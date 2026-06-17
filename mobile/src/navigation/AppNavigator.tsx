@@ -362,7 +362,15 @@ function TabNavigator() {
       // Platform-adaptive bar: Metro resolves TabBar.ios.tsx / TabBar.android.tsx
       // eslint-disable-next-line react/no-unstable-nested-components
       tabBar={(props) => <PlatformTabBar {...props} />}
-      screenLayout={screenErrorBoundaryLayout}
+      // NOTE: screenLayout (screenErrorBoundaryLayout) is INTENTIONALLY NOT set
+      // on the Tab.Navigator. Wrapping every tab in an ErrorBoundary keyed by
+      // route.key made the tab navigator re-evaluate its children whenever a
+      // MoreTab listener fired (state/tabPress/blur) → the nested
+      // MoreStackNavigator remounted mid-push → the first navigate was lost and
+      // the section «открывалась со второго раза». Tab-level crashes are still
+      // caught by the root Stack boundary below and App.tsx's top-level
+      // boundary. The per-tab boundaries live on the nested stacks
+      // (MoreStack/ChecksStack/ProductsStack/EquipmentStack) instead.
     >
       <Tab.Screen name="Dashboard" component={DashboardScreen} />
       <Tab.Screen name="Products" component={ProductsStackNavigator} />

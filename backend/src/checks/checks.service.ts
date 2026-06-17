@@ -924,6 +924,19 @@ export class ChecksService {
       const sets: string[] = ['is_deferred=false'];
       const vals: any[] = [];
       let ui = 1;
+      // ACCOUNTING: on a genuine draft→active transition the check's date must
+      // move to the moment of activation (payment), so revenue / salary /
+      // cash-flow reports and the warranty start all land on the activation day
+      // — NOT the day the draft was created. created_at is left untouched (audit).
+      // Strictly gated by `isActivating` (prior is_deferred under FOR UPDATE),
+      // so a plain re-save of an already-active check never rewrites the date.
+      // ONE timestamp, parameterised — reused for the warranty below so
+      // checks.date and warranty.started_at are byte-identical (no now()-vs-JS skew).
+      const activationDate = new Date().toISOString();
+      if (isActivating) {
+        sets.push(`date=$${ui++}`);
+        vals.push(activationDate);
+      }
       if (dto.paymentMethod !== undefined) {
         sets.push(`payment_method=$${ui++}`);
         vals.push(dto.paymentMethod);
@@ -949,15 +962,13 @@ export class ChecksService {
 
       // Side-effects ONLY on the real transition.
       if (isActivating) {
-        const checkDate =
-          checkRows[0].date instanceof Date
-            ? (checkRows[0].date as Date).toISOString()
-            : String(checkRows[0].date ?? new Date().toISOString());
+        // checks.date was just set to `activationDate` above; the warranty starts
+        // from the SAME timestamp (not the stale draft date).
         await this.applyDeferredActivation(
           client,
           tenantID,
           id,
-          checkDate,
+          activationDate,
           checkRows[0].client_id ?? null,
           checkRows[0].car_id ?? null,
         );
@@ -1206,6 +1217,23 @@ export class ChecksService {
         updateVals.push(dto.isDeferred);
       }
 
+      // ACCOUNTING: on a genuine draft→active transition (is_deferred true→false,
+      // authority = lockedIsActivating from the FOR UPDATE read) move the check's
+      // date to the moment of activation (payment). That way revenue / salary /
+      // cash-flow reports and the warranty start land on the activation day, not
+      // the draft-creation day. created_at is left untouched (audit trail). A
+      // plain re-edit of an already-active check (lockedIsActivating=false) never
+      // rewrites the date; this is the only place fullUpdate touches `date`.
+      // ONE timestamp, parameterised — reused for the warranty below so
+      // checks.date and warranty.started_at are byte-identical (no now()-vs-JS
+      // skew, which in fullUpdate would otherwise be 10-100ms+ apart across the
+      // line DELETE/INSERTs between the UPDATE and the warranty call).
+      const activationDate = new Date().toISOString();
+      if (lockedIsActivating) {
+        updateFields.push(`date=$${ui++}`);
+        updateVals.push(activationDate);
+      }
+
       // Always update calculated fields
       updateFields.push(`service_total=$${ui++}`);
       updateVals.push(serviceTotal);
@@ -1268,11 +1296,9 @@ export class ChecksService {
       if (lockedIsActivating) {
         const effectiveClientId = dto.clientId !== undefined ? dto.clientId || null : (checkRows[0].client_id ?? null);
         const effectiveCarId = dto.carId !== undefined ? dto.carId || null : (checkRows[0].car_id ?? null);
-        const checkDate =
-          checkRows[0].date instanceof Date
-            ? (checkRows[0].date as Date).toISOString()
-            : String(checkRows[0].date ?? new Date().toISOString());
-        await this.applyDeferredActivation(client, tenantID, id, checkDate, effectiveClientId, effectiveCarId);
+        // checks.date was set to `activationDate` in the UPDATE above; the warranty
+        // starts from that SAME timestamp (not the stale draft date).
+        await this.applyDeferredActivation(client, tenantID, id, activationDate, effectiveClientId, effectiveCarId);
       }
 
       await client.query('COMMIT');

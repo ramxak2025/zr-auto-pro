@@ -13,6 +13,7 @@ import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthUser } from '../common/auth-cache';
 import { SECTION_KEYS, SectionKey } from './dto/section-visibility.dto';
+import { ALL_ITEM_KEYS, OWNER_PROTECTED_ITEM_KEYS } from './dto/item-visibility.dto';
 
 // Roles that may be assigned through this service. Anything outside this set
 // is rejected up front so a manipulated DTO can't sneak a role string past
@@ -612,6 +613,124 @@ export class UsersService {
     invalidateAuthUser(userId);
 
     return this.getSectionVisibility(userId, tenantID);
+  }
+
+  // ─── Item Visibility (073) ──────────────────────────────────────────
+  // Granular per-employee item (sub-section) visibility, ADDITIVE to the
+  // group-level section visibility above. Owners hide individual «Ещё» menu rows
+  // within an otherwise-visible group. We persist ONLY explicit overrides; the
+  // read always materializes the full known set (defaults merged with overrides).
+
+  /**
+   * Resolve the effective visibility map for a user: every known item key,
+   * defaulting to `isVisible: true`, with any stored override applied. Always
+   * returns the full set in canonical order so the client never needs the
+   * defaults itself. Overrides for keys no longer in ALL_ITEM_KEYS (a removed
+   * menu row) are ignored — only known keys are returned.
+   */
+  async getItemVisibility(userId: string, tenantID: string) {
+    // Tenant-scoped existence check — a forged id from another tenant 404s here
+    // rather than silently returning a full default map.
+    await this.loadVisibilityTarget(userId, tenantID);
+
+    const { rows } = await this.pool.query(
+      `SELECT item_key, is_visible
+       FROM item_visibility
+       WHERE tenant_id = $1 AND user_id = $2`,
+      [tenantID, userId],
+    );
+
+    const overrides = new Map<string, boolean>(rows.map((r) => [r.item_key as string, !!r.is_visible]));
+
+    return ALL_ITEM_KEYS.map((itemKey) => ({
+      itemKey,
+      isVisible: overrides.has(itemKey) ? (overrides.get(itemKey) as boolean) : true,
+    }));
+  }
+
+  /**
+   * Upsert the supplied item overrides, then return the freshly-materialized
+   * map. Business rules (self-lockout protection), evaluated against the
+   * RESULTING state (existing overrides merged with this request) so partial
+   * PATCHes are safe:
+   *  - You can never hide EVERY known item — at least one must stay visible.
+   *  - A director / superadmin (owner-class) account must keep the protected
+   *    items (`users`, `company-settings`) visible — the access floor, so a
+   *    misconfiguration can't brick the owner out of user management / company
+   *    settings. Mirrors the section-level «work» floor.
+   * Unknown item keys in the body are rejected so a typo / removed row can't
+   * write a dangling override that the read would silently drop.
+   */
+  async updateItemVisibility(userId: string, tenantID: string, items: Array<{ itemKey: string; isVisible: boolean }>) {
+    const targetRole = await this.loadVisibilityTarget(userId, tenantID);
+
+    const knownKeys = new Set<string>(ALL_ITEM_KEYS);
+
+    // Collapse duplicate keys in the body (last write wins) and reject unknown
+    // keys up front so the upsert and resulting map are deterministic.
+    const requested = new Map<string, boolean>();
+    for (const it of items) {
+      if (!knownKeys.has(it.itemKey)) {
+        throw new BadRequestException({ message: `Неизвестный пункт меню: ${it.itemKey}` });
+      }
+      requested.set(it.itemKey, it.isVisible);
+    }
+
+    // Compute the resulting effective map = defaults + stored overrides + body.
+    const { rows: existing } = await this.pool.query(
+      `SELECT item_key, is_visible FROM item_visibility WHERE tenant_id=$1 AND user_id=$2`,
+      [tenantID, userId],
+    );
+    const effective = new Map<string, boolean>(ALL_ITEM_KEYS.map((k) => [k, true]));
+    for (const r of existing) {
+      // Ignore stored overrides for keys that no longer exist in the menu.
+      if (knownKeys.has(r.item_key as string)) effective.set(r.item_key as string, !!r.is_visible);
+    }
+    for (const [k, v] of requested) effective.set(k, v);
+
+    // Rule 1 — never hide every item.
+    const anyVisible = ALL_ITEM_KEYS.some((k) => effective.get(k) === true);
+    if (!anyVisible) {
+      throw new BadRequestException({ message: 'Нельзя скрыть все пункты — хотя бы один должен оставаться видимым' });
+    }
+
+    // Rule 2 — owner-class accounts keep the protected items visible.
+    const isOwnerClass = targetRole === 'director' || targetRole === 'superadmin';
+    if (isOwnerClass) {
+      const lockedOut = OWNER_PROTECTED_ITEM_KEYS.find((k) => effective.get(k) !== true);
+      if (lockedOut) {
+        throw new BadRequestException({
+          message: 'Этот пункт нельзя скрыть у директора или владельца',
+        });
+      }
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const [itemKey, isVisible] of requested) {
+        await client.query(
+          `INSERT INTO item_visibility (tenant_id, user_id, item_key, is_visible)
+           VALUES ($1, $2, $3, $4)
+           ON CONFLICT (tenant_id, user_id, item_key)
+           DO UPDATE SET is_visible = EXCLUDED.is_visible, updated_at = now()`,
+          [tenantID, userId, itemKey, isVisible],
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`updateItemVisibility error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сохранения видимости пунктов' });
+    } finally {
+      client.release();
+    }
+
+    // Changing what an employee can see is a permission-ish change — drop their
+    // cached auth so the next request reflects it without waiting for the TTL.
+    invalidateAuthUser(userId);
+
+    return this.getItemVisibility(userId, tenantID);
   }
 
   // ─── Product Commissions ────────────────────────────────────────────

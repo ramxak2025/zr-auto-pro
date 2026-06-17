@@ -67,7 +67,13 @@ export default function AdminShellNavigator() {
       }}
       // eslint-disable-next-line react/no-unstable-nested-components
       tabBar={(props) => <AdminTabBar {...props} />}
-      screenLayout={screenErrorBoundaryLayout}
+      // NOTE: screenLayout (screenErrorBoundaryLayout) is INTENTIONALLY NOT set
+      // on the AdminTab.Navigator — same reasoning as the car-service
+      // TabNavigator: a per-tab boundary keyed by route.key forces the tab
+      // navigator to re-evaluate children on every tab-event, remounting the
+      // nested stacks mid-navigation. Per-tab boundaries stay on the nested
+      // stacks (TenantsStack/OverviewStack); tab-level crashes fall through to
+      // the root Stack + App.tsx boundary.
     >
       <AdminTab.Screen name="AdminOverview" component={AdminOverviewStackNavigator} />
       <AdminTab.Screen name="AdminTenants" component={AdminTenantsStackNavigator} />

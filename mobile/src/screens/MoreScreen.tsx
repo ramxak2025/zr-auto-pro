@@ -24,6 +24,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { UserPermissions, SubscriptionInfo, SectionVisibility } from '../../../shared/types';
+import { ALL_ITEM_KEYS } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
@@ -43,6 +44,13 @@ interface MenuItem {
   label: string;
   description: string;
   screen: string;
+  /**
+   * 073 — granular per-employee visibility key. Matches one entry in
+   * `ITEM_KEYS` (shared/types) and the owner's per-item toggle in UsersScreen.
+   * A hidden item ({ isVisible: false }) drops THIS row from the user's menu,
+   * even when its parent group stays visible.
+   */
+  itemKey: string;
   icon: keyof typeof Ionicons.glyphMap;
   permission?: keyof UserPermissions;
   roles?: string[];
@@ -90,6 +98,7 @@ const menuSections: MenuSection[] = [
         label: 'Расписание',
         description: 'График работы и смены',
         screen: 'Schedule',
+        itemKey: 'schedule',
         featureKey: 'schedule_view',
         icon: 'calendar-outline',
         iconBg: colors.indigo[50],
@@ -102,6 +111,7 @@ const menuSections: MenuSection[] = [
         // a separate "Авто" menu entry is intentionally gone.
         description: 'Клиенты, авто и история',
         screen: 'Clients',
+        itemKey: 'clients',
         permission: 'clients_view',
         featureKey: 'clients_view',
         icon: 'people-outline',
@@ -115,6 +125,7 @@ const menuSections: MenuSection[] = [
         label: 'Обучение и база знаний',
         description: 'Курсы, регламенты и статьи',
         screen: 'KnowledgeBase',
+        itemKey: 'knowledge-base',
         icon: 'book-outline',
         iconBg: colors.cyan[50],
         iconColor: colors.cyan[600],
@@ -129,6 +140,7 @@ const menuSections: MenuSection[] = [
         label: 'Движение денег',
         description: 'Поступления и выдачи по дням',
         screen: 'CashFlow',
+        itemKey: 'cashflow',
         featureKey: 'cashflow_view',
         icon: 'swap-horizontal-outline',
         iconBg: colors.teal[50],
@@ -138,6 +150,7 @@ const menuSections: MenuSection[] = [
         label: 'Зарплата',
         description: 'Заработок мастеров',
         screen: 'Salary',
+        itemKey: 'salary',
         featureKey: 'salary_view',
         icon: 'wallet-outline',
         iconBg: colors.green[50],
@@ -147,6 +160,7 @@ const menuSections: MenuSection[] = [
         label: 'Расходы',
         description: 'Аренда, маркетинг и др.',
         screen: 'Expenses',
+        itemKey: 'expenses',
         roles: ['director', 'superadmin'],
         icon: 'trending-down-outline',
         iconBg: colors.rose[50],
@@ -156,6 +170,7 @@ const menuSections: MenuSection[] = [
         label: 'Финансовые отчёты',
         description: 'Прибыль, маржа, средний чек',
         screen: 'Reports',
+        itemKey: 'reports',
         permission: 'financial_reports',
         featureKey: 'reports_view',
         icon: 'bar-chart-outline',
@@ -177,6 +192,7 @@ const menuSections: MenuSection[] = [
         label: 'Услуги',
         description: 'Каталог услуг и цены',
         screen: 'Services',
+        itemKey: 'services',
         featureKey: 'services_view',
         icon: 'pricetags-outline',
         iconBg: colors.orange[50],
@@ -186,6 +202,7 @@ const menuSections: MenuSection[] = [
         label: 'Поставщики',
         description: 'Поставки и расчёты',
         screen: 'Suppliers',
+        itemKey: 'suppliers',
         permission: 'suppliers_access',
         featureKey: 'suppliers_view',
         icon: 'cube-outline',
@@ -196,6 +213,7 @@ const menuSections: MenuSection[] = [
         label: 'Имущество',
         description: 'Инструменты и оборудование',
         screen: 'Equipment',
+        itemKey: 'equipment',
         icon: 'construct-outline',
         iconBg: colors.emerald[50],
         iconColor: colors.emerald[700],
@@ -204,6 +222,7 @@ const menuSections: MenuSection[] = [
         label: 'Складская аналитика',
         description: 'Остатки, оборот, движение',
         screen: 'WarehouseAnalytics',
+        itemKey: 'warehouse-analytics',
         icon: 'analytics-outline',
         iconBg: colors.teal[50],
         iconColor: colors.teal[600],
@@ -218,6 +237,7 @@ const menuSections: MenuSection[] = [
         label: 'Отзывы и репутация',
         description: 'Сбор и публикация отзывов',
         screen: 'Marketing',
+        itemKey: 'marketing',
         icon: 'star-outline',
         iconBg: colors.violet[50],
         iconColor: colors.violet[600],
@@ -226,6 +246,7 @@ const menuSections: MenuSection[] = [
         label: 'Звонки',
         description: 'Журнал звонков и записи',
         screen: 'Calls',
+        itemKey: 'calls',
         roles: ['director', 'superadmin'],
         icon: 'call-outline',
         iconBg: colors.blue[50],
@@ -235,6 +256,7 @@ const menuSections: MenuSection[] = [
         label: 'Рассылки',
         description: 'SMS и push клиентам',
         screen: 'Mailings',
+        itemKey: 'mailings',
         roles: ['director', 'superadmin'],
         icon: 'paper-plane-outline',
         iconBg: colors.purple[50],
@@ -244,6 +266,7 @@ const menuSections: MenuSection[] = [
         label: 'Интеграции',
         description: 'Телефония, мессенджеры, CRM',
         screen: 'Integrations',
+        itemKey: 'integrations',
         roles: ['director', 'superadmin'],
         // `git-network-outline` resolved to Circle in our Lucide shim
         // (owner saw a blank dot). `extension-puzzle-outline` maps to
@@ -262,6 +285,7 @@ const menuSections: MenuSection[] = [
         label: 'Сотрудники',
         description: 'Карточки персонала, статус, рейтинги',
         screen: 'Employees',
+        itemKey: 'employees',
         icon: 'people-circle-outline',
         iconBg: colors.cyan[50],
         iconColor: colors.cyan[600],
@@ -270,6 +294,7 @@ const menuSections: MenuSection[] = [
         label: 'Пользователи',
         description: 'Управление доступом',
         screen: 'Users',
+        itemKey: 'users',
         permission: 'user_management',
         featureKey: 'users_manage',
         roles: ['director', 'superadmin'],
@@ -285,6 +310,7 @@ const menuSections: MenuSection[] = [
         label: 'Настройки компании',
         description: 'Реквизиты и данные для чеков',
         screen: 'CompanySettings',
+        itemKey: 'company-settings',
         roles: ['director', 'superadmin'],
         icon: 'business-outline',
         iconBg: colors.slate[100],
@@ -294,6 +320,7 @@ const menuSections: MenuSection[] = [
         label: 'Подписка',
         description: 'Тариф и оплата',
         screen: 'Subscription',
+        itemKey: 'subscription',
         roles: ['director', 'superadmin'],
         icon: 'card-outline',
         iconBg: colors.primary[50],
@@ -306,6 +333,21 @@ const menuSections: MenuSection[] = [
   // car-service «Ещё» menu. Directors / masters never had the superadmin role,
   // so this entry was unreachable for them. See AppNavigator → MainShell.
 ];
+
+// Dev-time guard (#073): every menu row's `itemKey` must exist in the shared
+// `ITEM_KEYS` contract, otherwise the owner's per-item toggle in UsersScreen
+// and this row would silently drift apart (a toggle nobody reads, or a row no
+// toggle controls). Stripped in production by the __DEV__ gate.
+if (__DEV__) {
+  const known = new Set(ALL_ITEM_KEYS);
+  for (const section of menuSections) {
+    for (const item of section.items) {
+      if (!known.has(item.itemKey)) {
+        console.warn(`[MoreScreen] itemKey "${item.itemKey}" (${item.screen}) is not in shared ITEM_KEYS`);
+      }
+    }
+  }
+}
 
 interface MenuRowProps {
   item: MenuItem;
@@ -364,7 +406,7 @@ const MenuRow = React.memo(function MenuRow({
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
-  const { user, logout, hasPermission, refreshUser, isSectionVisible } = useAuth();
+  const { user, logout, hasPermission, refreshUser, isSectionVisible, isItemVisible } = useAuth();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
@@ -408,6 +450,10 @@ export default function MoreScreen() {
   const filterItem = (item: MenuItem): boolean => {
     if (item.permission && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
+    // 073 — granular per-item visibility override (additive to the group-level
+    // isSectionVisible check the caller already applied). Owners keep their
+    // protected items via isItemVisible's own guard.
+    if (!isItemVisible(item.itemKey)) return false;
     return true;
   };
 

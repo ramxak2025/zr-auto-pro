@@ -6,6 +6,7 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateSectionVisibilityDto } from './dto/section-visibility.dto';
+import { UpdateItemVisibilityDto } from './dto/item-visibility.dto';
 
 // Roles allowed to manage other users (create / update / delete / reorder /
 // edit per-product commissions). Masters and admin-light users CANNOT touch
@@ -98,6 +99,23 @@ export class UsersController {
     @Body() dto: UpdateSectionVisibilityDto,
   ) {
     return this.usersService.updateSectionVisibility(id, user.tenantID, dto.sections);
+  }
+
+  // ─── Item Visibility (073) ──────────────────────────────────────────
+  // Granular sub-section visibility, ADDITIVE to section-visibility above.
+  // Same owner-class role gate; tenant-scoped via the JWT in the service (a
+  // foreign userId 404s rather than leaking another tenant's defaults).
+
+  @Roles(...MANAGER_ROLES)
+  @Get(':id/item-visibility')
+  getItemVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.getItemVisibility(id, user.tenantID);
+  }
+
+  @Roles(...MANAGER_ROLES)
+  @Patch(':id/item-visibility')
+  updateItemVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateItemVisibilityDto) {
+    return this.usersService.updateItemVisibility(id, user.tenantID, dto.items);
   }
 
   // ─── Product Commissions ────────────────────────────────────────────

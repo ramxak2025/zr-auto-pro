@@ -32,6 +32,15 @@ import type { User, UserPermissions, UserRole, SectionVisibility } from '../../.
 /** Logical top-level section bucket used by MoreScreen + visibility overrides (#071). */
 type SectionKey = SectionVisibility['sectionKey'];
 
+/**
+ * 073 — item keys that owners (superadmin/director) can NEVER hide from
+ * themselves. These are the access-control / billing entry points: locking
+ * them off would leave the owner unable to re-grant access or manage the
+ * subscription (self-lockout). Mirrors the «work» group protection in
+ * `isSectionVisible` — an override on these is ignored for owners.
+ */
+const OWNER_PROTECTED_ITEM_KEYS = new Set<string>(['users', 'company-settings', 'subscription']);
+
 interface AuthContextType {
   user: User | null;
   token: string | null;
@@ -48,6 +57,16 @@ interface AuthContextType {
    * (superadmin/director can't lock themselves out of the daily-work group).
    */
   isSectionVisible: (sectionKey: SectionKey) => boolean;
+  /**
+   * 073 — is a single «Ещё» menu item visible for the current user?
+   * ADDITIVE to {@link isSectionVisible}: a group can be visible while one item
+   * inside it is hidden. Default is visible: only an explicit `{ isVisible:
+   * false }` override on the user's `itemVisibility` hides an item. Owners
+   * (superadmin/director) always keep the access-control / billing items
+   * (`users`, `company-settings`, `subscription`) so an override can't lock
+   * them out of granting access or managing the subscription.
+   */
+  isItemVisible: (itemKey: string) => boolean;
   /**
    * True while the superadmin is impersonating a tenant owner (a 30-min
    * director token is installed instead of the superadmin's own). Drives the
@@ -761,6 +780,21 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     [user],
   );
 
+  const isItemVisible = useCallback(
+    (itemKey: string): boolean => {
+      if (!user) return false;
+      // Owners can't lock themselves out of access-control / billing items.
+      if ((user.role === 'superadmin' || user.role === 'director') && OWNER_PROTECTED_ITEM_KEYS.has(itemKey)) {
+        return true;
+      }
+      // Default visible: only an explicit `isVisible: false` override hides an
+      // item. Absent row → fall back to visible (matches the #073 contract).
+      const override = user.itemVisibility?.find((i) => i.itemKey === itemKey);
+      return override ? override.isVisible : true;
+    },
+    [user],
+  );
+
   // Memoise the context value so AuthContext.Provider doesn't broadcast a
   // fresh object reference on every AuthProvider render (e.g. when only
   // `loading` flips). With the memo, consumers see a stable value as
@@ -776,6 +810,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       hasPermission,
       isRole,
       isSectionVisible,
+      isItemVisible,
       isImpersonating,
       beginImpersonation,
       endImpersonation,
@@ -790,6 +825,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       hasPermission,
       isRole,
       isSectionVisible,
+      isItemVisible,
       isImpersonating,
       beginImpersonation,
       endImpersonation,

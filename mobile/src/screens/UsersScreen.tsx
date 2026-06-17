@@ -28,8 +28,8 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { User, UserPermissions, Product, SectionVisibility } from '../../../shared/types';
-import { UserRole } from '../../../shared/types';
+import type { User, UserPermissions, Product, SectionVisibility, ItemVisibility } from '../../../shared/types';
+import { UserRole, ITEM_KEYS, ALL_ITEM_KEYS } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 
 const roleBadgeMap: Record<string, string> = {
@@ -132,6 +132,72 @@ function mapToSections(map: SectionVisibilityMap): SectionVisibility[] {
   return SECTION_DEFS.map(({ key }) => ({ sectionKey: key, isVisible: map[key] }));
 }
 
+// ── Item visibility (#073) ────────────────────────────────────────────
+// Granular layer UNDER section visibility: the owner can hide a single «Ещё»
+// row even while its parent group stays visible. Item keys + grouping come
+// straight from the shared ITEM_KEYS contract; labels mirror the MoreScreen
+// menu rows (kept in the same order the owner sees them).
+const ITEM_LABELS: Record<string, string> = {
+  schedule: 'Расписание',
+  clients: 'Клиенты',
+  'knowledge-base': 'Обучение и база знаний',
+  cashflow: 'Движение денег',
+  salary: 'Зарплата',
+  expenses: 'Расходы',
+  reports: 'Финансовые отчёты',
+  services: 'Услуги',
+  suppliers: 'Поставщики',
+  equipment: 'Имущество',
+  'warehouse-analytics': 'Складская аналитика',
+  marketing: 'Отзывы и репутация',
+  calls: 'Звонки',
+  mailings: 'Рассылки',
+  integrations: 'Интеграции',
+  employees: 'Сотрудники',
+  users: 'Пользователи',
+  'company-settings': 'Настройки компании',
+  subscription: 'Подписка',
+};
+
+// Group def for the editor: reuse SECTION_DEFS' label + the contract's item set.
+const ITEM_GROUP_DEFS: { sectionKey: SectionKey; label: string; items: { key: string; label: string }[] }[] =
+  SECTION_DEFS.map(({ key, label }) => ({
+    sectionKey: key,
+    label,
+    items: (ITEM_KEYS[key] as readonly string[]).map((k) => ({ key: k, label: ITEM_LABELS[k] ?? k })),
+  }));
+
+// Owner (superadmin/director) can NEVER be denied these access-control /
+// billing items — hiding them would be a self-lockout. Mirrors the same set in
+// AuthContext.isItemVisible. The editor renders their toggles forced-on +
+// disabled when the edited user holds an owner role.
+const OWNER_PROTECTED_ITEM_KEYS = new Set<string>(['users', 'company-settings', 'subscription']);
+
+type ItemVisibilityMap = Record<string, boolean>;
+
+/** Default: every known item visible. */
+function defaultItemVisibility(): ItemVisibilityMap {
+  const map: ItemVisibilityMap = {};
+  for (const k of ALL_ITEM_KEYS) map[k] = true;
+  return map;
+}
+
+/** Fold the contract's sparse/materialized override list into a full map. */
+function toItemVisibilityMap(overrides: ItemVisibility[] | undefined): ItemVisibilityMap {
+  const map = defaultItemVisibility();
+  for (const o of Array.isArray(overrides) ? overrides : []) {
+    // Only keep keys we know about — a future server key we don't render yet
+    // shouldn't crash the editor (it just won't get a toggle).
+    if (o.itemKey in map) map[o.itemKey] = o.isVisible;
+  }
+  return map;
+}
+
+/** Expand the full map into the contract's explicit override list (all keys). */
+function mapToItems(map: ItemVisibilityMap): ItemVisibility[] {
+  return ALL_ITEM_KEYS.map((k) => ({ itemKey: k, isVisible: map[k] ?? true }));
+}
+
 const defaultPermissions: UserPermissions = {
   checks_view: true,
   checks_create: true,
@@ -171,6 +237,7 @@ interface UserForm {
   hiddenEverywhere: boolean;
   permissions: UserPermissions;
   sectionVisibility: SectionVisibilityMap;
+  itemVisibility: ItemVisibilityMap;
 }
 
 // ── UserCard ──────────────────────────────────────────────────────────
@@ -292,6 +359,7 @@ const emptyForm: UserForm = {
   hiddenEverywhere: false,
   permissions: { ...defaultPermissions },
   sectionVisibility: { ...defaultSectionVisibility },
+  itemVisibility: defaultItemVisibility(),
 };
 
 interface CommissionItem {
@@ -314,6 +382,9 @@ export default function UsersScreen() {
   const [form, setForm] = useState<UserForm>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  // 073 — which item-visibility group is expanded in the editor (accordion;
+  // only one open at a time keeps the modal tidy). null = all collapsed.
+  const [expandedGroup, setExpandedGroup] = useState<SectionKey | null>(null);
 
   // Commission modal
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
@@ -345,17 +416,22 @@ export default function UsersScreen() {
   // follow-up save is chained in onSuccess; on update we already have the id.
   const createMutation = useMutation({
     mutationFn: (d: any) => {
-      // Strip the transient section-visibility carrier — it's persisted via its
-      // own endpoint in onSuccess, never sent in the create body.
-      const { __sectionVisibility, ...body } = d;
+      // Strip the transient visibility carriers — they're persisted via their
+      // own endpoints in onSuccess, never sent in the create body.
+      const { __sectionVisibility, __itemVisibility, ...body } = d;
       void __sectionVisibility;
+      void __itemVisibility;
       return usersApi.create(body);
     },
     onSuccess: async (res, variables) => {
       const newId = (res?.data as User | undefined)?.id;
       const sections = (variables as { __sectionVisibility?: SectionVisibilityMap }).__sectionVisibility;
+      const items = (variables as { __itemVisibility?: ItemVisibilityMap }).__itemVisibility;
       if (newId && sections) {
         await usersApi.updateSectionVisibility(newId, mapToSections(sections)).catch(() => {});
+      }
+      if (newId && items) {
+        await usersApi.updateItemVisibility(newId, mapToItems(items)).catch(() => {});
       }
       queryClient.invalidateQueries({ queryKey: ['users'] });
       Alert.alert('Готово', 'Сотрудник создан');
@@ -365,12 +441,23 @@ export default function UsersScreen() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any; __sectionVisibility?: SectionVisibilityMap }) =>
-      usersApi.update(id, data),
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: any;
+      __sectionVisibility?: SectionVisibilityMap;
+      __itemVisibility?: ItemVisibilityMap;
+    }) => usersApi.update(id, data),
     onSuccess: async (_res, variables) => {
       const sections = variables.__sectionVisibility;
       if (sections) {
         await usersApi.updateSectionVisibility(variables.id, mapToSections(sections)).catch(() => {});
+      }
+      const items = variables.__itemVisibility;
+      if (items) {
+        await usersApi.updateItemVisibility(variables.id, mapToItems(items)).catch(() => {});
       }
       queryClient.invalidateQueries({ queryKey: ['users'] });
       Alert.alert('Готово', 'Сотрудник обновлён');
@@ -422,6 +509,7 @@ export default function UsersScreen() {
   // identity stability matters for the list re-render cost.
   const openEdit = useCallback((user: User) => {
     setEditingUser(user);
+    setExpandedGroup(null);
     setForm({
       fullName: user.fullName,
       phone: user.phone ? formatPhone(user.phone) : '',
@@ -436,15 +524,23 @@ export default function UsersScreen() {
       // Seed from whatever the list payload already carries (avoids a flash of
       // wrong toggles); the authoritative overrides are then refetched below.
       sectionVisibility: toVisibilityMap(user.sectionVisibility),
+      itemVisibility: toItemVisibilityMap(user.itemVisibility),
     });
     setModalOpen(true);
-    // 071 — fetch the authoritative per-section overrides for this employee.
-    // The list endpoint may omit them; this guarantees the toggles reflect the
-    // stored state. Failure is non-fatal — we keep the optimistic seed above.
+    // 071 / 073 — fetch the authoritative per-section AND per-item overrides for
+    // this employee. The list endpoint may omit them; these guarantee the
+    // toggles reflect the stored state. Failure is non-fatal — we keep the
+    // optimistic seed above.
     usersApi
       .getSectionVisibility(user.id)
       .then((res) => {
         setForm((prev) => ({ ...prev, sectionVisibility: toVisibilityMap(res.data) }));
+      })
+      .catch(() => {});
+    usersApi
+      .getItemVisibility(user.id)
+      .then((res) => {
+        setForm((prev) => ({ ...prev, itemVisibility: toItemVisibilityMap(res.data) }));
       })
       .catch(() => {});
   }, []);
@@ -501,14 +597,16 @@ export default function UsersScreen() {
 
   const openCreate = () => {
     setEditingUser(null);
-    setForm({ ...emptyForm });
+    setExpandedGroup(null);
+    setForm({ ...emptyForm, itemVisibility: defaultItemVisibility() });
     setModalOpen(true);
   };
 
   const closeModal = () => {
     setModalOpen(false);
     setEditingUser(null);
-    setForm({ ...emptyForm });
+    setExpandedGroup(null);
+    setForm({ ...emptyForm, itemVisibility: defaultItemVisibility() });
   };
 
   const handleSubmit = () => {
@@ -539,16 +637,22 @@ export default function UsersScreen() {
 
     if (!editingUser) {
       payload.password = form.password;
-      // Carry section visibility alongside the create payload so onSuccess can
-      // persist it once the new user id exists. `__sectionVisibility` is NOT
-      // part of the create body — it's stripped out before the API call.
-      createMutation.mutate({ ...payload, __sectionVisibility: form.sectionVisibility });
+      // Carry section + item visibility alongside the create payload so
+      // onSuccess can persist them once the new user id exists. Neither
+      // `__sectionVisibility` nor `__itemVisibility` is part of the create body
+      // — both are stripped out before the API call.
+      createMutation.mutate({
+        ...payload,
+        __sectionVisibility: form.sectionVisibility,
+        __itemVisibility: form.itemVisibility,
+      });
     } else {
       if (form.password) payload.password = form.password;
       updateMutation.mutate({
         id: editingUser.id,
         data: payload,
         __sectionVisibility: form.sectionVisibility,
+        __itemVisibility: form.itemVisibility,
       });
     }
   };
@@ -565,6 +669,32 @@ export default function UsersScreen() {
       ...prev,
       sectionVisibility: { ...prev.sectionVisibility, [key]: !prev.sectionVisibility[key] },
     }));
+  };
+
+  // The user being edited holds an owner role → its access-control / billing
+  // items can't be hidden (self-lockout guard; mirrors AuthContext).
+  const editedIsOwner = form.role === 'director' || form.role === 'superadmin';
+
+  // Toggle a single item. Protected items on an owner-role user are pinned on.
+  const toggleItem = (itemKey: string) => {
+    if (editedIsOwner && OWNER_PROTECTED_ITEM_KEYS.has(itemKey)) return;
+    setForm((prev) => ({
+      ...prev,
+      itemVisibility: { ...prev.itemVisibility, [itemKey]: !prev.itemVisibility[itemKey] },
+    }));
+  };
+
+  // Master toggle for a whole group: flip every item in it to `value`, but
+  // never force-hide an owner's protected items.
+  const toggleItemGroup = (sectionKey: SectionKey, value: boolean) => {
+    setForm((prev) => {
+      const next = { ...prev.itemVisibility };
+      for (const k of ITEM_KEYS[sectionKey] as readonly string[]) {
+        if (!value && editedIsOwner && OWNER_PROTECTED_ITEM_KEYS.has(k)) continue;
+        next[k] = value;
+      }
+      return { ...prev, itemVisibility: next };
+    });
   };
 
   const onRefresh = async () => {
@@ -875,6 +1005,91 @@ export default function UsersScreen() {
                     </View>
                   </React.Fragment>
                 ))}
+              </View>
+            </View>
+          )}
+
+          {/* Item visibility (#073) — granular per-row control UNDER the group
+              level above. Each group expands to per-item toggles + a master
+              toggle for the whole group. Director/superadmin only. */}
+          {isDirectorOrSuperadmin && (
+            <View style={styles.formField}>
+              <Text style={[styles.formLabel, { color: palette.text.secondary, marginBottom: spacing[2] }]}>
+                Видимость подразделов
+              </Text>
+              <Text style={[styles.sectionVisHint, { color: palette.text.tertiary }]}>
+                Точечно скройте отдельные пункты внутри разделов. Раскройте группу, чтобы настроить каждый пункт.
+              </Text>
+              <View
+                style={[
+                  styles.visibilityGroup,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, marginTop: spacing[2] },
+                ]}
+              >
+                {ITEM_GROUP_DEFS.map((group, gIdx) => {
+                  const onCount = group.items.filter((it) => form.itemVisibility[it.key]).length;
+                  const allOn = onCount === group.items.length;
+                  const expanded = expandedGroup === group.sectionKey;
+                  // When the parent SECTION is hidden, the whole group is gone
+                  // from the employee's menu regardless of item toggles — surface
+                  // that so the owner isn't confused why nothing shows.
+                  const sectionHidden = !form.sectionVisibility[group.sectionKey];
+                  return (
+                    <React.Fragment key={group.sectionKey}>
+                      {gIdx > 0 && (
+                        <View style={[styles.visibilityDivider, { backgroundColor: palette.border.subtle }]} />
+                      )}
+                      <View style={styles.itemGroupHeader}>
+                        <TouchableOpacity
+                          style={styles.itemGroupTitleWrap}
+                          onPress={() => setExpandedGroup(expanded ? null : group.sectionKey)}
+                          activeOpacity={0.6}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${group.label}, ${expanded ? 'свернуть' : 'развернуть'}`}
+                        >
+                          <Ionicons
+                            name={expanded ? 'chevron-down' : 'chevron-forward'}
+                            size={16}
+                            color={palette.text.tertiary}
+                          />
+                          <View style={styles.visibilityTextWrap}>
+                            <Text style={[styles.visibilityTitle, { color: palette.text.primary }]}>{group.label}</Text>
+                            <Text style={[styles.visibilitySub, { color: palette.text.tertiary }]}>
+                              {sectionHidden ? 'Раздел скрыт целиком' : `Показано ${onCount} из ${group.items.length}`}
+                            </Text>
+                          </View>
+                        </TouchableOpacity>
+                        <Switch
+                          value={allOn}
+                          onValueChange={(v) => toggleItemGroup(group.sectionKey, v)}
+                          trackColor={{ false: palette.border.strong, true: colors.primary[400] }}
+                          thumbColor={allOn ? colors.primary[600] : palette.bg.card}
+                        />
+                      </View>
+
+                      {expanded &&
+                        group.items.map((it) => {
+                          const pinned = editedIsOwner && OWNER_PROTECTED_ITEM_KEYS.has(it.key);
+                          const value = pinned ? true : !!form.itemVisibility[it.key];
+                          return (
+                            <View key={it.key} style={styles.itemSubRow}>
+                              <Text style={[styles.itemSubLabel, { color: palette.text.secondary }]} numberOfLines={1}>
+                                {it.label}
+                                {pinned ? '  (всегда доступно владельцу)' : ''}
+                              </Text>
+                              <Switch
+                                value={value}
+                                disabled={pinned}
+                                onValueChange={() => toggleItem(it.key)}
+                                trackColor={{ false: palette.border.strong, true: colors.primary[400] }}
+                                thumbColor={value ? colors.primary[600] : palette.bg.card}
+                              />
+                            </View>
+                          );
+                        })}
+                    </React.Fragment>
+                  );
+                })}
               </View>
             </View>
           )}
@@ -1236,6 +1451,30 @@ const styles = StyleSheet.create({
   visibilitySub: { fontSize: 11, lineHeight: 15, marginTop: 2 },
   visibilityDivider: { height: 1 },
   sectionVisHint: { fontSize: 11, lineHeight: 15 },
+  // Item-visibility accordion (#073)
+  itemGroupHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+  },
+  itemGroupTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  itemSubRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+    paddingVertical: spacing[2],
+    paddingLeft: spacing[6],
+  },
+  itemSubLabel: { flex: 1, minWidth: 0, fontSize: fontSize.sm },
   // Permissions — grouped
   permGroup: {
     marginBottom: spacing[3],

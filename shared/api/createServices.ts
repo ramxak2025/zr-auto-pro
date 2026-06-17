@@ -19,6 +19,7 @@ interface HttpClient {
 import type {
   User,
   SectionVisibility,
+  ItemVisibility,
   Tenant,
   Plan,
   Client,
@@ -181,6 +182,12 @@ export function createUsersApi(api: HttpClient) {
       api.get<SectionVisibility[]>(`/users/${userId}/section-visibility`),
     updateSectionVisibility: (userId: string, sections: SectionVisibility[]) =>
       api.patch<SectionVisibility[]>(`/users/${userId}/section-visibility`, { sections }),
+    // 073 — granular per-employee ITEM visibility overrides (additive to the
+    // group-level section-visibility above). The list returns the materialized
+    // map for every known item key (defaults merged with explicit overrides).
+    getItemVisibility: (userId: string) => api.get<ItemVisibility[]>(`/users/${userId}/item-visibility`),
+    updateItemVisibility: (userId: string, items: ItemVisibility[]) =>
+      api.patch<ItemVisibility[]>(`/users/${userId}/item-visibility`, { items }),
     getProductCommissions: (id: string) => api.get(`/users/${id}/product-commissions`),
     setProductCommissions: (
       id: string,
