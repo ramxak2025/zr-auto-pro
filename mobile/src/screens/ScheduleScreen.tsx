@@ -47,6 +47,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { TodayEmployeeStatus, ScheduleEntry, ScheduleSettings, User } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
+import { decideScheduleView } from './scheduleViewState';
 
 type TabType = 'grid' | 'today' | 'shifts' | 'rating' | 'settings';
 
@@ -724,7 +725,9 @@ function GridTab() {
 
   const {
     data: usersData,
+    isLoading: usersLoading,
     isError: usersError,
+    isSuccess: usersSuccess,
     refetch: refetchUsers,
   } = useQuery<User[]>({
     queryKey: ['users'],
@@ -1125,6 +1128,25 @@ function GridTab() {
     [canEdit],
   );
 
+  // Какое состояние рисуем — единая чистая функция (см. scheduleViewState.ts).
+  //
+  // КОРЕНЬ БАГА «Нет мастеров, хотя мастера есть»: пустой массив `[]` из
+  // протухшего persistentCache (status ещё не 'success') раньше проваливался
+  // в empty-state, т.к. условие смотрело на `usersData === undefined`. Теперь
+  // empty показываем ТОЛЬКО при подтверждённом успехе запроса ['users'].
+  // `hasCachedUsers` — есть ли вообще пользователи в кэше (placeholder/stale):
+  // при них держим грид/skeleton, а не мигаем error.
+  const hasCachedUsers = toArray<User>(usersData).length > 0;
+  const view = decideScheduleView({
+    gridReady,
+    isLoadingUsers: usersLoading,
+    isErrorUsers: usersError,
+    isSuccessUsers: usersSuccess,
+    activeUsersCount: activeUsers.length,
+    hasCachedUsers,
+    scheduleError: isError,
+  });
+
   return (
     <View style={{ flex: 1 }}>
       {/* Month picker is now lifted to ScheduleScreen's header
@@ -1233,22 +1255,21 @@ function GridTab() {
         ))}
       </ScrollView>
 
-      {/* Schedule states (экран ОБЯЗАН спокойно рендериться, когда API
-          лежит — это и есть фундаментальный фикс, а не страховочный
-          ErrorBoundary):
-          1. The push transition hasn't settled yet (gridReady=false), or
-             the ['users'] query is still loading with nothing cached →
-             skeleton, never a premature «Нет мастеров».
-          2. Both data sources failed with NOTHING cached (no masters AND
-             the schedule request errored) → единый error-state с кнопкой
-             «Повторить» (refetch обоих запросов).
-          3. The ['users'] query failed with nothing cached → error-state.
-          4. Users resolved but the master list is empty → onboarding empty.
-          5. Otherwise → calendar grid. activeUsers already falls back to
-             the auth user, so a fresh tenant still renders a one-row grid. */}
-      {!gridReady || (activeUsers.length === 0 && usersData === undefined && !usersError && !isError) ? (
+      {/* Schedule states — решение вынесено в чистую decideScheduleView()
+          (scheduleViewState.ts), покрытую юнит-тестами. Экран ОБЯЗАН
+          спокойно рендериться, когда API лежит:
+          • 'skeleton' — push-анимация ещё идёт, ИЛИ первая загрузка, ИЛИ
+            stale-рефетч пустого кэша (пустой `[]` из persistentCache до
+            подтверждения сервером). НИКОГДА не «Нет мастеров» здесь —
+            это и есть фикс бага «нет мастеров, хотя мастера есть».
+          • 'error'    — ['users'] или ['schedule'] упали И нет кэша.
+          • 'empty'    — запрос ['users'] ПОДТВЕРЖДЁННО успешен и мастеров
+            нет (единственное легальное место для «Нет мастеров»).
+          • 'grid'     — есть мастера. activeUsers фолбэчится на auth-user,
+            так что свежий тенант рисует одну строку. */}
+      {view === 'skeleton' ? (
         <GridSkeleton />
-      ) : activeUsers.length === 0 && usersData === undefined && (usersError || isError) ? (
+      ) : view === 'error' ? (
         <QueryErrorState
           title="Не удалось загрузить расписание"
           description="Сервер временно недоступен. Потяните, чтобы обновить, или нажмите «Повторить»."
@@ -1257,7 +1278,7 @@ function GridTab() {
             if (isError) refetch();
           }}
         />
-      ) : activeUsers.length === 0 ? (
+      ) : view === 'empty' ? (
         <EmptyState
           icon="people"
           title="Нет мастеров"

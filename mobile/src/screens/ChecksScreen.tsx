@@ -1136,7 +1136,12 @@ export default function ChecksScreen() {
         <>
           {/* Kind filter chips — drive `journalApi.warehouseDocs({type})`.
               Horizontal scroll so all 7 chips fit on small screens. */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.kindChipsRow}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.kindChipsScroll}
+            contentContainerStyle={styles.kindChipsRow}
+          >
             <View style={styles.kindChipsRowInner}>
               {KIND_CHIPS.map((chip) => {
                 const active = warehouseKind === chip.key;
@@ -1420,12 +1425,21 @@ const styles = StyleSheet.create({
 
   // ── Warehouse kind chips (above the warehouse-docs list) ────────
   // Horizontal scroll row driving `journalApi.warehouseDocs({ type })`.
+  // Корень бага: ScrollView — прямой child flex-колонки (styles.safe,
+  // flex:1). Без flexGrow:0 колонка растягивала горизонтальный
+  // ScrollView по вертикали, и чипы «плавали» в середине высокой
+  // пустой полосы. flexGrow/flexShrink:0 заставляют ScrollView
+  // обнимать высоту контента (chip 32 + paddingBottom) — компактная
+  // полоса, под которой список идёт сразу. alignSelf:'flex-start'
+  // защищает от cross-axis stretch на узких/широких iPhone.
+  kindChipsScroll: {
+    flexGrow: 0,
+    flexShrink: 0,
+    alignSelf: 'flex-start',
+  },
   kindChipsRow: {
     paddingHorizontal: spacing[4],
     paddingBottom: spacing[2],
-    // Центрируем по вертикали, чтобы чипы не растягивались на всю
-    // высоту горизонтального ScrollView (cross-axis stretch).
-    alignItems: 'center',
   },
   kindChipsRowInner: {
     flexDirection: 'row',

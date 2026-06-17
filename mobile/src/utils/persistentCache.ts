@@ -12,266 +12,57 @@
  *
  * Why a custom helper instead of @tanstack/query-async-storage-persister?
  *   - smaller surface area, easier to debug
- *   - we only persist 5 keys, full-cache persistence would be wasteful
+ *   - we only persist a whitelist, full-cache persistence would be wasteful
  *   - no extra dependency
+ *
+ * Pure parsing / classification / whitelist logic lives in
+ * `persistentCache.helpers.ts` (no react-native / AsyncStorage imports) so
+ * it can be unit-tested under the default jest (node) environment.
  */
 import { InteractionManager } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
-
-const STORAGE_PREFIX = 'rqcache:v1:';
-
-/**
- * Query keys whose results we persist.
- * Add a new entry only if the data is:
- *   - relatively static (changes < hourly)
- *   - useful to show stale to the user on cold start
- *   - not user-input-volatile (e.g. don't persist `['clients-plate', search]`)
- */
-// Whitelist of query keys we cache to AsyncStorage. Each entry matches the
-// FIRST element of a useQuery key (e.g. ['suppliers', { search: '' }] matches
-// 'suppliers'). Update this list whenever a new screen needs instant cold-start.
-const PERSISTED_KEYS = [
-  // Warehouse + product picker
-  'products',
-  'all-products-check',
-  'warehouse-categories',
-  // Warehouses (main / defect / used) — 3-row reference list, almost
-  // never changes. Persisted so the warehouse switcher renders the
-  // tabs instantly on cold start instead of flashing the spinner.
-  'warehouses',
-  // Reference data
-  'all-services',
-  'all-users',
-  'users',
-  // Suppliers / clients / cars / equipment
-  'suppliers',
-  // ClientsScreen people-list — useInfiniteQuery keyed
-  // ['clients-infinite', { search, filter, source }]. The base variant
-  // (search: '', filter: 'all', source: null) is what cold start needs;
-  // typed-search variants are filtered by `isSearchVolatile` and the
-  // persisted page count is bounded by MAX_PERSISTED_PAGES. The legacy
-  // ['clients', ...] useQuery key has no readers anymore (the login
-  // prefetch warms 'clients-infinite' directly), so it isn't persisted.
-  'clients-infinite',
-  'cars',
-  // Client source list (откуда узнал о нас) — static reference data,
-  // invalidated only on edit. Persisted so the source picker is instant
-  // on cold start instead of flashing empty.
-  'client-sources',
-  // Equipment (uses 'eq-*' keys)
-  'eq-summary',
-  'eq-storage-list',
-  'eq-user',
-  // Schedule + today
-  'schedule',
-  'schedule-today',
-  // Dashboard cards
-  'dashboard-chart',
-  'dashboard-v2',
-  'employee-ranking',
-  'marketing-dashboard',
-  'shifts',
-  'salary',
-  // Owner dashboard widgets (iter#14, 2026-05-22) — owner sees them every
-  // time the app cold-starts; persisting eliminates the 100-400ms flash
-  // between Hero/KPI render and the first network response.
-  // owner-alerts was replaced by WarehouseAnalyticsWidget (summary +
-  // reorder forecast) — same persistence rationale, single shared prefix.
-  'warehouse-analytics',
-  'clients-new-returning',
-  'retention',
-  'best-day-week',
-  'recent-reviews',
-  'call-funnel',
-  // Calls + services list
-  'calls-summary',
-  // Dashboard widgets (TodayQuickStats / LowStockWidget) — small payloads,
-  // cold-start instant.
-  'checks-dashboard',
-  'low-stock',
-  'services-list',
-  'service-categories',
-  // ── Knowledge base / Учебный центр ─────────────────────────────
-  // List/content keys (NOT per-user progress) so База знаний и Учебный
-  // центр render instantly from cache on cold start like every other
-  // section, and survive a transient first-fetch failure on a flaky
-  // network instead of showing «Не удалось загрузить». Per-user-volatile
-  // keys (article acks, regulations-pending) are intentionally excluded.
-  'knowledge-courses',
-  'knowledge-articles',
-  'knowledge-categories',
-  'knowledge-troubleshooting',
-  // ── Journal (Чеки) ─────────────────────────────────────────────
-  // 'checks' is a paginated history; the first-page default-filter
-  // snapshot is the slowest to render, so we cache the whole first
-  // segment. SWR replaces it within ~150 ms after mount.
-  'checks',
-  // useInfiniteQuery key for the Journal — cold-start instant: we
-  // render the previously seen pages immediately, then SWR refetches
-  // page 1 in the background. Older pages stay cached too, so coming
-  // back from a CheckDetail doesn't drop scroll position.
-  'checks-infinite',
-  // Filter helpers used by ChecksScreen — small list, mostly static.
-  'users-for-filter',
-  // Warehouse-document tab inside ChecksScreen. Replaces the older
-  // 'stock-movements' / 'supplier-deliveries' pair — the journal feed
-  // is now a single unified endpoint. Key shape: ['journal-warehouse-docs', kind].
-  'journal-warehouse-docs',
-  // ── Other heavy lists (cold-start instant) ─────────────────────
-  // Services screen uses ['services', { search, page, limit }].
-  'services',
-  // EmployeesScreen uses ['users-all'].
-  'users-all',
-  // CashFlowScreen uses ['masters'] for its filter dropdown.
-  'masters',
-  // CashFlowScreen + ReportsScreen finance reads.
-  'cashflow',
-  'financial-report',
-  // ExpensesScreen — list + categories. Categories are user-defined but
-  // change rarely (hours to days), so caching them eliminates the
-  // expense-modal flash where the picker was empty for a moment after
-  // tapping "+ Новый". `expenses` itself is keyed by (dateFrom, dateTo)
-  // and most users land on the same default period, so caching the
-  // "month" snapshot keeps the screen instant on cold start.
-  'expenses',
-  'expense-categories',
-  // ── HYBRID-cache expansion (2026-05-23) ────────────────────────
-  // Owner picked HYBRID: critical screens fetch fresh, everything
-  // else renders persistent cache then shows the FreshnessBadge.
-  // First-segment matching means each entry below covers EVERY
-  // sub-variant (date params, filters, etc.). Search-volatile
-  // variants are filtered by `isSearchVolatile`.
-  //
-  // 'clients-infinite', 'suppliers', 'cars', 'schedule', 'equipment'
-  // (via 'eq-*'), 'marketing-dashboard', 'expenses' — already covered
-  // above. Entries below close the remaining gaps.
-  //
-  // CallsScreen reads ['calls', dateStr] — small per-day payload.
-  'calls',
-  // ReportsScreen reads ['defect-writeoff-report', from, to] +
-  // 'financial-report' (already above). Owner returns to the same
-  // default month often.
-  'defect-writeoff-report',
-  // MarketingScreen — reviews / integrations / platform links /
-  // settings / reminder-settings. All small reference payloads.
-  'marketing-reviews',
-  'marketing-integrations',
-  'marketing-platform-links',
-  'marketing-settings',
-  'reminder-settings',
-  // EquipmentScreen — trash and categories under 'eq-' family.
-  'eq-trash',
-  'eq-cats',
-  'eq-storage',
-  // WarehouseAnalyticsScreen — owner-only deep dive into stock value,
-  // dead stock, ABC, velocity, reorder forecast. Heavy aggregations
-  // on the backend; we render the previous period instantly on cold
-  // start while SWR refetches.
-  'warehouse-analytics-summary',
-  'warehouse-analytics-velocity',
-  'warehouse-analytics-reorder',
-  'warehouse-analytics-category-margin',
-  'warehouse-analytics-top-moving',
-  'warehouse-analytics-top-margin',
-  // ── Detail cards — instant cold-open (2026-06-03) ──────────────
-  // ClientDetailScreen reads ['client', id] (header card) + ['client-checks',
-  // id] (history list) + ['client-checks-by-car', id]. EmployeeDetailScreen
-  // reads ['employee-full-profile', id] (the whole profile aggregate) +
-  // ['user', id]. All are keyed ONLY by a stable id (no search param → not
-  // search-volatile), so persisting their first segments lets a tapped card
-  // render from cache on cold start instead of a blocking spinner. A separate
-  // agent adds the pressIn prefetch of 'client-checks' for the list.
-  'client',
-  'client-checks',
-  'client-checks-by-car',
-  'employee-full-profile',
-  'user',
-] as const;
-
-type PersistedKey = (typeof PERSISTED_KEYS)[number];
-
-interface StoredEntry {
-  queryKey: QueryKey;
-  data: unknown;
-  storedAt: number;
-}
+import {
+  STORAGE_PREFIX,
+  PERSISTED_KEYS,
+  VARIANT_CAPS,
+  capInfinitePages,
+  classifyStoredPair,
+  firstKey,
+  isEmptyCollection,
+  isPersisted,
+  isSearchVolatile,
+  storageKey,
+  type PersistedKey,
+  type StoredEntry,
+  type StoredPairResult,
+} from './persistentCache.helpers';
 
 /**
- * Max age of a persisted entry — older than this is ignored.
+ * Apply one parsed stored pair to the QueryClient if it classifies as 'ok'.
  *
- * 7 days: most autosalon data (suppliers, clients, products) doesn't churn
- * faster than that; users opening the app after a weekend should still see
- * something instead of a blank screen. Stale data is replaced by a fresh
- * fetch in the background via TanStack Query's stale-while-revalidate.
+ * ROOT-CAUSE FIX: we pass the real `{ updatedAt: storedAt }` so React Query
+ * sets `dataUpdatedAt` to when the data was actually fetched — NOT `Date.now()`.
+ * Without it, hydrated data looked freshly-fetched, so within `staleTime`
+ * (1–5 min) the screen would NOT refetch on mount and a stale/empty snapshot
+ * (e.g. captured in a 502 window) stayed visible, masking reality. With the
+ * real age, an entry older than `staleTime` is `isStale()` immediately and
+ * React Query refetches on mount, overwriting stale with fresh.
+ * (`SetDataOptions.updatedAt` is supported in @tanstack/react-query v5.)
+ *
+ * Returns the same classification so the hydration GC can act on it.
  */
-const MAX_STALE_MS = 7 * 24 * 60 * 60 * 1000;
-
-/**
- * Per-first-key cap on the number of persisted VARIANTS (different
- * sub-params → different storage slots). Without a cap, per-day calls,
- * per-month schedule/salary, per-range cashflow and per-id detail slots
- * accumulate in AsyncStorage forever, slowing `hydrateCache` (and the
- * getAllKeys/multiGet it runs) on EVERY cold start. During hydration we
- * keep the N most-recent variants per first key and GC the rest.
- * First keys not listed here are uncapped (their param space is small).
- */
-const VARIANT_CAPS: Partial<Record<PersistedKey, number>> = {
-  // Period-keyed screens — users flip between a few recent periods.
-  calls: 3,
-  schedule: 3,
-  salary: 3,
-  cashflow: 3,
-  expenses: 3,
-  // Id-keyed detail cards — keep the 10 most recently opened.
-  client: 10,
-  'client-checks': 10,
-  'client-checks-by-car': 10,
-  'employee-full-profile': 10,
-  user: 10,
-  // Journal infinite feed — base slot + one filtered variant.
-  'checks-infinite': 2,
-};
-
-/**
- * Infinite queries persist their full `{ pages, pageParams }` aggregate.
- * A long scroll session can accumulate dozens of pages — persisting all
- * of them bloats the AsyncStorage slot and slows cold-start hydration
- * for data the user only needs after scrolling anyway. We cap the
- * persisted snapshot to the first pages; `getNextPageParam` re-derives
- * the next cursor from the restored pages, so pagination resumes cleanly.
- */
-const MAX_PERSISTED_PAGES = 2;
-
-function isInfiniteData(data: unknown): data is { pages: unknown[]; pageParams: unknown[] } {
-  return (
-    !!data &&
-    typeof data === 'object' &&
-    Array.isArray((data as { pages?: unknown }).pages) &&
-    Array.isArray((data as { pageParams?: unknown }).pageParams)
-  );
+function applyStoredPair(qc: QueryClient, raw: string | null, now: number): StoredPairResult {
+  const result = classifyStoredPair(raw, now);
+  if (result.status === 'ok') {
+    qc.setQueryData(result.queryKey, result.data, { updatedAt: result.storedAt });
+  }
+  return result;
 }
 
-/** Bound an infinite-query payload to the first MAX_PERSISTED_PAGES pages
- *  (pages + pageParams stay aligned). Non-infinite data passes through. */
-function capInfinitePages(data: unknown): unknown {
-  if (!isInfiniteData(data) || data.pages.length <= MAX_PERSISTED_PAGES) return data;
-  return {
-    ...data,
-    pages: data.pages.slice(0, MAX_PERSISTED_PAGES),
-    pageParams: data.pageParams.slice(0, MAX_PERSISTED_PAGES),
-  };
-}
-
-function firstKey(qk: QueryKey): string | null {
-  if (!Array.isArray(qk) || qk.length === 0) return null;
-  const f = qk[0];
-  return typeof f === 'string' ? f : null;
-}
-
-function isPersisted(key: string | null): key is PersistedKey {
-  return !!key && (PERSISTED_KEYS as readonly string[]).includes(key);
-}
+// Re-export the classification type so any import site referencing it from
+// this module keeps resolving (single source of truth: the helpers module).
+export type { StoredPairResult };
 
 /**
  * Priority first-screen keys — hydrated SYNCHRONOUSLY (awaited, bounded)
@@ -280,10 +71,10 @@ function isPersisted(key: string | null): key is PersistedKey {
  * flash empty. Everything else hydrates in the background via `hydrateCache`.
  *
  * Audit #8.7: `hydrateCache` does NOT block first render (~200-500ms for the
- * full ~60-key whitelist), so a fast user reaching Журнал/Склад before
- * hydration completes saw an empty flash. Synchronously hydrating just this
- * tiny subset closes that gap while keeping boot fast — only a handful of
- * `multiGet` reads + `JSON.parse` calls, bounded by `PRIORITY_HYDRATE_BUDGET_MS`.
+ * full whitelist), so a fast user reaching Журнал/Склад before hydration
+ * completes saw an empty flash. Synchronously hydrating just this tiny subset
+ * closes that gap while keeping boot fast — only a handful of `multiGet` reads
+ * + `JSON.parse` calls, bounded by `PRIORITY_HYDRATE_BUDGET_MS`.
  *
  * Keep this list SHORT — every entry adds to the pre-paint budget.
  */
@@ -325,93 +116,6 @@ async function readTokenOrFlush(): Promise<string | null> {
 }
 
 /**
- * Classification of one stored pair after a hydration attempt:
- *   - 'ok'      — valid, fresh, whitelisted → written into the QueryClient;
- *   - 'stale'   — too old / de-whitelisted / search-volatile → safe to GC;
- *   - 'corrupt' — unparseable or missing fields → safe to GC.
- * 'ok' carries the first key + storedAt so the variant-cap prune in
- * `hydrateCache` doesn't have to re-parse the payload.
- */
-type StoredPairResult =
-  | { status: 'ok'; first: PersistedKey; storedAt: number }
-  | { status: 'stale' }
-  | { status: 'corrupt' };
-
-/**
- * Parse one stored pair and write it into the QueryClient if valid + fresh +
- * whitelisted. Shared by both the priority and background passes so the
- * validation rules (max-age, whitelist, shape) never drift. The returned
- * classification feeds the hydration GC (dead slots get multiRemove'd).
- */
-function applyStoredPair(qc: QueryClient, raw: string | null, now: number): StoredPairResult {
-  if (!raw) return { status: 'corrupt' };
-  try {
-    const parsed: StoredEntry = JSON.parse(raw);
-    if (!parsed?.queryKey || parsed.data === undefined) return { status: 'corrupt' };
-    const storedAt = parsed.storedAt ?? 0;
-    if (now - storedAt > MAX_STALE_MS) return { status: 'stale' };
-    const f = firstKey(parsed.queryKey);
-    if (!isPersisted(f)) return { status: 'stale' };
-    // Search-volatile variants written by older builds (before the
-    // positional-search guard below existed) must not be resurrected —
-    // classify as stale so the hydration GC drops the slot.
-    if (isSearchVolatile(parsed.queryKey)) return { status: 'stale' };
-    qc.setQueryData(parsed.queryKey, parsed.data);
-    return { status: 'ok', first: f, storedAt };
-  } catch {
-    return { status: 'corrupt' };
-  }
-}
-
-function storageKey(qk: QueryKey): string {
-  // Stringify the full query key so different params (e.g. month in
-  // ['schedule', '2026-05-01', '2026-05-31']) get separate slots.
-  return STORAGE_PREFIX + JSON.stringify(qk);
-}
-
-/**
- * Is this query key search-volatile — i.e. its sub-params contain a
- * non-empty `search` string the user typed?
- *
- * We don't want to mirror every keystroke variant to AsyncStorage. That
- * would (a) blow up disk usage on long sessions and (b) cause main-thread
- * stalls because AsyncStorage writes serialise through a single bridge
- * call. We still persist the BASE variant (`search === ''`) because
- * that's the snapshot we want on cold start.
- */
-/**
- * Some keys carry the user-typed search as a POSITIONAL string instead of
- * a `{ search }` object part — e.g. ['suppliers', 'мас'] and
- * ['checks-infinite', 'мас', from, to, masterId]. The object-shape loop
- * below can't see those, so without this index every Журнал / Поставщики
- * keystroke persisted a full page payload. Maps first key → index of the
- * search string inside the query key. The empty-search base slot
- * (`qk[idx] === ''`) still persists.
- */
-const POSITIONAL_SEARCH_IDX: Record<string, number> = {
-  'checks-infinite': 1,
-  suppliers: 1,
-};
-
-function isSearchVolatile(qk: QueryKey): boolean {
-  if (!Array.isArray(qk)) return false;
-  const f = firstKey(qk);
-  const idx = f ? POSITIONAL_SEARCH_IDX[f] : undefined;
-  if (idx !== undefined) {
-    const v = qk[idx];
-    if (typeof v === 'string' && v.length > 0) return true;
-  }
-  for (let i = 1; i < qk.length; i++) {
-    const part = qk[i];
-    if (part && typeof part === 'object' && 'search' in (part as Record<string, unknown>)) {
-      const s = (part as { search?: unknown }).search;
-      if (typeof s === 'string' && s.length > 0) return true;
-    }
-  }
-  return false;
-}
-
-/**
  * Hydrate the QueryClient from AsyncStorage.
  *
  * Call once on app start, BEFORE the first render that uses `useQuery`.
@@ -442,6 +146,9 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
     // batch-removed afterwards so they stop slowing every future cold
     // start. 'ok' entries keep their storage key + first key + storedAt
     // for the variant-cap prune below — no payload re-parse needed.
+    // 'skip' entries (empty collections) are LEFT on disk untouched: a
+    // later non-empty write may legitimately replace the slot, and GC'ing
+    // it would just churn AsyncStorage.
     const deadKeys: string[] = [];
     const alive: Array<{ storageKey: string; first: PersistedKey; storedAt: number }> = [];
     // Chunk JSON.parse + setQueryData so we don't hog the JS thread on a
@@ -455,9 +162,10 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
         const result = applyStoredPair(qc, raw, now);
         if (result.status === 'ok') {
           alive.push({ storageKey: skey, first: result.first, storedAt: result.storedAt });
-        } else {
+        } else if (result.status === 'stale' || result.status === 'corrupt') {
           deadKeys.push(skey);
         }
+        // 'skip' → leave on disk, don't hydrate.
       }
       if (i + CHUNK < pairs.length) {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
@@ -553,6 +261,9 @@ export async function hydratePriorityCache(qc: QueryClient): Promise<void> {
  *   - SKIP search-volatile variants (`search: '<non-empty>'`). The base
  *     `search: ''` slot is still persisted. This prevents per-keystroke
  *     bridge writes that blocked the JS-thread on slower devices.
+ *   - SKIP empty collections (root-cause fix): a list response captured in
+ *     a 502 / empty window must NOT be persisted, otherwise it masks the
+ *     "there IS data now" state on the next cold start.
  *   - COALESCE rapid updates per storage key via a 350 ms tail-debounce.
  *     TanStack fires the `updated` event multiple times per refetch
  *     (status transitions, dataUpdatedAt bumps); we only need to write
@@ -614,6 +325,12 @@ export function attachPersistence(qc: QueryClient): () => void {
     // are NOT persisted — they're transient user input variants.
     // The empty-search variant under the same first-segment IS persisted.
     if (isSearchVolatile(query.queryKey)) return;
+    // Empty-collection guard (root-cause fix): never persist an empty list
+    // snapshot. A 502 / empty-window response would otherwise be cached and
+    // mask real data on the next cold start (stuck «0 товаров» / «нет
+    // мастеров»). Non-list objects (detail cards) and non-empty lists
+    // persist as before.
+    if (isEmptyCollection(query.state.data)) return;
 
     const skey = storageKey(query.queryKey);
     const existing = pendingWrites.get(skey);
@@ -644,3 +361,8 @@ export async function clearPersistentCache(): Promise<void> {
     // best-effort
   }
 }
+
+// Re-export the whitelist so callers / docs that referenced `PERSISTED_KEYS`
+// from this module keep resolving (single source of truth now lives in the
+// helpers module).
+export { PERSISTED_KEYS };

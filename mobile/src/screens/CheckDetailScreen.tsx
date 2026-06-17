@@ -21,9 +21,12 @@ import * as Print from 'expo-print';
 import * as Sharing from 'expo-sharing';
 import * as ImagePicker from 'expo-image-picker';
 import { checksApi, myCompanyApi, checkPhotosApi, returnsApi, knowledgeApi } from '../api/services';
+import { resolveCheckDetailState } from './checkDetailViewState';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
+import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import FeatureGate from '../components/FeatureGate';
 import Modal from '../components/Modal';
 import { haptic } from '../platform/haptics';
@@ -283,7 +286,12 @@ export default function CheckDetailScreen() {
   // содержит services/products, а CheckDetailScreen обращался к ним через
   // .length. Теперь даже если placeholder неполный — guards ниже спасают,
   // и реальные данные подъезжают через queryFn.
-  const { data: check, isLoading } = useQuery<Check>({
+  const {
+    data: check,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery<Check>({
     queryKey: ['check', id],
     queryFn: async () => {
       const res = await checksApi.getById(id);
@@ -492,9 +500,16 @@ export default function CheckDetailScreen() {
   // permission checks_edit (та же гейтовка, что и у кнопки «Изменить»).
   const acceptPaymentMutation = useMutation({
     mutationFn: () => checksApi.update(id, { isDeferred: false }),
-    onSuccess: () => {
+    onSuccess: async () => {
       haptic('success');
-      queryClient.invalidateQueries({ queryKey: ['check', id] });
+      // The ON-SCREEN check is refetched (awaited) rather than a bare
+      // invalidate: the detail must re-render on the CONFIRMED-fresh payload
+      // (isDeferred:false, recomputed totals) instead of a stale snapshot.
+      // `getById` always returns the full check (backend activateDeferred →
+      // getById), so the screen never drops to a content-less state.
+      await queryClient.refetchQueries({ queryKey: ['check', id] });
+      // Lists / dashboards are off-screen — fire-and-forget invalidation is
+      // enough; they refetch lazily on their next focus.
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
@@ -700,8 +715,42 @@ export default function CheckDetailScreen() {
     returnMutation.mutate(body);
   };
 
-  if (isLoading) return <LoadingSpinner />;
-  if (!check) return <Text style={{ padding: 20, textAlign: 'center' }}>{'Чек не найден'}</Text>;
+  // Terminal states get a proper FULL-SCREEN shell (canvas background + a back
+  // chevron) so a missing / failed check never renders as a blank screen on the
+  // transparent navigation stack — this is the «пустой экран» fix. Stale data
+  // keeps showing through `resolveCheckDetailState` (stale-while-revalidate).
+  const viewState = resolveCheckDetailState({ hasCheck: !!check, isLoading, isError });
+  if (viewState !== 'content' || !check) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+        <View style={[styles.header, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
+          </TouchableOpacity>
+          <View style={styles.headerCenter}>
+            <Text style={[styles.headerTitle, { color: palette.text.primary }]}>{'Чек'}</Text>
+          </View>
+          {/* Invisible spacer (width only) — balances the back chevron so the
+              title stays optically centered without drawing a stray circle. */}
+          <View style={{ width: 38 }} />
+        </View>
+        <View style={styles.terminalStateWrap}>
+          {viewState === 'loading' ? (
+            <LoadingSpinner />
+          ) : viewState === 'error' ? (
+            <QueryErrorState description="Не удалось загрузить чек. Проверьте соединение." onRetry={() => refetch()} />
+          ) : (
+            <EmptyState
+              icon="receipt"
+              title="Чек не найден"
+              description="Возможно, он был удалён."
+              action={{ label: 'Назад', onPress: () => navigation.goBack() }}
+            />
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
 
   // Возвращённые чеки заморожены: ни редактировать, ни удалять, ни
   // оформлять второй возврат. Permission остаётся, но UI его подавляет —
@@ -1585,6 +1634,11 @@ export default function CheckDetailScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+
+  // Full-screen terminal state (loading / error / not-found) — centers the
+  // state component below the header so it fills the screen instead of
+  // collapsing to a thin strip on the transparent navigation background.
+  terminalStateWrap: { flex: 1, justifyContent: 'center' },
 
   // Header
   header: {
