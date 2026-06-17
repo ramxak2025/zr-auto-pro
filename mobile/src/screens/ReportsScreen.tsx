@@ -472,7 +472,7 @@ export default function ReportsScreen() {
 
   // Категории расходов агрегируем в memo: имя категории → сумма.
   const expensesByCategory = useMemo(() => {
-    const rows = expensesQuery.data ?? [];
+    const rows = Array.isArray(expensesQuery.data) ? expensesQuery.data : [];
     const map = new Map<string, number>();
     for (const r of rows) {
       const key = r.categoryName ?? 'Без категории';
@@ -656,7 +656,7 @@ export default function ReportsScreen() {
   // Спарклайн "факт vs прогноз" — лёгкий синтетический ряд: marginSpark
   // умножаем на средний дневной revenueMonth, чтобы получить визуальный
   // тренд. Если spark пустой — спарклайн рисовать не будем.
-  const _marginSparkForChart = dashboard?.marginSpark ?? [];
+  const _marginSparkForChart = Array.isArray(dashboard?.marginSpark) ? dashboard?.marginSpark : [];
   const _monthlyRevenueForChart = dashboard?.revenueMonth ?? 0;
   const forecastSpark = useMemo(() => {
     if (!_marginSparkForChart.length || !_monthlyRevenueForChart) return [];
@@ -702,7 +702,7 @@ export default function ReportsScreen() {
   const marginPct = revenue > 0 ? (netProfit / revenue) * 100 : 0;
   const prevMarginPct = prevReport && prevReport.revenue > 0 ? (prevReport.netProfit / prevReport.revenue) * 100 : 0;
   const marginDelta = compareEnabled ? marginPct - prevMarginPct : (dashboard?.marginPctChange ?? 0);
-  const marginSpark = dashboard?.marginSpark ?? [];
+  const marginSpark = Array.isArray(dashboard?.marginSpark) ? dashboard?.marginSpark : [];
 
   const netProfitDelta = compareEnabled && prevReport ? deltaPct(netProfit, prevReport.netProfit) : 0;
 

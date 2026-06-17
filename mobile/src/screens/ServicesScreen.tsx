@@ -201,7 +201,7 @@ export default function ServicesScreen() {
     setRefreshing(false);
   };
 
-  const services = data?.data || [];
+  const services = Array.isArray(data?.data) ? data.data : [];
   const total = data?.total || 0;
   const hasMore = page * limit < total;
 

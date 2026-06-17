@@ -395,7 +395,10 @@ export default function ProductsScreen() {
     refetch: whRefetch,
   } = useQuery<Warehouse[]>({
     queryKey: ['warehouses'],
-    queryFn: async () => (await warehousesApi.list()).data,
+    queryFn: async () => {
+      const res = await warehousesApi.list();
+      return Array.isArray(res.data) ? res.data : [];
+    },
     staleTime: 10 * 60_000,
   });
 
@@ -493,7 +496,7 @@ export default function ProductsScreen() {
     queryKey: ['inventory-movements'],
     queryFn: async () => {
       const res = await productsApi.getMovements({ limit: 200 });
-      return res.data;
+      return Array.isArray(res.data) ? res.data : [];
     },
     staleTime: 60_000,
     enabled: needsInventoryMovements,
@@ -622,7 +625,7 @@ export default function ProductsScreen() {
   // на бэке и доступны через web-админ. Никакого UI они здесь больше не
   // имеют, чтобы не подкидывать нестабильный gesture-стек.
 
-  const allProducts = data?.data || [];
+  const allProducts = Array.isArray(data?.data) ? data.data : [];
 
   // Compute folder annotations: last inventory date per folder
   const inventoryAnnotations = useMemo(() => {

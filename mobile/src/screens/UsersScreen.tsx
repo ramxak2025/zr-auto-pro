@@ -121,7 +121,7 @@ const defaultSectionVisibility: SectionVisibilityMap = {
 /** Fold the contract's sparse override list into a full key→bool map. */
 function toVisibilityMap(overrides: SectionVisibility[] | undefined): SectionVisibilityMap {
   const map = { ...defaultSectionVisibility };
-  for (const o of overrides ?? []) {
+  for (const o of Array.isArray(overrides) ? overrides : []) {
     if (o.sectionKey in map) map[o.sectionKey] = o.isVisible;
   }
   return map;
@@ -333,12 +333,12 @@ export default function UsersScreen() {
     queryKey: ['all-products-commissions'],
     queryFn: async () => {
       const res = await productsApi.getAll({ limit: 500 });
-      return res.data.data || res.data;
+      return Array.isArray(res.data.data) ? res.data.data : Array.isArray(res.data) ? res.data : [];
     },
     enabled: !!commissionUserId,
   });
 
-  const users = data ?? [];
+  const users = Array.isArray(data) ? data : [];
 
   // Section visibility (#071) is persisted via its own endpoint AFTER the user
   // row exists. On create we only have the id from the create response, so the
@@ -406,7 +406,7 @@ export default function UsersScreen() {
   // Product search for commission modal.
   // MUST be declared before any early return to satisfy rules-of-hooks.
   const filteredProducts = useMemo(() => {
-    const products = allProducts || [];
+    const products = Array.isArray(allProducts) ? allProducts : [];
     const alreadyAdded = new Set(commissionItems.map((c) => c.productId));
     const available = products.filter((p) => !alreadyAdded.has(p.id));
     if (!productSearchText) return available;

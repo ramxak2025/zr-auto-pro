@@ -443,7 +443,7 @@ function KpiStrip() {
     [],
   );
 
-  const points = c?.points ?? [];
+  const points = Array.isArray(c?.points) ? c.points : [];
 
   // Динамический заголовок секции — название текущего месяца.
   const monthHeader = useMemo(() => {
@@ -697,7 +697,7 @@ function OwnerAnalyticsChart() {
     setOffset(0);
   };
 
-  const points = data?.points || [];
+  const points = Array.isArray(data?.points) ? data.points : [];
   const totalRevenue = data?.totalRevenue ?? 0;
   const totalProfit = data?.totalProfit ?? 0;
   const totalChecks = data?.totalChecks ?? 0;
@@ -1199,7 +1199,7 @@ function OnShiftSnapshot() {
     staleTime: 30_000,
   });
 
-  const statuses = todayData ?? [];
+  const statuses = Array.isArray(todayData) ? todayData : [];
   const isSick = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('больнич');
   const isAbsent = (s: TodayEmployeeStatus) => (s.note || '').toLowerCase().includes('прогул');
   const isOnShift = (s: TodayEmployeeStatus) => s.isWorking || !!s.actualArrival || s.lateStatus === 'on_time';
@@ -1632,7 +1632,7 @@ function MarginCard() {
 
   const margin = data?.marginPct ?? 0;
   const change = data?.marginPctChange ?? 0;
-  const spark = data?.marginSpark ?? [];
+  const spark = Array.isArray(data?.marginSpark) ? data.marginSpark : [];
   const W = SCREEN_WIDTH - spacing[4] * 2 - spacing[5] * 2;
   const H = 60;
   const path = useMemo(() => buildSparkPath(spark, W, H), [spark, W, H]);
@@ -1793,7 +1793,7 @@ function WarehouseAnalyticsWidget() {
     overstocked: 99,
   };
   const reorderTop = useMemo(() => {
-    const items = forecastQuery.data ?? [];
+    const items = Array.isArray(forecastQuery.data) ? forecastQuery.data : [];
     return items
       .filter((r) => r.urgency === 'critical' || r.urgency === 'now' || r.urgency === 'soon')
       .sort((a, b) => {
@@ -1976,7 +1976,7 @@ function LowStockCard() {
     staleTime: 60_000,
   });
 
-  const items = data ?? [];
+  const items = Array.isArray(data) ? data : [];
   if (items.length === 0) return null;
 
   const top = items.slice(0, 3);
@@ -2362,7 +2362,7 @@ function BestDayOfWeekCard() {
     placeholderData: (prev) => prev,
   });
 
-  const days = data?.days ?? [];
+  const days = Array.isArray(data?.days) ? data.days : [];
   const best = data?.best ?? -1;
   const worst = data?.worst ?? -1;
   const maxRev = Math.max(...days.map((d) => d.revenue), 1);
@@ -2472,7 +2472,7 @@ function RecentReviewsCard() {
     placeholderData: (prev) => prev,
   });
 
-  const reviews = data ?? [];
+  const reviews = Array.isArray(data) ? data : [];
 
   return (
     <AnimatedCard
@@ -3161,7 +3161,10 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
     queryFn: async () => (await usersApi.getAll()).data,
   });
 
-  const masters = useMemo(() => (usersData || []).filter((u) => u.isActive && u.role === 'master'), [usersData]);
+  const masters = useMemo(
+    () => (Array.isArray(usersData) ? usersData : []).filter((u) => u.isActive && u.role === 'master'),
+    [usersData],
+  );
 
   const stats = useMemo(() => calculateAttendanceStats(monthEntries as any), [monthEntries]);
   const ranked = useMemo(
@@ -3274,7 +3277,7 @@ function MasterDashboard() {
     },
     staleTime: 10_000,
   });
-  const shiftOpen = (myShifts ?? []).some((s) => !s.closedAt);
+  const shiftOpen = (Array.isArray(myShifts) ? myShifts : []).some((s) => !s.closedAt);
 
   // Sync the iOS home-screen widget with the master's earnings.
   // Source: salaryApi.getMy() — the exact numbers the «Сегодня /

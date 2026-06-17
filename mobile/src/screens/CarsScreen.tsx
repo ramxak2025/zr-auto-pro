@@ -1,13 +1,5 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  StyleSheet,
-  RefreshControl,
-  ActivityIndicator,
-  ScrollView,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, ActivityIndicator, ScrollView } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
@@ -60,9 +52,7 @@ export default function CarsScreen() {
     // chip refetches the server-filtered set instead of paginating page 1.
     queryKey: ['cars', noPlateOnly ? { search, page, limit, noPlate: true } : { search, page, limit }],
     queryFn: async () => {
-      const res = await carsApi.getAll(
-        noPlateOnly ? { search, page, limit, noPlate: true } : { search, page, limit },
-      );
+      const res = await carsApi.getAll(noPlateOnly ? { search, page, limit, noPlate: true } : { search, page, limit });
       return res.data;
     },
     placeholderData: (prev) => prev,
@@ -76,7 +66,7 @@ export default function CarsScreen() {
   };
 
   const rawCars = useMemo<Car[]>(
-    () => (Array.isArray(data) ? (data as Car[]) : ((data as any)?.data ?? [])),
+    () => (Array.isArray(data) ? (data as Car[]) : Array.isArray((data as any)?.data) ? (data as any).data : []),
     [data],
   );
   const total = Array.isArray(data) ? rawCars.length : ((data as any)?.total ?? rawCars.length);
@@ -118,7 +108,9 @@ export default function CarsScreen() {
                 model, since the owner identifies the car by its plate first. */}
             <View style={styles.plateColumn}>
               {item.plateNumber ? (
-                <View style={[styles.plateBadge, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+                <View
+                  style={[styles.plateBadge, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                >
                   <Text style={[styles.plateText, { color: palette.text.primary }]}>{item.plateNumber}</Text>
                 </View>
               ) : (
@@ -144,11 +136,7 @@ export default function CarsScreen() {
                 </Text>
               )}
             </View>
-            <Ionicons
-              name={expanded ? 'chevron-up' : 'chevron-down'}
-              size={16}
-              color={palette.text.tertiary}
-            />
+            <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={16} color={palette.text.tertiary} />
           </TouchableOpacity>
           {expanded ? <CarChecksInline carId={item.id} palette={palette} /> : null}
         </View>
@@ -175,11 +163,7 @@ export default function CarsScreen() {
         />
       </View>
 
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipsRow}
-      >
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
         <CarFilterChip
           active={!noPlateOnly}
           label="Все"
@@ -210,10 +194,7 @@ export default function CarsScreen() {
         // Genuinely-empty unfiltered list — a full-screen EmptyState is fine
         // here (there's nothing to paginate). For search / «без номеров» we
         // keep the list mounted (below) so onEndReached can load deeper pages.
-        <EmptyState
-          title="Нет автомобилей"
-          description="Автомобили появятся после добавления к клиентам"
-        />
+        <EmptyState title="Нет автомобилей" description="Автомобили появятся после добавления к клиентам" />
       ) : (
         <FlashList
           data={sortedCars}
@@ -225,13 +206,7 @@ export default function CarsScreen() {
           ListEmptyComponent={
             !isLoading ? (
               <EmptyState
-                title={
-                  search
-                    ? 'Ничего не найдено'
-                    : noPlateOnly
-                      ? 'Нет авто без номеров'
-                      : 'Нет автомобилей'
-                }
+                title={search ? 'Ничего не найдено' : noPlateOnly ? 'Нет авто без номеров' : 'Нет автомобилей'}
                 description={search ? `Запрос: «${search}»` : undefined}
               />
             ) : null
@@ -291,18 +266,12 @@ function CarFilterChip({ active, label, icon, onPress, palette }: CarFilterChipP
  * total, master and payment so the owner can answer "what did we do
  * last time for this car?" without leaving the list.
  */
-function CarChecksInline({
-  carId,
-  palette,
-}: {
-  carId: string;
-  palette: ReturnType<typeof useColors>;
-}) {
+function CarChecksInline({ carId, palette }: { carId: string; palette: ReturnType<typeof useColors> }) {
   const { data: checks, isLoading } = useQuery<Check[]>({
     queryKey: ['car-checks', carId],
     queryFn: async () => {
       const res = await carsApi.checks(carId, { limit: 20 });
-      return res.data;
+      return Array.isArray(res.data) ? res.data : [];
     },
     staleTime: 60_000,
   });

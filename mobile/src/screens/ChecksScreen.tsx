@@ -423,7 +423,7 @@ export default function ChecksScreen() {
     staleTime: 5 * 60_000,
   });
 
-  const activeUsers = useMemo(() => (allUsers || []).filter((u) => u.isActive), [allUsers]);
+  const activeUsers = useMemo(() => (Array.isArray(allUsers) ? allUsers : []).filter((u) => u.isActive), [allUsers]);
 
   // Near-live journal: poll the loaded pages every 30s, but only while the
   // screen is focused, so a backgrounded Журнал tab spends no JS tick or
@@ -531,7 +531,7 @@ export default function ChecksScreen() {
     queryKey: ['journal-warehouse-docs', warehouseKind],
     queryFn: async () => {
       const res = await journalApi.warehouseDocs(warehouseKind ? { type: warehouseKind } : {});
-      return res.data;
+      return Array.isArray(res.data) ? res.data : [];
     },
     staleTime: 60_000,
     enabled: activeTab === 'warehouse',
@@ -615,7 +615,11 @@ export default function ChecksScreen() {
   // Flatten all loaded pages — newest first comes from page 1, older
   // appended below from page 2+. The reduce avoids creating a fresh
   // array on every render unless the underlying pages change.
-  const allLoadedChecks = useMemo(() => (checksData?.pages ?? []).flatMap((p) => p?.data ?? []), [checksData?.pages]);
+  const allLoadedChecks = useMemo(
+    () =>
+      (Array.isArray(checksData?.pages) ? checksData.pages : []).flatMap((p) => (Array.isArray(p?.data) ? p.data : [])),
+    [checksData?.pages],
+  );
   // Returns-only фильтр работает на уже загруженных страницах. Бэк
   // не отдаёт серверный isReturned-параметр (пока), но `placeholderData`
   // + `checks-infinite` cache держат страницы тёплыми — клиентский

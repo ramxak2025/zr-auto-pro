@@ -392,7 +392,7 @@ export default function CashFlowScreen() {
         dateTo: expandedDay,
         approvalStatus: 'approved',
       });
-      return res.data as any[];
+      return Array.isArray(res.data) ? (res.data as any[]) : [];
     },
     enabled: canViewCashFlow && !!expandedDay,
   });
@@ -496,7 +496,7 @@ export default function CashFlowScreen() {
 
   // ── Derived ──────────────────────────────────────────────────────────
   const totals = useMemo(() => cashflow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 }, [cashflow?.totals]);
-  const days = useMemo<any[]>(() => cashflow?.days || [], [cashflow?.days]);
+  const days = useMemo<any[]>(() => (Array.isArray(cashflow?.days) ? cashflow.days : []), [cashflow?.days]);
 
   // Sort newest-first so the user reads "what happened today" without
   // scrolling to the bottom of a month.
@@ -885,7 +885,7 @@ export default function CashFlowScreen() {
                             Нет чеков за этот день
                           </Text>
                         ) : (
-                          expandedChecks.data.map((c: any) => (
+                          (Array.isArray(expandedChecks.data) ? expandedChecks.data : []).map((c: any) => (
                             <CheckRow key={c.id} check={c} palette={palette} onPress={() => openCheck(c.id)} />
                           ))
                         )}
@@ -968,7 +968,7 @@ export default function CashFlowScreen() {
                 Обычный ScrollView гарантирует, что строки видны и пресс
                 по любой из них срабатывает. */}
             <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
-              {(employees || []).map((item: any) => (
+              {(Array.isArray(employees) ? employees : []).map((item: any) => (
                 <EmployeePickerRow
                   key={item.id}
                   id={item.id}

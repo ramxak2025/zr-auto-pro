@@ -193,7 +193,7 @@ export default function EmployeesScreen() {
     queryKey: ['users-all'],
     queryFn: async () => {
       const res = await usersApi.getAll();
-      return res.data;
+      return Array.isArray(res.data) ? res.data : [];
     },
     staleTime: 60_000,
     placeholderData: (prev) => prev,
@@ -219,7 +219,7 @@ export default function EmployeesScreen() {
     queryKey: ['schedule-today'],
     queryFn: async () => {
       const res = await scheduleApi.getToday();
-      return res.data;
+      return Array.isArray(res.data) ? res.data : [];
     },
     staleTime: 30_000,
     refetchInterval: pollEnabled ? 60_000 : false,
@@ -248,29 +248,32 @@ export default function EmployeesScreen() {
     queryKey: ['users-dismissed'],
     queryFn: async () => {
       const res = await usersApi.listDismissed();
-      return res.data;
+      return Array.isArray(res.data) ? res.data : [];
     },
     enabled: canManageDismissed,
     staleTime: 30_000,
     placeholderData: (prev) => prev,
   });
-  const dismissedCount = (dismissed ?? []).filter((u) => !!u.dismissedAt && !u.purgedAt).length;
+  const dismissedCount = (Array.isArray(dismissed) ? dismissed : []).filter(
+    (u) => !!u.dismissedAt && !u.purgedAt,
+  ).length;
 
   const todayMap = useMemo(() => {
     const map = new Map<string, TodayEmployeeStatus>();
-    (today ?? []).forEach((s) => map.set(s.userId, s));
+    (Array.isArray(today) ? today : []).forEach((s) => map.set(s.userId, s));
     return map;
   }, [today]);
 
   const rankingMap = useMemo(() => {
     const map = new Map<string, { revenue: number; checkCount: number }>();
-    (ranking?.today ?? []).forEach((r) => map.set(r.masterId, { revenue: r.revenue, checkCount: r.checkCount }));
+    const todayRanking = ranking && Array.isArray(ranking.today) ? ranking.today : [];
+    todayRanking.forEach((r) => map.set(r.masterId, { revenue: r.revenue, checkCount: r.checkCount }));
     return map;
   }, [ranking]);
 
   const sortedUsers = useMemo(() => {
     return (
-      (users ?? [])
+      (Array.isArray(users) ? users : [])
         // #5 — fully hidden employees (e.g. the owner) never appear.
         // Defensive: a dismissed / purged user must never surface among the
         // active staff even from a stale cache (the API already excludes them).

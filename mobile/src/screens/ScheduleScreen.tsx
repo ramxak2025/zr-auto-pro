@@ -40,6 +40,8 @@ import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
+import QueryErrorState from '../components/QueryErrorState';
+import EmptyState from '../components/EmptyState';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -96,6 +98,32 @@ function getDaysInMonth(year: number, month: number): Date[] {
   const count = new Date(year, month + 1, 0).getDate();
   for (let i = 1; i <= count; i++) days.push(new Date(year, month, i));
   return days;
+}
+
+/**
+ * toArray — единственный источник истины для приведения любого
+ * query-результата к массиву.
+ *
+ * КОРЕНЬ КРАША (REACT-NATIVE-6 «undefined is not a function»):
+ * `usersData || []` и `entries ?? []` защищают ТОЛЬКО от null/undefined,
+ * но НЕ от truthy-не-массива. В окна, когда backend временно отдаёт 502
+ * (рестарт контейнера на деплое / нагрузка), а также через persistent
+ * cache (`hydrateCache` пишет в QueryClient любой сохранённый `data`,
+ * не проверяя форму) в кэш ключей `['users']` / `['schedule', …]` мог
+ * попасть объект (например `{ statusCode, message }` или иной не-массив).
+ * Тогда `obj.filter` === `undefined` → вызов внутри useMemo
+ * (`activeUsers` ~стр.751, `entryMap` ~стр.812) бросал «undefined is not
+ * a function», ронял весь экран в per-screen ErrorBoundary, и в
+ * расписание было «вообще не зайти».
+ *
+ * Лечение фундаментальное: жёстко приводим к массиву через
+ * `Array.isArray(x) ? x : []` И в queryFn (чтобы в кэш никогда не лёг
+ * не-массив), И на месте использования (чтобы даже отравленный
+ * hydrated-кэш деградировал в пустой список, а не в краш). Метод массива
+ * больше нигде не вызывается на возможно-не-массиве.
+ */
+function toArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
 }
 
 /**
@@ -685,7 +713,9 @@ function GridTab() {
     queryKey: ['schedule', dateFrom, dateTo],
     queryFn: async () => {
       const res = await scheduleApi.getAll({ dateFrom, dateTo });
-      return res.data ?? [];
+      // Жёсткое приведение к массиву — см. toArray(). Даже если сервер
+      // в окне 502 вернул не-массив, в кэш ляжет [].
+      return toArray<ScheduleEntry>(res.data);
     },
     // keep previous month visible while next month loads — no flash to empty
     placeholderData: (prev) => prev,
@@ -700,7 +730,7 @@ function GridTab() {
     queryKey: ['users'],
     queryFn: async () => {
       const res = await usersApi.getAll();
-      return res.data ?? [];
+      return toArray<User>(res.data);
     },
     placeholderData: (prev) => prev,
     staleTime: 5 * 60_000,
@@ -731,7 +761,7 @@ function GridTab() {
         queryKey: ['schedule', from, to],
         queryFn: async () => {
           const res = await scheduleApi.getAll({ dateFrom: from, dateTo: to });
-          return res.data ?? [];
+          return toArray<ScheduleEntry>(res.data);
         },
         staleTime: 30_000,
       });
@@ -761,7 +791,9 @@ function GridTab() {
       const role = (u.role || '').toString().toLowerCase();
       return role !== 'superadmin' && role !== 'director' && role !== 'owner';
     };
-    const raw = (usersData || []).filter(isSchedulable);
+    // toArray, не `usersData || []`: отравленный (или hydrated из persistent
+    // cache) не-массив здесь деградирует в [], а не в `obj.filter`-краш.
+    const raw = toArray<User>(usersData).filter(isSchedulable);
     if (raw.length > 0) {
       return raw.sort((a: any, b: any) => {
         const ao = a.sortOrder ?? 0;
@@ -781,8 +813,9 @@ function GridTab() {
     onMutate: async (orderedIds: string[]) => {
       await queryClient.cancelQueries({ queryKey: ['users'] });
       const prev = queryClient.getQueryData<any>(['users']);
-      queryClient.setQueryData<any>(['users'], (old: any) => {
-        if (!old) return old;
+      queryClient.setQueryData<any>(['users'], (old: unknown) => {
+        // toArray: never .map a poisoned non-array users cache value.
+        if (!Array.isArray(old)) return old;
         return old.map((u: any) => {
           const idx = orderedIds.indexOf(u.id);
           return idx >= 0 ? { ...u, sortOrder: idx } : u;
@@ -811,7 +844,9 @@ function GridTab() {
 
   const entryMap = useMemo(() => {
     const map = new Map<string, ScheduleEntry>();
-    (entries ?? []).forEach((e) => {
+    // toArray, не `entries ?? []`: то же самое — не-массив в кэше не должен
+    // звать `.forEach` на не-массиве.
+    toArray<ScheduleEntry>(entries).forEach((e) => {
       // Skip orphaned / malformed rows: an entry with no userId or no
       // usable date can't be keyed and would otherwise poison lookups.
       if (!e || !e.userId) return;
@@ -854,8 +889,8 @@ function GridTab() {
   // Optimistic update helper (React Query documented pattern)
   const optimisticUpdate = (userId: string, date: string, payload: any, existingEntry?: ScheduleEntry) => {
     const previous = queryClient.getQueryData(scheduleQueryKey);
-    queryClient.setQueryData(scheduleQueryKey, (old: any) => {
-      const arr = (old ?? []) as ScheduleEntry[];
+    queryClient.setQueryData(scheduleQueryKey, (old: unknown) => {
+      const arr = toArray<ScheduleEntry>(old);
       const temp = {
         id: existingEntry?.id || `temp-${userId}-${date}`,
         tenantId: '',
@@ -875,7 +910,7 @@ function GridTab() {
   // patchCache directly mutates RQ cache for instant UI
   const patchCache = (userId: string, date: string, payload: any, isNew: boolean) => {
     queryClient.setQueryData<ScheduleEntry[]>(scheduleQueryKey, (old) => {
-      const arr = old ?? [];
+      const arr = toArray<ScheduleEntry>(old);
       if (isNew) {
         return [
           ...arr,
@@ -909,8 +944,8 @@ function GridTab() {
     onMutate: async (id: string) => {
       await queryClient.cancelQueries({ queryKey: scheduleQueryKey });
       const previous = queryClient.getQueryData(scheduleQueryKey);
-      queryClient.setQueryData(scheduleQueryKey, (old: any) =>
-        ((old ?? []) as ScheduleEntry[]).filter((e) => e.id !== id),
+      queryClient.setQueryData(scheduleQueryKey, (old: unknown) =>
+        toArray<ScheduleEntry>(old).filter((e) => e.id !== id),
       );
       return previous;
     },
@@ -1198,41 +1233,36 @@ function GridTab() {
         ))}
       </ScrollView>
 
-      {/* Schedule states:
+      {/* Schedule states (экран ОБЯЗАН спокойно рендериться, когда API
+          лежит — это и есть фундаментальный фикс, а не страховочный
+          ErrorBoundary):
           1. The push transition hasn't settled yet (gridReady=false), or
              the ['users'] query is still loading with nothing cached →
              skeleton, never a premature «Нет мастеров».
-          2. The ['users'] query failed with nothing cached → tap-to-retry
-             error row.
-          3. Users resolved but the master list is empty → onboarding.
-          4. Otherwise → calendar grid. activeUsers already falls back to
+          2. Both data sources failed with NOTHING cached (no masters AND
+             the schedule request errored) → единый error-state с кнопкой
+             «Повторить» (refetch обоих запросов).
+          3. The ['users'] query failed with nothing cached → error-state.
+          4. Users resolved but the master list is empty → onboarding empty.
+          5. Otherwise → calendar grid. activeUsers already falls back to
              the auth user, so a fresh tenant still renders a one-row grid. */}
-      {!gridReady || (activeUsers.length === 0 && usersData === undefined && !usersError) ? (
+      {!gridReady || (activeUsers.length === 0 && usersData === undefined && !usersError && !isError) ? (
         <GridSkeleton />
-      ) : activeUsers.length === 0 && usersData === undefined && usersError ? (
-        <TouchableOpacity onPress={() => refetchUsers()} style={styles.errorBanner} activeOpacity={0.7}>
-          <Ionicons name="cloud-offline-outline" size={16} color={colors.red[600]} />
-          <Text style={styles.errorBannerText}>Не удалось загрузить сотрудников. Нажмите, чтобы повторить.</Text>
-        </TouchableOpacity>
+      ) : activeUsers.length === 0 && usersData === undefined && (usersError || isError) ? (
+        <QueryErrorState
+          title="Не удалось загрузить расписание"
+          description="Сервер временно недоступен. Потяните, чтобы обновить, или нажмите «Повторить»."
+          onRetry={() => {
+            if (usersError) refetchUsers();
+            if (isError) refetch();
+          }}
+        />
       ) : activeUsers.length === 0 ? (
-        <View style={[styles.emptyState, { paddingTop: 60, paddingHorizontal: 24 }]}>
-          <View
-            style={[styles.emptyIcon, { width: 72, height: 72, borderRadius: 36, backgroundColor: palette.bg.muted }]}
-          >
-            <Ionicons name="people-outline" size={32} color={palette.text.tertiary} />
-          </View>
-          <Text style={[styles.emptyTitle, { fontSize: 17, fontWeight: '600', color: palette.text.secondary }]}>
-            Нет мастеров
-          </Text>
-          <Text
-            style={[
-              styles.emptySubtitle,
-              { textAlign: 'center', maxWidth: 260, marginTop: 4, color: palette.text.tertiary },
-            ]}
-          >
-            Чтобы планировать смены, добавьте сотрудников в разделе «Пользователи»
-          </Text>
-        </View>
+        <EmptyState
+          icon="people"
+          title="Нет мастеров"
+          description="Чтобы планировать смены, добавьте сотрудников в разделе «Пользователи»"
+        />
       ) : (
         /* Schedule grid — the names column and the day grid sync ON THE
            UI THREAD via reanimated useAnimatedScrollHandler + scrollTo,
@@ -1568,12 +1598,17 @@ function TodayTab() {
   const [refreshing, setRefreshing] = useState(false);
   const tabBarHeight = useTabBarHeight();
 
-  const { data: todayData, isLoading } = useQuery<TodayEmployeeStatus[]>({
+  const {
+    data: todayData,
+    isError,
+    refetch,
+  } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
     queryFn: async () => {
       const res = await scheduleApi.getToday();
-      return res.data;
+      return toArray<TodayEmployeeStatus>(res.data);
     },
+    placeholderData: (prev) => prev,
     staleTime: 30_000,
   });
 
@@ -1583,10 +1618,11 @@ function TodayTab() {
     setRefreshing(false);
   };
 
-  // Defensive: `todayData` may be undefined (no body) or contain holes;
-  // drop anything without a userId so downstream `.note`/`.fullName`
+  // Defensive: `todayData` may be undefined (no body), a non-array (502
+  // window / poisoned cache) or contain holes; toArray hardens the shape,
+  // then we drop anything without a userId so downstream `.note`/`.fullName`
   // access can never hit `undefined`.
-  const statuses = (todayData ?? []).filter((s): s is TodayEmployeeStatus => !!s && !!s.userId);
+  const statuses = toArray<TodayEmployeeStatus>(todayData).filter((s): s is TodayEmployeeStatus => !!s && !!s.userId);
   const working = statuses.filter((s) => s.isWorking && !(s.note || '').toLowerCase().includes('больнич'));
   const notWorking = statuses.filter((s) => !s.isWorking || (s.note || '').toLowerCase().includes('больнич'));
 
@@ -1708,8 +1744,12 @@ function TodayTab() {
         </View>
       </AnimatedCard>
 
-      {isLoading ? (
-        <LoadingSpinner />
+      {statuses.length === 0 && isError ? (
+        <QueryErrorState
+          title="Не удалось загрузить"
+          description="Сервер временно недоступен. Потяните, чтобы обновить."
+          onRetry={() => refetch()}
+        />
       ) : statuses.length === 0 ? (
         <View style={styles.emptyState}>
           <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
@@ -1948,23 +1988,27 @@ function RatingTab() {
     return `${y}-${String(m).padStart(2, '0')}-${new Date(y, m, 0).getDate()}`;
   })();
 
-  const { data: monthEntries = [] } = useQuery<ScheduleEntry[]>({
+  const { data: monthEntries } = useQuery<ScheduleEntry[]>({
     queryKey: ['schedule', monthStart, monthEnd],
-    // `?? []` — a 204 / empty body must not become `undefined`, otherwise
-    // calculateAttendanceStats() iterates `undefined` and throws.
-    queryFn: async () => (await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd })).data ?? [],
+    // toArray — a 204 / empty body / non-array (502 window) must not reach
+    // calculateAttendanceStats() (which would call array methods on it).
+    queryFn: async () =>
+      toArray<ScheduleEntry>((await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd })).data),
+    placeholderData: (prev) => prev,
   });
 
   const { data: usersData } = useQuery<User[]>({
     queryKey: ['users'],
-    queryFn: async () => (await usersApi.getAll()).data ?? [],
+    queryFn: async () => toArray<User>((await usersApi.getAll()).data),
+    placeholderData: (prev) => prev,
   });
 
   // Same eligibility rule as the grid's activeUsers: owners (superadmin /
   // director / owner) не отображаются в графике — и в рейтинге тоже.
+  // toArray guards against a poisoned non-array users cache value.
   const users = useMemo(
     () =>
-      (usersData || []).filter((u) => {
+      toArray<User>(usersData).filter((u) => {
         if (!u || !u.id || !u.isActive) return false;
         if (u.hiddenFromSchedule || u.hiddenEverywhere) return false;
         const role = (u.role || '').toString().toLowerCase();
@@ -1974,8 +2018,8 @@ function RatingTab() {
   );
 
   // SHARED attendance utility — same logic everywhere (web + mobile).
-  // `?? []` guards against a malformed cache value reaching the iterator.
-  const stats = useMemo(() => calculateAttendanceStats((monthEntries ?? []) as any), [monthEntries]);
+  // toArray guards against a malformed cache value reaching the iterator.
+  const stats = useMemo(() => calculateAttendanceStats(toArray<ScheduleEntry>(monthEntries) as any), [monthEntries]);
 
   const ranked = useMemo(
     () =>
@@ -2318,22 +2362,24 @@ function SettingsTab() {
     queryKey: ['users'],
     queryFn: async () => {
       const res = await usersApi.getAll();
-      return res.data;
+      return toArray<User>(res.data);
     },
+    placeholderData: (prev) => prev,
   });
 
   const { data: workModes } = useQuery<any[]>({
     queryKey: ['work-modes'],
     queryFn: async () => {
       const res = await scheduleApi.getWorkModes();
-      return res.data;
+      return toArray<any>(res.data);
     },
+    placeholderData: (prev) => prev,
   });
 
   // Defensive: drop null/orphaned rows (a malformed users payload after a
   // deletion could contain holes) so the settings sub-tabs never call a
-  // method on `undefined`.
-  const activeUsers = useMemo(() => (usersData || []).filter((u) => u && u.id && u.isActive), [usersData]);
+  // method on `undefined`. toArray also guards a poisoned non-array cache.
+  const activeUsers = useMemo(() => toArray<User>(usersData).filter((u) => u && u.id && u.isActive), [usersData]);
 
   const toggleDayOff = async (userId: string, dayOfWeek: number) => {
     const user = activeUsers.find((u) => u.id === userId);
@@ -2389,8 +2435,11 @@ function SettingsTab() {
   // fetched settings; reset every time the API view changes.
   const [shiftKeys, setShiftKeys] = useState<Set<string>>(new Set(['worked', 'short']));
   useEffect(() => {
-    if (scheduleSettings?.shiftStatuses) {
-      setShiftKeys(new Set(scheduleSettings.shiftStatuses));
+    // toArray: shiftStatuses could be a non-array on a malformed settings
+    // payload — new Set(non-iterable) would throw and crash the tab.
+    const next = toArray<string>(scheduleSettings?.shiftStatuses);
+    if (next.length > 0) {
+      setShiftKeys(new Set(next));
     }
   }, [scheduleSettings]);
 
@@ -2421,7 +2470,7 @@ function SettingsTab() {
     shiftSettingsMutation.mutate({ shiftStatuses: Array.from(shiftKeys) });
   };
 
-  const currentList = scheduleSettings?.shiftStatuses || [];
+  const currentList = toArray<string>(scheduleSettings?.shiftStatuses);
   const dirty =
     currentList.length !== shiftKeys.size ||
     currentList.some((k) => !shiftKeys.has(k)) ||
@@ -2603,7 +2652,7 @@ function SettingsTab() {
         </View>
       ) : (
         <View style={{ gap: spacing[3] }}>
-          {(workModes || []).map((mode: any, idx: number) => (
+          {toArray<any>(workModes).map((mode: any, idx: number) => (
             <AnimatedCard key={mode.id} index={idx}>
               <View style={styles.modeCard}>
                 <LinearGradient
@@ -2641,7 +2690,7 @@ function SettingsTab() {
               </View>
             </AnimatedCard>
           ))}
-          {(!workModes || workModes.length === 0) && (
+          {toArray<any>(workModes).length === 0 && (
             <View style={styles.emptyState}>
               <View style={styles.emptyIcon}>
                 <Ionicons name="time-outline" size={36} color={colors.gray[300]} />

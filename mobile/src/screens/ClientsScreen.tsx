@@ -183,7 +183,7 @@ export default function ClientsScreen() {
     queryKey: ['clients-plate', normalizedPlate, plateMode],
     queryFn: async () => {
       const res = await clientsApi.getAll({ search: normalizedPlate, limit: 20 });
-      return res.data.data || [];
+      return Array.isArray(res.data.data) ? res.data.data : [];
     },
     enabled: mode === 'plate' && normalizedPlate.length >= 2,
     placeholderData: (prev) => prev,
@@ -426,7 +426,10 @@ export default function ClientsScreen() {
   // freshest server slice; page 2+ are appended below as the user scrolls.
   // Memoised on `data.pages` so a parent re-render doesn't churn a new array
   // (which would bust FlashList's row recycling).
-  const rawClients = useMemo<Client[]>(() => (data?.pages ?? []).flatMap((p) => p?.data ?? []), [data?.pages]);
+  const rawClients = useMemo<Client[]>(
+    () => (Array.isArray(data?.pages) ? data.pages : []).flatMap((p) => (Array.isArray(p?.data) ? p.data : [])),
+    [data?.pages],
+  );
 
   // The list backend already returns retail buyer first when not
   // searching (server sorts by `is_retail DESC NULLS LAST`). When the
@@ -446,7 +449,9 @@ export default function ClientsScreen() {
     // Pre-trim by plate when user is typing what looks like a plate.
     if (search && looksLikePlateQuery(search)) {
       const q = normalizePlateQuery(search);
-      const byPlate = base.filter((c) => (c.cars || []).some((car) => plateMatches(car.plateNumber, q)));
+      const byPlate = base.filter((c) =>
+        (Array.isArray(c.cars) ? c.cars : []).some((car) => plateMatches(car.plateNumber, q)),
+      );
       const byOther = base.filter((c) => !byPlate.includes(c));
       base = [...byPlate, ...byOther];
     }
@@ -465,7 +470,7 @@ export default function ClientsScreen() {
       // Clients that have at least one car without a plate (or marked
       // «без номеров»), or no cars at all — i.e. nothing to identify by plate.
       base = base.filter((c) => {
-        const cs = c.cars || [];
+        const cs = Array.isArray(c.cars) ? c.cars : [];
         if (cs.length === 0) return true;
         return cs.some((car) => car.noPlate || !car.plateNumber);
       });
@@ -494,12 +499,12 @@ export default function ClientsScreen() {
   // without a plate are excluded — plate mode is about identifying a car
   // by its госномер; plateless cars are found via client mode.
   const plateResults = useMemo<{ client: Client; car: Car }[]>(() => {
-    const list = plateQuery.data || [];
+    const list = Array.isArray(plateQuery.data) ? plateQuery.data : [];
     const q = normalizedPlate;
     const hits: { client: Client; car: Car }[] = [];
     const misses: { client: Client; car: Car }[] = [];
     for (const client of list) {
-      for (const car of client.cars || []) {
+      for (const car of Array.isArray(client.cars) ? client.cars : []) {
         if (!car.plateNumber) continue;
         const matches = q.length > 0 && normalizePlateForSearch(car.plateNumber, plateMode).includes(q);
         (matches ? hits : misses).push({ client, car });

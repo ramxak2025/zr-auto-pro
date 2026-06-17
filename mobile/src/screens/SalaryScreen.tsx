@@ -384,7 +384,7 @@ export default function SalaryScreen() {
     queryKey: ['salary', dateFrom, dateTo],
     queryFn: async () => {
       const res = await salaryApi.getAll({ dateFrom, dateTo });
-      return res.data;
+      return Array.isArray(res.data) ? res.data : [];
     },
     // SWR — keep previous month visible while user navigates between months.
     placeholderData: (prev) => prev,
@@ -393,7 +393,7 @@ export default function SalaryScreen() {
   // Derive the open detail master from the freshest list snapshot.
   const detailMaster = useMemo<MasterSalary | null>(() => {
     if (!detailId) return null;
-    return (salaries || []).find((m) => m.masterId === detailId) || null;
+    return (Array.isArray(salaries) ? salaries : []).find((m) => m.masterId === detailId) || null;
   }, [detailId, salaries]);
 
   const onRefresh = useCallback(async () => {
@@ -587,7 +587,7 @@ export default function SalaryScreen() {
   // ── Summary totals ───────────────────────────────────────────────────────
 
   const totals = useMemo(() => {
-    const rows = salaries || [];
+    const rows = Array.isArray(salaries) ? salaries : [];
     let earnings = 0;
     let paid = 0;
     let remaining = 0;
@@ -856,8 +856,8 @@ function DetailContent({ master, palette, monthLabel, onPay, onPremium, canManag
   const services = master.serviceEarnings || 0;
   const products = master.productEarnings || 0;
   const premiumsAmount = master.premiumsAmount || 0;
-  const premiumList: SalaryPremium[] = master.premiums || [];
-  const payments: SalaryPayment[] = master.payments || [];
+  const premiumList: SalaryPremium[] = Array.isArray(master.premiums) ? master.premiums : [];
+  const payments: SalaryPayment[] = Array.isArray(master.payments) ? master.payments : [];
   const status = rowStatus(master);
   const statusC = statusColors(status, palette);
 

@@ -373,7 +373,7 @@ export default function ProductPickerModal({
   });
 
   const { sortedProductFolders, visibleProducts } = useMemo(() => {
-    const products = allProducts || [];
+    const products = Array.isArray(allProducts) ? allProducts : [];
     if (productSearch) {
       const q = productSearch.toLowerCase();
       return {
