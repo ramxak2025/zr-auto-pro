@@ -1,6 +1,7 @@
 import { Injectable, CanActivate, ExecutionContext, HttpException, HttpStatus } from '@nestjs/common';
 import { Request } from 'express';
 import * as crypto from 'crypto';
+import { redisIncrWithExpiry } from '../redis';
 
 /**
  * Global rate limiter with different limits per endpoint TYPE.
@@ -35,6 +36,17 @@ import * as crypto from 'crypto';
  * /auth/me, /auth/avatar, /auth/refresh are NOT rate-limited as auth — they
  * use the regular read/write buckets. Only /auth/login and /auth/register
  * have the strict brute-force limit.
+ *
+ * COUNTER STORAGE — Redis-first, in-memory fallback (fail-safe):
+ *   When REDIS_URL is configured AND Redis is reachable, counters live in
+ *   Redis (atomic INCR + a per-window PEXPIRE) so the limit is shared across
+ *   every backend instance behind the load balancer. The instant Redis is
+ *   absent, down, slow or errors in ANY way, we transparently fall back to the
+ *   per-process in-memory Map below — the exact behaviour of the pre-Redis
+ *   build. The guard NEVER throws a 500 because of Redis and NEVER blocks a
+ *   legitimate request due to an infra hiccup: a Redis failure degrades to the
+ *   local Map, it does not deny the request. Limits, bucket-key shapes, the
+ *   60s window, the 429 text and the token fingerprint are all unchanged.
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
@@ -51,7 +63,11 @@ export class RateLimitGuard implements CanActivate {
     }, 5 * 60_000);
   }
 
-  canActivate(context: ExecutionContext): boolean {
+  // canActivate is async because the Redis path awaits an atomic INCR. NestJS
+  // fully supports a guard returning Promise<boolean>. When Redis is not in
+  // play (no URL / unavailable) the Redis call resolves to null synchronously
+  // enough that the in-memory path is taken with no added latency.
+  async canActivate(context: ExecutionContext): Promise<boolean> {
     const request = context.switchToHttp().getRequest<Request>();
     const ip = request.ip || request.socket.remoteAddress || 'unknown';
     const method = request.method;
@@ -84,6 +100,28 @@ export class RateLimitGuard implements CanActivate {
       bucketKey = `write:${idKey}`;
     }
 
+    // ── Redis path (shared across instances) ───────────────────────────────
+    // redisIncrWithExpiry NEVER throws: it returns the new counter when Redis
+    // is healthy, or null when there is no URL / Redis is down / it errored /
+    // timed out. A null means "Redis unavailable" → fall through to the Map.
+    const redisCount = await redisIncrWithExpiry(`rl:${bucketKey}`, this.windowMs);
+    if (redisCount !== null) {
+      if (redisCount > maxAttempts) {
+        // We don't know the exact remaining TTL cheaply here; the window is
+        // fixed at windowMs, so report the full window as a safe upper bound.
+        const retryAfter = Math.ceil(this.windowMs / 1000);
+        throw new HttpException(
+          { message: `Слишком много запросов. Повторите через ${retryAfter} сек.` },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      return true;
+    }
+
+    // ── In-memory fallback (per-process) ────────────────────────────────────
+    // Identical to the pre-Redis behaviour. Used when REDIS_URL is unset or
+    // Redis is unreachable; a Redis outage therefore degrades gracefully
+    // instead of dropping rate-limiting entirely or returning 500s.
     const entry = this.attempts.get(bucketKey);
     if (!entry || now > entry.resetAt) {
       this.attempts.set(bucketKey, { count: 1, resetAt: now + this.windowMs });

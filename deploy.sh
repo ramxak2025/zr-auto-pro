@@ -102,9 +102,62 @@ log "Rebuilding backend and frontend containers (no cache)..."
 docker compose build --no-cache backend frontend 2>&1
 docker compose up -d --no-deps --force-recreate backend frontend 2>&1
 
-# Wait for health check
-log "Waiting for services to start..."
-sleep 8
+# ═══════════════════════════════════════════════════════
+# STEP 2.5: Health-gate — wait until the NEW backend actually answers.
+# Replaces the old blind `sleep 8`, which could declare a deploy "complete"
+# while backend was still booting (migrations, JIT warm-up) → users hit 502.
+# We poll the backend's own /api/health from INSIDE the backend container
+# (no host port exposed for backend), and also confirm the public path through
+# the frontend (localhost:8080/api/health) so we know nginx re-resolved the new
+# container IP. Either signal alone is enough to consider backend "up".
+# Timeout ~90s; on timeout → loud error + non-zero exit (deploy NOT successful).
+# ═══════════════════════════════════════════════════════
+log "Waiting for backend health (timeout 90s)..."
+HEALTH_TIMEOUT=90
+HEALTH_DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT ))
+HEALTH_OK=0
+ATTEMPT=0
+
+while [ "$(date +%s)" -lt "$HEALTH_DEADLINE" ]; do
+    ATTEMPT=$((ATTEMPT + 1))
+
+    # 1) Docker-reported health status of the backend container (if defined).
+    BACKEND_CID=$(docker compose ps -q backend 2>/dev/null | head -1)
+    DOCKER_HEALTH="unknown"
+    if [ -n "$BACKEND_CID" ]; then
+        DOCKER_HEALTH=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealth{{end}}' "$BACKEND_CID" 2>/dev/null || echo "unknown")
+    fi
+
+    # 2) Backend answers its own /api/health from inside its container.
+    INSIDE_OK=0
+    if [ -n "$BACKEND_CID" ]; then
+        if docker exec "$BACKEND_CID" node -e "require('http').get('http://localhost:3000/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" 2>/dev/null; then
+            INSIDE_OK=1
+        fi
+    fi
+
+    # 3) Public path through frontend nginx (confirms nginx re-resolved new IP).
+    PUBLIC_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:8080/api/health 2>/dev/null || echo "000")
+
+    if [ "$DOCKER_HEALTH" = "healthy" ] || [ "$INSIDE_OK" = "1" ] || [ "$PUBLIC_CODE" = "200" ]; then
+        HEALTH_OK=1
+        log "Backend healthy (attempt $ATTEMPT): docker=$DOCKER_HEALTH inside=$INSIDE_OK public=$PUBLIC_CODE"
+        break
+    fi
+
+    log "Backend not ready yet (attempt $ATTEMPT): docker=$DOCKER_HEALTH inside=$INSIDE_OK public=$PUBLIC_CODE — retrying..."
+    sleep 3
+done
+
+if [ "$HEALTH_OK" != "1" ]; then
+    log "ERROR: Backend did NOT become healthy within ${HEALTH_TIMEOUT}s."
+    log "Recent backend logs:"
+    docker compose logs --tail=50 backend 2>&1 || true
+    log "Container status:"
+    docker compose ps 2>&1 || true
+    log "=== Deploy FAILED (backend unhealthy) ==="
+    exit 1
+fi
 
 # Check status
 log "Container status:"

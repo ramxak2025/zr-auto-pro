@@ -85,12 +85,44 @@ export class CallsService {
         }
       }
 
+      // Collect ONLY the phone numbers that actually appear in this batch of
+      // calls, so we can fetch just the matching clients instead of scanning
+      // the whole tenant. Cleaning mirrors the matching logic below exactly
+      // (strip spaces / dashes / plus / parens), and we also add the last-10
+      // short form, since the in-memory matcher keys on both forms.
+      const callPhoneCandidates = new Set<string>();
+      for (const call of calls) {
+        const cleaned = (call.client_number || '').replace(/[\s\-\+\(\)]/g, '');
+        if (!cleaned) continue;
+        callPhoneCandidates.add(cleaned);
+        if (cleaned.length >= 10) callPhoneCandidates.add(cleaned.slice(-10));
+      }
+
       const clientPhones = new Map<string, { id: string; fullName: string; cars: any[] }>();
-      if (calls.length > 0) {
+      if (calls.length > 0 && callPhoneCandidates.size > 0) {
+        const candidates = [...callPhoneCandidates];
+        // Fetch only clients whose phone matches one of the call numbers.
+        // Tenant-scoped. We clean the stored phone the SAME way the JS matcher
+        // does — strip spaces, tabs, CR/LF, '-', '+', '(' and ')' — but with
+        // translate() (literal char stripping, no regex-engine ambiguity, and
+        // faster than regexp_replace). The JS regex /[\s\-\+\(\)]/ only ever
+        // meets spaces among the whitespace class in real phone data, but we
+        // also strip tab/CR/LF for completeness. Match either the full cleaned
+        // phone or its last 10 digits against the candidate list.
         const { rows: clients } = await this.pool.query(
-          `SELECT c.id, c.full_name, c.phone FROM clients c WHERE c.tenant_id=$1`,
-          [tenantId],
+          `SELECT c.id, c.full_name, c.phone
+             FROM clients c
+            WHERE c.tenant_id = $1
+              AND (
+                translate(c.phone, E' \\t\\n\\r-+()', '') = ANY($2)
+                OR right(translate(c.phone, E' \\t\\n\\r-+()', ''), 10) = ANY($2)
+              )`,
+          [tenantId, candidates],
         );
+        // Rebuild the matcher map with IDENTICAL keying to the previous
+        // implementation: cleaned full phone + its last-10 form. Matching the
+        // mapped calls against this map below is therefore byte-for-byte the
+        // same as before — we just narrowed which clients we loaded.
         for (const client of clients) {
           const cleanPhone = client.phone.replace(/[\s\-\+\(\)]/g, '');
           clientPhones.set(cleanPhone, { id: client.id, fullName: client.full_name, cars: [] });

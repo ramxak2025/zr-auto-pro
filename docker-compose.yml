@@ -22,6 +22,23 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── Redis — token-revocation blacklist / rate-limit backing store ────────
+  # Internal-only (expose, NOT ports) — never published to the host.
+  # Persistence via appendonly so revoked tokens survive a restart.
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    expose:
+      - "6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   backend:
     build:
       context: ./backend
@@ -30,9 +47,15 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      # Intentionally service_started (NOT service_healthy): backend must boot
+      # even if redis is slow/unhealthy. The redis client falls back to an
+      # in-memory blacklist, so a redis outage degrades gracefully, not fatally.
+      redis:
+        condition: service_started
     environment:
       DATABASE_URL: postgres://postgres:${DB_PASSWORD:?DB_PASSWORD must be set in .env}@postgres:5432/zr_auto_pro?sslmode=disable
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      REDIS_URL: redis://redis:6379
       PORT: 3000
     expose:
       - "3000"
@@ -87,3 +110,4 @@ services:
 volumes:
   pgdata:
   uploads:
+  redisdata:
