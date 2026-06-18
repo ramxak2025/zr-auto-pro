@@ -28,8 +28,23 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { User, UserPermissions, Product, SectionVisibility, ItemVisibility } from '../../../shared/types';
-import { UserRole, ITEM_KEYS, ALL_ITEM_KEYS } from '../../../shared/types';
+import { haptic } from '../platform/haptics';
+import type {
+  User,
+  UserPermissions,
+  Product,
+  SectionVisibility,
+  ItemVisibility,
+  PermissionKey,
+} from '../../../shared/types';
+import {
+  UserRole,
+  ITEM_KEYS,
+  ALL_ITEM_KEYS,
+  PERMISSION_GROUPS,
+  PERMISSION_KEYS,
+  ROLE_PERMISSION_DEFAULTS,
+} from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 
 const roleBadgeMap: Record<string, string> = {
@@ -46,53 +61,101 @@ const roleLabels: Record<string, string> = {
   master: 'Мастер',
 };
 
-// Grouped permissions for better UX
-const permissionGroups: {
-  title: string;
+// ── Action permissions (server-enforced) ─────────────────────────────────────
+// SEPARATE from the section/item menu-VISIBILITY editors below: visibility says
+// which «Ещё» rows a user SEES; these say which server ACTIONS a user may DO.
+// The vocabulary (keys + grouping) is the canonical PERMISSION_GROUPS contract
+// from shared/types — backend's PermissionsGuard enforces the exact same keys.
+//
+// Owner-friendly Russian labels for every canonical PermissionKey. Phrased as a
+// capability ("Видит…", "Меняет…", "Доступ к…") so a non-technical owner reads
+// each row as a plain sentence about what the employee can do.
+const PERMISSION_LABELS: Record<PermissionKey, string> = {
+  // Касса
+  checks_view: 'Видит чеки',
+  checks_create: 'Создаёт чеки',
+  checks_edit: 'Редактирует чеки',
+  checks_delete: 'Удаляет чеки',
+  checks_change_datetime: 'Меняет дату и время чека',
+  checks_view_all: 'Видит чеки всех мастеров',
+  payment_edit: 'Меняет оплату чека',
+  // Финансы
+  profit_view: 'Видит прибыль',
+  financial_reports: 'Финансовые отчёты',
+  export_data: 'Экспорт данных',
+  can_add_expenses: 'Вносит расходы',
+  salary_view: 'Видит зарплаты',
+  // Склад
+  warehouse_access: 'Доступ к складу',
+  suppliers_access: 'Доступ к поставщикам',
+  // CRM
+  clients_view: 'Видит клиентов',
+  clients_edit: 'Редактирует клиентов',
+  schedule_view: 'Доступ к расписанию',
+  bookings_access: 'Доступ к записям',
+  marketing_access: 'Доступ к маркетингу',
+  calls_view: 'Видит звонки',
+  calls_listen: 'Слушает записи звонков',
+  // Управление
+  user_management: 'Управление пользователями',
+};
+
+// Subtitle for the two keys whose names hide a subtlety the owner should know.
+const PERMISSION_HINTS: Partial<Record<PermissionKey, string>> = {
+  checks_view_all: 'Без этого права мастер видит только свои чеки.',
+  user_management: 'Даёт доступ к этому экрану — правам и сотрудникам.',
+};
+
+// Per-group SF-style icon + display order. Keys of PERMISSION_GROUPS drive the
+// sections; this only supplies the leading glyph for each header.
+const PERMISSION_GROUP_ICONS: Record<keyof typeof PERMISSION_GROUPS, keyof typeof Ionicons.glyphMap> = {
+  Касса: 'receipt-outline',
+  Финансы: 'wallet-outline',
+  Склад: 'cube-outline',
+  CRM: 'people-outline',
+  Управление: 'shield-checkmark-outline',
+};
+
+// Render-ready, typed view of the contract grouping (stable module-scope const).
+const PERMISSION_GROUP_DEFS: {
+  title: keyof typeof PERMISSION_GROUPS;
   icon: keyof typeof Ionicons.glyphMap;
-  items: { key: keyof UserPermissions; label: string }[];
-}[] = [
-  {
-    title: 'Заказ-наряды',
-    icon: 'receipt-outline',
-    items: [
-      { key: 'checks_view', label: 'Просмотр' },
-      { key: 'checks_create', label: 'Создание' },
-      { key: 'checks_edit', label: 'Редактирование' },
-      { key: 'checks_delete', label: 'Удаление' },
-      { key: 'checks_change_datetime', label: 'Изменять дату/время' },
-    ],
-  },
-  {
-    title: 'Финансы',
-    icon: 'wallet-outline',
-    items: [
-      { key: 'profit_view', label: 'Просмотр прибыли' },
-      { key: 'financial_reports', label: 'Финансовые отчёты' },
-      { key: 'salary_view', label: 'Просмотр зарплат' },
-      { key: 'export_data', label: 'Экспорт данных' },
-    ],
-  },
-  {
-    title: 'Клиенты и склад',
-    icon: 'people-outline',
-    items: [
-      { key: 'clients_view', label: 'Просмотр клиентов' },
-      { key: 'clients_edit', label: 'Редактирование клиентов' },
-      { key: 'warehouse_access', label: 'Доступ к складу' },
-      { key: 'suppliers_access', label: 'Доступ к поставщикам' },
-    ],
-  },
-  {
-    title: 'Управление',
-    icon: 'settings-outline',
-    items: [
-      { key: 'user_management', label: 'Управление сотрудниками' },
-      { key: 'schedule_view', label: 'Расписание' },
-      { key: 'marketing_access', label: 'Маркетинг' },
-    ],
-  },
+  keys: readonly PermissionKey[];
+}[] = (Object.keys(PERMISSION_GROUPS) as (keyof typeof PERMISSION_GROUPS)[]).map((title) => ({
+  title,
+  icon: PERMISSION_GROUP_ICONS[title],
+  keys: PERMISSION_GROUPS[title],
+}));
+
+// Owner-class roles hold EVERY permission implicitly — the backend's
+// PermissionsGuard short-circuits superadmin / director / admin before it ever
+// consults the stored map. The editor renders a read-only note for these
+// instead of toggles (mirrors the server bypass).
+const OWNER_CLASS_ROLES = new Set<UserRole>([UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN]);
+
+// Role preset buttons — fill the toggles from ROLE_PERMISSION_DEFAULTS so the
+// owner gets a sensible baseline, then tweaks. Master is the only role with a
+// non-empty default (owner-class roles bypass the map entirely).
+const PERMISSION_PRESETS: { role: UserRole; label: string }[] = [
+  { role: UserRole.MASTER, label: 'Мастер' },
+  { role: UserRole.ADMIN, label: 'Администратор' },
+  { role: UserRole.DIRECTOR, label: 'Директор' },
 ];
+
+/**
+ * Build a full PermissionKey→bool map from a role's ROLE_PERMISSION_DEFAULTS.
+ * The defaults are sparse (only `true` keys matter for master; owner-class roles
+ * are empty → everything implicit). We materialize every canonical key so the
+ * switches render deterministically: a key absent from the role default is
+ * `false` (for owner-class presets that means "all off" locally — the owner is
+ * expected to grant explicitly, while the server still treats the role as full).
+ */
+function permissionsFromRoleDefaults(role: UserRole): Record<PermissionKey, boolean> {
+  const defaults = ROLE_PERMISSION_DEFAULTS[role] ?? {};
+  const map = {} as Record<PermissionKey, boolean>;
+  for (const key of PERMISSION_KEYS) map[key] = defaults[key] === true;
+  return map;
+}
 
 // ── Section visibility (#071) ─────────────────────────────────────────
 // Owner toggles which top-level «Ещё» groups an employee sees. Five buckets
@@ -385,6 +448,10 @@ export default function UsersScreen() {
   // 073 — which item-visibility group is expanded in the editor (accordion;
   // only one open at a time keeps the modal tidy). null = all collapsed.
   const [expandedGroup, setExpandedGroup] = useState<SectionKey | null>(null);
+  // Action-permissions matrix: while the authoritative map is (re)fetched for
+  // the edited user we show a spinner so the owner never toggles against a
+  // stale seed. Seeded false; set true the moment openEdit kicks off the fetch.
+  const [permissionsLoading, setPermissionsLoading] = useState(false);
 
   // Commission modal
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
@@ -449,6 +516,7 @@ export default function UsersScreen() {
       data: any;
       __sectionVisibility?: SectionVisibilityMap;
       __itemVisibility?: ItemVisibilityMap;
+      __permissions?: UserPermissions;
     }) => usersApi.update(id, data),
     onSuccess: async (_res, variables) => {
       const sections = variables.__sectionVisibility;
@@ -459,7 +527,28 @@ export default function UsersScreen() {
       if (items) {
         await usersApi.updateItemVisibility(variables.id, mapToItems(items)).catch(() => {});
       }
+      // Action permissions go through the DEDICATED endpoint (self-lockout
+      // guard + per-user auth-cache drop) rather than the generic update body.
+      // A failure here is non-destructive — the rest of the profile already
+      // saved — so surface the server message but DON'T lose the other fields.
+      let permError: string | null = null;
+      const permissions = variables.__permissions;
+      if (permissions) {
+        try {
+          await usersApi.updatePermissions(variables.id, permissions);
+        } catch (e: any) {
+          permError = e?.response?.data?.message || 'Не удалось сохранить права доступа';
+        }
+      }
       queryClient.invalidateQueries({ queryKey: ['users'] });
+      if (permError) {
+        haptic('error');
+        Alert.alert('Права доступа не сохранены', permError);
+        // Keep the modal open so the owner can correct the toggle and retry —
+        // the rest of the profile is already persisted.
+        return;
+      }
+      haptic('success');
       Alert.alert('Готово', 'Сотрудник обновлён');
       closeModal();
     },
@@ -510,6 +599,7 @@ export default function UsersScreen() {
   const openEdit = useCallback((user: User) => {
     setEditingUser(user);
     setExpandedGroup(null);
+    setPermissionsLoading(true);
     setForm({
       fullName: user.fullName,
       phone: user.phone ? formatPhone(user.phone) : '',
@@ -543,6 +633,16 @@ export default function UsersScreen() {
         setForm((prev) => ({ ...prev, itemVisibility: toItemVisibilityMap(res.data) }));
       })
       .catch(() => {});
+    // Action permissions — load the AUTHORITATIVE stored map from the dedicated
+    // endpoint (the list payload's `permissions` may be partial/empty for an
+    // existing master). Merge over defaults so every canonical key has a value.
+    usersApi
+      .getPermissions(user.id)
+      .then((res) => {
+        setForm((prev) => ({ ...prev, permissions: { ...defaultPermissions, ...res.data } }));
+      })
+      .catch(() => {})
+      .finally(() => setPermissionsLoading(false));
   }, []);
 
   const openCommissions = useCallback(async (user: User) => {
@@ -632,15 +732,15 @@ export default function UsersScreen() {
       isActive: form.isActive,
       hiddenFromSchedule: form.hiddenFromSchedule,
       hiddenEverywhere: form.hiddenEverywhere,
-      permissions: form.permissions,
     };
 
     if (!editingUser) {
       payload.password = form.password;
-      // Carry section + item visibility alongside the create payload so
-      // onSuccess can persist them once the new user id exists. Neither
-      // `__sectionVisibility` nor `__itemVisibility` is part of the create body
-      // — both are stripped out before the API call.
+      // On CREATE there is no id yet, so the dedicated permissions endpoint
+      // can't run — the create body's `permissions` field seeds the new user's
+      // map (backend accepts it). Section + item visibility ride along via the
+      // `__*` carriers and are persisted in onSuccess once the id exists.
+      payload.permissions = form.permissions;
       createMutation.mutate({
         ...payload,
         __sectionVisibility: form.sectionVisibility,
@@ -648,19 +748,63 @@ export default function UsersScreen() {
       });
     } else {
       if (form.password) payload.password = form.password;
+      // On EDIT the action-permissions map is saved through the DEDICATED
+      // endpoint (self-lockout guard + auth-cache drop) via `__permissions`,
+      // NOT the generic update body — so it's intentionally omitted from
+      // `payload`. Owner-class users render a read-only note (the server
+      // bypasses their map), so we skip the permissions PATCH entirely for them
+      // — nothing the owner could change. Final client-side self-lockout net:
+      // editing your OWN account can never drop `user_management`.
+      const editsOwnAccount = editingUser.id === currentUser?.id;
+      const permissions: UserPermissions | undefined = editedIsOwnerClass
+        ? undefined
+        : editsOwnAccount
+          ? { ...form.permissions, user_management: true }
+          : form.permissions;
       updateMutation.mutate({
         id: editingUser.id,
         data: payload,
         __sectionVisibility: form.sectionVisibility,
         __itemVisibility: form.itemVisibility,
+        __permissions: permissions,
       });
     }
   };
 
-  const togglePermission = (key: keyof UserPermissions) => {
+  // Whether the owner is editing THEIR OWN account — drives the self-lockout
+  // pin on `user_management` (can't strip the right that gates this screen).
+  const editingSelf = !!editingUser && editingUser.id === currentUser?.id;
+
+  // The edited user holds an owner-class role (superadmin/director/admin) →
+  // server bypasses the permission map entirely. The matrix renders a read-only
+  // note instead of toggles for these.
+  const editedIsOwnerClass = OWNER_CLASS_ROLES.has(form.role);
+
+  // Toggle one action permission. `user_management` is pinned ON when editing
+  // your own account (self-lockout). No-op for owner-class users (read-only).
+  const togglePermission = (key: PermissionKey) => {
+    if (editedIsOwnerClass) return;
+    if (key === 'user_management' && editingSelf) return;
+    haptic('select');
     setForm((prev) => ({
       ...prev,
       permissions: { ...prev.permissions, [key]: !prev.permissions[key] },
+    }));
+  };
+
+  // Role preset: fill the whole matrix from ROLE_PERMISSION_DEFAULTS, then let
+  // the owner tweak before saving. Never strips your own user_management.
+  const applyPermissionPreset = (role: UserRole) => {
+    if (editedIsOwnerClass) return;
+    haptic('impact');
+    const preset = permissionsFromRoleDefaults(role);
+    setForm((prev) => ({
+      ...prev,
+      permissions: {
+        ...prev.permissions,
+        ...preset,
+        ...(editingSelf ? { user_management: true } : null),
+      },
     }));
   };
 
@@ -1094,32 +1238,107 @@ export default function UsersScreen() {
             </View>
           )}
 
-          {/* Permissions — grouped */}
+          {/* ── Права доступа (action-permission matrix) ──────────────────────
+              SEPARATE from «Видимость разделов/подразделов» above: visibility
+              controls which menu rows the user SEES; this controls which server
+              actions the user may DO. Loaded via usersApi.getPermissions, saved
+              via usersApi.updatePermissions (self-lockout-protected). */}
           <View style={styles.formField}>
-            <Text style={[styles.formLabel, { color: palette.text.secondary, marginBottom: spacing[3] }]}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary, marginBottom: spacing[2] }]}>
               Права доступа
             </Text>
-            {permissionGroups.map((group) => (
+            <Text style={[styles.sectionVisHint, { color: palette.text.tertiary }]}>
+              Что сотрудник может ДЕЛАТЬ в приложении. Это не то же самое, что видимость разделов в меню.
+            </Text>
+
+            {editedIsOwnerClass ? (
+              // Owner-class roles bypass the permission map on the server — show
+              // a read-only note instead of toggles (matches the bypass).
               <View
-                key={group.title}
-                style={[styles.permGroup, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                style={[
+                  styles.permOwnerNote,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                ]}
               >
-                <View style={[styles.permGroupHeader, { borderBottomColor: palette.border.subtle }]}>
-                  <Ionicons name={group.icon} size={14} color={palette.text.secondary} />
-                  <Text style={[styles.permGroupTitle, { color: palette.text.secondary }]}>{group.title}</Text>
-                </View>
-                {group.items.map((item) => (
-                  <TouchableOpacity key={item.key} style={styles.permRow} onPress={() => togglePermission(item.key)}>
-                    <Ionicons
-                      name={form.permissions[item.key] ? 'checkbox' : 'square-outline'}
-                      size={20}
-                      color={form.permissions[item.key] ? colors.primary[600] : palette.text.tertiary}
-                    />
-                    <Text style={[styles.permLabel, { color: palette.text.primary }]}>{item.label}</Text>
-                  </TouchableOpacity>
-                ))}
+                <Ionicons name="shield-checkmark" size={18} color={colors.primary[600]} />
+                <Text style={[styles.permOwnerNoteText, { color: palette.text.secondary }]}>
+                  {roleLabels[form.role] || form.role} имеет все права автоматически. Отдельная настройка не требуется.
+                </Text>
               </View>
-            ))}
+            ) : (
+              <>
+                {/* Role presets — fill the toggles from a role's defaults. */}
+                <View style={styles.presetRow}>
+                  {PERMISSION_PRESETS.map((preset) => (
+                    <TouchableOpacity
+                      key={preset.role}
+                      style={[
+                        styles.presetChip,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      ]}
+                      onPress={() => applyPermissionPreset(preset.role)}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Применить шаблон прав: ${preset.label}`}
+                    >
+                      <Ionicons name="sparkles-outline" size={13} color={colors.primary[600]} />
+                      <Text style={[styles.presetChipText, { color: colors.primary[700] }]}>{preset.label}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                {permissionsLoading ? (
+                  <View style={styles.permLoading}>
+                    <ActivityIndicator size="small" color={colors.primary[600]} />
+                  </View>
+                ) : (
+                  PERMISSION_GROUP_DEFS.map((group) => (
+                    <View
+                      key={group.title}
+                      style={[
+                        styles.permGroup,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      ]}
+                    >
+                      <View style={[styles.permGroupHeader, { borderBottomColor: palette.border.subtle }]}>
+                        <Ionicons name={group.icon} size={14} color={palette.text.secondary} />
+                        <Text style={[styles.permGroupTitle, { color: palette.text.secondary }]}>{group.title}</Text>
+                      </View>
+                      {group.keys.map((key) => {
+                        // Self-lockout: editing your OWN account can't strip the
+                        // permission that gates this very screen.
+                        const pinned = key === 'user_management' && editingSelf;
+                        const value = pinned ? true : !!form.permissions[key];
+                        const hint = PERMISSION_HINTS[key];
+                        return (
+                          <View key={key} style={styles.permSwitchRow}>
+                            <View style={styles.permSwitchTextWrap}>
+                              <Text style={[styles.permLabel, { color: palette.text.primary }]}>
+                                {PERMISSION_LABELS[key]}
+                              </Text>
+                              {pinned ? (
+                                <Text style={[styles.permRowHint, { color: palette.text.tertiary }]}>
+                                  Нельзя снять у себя — иначе потеряете доступ к этому экрану.
+                                </Text>
+                              ) : hint ? (
+                                <Text style={[styles.permRowHint, { color: palette.text.tertiary }]}>{hint}</Text>
+                              ) : null}
+                            </View>
+                            <Switch
+                              value={value}
+                              disabled={pinned}
+                              onValueChange={() => togglePermission(key)}
+                              trackColor={{ false: palette.border.strong, true: colors.primary[400] }}
+                              thumbColor={value ? colors.primary[600] : palette.bg.card}
+                            />
+                          </View>
+                        );
+                      })}
+                    </View>
+                  ))
+                )}
+              </>
+            )}
           </View>
 
           <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
@@ -1500,8 +1719,41 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  permRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[1.5] },
-  permLabel: { fontSize: fontSize.sm, color: colors.gray[700] },
+  permLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
+  // Action-permission matrix (switch-per-key) — the toggle row, its caption,
+  // role-preset chips, the owner-class read-only note, and the load spinner.
+  permSwitchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+    paddingVertical: spacing[2.5],
+  },
+  permSwitchTextWrap: { flex: 1, minWidth: 0 },
+  permRowHint: { fontSize: 11, lineHeight: 15, marginTop: 2 },
+  presetRow: { flexDirection: 'row', gap: spacing[2], marginTop: spacing[3], marginBottom: spacing[1] },
+  presetChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  presetChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  permLoading: { paddingVertical: spacing[6], alignItems: 'center', justifyContent: 'center' },
+  permOwnerNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    marginTop: spacing[3],
+    padding: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+  },
+  permOwnerNoteText: { flex: 1, fontSize: fontSize.sm, lineHeight: 19 },
   formActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
