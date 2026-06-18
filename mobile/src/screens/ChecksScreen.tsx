@@ -69,7 +69,8 @@ type JournalKind = JournalDoc['kind'];
 
 const journalKindLabels: Record<JournalKind, string> = {
   purchase: 'Покупки',
-  return_to_supplier: 'Возвраты',
+  return_to_supplier: 'Возврат поставщику',
+  customer_return: 'Возврат клиента',
   defect_transfer: 'Брак',
   writeoff: 'Списания',
   supplier_payment: 'Платежи',
@@ -93,6 +94,15 @@ const journalKindVisual: Record<
 > = {
   purchase: { icon: 'cube-outline', accentColor: colors.green[500], iconColor: colors.green[600] },
   return_to_supplier: { icon: 'arrow-undo-outline', accentColor: colors.orange[500], iconColor: colors.orange[600] },
+  // Customer return — goods come BACK into stock (an inflow, like a purchase),
+  // but visually teal so it never reads as a supplier purchase or a supplier
+  // return. Distinct from green (purchase) and orange (return_to_supplier).
+  customer_return: {
+    icon: 'arrow-undo-outline',
+    accentColor: colors.teal[600],
+    iconColor: colors.teal[600],
+    cardBg: colors.teal[50],
+  },
   defect_transfer: { icon: 'warning-outline', accentColor: colors.red[500], iconColor: colors.red[600] },
   writeoff: { icon: 'trash-outline', accentColor: colors.gray[400], iconColor: colors.gray[600] },
   supplier_payment: { icon: 'cash-outline', accentColor: colors.blue[500], iconColor: colors.blue[600] },
@@ -107,7 +117,13 @@ const journalKindVisual: Record<
   },
 };
 
-// Outflow rows — amount shown with `-` prefix and red tint.
+// Outflow rows — amount shown with `-` prefix and red tint. `customer_return`
+// is deliberately NOT here: like `purchase`, it is a STOCK INFLOW (goods come
+// back onto the shelf), and the row amount is the goods' cost value, so it reads
+// as `+` to match the existing purchase convention. (The customer's cash refund
+// is reversed separately on the check itself — F1 in returns.service.ts — and is
+// not what this warehouse-doc row represents.) Its teal tint keeps it visually
+// distinct from a green purchase.
 const NEGATIVE_KINDS = new Set<JournalKind>(['return_to_supplier', 'defect_transfer', 'writeoff', 'supplier_payment']);
 
 // Ordered list of kind chips above the warehouse-docs list. `null` is
@@ -115,6 +131,7 @@ const NEGATIVE_KINDS = new Set<JournalKind>(['return_to_supplier', 'defect_trans
 const KIND_CHIPS: Array<{ key: JournalKind | null; label: string }> = [
   { key: null, label: 'Все' },
   { key: 'purchase', label: journalKindLabels.purchase },
+  { key: 'customer_return', label: journalKindLabels.customer_return },
   { key: 'return_to_supplier', label: journalKindLabels.return_to_supplier },
   { key: 'defect_transfer', label: journalKindLabels.defect_transfer },
   { key: 'writeoff', label: journalKindLabels.writeoff },
@@ -318,7 +335,13 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, pa
   const visual = journalKindVisual[item.kind];
   const isNegative = NEGATIVE_KINDS.has(item.kind);
   const amountColor =
-    item.kind === 'used_purchase' ? colors.purple[700] : isNegative ? colors.red[600] : colors.green[600];
+    item.kind === 'used_purchase'
+      ? colors.purple[700]
+      : item.kind === 'customer_return'
+        ? colors.teal[600]
+        : isNegative
+          ? colors.red[600]
+          : colors.green[600];
   // Title prefers payeeName for supplier_payment ("Оплата: ООО Х"),
   // otherwise falls back to the backend-provided title.
   const title = item.kind === 'supplier_payment' && item.payeeName ? `Оплата: ${item.payeeName}` : item.title;
@@ -937,7 +960,7 @@ export default function ChecksScreen() {
             ]}
             accessibilityRole="switch"
             accessibilityState={{ checked: returnsOnly }}
-            accessibilityLabel="Только возвраты"
+            accessibilityLabel="Только возвраты клиентов"
           >
             <Ionicons
               name="arrow-undo-outline"
@@ -945,7 +968,7 @@ export default function ChecksScreen() {
               color={returnsOnly ? colors.red[600] : palette.text.secondary}
             />
             <Text style={[styles.returnsToggleLabel, { color: returnsOnly ? colors.red[700] : palette.text.primary }]}>
-              Только возвраты
+              Возврат клиента
             </Text>
             <View
               style={[
@@ -1216,7 +1239,13 @@ export default function ChecksScreen() {
             const visual = journalKindVisual[doc.kind];
             const isNegative = NEGATIVE_KINDS.has(doc.kind);
             const amountColor =
-              doc.kind === 'used_purchase' ? colors.purple[700] : isNegative ? colors.red[600] : colors.green[600];
+              doc.kind === 'used_purchase'
+                ? colors.purple[700]
+                : doc.kind === 'customer_return'
+                  ? colors.teal[600]
+                  : isNegative
+                    ? colors.red[600]
+                    : colors.green[600];
             return (
               <View style={{ gap: spacing[3] }}>
                 <View style={[styles.docDetailHeader, { borderBottomColor: palette.border.subtle }]}>

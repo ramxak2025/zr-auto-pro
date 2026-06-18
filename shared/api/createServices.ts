@@ -961,7 +961,14 @@ export function createJournalApi(api: HttpClient) {
     warehouseDocs: (params: {
       from?: string;
       to?: string;
-      type?: 'purchase' | 'return_to_supplier' | 'defect_transfer' | 'writeoff' | 'supplier_payment' | 'used_purchase';
+      type?:
+        | 'purchase'
+        | 'return_to_supplier'
+        | 'customer_return'
+        | 'defect_transfer'
+        | 'writeoff'
+        | 'supplier_payment'
+        | 'used_purchase';
     }) => api.get<JournalDoc[]>('/journal/warehouse-docs', { params }),
   };
 }

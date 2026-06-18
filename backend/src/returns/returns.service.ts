@@ -49,7 +49,9 @@ export class ReturnsService {
    *      return_destination, return_scope are persisted.
    *   4. For every product line returned (full → all product lines; partial →
    *      the ones the caller listed), a `stock_movements` row is written.
-   *      Destination=warehouse → main warehouse (income, returned to stock).
+   *      Destination=warehouse → main warehouse (customer_return, returned to
+   *      stock — a distinct type so the journal shows «Возврат клиента», NOT
+   *      a supplier «Поступление»; stock still increments exactly as income did).
    *      Destination=defect    → defect warehouse (defect_transfer, stock NOT
    *      added back to main; instead it lands on the defect warehouse
    *      so it shows up in the defect/writeoff report).
@@ -194,7 +196,11 @@ export class ReturnsService {
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [
             mv.productId,
-            dto.destination === 'warehouse' ? 'income' : 'defect_transfer',
+            // Customer return to the main warehouse gets its OWN type so the
+            // journal classifies it as «Возврат клиента» (not a supplier
+            // «Поступление»). Stock still adds back identically (see stockAfter
+            // above) — only the type label differs from the old 'income'.
+            dto.destination === 'warehouse' ? 'customer_return' : 'defect_transfer',
             mv.quantity,
             stockBefore,
             stockAfter,

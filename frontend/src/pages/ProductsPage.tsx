@@ -117,16 +117,16 @@ function ProductFormModal({
   const [isBundle, setIsBundle] = useState(product?.isBundle || false);
   const [bundleItems, setBundleItems] = useState<BundleItem[]>(product?.bundleItems || []);
   const [bundleSearch, setBundleSearch] = useState('');
-  const [warrantyDays, setWarrantyDays] = useState(
-    product?.warrantyDays != null ? String(product.warrantyDays) : '',
-  );
+  const [warrantyDays, setWarrantyDays] = useState(product?.warrantyDays != null ? String(product.warrantyDays) : '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const bundleSearchResults = useMemo(() => {
     if (!bundleSearch.trim()) return [];
     const q = bundleSearch.toLowerCase();
     return allProducts
-      .filter((p) => !p.isBundle && p.name.toLowerCase().includes(q) && !bundleItems.some((bi) => bi.productId === p.id))
+      .filter(
+        (p) => !p.isBundle && p.name.toLowerCase().includes(q) && !bundleItems.some((bi) => bi.productId === p.id),
+      )
       .slice(0, 8);
   }, [bundleSearch, allProducts, bundleItems]);
 
@@ -192,17 +192,10 @@ function ProductFormModal({
   }
 
   return (
-    <Modal
-      isOpen={isOpen}
-      onClose={onClose}
-      title={product ? 'Редактировать товар' : 'Новый товар'}
-      size="lg"
-    >
+    <Modal isOpen={isOpen} onClose={onClose} title={product ? 'Редактировать товар' : 'Новый товар'} size="lg">
       <form onSubmit={handleSubmit} className="space-y-4 max-h-[75vh] overflow-y-auto">
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Фото товара
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Фото товара</label>
           <div className="flex items-center gap-4">
             {photo ? (
               <div className="relative">
@@ -264,9 +257,7 @@ function ProductFormModal({
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Категория
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Категория</label>
           <input
             type="text"
             value={category}
@@ -284,9 +275,7 @@ function ProductFormModal({
 
         {/* Unit selector */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Единица измерения
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Единица измерения</label>
           <div className="flex gap-2">
             {UNIT_OPTIONS.map((opt) => (
               <button
@@ -307,9 +296,7 @@ function ProductFormModal({
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Закуп. цена
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Закуп. цена</label>
             <input
               type="number"
               value={costPrice}
@@ -320,9 +307,7 @@ function ProductFormModal({
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Продажная цена
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Продажная цена</label>
             <input
               type="number"
               value={sellPrice}
@@ -337,7 +322,12 @@ function ProductFormModal({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Остаток {unit !== 'pcs' && <span className="text-gray-400 font-normal">({unit === 'm' ? 'м' : unit === 'l' ? 'л' : unit === 'kg' ? 'кг' : unit})</span>}
+              Остаток{' '}
+              {unit !== 'pcs' && (
+                <span className="text-gray-400 font-normal">
+                  ({unit === 'm' ? 'м' : unit === 'l' ? 'л' : unit === 'kg' ? 'кг' : unit})
+                </span>
+              )}
             </label>
             <input
               type="number"
@@ -349,9 +339,7 @@ function ProductFormModal({
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Мин. остаток
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">Мин. остаток</label>
             <input
               type="number"
               value={minStock}
@@ -388,7 +376,10 @@ function ProductFormModal({
             {bundleItems.length > 0 && (
               <div className="space-y-2">
                 {bundleItems.map((bi) => (
-                  <div key={bi.productId} className="flex items-center gap-2 bg-white rounded-lg px-3 py-2 border border-gray-200">
+                  <div
+                    key={bi.productId}
+                    className="flex items-center gap-2 bg-white rounded-lg px-3 py-2 border border-gray-200"
+                  >
                     <span className="flex-1 text-sm text-gray-900 truncate">{bi.name}</span>
                     <input
                       type="number"
@@ -397,7 +388,9 @@ function ProductFormModal({
                       min="1"
                       className="w-16 rounded-lg border border-gray-200 px-2 py-1 text-sm text-center focus:border-primary-500 focus:outline-none"
                     />
-                    <span className="text-xs text-gray-400">{unitLabel(allProducts.find((p) => p.id === bi.productId)?.unit)}</span>
+                    <span className="text-xs text-gray-400">
+                      {unitLabel(allProducts.find((p) => p.id === bi.productId)?.unit)}
+                    </span>
                     <button
                       type="button"
                       onClick={() => removeBundleItem(bi.productId)}
@@ -430,7 +423,9 @@ function ProductFormModal({
                   >
                     <Package className="h-4 w-4 text-gray-400 flex-shrink-0" />
                     <span className="flex-1 text-sm text-gray-900 truncate">{p.name}</span>
-                    <span className="text-xs text-gray-400">{p.stock} {unitLabel(p.unit)}</span>
+                    <span className="text-xs text-gray-400">
+                      {p.stock} {unitLabel(p.unit)}
+                    </span>
                   </button>
                 ))}
               </div>
@@ -440,9 +435,7 @@ function ProductFormModal({
 
         {/* Warranty days */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">
-            Срок гарантии (дней)
-          </label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Срок гарантии (дней)</label>
           <input
             type="number"
             value={warrantyDays}
@@ -500,9 +493,18 @@ function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: Writeo
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const qty = parseFloat(quantity);
-    if (!qty || qty <= 0) { toast.error('Введите количество'); return; }
-    if (qty > product.stock) { toast.error('Количество превышает остаток'); return; }
-    if (!reason.trim()) { toast.error('Укажите причину списания'); return; }
+    if (!qty || qty <= 0) {
+      toast.error('Введите количество');
+      return;
+    }
+    if (qty > product.stock) {
+      toast.error('Количество превышает остаток');
+      return;
+    }
+    if (!reason.trim()) {
+      toast.error('Укажите причину списания');
+      return;
+    }
     onSubmit({ quantity: qty, reason: reason.trim(), recordAsExpense });
   }
 
@@ -511,17 +513,29 @@ function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: Writeo
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-sm text-gray-600">
           Товар: <span className="font-medium text-gray-900">{product.name}</span>
-          <br />Остаток: <span className="font-medium text-gray-900">{product.stock}</span>
+          <br />
+          Остаток: <span className="font-medium text-gray-900">{product.stock}</span>
         </p>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Количество *</label>
-          <input type="number" value={quantity} onChange={(e) => setQuantity(e.target.value)} min="1" max={product.stock}
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20" />
+          <input
+            type="number"
+            value={quantity}
+            onChange={(e) => setQuantity(e.target.value)}
+            min="1"
+            max={product.stock}
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+          />
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Причина *</label>
-          <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={3} placeholder="Причина списания..."
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none" />
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+            placeholder="Причина списания..."
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
+          />
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Учёт</label>
@@ -551,16 +565,25 @@ function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: Writeo
               />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-gray-900">Просто списать</p>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  Уберёт остаток без проводки в расходы.
-                </p>
+                <p className="text-xs text-gray-500 mt-0.5">Уберёт остаток без проводки в расходы.</p>
               </div>
             </label>
           </div>
         </div>
         <div className="flex items-center justify-end gap-3 pt-2">
-          <button type="button" onClick={onClose} disabled={isLoading} className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Отмена</button>
-          <button type="submit" disabled={isLoading} className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isLoading}
+            className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            Отмена
+          </button>
+          <button
+            type="submit"
+            disabled={isLoading}
+            className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+          >
             {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}Списать
           </button>
         </div>
@@ -607,8 +630,14 @@ function TransferModal({
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const qty = parseFloat(quantity);
-    if (!qty || qty <= 0) { toast.error('Введите количество'); return; }
-    if (qty > product.stock) { toast.error('Количество превышает остаток'); return; }
+    if (!qty || qty <= 0) {
+      toast.error('Введите количество');
+      return;
+    }
+    if (qty > product.stock) {
+      toast.error('Количество превышает остаток');
+      return;
+    }
     const target = mode === 'defect' ? defectWh : usedWh;
     if (!target) {
       toast.error(mode === 'defect' ? 'Склад брака не найден' : 'Склад Б/У не найден');
@@ -628,7 +657,8 @@ function TransferModal({
       <form onSubmit={handleSubmit} className="space-y-4">
         <p className="text-sm text-gray-600">
           Товар: <span className="font-medium text-gray-900">{product.name}</span>
-          <br />Остаток на основном: <span className="font-medium text-gray-900">{product.stock}</span>
+          <br />
+          Остаток на основном: <span className="font-medium text-gray-900">{product.stock}</span>
         </p>
 
         <div>
@@ -735,8 +765,14 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
     const a = parseFloat(actualStock);
-    if (isNaN(a) || a < 0) { toast.error('Введите корректный остаток'); return; }
-    if (!reason.trim()) { toast.error('Укажите причину'); return; }
+    if (isNaN(a) || a < 0) {
+      toast.error('Введите корректный остаток');
+      return;
+    }
+    if (!reason.trim()) {
+      toast.error('Укажите причину');
+      return;
+    }
     onSubmit({ actualStock: a, reason: reason.trim() });
   }
 
@@ -752,19 +788,26 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
               <p className="text-[10px] text-gray-400 uppercase">В системе</p>
             </div>
             <div>
-              <p className={`text-lg font-bold ${actual !== product.stock ? 'text-primary-600' : 'text-gray-400'}`}>{actual}</p>
+              <p className={`text-lg font-bold ${actual !== product.stock ? 'text-primary-600' : 'text-gray-400'}`}>
+                {actual}
+              </p>
               <p className="text-[10px] text-gray-400 uppercase">Факт</p>
             </div>
             <div>
-              <p className={`text-lg font-bold ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-gray-400'}`}>
-                {diff > 0 ? '+' : ''}{diff !== 0 ? diff.toFixed(product.unit === 'pcs' ? 0 : 2) : '—'}
+              <p
+                className={`text-lg font-bold ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-gray-400'}`}
+              >
+                {diff > 0 ? '+' : ''}
+                {diff !== 0 ? diff.toFixed(product.unit === 'pcs' ? 0 : 2) : '—'}
               </p>
               <p className="text-[10px] text-gray-400 uppercase">Разница</p>
             </div>
           </div>
           {/* Cost impact for shortage/excess */}
           {diff !== 0 && (
-            <div className={`mt-3 rounded-lg p-2 text-center ${diff < 0 ? 'bg-red-50 border border-red-100' : 'bg-green-50 border border-green-100'}`}>
+            <div
+              className={`mt-3 rounded-lg p-2 text-center ${diff < 0 ? 'bg-red-50 border border-red-100' : 'bg-green-50 border border-green-100'}`}
+            >
               <p className={`text-[10px] uppercase font-semibold ${diff < 0 ? 'text-red-500' : 'text-green-500'}`}>
                 {diff < 0 ? 'Сумма недостачи' : 'Сумма излишков'}
               </p>
@@ -772,7 +815,8 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
                 {formatMoney(diff < 0 ? damageAmount : excessAmount)}
               </p>
               <p className="text-[10px] text-gray-400">
-                {Math.abs(diff).toFixed(product.unit === 'pcs' ? 0 : 2)} {unitLabel(product.unit)} x {formatMoney(product.costPrice)}
+                {Math.abs(diff).toFixed(product.unit === 'pcs' ? 0 : 2)} {unitLabel(product.unit)} x{' '}
+                {formatMoney(product.costPrice)}
               </p>
             </div>
           )}
@@ -780,17 +824,39 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
 
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Фактический остаток</label>
-          <input type="number" value={actualStock} onChange={(e) => setActualStock(e.target.value)} min="0" step="any"
-            className="block w-full rounded-xl border border-gray-300 px-4 py-3 text-base font-semibold focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20" />
+          <input
+            type="number"
+            value={actualStock}
+            onChange={(e) => setActualStock(e.target.value)}
+            min="0"
+            step="any"
+            className="block w-full rounded-xl border border-gray-300 px-4 py-3 text-base font-semibold focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+          />
         </div>
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1.5">Причина</label>
-          <textarea value={reason} onChange={(e) => setReason(e.target.value)} rows={2} placeholder="Причина корректировки..."
-            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none" />
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            placeholder="Причина корректировки..."
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 resize-none"
+          />
         </div>
         <div className="flex items-center justify-end gap-3 pt-2">
-          <button type="button" onClick={onClose} disabled={isLoading} className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50">Отмена</button>
-          <button type="submit" disabled={isLoading || diff === 0} className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={isLoading}
+            className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+          >
+            Отмена
+          </button>
+          <button
+            type="submit"
+            disabled={isLoading || diff === 0}
+            className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+          >
             {isLoading && <Loader2 className="h-4 w-4 animate-spin" />}Провести инвентаризацию
           </button>
         </div>
@@ -851,7 +917,11 @@ const ProductCard = memo(function ProductCard({
         }
       }}
       className={`relative rounded-2xl overflow-hidden shadow-sm border transition-all active:scale-[0.97] cursor-pointer ${
-        selected ? 'border-primary-500 ring-2 ring-primary-500/20' : recentlyChecked ? 'border-green-200 ring-1 ring-green-100' : 'border-gray-100'
+        selected
+          ? 'border-primary-500 ring-2 ring-primary-500/20'
+          : recentlyChecked
+            ? 'border-green-200 ring-1 ring-green-100'
+            : 'border-gray-100'
       }`}
       style={recentlyChecked ? { backgroundColor: '#f0fdf4' } : { backgroundColor: '#ffffff' }}
     >
@@ -860,9 +930,7 @@ const ProductCard = memo(function ProductCard({
         <div className="absolute top-2 left-2 z-10">
           <div
             className={`flex h-5 w-5 items-center justify-center rounded-full border-2 transition-colors ${
-              selected
-                ? 'border-primary-600 bg-primary-600'
-                : 'border-white bg-white/80 shadow-sm'
+              selected ? 'border-primary-600 bg-primary-600' : 'border-white bg-white/80 shadow-sm'
             }`}
           >
             {selected && <CheckIcon className="h-3 w-3 text-white" />}
@@ -882,7 +950,12 @@ const ProductCard = memo(function ProductCard({
       {/* Image area — use thumbnail for fast grid loading */}
       <div className="aspect-[4/3] bg-gray-50 flex items-center justify-center overflow-hidden">
         {product.photo ? (
-          <img src={thumbUrl(product.photo) || product.photo} alt="" className="w-full h-full object-cover" loading="lazy" />
+          <img
+            src={thumbUrl(product.photo) || product.photo}
+            alt=""
+            className="w-full h-full object-cover"
+            loading="lazy"
+          />
         ) : (
           <Package className="h-10 w-10 text-gray-200" />
         )}
@@ -906,20 +979,12 @@ const ProductCard = memo(function ProductCard({
           </span>
           {isLow && <AlertTriangle className="h-3 w-3 text-red-500" />}
         </div>
-        <p className="text-sm font-bold text-gray-900 mt-1">
-          {formatMoney(product.sellPrice)}
-        </p>
+        <p className="text-sm font-bold text-gray-900 mt-1">{formatMoney(product.sellPrice)}</p>
         {/* Inventory check date */}
         {lastInventoryDate && !recentlyChecked && (
-          <p className="text-[10px] text-gray-400 mt-0.5">
-            Проверено: {formatDateShort(lastInventoryDate)}
-          </p>
+          <p className="text-[10px] text-gray-400 mt-0.5">Проверено: {formatDateShort(lastInventoryDate)}</p>
         )}
-        {recentlyChecked && (
-          <p className="text-[10px] text-green-600 font-medium mt-0.5">
-            Проверено сегодня
-          </p>
-        )}
+        {recentlyChecked && <p className="text-[10px] text-green-600 font-medium mt-0.5">Проверено сегодня</p>}
       </div>
     </div>
   );
@@ -963,7 +1028,10 @@ function FolderTile({
           type="button"
           aria-label="Перетащите чтобы переставить"
           className="flex-shrink-0 cursor-grab active:cursor-grabbing touch-none p-1 rounded text-gray-300 hover:text-gray-500 hover:bg-gray-50 transition-colors"
-          onPointerDown={(e) => { e.stopPropagation(); dragHandleProps.onPointerDown(e); }}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            dragHandleProps.onPointerDown(e);
+          }}
         >
           <GripVertical className="h-4 w-4" />
         </button>
@@ -977,7 +1045,9 @@ function FolderTile({
         onKeyDown={(e) => e.key === 'Enter' && onClick()}
         className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer active:opacity-70"
       >
-        <div className={`flex h-9 w-9 items-center justify-center rounded-lg flex-shrink-0 ${recentlyChecked ? 'bg-green-100' : 'bg-primary-50'}`}>
+        <div
+          className={`flex h-9 w-9 items-center justify-center rounded-lg flex-shrink-0 ${recentlyChecked ? 'bg-green-100' : 'bg-primary-50'}`}
+        >
           <FolderOpen className={`h-4.5 w-4.5 ${recentlyChecked ? 'text-green-500' : 'text-primary-500'}`} />
         </div>
         <div className="flex-1 min-w-0">
@@ -1004,7 +1074,10 @@ function FolderTile({
       {canManage && onDelete && (
         <button
           type="button"
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          onClick={(e) => {
+            e.stopPropagation();
+            onDelete();
+          }}
           className="p-2 rounded-lg hover:bg-red-50 text-gray-300 hover:text-red-500 transition-colors flex-shrink-0"
           title="Удалить папку"
         >
@@ -1070,9 +1143,19 @@ const MOVEMENT_LABELS: Record<string, { label: string; color: string }> = {
   defect_transfer: { label: 'В брак', color: 'text-amber-600 bg-amber-50' },
   used_transfer: { label: 'В Б/У', color: 'text-blue-600 bg-blue-50' },
   defect_return_to_supplier: { label: 'Поставщику', color: 'text-red-700 bg-red-50' },
+  customer_return: { label: 'Возврат клиента', color: 'text-teal-700 bg-teal-50' },
 };
 
-function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory, onDelete, onTransfer, canTransfer }: {
+function ProductDetailModal({
+  product,
+  onClose,
+  onEdit,
+  onWriteoff,
+  onInventory,
+  onDelete,
+  onTransfer,
+  canTransfer,
+}: {
   product: Product;
   onClose: () => void;
   onEdit: () => void;
@@ -1088,22 +1171,31 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
 
   const { data: movements, isLoading: movLoading } = useQuery({
     queryKey: ['product-movements', product.id],
-    queryFn: async () => { const res = await productsApi.getProductMovements(product.id); return res.data; },
+    queryFn: async () => {
+      const res = await productsApi.getProductMovements(product.id);
+      return res.data;
+    },
     enabled: tab === 'movements',
     staleTime: 30_000,
   });
 
   const { data: priceHistory, isLoading: priceLoading } = useQuery({
     queryKey: ['product-prices', product.id],
-    queryFn: async () => { const res = await productsApi.getProductPriceHistory(product.id); return res.data; },
+    queryFn: async () => {
+      const res = await productsApi.getProductPriceHistory(product.id);
+      return res.data;
+    },
     enabled: tab === 'prices',
     staleTime: 30_000,
   });
 
   const fmtDate = (d: string) => {
     const dt = new Date(d);
-    return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) + ' ' +
-      dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    return (
+      dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) +
+      ' ' +
+      dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    );
   };
 
   return (
@@ -1115,9 +1207,13 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
             { key: 'info' as const, label: 'Информация' },
             { key: 'movements' as const, label: 'Движение' },
             { key: 'prices' as const, label: 'Цены' },
-          ].map(t => (
-            <button key={t.key} type="button" onClick={() => setTab(t.key)}
-              className={`flex-1 py-2.5 text-xs font-semibold text-center relative transition-colors ${tab === t.key ? 'text-primary-600' : 'text-gray-400'}`}>
+          ].map((t) => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setTab(t.key)}
+              className={`flex-1 py-2.5 text-xs font-semibold text-center relative transition-colors ${tab === t.key ? 'text-primary-600' : 'text-gray-400'}`}
+            >
               {t.label}
               {tab === t.key && <div className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-500 rounded-full" />}
             </button>
@@ -1130,7 +1226,12 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
             <div className="flex items-start gap-4">
               <div className="flex h-20 w-20 items-center justify-center rounded-xl bg-gray-50 flex-shrink-0 overflow-hidden">
                 {product.photo ? (
-                  <img src={product.photo} alt={product.name} className="w-full h-full object-cover rounded-xl" loading="lazy" />
+                  <img
+                    src={product.photo}
+                    alt={product.name}
+                    className="w-full h-full object-cover rounded-xl"
+                    loading="lazy"
+                  />
                 ) : (
                   <Package className="h-8 w-8 text-gray-300" />
                 )}
@@ -1138,10 +1239,14 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
               <div className="flex-1 min-w-0 space-y-1.5">
                 <div className="flex items-center gap-2 flex-wrap">
                   {product.category && (
-                    <span className="inline-block text-[11px] font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">{product.category}</span>
+                    <span className="inline-block text-[11px] font-medium text-primary-600 bg-primary-50 px-2 py-0.5 rounded-full">
+                      {product.category}
+                    </span>
                   )}
                   {product.isBundle && (
-                    <span className="inline-block text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">Комплект</span>
+                    <span className="inline-block text-[11px] font-medium text-amber-700 bg-amber-50 px-2 py-0.5 rounded-full">
+                      Комплект
+                    </span>
                   )}
                 </div>
                 <p className="text-base font-bold text-gray-900">{product.name}</p>
@@ -1155,7 +1260,9 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
                   <div key={idx} className="flex items-center gap-2 text-sm">
                     <Package className="h-3.5 w-3.5 text-primary-400 flex-shrink-0" />
                     <span className="flex-1 text-gray-900 truncate">{bi.name}</span>
-                    <span className="text-gray-500 font-medium">{bi.quantity} {unitLabel('pcs')}</span>
+                    <span className="text-gray-500 font-medium">
+                      {bi.quantity} {unitLabel('pcs')}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -1178,32 +1285,54 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
               </div>
               <div className="rounded-xl bg-gray-50 p-3">
                 <p className="text-[11px] text-gray-400 mb-0.5">Мин. остаток</p>
-                <p className="text-sm font-bold text-gray-900">{product.minStock} {uLabel}</p>
+                <p className="text-sm font-bold text-gray-900">
+                  {product.minStock} {uLabel}
+                </p>
               </div>
             </div>
 
             <div className="space-y-2 pt-2 border-t border-gray-100">
-              <button type="button" onClick={onEdit}
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-                <Pencil className="h-4 w-4 text-primary-500" />Редактировать
+              <button
+                type="button"
+                onClick={onEdit}
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <Pencil className="h-4 w-4 text-primary-500" />
+                Редактировать
               </button>
               {canTransfer && onTransfer && (
-                <button type="button" onClick={onTransfer}
-                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-                  <ArrowLeftRight className="h-4 w-4 text-amber-500" />Перенос в брак / Б/У
+                <button
+                  type="button"
+                  onClick={onTransfer}
+                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <ArrowLeftRight className="h-4 w-4 text-amber-500" />
+                  Перенос в брак / Б/У
                 </button>
               )}
-              <button type="button" onClick={onWriteoff}
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-                <PackageMinus className="h-4 w-4 text-orange-500" />Списание
+              <button
+                type="button"
+                onClick={onWriteoff}
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <PackageMinus className="h-4 w-4 text-orange-500" />
+                Списание
               </button>
-              <button type="button" onClick={onInventory}
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors">
-                <ClipboardCheck className="h-4 w-4 text-blue-500" />Инвентаризация
+              <button
+                type="button"
+                onClick={onInventory}
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                <ClipboardCheck className="h-4 w-4 text-blue-500" />
+                Инвентаризация
               </button>
-              <button type="button" onClick={onDelete}
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors">
-                <Trash2 className="h-4 w-4" />Удалить товар
+              <button
+                type="button"
+                onClick={onDelete}
+                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+              >
+                <Trash2 className="h-4 w-4" />
+                Удалить товар
               </button>
             </div>
           </div>
@@ -1213,7 +1342,9 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
         {tab === 'movements' && (
           <div className="space-y-2">
             {movLoading ? (
-              <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-gray-400" /></div>
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+              </div>
             ) : !movements || movements.length === 0 ? (
               <div className="text-center py-8 text-sm text-gray-400">Нет движений по товару</div>
             ) : (
@@ -1223,15 +1354,22 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
                   const diff = m.stockAfter - m.stockBefore;
                   return (
                     <div key={m.id} className="flex items-start gap-3 px-3 py-2.5 rounded-xl bg-gray-50">
-                      <div className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 mt-0.5 ${info.color}`}>
+                      <div
+                        className={`px-2 py-0.5 rounded-full text-[10px] font-bold flex-shrink-0 mt-0.5 ${info.color}`}
+                      >
                         {info.label}
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <span className={`text-sm font-bold ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-gray-600'}`}>
-                            {diff > 0 ? '+' : ''}{diff} {uLabel}
+                          <span
+                            className={`text-sm font-bold ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-gray-600'}`}
+                          >
+                            {diff > 0 ? '+' : ''}
+                            {diff} {uLabel}
                           </span>
-                          <span className="text-xs text-gray-400">{m.stockBefore} → {m.stockAfter}</span>
+                          <span className="text-xs text-gray-400">
+                            {m.stockBefore} → {m.stockAfter}
+                          </span>
                         </div>
                         {m.reason && <p className="text-xs text-gray-500 mt-0.5 truncate">{m.reason}</p>}
                         <div className="flex items-center gap-2 mt-0.5">
@@ -1265,7 +1403,9 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">История изменений</p>
 
             {priceLoading ? (
-              <div className="flex justify-center py-8"><Loader2 className="h-5 w-5 animate-spin text-gray-400" /></div>
+              <div className="flex justify-center py-8">
+                <Loader2 className="h-5 w-5 animate-spin text-gray-400" />
+              </div>
             ) : !priceHistory || priceHistory.length === 0 ? (
               <div className="text-center py-8 text-sm text-gray-400">Цены не менялись</div>
             ) : (
@@ -1281,7 +1421,9 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
                             <span className="text-gray-400 w-16">Закуп.</span>
                             <span className="text-gray-500 line-through">{formatMoney(p.costPriceBefore)}</span>
                             <span className="text-gray-400">→</span>
-                            <span className={`font-bold ${p.costPriceAfter > p.costPriceBefore ? 'text-red-600' : 'text-green-600'}`}>
+                            <span
+                              className={`font-bold ${p.costPriceAfter > p.costPriceBefore ? 'text-red-600' : 'text-green-600'}`}
+                            >
                               {formatMoney(p.costPriceAfter)}
                             </span>
                           </div>
@@ -1291,7 +1433,9 @@ function ProductDetailModal({ product, onClose, onEdit, onWriteoff, onInventory,
                             <span className="text-gray-400 w-16">Продаж.</span>
                             <span className="text-gray-500 line-through">{formatMoney(p.sellPriceBefore)}</span>
                             <span className="text-gray-400">→</span>
-                            <span className={`font-bold ${p.sellPriceAfter > p.sellPriceBefore ? 'text-green-600' : 'text-red-600'}`}>
+                            <span
+                              className={`font-bold ${p.sellPriceAfter > p.sellPriceBefore ? 'text-green-600' : 'text-red-600'}`}
+                            >
                               {formatMoney(p.sellPriceAfter)}
                             </span>
                           </div>
@@ -1325,7 +1469,10 @@ export default function ProductsPage() {
 
   const { data: warehouseStats } = useQuery({
     queryKey: ['warehouse-stats'],
-    queryFn: async () => { const res = await productsApi.getWarehouseStats(); return res.data; },
+    queryFn: async () => {
+      const res = await productsApi.getWarehouseStats();
+      return res.data;
+    },
     staleTime: 60_000,
     enabled: isOwner,
   });
@@ -1349,7 +1496,9 @@ export default function ProductsPage() {
   const [warehouseOpsOpen, setWarehouseOpsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
   const [warehouseOpsMode, setWarehouseOpsMode] = useState<'inventory' | 'writeoff' | null>(null);
-  const [warehouseOpsProducts, setWarehouseOpsProducts] = useState<Record<string, { actual: string; reason: string }>>({});
+  const [warehouseOpsProducts, setWarehouseOpsProducts] = useState<Record<string, { actual: string; reason: string }>>(
+    {},
+  );
 
   // Select & move state
   const [selectMode, setSelectMode] = useState(false);
@@ -1416,10 +1565,7 @@ export default function ProductsPage() {
     return warehouses?.find((w) => w.id === activeWarehouseId)?.kind ?? null;
   }, [warehouses, activeWarehouseId]);
 
-  const {
-    data: productsData,
-    isLoading,
-  } = useQuery<PaginatedResponse<Product>>({
+  const { data: productsData, isLoading } = useQuery<PaginatedResponse<Product>>({
     queryKey: ['products', { limit: 1000, warehouseId: activeWarehouseId || 'all' }],
     queryFn: async () => {
       const params: { limit: number; warehouseId?: string } = { limit: 1000 };
@@ -1476,7 +1622,10 @@ export default function ProductsPage() {
   // Fetch persisted empty warehouse categories
   const { data: warehouseCats } = useQuery<Array<{ id: string; path: string }>>({
     queryKey: ['warehouse-categories'],
-    queryFn: async () => { const res = await warehouseCategoriesApi.getAll(); return res.data; },
+    queryFn: async () => {
+      const res = await warehouseCategoriesApi.getAll();
+      return res.data;
+    },
     staleTime: 30_000,
   });
 
@@ -1532,7 +1681,9 @@ export default function ProductsPage() {
 
   const categories = useMemo(() => {
     const cats = new Set<string>();
-    allProducts.forEach((p: Product) => { if (p.category) cats.add(p.category); });
+    allProducts.forEach((p: Product) => {
+      if (p.category) cats.add(p.category);
+    });
     return Array.from(cats).sort();
   }, [allProducts]);
 
@@ -1615,7 +1766,7 @@ export default function ProductsPage() {
     for (const folder of subfolders) {
       const folderPrefix = prefix ? `${prefix}/${folder.name}` : folder.name;
       // Find all products in this folder (directly or nested)
-      const folderProducts = allProducts.filter(p => {
+      const folderProducts = allProducts.filter((p) => {
         const cat = p.category || '';
         return cat === folderPrefix || cat.startsWith(folderPrefix + '/');
       });
@@ -1671,8 +1822,7 @@ export default function ProductsPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: ProductFormData }) =>
-      productsApi.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: ProductFormData }) => productsApi.update(id, data),
     onSuccess: () => {
       toast.success('Товар обновлён');
       queryClient.invalidateQueries({ queryKey: ['products'] });
@@ -1783,7 +1933,9 @@ export default function ProductsPage() {
       await Promise.all(productIds.map((id) => productsApi.remove(id)));
     },
     onSuccess: (_, productIds) => {
-      toast.success(`${productIds.length} ${productIds.length === 1 ? 'товар перемещён' : 'товаров перемещено'} в корзину`);
+      toast.success(
+        `${productIds.length} ${productIds.length === 1 ? 'товар перемещён' : 'товаров перемещено'} в корзину`,
+      );
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
       setSelectedProducts(new Set());
@@ -1845,7 +1997,11 @@ export default function ProductsPage() {
     }
 
     const detectMap = (row: string[]) => {
-      const cols = row.map((c) => String(c ?? '').trim().toLowerCase());
+      const cols = row.map((c) =>
+        String(c ?? '')
+          .trim()
+          .toLowerCase(),
+      );
       const m = { name: -1, category: -1, unit: -1, sellPrice: -1, costPrice: -1, stock: -1, minStock: -1 };
       cols.forEach((h, i) => {
         if (!h) return;
@@ -1868,13 +2024,22 @@ export default function ProductsPage() {
     for (let i = 1; i < Math.min(rawRows.length, 10); i++) {
       const m = detectMap(rawRows[i]);
       const score = Object.values(m).filter((v) => v >= 0).length;
-      if (score > bestScore) { bestScore = score; colMap = m; headerIdx = i; }
+      if (score > bestScore) {
+        bestScore = score;
+        colMap = m;
+        headerIdx = i;
+      }
     }
 
     // Fallback: if no header matched for name, assume old positional format
     if (colMap.name < 0) {
-      colMap.name = 0; colMap.category = 1; colMap.costPrice = 2;
-      colMap.sellPrice = 3; colMap.stock = 4; colMap.minStock = 5; colMap.unit = 6;
+      colMap.name = 0;
+      colMap.category = 1;
+      colMap.costPrice = 2;
+      colMap.sellPrice = 3;
+      colMap.stock = 4;
+      colMap.minStock = 5;
+      colMap.unit = 6;
       headerIdx = 0;
     }
 
@@ -1882,15 +2047,18 @@ export default function ProductsPage() {
     // Russian locale uses "," as decimal sep in Excel → normalize
     const toNum = (s: string) => parseFloat(s.replace(/\s/g, '').replace(',', '.')) || 0;
 
-    const rows = rawRows.slice(headerIdx + 1).map((row) => ({
-      name: col(row, colMap.name),
-      category: col(row, colMap.category),
-      costPrice: colMap.costPrice >= 0 ? toNum(col(row, colMap.costPrice)) : 0,
-      sellPrice: colMap.sellPrice >= 0 ? toNum(col(row, colMap.sellPrice)) : 0,
-      stock: colMap.stock >= 0 ? toNum(col(row, colMap.stock)) : 0,
-      minStock: colMap.minStock >= 0 ? toNum(col(row, colMap.minStock)) : 0,
-      unit: col(row, colMap.unit) || 'pcs',
-    })).filter((r) => r.name);
+    const rows = rawRows
+      .slice(headerIdx + 1)
+      .map((row) => ({
+        name: col(row, colMap.name),
+        category: col(row, colMap.category),
+        costPrice: colMap.costPrice >= 0 ? toNum(col(row, colMap.costPrice)) : 0,
+        sellPrice: colMap.sellPrice >= 0 ? toNum(col(row, colMap.sellPrice)) : 0,
+        stock: colMap.stock >= 0 ? toNum(col(row, colMap.stock)) : 0,
+        minStock: colMap.minStock >= 0 ? toNum(col(row, colMap.minStock)) : 0,
+        unit: col(row, colMap.unit) || 'pcs',
+      }))
+      .filter((r) => r.name);
 
     if (rows.length === 0) {
       toast.error('Не найдено товаров для импорта');
@@ -2021,9 +2189,11 @@ export default function ProductsPage() {
             >
               {/* Select checkbox */}
               {!isSearch && selectMode && (
-                <div className={`flex h-5 w-5 items-center justify-center rounded-full border-2 flex-shrink-0 ${
-                  isSelected ? 'border-primary-600 bg-primary-600' : 'border-gray-300 bg-white'
-                }`}>
+                <div
+                  className={`flex h-5 w-5 items-center justify-center rounded-full border-2 flex-shrink-0 ${
+                    isSelected ? 'border-primary-600 bg-primary-600' : 'border-gray-300 bg-white'
+                  }`}
+                >
                   {isSelected && <CheckIcon className="h-3 w-3 text-white" />}
                 </div>
               )}
@@ -2032,7 +2202,10 @@ export default function ProductsPage() {
               <div
                 className="h-10 w-10 rounded-lg bg-gray-50 overflow-hidden flex-shrink-0 flex items-center justify-center"
                 onContextMenu={(e) => {
-                  if (product.photo) { e.preventDefault(); setPhotoPreview(product.photo); }
+                  if (product.photo) {
+                    e.preventDefault();
+                    setPhotoPreview(product.photo);
+                  }
                 }}
                 onTouchStart={() => {
                   if (!product.photo) return;
@@ -2043,7 +2216,12 @@ export default function ProductsPage() {
                 }}
               >
                 {product.photo ? (
-                  <img src={thumbUrl(product.photo) || product.photo} alt="" className="h-full w-full object-cover" loading="lazy" />
+                  <img
+                    src={thumbUrl(product.photo) || product.photo}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
                 ) : (
                   <Package className="h-5 w-5 text-gray-200" />
                 )}
@@ -2053,7 +2231,9 @@ export default function ProductsPage() {
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-gray-900 truncate">{product.name}</p>
                 {product.isBundle && (
-                  <span className="text-[9px] font-bold bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded-full">КМП</span>
+                  <span className="text-[9px] font-bold bg-primary-100 text-primary-700 px-1.5 py-0.5 rounded-full">
+                    КМП
+                  </span>
                 )}
               </div>
 
@@ -2108,7 +2288,13 @@ export default function ProductsPage() {
             >
               <Upload className="h-4 w-4" />
             </button>
-            <input ref={fileInputRef} type="file" accept=".xlsx,.xls,.csv,.txt" onChange={handleImportFile} className="hidden" />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv,.txt"
+              onChange={handleImportFile}
+              className="hidden"
+            />
             <button
               type="button"
               onClick={() => setTrashOpen(true)}
@@ -2184,7 +2370,9 @@ export default function ProductsPage() {
           </div>
           <div className="rounded-xl bg-gray-50 p-3">
             <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Расход пред. мес.</p>
-            <p className="text-base font-bold text-gray-700 mt-0.5">{formatMoney(warehouseStats.lastMonthProductCost)}</p>
+            <p className="text-base font-bold text-gray-700 mt-0.5">
+              {formatMoney(warehouseStats.lastMonthProductCost)}
+            </p>
           </div>
         </div>
       )}
@@ -2274,9 +2462,7 @@ export default function ProductsPage() {
                     setSelectedProducts(new Set());
                   }}
                   className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors flex-shrink-0 ${
-                    selectMode
-                      ? 'bg-primary-100 text-primary-700'
-                      : 'text-gray-500 hover:bg-gray-100'
+                    selectMode ? 'bg-primary-100 text-primary-700' : 'text-gray-500 hover:bg-gray-100'
                   }`}
                 >
                   {selectMode ? 'Отмена' : 'Выбрать'}
@@ -2297,8 +2483,14 @@ export default function ProductsPage() {
                 axis="y"
                 values={subfolders}
                 onReorder={(next) => {
-                  const before = subfolders.map((f) => f.catId).filter(Boolean).join('|');
-                  const after = next.map((f: { catId: string }) => f.catId).filter(Boolean).join('|');
+                  const before = subfolders
+                    .map((f) => f.catId)
+                    .filter(Boolean)
+                    .join('|');
+                  const after = next
+                    .map((f: { catId: string }) => f.catId)
+                    .filter(Boolean)
+                    .join('|');
                   if (before === after) return;
                   reorderCategoriesMutation.mutate(next.map((f: { catId: string }) => f.catId).filter(Boolean));
                 }}
@@ -2311,7 +2503,9 @@ export default function ProductsPage() {
                     checkInfo={folderCheckInfo.get(folder.name)}
                     canManage={canManageWarehouse}
                     onClick={() => enterFolder(folder.name)}
-                    onDelete={() => setDeleteFolderTarget({ id: folder.catId, name: folder.name, path: folder.fullPath })}
+                    onDelete={() =>
+                      setDeleteFolderTarget({ id: folder.catId, name: folder.name, path: folder.fullPath })
+                    }
                   />
                 ))}
               </Reorder.Group>
@@ -2349,9 +2543,7 @@ export default function ProductsPage() {
           )}
 
           {/* ── Products grid ── */}
-          {(showingRoot || showingFolderContents) && currentProducts.length > 0 && (
-            renderProductList(currentProducts)
-          )}
+          {(showingRoot || showingFolderContents) && currentProducts.length > 0 && renderProductList(currentProducts)}
 
           {/* Empty state */}
           {showingFolderContents && subfolders.length === 0 && currentProducts.length === 0 && (
@@ -2362,16 +2554,15 @@ export default function ProductsPage() {
           )}
 
           {/* Search results */}
-          {showingSearch && (
-            searchResults.length === 0 ? (
+          {showingSearch &&
+            (searchResults.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-16 text-gray-400">
                 <Package className="h-12 w-12 mb-3" />
                 <p className="text-sm">Товары не найдены</p>
               </div>
             ) : (
               renderProductList(searchResults, true)
-            )
-          )}
+            ))}
         </>
       )}
 
@@ -2394,15 +2585,18 @@ export default function ProductsPage() {
                 onClick={() => {
                   const ids = Array.from(selectedProducts);
                   if (ids.length === 0) return;
-                  if (confirm(`Переместить ${ids.length} ${ids.length === 1 ? 'товар' : 'товаров'} в корзину? Можно будет восстановить.`)) {
+                  if (
+                    confirm(
+                      `Переместить ${ids.length} ${ids.length === 1 ? 'товар' : 'товаров'} в корзину? Можно будет восстановить.`,
+                    )
+                  ) {
                     bulkTrashMutation.mutate(ids);
                   }
                 }}
                 disabled={bulkTrashMutation.isPending}
                 className="flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
               >
-                <Trash2 className="h-4 w-4" />
-                В корзину
+                <Trash2 className="h-4 w-4" />В корзину
               </button>
             </div>
           </div>
@@ -2414,14 +2608,29 @@ export default function ProductsPage() {
         <ProductDetailModal
           product={detailTarget}
           onClose={() => setDetailTarget(null)}
-          onEdit={() => { openEdit(detailTarget); setDetailTarget(null); }}
-          onWriteoff={() => { setWriteoffTarget(detailTarget); setDetailTarget(null); }}
-          onInventory={() => { setInventoryTarget(detailTarget); setDetailTarget(null); }}
-          onDelete={() => { setDeleteTarget(detailTarget); setDetailTarget(null); }}
+          onEdit={() => {
+            openEdit(detailTarget);
+            setDetailTarget(null);
+          }}
+          onWriteoff={() => {
+            setWriteoffTarget(detailTarget);
+            setDetailTarget(null);
+          }}
+          onInventory={() => {
+            setInventoryTarget(detailTarget);
+            setDetailTarget(null);
+          }}
+          onDelete={() => {
+            setDeleteTarget(detailTarget);
+            setDetailTarget(null);
+          }}
           // Перенос доступен только с основного склада (продаём с main; брак/б/у —
           // конечные точки, дальше — списание или возврат поставщику).
           canTransfer={activeWarehouseKind === 'main'}
-          onTransfer={() => { setTransferTarget(detailTarget); setDetailTarget(null); }}
+          onTransfer={() => {
+            setTransferTarget(detailTarget);
+            setDetailTarget(null);
+          }}
         />
       )}
 
@@ -2499,12 +2708,7 @@ export default function ProductsPage() {
           (1) keep products, move them to root
           (2) delete the folder AND send its products to trash (recoverable). */}
       {deleteFolderTarget && (
-        <Modal
-          isOpen
-          onClose={() => setDeleteFolderTarget(null)}
-          title="Удалить папку"
-          size="sm"
-        >
+        <Modal isOpen onClose={() => setDeleteFolderTarget(null)} title="Удалить папку" size="sm">
           <div className="space-y-3">
             <p className="text-sm text-gray-600">
               Что сделать с папкой <span className="font-semibold text-gray-900">«{deleteFolderTarget.name}»</span>?
@@ -2558,11 +2762,7 @@ export default function ProductsPage() {
               </div>
             </button>
 
-            <button
-              type="button"
-              onClick={() => setDeleteFolderTarget(null)}
-              className="btn-ghost w-full"
-            >
+            <button type="button" onClick={() => setDeleteFolderTarget(null)} className="btn-ghost w-full">
               Отмена
             </button>
           </div>
@@ -2641,9 +2841,10 @@ export default function ProductsPage() {
                   type="button"
                   onClick={() => {
                     if (newFolderName.trim()) {
-                      const targetCategory = activePath.length > 0
-                        ? activePath.join('/') + '/' + newFolderName.trim()
-                        : newFolderName.trim();
+                      const targetCategory =
+                        activePath.length > 0
+                          ? activePath.join('/') + '/' + newFolderName.trim()
+                          : newFolderName.trim();
                       moveMutation.mutate({
                         productIds: Array.from(selectedProducts),
                         category: targetCategory,
@@ -2665,9 +2866,14 @@ export default function ProductsPage() {
       {warehouseOpsOpen && !warehouseOpsMode && (
         <Modal isOpen onClose={() => setWarehouseOpsOpen(false)} title="Складские операции" size="sm">
           <div className="space-y-2">
-            <button type="button"
-              onClick={() => { setWarehouseOpsMode('inventory'); setWarehouseOpsProducts({}); }}
-              className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-blue-50 transition-colors text-left border border-gray-100">
+            <button
+              type="button"
+              onClick={() => {
+                setWarehouseOpsMode('inventory');
+                setWarehouseOpsProducts({});
+              }}
+              className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-blue-50 transition-colors text-left border border-gray-100"
+            >
               <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
                 <ClipboardCheck className="w-5 h-5 text-blue-600" />
               </div>
@@ -2676,9 +2882,14 @@ export default function ProductsPage() {
                 <p className="text-xs text-gray-500">Пересчёт остатков на складе</p>
               </div>
             </button>
-            <button type="button"
-              onClick={() => { setWarehouseOpsMode('writeoff'); setWarehouseOpsProducts({}); }}
-              className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-orange-50 transition-colors text-left border border-gray-100">
+            <button
+              type="button"
+              onClick={() => {
+                setWarehouseOpsMode('writeoff');
+                setWarehouseOpsProducts({});
+              }}
+              className="w-full flex items-center gap-3 p-4 rounded-xl hover:bg-orange-50 transition-colors text-left border border-gray-100"
+            >
               <div className="w-10 h-10 rounded-xl bg-orange-100 flex items-center justify-center">
                 <PackageMinus className="w-5 h-5 text-orange-600" />
               </div>
@@ -2693,14 +2904,26 @@ export default function ProductsPage() {
 
       {/* Global inventory modal */}
       {warehouseOpsMode === 'inventory' && (
-        <Modal isOpen onClose={() => { setWarehouseOpsMode(null); setWarehouseOpsOpen(false); }} title="Инвентаризация" size="lg">
+        <Modal
+          isOpen
+          onClose={() => {
+            setWarehouseOpsMode(null);
+            setWarehouseOpsOpen(false);
+          }}
+          title="Инвентаризация"
+          size="lg"
+        >
           <GlobalInventoryForm
             products={allProducts}
             categories={categories}
             activePath={activePath}
             onSubmit={async (items) => {
               for (const item of items) {
-                await productsApi.updateStock(item.productId, { type: 'inventory', quantity: item.actual, reason: item.reason || 'Инвентаризация' });
+                await productsApi.updateStock(item.productId, {
+                  type: 'inventory',
+                  quantity: item.actual,
+                  reason: item.reason || 'Инвентаризация',
+                });
               }
               queryClient.invalidateQueries({ queryKey: ['products'] });
               queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
@@ -2716,12 +2939,24 @@ export default function ProductsPage() {
 
       {/* Global writeoff modal */}
       {warehouseOpsMode === 'writeoff' && (
-        <Modal isOpen onClose={() => { setWarehouseOpsMode(null); setWarehouseOpsOpen(false); }} title="Списание товаров" size="lg">
+        <Modal
+          isOpen
+          onClose={() => {
+            setWarehouseOpsMode(null);
+            setWarehouseOpsOpen(false);
+          }}
+          title="Списание товаров"
+          size="lg"
+        >
           <GlobalWriteoffForm
             products={allProducts}
             onSubmit={async (items) => {
               for (const item of items) {
-                await productsApi.updateStock(item.productId, { type: 'writeoff', quantity: item.quantity, reason: item.reason });
+                await productsApi.updateStock(item.productId, {
+                  type: 'writeoff',
+                  quantity: item.quantity,
+                  reason: item.reason,
+                });
               }
               queryClient.invalidateQueries({ queryKey: ['products'] });
               toast.success(`Списано ${items.length} позиций`);
@@ -2767,9 +3002,8 @@ export default function ProductsPage() {
                 type="button"
                 onClick={() => {
                   if (newFolderName.trim()) {
-                    const folderPath = activePath.length > 0
-                      ? activePath.join('/') + '/' + newFolderName.trim()
-                      : newFolderName.trim();
+                    const folderPath =
+                      activePath.length > 0 ? activePath.join('/') + '/' + newFolderName.trim() : newFolderName.trim();
                     createCategoryMutation.mutate(folderPath);
                     enterFolder(newFolderName.trim());
                     setShowFolderModal(false);
@@ -2788,16 +3022,28 @@ export default function ProductsPage() {
 
       {/* Import preview modal */}
       {showImportModal && importData && (
-        <Modal isOpen onClose={() => { setShowImportModal(false); setImportData(null); }} title="Импорт товаров" size="lg">
+        <Modal
+          isOpen
+          onClose={() => {
+            setShowImportModal(false);
+            setImportData(null);
+          }}
+          title="Импорт товаров"
+          size="lg"
+        >
           <div className="space-y-4">
             <div className="rounded-xl bg-blue-50 border border-blue-200 p-3">
               <p className="text-xs font-semibold text-blue-900 mb-1">Поддерживаются Excel (.xlsx, .xls) и CSV файлы</p>
-              <p className="text-[11px] text-blue-800 font-mono">Наименование | Группа | Единица измерения | Цена продажи | Цена закупки</p>
-              <p className="text-[10px] text-blue-600 mt-1">Колонки определяются автоматически по заголовку. Группы/папки через /</p>
+              <p className="text-[11px] text-blue-800 font-mono">
+                Наименование | Группа | Единица измерения | Цена продажи | Цена закупки
+              </p>
+              <p className="text-[10px] text-blue-600 mt-1">
+                Колонки определяются автоматически по заголовку. Группы/папки через /
+              </p>
             </div>
             <p className="text-sm text-gray-600">
-              Найдено <span className="font-bold text-gray-900">{importData.length}</span> товаров для импорта.
-              Товары с совпадающими названиями будут обновлены.
+              Найдено <span className="font-bold text-gray-900">{importData.length}</span> товаров для импорта. Товары с
+              совпадающими названиями будут обновлены.
             </p>
 
             <div className="max-h-80 overflow-auto rounded-xl border border-gray-200">
@@ -2826,16 +3072,17 @@ export default function ProductsPage() {
                 </tbody>
               </table>
               {importData.length > 50 && (
-                <p className="text-center text-xs text-gray-400 py-2">
-                  ... и ещё {importData.length - 50} товаров
-                </p>
+                <p className="text-center text-xs text-gray-400 py-2">... и ещё {importData.length - 50} товаров</p>
               )}
             </div>
 
             <div className="flex items-center justify-end gap-3 pt-2">
               <button
                 type="button"
-                onClick={() => { setShowImportModal(false); setImportData(null); }}
+                onClick={() => {
+                  setShowImportModal(false);
+                  setImportData(null);
+                }}
                 disabled={importing}
                 className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
               >
@@ -2862,11 +3109,7 @@ export default function ProductsPage() {
           onClick={() => setPhotoPreview(null)}
           onTouchEnd={() => setPhotoPreview(null)}
         >
-          <img
-            src={photoPreview}
-            alt=""
-            className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain"
-          />
+          <img src={photoPreview} alt="" className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain" />
         </div>
       )}
 
@@ -2895,16 +3138,10 @@ interface InventoryReportItem {
 // Inventory Report View — shown after inventory is completed
 // ---------------------------------------------------------------------------
 
-function InventoryReport({
-  items,
-  onClose,
-}: {
-  items: InventoryReportItem[];
-  onClose: () => void;
-}) {
-  const shortageItems = items.filter(i => i.diff < 0);
-  const excessItems = items.filter(i => i.diff > 0);
-  const matchItems = items.filter(i => i.diff === 0);
+function InventoryReport({ items, onClose }: { items: InventoryReportItem[]; onClose: () => void }) {
+  const shortageItems = items.filter((i) => i.diff < 0);
+  const excessItems = items.filter((i) => i.diff > 0);
+  const matchItems = items.filter((i) => i.diff === 0);
 
   const totalShortageAmount = shortageItems.reduce((sum, i) => sum + Math.abs(i.diff) * i.costPrice, 0);
   const totalExcessAmount = excessItems.reduce((sum, i) => sum + i.diff * i.costPrice, 0);
@@ -2936,7 +3173,7 @@ function InventoryReport({
         {shortageItems.length > 0 && (
           <>
             <p className="text-xs font-semibold text-red-600 uppercase tracking-wider pt-1">Недостача</p>
-            {shortageItems.map(item => (
+            {shortageItems.map((item) => (
               <div key={item.productId} className="rounded-xl border border-red-100 bg-red-50/40 p-3">
                 <div className="flex items-center gap-3">
                   <div className="flex-1 min-w-0">
@@ -2959,7 +3196,7 @@ function InventoryReport({
         {excessItems.length > 0 && (
           <>
             <p className="text-xs font-semibold text-green-600 uppercase tracking-wider pt-2">Излишки</p>
-            {excessItems.map(item => (
+            {excessItems.map((item) => (
               <div key={item.productId} className="rounded-xl border border-green-100 bg-green-50/40 p-3">
                 <div className="flex items-center gap-3">
                   <div className="flex-1 min-w-0">
@@ -2982,12 +3219,14 @@ function InventoryReport({
         {matchItems.length > 0 && (
           <>
             <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider pt-2">Без расхождений</p>
-            {matchItems.map(item => (
+            {matchItems.map((item) => (
               <div key={item.productId} className="rounded-xl border border-gray-100 bg-gray-50/40 p-3">
                 <div className="flex items-center gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-medium text-gray-900 truncate">{item.name}</p>
-                    <p className="text-[11px] text-gray-400">Остаток: {item.actual} {unitLabel(item.unit)}</p>
+                    <p className="text-[11px] text-gray-400">
+                      Остаток: {item.actual} {unitLabel(item.unit)}
+                    </p>
                   </div>
                   <CheckIcon className="w-4 h-4 text-green-500 flex-shrink-0" />
                 </div>
@@ -2998,8 +3237,11 @@ function InventoryReport({
       </div>
 
       <div className="flex items-center justify-end pt-3 border-t border-gray-100">
-        <button type="button" onClick={onClose}
-          className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700">
+        <button
+          type="button"
+          onClick={onClose}
+          className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700"
+        >
           Закрыть
         </button>
       </div>
@@ -3032,18 +3274,18 @@ function GlobalInventoryForm({
 
   const productMap = useMemo(() => {
     const map = new Map<string, Product>();
-    products.forEach(p => map.set(p.id, p));
+    products.forEach((p) => map.set(p.id, p));
     return map;
   }, [products]);
 
   const filtered = useMemo(() => {
-    let list = products.filter(p => !p.isBundle);
+    let list = products.filter((p) => !p.isBundle);
     if (filterCat) {
-      list = list.filter(p => p.category === filterCat || (p.category && p.category.startsWith(filterCat + '/')));
+      list = list.filter((p) => p.category === filterCat || (p.category && p.category.startsWith(filterCat + '/')));
     }
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter(p => p.name.toLowerCase().includes(q));
+      list = list.filter((p) => p.name.toLowerCase().includes(q));
     }
     return list;
   }, [products, filterCat, search]);
@@ -3056,11 +3298,14 @@ function GlobalInventoryForm({
         actual: parseFloat(v.actual) || 0,
         reason: v.reason || 'Инвентаризация',
       }));
-    if (items.length === 0) { toast.error('Укажите фактические остатки'); return; }
+    if (items.length === 0) {
+      toast.error('Укажите фактические остатки');
+      return;
+    }
     setSubmitting(true);
     try {
       // Build report data before submitting (uses current stock values)
-      const report: InventoryReportItem[] = items.map(item => {
+      const report: InventoryReportItem[] = items.map((item) => {
         const product = productMap.get(item.productId);
         const stockBefore = product?.stock ?? 0;
         const diff = item.actual - stockBefore;
@@ -3085,24 +3330,31 @@ function GlobalInventoryForm({
 
   // Show report after successful inventory
   if (reportItems) {
-    return (
-      <InventoryReport items={reportItems} onClose={onClose} />
-    );
+    return <InventoryReport items={reportItems} onClose={onClose} />;
   }
 
-  const countedIds = new Set(Object.keys(entries).filter(id => entries[id].actual !== ''));
+  const countedIds = new Set(Object.keys(entries).filter((id) => entries[id].actual !== ''));
 
   return (
     <div className="space-y-4 max-h-[70vh] flex flex-col">
       <div className="flex gap-2">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-            placeholder="Поиск товара..." className="input pl-9" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Поиск товара..."
+            className="input pl-9"
+          />
         </div>
-        <select value={filterCat} onChange={e => setFilterCat(e.target.value)} className="input w-auto">
+        <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)} className="input w-auto">
           <option value="">Все папки</option>
-          {categories.map(c => <option key={c} value={c}>{c}</option>)}
+          {categories.map((c) => (
+            <option key={c} value={c}>
+              {c}
+            </option>
+          ))}
         </select>
       </div>
 
@@ -3122,17 +3374,26 @@ function GlobalInventoryForm({
           const isCounted = entry.actual !== '';
 
           return (
-            <div className={`rounded-xl border p-3 mb-2 transition-colors ${isCounted ? 'border-green-200 bg-green-50/30' : 'border-gray-100 bg-white'}`}>
+            <div
+              className={`rounded-xl border p-3 mb-2 transition-colors ${isCounted ? 'border-green-200 bg-green-50/30' : 'border-gray-100 bg-white'}`}
+            >
               <div className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
-                  <p className="text-[11px] text-gray-400">В системе: <span className="font-semibold text-gray-600">{p.stock}</span> {unitLabel(p.unit)}</p>
+                  <p className="text-[11px] text-gray-400">
+                    В системе: <span className="font-semibold text-gray-600">{p.stock}</span> {unitLabel(p.unit)}
+                  </p>
                 </div>
                 <div className="flex items-center gap-2 flex-shrink-0">
                   <input
                     type="number"
                     value={entry.actual}
-                    onChange={e => setEntries(prev => ({ ...prev, [p.id]: { ...prev[p.id] || { reason: '' }, actual: e.target.value } }))}
+                    onChange={(e) =>
+                      setEntries((prev) => ({
+                        ...prev,
+                        [p.id]: { ...(prev[p.id] || { reason: '' }), actual: e.target.value },
+                      }))
+                    }
                     placeholder="Факт"
                     className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-sm text-center font-semibold focus:border-primary-500 focus:outline-none"
                     min="0"
@@ -3140,26 +3401,27 @@ function GlobalInventoryForm({
                   />
                   {diff !== null && diff !== 0 && (
                     <span className={`text-xs font-bold ${diff > 0 ? 'text-green-600' : 'text-red-600'}`}>
-                      {diff > 0 ? '+' : ''}{diff}
+                      {diff > 0 ? '+' : ''}
+                      {diff}
                     </span>
                   )}
-                  {isCounted && diff === 0 && (
-                    <CheckIcon className="w-4 h-4 text-green-500" />
-                  )}
+                  {isCounted && diff === 0 && <CheckIcon className="w-4 h-4 text-green-500" />}
                 </div>
               </div>
             </div>
           );
         }}
       />
-      {filtered.length === 0 && (
-        <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>
-      )}
+      {filtered.length === 0 && <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>}
 
       <div className="flex items-center justify-between pt-3 border-t border-gray-100">
         <p className="text-xs text-gray-400">{countedIds.size} позиций</p>
-        <button type="button" onClick={handleSubmit} disabled={submitting || countedIds.size === 0}
-          className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50">
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={submitting || countedIds.size === 0}
+          className="flex items-center gap-2 rounded-xl bg-primary-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+        >
           {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <ClipboardCheck className="w-4 h-4" />}
           Провести инвентаризацию
         </button>
@@ -3185,10 +3447,10 @@ function GlobalWriteoffForm({
   const [reason, setReason] = useState('');
 
   const filtered = useMemo(() => {
-    let list = products.filter(p => !p.isBundle && p.stock > 0);
+    let list = products.filter((p) => !p.isBundle && p.stock > 0);
     if (search) {
       const q = search.toLowerCase();
-      list = list.filter(p => p.name.toLowerCase().includes(q));
+      list = list.filter((p) => p.name.toLowerCase().includes(q));
     }
     return list;
   }, [products, search]);
@@ -3201,25 +3463,42 @@ function GlobalWriteoffForm({
         quantity: parseFloat(v.quantity) || 0,
         reason: v.reason || reason || 'Списание',
       }));
-    if (items.length === 0) { toast.error('Укажите количество для списания'); return; }
+    if (items.length === 0) {
+      toast.error('Укажите количество для списания');
+      return;
+    }
     setSubmitting(true);
-    try { await onSubmit(items); } finally { setSubmitting(false); }
+    try {
+      await onSubmit(items);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
-  const count = Object.values(entries).filter(v => v.quantity !== '' && parseFloat(v.quantity) > 0).length;
+  const count = Object.values(entries).filter((v) => v.quantity !== '' && parseFloat(v.quantity) > 0).length;
 
   return (
     <div className="space-y-4 max-h-[70vh] flex flex-col">
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-        <input type="text" value={search} onChange={e => setSearch(e.target.value)}
-          placeholder="Поиск товара..." className="input pl-9" />
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Поиск товара..."
+          className="input pl-9"
+        />
       </div>
 
       <div>
         <label className="text-xs font-medium text-gray-500 mb-1 block">Общая причина списания</label>
-        <input type="text" value={reason} onChange={e => setReason(e.target.value)}
-          placeholder="Брак, просрочка..." className="input" />
+        <input
+          type="text"
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Брак, просрочка..."
+          className="input"
+        />
       </div>
 
       <VirtualList
@@ -3234,12 +3513,19 @@ function GlobalWriteoffForm({
               <div className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
-                  <p className="text-[11px] text-gray-400">Остаток: <span className="font-semibold text-gray-600">{p.stock}</span> {unitLabel(p.unit)}</p>
+                  <p className="text-[11px] text-gray-400">
+                    Остаток: <span className="font-semibold text-gray-600">{p.stock}</span> {unitLabel(p.unit)}
+                  </p>
                 </div>
                 <input
                   type="number"
                   value={entry.quantity}
-                  onChange={e => setEntries(prev => ({ ...prev, [p.id]: { quantity: e.target.value, reason: prev[p.id]?.reason || '' } }))}
+                  onChange={(e) =>
+                    setEntries((prev) => ({
+                      ...prev,
+                      [p.id]: { quantity: e.target.value, reason: prev[p.id]?.reason || '' },
+                    }))
+                  }
                   placeholder="Кол-во"
                   className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-sm text-center font-semibold focus:border-orange-500 focus:outline-none"
                   min="0"
@@ -3251,14 +3537,16 @@ function GlobalWriteoffForm({
           );
         }}
       />
-      {filtered.length === 0 && (
-        <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>
-      )}
+      {filtered.length === 0 && <div className="text-center py-8 text-sm text-gray-400">Товары не найдены</div>}
 
       <div className="flex items-center justify-between pt-3 border-t border-gray-100">
         <p className="text-xs text-gray-400">{count} позиций</p>
-        <button type="button" onClick={handleSubmit} disabled={submitting || count === 0}
-          className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50">
+        <button
+          type="button"
+          onClick={handleSubmit}
+          disabled={submitting || count === 0}
+          className="flex items-center gap-2 rounded-xl bg-orange-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-orange-700 disabled:opacity-50"
+        >
           {submitting ? <Loader2 className="w-4 h-4 animate-spin" /> : <PackageMinus className="w-4 h-4" />}
           Списать
         </button>

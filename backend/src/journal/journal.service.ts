@@ -4,7 +4,14 @@ import { PG_POOL } from '../database.module';
 
 export interface JournalDoc {
   id: string;
-  kind: 'purchase' | 'return_to_supplier' | 'defect_transfer' | 'writeoff' | 'supplier_payment' | 'used_purchase';
+  kind:
+    | 'purchase'
+    | 'return_to_supplier'
+    | 'customer_return'
+    | 'defect_transfer'
+    | 'writeoff'
+    | 'supplier_payment'
+    | 'used_purchase';
   occurredAt: string;
   title: string;
   subtitle?: string;
@@ -17,7 +24,8 @@ export interface JournalDoc {
 // Visual tokens shared with the FE for chip / badge rendering.
 const KIND_META: Record<JournalDoc['kind'], { badge: string; badgeColor: string; title: string }> = {
   purchase: { badge: 'Поступление', badgeColor: 'green', title: 'Поступление товара' },
-  return_to_supplier: { badge: 'Возврат', badgeColor: 'orange', title: 'Возврат поставщику' },
+  return_to_supplier: { badge: 'Возврат поставщику', badgeColor: 'orange', title: 'Возврат поставщику' },
+  customer_return: { badge: 'Возврат клиента', badgeColor: 'teal', title: 'Возврат клиента на склад' },
   defect_transfer: { badge: 'В брак', badgeColor: 'red', title: 'Перемещение в брак' },
   writeoff: { badge: 'Списание', badgeColor: 'red', title: 'Списание со склада' },
   supplier_payment: { badge: 'Оплата', badgeColor: 'blue', title: 'Оплата поставщику' },
@@ -57,7 +65,9 @@ export class JournalService {
     // Pull stock_movements first; we map type → kind below.
     const wantStockMovements =
       !type ||
-      ['purchase', 'return_to_supplier', 'defect_transfer', 'writeoff', 'used_purchase'].includes(type);
+      ['purchase', 'return_to_supplier', 'customer_return', 'defect_transfer', 'writeoff', 'used_purchase'].includes(
+        type,
+      );
 
     if (wantStockMovements) {
       const { rows } = await this.pool.query(
@@ -83,6 +93,7 @@ export class JournalService {
         let kind: JournalDoc['kind'] | null = null;
         if (r.is_used_purchase) kind = 'used_purchase';
         else if (r.type === 'income') kind = 'purchase';
+        else if (r.type === 'customer_return') kind = 'customer_return';
         else if (r.type === 'defect_return_to_supplier') kind = 'return_to_supplier';
         else if (r.type === 'defect_transfer') kind = 'defect_transfer';
         else if (r.type === 'writeoff') kind = 'writeoff';

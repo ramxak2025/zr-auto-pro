@@ -628,7 +628,10 @@ export type StockMovementType =
   | 'inventory'
   | 'defect_transfer'
   | 'used_transfer'
-  | 'defect_return_to_supplier';
+  | 'defect_return_to_supplier'
+  // Inbound leg of a customer return to the main warehouse. Distinct from
+  // 'income' (supplier purchase) so the journal renders «Возврат клиента».
+  | 'customer_return';
 
 export interface StockMovement {
   id: string;
@@ -1324,7 +1327,14 @@ export interface SalaryPenalty {
 
 export interface JournalDoc {
   id: string;
-  kind: 'purchase' | 'return_to_supplier' | 'defect_transfer' | 'writeoff' | 'supplier_payment' | 'used_purchase';
+  kind:
+    | 'purchase'
+    | 'return_to_supplier'
+    | 'customer_return'
+    | 'defect_transfer'
+    | 'writeoff'
+    | 'supplier_payment'
+    | 'used_purchase';
   occurredAt: string;
   title: string;
   subtitle?: string;

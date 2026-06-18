@@ -1,7 +1,26 @@
 import { useState, memo, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link, useSearchParams } from 'react-router-dom';
-import { Plus, FileText, Trash2, Clock, MessageSquare, TrendingUp, Car, User as UserIcon, Percent, Package, PackagePlus, AlertTriangle, ArrowDown, ArrowUp, ClipboardCheck, ArrowLeftRight, Recycle, Undo2 } from 'lucide-react';
+import {
+  Plus,
+  FileText,
+  Trash2,
+  Clock,
+  MessageSquare,
+  TrendingUp,
+  Car,
+  User as UserIcon,
+  Percent,
+  Package,
+  PackagePlus,
+  AlertTriangle,
+  ArrowDown,
+  ArrowUp,
+  ClipboardCheck,
+  ArrowLeftRight,
+  Recycle,
+  Undo2,
+} from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
@@ -17,12 +36,33 @@ import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatte
 
 const movementTypeConfig: Record<string, { label: string; color: string; bg: string; icon: typeof Package }> = {
   writeoff: { label: 'Списание', color: 'text-red-600', bg: 'bg-red-50 border-red-200', icon: AlertTriangle },
-  inventory: { label: 'Инвентаризация', color: 'text-purple-600', bg: 'bg-purple-50 border-purple-200', icon: ClipboardCheck },
+  inventory: {
+    label: 'Инвентаризация',
+    color: 'text-purple-600',
+    bg: 'bg-purple-50 border-purple-200',
+    icon: ClipboardCheck,
+  },
   income: { label: 'Поступление', color: 'text-blue-600', bg: 'bg-blue-50 border-blue-200', icon: ArrowDown },
+  customer_return: { label: 'Возврат клиента', color: 'text-teal-700', bg: 'bg-teal-50 border-teal-200', icon: Undo2 },
   expense: { label: 'Продажа', color: 'text-green-600', bg: 'bg-green-50 border-green-200', icon: ArrowUp },
-  defect_transfer: { label: 'Перемещение в брак', color: 'text-amber-600', bg: 'bg-amber-50 border-amber-200', icon: ArrowLeftRight },
-  used_transfer: { label: 'Перемещение в Б/У', color: 'text-blue-600', bg: 'bg-blue-50 border-blue-200', icon: Recycle },
-  defect_return_to_supplier: { label: 'Возврат поставщику', color: 'text-red-700', bg: 'bg-red-50 border-red-200', icon: Undo2 },
+  defect_transfer: {
+    label: 'Перемещение в брак',
+    color: 'text-amber-600',
+    bg: 'bg-amber-50 border-amber-200',
+    icon: ArrowLeftRight,
+  },
+  used_transfer: {
+    label: 'Перемещение в Б/У',
+    color: 'text-blue-600',
+    bg: 'bg-blue-50 border-blue-200',
+    icon: Recycle,
+  },
+  defect_return_to_supplier: {
+    label: 'Возврат поставщику',
+    color: 'text-red-700',
+    bg: 'bg-red-50 border-red-200',
+    icon: Undo2,
+  },
 };
 
 // Special config for is_used_purchase=true rows. Distinct cyan palette
@@ -57,16 +97,20 @@ const MobileCheckCard = memo(function MobileCheckCard({
   onDelete: (e: React.MouseEvent, id: string, number: number) => void;
 }) {
   return (
-    <div onClick={() => onNavigate(check.id)}
+    <div
+      onClick={() => onNavigate(check.id)}
       className={`rounded-2xl border shadow-sm overflow-hidden active:scale-[0.99] transition-all cursor-pointer ${
         check.isDeferred ? 'bg-red-50/50 border-red-200' : 'bg-white border-gray-100'
-      }`}>
+      }`}
+    >
       <div className="px-4 pt-3.5 pb-2.5">
         <div className="flex items-center justify-between mb-2.5">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-base font-bold text-gray-900">#{check.number}</span>
             {check.isDeferred && (
-              <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">Отложен</span>
+              <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                Отложен
+              </span>
             )}
             <span className={`flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
               {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
@@ -74,8 +118,11 @@ const MobileCheckCard = memo(function MobileCheckCard({
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
             {canDelete && (
-              <button type="button" onClick={(e) => onDelete(e, check.id, check.number)}
-                className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors">
+              <button
+                type="button"
+                onClick={(e) => onDelete(e, check.id, check.number)}
+                className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+              >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
             )}
@@ -84,7 +131,9 @@ const MobileCheckCard = memo(function MobileCheckCard({
         <div className="space-y-1 mb-3">
           <div className="flex items-center gap-2">
             <UserIcon className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-            <p className="text-sm font-medium text-gray-800 truncate">{check.client?.fullName ?? 'Розничный покупатель'}</p>
+            <p className="text-sm font-medium text-gray-800 truncate">
+              {check.client?.fullName ?? 'Розничный покупатель'}
+            </p>
           </div>
           {check.car && (
             <div className="flex items-center gap-2">
@@ -103,9 +152,11 @@ const MobileCheckCard = memo(function MobileCheckCard({
           </div>
         )}
       </div>
-      <div className={`px-4 py-2.5 border-t flex items-center justify-between gap-3 ${
-        check.isDeferred ? 'border-red-100 bg-red-50/30' : 'border-gray-50 bg-gray-50/50'
-      }`}>
+      <div
+        className={`px-4 py-2.5 border-t flex items-center justify-between gap-3 ${
+          check.isDeferred ? 'border-red-100 bg-red-50/30' : 'border-gray-50 bg-gray-50/50'
+        }`}
+      >
         <div className="flex items-center gap-3 text-xs text-gray-400 min-w-0">
           <div className="flex items-center gap-1">
             <Clock className="w-3 h-3" />
@@ -124,15 +175,18 @@ const MobileCheckCard = memo(function MobileCheckCard({
         </div>
       </div>
       {canViewProfit && (
-        <div className={`px-4 py-2 border-t flex items-center justify-between ${
-          check.isDeferred ? 'border-red-100' : 'border-gray-100'
-        }`}>
+        <div
+          className={`px-4 py-2 border-t flex items-center justify-between ${
+            check.isDeferred ? 'border-red-100' : 'border-gray-100'
+          }`}
+        >
           <div className="flex items-center gap-1.5">
             <TrendingUp className="w-3.5 h-3.5 text-gray-400" />
             <span className="text-xs text-gray-400">Прибыль</span>
           </div>
           <span className={`text-sm font-bold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-            {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+            {check.profit >= 0 ? '+' : ''}
+            {formatMoney(check.profit)}
           </span>
         </div>
       )}
@@ -231,7 +285,7 @@ export default function ChecksPage() {
     enabled: !!dateFrom && !!dateTo,
   });
 
-  const recentMovements = (movements ?? []).filter(m => m.type !== 'expense');
+  const recentMovements = (movements ?? []).filter((m) => m.type !== 'expense');
 
   const checks = checksData?.data ?? [];
   const total = checksData?.total ?? 0;
@@ -250,18 +304,10 @@ export default function ChecksPage() {
       {/* Filters */}
       <div className="card card-body">
         <div className="flex flex-col lg:flex-row gap-4">
-          <DatePeriodPicker
-            dateFrom={dateFrom}
-            dateTo={dateTo}
-            onChange={handleDateChange}
-          />
+          <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={handleDateChange} />
           <div className="flex flex-col sm:flex-row gap-3 flex-1">
             <div className="w-full sm:w-48">
-              <select
-                value={masterId}
-                onChange={handleMasterChange}
-                className="input"
-              >
+              <select value={masterId} onChange={handleMasterChange} className="input">
                 <option value="">{'Все мастера'}</option>
                 {mastersData?.map((master) => (
                   <option key={master.id} value={master.id}>
@@ -280,9 +326,14 @@ export default function ChecksPage() {
           </div>
           <button
             type="button"
-            onClick={() => { setShowWarehouseDocs(!showWarehouseDocs); setPage(1); }}
+            onClick={() => {
+              setShowWarehouseDocs(!showWarehouseDocs);
+              setPage(1);
+            }}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${
-              showWarehouseDocs ? 'bg-purple-100 text-purple-700 border border-purple-200' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              showWarehouseDocs
+                ? 'bg-purple-100 text-purple-700 border border-purple-200'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
           >
             <Package className="w-3.5 h-3.5" />
@@ -306,10 +357,10 @@ export default function ChecksPage() {
               m.type === 'defect_transfer' || m.type === 'used_transfer'
                 ? `${m.sourceWarehouseName ?? 'Основной'} → ${m.targetWarehouseName ?? '—'}`
                 : m.type === 'defect_return_to_supplier'
-                ? `${m.warehouseName ?? 'Склад брака'}${m.supplierName ? ` → ${m.supplierName}` : ''}`
-                : m.isUsedPurchase && m.supplierName
-                ? `${m.supplierName} → ${m.warehouseName ?? 'Склад Б/У'}`
-                : null;
+                  ? `${m.warehouseName ?? 'Склад брака'}${m.supplierName ? ` → ${m.supplierName}` : ''}`
+                  : m.isUsedPurchase && m.supplierName
+                    ? `${m.supplierName} → ${m.warehouseName ?? 'Склад Б/У'}`
+                    : null;
             return (
               <div key={m.id} className={`rounded-xl border shadow-sm p-3 flex items-center gap-3 ${cfg.bg}`}>
                 <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${cfg.bg}`}>
@@ -321,11 +372,13 @@ export default function ChecksPage() {
                     <span className="text-xs text-gray-500 truncate">{m.product?.name || '—'}</span>
                   </div>
                   <p className="text-[10px] text-gray-400">
-                    {m.quantity > 0 ? (m.type === 'income' ? '+' : '-') : ''}{Math.abs(m.quantity)} шт
+                    {m.quantity > 0 ? (m.type === 'income' || m.type === 'customer_return' ? '+' : '-') : ''}
+                    {Math.abs(m.quantity)} шт
                     {direction ? ` · ${direction}` : ''}
                     {m.reason ? ` · ${m.reason}` : ''}
                     {m.user?.fullName ? ` · ${m.user.fullName}` : ''}
-                    {' · '}{format(new Date(m.createdAt), 'dd.MM HH:mm', { locale: ru })}
+                    {' · '}
+                    {format(new Date(m.createdAt), 'dd.MM HH:mm', { locale: ru })}
                   </p>
                 </div>
               </div>
@@ -336,11 +389,21 @@ export default function ChecksPage() {
 
       {/* Content */}
       {showWarehouseDocs ? (
-        recentMovements.length === 0 && <EmptyState icon={Package} title="Нет складских операций" description="Выберите период для просмотра складских документов" />
+        recentMovements.length === 0 && (
+          <EmptyState
+            icon={Package}
+            title="Нет складских операций"
+            description="Выберите период для просмотра складских документов"
+          />
+        )
       ) : isLoading ? (
         <LoadingSpinner />
       ) : checks.length === 0 ? (
-        <EmptyState icon={FileText} title="Чеков не найдено" description="Попробуйте изменить фильтры или создайте новый чек" />
+        <EmptyState
+          icon={FileText}
+          title="Чеков не найдено"
+          description="Попробуйте изменить фильтры или создайте новый чек"
+        />
       ) : (
         <>
           {/* Mobile cards (memoized) */}
@@ -367,7 +430,7 @@ export default function ChecksPage() {
                   <th>Клиент</th>
                   <th>Авто</th>
                   <th>Мастер</th>
-                  {(canViewProfit) && <th>Скидка</th>}
+                  {canViewProfit && <th>Скидка</th>}
                   <th>Выручка</th>
                   {canViewProfit && <th>Прибыль</th>}
                   <th>Оплата</th>
@@ -376,19 +439,32 @@ export default function ChecksPage() {
               </thead>
               <tbody>
                 {checks.map((check) => (
-                  <tr key={check.id} onClick={() => navigate(`/checks/${check.id}`)} className={`cursor-pointer ${check.isDeferred ? 'bg-red-50' : ''}`}>
+                  <tr
+                    key={check.id}
+                    onClick={() => navigate(`/checks/${check.id}`)}
+                    className={`cursor-pointer ${check.isDeferred ? 'bg-red-50' : ''}`}
+                  >
                     <td className="font-medium">
                       <span>{check.number}</span>
-                      {check.isDeferred && <span className="ml-1.5 text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">Отложен</span>}
+                      {check.isDeferred && (
+                        <span className="ml-1.5 text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
+                          Отложен
+                        </span>
+                      )}
                     </td>
                     <td>
                       <div className="text-sm">{format(new Date(check.date), 'dd.MM.yyyy', { locale: ru })}</div>
-                      <div className="text-xs text-gray-400">{format(new Date(check.date), 'HH:mm', { locale: ru })}</div>
+                      <div className="text-xs text-gray-400">
+                        {format(new Date(check.date), 'HH:mm', { locale: ru })}
+                      </div>
                     </td>
                     <td>
                       <div className="text-sm font-medium">{check.client?.fullName ?? 'Розничный покупатель'}</div>
                       {check.comment && (
-                        <div className="text-xs text-amber-600 bg-amber-50 rounded px-1.5 py-0.5 mt-0.5 truncate max-w-[200px] inline-flex items-center gap-1" title={check.comment}>
+                        <div
+                          className="text-xs text-amber-600 bg-amber-50 rounded px-1.5 py-0.5 mt-0.5 truncate max-w-[200px] inline-flex items-center gap-1"
+                          title={check.comment}
+                        >
                           <MessageSquare className="w-3 h-3 flex-shrink-0" />
                           <span className="truncate">{check.comment}</span>
                         </div>
@@ -400,13 +476,17 @@ export default function ChecksPage() {
                           <div className="text-sm">{check.car.makeModel}</div>
                           <div className="text-xs text-gray-400">{check.car.plateNumber}</div>
                         </div>
-                      ) : '—'}
+                      ) : (
+                        '—'
+                      )}
                     </td>
                     <td>{check.master?.fullName ?? '—'}</td>
                     {canViewProfit && (
                       <td>
                         {(check.discount ?? 0) > 0 ? (
-                          <span className="text-sm text-orange-500 font-medium">-{formatMoney(check.discount ?? 0)}</span>
+                          <span className="text-sm text-orange-500 font-medium">
+                            -{formatMoney(check.discount ?? 0)}
+                          </span>
                         ) : (
                           <span className="text-gray-300">—</span>
                         )}
@@ -416,7 +496,8 @@ export default function ChecksPage() {
                     {canViewProfit && (
                       <td>
                         <span className={`font-semibold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                          {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+                          {check.profit >= 0 ? '+' : ''}
+                          {formatMoney(check.profit)}
                         </span>
                       </td>
                     )}
