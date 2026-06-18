@@ -60,9 +60,20 @@ export class ReportsService {
     const salaries = parseFloat(r.salaries) || 0;
     const grossProfit = revenue - productCost;
 
-    // Get director expenses for the same period
+    // Get director expenses for the same period. Two corrections vs. naïve
+    // SUM(amount): (1) net profit must NOT double-count labour — the per-check
+    // salary accrual is already in `salaries` above, and salary PAYOUTS are
+    // mirrored into `expenses` under the 'Зарплата' category by
+    // salary.createPayment, so we exclude that category here; (2) only
+    // APPROVED expenses count — pending / rejected must never reduce profit.
+    // Legacy rows have NULL approval_status → treated as approved.
     const { rows: expRows } = await this.pool.query(
-      `SELECT COALESCE(SUM(amount), 0) as total FROM expenses WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz`,
+      `SELECT COALESCE(SUM(e.amount), 0) as total
+         FROM expenses e
+         LEFT JOIN expense_categories ec ON ec.id = e.category_id
+        WHERE e.tenant_id = $1 AND e.date >= $2 AND e.date <= ($3::date + 1)::timestamptz
+          AND COALESCE(e.approval_status, 'approved') = 'approved'
+          AND COALESCE(ec.name, '') <> 'Зарплата'`,
       [tenantID, dateFrom, dateTo],
     );
     const otherExpenses = parseFloat(expRows[0]?.total) || 0;
@@ -302,13 +313,20 @@ export class ReportsService {
 
     // Director-recorded expenses (today, month, last month) — needed for
     // net profit and the spark line.
+    // Same two corrections as getFinancial: exclude the 'Зарплата' payout
+    // category (per-check `profit` already nets the salary accrual, so adding
+    // the payout expense would double-count labour in netProfit) and count
+    // only APPROVED expenses (NULL = legacy approved).
     const { rows: expenseRows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN date >= $2 THEN amount END), 0) AS exp_today,
-         COALESCE(SUM(CASE WHEN date >= $3 THEN amount END), 0) AS exp_month,
-         COALESCE(SUM(CASE WHEN date >= $4 AND date < $3 THEN amount END), 0) AS exp_prev_month
-       FROM expenses
-       WHERE tenant_id=$1`,
+         COALESCE(SUM(CASE WHEN e.date >= $2 THEN e.amount END), 0) AS exp_today,
+         COALESCE(SUM(CASE WHEN e.date >= $3 THEN e.amount END), 0) AS exp_month,
+         COALESCE(SUM(CASE WHEN e.date >= $4 AND e.date < $3 THEN e.amount END), 0) AS exp_prev_month
+       FROM expenses e
+       LEFT JOIN expense_categories ec ON ec.id = e.category_id
+       WHERE e.tenant_id=$1
+         AND COALESCE(e.approval_status, 'approved') = 'approved'
+         AND COALESCE(ec.name, '') <> 'Зарплата'`,
       [tenantID, todayStart, monthStart, prevMonthStart],
     );
     const expToday = parseFloat(expenseRows[0]?.exp_today) || 0;
@@ -356,9 +374,12 @@ export class ReportsService {
             GROUP BY day
          ) ch USING (day)
          LEFT JOIN (
-           SELECT date::date AS day, SUM(amount) AS exp
-             FROM expenses
-            WHERE tenant_id=$1 AND date >= now() - interval '30 days'
+           SELECT e.date::date AS day, SUM(e.amount) AS exp
+             FROM expenses e
+             LEFT JOIN expense_categories ec ON ec.id = e.category_id
+            WHERE e.tenant_id=$1 AND e.date >= now() - interval '30 days'
+              AND COALESCE(e.approval_status, 'approved') = 'approved'
+              AND COALESCE(ec.name, '') <> 'Зарплата'
             GROUP BY day
          ) ex USING (day)
          ORDER BY day`,

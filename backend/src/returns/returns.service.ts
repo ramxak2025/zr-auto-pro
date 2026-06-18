@@ -9,6 +9,7 @@ import {
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { WarehousesService } from '../warehouses/warehouses.service';
+import { invalidateReportsForTenant } from '../common/reports-cache';
 
 export type ReturnDestination = 'warehouse' | 'defect';
 export type ReturnScope = 'full' | 'partial';
@@ -89,12 +90,15 @@ export class ReturnsService {
       }
 
       const totalRevenue = parseFloat(checkRows[0].total_revenue) || 0;
-      const refundAmount =
+      const requestedRefund =
         dto.refundAmount !== undefined && dto.refundAmount !== null
           ? Math.max(0, parseFloat(String(dto.refundAmount)))
           : dto.scope === 'full'
             ? totalRevenue
             : 0;
+      // A refund can never exceed what was actually charged on the check —
+      // otherwise reversing it would drive the check's revenue/cash negative.
+      const refundAmount = Math.min(requestedRefund, totalRevenue);
 
       // Insert the header row first.
       const { rows: retRows } = await client.query(
@@ -130,7 +134,12 @@ export class ReturnsService {
             if (!match) {
               throw new BadRequestException({ message: 'Позиция не найдена в заказ-наряде' });
             }
-            const qty = ln.quantity !== undefined && ln.quantity !== null ? parseFloat(String(ln.quantity)) : 1;
+            const lineQty = parseFloat(match.quantity) || 0;
+            const requestedQty =
+              ln.quantity !== undefined && ln.quantity !== null ? parseFloat(String(ln.quantity)) : 1;
+            // Never return more than was sold on that line — a forged quantity
+            // would otherwise inflate stock on add-back.
+            const qty = Math.max(0, Math.min(requestedQty, lineQty));
             productMoves.push({
               productLineId: match.id,
               productId: match.product_id,
@@ -168,10 +177,7 @@ export class ReturnsService {
         );
         if (prodRows.length === 0) continue; // product deleted — skip stock, but keep the return line
         const stockBefore = parseFloat(prodRows[0].stock) || 0;
-        const stockAfter =
-          dto.destination === 'warehouse'
-            ? stockBefore + mv.quantity
-            : stockBefore; // defect destination doesn't add back to main
+        const stockAfter = dto.destination === 'warehouse' ? stockBefore + mv.quantity : stockBefore; // defect destination doesn't add back to main
 
         if (dto.destination === 'warehouse') {
           await client.query(`UPDATE products SET stock = $1 WHERE id = $2 AND tenant_id = $3`, [
@@ -200,18 +206,37 @@ export class ReturnsService {
         );
       }
 
-      // Mark the check itself as returned.
+      // Mark the check returned AND reverse its realised money so every
+      // report (cash-flow, profit, dashboard) is automatically correct from a
+      // single source of truth — no aggregation needs to special-case
+      // is_returned. Owner policy (2026-06): a returned sale stops counting in
+      // its OWN period (full → whole sale removed, partial → by refund amount),
+      // while the master KEEPS their accrued salary (service_salary_total /
+      // product_salary_total are left untouched), so the labour stays a real
+      // cost and the return shows as the genuine loss it is. refundAmount is
+      // already capped at total_revenue above, so these never go negative.
+      // The card reduction takes whatever the refund couldn't draw from cash
+      // (cash first, then card) — a full return zeroes both exactly.
       await client.query(
         `UPDATE checks
             SET is_returned = true,
                 returned_at = now(),
                 return_destination = $1,
-                return_scope = $2
+                return_scope = $2,
+                total_revenue = GREATEST(COALESCE(total_revenue, 0) - $5, 0),
+                profit = COALESCE(profit, 0) - $5,
+                cash_amount = GREATEST(COALESCE(cash_amount, 0) - $5, 0),
+                card_amount = GREATEST(COALESCE(card_amount, 0) - GREATEST($5 - COALESCE(cash_amount, 0), 0), 0)
           WHERE id = $3 AND tenant_id = $4`,
-        [dto.destination, dto.scope, checkId, tenantID],
+        [dto.destination, dto.scope, checkId, tenantID, refundAmount],
       );
 
       await client.query('COMMIT');
+
+      // Returns move the cash position / profit — drop the tenant's cached
+      // report aggregates so the dashboard reflects the reversal immediately
+      // (mirrors every check/expense write).
+      invalidateReportsForTenant(tenantID);
 
       return {
         id: returnId,

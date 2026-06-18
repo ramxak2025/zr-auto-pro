@@ -15,6 +15,12 @@ export class RolesGuard implements CanActivate {
     ]);
     if (!requiredRoles) return true;
     const { user } = context.switchToHttp().getRequest();
-    return requiredRoles.includes(user.role);
+    // Superadmin (platform owner) bypasses every role gate — mirrors the
+    // client-side FeatureGate. Today every @Roles(...) list already includes
+    // 'superadmin', so this is behaviour-preserving; it also future-proofs
+    // against a new @Roles(...) that forgets superadmin and would otherwise
+    // silently lock the platform owner out of a tenant-scoped endpoint.
+    if (user?.role === 'superadmin') return true;
+    return requiredRoles.includes(user?.role);
   }
 }

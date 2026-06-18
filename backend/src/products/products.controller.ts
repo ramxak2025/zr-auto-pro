@@ -2,12 +2,18 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Re
 import { Response } from 'express';
 import { ProductsService } from './products.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { StockUpdateDto } from './dto/stock-update.dto';
 
-@UseGuards(JwtAuthGuard)
+// Reads stay open to every authenticated user (a master needs to browse
+// products to build a check). MUTATIONS are gated per-method to
+// director/admin/superadmin via @Roles below — a master must not be able to
+// delete products, rewrite prices, adjust stock, empty the trash or bulk-import
+// by hitting the API directly (the UI hiding those is not a security boundary).
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('products')
 export class ProductsController {
   constructor(private productsService: ProductsService) {}
@@ -40,6 +46,7 @@ export class ProductsController {
     res.send('\uFEFF' + csv);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Post('import-csv')
   importCsv(@CurrentUser() user: JwtPayload, @Body() dto: { items: any[] }) {
     return this.productsService.importCsv(user.tenantID, dto.items);
@@ -54,16 +61,19 @@ export class ProductsController {
     return this.productsService.getTrash(user.tenantID);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Delete('trash/empty')
   emptyTrash(@CurrentUser() user: JwtPayload) {
     return this.productsService.emptyTrash(user.tenantID);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Post(':id/restore')
   restore(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productsService.restore(id, user.tenantID);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Delete(':id/hard')
   hardDelete(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productsService.hardDelete(id, user.tenantID);
@@ -74,6 +84,7 @@ export class ProductsController {
     return this.productsService.getById(id, user.tenantID);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateProductDto) {
     return this.productsService.create(user.tenantID, dto);
@@ -89,6 +100,7 @@ export class ProductsController {
     return this.productsService.getProductPriceHistory(id, user.tenantID);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateProductDto) {
     return this.productsService.update(id, user.tenantID, dto, user.userID);
@@ -98,20 +110,19 @@ export class ProductsController {
   // used-purchase flow — the owner intake doesn't always know the future
   // sell price, so the product is initially created with sell_price equal
   // to purchasePrice and updated later when the owner sets the markup.
+  @Roles('director', 'admin', 'superadmin')
   @Patch(':id/sell-price')
-  setSellPrice(
-    @Param('id') id: string,
-    @CurrentUser() user: JwtPayload,
-    @Body() body: { sellPrice: number },
-  ) {
+  setSellPrice(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() body: { sellPrice: number }) {
     return this.productsService.setSellPrice(id, user.tenantID, body?.sellPrice, user.userID);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productsService.remove(id, user.tenantID);
   }
 
+  @Roles('director', 'admin', 'superadmin')
   @Post(':id/stock')
   updateStock(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: StockUpdateDto) {
     return this.productsService.updateStock(id, user.tenantID, dto, user.userID);

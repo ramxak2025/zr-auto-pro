@@ -432,6 +432,8 @@ export default function ClientDetailScreen() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['client', id] });
       queryClient.invalidateQueries({ queryKey: ['client-checks-by-car', id] });
+      // A new car shows up in the garage list (CarsScreen) — bust it too.
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
       closeCarModal();
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при создании авто'),
@@ -441,6 +443,13 @@ export default function ClientDetailScreen() {
     mutationFn: ({ carId, data }: { carId: string; data: any }) => carsApi.update(carId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['client', id] });
+      // Editing a car (esp. its plate) ripples to the garage list, the
+      // per-car check history, and the plate badge shown on this client's own
+      // check history — refresh all of them so nothing shows the old plate.
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
+      queryClient.invalidateQueries({ queryKey: ['car-checks'] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks', id] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks-full', id] });
       closeCarModal();
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при обновлении авто'),
@@ -448,7 +457,15 @@ export default function ClientDetailScreen() {
 
   const deleteCarMutation = useMutation({
     mutationFn: (carId: string) => carsApi.remove(carId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['client', id] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['client', id] });
+      // Deleting a car removes it from the garage and from any check history
+      // that referenced it — refresh the same set as edit.
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
+      queryClient.invalidateQueries({ queryKey: ['car-checks'] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks', id] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks-full', id] });
+    },
     onError: () => Alert.alert('Ошибка', 'Ошибка при удалении авто'),
   });
 

@@ -64,7 +64,14 @@ export class SalaryController {
    */
   @Get('premiums')
   listPremiums(@CurrentUser() user: JwtPayload, @Query() query: { userId?: string; monthYear?: string }) {
-    return this.salaryService.listPremiums(user.tenantID, query || {});
+    // A non-privileged user may only see their OWN premiums — force the userId
+    // filter to themselves so a master can't pass ?userId=<colleague> (read a
+    // colleague's bonuses) or omit it to dump the whole tenant's premium
+    // history. Director / admin / superadmin keep the full audit view.
+    const privileged = ['director', 'admin', 'superadmin'].includes(user.role);
+    const q = { ...(query || {}) };
+    if (!privileged) q.userId = user.userID;
+    return this.salaryService.listPremiums(user.tenantID, q);
   }
 
   @Roles('director', 'admin', 'superadmin')

@@ -967,6 +967,9 @@ function GridTab() {
     const base: any = { userId, date };
 
     if (type === 'delete' && entry) {
+      // Guard against a double-tap firing two DELETEs (the 2nd 404s and is
+      // swallowed, but it's a wasted round-trip and a race).
+      if (deleteMutation.isPending) return;
       deleteMutation.mutate(entry.id);
       return;
     }
@@ -2402,16 +2405,26 @@ function SettingsTab() {
   // method on `undefined`. toArray also guards a poisoned non-array cache.
   const activeUsers = useMemo(() => toArray<User>(usersData).filter((u) => u && u.id && u.isActive), [usersData]);
 
+  const dayOffInFlight = useRef<Set<string>>(new Set());
   const toggleDayOff = async (userId: string, dayOfWeek: number) => {
+    const key = `${userId}:${dayOfWeek}`;
+    // Per-cell guard: a double-tap (or a fast on→off) would otherwise fire two
+    // read-modify-write PATCHes off the SAME stale `daysOff`, racing to an
+    // inconsistent final state. Block a second toggle of the same cell until
+    // the first settles.
+    if (dayOffInFlight.current.has(key)) return;
     const user = activeUsers.find((u) => u.id === userId);
     if (!user) return;
     const current: number[] = Array.isArray((user as any).daysOff) ? (user as any).daysOff : [];
     const newDaysOff = current.includes(dayOfWeek) ? current.filter((d) => d !== dayOfWeek) : [...current, dayOfWeek];
+    dayOffInFlight.current.add(key);
     try {
       await usersApi.update(userId, { daysOff: newDaysOff } as any);
       queryClient.invalidateQueries({ queryKey: ['users'] });
     } catch {
       Alert.alert('Ошибка', 'Не удалось обновить');
+    } finally {
+      dayOffInFlight.current.delete(key);
     }
   };
 

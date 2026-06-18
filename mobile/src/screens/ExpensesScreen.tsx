@@ -105,13 +105,33 @@ interface ExpenseItem {
 // ────────────────────────────────────────────────────────────────────────
 
 const MONTH_NAMES_GENITIVE = [
-  'января', 'февраля', 'марта', 'апреля', 'мая', 'июня',
-  'июля', 'августа', 'сентября', 'октября', 'ноября', 'декабря',
+  'января',
+  'февраля',
+  'марта',
+  'апреля',
+  'мая',
+  'июня',
+  'июля',
+  'августа',
+  'сентября',
+  'октября',
+  'ноября',
+  'декабря',
 ] as const;
 
 const MONTH_NAMES_NOMINATIVE = [
-  'Январь', 'Февраль', 'Март', 'Апрель', 'Май', 'Июнь',
-  'Июль', 'Август', 'Сентябрь', 'Октябрь', 'Ноябрь', 'Декабрь',
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь',
 ] as const;
 
 function formatMoney(v: number): string {
@@ -222,7 +242,11 @@ function endOfMonth(d: Date): Date {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0);
 }
 
-function getDateRangeForPeriod(period: Period, anchor: Date, custom: { from: string; to: string }): { from: string; to: string } {
+function getDateRangeForPeriod(
+  period: Period,
+  anchor: Date,
+  custom: { from: string; to: string },
+): { from: string; to: string } {
   if (period === 'custom') {
     return custom;
   }
@@ -462,8 +486,7 @@ export default function ExpensesScreen() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const palette = useColors();
-  const isOwnerRole =
-    user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  const isOwnerRole = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
   const canCreate = isOwnerRole || user?.canAddExpenses === true;
   const tabBarHeight = useTabBarHeight();
 
@@ -604,6 +627,10 @@ export default function ExpensesScreen() {
     queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
     queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
     queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+    // CashFlow's day drill-down lists the day's expenses from a SEPARATE key
+    // (filters approved). Without busting it, approving/creating an expense
+    // leaves the expanded day + its outflow subtotal stale until manual refresh.
+    queryClient.invalidateQueries({ queryKey: ['cashflow-day-expenses'] });
   }, [queryClient]);
 
   const createMutation = useMutation({
@@ -626,7 +653,13 @@ export default function ExpensesScreen() {
   // нетронутой. Pending-строки редактировать нельзя (см. handleEditExpense),
   // иначе replace сбросил бы статус одобрения.
   const editMutation = useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: { categoryId?: string; amount: number; description?: string; date?: string } }) => {
+    mutationFn: async ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: { categoryId?: string; amount: number; description?: string; date?: string };
+    }) => {
       await expensesApi.remove(id);
       await expensesApi.create(data);
     },
@@ -918,7 +951,16 @@ export default function ExpensesScreen() {
         />
       );
     },
-    [colorByName, isOwnerRole, user?.id, handleDeleteExpense, handleEditExpense, handleApproveExpense, handleRejectExpense, palette],
+    [
+      colorByName,
+      isOwnerRole,
+      user?.id,
+      handleDeleteExpense,
+      handleEditExpense,
+      handleApproveExpense,
+      handleRejectExpense,
+      palette,
+    ],
   );
 
   // ── Render ───────────────────────────────────────────────────────────
@@ -1007,12 +1049,17 @@ export default function ExpensesScreen() {
 
       {/* Custom range editor */}
       {period === 'custom' && (
-        <View style={[styles.customRangeCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+        <View
+          style={[styles.customRangeCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
           <View style={styles.customRangeField}>
             <Text style={[styles.customRangeLabel, { color: palette.text.tertiary }]}>С</Text>
             <TouchableOpacity
               onPress={() => setDatePickerMode('customFrom')}
-              style={[styles.customRangeInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              style={[
+                styles.customRangeInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+              ]}
               activeOpacity={0.7}
             >
               <TextInput
@@ -1030,7 +1077,10 @@ export default function ExpensesScreen() {
             <Text style={[styles.customRangeLabel, { color: palette.text.tertiary }]}>По</Text>
             <TouchableOpacity
               onPress={() => setDatePickerMode('customTo')}
-              style={[styles.customRangeInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              style={[
+                styles.customRangeInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+              ]}
               activeOpacity={0.7}
             >
               <TextInput
@@ -1052,9 +1102,7 @@ export default function ExpensesScreen() {
         <View style={[styles.heroCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.heroLabelRow}>
             <Ionicons name="trending-down-outline" size={14} color={colors.rose[500]} />
-            <Text style={[iosSectionLabel, { marginBottom: 0, color: colors.rose[500] }]}>
-              Расходов за период
-            </Text>
+            <Text style={[iosSectionLabel, { marginBottom: 0, color: colors.rose[500] }]}>Расходов за период</Text>
           </View>
           <Text style={[styles.heroValue, { color: palette.text.primary }]}>{formatMoney(totalExpenses)}</Text>
           {isOwnerRole && period === 'month' && diffPercent !== null && (
@@ -1064,12 +1112,7 @@ export default function ExpensesScreen() {
                 size={12}
                 color={diffAmount >= 0 ? colors.rose[500] : colors.green[600]}
               />
-              <Text
-                style={[
-                  styles.heroDiffText,
-                  { color: diffAmount >= 0 ? colors.rose[600] : colors.green[700] },
-                ]}
-              >
+              <Text style={[styles.heroDiffText, { color: diffAmount >= 0 ? colors.rose[600] : colors.green[700] }]}>
                 {diffAmount >= 0 ? '+' : ''}
                 {diffPercent.toFixed(1)}%
               </Text>
@@ -1112,9 +1155,7 @@ export default function ExpensesScreen() {
       {/* Category breakdown with progress bars */}
       {categoryBreakdown.length > 0 && (
         <View style={[styles.breakdownCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-          <Text style={[iosSectionLabel, styles.breakdownTitle, { color: palette.text.tertiary }]}>
-            По категориям
-          </Text>
+          <Text style={[iosSectionLabel, styles.breakdownTitle, { color: palette.text.tertiary }]}>По категориям</Text>
           {categoryBreakdown.map((cat) => {
             const percentage = totalExpenses > 0 ? (cat.total / totalExpenses) * 100 : 0;
             const catColor = colorByName.get(cat.name) || getCategoryColor(0);
@@ -1172,7 +1213,10 @@ export default function ExpensesScreen() {
                 key={e.id}
                 style={[
                   styles.topRow,
-                  i < top5.length - 1 && { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border.subtle },
+                  i < top5.length - 1 && {
+                    borderBottomWidth: StyleSheet.hairlineWidth,
+                    borderBottomColor: palette.border.subtle,
+                  },
                 ]}
               >
                 <View style={[styles.topRank, { backgroundColor: catColor.light }]}>
@@ -1224,22 +1268,14 @@ export default function ExpensesScreen() {
         ).map((t) => (
           <TouchableOpacity
             key={t.key}
-            style={[
-              styles.tabChip,
-              { backgroundColor: tab === t.key ? colors.primary[600] : palette.bg.muted },
-            ]}
+            style={[styles.tabChip, { backgroundColor: tab === t.key ? colors.primary[600] : palette.bg.muted }]}
             onPress={() => {
               haptic('select');
               setTab(t.key);
             }}
             activeOpacity={0.7}
           >
-            <Text
-              style={[
-                styles.tabChipText,
-                { color: tab === t.key ? colors.white : palette.text.secondary },
-              ]}
-            >
+            <Text style={[styles.tabChipText, { color: tab === t.key ? colors.white : palette.text.secondary }]}>
               {t.label}
             </Text>
           </TouchableOpacity>
@@ -1302,11 +1338,7 @@ export default function ExpensesScreen() {
             }}
             activeOpacity={0.7}
           >
-            <Ionicons
-              name="time-outline"
-              size={13}
-              color={pendingOnly ? colors.amber[600] : palette.text.secondary}
-            />
+            <Ionicons name="time-outline" size={13} color={pendingOnly ? colors.amber[600] : palette.text.secondary} />
             <Text
               style={[
                 styles.filterChipText,
@@ -1343,20 +1375,14 @@ export default function ExpensesScreen() {
 
       {/* Section title for the list */}
       <Text style={[iosSectionLabel, styles.listSectionLabel, { color: palette.text.tertiary }]}>
-        {filteredExpenses.length > 0
-          ? `Все расходы · ${filteredExpenses.length}`
-          : 'Все расходы'}
+        {filteredExpenses.length > 0 ? `Все расходы · ${filteredExpenses.length}` : 'Все расходы'}
       </Text>
     </View>
   );
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Расходы"
-        onBack={() => navigation.goBack()}
-        trailing={trailing}
-      />
+      <IosScreenHeader title="Расходы" onBack={() => navigation.goBack()} trailing={trailing} />
 
       {expensesQuery.isLoading && expenses.length === 0 ? (
         <View style={styles.loadingWrap}>
@@ -1375,8 +1401,8 @@ export default function ExpensesScreen() {
                 filterCategory
                   ? 'Сбросьте фильтр или выберите другую категорию'
                   : pendingOnly
-                  ? 'Нет расходов, ожидающих одобрения'
-                  : 'Добавьте расходы за выбранный период'
+                    ? 'Нет расходов, ожидающих одобрения'
+                    : 'Добавьте расходы за выбранный период'
               }
               action={canCreate ? { label: '+ Новый расход', onPress: openCreateModal } : undefined}
             />
@@ -1511,9 +1537,7 @@ export default function ExpensesScreen() {
             ]}
             activeOpacity={0.7}
           >
-            <Text style={[styles.dateBtnText, { color: palette.text.primary }]}>
-              {formatDDMMYYYY(expenseDate)}
-            </Text>
+            <Text style={[styles.dateBtnText, { color: palette.text.primary }]}>{formatDDMMYYYY(expenseDate)}</Text>
             <Ionicons name="calendar-outline" size={16} color={palette.text.tertiary} />
           </TouchableOpacity>
         </View>
@@ -1571,8 +1595,8 @@ export default function ExpensesScreen() {
         <View style={[styles.approvalInfo, { backgroundColor: colors.amber[50] }]}>
           <Ionicons name="shield-checkmark-outline" size={15} color={colors.amber[700]} />
           <Text style={[styles.approvalInfoText, { color: colors.amber[700] }]}>
-            Если категория требует одобрения, расход сотрудника в ней попадёт «На одобрении» —
-            пока вы не подтвердите, он не учитывается. Ваши собственные расходы одобряются сразу.
+            Если категория требует одобрения, расход сотрудника в ней попадёт «На одобрении» — пока вы не подтвердите,
+            он не учитывается. Ваши собственные расходы одобряются сразу.
           </Text>
         </View>
 
@@ -1604,9 +1628,7 @@ export default function ExpensesScreen() {
               </View>
               <View style={[styles.catApprovalRow, { borderTopColor: palette.border.subtle }]}>
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.catApprovalLabel, { color: palette.text.primary }]}>
-                    Требует одобрения
-                  </Text>
+                  <Text style={[styles.catApprovalLabel, { color: palette.text.primary }]}>Требует одобрения</Text>
                   <Text style={[styles.catApprovalHint, { color: palette.text.tertiary }]} numberOfLines={1}>
                     {c.approvalRequired
                       ? 'Расходы сотрудников уходят на подтверждение'

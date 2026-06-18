@@ -1316,17 +1316,52 @@ export class ChecksService {
   }
 
   async remove(id: string, tenantID: string, userRole: string) {
-    const { rows } = await this.pool.query('SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2', [
-      id,
-      tenantID,
-    ]);
-    if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Lock the check row for the lifetime of the delete so a concurrent
+      // edit/return/delete can't race the stock restore below.
+      const { rows } = await client.query(
+        'SELECT is_deferred, is_returned FROM checks WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+        [id, tenantID],
+      );
+      if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      if (userRole === 'master' && !rows[0].is_deferred) {
+        throw new ForbiddenException({ message: 'Мастер не может удалить закрытый заказ-наряд' });
+      }
 
-    if (userRole === 'master' && !rows[0].is_deferred) {
-      throw new ForbiddenException({ message: 'Мастер не может удалить закрытый заказ-наряд' });
+      // Restore stock for a sale that ACTUALLY took stock and hasn't already
+      // been reversed. A deferred draft never decremented stock; a returned
+      // check already had its stock added back (warehouse return) or sent to
+      // defect (defect return) — restoring again would double-count. So we
+      // only add back when the check is a live, non-returned sale. The
+      // `stock = stock + qty` is an atomic row update (no read-then-write
+      // race). Deleting the check itself reverses its revenue (the row is
+      // gone), so no financial unwind is needed here.
+      if (!rows[0].is_deferred && !rows[0].is_returned) {
+        const { rows: lines } = await client.query(
+          'SELECT product_id, quantity FROM check_product_lines WHERE check_id=$1 AND product_id IS NOT NULL',
+          [id],
+        );
+        for (const ln of lines) {
+          const qty = parseFloat(ln.quantity) || 0;
+          if (qty <= 0) continue;
+          await client.query('UPDATE products SET stock = stock + $1 WHERE id=$2 AND tenant_id=$3', [
+            qty,
+            ln.product_id,
+            tenantID,
+          ]);
+        }
+      }
+
+      await client.query('DELETE FROM checks WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
-
-    await this.pool.query('DELETE FROM checks WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     this.invalidateReports(tenantID);
     return { message: 'Удалено' };
   }

@@ -1039,6 +1039,12 @@ export default function CheckCreateScreen() {
         ['cashflow'],
         ['low-stock'],
         ['products'],
+        // The cash product-picker + the oversell-confirm read stock from
+        // ['all-products-check'] (limit 500), NOT ['products'] — so without
+        // this the NEXT check created in the same session sees pre-decrement
+        // stock and a stale oversell threshold. Mirror ProductsScreen, which
+        // already busts this key on every stock mutation.
+        ['all-products-check'],
         ['warehouse-analytics'],
       ];
       for (const queryKey of heavyKeys) {

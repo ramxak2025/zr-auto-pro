@@ -4,7 +4,12 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
+// Calls = customer-comms data (call logs, SMS history, recording URLs) — this
+// is director-level. The client-side calls_view / calls_listen toggles are
+// UI-only, so the controller must enforce the floor server-side: a master must
+// not be able to pull recordings/SMS by hitting the API directly.
 @UseGuards(JwtAuthGuard, RolesGuard)
+@Roles('director', 'admin', 'superadmin')
 @Controller('calls')
 export class CallsController {
   constructor(private callsService: CallsService) {}
