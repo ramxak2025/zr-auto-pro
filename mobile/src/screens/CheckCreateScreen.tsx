@@ -35,6 +35,7 @@ import {
   checkPhotosApi,
   subscriptionApi,
   warrantyApi,
+  bookingsApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -337,7 +338,21 @@ export default function CheckCreateScreen() {
   const insetsTop = useSafeAreaInsets().top;
   const palette = useColors();
   const editId = route.params?.id;
-  const isStackScreen = !!editId;
+  // ── Записи → касса (приход) ────────────────────────────────────────────
+  // ADDITIVE, param-gated: when the Записи «Подтвердить приход» flow pushes
+  // CheckCreate it passes `bookingId` + prefill fields. On a successful check
+  // save we then call bookingsApi.convert(bookingId, checkId) so the booking
+  // flips to «проведена». EVERY booking-specific branch below is guarded by
+  // these params, so the normal cash flow (no params) is byte-for-byte
+  // unchanged. `bookingId` is captured ONCE (ref) so a navigate.setParams or
+  // re-render can't lose/duplicate the conversion.
+  const bookingIdRef = useRef<string | undefined>(route.params?.bookingId);
+  const bookingId = bookingIdRef.current;
+  const isFromBooking = !!bookingId;
+  // A check opened from a booking is a pushed (root-stack) screen that must
+  // pop back to the booking on save — treat it like a stack screen for nav,
+  // even though there's no editId.
+  const isStackScreen = !!editId || isFromBooking;
   // When opened from the bottom tab (route name 'NewCheck'), the floating
   // tab bar covers the bottom of the screen → reserve extra padding.
   const openedFromTab = route.name === 'NewCheck';
@@ -727,6 +742,22 @@ export default function CheckCreateScreen() {
     Alert.alert('Ошибка', 'Не удалось загрузить чек', [{ text: 'OK', onPress: () => navigation.goBack() }]);
   }, [editCheckError, navigation]);
 
+  // ── Записи → касса: одноразовый префилл клиента/авто/комментария ─────────
+  // ADDITIVE + param-gated: только когда CheckCreate открыт из «прихода»
+  // (bookingId есть) И это НЕ режим редактирования. Сидируем единожды (ref),
+  // чтобы фоновый ре-рендер не перетирал правки пользователя. Услуги/товары
+  // НЕ префиллим — мастер добавляет их сам (запись их не содержит).
+  const bookingPrefilledRef = useRef(false);
+  useEffect(() => {
+    if (!isFromBooking || editId || bookingPrefilledRef.current) return;
+    bookingPrefilledRef.current = true;
+    const p = route.params || {};
+    if (p.prefillClientId) setClientId(p.prefillClientId);
+    if (p.prefillCarId) setCarId(p.prefillCarId);
+    if (p.prefillComment) setComment(p.prefillComment);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isFromBooking, editId]);
+
   const selectedClient = clientData || plateClients?.find((c) => c.id === clientId);
   const selectedCar = clientCars?.find((c) => c.id === carId) ?? clientCars?.[0];
 
@@ -1090,7 +1121,31 @@ export default function CheckCreateScreen() {
         }
       }
 
-      if (isStackScreen) {
+      // ── Записи → касса: пометить запись «проведённой» ────────────────────
+      // ADDITIVE + param-gated: только когда касса открыта из «прихода»
+      // (bookingId есть) и это НОВЫЙ чек. Чек уже сохранён — конверсия лишь
+      // линкует его к записи (booking.status=converted, check_id=...). Если
+      // convert упадёт (сеть), чек НЕ теряется: запись остаётся в Предстоящих,
+      // приход можно повторить. Поэтому — best-effort с тихим логом, без
+      // блокировки навигации.
+      if (isFromBooking && bookingId && !editId && savedCheckId) {
+        try {
+          await bookingsApi.convert(bookingId, { checkId: savedCheckId });
+          queryClient.invalidateQueries({ queryKey: ['bookings'] });
+          queryClient.invalidateQueries({ queryKey: ['booking-detail', bookingId] });
+        } catch (err) {
+          // eslint-disable-next-line no-console
+          console.warn('[CheckCreate] booking convert failed (check saved anyway)', err);
+        }
+      }
+
+      if (isFromBooking) {
+        // Приход проведён → возвращаем пользователя на список Записей (запись
+        // теперь в «Прошедших» со ссылкой на чек). Явная навигация надёжнее
+        // goBack(): root-push кассы сбросил вложенный MoreStack, так что
+        // обычный pop приземлил бы на меню «Ещё», а не на список записей.
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Bookings' } });
+      } else if (isStackScreen) {
         navigation.goBack();
       } else {
         resetForm();
@@ -1166,7 +1221,9 @@ export default function CheckCreateScreen() {
 
   // Get current user as default master (already resolved above via `authUser`)
   const currentUser = authUser;
-  const defaultMasterId = currentUser?.id || '';
+  // Записи → касса: если приход открыли с конкретным мастером, услуги/товары
+  // по умолчанию вешаем на него (param-gated; обычный поток — текущий юзер).
+  const defaultMasterId = (isFromBooking && route.params?.prefillMasterId) || currentUser?.id || '';
   // Mirror warehouse role gating — directors / admins / superadmins see
   // cost price inside the picker, masters don't. Same predicate as
   // `ProductsScreen.tsx`'s `canSeeCostPrice`.

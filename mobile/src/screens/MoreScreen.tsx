@@ -18,7 +18,9 @@ import { useQuery } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { uploadsApi, authApi, subscriptionApi, knowledgeApi } from '../api/services';
+import { uploadsApi, authApi, subscriptionApi, knowledgeApi, bookingsApi } from '../api/services';
+import { countUpcoming } from './bookings/bookingHelpers';
+import type { Booking } from '../../../shared/types';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
@@ -94,6 +96,19 @@ const menuSections: MenuSection[] = [
     title: 'Работа',
     sectionKey: 'work',
     items: [
+      {
+        // Записи — внутренний инструмент персонала: запись клиента на дату/
+        // время → «приход» открывает кассу. Гейт: право bookings_access
+        // (мастер/админ) + section/item-visibility. Сервер закрывает API.
+        label: 'Записи',
+        description: 'Запись клиентов на дату и время',
+        screen: 'Bookings',
+        itemKey: 'bookings',
+        permission: 'bookings_access',
+        icon: 'time-outline',
+        iconBg: colors.blue[50],
+        iconColor: colors.blue[600],
+      },
       {
         label: 'Расписание',
         description: 'График работы и смены',
@@ -435,6 +450,19 @@ export default function MoreScreen() {
   });
   const pendingRegsCount = pendingRegs?.count ?? 0;
 
+  // Записи → бейдж предстоящих на пункте меню. Считаем по scope=upcoming
+  // (то же, что показывает список). Только если есть право — иначе лишний
+  // запрос. Ключ ['bookings','upcoming'] совпадает со списком (persistent
+  // cache, мгновенно). Падение — тихое (бейдж просто не покажется).
+  const canSeeBookings = hasPermission('bookings_access');
+  const { data: upcomingBookings } = useQuery<Booking[]>({
+    queryKey: ['bookings', 'upcoming'],
+    queryFn: async () => (await bookingsApi.list({ scope: 'upcoming' })).data,
+    enabled: canSeeBookings,
+    staleTime: 60 * 1000,
+  });
+  const upcomingBookingsCount = countUpcoming(upcomingBookings);
+
   // Lock badges mirror FeatureGate exactly: gate on the server-resolved
   // `sub.features` (authoritative, keyed by planId) — NOT the fragile
   // plan-NAME match against sub.plans. Superadmin bypasses everything;
@@ -592,7 +620,13 @@ export default function MoreScreen() {
                     descColor={palette.text.secondary}
                     separatorColor={palette.border.subtle}
                     iconMutedColor={palette.text.tertiary}
-                    badgeCount={item.screen === 'KnowledgeBase' ? pendingRegsCount : 0}
+                    badgeCount={
+                      item.screen === 'KnowledgeBase'
+                        ? pendingRegsCount
+                        : item.screen === 'Bookings'
+                          ? upcomingBookingsCount
+                          : 0
+                    }
                   />
                 ))}
               </View>

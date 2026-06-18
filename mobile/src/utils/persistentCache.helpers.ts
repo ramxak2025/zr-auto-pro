@@ -61,6 +61,13 @@ export const PERSISTED_KEYS = [
   // Schedule + today
   'schedule',
   'schedule-today',
+  // ── Записи (bookings) ──────────────────────────────────────────
+  // List keyed ['bookings', scope] (scope = 'upcoming' | 'past') — a tiny,
+  // fixed 2-variant param space, NOT search-volatile. Persisting both slots
+  // lets the «Записи» list render instantly from cache on cold start
+  // (matching every other section) and survive a transient first-fetch 502
+  // instead of a hard «Не удалось загрузить». Capped at 2 variants below.
+  'bookings',
   // Dashboard cards
   'dashboard-chart',
   'dashboard-v2',
@@ -250,6 +257,8 @@ export const VARIANT_CAPS: Partial<Record<PersistedKey, number>> = {
   'car-checks': 10,
   // Journal infinite feed — base slot + one filtered variant.
   'checks-infinite': 2,
+  // Записи — exactly two scopes (upcoming / past).
+  bookings: 2,
 };
 
 /**

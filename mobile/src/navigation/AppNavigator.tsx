@@ -49,6 +49,10 @@ import TrashScreen from '../screens/TrashScreen';
 import MailingsScreen from '../screens/MailingsScreen';
 import IntegrationsScreen from '../screens/IntegrationsScreen';
 import WarehouseAnalyticsScreen from '../screens/WarehouseAnalyticsScreen';
+import BookingsScreen from '../screens/BookingsScreen';
+import BookingDetailScreen from '../screens/BookingDetailScreen';
+import BookingCreateScreen from '../screens/BookingCreateScreen';
+import BookingSettingsScreen from '../screens/BookingSettingsScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { screenErrorBoundaryLayout } from '../components/ErrorBoundary';
 import FeatureGate from '../components/FeatureGate';
@@ -133,7 +137,25 @@ const GatedUsers = gated('users_manage', UsersScreen);
 export type RootStackParamList = {
   Login: undefined;
   Main: undefined;
-  CheckCreate: { id?: string } | undefined;
+  /**
+   * `id` — edit an existing check.
+   * Записи → касса (приход): `bookingId` + prefill fields are passed by the
+   * BookingDetail «Подтвердить приход» action. CheckCreate seeds client/car/
+   * comment/master from them and, on a successful NEW-check save, calls
+   * bookingsApi.convert(bookingId, checkId). All booking params are OPTIONAL
+   * and param-gated — a normal Касса open (no params) is byte-for-byte
+   * unchanged.
+   */
+  CheckCreate:
+    | {
+        id?: string;
+        bookingId?: string;
+        prefillClientId?: string;
+        prefillCarId?: string;
+        prefillMasterId?: string;
+        prefillComment?: string;
+      }
+    | undefined;
   CheckDetail: { id: string };
   /**
    * `focusCarId` — set when the caller (typically the Clients screen
@@ -235,6 +257,19 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Trash" component={TrashScreen} />
       <MoreStack.Screen name="Subscription" component={SubscriptionScreen} />
       <MoreStack.Screen name="Schedule" component={GatedSchedule} />
+      {/*
+        Записи — list / detail / create / settings live in MoreStack so a tap
+        from the list (Bookings → BookingDetail) pushes onto THIS stack and the
+        floating tab bar stays visible (like Clients → ClientDetail). The
+        «Подтвердить приход» action navigates to the ROOT-stack CheckCreate
+        (registered below) which intentionally covers the tab bar — that's the
+        normal Касса presentation. CheckDetail (already in MoreStack) serves the
+        «Чек №…» link from a converted booking, keeping back-nav in-section.
+      */}
+      <MoreStack.Screen name="Bookings" component={BookingsScreen} />
+      <MoreStack.Screen name="BookingDetail" component={BookingDetailScreen} />
+      <MoreStack.Screen name="BookingCreate" component={BookingCreateScreen} />
+      <MoreStack.Screen name="BookingSettings" component={BookingSettingsScreen} />
       <MoreStack.Screen name="Clients" component={GatedClients} />
       <MoreStack.Screen name="KnowledgeBase" component={KnowledgeBaseScreen} />
       <MoreStack.Screen name="KnowledgeCategory" component={KnowledgeCategoryScreen} />

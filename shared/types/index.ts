@@ -197,7 +197,7 @@ export interface ItemVisibility {
  * the single source of truth for the known set, used to materialize defaults.
  */
 export const ITEM_KEYS = {
-  work: ['schedule', 'clients', 'knowledge-base'],
+  work: ['bookings', 'schedule', 'clients', 'knowledge-base'],
   finance: ['cashflow', 'salary', 'expenses', 'reports'],
   warehouse: ['services', 'suppliers', 'equipment', 'warehouse-analytics'],
   marketing: ['marketing', 'calls', 'mailings', 'integrations'],
