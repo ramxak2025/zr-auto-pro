@@ -180,8 +180,9 @@ interface AuthProviderProps {
  * role identically. Under a master that meant a wave of owner-only requests
  * (`/checks/dashboard`, `/products/low-stock`, `/calls?date=…`) competing
  * with the queries the master dashboard actually needs (`/salary/my`,
- * `/shifts/my`) — and `/calls` is a guaranteed 400×2 (global retry: 1) on
- * tenants without the МоиЗвонки integration. Every prefetch below is now
+ * `/shifts/my`) — and `/calls` is a guaranteed 400 on tenants without the
+ * МоиЗвонки integration (a 4xx is deterministic, so the retry policy never
+ * retries it — see utils/queryRetry.ts). Every prefetch below is now
  * gated by the same role/permission rules the screens themselves use
  * (mirrors `hasPermission` further down this file): a master session fires
  * ZERO requests it isn't allowed to make or has no screen for.
@@ -389,7 +390,8 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
   // DashboardScreen's AdminDashboard). Masters never mount these widgets and
   // never read these keys — prefetching under a master was pure waste, and
   // `/calls` is a guaranteed 400 on tenants without the МоиЗвонки
-  // integration (×2 with the global retry), polluting the master login.
+  // integration (a 4xx is never retried by the transient-retry policy),
+  // polluting the master login.
   //
   // NOTE: the former ['checks-dashboard'] prefetch was removed entirely —
   // no `useQuery` anywhere in mobile/src reads that key any more (only

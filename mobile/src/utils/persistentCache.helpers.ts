@@ -182,6 +182,22 @@ export const PERSISTED_KEYS = [
   'client-checks-by-car',
   'employee-full-profile',
   'user',
+  // ── Detail cards reached one tap from a cached LIST (2026-06-18) ──────
+  // SupplierDetailScreen (['supplier' | 'supplier-deliveries' |
+  // 'supplier-payments' | 'supplier-defect-returns', id]),
+  // CheckDetail/CheckCreate (['check', id]) and CarsScreen
+  // (['car-checks', carId]). The LIST screens (suppliers / checks-infinite /
+  // cars) were already persisted, but opening a DETAIL cold during a deploy
+  // 502 window had no fallback → hard «Не удалось загрузить». All are keyed
+  // ONLY by a stable id (not search-volatile) and bounded by VARIANT_CAPS
+  // below; {updatedAt: storedAt} + the empty-collection guard ensure a
+  // restored snapshot refetches on mount and never masks "data exists now".
+  'supplier',
+  'supplier-deliveries',
+  'supplier-payments',
+  'supplier-defect-returns',
+  'check',
+  'car-checks',
 ] as const;
 
 export type PersistedKey = (typeof PERSISTED_KEYS)[number];
@@ -224,6 +240,14 @@ export const VARIANT_CAPS: Partial<Record<PersistedKey, number>> = {
   'client-checks-by-car': 10,
   'employee-full-profile': 10,
   user: 10,
+  // Id-keyed detail cards reached from a cached list — keep the 10 most
+  // recently opened (2026-06-18).
+  supplier: 10,
+  'supplier-deliveries': 10,
+  'supplier-payments': 10,
+  'supplier-defect-returns': 10,
+  check: 10,
+  'car-checks': 10,
   // Journal infinite feed — base slot + one filtered variant.
   'checks-infinite': 2,
 };

@@ -26,6 +26,7 @@ import { UserRole } from '../../../shared/types';
 import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
+import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
@@ -153,6 +154,8 @@ export default function ClientsScreen() {
   const {
     data,
     isLoading,
+    isError,
+    refetch,
     isFetching,
     isPlaceholderData,
     dataUpdatedAt,
@@ -806,7 +809,19 @@ export default function ClientsScreen() {
             </ScrollView>
           </View>
 
-          {data === undefined ? (
+          {data === undefined && isError ? (
+            // Cold start with no cached pages AND the fetch failed (e.g. a
+            // deploy 502 window): show a recoverable error with a real retry
+            // instead of an eternal skeleton. With cached pages present,
+            // global placeholderData keeps the list visible and this branch
+            // never triggers (stale-while-revalidate). backendRecovery also
+            // refetches this query automatically once /health returns.
+            <QueryErrorState
+              title="Не удалось загрузить клиентов"
+              description="Проверьте соединение и попробуйте ещё раз."
+              onRetry={() => refetch()}
+            />
+          ) : data === undefined ? (
             <ListSkeleton count={8} />
           ) : (
             <FlashList

@@ -20,6 +20,9 @@ import { colors } from './src/theme';
 import { haptic } from './src/platform/haptics';
 import { hydrateCache, hydratePriorityCache, attachPersistence } from './src/utils/persistentCache';
 import { attachForegroundRevalidation } from './src/utils/foregroundRevalidation';
+import { attachBackendRecovery } from './src/utils/backendRecovery';
+import { shouldRetryTransient, transientRetryDelay } from './src/utils/queryRetry';
+import { API_URL } from './src/api/axios';
 
 // Wire TanStack Query's onlineManager to the real device connectivity
 // (NetInfo). Without this RN has no `online`/`offline` browser events, so
@@ -28,7 +31,16 @@ import { attachForegroundRevalidation } from './src/utils/foregroundRevalidation
 // OfflineBanner below would have no source of truth.
 onlineManager.setEventListener((setOnline) =>
   NetInfo.addEventListener((state) => {
-    setOnline(!!state.isConnected);
+    // Prefer `isInternetReachable` (the device can actually reach the
+    // internet) over `isConnected` (the link is merely up): a Wi-Fi with a
+    // dead upstream / captive portal is "connected" but useless, and treating
+    // it as online just burns query retries into an error card. NetInfo
+    // reports `isInternetReachable` as `null` until it probes, so fall back to
+    // `isConnected` while unknown to avoid a false-offline flash on cold
+    // start. A backend 502 keeps the internet reachable, so this never hides a
+    // real server outage behind the offline banner — that path is handled by
+    // the transient-retry policy + backendRecovery below.
+    setOnline(state.isInternetReachable ?? state.isConnected ?? false);
   }),
 );
 
@@ -53,22 +65,22 @@ const queryClient = new QueryClient({
       // Keep query data alive for 30 min after last unmount, so a tab swipe
       // back doesn't lose the cache.
       gcTime: 30 * 60 * 1000,
-      // Retry policy: NEVER retry 4xx — they are deterministic (403 master
-      // hitting an owner-only endpoint, 404 deleted entity); retrying only
-      // doubles the spinner for an answer that cannot change. For TRANSIENT
-      // failures — network errors (no err.response), timeouts, 5xx — retry up
-      // to TWICE. The owner reported sections showing «Не удалось загрузить»
-      // on first open that then worked on a manual «Повторить»: a single
-      // flaky-DNS / cold-connection blip slipped past one retry and surfaced
-      // as an error card. Two quick retries (500ms, 1000ms) absorb the blip
-      // silently so the first open just works; cache + placeholderData keep
-      // paint instant meanwhile.
-      retry: (failureCount: number, error: Error) => {
-        const status = (error as { response?: { status?: number } }).response?.status;
-        if (status !== undefined && status >= 400 && status < 500) return false;
-        return failureCount < 2;
-      },
-      retryDelay: (attempt: number) => Math.min(500 * 2 ** attempt, 2_000),
+      // Retry policy (see utils/queryRetry.ts): NEVER retry 4xx — they are
+      // deterministic (403 master hitting an owner-only endpoint, 404 deleted
+      // entity, 400 validation); retrying only doubles the spinner for an
+      // answer that cannot change. For TRANSIENT failures — network errors (no
+      // err.response), timeouts, and any 5xx (502/503/504) — retry up to 6
+      // times with capped exponential backoff + jitter (~31s of coverage).
+      // ROOT CAUSE FIXED: the old policy gave up after ~1.5s, far shorter than
+      // a 5–15s backend redeploy 502 window, so every section errored out at
+      // once and a manual «Повторить» fired inside the same window failed
+      // again ("повторить не помогает"). The wider budget rides through a
+      // deploy invisibly (cache + placeholderData keep paint instant
+      // meanwhile); backendRecovery heals anything still errored once /health
+      // returns. Jitter de-syncs the post-login fan-out off the recovering
+      // backend.
+      retry: shouldRetryTransient,
+      retryDelay: (attempt: number) => transientRetryDelay(attempt),
       refetchOnWindowFocus: false,
       // Global stale-while-revalidate: when a queryKey changes (eg. paging,
       // search, filters), keep showing the previous data until the new one
@@ -183,6 +195,7 @@ export default function App() {
   const [fontsReady, setFontsReady] = useState(false);
   const persistenceCleanup = useRef<(() => void) | null>(null);
   const foregroundCleanup = useRef<(() => void) | null>(null);
+  const recoveryCleanup = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,6 +210,11 @@ export default function App() {
     // freshest cash position immediately, instead of yesterday's snapshot
     // plus a manual pull-to-refresh.
     foregroundCleanup.current = attachForegroundRevalidation(queryClient);
+    // Backend-recovery self-heal: a 502 keeps the socket up, so NetInfo /
+    // onlineManager / refetchOnReconnect never fire. This polls /health while
+    // any mounted query is errored and refetches them the moment the backend
+    // returns — no manual «Повторить» needed. See utils/backendRecovery.ts.
+    recoveryCleanup.current = attachBackendRecovery(queryClient, API_URL);
     // Audit #8.7 — cold-start hydrate race. Step 1: synchronously hydrate
     // ONLY the priority first-screen keys (Dashboard / Журнал / Склад),
     // bounded to ~80ms. The splash stays up until this resolves so a fast
@@ -222,6 +240,8 @@ export default function App() {
       persistenceCleanup.current = null;
       foregroundCleanup.current?.();
       foregroundCleanup.current = null;
+      recoveryCleanup.current?.();
+      recoveryCleanup.current = null;
     };
   }, []);
 
