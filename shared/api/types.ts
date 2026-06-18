@@ -624,3 +624,47 @@ export interface ForCarParams {
   make?: string;
   model?: string;
 }
+
+// ─── Записи (bookings) ───────────────────────────────────────────────────────
+
+/** GET /bookings query. */
+export interface ListBookingsParams {
+  scope?: 'upcoming' | 'past';
+  /** ISO 8601 lower bound on scheduled_at. */
+  from?: string;
+  /** ISO 8601 upper bound on scheduled_at. */
+  to?: string;
+}
+
+/** POST /bookings body. */
+export interface CreateBookingRequest {
+  clientId: string;
+  carId?: string | null;
+  /** Omit when a master books for self; admin/owner may set any master or null. */
+  masterId?: string | null;
+  /** ISO 8601 date+time. */
+  scheduledAt: string;
+  comment?: string;
+  notifyOnCreate?: boolean;
+}
+
+/** PATCH /bookings/:id body (reschedule / comment / reassign). */
+export interface UpdateBookingRequest {
+  scheduledAt?: string;
+  comment?: string;
+  masterId?: string | null;
+  carId?: string | null;
+}
+
+/** POST /bookings/:id/convert body. */
+export interface ConvertBookingRequest {
+  checkId: string;
+}
+
+/** PATCH /bookings/settings body — all fields optional. */
+export interface UpdateBookingSettingsRequest {
+  notifyClientOnCreate?: boolean;
+  reminderEnabled?: boolean;
+  reminderHours?: number;
+  channel?: 'auto' | 'sms' | 'whatsapp';
+}

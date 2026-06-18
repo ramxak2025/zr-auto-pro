@@ -356,7 +356,15 @@ export const PERMISSION_GROUPS = {
   ],
   Финансы: ['profit_view', 'financial_reports', 'export_data', 'can_add_expenses', 'salary_view'],
   Склад: ['warehouse_access', 'suppliers_access'],
-  CRM: ['clients_view', 'clients_edit', 'schedule_view', 'bookings_access', 'marketing_access', 'calls_view', 'calls_listen'],
+  CRM: [
+    'clients_view',
+    'clients_edit',
+    'schedule_view',
+    'bookings_access',
+    'marketing_access',
+    'calls_view',
+    'calls_listen',
+  ],
   Управление: ['user_management'],
 } as const satisfies Record<string, readonly PermissionKey[]>;
 
@@ -575,6 +583,62 @@ export interface Check {
   returnDestination?: 'warehouse' | 'defect' | null;
   returnScope?: 'full' | 'partial' | null;
   createdAt: string;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Записи (appointments / bookings) — internal staff-side scheduling.
+//  Backend: bookings/ module (migrations 075_bookings + 076_booking_settings).
+//  A master books a client for a date/time; admin/owner sees all and may
+//  assign/leave the master null. On «приход» the cash screen opens prefilled;
+//  the saved check is then linked back via POST /bookings/:id/convert.
+// ───────────────────────────────────────────────────────────────────────
+
+export type BookingStatus = 'scheduled' | 'arrived' | 'converted' | 'cancelled' | 'no_show';
+
+export interface Booking {
+  id: string;
+  tenantId: string;
+  clientId: string;
+  /** Denormalised from the client join (list/detail responses). */
+  clientName?: string | null;
+  clientPhone?: string | null;
+  carId?: string | null;
+  carPlate?: string | null;
+  carMakeModel?: string | null;
+  /** On whom the booking is. Null = unassigned (admin/owner only until assigned). */
+  masterId?: string | null;
+  masterName?: string | null;
+  createdBy?: string | null;
+  scheduledAt: string;
+  comment?: string | null;
+  status: BookingStatus;
+  /** Set on conversion to the check created from the «приход» flow. */
+  checkId?: string | null;
+  checkNumber?: number | null;
+  notifyOnCreate: boolean;
+  reminderSentAt?: string | null;
+  createdAt: string;
+  cancelledAt?: string | null;
+  cancelledBy?: string | null;
+}
+
+/**
+ * POST/PATCH /bookings echo back the created/updated booking PLUS a soft
+ * conflict: an overlapping scheduled booking for the same master near the
+ * chosen time. It is a NON-blocking warning — the save already succeeded.
+ */
+export interface BookingMutationResult extends Booking {
+  conflictWarning?: Booking | null;
+}
+
+export interface BookingSettings {
+  /** Send the client a «вы записаны» message on create. */
+  notifyClientOnCreate: boolean;
+  /** Send the client a reminder N hours before. */
+  reminderEnabled: boolean;
+  reminderHours: number;
+  /** 'auto' = use the provider configured in Маркетинг. */
+  channel: 'auto' | 'sms' | 'whatsapp';
 }
 
 export interface Supplier {

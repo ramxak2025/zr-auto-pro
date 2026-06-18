@@ -100,6 +100,9 @@ import type {
   TenantMetrics,
   ImpersonateResponse,
   AuditLogEntry,
+  Booking,
+  BookingMutationResult,
+  BookingSettings,
 } from '../types';
 import type {
   LoginRequest,
@@ -151,6 +154,11 @@ import type {
   ListTroubleshootingParams,
   ForCarParams,
   CreateBroadcastRequest,
+  ListBookingsParams,
+  CreateBookingRequest,
+  UpdateBookingRequest,
+  ConvertBookingRequest,
+  UpdateBookingSettingsRequest,
 } from './types';
 
 export function createAuthApi(api: HttpClient) {
@@ -179,8 +187,7 @@ export function createUsersApi(api: HttpClient) {
     purge: (id: string) => api.post(`/users/${id}/purge`),
     // 071 — per-employee section visibility overrides. The list returns ONLY the
     // explicit overrides; an absent section falls back to its default (visible).
-    getSectionVisibility: (userId: string) =>
-      api.get<SectionVisibility[]>(`/users/${userId}/section-visibility`),
+    getSectionVisibility: (userId: string) => api.get<SectionVisibility[]>(`/users/${userId}/section-visibility`),
     updateSectionVisibility: (userId: string, sections: SectionVisibility[]) =>
       api.patch<SectionVisibility[]>(`/users/${userId}/section-visibility`, { sections }),
     // 073 — granular per-employee ITEM visibility overrides (additive to the
@@ -1082,5 +1089,24 @@ export function createNotificationsApi(api: HttpClient) {
 
     // Superadmin → director broadcast authoring.
     createBroadcast: (payload: CreateBroadcastRequest) => api.post<Broadcast>('/admin/broadcast', payload),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Записи (bookings) — internal staff-side appointments.
+//  All routes require `bookings_access`; visibility (master=own, admin/owner=
+//  all) and ownership are enforced server-side. create/update echo back the
+//  booking with an optional non-blocking `conflictWarning`.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createBookingsApi(api: HttpClient) {
+  return {
+    list: (params?: ListBookingsParams) => api.get<Booking[]>('/bookings', { params }),
+    create: (data: CreateBookingRequest) => api.post<BookingMutationResult>('/bookings', data),
+    update: (id: string, data: UpdateBookingRequest) => api.patch<BookingMutationResult>(`/bookings/${id}`, data),
+    cancel: (id: string) => api.post<Booking>(`/bookings/${id}/cancel`),
+    convert: (id: string, data: ConvertBookingRequest) => api.post<Booking>(`/bookings/${id}/convert`, data),
+    getSettings: () => api.get<BookingSettings>('/bookings/settings'),
+    updateSettings: (data: UpdateBookingSettingsRequest) => api.patch<BookingSettings>('/bookings/settings', data),
   };
 }

@@ -37,6 +37,7 @@ import {
   createJournalApi,
   createKnowledgeApi,
   createNotificationsApi,
+  createBookingsApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -79,6 +80,7 @@ export const clientSourcesApi = createClientSourcesApi(api);
 export const journalApi = createJournalApi(api);
 export const knowledgeApi = createKnowledgeApi(api);
 export const notificationsApi = createNotificationsApi(api);
+export const bookingsApi = createBookingsApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {

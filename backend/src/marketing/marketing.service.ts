@@ -201,6 +201,34 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     return rows.length > 0 ? this.createAdapter(rows[0]) : null;
   }
 
+  /**
+   * Public messaging reuse point for other modules (e.g. Bookings). Sends a
+   * one-off message to a client phone using the tenant's configured messaging
+   * provider (the same `messaging_integrations` adapter the review/reminder
+   * flows use). When no provider is configured it returns
+   * `{ sent: false, reason: 'no_provider' }` so callers can skip silently —
+   * it never throws on a missing provider.
+   *
+   * `sent: true` means the adapter reported success; `sent: false` with
+   * `reason: 'error'` means a provider exists but the send failed (network /
+   * provider error) — the caller decides whether to retry.
+   */
+  async sendClientMessage(
+    tenantId: string,
+    phone: string,
+    message: string,
+  ): Promise<{ sent: boolean; reason?: 'no_provider' | 'no_phone' | 'error'; error?: string }> {
+    if (!phone || !phone.trim()) return { sent: false, reason: 'no_phone' };
+    const adapter = await this.getAdapter(tenantId);
+    if (!adapter) return { sent: false, reason: 'no_provider' };
+    try {
+      const result = await adapter.sendMessage(phone, message);
+      return result.success ? { sent: true } : { sent: false, reason: 'error', error: result.error };
+    } catch (err: any) {
+      return { sent: false, reason: 'error', error: err?.message || String(err) };
+    }
+  }
+
   // ─── Token Generation ────────────────────────────────────────────
   private generateToken(): string {
     return crypto.randomBytes(32).toString('hex');

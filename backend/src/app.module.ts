@@ -37,6 +37,7 @@ import { ClientSourcesModule } from './client-sources/client-sources.module';
 import { JournalModule } from './journal/journal.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { BookingsModule } from './bookings/bookings.module';
 
 @Module({
   imports: [
@@ -77,6 +78,7 @@ import { NotificationsModule } from './notifications/notifications.module';
     JournalModule,
     KnowledgeModule,
     NotificationsModule,
+    BookingsModule,
   ],
   providers: [MigrationRunner],
 })
