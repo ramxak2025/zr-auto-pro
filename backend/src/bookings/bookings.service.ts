@@ -280,12 +280,18 @@ export class BookingsService {
     const comment = dto.comment !== undefined ? dto.comment : row.comment;
     const carId = dto.carId !== undefined ? dto.carId : row.car_id;
 
-    await this.pool.query(
+    // Only a still-`scheduled` booking can be rescheduled/edited — never a
+    // converted (linked to a real check) or cancelled one (would resurrect it
+    // into Предстоящие). UI gates this; the server is the contract boundary.
+    const { rowCount } = await this.pool.query(
       `UPDATE bookings
           SET scheduled_at = $1, comment = $2, master_id = $3, car_id = $4
-        WHERE id = $5 AND tenant_id = $6`,
+        WHERE id = $5 AND tenant_id = $6 AND status = 'scheduled'`,
       [scheduledAt, comment, masterId, carId, id, tenantId],
     );
+    if (rowCount === 0) {
+      throw new BadRequestException({ message: 'Нельзя изменить — запись уже проведена или отменена' });
+    }
 
     // Recompute the soft conflict for the (possibly new) master/time.
     let conflictWarning: ReturnType<BookingsService['mapRow']> | null = null;
@@ -307,12 +313,19 @@ export class BookingsService {
       throw new ForbiddenException({ message: 'Можно отменять только свои записи' });
     }
 
-    await this.pool.query(
+    // Only a still-`scheduled` booking can be cancelled — never re-cancel a
+    // cancelled one or cancel a converted booking (which has a real linked
+    // check; flipping it to cancelled would leave check_id dangling + a lying
+    // status).
+    const { rowCount } = await this.pool.query(
       `UPDATE bookings
           SET status = 'cancelled', cancelled_at = now(), cancelled_by = $1
-        WHERE id = $2 AND tenant_id = $3`,
+        WHERE id = $2 AND tenant_id = $3 AND status = 'scheduled'`,
       [user.userID, id, tenantId],
     );
+    if (rowCount === 0) {
+      throw new BadRequestException({ message: 'Нельзя отменить — запись уже проведена или отменена' });
+    }
 
     return this.mapRow(await this.getOwnedRow(id, tenantId));
   }
@@ -334,11 +347,19 @@ export class BookingsService {
     ]);
     if (checkRows.length === 0) throw new BadRequestException({ message: 'Чек не найден' });
 
-    await this.pool.query(`UPDATE bookings SET status = 'converted', check_id = $1 WHERE id = $2 AND tenant_id = $3`, [
-      checkId,
-      id,
-      tenantId,
-    ]);
+    // Atomic, status-gated claim: only a still-`scheduled` booking with NO
+    // linked check converts. Guards against double-convert (the convert-on-save
+    // call is best-effort + retried after the tolerated network blip, or two
+    // staff devices racing) overwriting check_id and orphaning the first check,
+    // and against resurrecting a cancelled booking.
+    const { rowCount } = await this.pool.query(
+      `UPDATE bookings SET status = 'converted', check_id = $1
+        WHERE id = $2 AND tenant_id = $3 AND status = 'scheduled' AND check_id IS NULL`,
+      [checkId, id, tenantId],
+    );
+    if (rowCount === 0) {
+      throw new BadRequestException({ message: 'Запись уже проведена или отменена' });
+    }
 
     return this.mapRow(await this.getOwnedRow(id, tenantId));
   }

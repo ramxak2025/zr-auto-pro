@@ -256,6 +256,23 @@ export class UsersService {
       }
     }
 
+    // Self-lockout guard for the LEGACY permissions path (mirrors the dedicated
+    // PATCH /users/:id/permissions). A user editing their OWN account must not
+    // be able to strip their own `user_management` — an `admin` would otherwise
+    // brick their access to Users/Employees (their client gate checks this key).
+    // superadmin/director are excluded: their client bypass is unconditional so
+    // they cannot self-lock, and excluding them avoids over-blocking an
+    // owner-class self profile-edit whose stored map happens to omit the key.
+    if (
+      dto.permissions !== undefined &&
+      id === actorID &&
+      actorRole !== 'superadmin' &&
+      actorRole !== 'director' &&
+      dto.permissions.user_management !== true
+    ) {
+      throw new BadRequestException({ message: 'Нельзя снять у себя право «Управление пользователями»' });
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
