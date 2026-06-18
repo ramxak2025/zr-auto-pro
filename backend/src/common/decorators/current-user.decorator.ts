@@ -4,6 +4,8 @@ export interface JwtPayload {
   userID: string;
   tenantID: string;
   role: string;
+  /** Action-permission map loaded by JwtStrategy.validate (users.permissions). */
+  permissions: Record<string, boolean>;
   jti?: string;
 }
 

@@ -24,6 +24,14 @@ export interface ValidatedUser {
   userID: string;
   tenantID: string;
   role: string;
+  /**
+   * The user's action-permission map (users.permissions JSON). Loaded here so
+   * PermissionsGuard can enforce server-side without an extra DB hop. Cached
+   * alongside the rest of the validation result; a permission change already
+   * purges this user's cache via invalidateAuthUser (UsersService.update), so
+   * the 30s TTL is the only staleness window — identical to role/is_active.
+   */
+  permissions: Record<string, boolean>;
   jti: string | undefined;
 }
 

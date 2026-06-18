@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { MarketingService } from './marketing.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { SubmitReviewDto } from './dto/submit-review.dto';
 import { UpsertIntegrationDto } from './dto/upsert-integration.dto';
@@ -50,13 +51,15 @@ export class MarketingController {
     return this.marketingService.getIntegrations(user.tenantID);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Post('integrations')
   upsertIntegration(@CurrentUser() user: JwtPayload, @Body() dto: UpsertIntegrationDto) {
     return this.marketingService.upsertIntegration(user.tenantID, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Delete('integrations/:id')
   removeIntegration(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.marketingService.removeIntegration(id, user.tenantID);
@@ -69,13 +72,15 @@ export class MarketingController {
     return this.marketingService.getPlatformLinks(user.tenantID);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Post('platform-links')
   upsertPlatformLink(@CurrentUser() user: JwtPayload, @Body() dto: UpsertPlatformLinkDto) {
     return this.marketingService.upsertPlatformLink(user.tenantID, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Delete('platform-links/:id')
   removePlatformLink(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.marketingService.removePlatformLink(id, user.tenantID);
@@ -88,7 +93,8 @@ export class MarketingController {
     return this.marketingService.getSettings(user.tenantID);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Patch('settings')
   updateSettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateReviewSettingsDto) {
     return this.marketingService.updateSettings(user.tenantID, dto);
@@ -101,13 +107,15 @@ export class MarketingController {
     return this.reminderService.getSettings(user.tenantID);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Post('reminders')
   updateReminderSettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateReminderSettingsDto) {
     return this.reminderService.updateSettings(user.tenantID, dto);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Post('reminders/send')
   sendReminders(@CurrentUser() user: JwtPayload) {
     return this.reminderService.sendForTenant(user.tenantID);

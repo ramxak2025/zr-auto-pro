@@ -284,7 +284,133 @@ export interface UserPermissions {
   schedule_view: boolean;
   salary_view: boolean;
   marketing_access: boolean;
+  // ── Additive keys (server-enforced permissions foundation) ──────────────
+  // Kept OPTIONAL so existing `defaultPermissions: UserPermissions = { …16 keys }`
+  // literals in web/mobile keep compiling. A new permission defaults to
+  // "absent" → the PermissionsGuard falls back to the per-role default.
+  /** See the calls list (calls module is also director+ role-gated). */
+  calls_view?: boolean;
+  /** Listen to call recordings. */
+  calls_listen?: boolean;
+  /** Submit /expenses entries. NOTE: server still enforces this via the
+   *  separate users.can_add_expenses COLUMN, not this JSON key. */
+  can_add_expenses?: boolean;
+  /** Access the online-booking / appointments surface. */
+  bookings_access?: boolean;
+  /** Change cash/card split or payment status on a check. */
+  payment_edit?: boolean;
+  /** See ALL masters' checks in the journal. A master without this sees
+   *  only their own (master_id = self); owner-class always sees all. */
+  checks_view_all?: boolean;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Canonical permission vocabulary (server-enforced foundation)
+//
+//  Single source of truth for action-permission keys, shared by backend
+//  (PermissionsGuard + @RequirePermission), web and mobile. This is SEPARATE
+//  from the section/item *menu*-visibility system (SECTION_KEYS / ITEM_KEYS) —
+//  those control which menu rows render; these control which server actions an
+//  account may perform.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Action-permission key. A subset of `keyof UserPermissions`. */
+export type PermissionKey =
+  | 'checks_view'
+  | 'checks_create'
+  | 'checks_edit'
+  | 'checks_delete'
+  | 'checks_change_datetime'
+  | 'checks_view_all'
+  | 'payment_edit'
+  | 'profit_view'
+  | 'financial_reports'
+  | 'export_data'
+  | 'can_add_expenses'
+  | 'warehouse_access'
+  | 'suppliers_access'
+  | 'clients_view'
+  | 'clients_edit'
+  | 'schedule_view'
+  | 'salary_view'
+  | 'bookings_access'
+  | 'marketing_access'
+  | 'calls_view'
+  | 'calls_listen'
+  | 'user_management';
+
+/**
+ * Permission keys grouped for UI rendering (Касса / Финансы / Склад / CRM /
+ * Управление). The grouping drives the permissions editor; enforcement only
+ * cares about the flat key.
+ */
+export const PERMISSION_GROUPS = {
+  Касса: [
+    'checks_view',
+    'checks_create',
+    'checks_edit',
+    'checks_delete',
+    'checks_change_datetime',
+    'checks_view_all',
+    'payment_edit',
+  ],
+  Финансы: ['profit_view', 'financial_reports', 'export_data', 'can_add_expenses', 'salary_view'],
+  Склад: ['warehouse_access', 'suppliers_access'],
+  CRM: ['clients_view', 'clients_edit', 'schedule_view', 'bookings_access', 'marketing_access', 'calls_view', 'calls_listen'],
+  Управление: ['user_management'],
+} as const satisfies Record<string, readonly PermissionKey[]>;
+
+/** Flat set of every canonical permission key (deduped, stable order). */
+export const PERMISSION_KEYS: readonly PermissionKey[] = Array.from(
+  new Set(Object.values(PERMISSION_GROUPS).flat()),
+) as PermissionKey[];
+
+/**
+ * Per-role DEFAULT for each permission when the user's stored `permissions`
+ * map does not have an explicit `true`/`false` for that key. This is the
+ * lockout-safety net: an existing master whose `permissions` is `{}` is NOT
+ * locked out of master-legitimate actions (касса, own data), and is NOT
+ * silently granted financials/reports/profit, product mutations, calls,
+ * marketing, or user management.
+ *
+ * Owner-class roles (superadmin / director / admin) are handled by the guard
+ * as ALWAYS-allowed and do not consult this map; they are listed here only for
+ * completeness / client-side mirroring.
+ */
+export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<PermissionKey, boolean>>> = {
+  [UserRole.SUPERADMIN]: {},
+  [UserRole.DIRECTOR]: {},
+  [UserRole.ADMIN]: {},
+  [UserRole.MASTER]: {
+    // Касса — a master CAN use the cash screen and see/edit their own checks.
+    checks_view: true,
+    checks_create: true,
+    checks_edit: true,
+    checks_delete: false,
+    checks_change_datetime: false,
+    checks_view_all: false, // sees only their own checks by default
+    payment_edit: false,
+    // Финансы — NONE by default.
+    profit_view: false,
+    financial_reports: false,
+    export_data: false,
+    can_add_expenses: false,
+    salary_view: false,
+    // Склад — reads are open elsewhere; mutations are role-gated. No access flag by default.
+    warehouse_access: false,
+    suppliers_access: false,
+    // CRM — masters can see their own clients/cars; broad CRM editing off.
+    clients_view: true,
+    clients_edit: false,
+    schedule_view: true,
+    bookings_access: false,
+    marketing_access: false,
+    calls_view: false,
+    calls_listen: false,
+    // Управление — never for a master.
+    user_management: false,
+  },
+};
 
 export interface Client {
   id: string;

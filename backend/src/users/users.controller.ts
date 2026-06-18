@@ -7,6 +7,7 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateSectionVisibilityDto } from './dto/section-visibility.dto';
 import { UpdateItemVisibilityDto } from './dto/item-visibility.dto';
+import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 
 // Roles allowed to manage other users (create / update / delete / reorder /
 // edit per-product commissions). Masters and admin-light users CANNOT touch
@@ -116,6 +117,24 @@ export class UsersController {
   @Patch(':id/item-visibility')
   updateItemVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateItemVisibilityDto) {
     return this.usersService.updateItemVisibility(id, user.tenantID, dto.items);
+  }
+
+  // ─── Action Permissions (server-enforced) ──────────────────────────
+  // Owner-class roles set another user's action-permission map. Tenant-scoped
+  // in the service (a foreign id 404s); self-lockout protection lives there too
+  // (you can't strip your own user_management). This is ADDITIVE to the legacy
+  // PATCH /users/:id which also accepts a `permissions` field.
+
+  @Roles(...MANAGER_ROLES)
+  @Get(':id/permissions')
+  getPermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.getPermissions(id, user.tenantID);
+  }
+
+  @Roles(...MANAGER_ROLES)
+  @Patch(':id/permissions')
+  updatePermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdatePermissionsDto) {
+    return this.usersService.updatePermissions(id, user.tenantID, user.userID, dto.permissions);
   }
 
   // ─── Product Commissions ────────────────────────────────────────────

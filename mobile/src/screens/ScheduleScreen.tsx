@@ -662,13 +662,28 @@ function GridTab() {
     userName?: string;
   } | null>(null);
   const [reorderUser, setReorderUser] = useState<{ userId: string; name: string; index: number } | null>(null);
-  const [pendingChanges, setPendingChanges] = useState<
-    Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>
-  >({});
-  // In-flight guard for «Применить» — without it a double-tap fires the
-  // batch twice and creates duplicate shifts on the same date (P1).
-  const [applying, setApplying] = useState(false);
-  const applyingRef = useRef(false);
+  // Ephemeral, non-blocking error notice for a failed quick-action. The owner
+  // explicitly does NOT want a blocking Alert per tap — a failed optimistic
+  // status rolls back silently and surfaces this auto-dismissing banner +
+  // an error haptic instead. Cleared on a timer so it never lingers.
+  const [quickError, setQuickError] = useState<string | null>(null);
+  const quickErrorTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const showQuickError = useCallback((msg: string) => {
+    setQuickError(msg);
+    if (quickErrorTimer.current) clearTimeout(quickErrorTimer.current);
+    quickErrorTimer.current = setTimeout(() => setQuickError(null), 2600);
+  }, []);
+  useEffect(() => {
+    return () => {
+      if (quickErrorTimer.current) clearTimeout(quickErrorTimer.current);
+    };
+  }, []);
+  // Per-cell re-entrancy guard for instant quick-actions. Mirrors the
+  // `dayOffInFlight` pattern in SettingsTab: a double-tap on the SAME
+  // `${userId}-${date}` cell must not fire two create/update round-trips
+  // (the 2nd would duplicate the row or race the first to an inconsistent
+  // state). A ref (not state) so the guard is synchronous within a frame.
+  const cellInFlight = useRef<Set<string>>(new Set());
 
   // Synced vertical scroll refs.
   //
@@ -743,10 +758,29 @@ function GridTab() {
   // synchronously during the push transition blocked the JS thread and
   // the screen looked frozen. First render paints the cheap GridSkeleton;
   // the real grid mounts after the navigation animation settles.
+  //
+  // КОРЕНЬ БАГА «открывается со второго раза»: раньше `gridReady` зависел
+  // ИСКЛЮЧИТЕЛЬНО от InteractionManager.runAfterInteractions. Его коллбэк
+  // выполняется только когда ВСЕ interaction-handles завершены; если хэндл
+  // push-анимации (или тача, открывшего экран) не снялся — очередь не
+  // дренится, `gridReady` навсегда остаётся false, и при первом открытии
+  // виден только GridSkeleton (грид «не открылся»). Второй тап генерил новые
+  // события, очередь дренилась, грид появлялся — отсюда «со второго раза».
+  //
+  // Лечение: гонка между runAfterInteractions и коротким fallback-таймером.
+  // Кто сработает первым — поднимает `gridReady`; повторные вызовы setState
+  // идемпотентны. Грид гарантированно появляется с первого открытия даже
+  // если interaction-очередь застряла. Оба источника снимаются на unmount.
   const [gridReady, setGridReady] = useState(false);
   useEffect(() => {
     const task = InteractionManager.runAfterInteractions(() => setGridReady(true));
-    return () => task.cancel();
+    // Длиннее типичной push-анимации (~300мс), но достаточно, чтобы экран
+    // никогда не «завис» на скелетоне, если очередь interactions не дренится.
+    const fallback = setTimeout(() => setGridReady(true), 350);
+    return () => {
+      task.cancel();
+      clearTimeout(fallback);
+    };
   }, []);
 
   // Prefetch adjacent months so swiping the month pager feels instant — by
@@ -857,20 +891,11 @@ function GridTab() {
       if (!d) return;
       map.set(`${e.userId}-${d}`, e);
     });
-    // Overlay pending changes
-    Object.values(pendingChanges).forEach((c) => {
-      if (!c || !c.userId) return;
-      const d = String(c.date ?? '').slice(0, 10);
-      if (!d) return;
-      const key = `${c.userId}-${d}`;
-      const existing = map.get(key);
-      map.set(key, {
-        ...(existing || { id: `pending-${key}`, tenantId: '', userId: c.userId, date: c.date, isManualOverride: true }),
-        ...c.payload,
-      } as ScheduleEntry);
-    });
+    // Optimistic quick-actions write straight into the ['schedule', …] query
+    // cache (see quickAction → applyOptimistic), so `entries` already reflects
+    // every staged change — no separate pending overlay to merge here.
     return map;
-  }, [entries, pendingChanges]);
+  }, [entries]);
 
   const userStats = useMemo(() => {
     const stats = new Map<string, { worked: number; off: number }>();
@@ -889,58 +914,36 @@ function GridTab() {
 
   const scheduleQueryKey = ['schedule', dateFrom, dateTo];
 
-  // Optimistic update helper (React Query documented pattern)
-  const optimisticUpdate = (userId: string, date: string, payload: any, existingEntry?: ScheduleEntry) => {
-    const previous = queryClient.getQueryData(scheduleQueryKey);
-    queryClient.setQueryData(scheduleQueryKey, (old: unknown) => {
-      const arr = toArray<ScheduleEntry>(old);
-      const temp = {
-        id: existingEntry?.id || `temp-${userId}-${date}`,
-        tenantId: '',
-        userId,
-        date,
-        isManualOverride: true,
-        ...payload,
-      } as ScheduleEntry;
-      if (existingEntry) {
-        return arr.map((e) => (e.id === existingEntry.id ? { ...e, ...temp } : e));
-      }
-      return [...arr, temp];
-    });
-    return previous;
-  };
-
-  // patchCache directly mutates RQ cache for instant UI
-  const patchCache = (userId: string, date: string, payload: any, isNew: boolean) => {
-    queryClient.setQueryData<ScheduleEntry[]>(scheduleQueryKey, (old) => {
-      const arr = toArray<ScheduleEntry>(old);
-      if (isNew) {
-        return [
-          ...arr,
-          { id: `t-${Date.now()}`, tenantId: '', userId, date, isManualOverride: true, ...payload } as ScheduleEntry,
-        ];
-      }
-      return arr.map((e) =>
-        e.userId === userId && String(e.date ?? '').slice(0, 10) === date ? { ...e, ...payload } : e,
-      );
-    });
-  };
-
-  const createMutation = useMutation({
-    mutationFn: (d: any) => scheduleApi.create(d),
-    onSuccess: () => {
-      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['schedule'] }), 1500);
+  // applyOptimistic — write a quick-action result straight into the
+  // ['schedule', dateFrom, dateTo] query cache so the tapped cell repaints
+  // with ZERO delay (no «Применить» step, no waiting for the server). Returns
+  // the previous cache snapshot so the caller can roll back on a failed
+  // round-trip. Single source of truth for the optimistic patch — replaces the
+  // old never-called optimisticUpdate/patchCache/create/update mutation pair
+  // that the audit flagged as racy dead code.
+  const applyOptimistic = useCallback(
+    (userId: string, date: string, payload: any, existingEntry?: ScheduleEntry): unknown => {
+      const previous = queryClient.getQueryData(scheduleQueryKey);
+      queryClient.setQueryData(scheduleQueryKey, (old: unknown) => {
+        const arr = toArray<ScheduleEntry>(old);
+        if (existingEntry) {
+          return arr.map((e) => (e.id === existingEntry.id ? ({ ...e, ...payload } as ScheduleEntry) : e));
+        }
+        const temp = {
+          // Temp id — replaced by the real row on the post-success refetch.
+          id: `temp-${userId}-${date}`,
+          tenantId: '',
+          userId,
+          date,
+          isManualOverride: true,
+          ...payload,
+        } as ScheduleEntry;
+        return [...arr, temp];
+      });
+      return previous;
     },
-    onError: () => queryClient.invalidateQueries({ queryKey: ['schedule'] }),
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
-    onSuccess: () => {
-      setTimeout(() => queryClient.invalidateQueries({ queryKey: ['schedule'] }), 1500);
-    },
-    onError: () => queryClient.invalidateQueries({ queryKey: ['schedule'] }),
-  });
+    [queryClient, scheduleQueryKey],
+  );
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => scheduleApi.remove(id),
@@ -973,6 +976,11 @@ function GridTab() {
       deleteMutation.mutate(entry.id);
       return;
     }
+
+    // Per-cell re-entrancy guard — a fast double-tap on the same cell must
+    // not fire two create/update round-trips off the same stale entry.
+    const cellKey = `${userId}-${date}`;
+    if (cellInFlight.current.has(cellKey)) return;
 
     // Pin actualArrival to the SCHEDULED date, not `now()`. Prevents past-date
     // quick-actions from inflating rating counts with today's timestamp.
@@ -1032,45 +1040,36 @@ function GridTab() {
       base.lateMinutes = 0;
     }
 
-    // Save to pending changes — applied in batch via Apply button
-    const key = `${userId}-${date}`;
-    setPendingChanges((prev) => ({
-      ...prev,
-      [key]: { userId, date, payload: base, existingEntryId: entry?.id },
-    }));
+    // INSTANT apply — no «Применить» step. Repaint the cell immediately by
+    // writing the new entry into the schedule cache, then fire the network
+    // call in the background. The owner taps a status → it shows at once.
+    //   1. close the popup right away (the cell already reflects the choice);
+    //   2. optimistically patch the cache (existingEntry → update, else add);
+    //   3. POST/PATCH in the background using the real entry id;
+    //   4. on error → roll back the exact snapshot + error haptic + a light
+    //      auto-dismissing banner (never a blocking Alert per tap);
+    //   5. on success → background-refetch to swap the temp row for the real
+    //      one (and refresh «Сегодня»). The guard clears in `finally`.
     setQuickPopup(null);
-  };
-
-  const applyPending = async () => {
-    // Synchronous re-entrancy guard: setState is async, so a second tap
-    // in the same frame would slip past an `applying`-only check. The ref
-    // blocks it immediately and prevents duplicate shift creation.
-    if (applyingRef.current) return;
-    const items = Object.values(pendingChanges);
-    if (items.length === 0) return;
-    applyingRef.current = true;
-    setApplying(true);
-    let failed = 0;
-    try {
-      for (const c of items) {
-        try {
-          if (c.existingEntryId) await scheduleApi.update(c.existingEntryId, c.payload);
-          else await scheduleApi.create(c.payload);
-        } catch {
-          failed++;
-        }
+    cellInFlight.current.add(cellKey);
+    const previous = applyOptimistic(userId, date, base, entry);
+    void (async () => {
+      try {
+        if (entry?.id) await scheduleApi.update(entry.id, base);
+        else await scheduleApi.create(base);
+        queryClient.invalidateQueries({ queryKey: ['schedule'] });
+        queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      } catch {
+        // Roll back to the pre-tap snapshot so the cell reverts to its old
+        // state — no half-applied, no blocking dialog.
+        queryClient.setQueryData(scheduleQueryKey, previous);
+        haptic('error');
+        showQuickError('Не удалось сохранить. Попробуйте ещё раз.');
+      } finally {
+        cellInFlight.current.delete(cellKey);
       }
-      setPendingChanges({});
-      queryClient.invalidateQueries({ queryKey: ['schedule'] });
-      queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
-      if (failed > 0) Alert.alert('Ошибка', `Не применено: ${failed}`);
-    } finally {
-      applyingRef.current = false;
-      setApplying(false);
-    }
+    })();
   };
-
-  const discardPending = () => setPendingChanges({});
 
   const CELL_W = 44;
   const NAME_W = 140;
@@ -1172,58 +1171,21 @@ function GridTab() {
         </TouchableOpacity>
       )}
 
-      {/* Pending changes Apply bar */}
-      {Object.keys(pendingChanges).length > 0 && (
-        <View
-          style={{
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
-            backgroundColor: '#fef3c7',
-            borderWidth: 1,
-            borderColor: '#fde68a',
-            borderRadius: 12,
-            paddingHorizontal: 12,
-            paddingVertical: 8,
-            marginHorizontal: 16,
-            marginBottom: 8,
-          }}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flex: 1 }}>
-            <Ionicons name="warning-outline" size={14} color="#d97706" />
-            <Text style={{ fontSize: 11, fontWeight: '700', color: '#92400e' }}>
-              Не сохранено: {Object.keys(pendingChanges).length}
-            </Text>
-          </View>
-          <View style={{ flexDirection: 'row', gap: 6 }}>
-            <TouchableOpacity
-              onPress={discardPending}
-              disabled={applying}
-              style={{ paddingHorizontal: 10, paddingVertical: 6, opacity: applying ? 0.4 : 1 }}
-            >
-              <Text style={{ fontSize: 11, fontWeight: '600', color: '#6b7280' }}>Отмена</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={applyPending}
-              disabled={applying}
-              style={{
-                backgroundColor: '#d97706',
-                borderRadius: 8,
-                paddingHorizontal: 12,
-                paddingVertical: 6,
-                opacity: applying ? 0.6 : 1,
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 6,
-              }}
-            >
-              {applying && <ActivityIndicator size="small" color="#fff" />}
-              <Text style={{ fontSize: 11, fontWeight: '700', color: '#fff' }}>
-                {applying ? 'Применяем…' : 'Применить'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
+      {/* Quick-action error notice — a status tap applies instantly and
+          optimistically; if the background save fails we roll the cell back
+          and surface this light, auto-dismissing banner (NOT a blocking
+          Alert per tap). Tap to dismiss early. */}
+      {quickError && (
+        <Reanimated.View entering={FadeInDown.duration(180)}>
+          <TouchableOpacity
+            onPress={() => setQuickError(null)}
+            activeOpacity={0.8}
+            style={[styles.errorBanner, { borderColor: colors.red[200] }]}
+          >
+            <Ionicons name="alert-circle-outline" size={16} color={colors.red[600]} />
+            <Text style={styles.errorBannerText}>{quickError}</Text>
+          </TouchableOpacity>
+        </Reanimated.View>
       )}
 
       {/* Legend — icon-based, mirrors the SF-Health-inspired cell

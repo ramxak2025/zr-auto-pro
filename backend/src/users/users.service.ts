@@ -733,6 +733,82 @@ export class UsersService {
     return this.getItemVisibility(userId, tenantID);
   }
 
+  // ─── Action Permissions (server-enforced) ──────────────────────────
+  // The owner sets another user's action-permission map (users.permissions).
+  // This is the SAME column the legacy PATCH /users/:id already writes via
+  // UpdateUserDto.permissions; this dedicated endpoint exists so the
+  // permissions editor has a focused, self-lockout-protected path. Reads/writes
+  // are tenant-scoped (a foreign id 404s) and the controller restricts the
+  // caller to owner-class roles.
+
+  /** Return the user's stored permission map (tenant-scoped). */
+  async getPermissions(userId: string, tenantID: string): Promise<Record<string, boolean>> {
+    const { rows } = await this.pool.query(
+      `SELECT COALESCE(permissions, '{}') as permissions FROM users WHERE id=$1 AND tenant_id=$2`,
+      [userId, tenantID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+    const raw = rows[0].permissions;
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, boolean>;
+  }
+
+  /**
+   * Replace a user's action-permission map.
+   *
+   * Self-lockout protection: a user editing THEIR OWN account cannot drop
+   * `user_management` — that's the key that gates the very screen they're using
+   * to manage permissions, so removing it from yourself would brick your access
+   * to user management (mirrors the section/item visibility «work» floor).
+   * Editing someone ELSE's `user_management` is allowed (an owner can demote a
+   * sub-admin). Owner-class role gating is enforced by the controller.
+   *
+   * Every value is coerced to a strict boolean so a forged `"true"`/1/null in
+   * the JSON body can't store a non-boolean that the guard would mis-read.
+   */
+  async updatePermissions(
+    userId: string,
+    tenantID: string,
+    actorUserId: string,
+    permissions: Record<string, boolean>,
+  ): Promise<Record<string, boolean>> {
+    // Tenant-scoped existence check — a forged id from another tenant 404s.
+    const { rows: existsRows } = await this.pool.query(`SELECT 1 FROM users WHERE id=$1 AND tenant_id=$2`, [
+      userId,
+      tenantID,
+    ]);
+    if (existsRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+
+    // Coerce to a clean boolean map.
+    const clean: Record<string, boolean> = {};
+    for (const [key, value] of Object.entries(permissions || {})) {
+      clean[key] = value === true;
+    }
+
+    // Self-lockout guard: you can't strip your own user_management.
+    if (userId === actorUserId && clean.user_management !== true) {
+      throw new BadRequestException({
+        message: 'Нельзя снять у себя право «Управление пользователями»',
+      });
+    }
+
+    const { rows } = await this.pool.query(
+      `UPDATE users SET permissions=$1, updated_at=now() WHERE id=$2 AND tenant_id=$3
+       RETURNING COALESCE(permissions, '{}') as permissions`,
+      [JSON.stringify(clean), userId, tenantID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+
+    // Permission change must take effect on the user's NEXT request, not after
+    // the auth-cache TTL — drop their cached JWT validations (same trigger the
+    // legacy PATCH /users/:id path already fires when it touches permissions).
+    invalidateAuthUser(userId);
+
+    const raw = rows[0].permissions;
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    return (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, boolean>;
+  }
+
   // ─── Product Commissions ────────────────────────────────────────────
 
   async getProductCommissions(userId: string, tenantID: string) {

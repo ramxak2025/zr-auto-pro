@@ -63,7 +63,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     const { rows } = await this.pool.query(
-      `SELECT is_active, COALESCE(tenant_id::text, '') as tenant_id, role, dismissed_at, purged_at FROM users WHERE id=$1`,
+      `SELECT is_active, COALESCE(tenant_id::text, '') as tenant_id, role, dismissed_at, purged_at,
+              COALESCE(permissions, '{}') as permissions
+       FROM users WHERE id=$1`,
       [userID],
     );
 
@@ -82,10 +84,26 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException({ message: 'Аккаунт деактивирован' });
     }
 
+    // `permissions` is jsonb — node-pg returns it already parsed as an object,
+    // but a legacy text column would come back as a string. Normalize both,
+    // and never let a malformed value reject an otherwise-valid token.
+    let permissions: Record<string, boolean> = {};
+    const rawPerms = rows[0].permissions;
+    if (rawPerms && typeof rawPerms === 'object') {
+      permissions = rawPerms as Record<string, boolean>;
+    } else if (typeof rawPerms === 'string') {
+      try {
+        permissions = JSON.parse(rawPerms) as Record<string, boolean>;
+      } catch {
+        permissions = {};
+      }
+    }
+
     return {
       userID,
       tenantID: rows[0].tenant_id,
       role: rows[0].role,
+      permissions,
       jti,
     };
   }

@@ -1,6 +1,19 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Users, Loader2, Package, X, Search, Gift, Archive, RotateCcw, UserX } from 'lucide-react';
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Users,
+  Loader2,
+  Package,
+  X,
+  Search,
+  Gift,
+  Archive,
+  RotateCcw,
+  UserX,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { usersApi, productsApi } from '../api/services';
@@ -55,7 +68,12 @@ const roleBadgeMap: Record<string, string> = {
   master: 'badge-yellow',
 };
 
-const permissionLabels: Record<keyof UserPermissions, string> = {
+// Partial: the new server-enforced permission keys (checks_view_all,
+// payment_edit, bookings_access, …) are optional in UserPermissions and don't
+// yet have a row in this web editor — Partial keeps this map valid without
+// forcing a label for every key. The rendered set (Object.keys below) is
+// unchanged, so behaviour is identical.
+const permissionLabels: Partial<Record<keyof UserPermissions, string>> = {
   checks_view: 'Просмотр заказ-нарядов',
   checks_create: 'Создание заказ-нарядов',
   checks_edit: 'Редактирование заказ-нарядов',
@@ -172,13 +190,7 @@ export default function UsersPage() {
   });
 
   if (!hasPermission('user_management')) {
-    return (
-      <EmptyState
-        icon={Users}
-        title="Нет доступа"
-        description="У вас нет прав для управления сотрудниками"
-      />
-    );
+    return <EmptyState icon={Users} title="Нет доступа" description="У вас нет прав для управления сотрудниками" />;
   }
 
   const openCreate = () => {
@@ -510,9 +522,7 @@ export default function UsersPage() {
               />
               <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
             </label>
-            <span className="text-sm font-medium text-gray-700">
-              {form.isActive ? 'Активен' : 'Неактивен'}
-            </span>
+            <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активен' : 'Неактивен'}</span>
           </div>
 
           {/* Permissions */}
@@ -572,9 +582,12 @@ export default function UsersPage() {
       {commissionUserId && (
         <ProductCommissionModal
           isOpen={commissionModalOpen}
-          onClose={() => { setCommissionModalOpen(false); setCommissionUserId(null); }}
+          onClose={() => {
+            setCommissionModalOpen(false);
+            setCommissionUserId(null);
+          }}
           userId={commissionUserId}
-          userName={users.find(u => u.id === commissionUserId)?.fullName || ''}
+          userName={users.find((u) => u.id === commissionUserId)?.fullName || ''}
         />
       )}
 
@@ -642,7 +655,9 @@ function DismissedModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
           <div className="text-center py-10 text-gray-400">
             <UserX className="w-10 h-10 mx-auto mb-3 opacity-40" />
             <p className="text-sm font-medium text-gray-500">Нет уволенных сотрудников</p>
-            <p className="text-xs mt-1">Уволенные сотрудники появятся здесь и могут быть восстановлены в течение года</p>
+            <p className="text-xs mt-1">
+              Уволенные сотрудники появятся здесь и могут быть восстановлены в течение года
+            </p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -748,9 +763,15 @@ function DismissedModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => v
 // ─── Product Commission Configuration Modal ─────────────────────────
 
 function ProductCommissionModal({
-  isOpen, onClose, userId, userName,
+  isOpen,
+  onClose,
+  userId,
+  userName,
 }: {
-  isOpen: boolean; onClose: () => void; userId: string; userName: string;
+  isOpen: boolean;
+  onClose: () => void;
+  userId: string;
+  userName: string;
 }) {
   const queryClient = useQueryClient();
   const [globalPct, setGlobalPct] = useState(0);
@@ -775,7 +796,7 @@ function ProductCommissionModal({
   const allProducts: Product[] = (() => {
     const d = productsData?.data;
     if (!d) return [];
-    return Array.isArray(d) ? d : ((d as PaginatedResponse<Product>).data || []);
+    return Array.isArray(d) ? d : (d as PaginatedResponse<Product>).data || [];
   })();
 
   useEffect(() => {
@@ -792,19 +813,19 @@ function ProductCommissionModal({
   }, [commissionData]);
 
   const addProduct = useCallback((product: Product) => {
-    setItems(prev => {
-      if (prev.some(i => i.productId === product.id)) return prev;
+    setItems((prev) => {
+      if (prev.some((i) => i.productId === product.id)) return prev;
       return [...prev, { productId: product.id, percent: 10, productName: product.name }];
     });
     setSearch('');
   }, []);
 
   const removeProduct = useCallback((productId: string) => {
-    setItems(prev => prev.filter(i => i.productId !== productId));
+    setItems((prev) => prev.filter((i) => i.productId !== productId));
   }, []);
 
   const updatePercent = useCallback((productId: string, pct: number) => {
-    setItems(prev => prev.map(i => i.productId === productId ? { ...i, percent: pct } : i));
+    setItems((prev) => prev.map((i) => (i.productId === productId ? { ...i, percent: pct } : i)));
   }, []);
 
   const handleSave = async () => {
@@ -812,7 +833,7 @@ function ProductCommissionModal({
     try {
       await usersApi.setProductCommissions(userId, {
         productSalaryPercent: globalPct,
-        items: items.map(i => ({ productId: i.productId, percent: i.percent })),
+        items: items.map((i) => ({ productId: i.productId, percent: i.percent })),
       });
       queryClient.invalidateQueries({ queryKey: ['product-commissions', userId] });
       queryClient.invalidateQueries({ queryKey: ['users'] });
@@ -825,15 +846,21 @@ function ProductCommissionModal({
     }
   };
 
-  const searchResults = search.trim().length >= 2
-    ? allProducts
-        .filter(p => p.name.toLowerCase().includes(search.toLowerCase()))
-        .filter(p => !items.some(i => i.productId === p.id))
-        .slice(0, 10)
-    : [];
+  const searchResults =
+    search.trim().length >= 2
+      ? allProducts
+          .filter((p) => p.name.toLowerCase().includes(search.toLowerCase()))
+          .filter((p) => !items.some((i) => i.productId === p.id))
+          .slice(0, 10)
+      : [];
 
   const formatCurrency = (v: number) =>
-    new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(v);
+    new Intl.NumberFormat('ru-RU', {
+      style: 'currency',
+      currency: 'RUB',
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 0,
+    }).format(v);
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`Комиссия с товаров — ${userName}`} size="lg">
@@ -857,7 +884,7 @@ function ProductCommissionModal({
                   max={100}
                   step={1}
                   value={globalPct}
-                  onChange={e => setGlobalPct(Math.max(0, Math.min(100, Number(e.target.value))))}
+                  onChange={(e) => setGlobalPct(Math.max(0, Math.min(100, Number(e.target.value))))}
                   className="w-20 text-right text-sm font-semibold border border-gray-200 rounded-lg px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500/20 focus:border-primary-500"
                 />
                 <span className="text-sm font-medium text-gray-500">%</span>
@@ -880,18 +907,21 @@ function ProductCommissionModal({
               <input
                 type="text"
                 value={search}
-                onChange={e => setSearch(e.target.value)}
+                onChange={(e) => setSearch(e.target.value)}
                 placeholder="Найти и добавить товар..."
                 className="input pl-10 w-full"
               />
               {search && (
-                <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400">
+                <button
+                  onClick={() => setSearch('')}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                >
                   <X className="w-4 h-4" />
                 </button>
               )}
               {searchResults.length > 0 && (
                 <div className="absolute left-0 right-0 top-full mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-10 max-h-48 overflow-y-auto">
-                  {searchResults.map(p => (
+                  {searchResults.map((p) => (
                     <button
                       key={p.id}
                       type="button"
@@ -901,9 +931,7 @@ function ProductCommissionModal({
                       <Package className="w-4 h-4 text-gray-300 flex-shrink-0" />
                       <div className="flex-1 min-w-0">
                         <p className="text-sm text-gray-900 truncate">{p.name}</p>
-                        <p className="text-xs text-gray-400">
-                          Прибыль: {formatCurrency(p.sellPrice - p.costPrice)}
-                        </p>
+                        <p className="text-xs text-gray-400">Прибыль: {formatCurrency(p.sellPrice - p.costPrice)}</p>
                       </div>
                       <Plus className="w-4 h-4 text-primary-500 flex-shrink-0" />
                     </button>
@@ -921,16 +949,17 @@ function ProductCommissionModal({
               </div>
             ) : (
               <div className="space-y-2 max-h-60 overflow-y-auto">
-                {items.map(item => {
-                  const product = allProducts.find(p => p.id === item.productId);
+                {items.map((item) => {
+                  const product = allProducts.find((p) => p.id === item.productId);
                   const profit = product ? product.sellPrice - product.costPrice : 0;
-                  const bonus = Math.round(profit * item.percent / 100);
+                  const bonus = Math.round((profit * item.percent) / 100);
                   return (
                     <div key={item.productId} className="flex items-center gap-3 bg-gray-50 rounded-xl px-3 py-2.5">
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">{item.productName}</p>
                         <p className="text-xs text-gray-400">
-                          Прибыль: {formatCurrency(profit)} → Бонус: <span className="text-green-600 font-medium">{formatCurrency(bonus)}</span>
+                          Прибыль: {formatCurrency(profit)} → Бонус:{' '}
+                          <span className="text-green-600 font-medium">{formatCurrency(bonus)}</span>
                         </p>
                       </div>
                       <input
@@ -939,11 +968,16 @@ function ProductCommissionModal({
                         max={100}
                         step={1}
                         value={item.percent}
-                        onChange={e => updatePercent(item.productId, Math.max(0, Math.min(100, Number(e.target.value))))}
+                        onChange={(e) =>
+                          updatePercent(item.productId, Math.max(0, Math.min(100, Number(e.target.value))))
+                        }
                         className="w-16 text-right text-sm font-medium border border-gray-200 rounded-lg px-2 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
                       />
                       <span className="text-xs text-gray-400">%</span>
-                      <button onClick={() => removeProduct(item.productId)} className="p-1 text-red-400 hover:text-red-600">
+                      <button
+                        onClick={() => removeProduct(item.productId)}
+                        className="p-1 text-red-400 hover:text-red-600"
+                      >
                         <X className="w-4 h-4" />
                       </button>
                     </div>
@@ -955,9 +989,17 @@ function ProductCommissionModal({
 
           {/* Actions */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={onClose} className="btn-secondary">Отмена</button>
+            <button type="button" onClick={onClose} className="btn-secondary">
+              Отмена
+            </button>
             <button onClick={handleSave} disabled={saving} className="btn-primary">
-              {saving ? <><Loader2 className="w-4 h-4 animate-spin" /> Сохранение...</> : 'Сохранить'}
+              {saving ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" /> Сохранение...
+                </>
+              ) : (
+                'Сохранить'
+              )}
             </button>
           </div>
         </div>

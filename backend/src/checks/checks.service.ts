@@ -15,6 +15,14 @@ import { PushService } from '../push/push.service';
 import { parseFields, filterShape } from '../common/field-filter';
 import { ttlCache } from '../common/ttl-cache';
 import { invalidateReportsForTenant } from '../common/reports-cache';
+import { userHasPermission } from '../common/guards/permissions.guard';
+
+/** Actor context for visibility decisions (checks_view_all). */
+interface ChecksActor {
+  userID: string;
+  role: string;
+  permissions?: Record<string, boolean>;
+}
 
 // Only tables we explicitly want to allow as targets of cross-tenant
 // assertions. Keeping this as an allow-list (not a string the caller
@@ -247,7 +255,7 @@ export class ChecksService {
     };
   }
 
-  async getAll(tenantID: string, query: any) {
+  async getAll(tenantID: string, query: any, actor?: ChecksActor) {
     const page = parseInt(query.page) || 1;
     const limit = parseInt(query.limit) || 50;
     const offset = (page - 1) * limit;
@@ -267,6 +275,18 @@ export class ChecksService {
     let where = 'ch.tenant_id = $1';
     const params: any[] = [tenantID];
     let idx = 2;
+
+    // ── checks_view_all ──────────────────────────────────────────────────
+    // A master who does NOT hold `checks_view_all` may only see their own
+    // checks. Owner-class roles (and a master who DOES hold the permission)
+    // see every check in the tenant. This is layered ON TOP of the tenant
+    // scope above — it never widens visibility, only narrows it, and it
+    // doesn't touch tenant_id. Applied to `where` so it flows into both the
+    // COUNT and the page query (offset and keyset alike).
+    if (actor && actor.role === 'master' && !userHasPermission(actor, 'checks_view_all')) {
+      where += ` AND ch.master_id = $${idx++}`;
+      params.push(actor.userID);
+    }
 
     if (query.masterId) {
       where += ` AND ch.master_id = $${idx++}`;

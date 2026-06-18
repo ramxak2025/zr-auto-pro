@@ -18,6 +18,7 @@ interface HttpClient {
 }
 import type {
   User,
+  UserPermissions,
   SectionVisibility,
   ItemVisibility,
   Tenant,
@@ -188,6 +189,14 @@ export function createUsersApi(api: HttpClient) {
     getItemVisibility: (userId: string) => api.get<ItemVisibility[]>(`/users/${userId}/item-visibility`),
     updateItemVisibility: (userId: string, items: ItemVisibility[]) =>
       api.patch<ItemVisibility[]>(`/users/${userId}/item-visibility`, { items }),
+    // Server-enforced action permissions. getPermissions returns the stored map
+    // (may be partial / empty for an existing master); updatePermissions replaces
+    // it. The server applies self-lockout protection (you can't strip your own
+    // user_management) and tenant-scopes the target. Additive to update() above,
+    // which also accepts a `permissions` field.
+    getPermissions: (userId: string) => api.get<UserPermissions>(`/users/${userId}/permissions`),
+    updatePermissions: (userId: string, permissions: UserPermissions) =>
+      api.patch<UserPermissions>(`/users/${userId}/permissions`, { permissions }),
     getProductCommissions: (id: string) => api.get(`/users/${id}/product-commissions`),
     setProductCommissions: (
       id: string,

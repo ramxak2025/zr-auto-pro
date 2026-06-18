@@ -11,7 +11,10 @@ export class ChecksController {
 
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.checksService.getAll(user.tenantID, query);
+    // Pass the actor so the service can apply the checks_view_all rule: a master
+    // without that permission sees only their own checks (master_id = self).
+    // Owner-class roles see every check in the tenant. Response shape unchanged.
+    return this.checksService.getAll(user.tenantID, query, user);
   }
 
   @Get('dashboard')
