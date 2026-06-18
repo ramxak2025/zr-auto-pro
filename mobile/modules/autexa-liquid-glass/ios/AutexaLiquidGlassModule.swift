@@ -105,6 +105,39 @@ public class AutexaLiquidGlassTabBarModule: Module {
 }
 
 /**
+ * Native Liquid-Glass HEADER material — used as the background of a
+ * top-of-screen header / filter-chip strip (the Journal screen's
+ * warehouse-docs kind-chip row). See AutexaGlassHeaderView.swift.
+ *
+ * Registered as its own Module so `requireNativeViewManager('AutexaGlassHeader')`
+ * resolves to exactly this view (same one-Module-per-view pattern as the
+ * tab bar and Касса button — avoids the multi-view ambiguity we hit when
+ * two views shared a single Module definition).
+ *
+ * The view renders ONLY the glass material; the RN chips are appended as
+ * children and keep driving the filter state in JS. This keeps the data
+ * flow unforked and the Android / no-module fallback byte-for-byte
+ * identical (the JS wrapper renders the SAME chips over a transparent View).
+ */
+public class AutexaGlassHeaderModule: Module {
+  public func definition() -> ModuleDefinition {
+    Name("AutexaGlassHeader")
+
+    View(AutexaGlassHeaderView.self) {
+      Prop("variant") { (view: AutexaGlassHeaderView, value: String) in
+        view.applyVariant(value)
+      }
+      // 1pt hairline at the BOTTOM edge — the separator between the glass
+      // header and the list scrolling underneath. Defaults to false on the
+      // JS side so the header stays clean unless explicitly requested.
+      Prop("bottomRim") { (view: AutexaGlassHeaderView, value: Bool) in
+        view.setBottomRim(visible: value)
+      }
+    }
+  }
+}
+
+/**
  * Premium native Касса button — see AutexaKassaButtonView.swift for the
  * full architecture (UIVisualEffectView + UIVibrancyEffect + SF Symbol +
  * UIImpactFeedbackGenerator + UISpringTimingParameters spring).

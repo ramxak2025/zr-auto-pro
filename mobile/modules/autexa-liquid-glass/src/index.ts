@@ -4,6 +4,9 @@ export type { AutexaLiquidGlassViewProps, GlassVariant } from './AutexaLiquidGla
 export { AutexaLiquidGlassTabBar } from './AutexaLiquidGlassTabBar';
 export type { AutexaLiquidGlassTabBarProps } from './AutexaLiquidGlassTabBar';
 
+export { AutexaGlassHeader } from './AutexaGlassHeader';
+export type { AutexaGlassHeaderProps } from './AutexaGlassHeader';
+
 export { AutexaKassaButton } from './AutexaKassaButton';
 
 /**

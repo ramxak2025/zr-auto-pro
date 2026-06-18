@@ -21,6 +21,7 @@ import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
+import { AutexaGlassHeader } from 'autexa-liquid-glass';
 import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
 
 const paymentLabels: Record<string, string> = {
@@ -1158,44 +1159,55 @@ export default function ChecksScreen() {
       ) : (
         <>
           {/* Kind filter chips — drive `journalApi.warehouseDocs({type})`.
-              Horizontal scroll so all 7 chips fit on small screens. */}
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            style={styles.kindChipsScroll}
-            contentContainerStyle={styles.kindChipsRow}
-          >
-            <View style={styles.kindChipsRowInner}>
-              {KIND_CHIPS.map((chip) => {
-                const active = warehouseKind === chip.key;
-                const visual = chip.key ? journalKindVisual[chip.key] : null;
-                return (
-                  <TouchableOpacity
-                    key={chip.key ?? 'all'}
-                    onPress={() => setWarehouseKind(chip.key)}
-                    activeOpacity={0.7}
-                    style={[
-                      styles.kindChip,
-                      {
-                        backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.muted,
-                        borderColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.border.subtle,
-                      },
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: active }}
-                    accessibilityLabel={chip.label}
-                  >
-                    {visual && (
-                      <Ionicons name={visual.icon} size={12} color={active ? colors.white : palette.text.secondary} />
-                    )}
-                    <Text style={[styles.kindChipText, { color: active ? colors.white : palette.text.secondary }]}>
-                      {chip.label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </ScrollView>
+              Horizontal scroll so all 7 chips fit on small screens.
+
+              The chip strip sits on a NATIVE Liquid-Glass material
+              (AutexaGlassHeader → UIVisualEffectView, auto-upgraded to iOS 26
+              UIGlassEffect). The glass is a pure visual background: the chips
+              below are unchanged RN TouchableOpacity, still drive the same
+              `warehouseKind` state + query, and render BYTE-FOR-BYTE the same
+              on Android / iOS where the native module is unavailable (then
+              AutexaGlassHeader is a transparent passthrough View). See
+              modules/autexa-liquid-glass/src/AutexaGlassHeader.tsx. */}
+          <AutexaGlassHeader variant="thinMaterial" style={styles.kindChipsGlass}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.kindChipsScroll}
+              contentContainerStyle={styles.kindChipsRow}
+            >
+              <View style={styles.kindChipsRowInner}>
+                {KIND_CHIPS.map((chip) => {
+                  const active = warehouseKind === chip.key;
+                  const visual = chip.key ? journalKindVisual[chip.key] : null;
+                  return (
+                    <TouchableOpacity
+                      key={chip.key ?? 'all'}
+                      onPress={() => setWarehouseKind(chip.key)}
+                      activeOpacity={0.7}
+                      style={[
+                        styles.kindChip,
+                        {
+                          backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.muted,
+                          borderColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.border.subtle,
+                        },
+                      ]}
+                      accessibilityRole="button"
+                      accessibilityState={{ selected: active }}
+                      accessibilityLabel={chip.label}
+                    >
+                      {visual && (
+                        <Ionicons name={visual.icon} size={12} color={active ? colors.white : palette.text.secondary} />
+                      )}
+                      <Text style={[styles.kindChipText, { color: active ? colors.white : palette.text.secondary }]}>
+                        {chip.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </ScrollView>
+          </AutexaGlassHeader>
 
           {/* Cold-start path: skeleton only on the very first fetch.
              After we have any data (even from a different kind filter),
@@ -1461,6 +1473,21 @@ const styles = StyleSheet.create({
   // обнимать высоту контента (chip 32 + paddingBottom) — компактная
   // полоса, под которой список идёт сразу. alignSelf:'flex-start'
   // защищает от cross-axis stretch на узких/широких iPhone.
+  // Native Liquid-Glass material strip behind the kind chips. Must hug the
+  // chip-row height (flexGrow/flexShrink: 0), same lesson as kindChipsScroll
+  // below — the parent is a flex column (styles.safe, flex:1) and without
+  // this the glass band would stretch to fill the column and the chips would
+  // float in the middle of a tall empty strip. Full-width so the material
+  // reads edge-to-edge; the chips keep their own paddingHorizontal. A little
+  // top padding gives the chips breathing room inside the glass. On Android /
+  // no-module this style applies to a plain transparent View (no visual
+  // change vs. before).
+  kindChipsGlass: {
+    flexGrow: 0,
+    flexShrink: 0,
+    alignSelf: 'stretch',
+    paddingTop: spacing[1.5],
+  },
   kindChipsScroll: {
     flexGrow: 0,
     flexShrink: 0,
