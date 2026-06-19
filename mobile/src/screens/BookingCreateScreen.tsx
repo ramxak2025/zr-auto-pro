@@ -328,7 +328,7 @@ export default function BookingCreateScreen() {
           ) : (
             <View style={[styles.searchCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
               <View style={styles.plateLabelRow}>
-                <Text style={[styles.subLabel, { color: palette.text.secondary }]}>ПОИСК ПО ГОСНОМЕРУ / ТЕЛЕФОНУ</Text>
+                <Text style={[styles.subLabel, { color: palette.text.secondary }]}>ПОИСК ПО ГОСНОМЕРУ</Text>
                 <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
               </View>
               <RussianPlateInput value={plateSearch} onChangeText={setPlateSearch} autoFocus={false} mode={plateMode} />
@@ -730,9 +730,12 @@ const styles = StyleSheet.create({
     padding: spacing[3.5],
   },
   plateLabelRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    // Лейбл сверху, переключатель RU/INT под ним и прижат влево (alignSelf:
+    // 'flex-start' у самого свитчера) — раньше был space-between, и свитчер
+    // уезжал к правому краю и смотрелся криво.
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: spacing[2],
     marginBottom: spacing[2.5],
   },
   subLabel: { fontSize: 11, fontWeight: '600', letterSpacing: 0.3 },

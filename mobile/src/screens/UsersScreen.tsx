@@ -489,7 +489,7 @@ export default function UsersScreen() {
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [productSearchText, setProductSearchText] = useState('');
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['users'],
     queryFn: () => usersApi.getAll(),
     select: (res) => res.data as User[],
@@ -1074,11 +1074,22 @@ export default function UsersScreen() {
         }
       >
         {users.length === 0 ? (
-          <EmptyState
-            title="Нет сотрудников"
-            description="Добавьте первого сотрудника"
-            action={{ label: 'Добавить', onPress: openCreate }}
-          />
+          isError ? (
+            // Ошибка загрузки без кэша (например, окно деплоя) — НЕ показываем
+            // «Нет сотрудников» (это вводит в заблуждение), а даём явную ошибку
+            // с «Повторить». Так список не выглядит пустым из-за сбоя сети.
+            <EmptyState
+              title="Не удалось загрузить"
+              description="Проверьте соединение и потяните вниз или нажмите «Повторить»"
+              action={{ label: 'Повторить', onPress: () => refetch() }}
+            />
+          ) : (
+            <EmptyState
+              title="Нет сотрудников"
+              description="Добавьте первого сотрудника"
+              action={{ label: 'Добавить', onPress: openCreate }}
+            />
+          )
         ) : (
           users.map((user, idx) => {
             const badge = getRoleBadge(user.role);
