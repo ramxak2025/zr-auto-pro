@@ -44,6 +44,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     restart: unless-stopped
+    # Дать NestJS время слить запросы «в полёте» при деплое (graceful shutdown
+    # через app.enableShutdownHooks) до того как Docker пришлёт SIGKILL —
+    # это убирает 504 на запросе «в полёте» во время --force-recreate.
+    stop_grace_period: 30s
     depends_on:
       postgres:
         condition: service_healthy

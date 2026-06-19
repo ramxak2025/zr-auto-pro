@@ -148,8 +148,12 @@ export class ChecksService {
   ): Promise<void> {
     // ── 1) Decrement stock from the persisted product lines ───────────────
     // Aggregate per product so a product appearing on several lines is
-    // decremented once by the summed quantity. GREATEST(...,0) clamps to 0,
-    // matching create()'s stock write exactly. Tenant-scoped on both ends.
+    // decremented once by the summed quantity. Stock is allowed to go NEGATIVE
+    // («продажа в минус» — по требованию владельца): продать больше, чем есть на
+    // складе, никогда не блокируется и не ошибается — записывается дефицит,
+    // чтобы владелец видел, сколько «должны». Симметрично пути возврата/удаления
+    // (stock + qty), поэтому отменённый оверселл восстанавливает сток ровно.
+    // Tenant-scoped on both ends.
     const { rows: prodRows } = await client.query(
       `SELECT product_id, COALESCE(SUM(quantity), 0) AS qty
          FROM check_product_lines
@@ -160,7 +164,7 @@ export class ChecksService {
     for (const r of prodRows) {
       const qty = parseFloat(r.qty) || 0;
       if (qty <= 0) continue;
-      await client.query(`UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2 AND tenant_id = $3`, [
+      await client.query(`UPDATE products SET stock = stock - $1 WHERE id = $2 AND tenant_id = $3`, [
         qty,
         r.product_id,
         tenantID,
@@ -713,9 +717,11 @@ export class ChecksService {
           ],
         );
 
-        // Decrease product stock
+        // Decrease product stock — сток уходит в МИНУС («продажа в минус», по
+        // требованию владельца): оверселл записывает дефицит, а не блокирует
+        // продажу. Симметрично восстановлению стока при возврате/удалении чека.
         if (prod.productId && !dto.isDeferred) {
-          await client.query(`UPDATE products SET stock = GREATEST(stock - $1, 0) WHERE id = $2 AND tenant_id = $3`, [
+          await client.query(`UPDATE products SET stock = stock - $1 WHERE id = $2 AND tenant_id = $3`, [
             prod.quantity || 1,
             prod.productId,
             tenantID,

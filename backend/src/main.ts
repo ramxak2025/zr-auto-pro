@@ -72,6 +72,16 @@ async function bootstrap() {
     credentials: true,
   });
 
+  // ── Graceful shutdown (убирает 504 в окне деплоя) ───────────────────────
+  // На SIGTERM/SIGINT (Docker `stop` / --force-recreate при деплое) Nest теперь
+  // корректно закрывает HTTP-сервер: перестаёт принимать новые соединения и
+  // даёт запросам «в полёте» завершиться до выхода процесса. Без этого процесс
+  // убивался прямо посреди запроса, и запрос «в полёте» (например, создание
+  // чека) терялся, а nginx — всё ещё держа keepalive-соединение к умирающему
+  // бэкенду — ждал весь proxy_read_timeout и возвращал пользователю 504.
+  // В паре с `stop_grace_period` в docker-compose, чтобы Docker дождался слива.
+  app.enableShutdownHooks();
+
   const port = parseInt(process.env.PORT || '3000', 10);
   await app.listen(port);
   logger.log(`Server running on port ${port}`);
