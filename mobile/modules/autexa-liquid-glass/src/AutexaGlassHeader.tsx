@@ -57,10 +57,19 @@ try {
   NativeHeader = null;
 }
 
+// NATIVE GLASS TEMPORARILY DISABLED (2026-06-19). The first implementation
+// hosted the RN children (the filter chips) as DIRECT subviews of the native
+// UIVisualEffectView, so they rendered BEHIND the blur material → the strip
+// looked fully frosted/opaque and hid the chips ("ничего не видно"). The fix is
+// to host children in the effect view's `contentView` (a Swift change + native
+// rebuild). Until that lands, force the transparent passthrough so the chips
+// render exactly as before build 21 — the journal filters are unaffected.
+const NATIVE_GLASS_ENABLED = false;
+
 export function AutexaGlassHeader(props: AutexaGlassHeaderProps) {
   const { variant = 'thinMaterial', bottomRim = false, style, children } = props;
 
-  if (Platform.OS === 'ios' && NativeHeader) {
+  if (NATIVE_GLASS_ENABLED && Platform.OS === 'ios' && NativeHeader) {
     return (
       <NativeHeader variant={variant} bottomRim={bottomRim} style={style}>
         {children}
