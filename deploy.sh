@@ -23,6 +23,42 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# ── recreate_and_wait <service> [timeout_s] ──────────────────────────────────
+# Force-recreate ONE service and block until its container is healthy (or
+# timeout). Used for the rolling, one-replica-at-a-time backend recreate so the
+# OTHER replica keeps serving /api the whole time. Returns non-zero on timeout
+# (caller aborts the deploy).
+recreate_and_wait() {
+    local svc="$1"
+    local timeout="${2:-90}"
+    log "Rolling recreate: $svc ..."
+    docker compose up -d --no-deps --force-recreate "$svc" 2>&1
+    local deadline=$(( $(date +%s) + timeout ))
+    local attempt=0
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        attempt=$((attempt + 1))
+        local cid
+        cid=$(docker compose ps -q "$svc" 2>/dev/null | head -1)
+        local inside=0
+        local dhealth="unknown"
+        if [ -n "$cid" ]; then
+            if docker exec "$cid" node -e "require('http').get('http://localhost:3000/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" 2>/dev/null; then
+                inside=1
+            fi
+            dhealth=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealth{{end}}' "$cid" 2>/dev/null || echo "unknown")
+        fi
+        if [ "$dhealth" = "healthy" ] || [ "$inside" = "1" ]; then
+            log "$svc healthy (attempt $attempt): docker=$dhealth inside=$inside"
+            return 0
+        fi
+        log "$svc not ready yet (attempt $attempt): docker=$dhealth inside=$inside — retrying..."
+        sleep 3
+    done
+    log "ERROR: $svc did NOT become healthy within ${timeout}s."
+    docker compose logs --tail=50 "$svc" 2>&1 || true
+    return 1
+}
+
 log "=== Starting deploy ==="
 log "Repo: $REPO_DIR"
 log "Branch: $BRANCH"
@@ -95,67 +131,76 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 2: Rebuild ONLY backend + frontend (NOT postgres!)
+# STEP 2: ROLLING zero-downtime rebuild + recreate.
 # Volume pgdata is NEVER touched — data is safe.
+#
+# Два backend-реплики (backend + backend2) за nginx-апстримом + idempotent
+# proxy_next_upstream фейловер. Порядок критичен: сначала поднимаем ВТОРУЮ
+# реплику и проверяем НОВЫЙ nginx-конфиг В СЕТИ, и только потом по очереди
+# пересоздаём реплики — в каждый момент ≥1 живой backend отвечает на /api.
 # ═══════════════════════════════════════════════════════
-log "Rebuilding backend and frontend containers (no cache)..."
+log "Rebuilding backend + frontend images (no cache)..."
 docker compose build --no-cache backend frontend 2>&1
-docker compose up -d --no-deps --force-recreate backend frontend 2>&1
+
+# Поднять вторую реплику (HTTP-only, переиспользует образ backend). Безвредно,
+# если уже запущена. Делает второй статический upstream живым ДО того, как мы
+# тронем основную реплику — чтобы фейловеру было куда уходить.
+log "Ensuring second backend replica (backend2) is up..."
+docker compose up -d --no-deps backend2 2>&1
+
+# ── ГЛАВНЫЙ предохранитель против аварии «битый nginx уронил /api» ──────────
+# Проверяем НОВЫЙ frontend-образ `nginx -t` во ВРЕМЕННОМ контейнере, прицепленном
+# к compose-сети, чтобы `backend`/`backend2` в статическом upstream резолвились.
+# Если конфиг битый — ABORT СЕЙЧАС: старый frontend продолжает отдавать сайт.
+log "Validating new nginx config (nginx -t) in-network..."
+if ! docker compose run --rm --no-deps frontend nginx -t 2>&1; then
+    log "ERROR: new nginx config failed nginx -t — ABORTING deploy. Old frontend still serving."
+    exit 1
+fi
+log "nginx config OK."
+
+# Пересоздать frontend (новый nginx: 2-реплики upstream + фейловер). Короткий
+# blip статики (~1-2с) — как и при обычном веб-деплое; /api переживает за счёт
+# двух живых backend-реплик.
+log "Recreating frontend (new nginx with failover)..."
+docker compose up -d --no-deps --force-recreate frontend 2>&1
+
+# Катящееся пересоздание backend-реплик ПО ОДНОЙ. Пока пересоздаётся одна —
+# nginx фейловерит на другую, пользователь не видит 502/504.
+if ! recreate_and_wait backend; then
+    log "=== Deploy FAILED (backend unhealthy after recreate) ==="
+    docker compose ps 2>&1 || true
+    exit 1
+fi
+if ! recreate_and_wait backend2; then
+    log "=== Deploy FAILED (backend2 unhealthy after recreate) ==="
+    docker compose ps 2>&1 || true
+    exit 1
+fi
 
 # ═══════════════════════════════════════════════════════
-# STEP 2.5: Health-gate — wait until the NEW backend actually answers.
-# Replaces the old blind `sleep 8`, which could declare a deploy "complete"
-# while backend was still booting (migrations, JIT warm-up) → users hit 502.
-# We poll the backend's own /api/health from INSIDE the backend container
-# (no host port exposed for backend), and also confirm the public path through
-# the frontend (localhost:8080/api/health) so we know nginx re-resolved the new
-# container IP. Either signal alone is enough to consider backend "up".
-# Timeout ~90s; on timeout → loud error + non-zero exit (deploy NOT successful).
+# STEP 2.5: Финальный public-path gate — nginx реально маршрутизирует на /api.
+# Подтверждаем 200 через публичный путь (localhost:8080/api/health) — значит
+# nginx переразрешил новые IP реплик и фейловер работает.
 # ═══════════════════════════════════════════════════════
-log "Waiting for backend health (timeout 90s)..."
-HEALTH_TIMEOUT=90
-HEALTH_DEADLINE=$(( $(date +%s) + HEALTH_TIMEOUT ))
-HEALTH_OK=0
-ATTEMPT=0
-
-while [ "$(date +%s)" -lt "$HEALTH_DEADLINE" ]; do
-    ATTEMPT=$((ATTEMPT + 1))
-
-    # 1) Docker-reported health status of the backend container (if defined).
-    BACKEND_CID=$(docker compose ps -q backend 2>/dev/null | head -1)
-    DOCKER_HEALTH="unknown"
-    if [ -n "$BACKEND_CID" ]; then
-        DOCKER_HEALTH=$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}nohealth{{end}}' "$BACKEND_CID" 2>/dev/null || echo "unknown")
-    fi
-
-    # 2) Backend answers its own /api/health from inside its container.
-    INSIDE_OK=0
-    if [ -n "$BACKEND_CID" ]; then
-        if docker exec "$BACKEND_CID" node -e "require('http').get('http://localhost:3000/api/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))" 2>/dev/null; then
-            INSIDE_OK=1
-        fi
-    fi
-
-    # 3) Public path through frontend nginx (confirms nginx re-resolved new IP).
+log "Confirming public /api/health (timeout 30s)..."
+PUBLIC_DEADLINE=$(( $(date +%s) + 30 ))
+PUBLIC_OK=0
+while [ "$(date +%s)" -lt "$PUBLIC_DEADLINE" ]; do
     PUBLIC_CODE=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 http://localhost:8080/api/health 2>/dev/null || echo "000")
-
-    if [ "$DOCKER_HEALTH" = "healthy" ] || [ "$INSIDE_OK" = "1" ] || [ "$PUBLIC_CODE" = "200" ]; then
-        HEALTH_OK=1
-        log "Backend healthy (attempt $ATTEMPT): docker=$DOCKER_HEALTH inside=$INSIDE_OK public=$PUBLIC_CODE"
+    if [ "$PUBLIC_CODE" = "200" ]; then
+        PUBLIC_OK=1
+        log "Public /api/health: 200 OK"
         break
     fi
-
-    log "Backend not ready yet (attempt $ATTEMPT): docker=$DOCKER_HEALTH inside=$INSIDE_OK public=$PUBLIC_CODE — retrying..."
+    log "Public /api/health not 200 yet ($PUBLIC_CODE) — retrying..."
     sleep 3
 done
-
-if [ "$HEALTH_OK" != "1" ]; then
-    log "ERROR: Backend did NOT become healthy within ${HEALTH_TIMEOUT}s."
-    log "Recent backend logs:"
-    docker compose logs --tail=50 backend 2>&1 || true
-    log "Container status:"
+if [ "$PUBLIC_OK" != "1" ]; then
+    log "ERROR: public /api/health never returned 200 after rolling deploy."
+    docker compose logs --tail=50 frontend 2>&1 || true
     docker compose ps 2>&1 || true
-    log "=== Deploy FAILED (backend unhealthy) ==="
+    log "=== Deploy FAILED (public path unhealthy) ==="
     exit 1
 fi
 
@@ -171,4 +216,4 @@ log ""
 log "IMPORTANT: Data is safe. Backups are in: $REPO_DIR/backups/"
 log "To restore: ./restore.sh"
 
-# deploy trigger: 2026-06-13 (self-heal cycle for early-prune deploy.sh)
+# deploy trigger: 2026-06-19 (rolling 2-replica zero-downtime + in-network nginx -t gate)

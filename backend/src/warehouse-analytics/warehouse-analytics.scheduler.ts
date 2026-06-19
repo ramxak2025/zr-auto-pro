@@ -1,6 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { WarehouseAnalyticsService } from './warehouse-analytics.service';
+import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 
 /**
  * Daily stock-value snapshot job.
@@ -22,16 +23,19 @@ export class WarehouseAnalyticsScheduler implements OnModuleInit {
   constructor(private analytics: WarehouseAnalyticsService) {}
 
   onModuleInit() {
+    // Фоновая работа — только на leader-реплике (на backend2 = false). Снапшот
+    // идемпотентен (ON CONFLICT DO UPDATE), но это тяжёлый пересчёт — не гоняем
+    // его повторно на второй реплике при каждом деплое.
+    if (!RUN_BACKGROUND_JOBS) return;
     // Delay startup snapshot so migrations + initial DB warm-up finish first.
     setTimeout(() => {
-      this.snapshot('startup').catch((err) =>
-        this.logger.error(`startup snapshot failed: ${err}`),
-      );
+      this.snapshot('startup').catch((err) => this.logger.error(`startup snapshot failed: ${err}`));
     }, 30_000);
   }
 
   @Cron('30 3 * * *', { timeZone: 'Europe/Moscow' })
   async dailySnapshot() {
+    if (!RUN_BACKGROUND_JOBS) return;
     await this.snapshot('daily');
   }
 

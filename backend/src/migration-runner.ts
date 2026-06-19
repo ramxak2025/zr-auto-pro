@@ -4,6 +4,12 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { getDbConfig } from './common/db-config';
 
+// Postgres advisory-lock key for serialising migration runs across replicas.
+// Two replicas starting at the same time both grab this key on their own
+// migration connection; the second blocks here until the first finishes,
+// then sees every migration already applied and does nothing.
+const MIGRATION_LOCK_KEY = 8274619;
+
 /**
  * MigrationRunner
  * --------------------------------------------------------------------------
@@ -52,6 +58,14 @@ export class MigrationRunner implements OnModuleInit {
   private async runMigrations() {
     const client = await this.pool.connect();
     try {
+      // Serialise migration runs across replicas. A second replica starting at
+      // the same time blocks here until the first finishes, then proceeds and
+      // finds every migration already applied — so it runs none. Session-level
+      // lock; it is released explicitly below and again when the connection
+      // closes. The migration pool runs without statement_timeout
+      // (getDbConfig({ statementTimeout: null })), so the wait is never cut off.
+      await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY]);
+
       await client.query(`
         CREATE TABLE IF NOT EXISTS _migrations (
           id SERIAL PRIMARY KEY,
@@ -89,6 +103,7 @@ export class MigrationRunner implements OnModuleInit {
         }
       }
     } finally {
+      await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]).catch(() => {});
       client.release();
       await this.pool.end();
     }

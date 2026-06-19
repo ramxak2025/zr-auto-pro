@@ -39,10 +39,18 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── backend — primary replica (LEADER for background jobs) ───────────────
+  # Two identical backend replicas (backend + backend2) sit behind the nginx
+  # upstream so a rolling deploy never drops /api (zero-downtime). This one is
+  # the LEADER: RUN_BACKGROUND_JOBS=true → cron/interval jobs (reminders,
+  # analytics, shift auto-close) run ONLY here. backend2 is HTTP-only.
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    # Tag the built image so the second replica (backend2) reuses it
+    # byte-for-byte instead of building the same image twice.
+    image: autexa-backend:latest
     restart: unless-stopped
     # Дать NestJS время слить запросы «в полёте» при деплое (graceful shutdown
     # через app.enableShutdownHooks) до того как Docker пришлёт SIGKILL —
@@ -61,6 +69,46 @@ services:
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
       REDIS_URL: redis://redis:6379
       PORT: 3000
+      # LEADER: фоновые джобы (напоминания, аналитика, авто-закрытие смен)
+      # выполняются ТОЛЬКО на этой реплике. На backend2 — "false".
+      RUN_BACKGROUND_JOBS: "true"
+    expose:
+      - "3000"
+    volumes:
+      - uploads:/app/uploads
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "require('http').get('http://localhost:3000/api/health',(r)=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  # ── backend2 — second replica (HTTP-only, NOT the job leader) ────────────
+  # Reuses the exact image built for `backend` (no second build). Exists purely
+  # so nginx always has ≥1 live upstream during a rolling deploy. Background
+  # jobs are DISABLED here (RUN_BACKGROUND_JOBS=false) so reminders / analytics
+  # / shift auto-close / review-SMS fire exactly once across the two replicas.
+  backend2:
+    image: autexa-backend:latest
+    restart: unless-stopped
+    stop_grace_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgres://postgres:${DB_PASSWORD:?DB_PASSWORD must be set in .env}@postgres:5432/zr_auto_pro?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
+      REDIS_URL: redis://redis:6379
+      PORT: 3000
+      RUN_BACKGROUND_JOBS: "false"
     expose:
       - "3000"
     volumes:
@@ -86,8 +134,12 @@ services:
         VITE_API_URL: ${VITE_API_URL:-/api}
     restart: unless-stopped
     depends_on:
+      # Wait for the LEADER to be truly healthy; backend2 only needs to be
+      # started so nginx can resolve its hostname in the static upstream.
       backend:
         condition: service_healthy
+      backend2:
+        condition: service_started
     ports:
       - "8080:80"
     volumes:

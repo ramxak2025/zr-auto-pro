@@ -2,6 +2,7 @@ import { Injectable, Inject, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 
 /**
  * Automatically closes shifts that were left open past the end of the day.
@@ -19,6 +20,8 @@ export class ShiftAutoCloseService implements OnModuleInit {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
   async onModuleInit() {
+    // Фоновая работа — только на leader-реплике (на backend2 = false).
+    if (!RUN_BACKGROUND_JOBS) return;
     // Safety sweep on startup (in case server was down during cron time).
     // Delayed 10s so the DB is definitely ready.
     setTimeout(() => this.closeStaleShifts('startup'), 10_000);
@@ -26,6 +29,7 @@ export class ShiftAutoCloseService implements OnModuleInit {
 
   @Cron('59 23 * * *', { timeZone: 'Europe/Moscow' })
   async handleDailyClose() {
+    if (!RUN_BACKGROUND_JOBS) return;
     await this.closeStaleShifts('cron');
   }
 

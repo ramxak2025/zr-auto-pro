@@ -14,6 +14,7 @@ import { randomUUID } from 'crypto';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthToken } from '../common/auth-cache';
+import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 
@@ -123,6 +124,7 @@ export class AuthService {
    */
   @Cron('17 3 * * *', { timeZone: 'Europe/Moscow' })
   async cleanExpiredTokens(): Promise<void> {
+    if (!RUN_BACKGROUND_JOBS) return;
     try {
       const { rowCount } = await this.pool.query(`DELETE FROM revoked_tokens WHERE expires_at < now()`);
       if (rowCount && rowCount > 0) {

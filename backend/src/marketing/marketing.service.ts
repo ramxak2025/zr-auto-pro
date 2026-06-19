@@ -10,6 +10,7 @@ import {
 import { Pool } from 'pg';
 import * as crypto from 'crypto';
 import { PG_POOL } from '../database.module';
+import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 
 // ─── Messaging Provider Strategy Pattern ─────────────────────────────
 interface MessagingProviderAdapter {
@@ -163,6 +164,10 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
   onModuleInit() {
+    if (!RUN_BACKGROUND_JOBS) {
+      this.logger.log('Review job processor disabled on this replica (RUN_BACKGROUND_JOBS=false)');
+      return;
+    }
     // Process review jobs every 60 seconds
     this.jobInterval = setInterval(() => this.processReviewJobs(), 60_000);
     // Also scan for new completed checks every 5 minutes

@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { MarketingService } from '../marketing/marketing.service';
+import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 
 /**
  * BookingReminderService
@@ -37,6 +38,10 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   onModuleInit() {
+    if (!RUN_BACKGROUND_JOBS) {
+      this.logger.log('Booking reminder scheduler disabled on this replica (RUN_BACKGROUND_JOBS=false)');
+      return;
+    }
     // Every 15 minutes.
     this.interval = setInterval(() => void this.run(), 15 * 60 * 1000);
     this.logger.log('Booking reminder scheduler started (15m interval)');
