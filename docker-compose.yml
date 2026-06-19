@@ -98,6 +98,12 @@ services:
     image: autexa-backend:latest
     restart: unless-stopped
     stop_grace_period: 30s
+    # Потолок памяти для ОПЦИОНАЛЬНОЙ реплики: если RAM на VDS окажется тесным,
+    # backend2 упрётся в СВОЙ cgroup-лимит и его убьёт первым — kernel НЕ выберет
+    # жертвой postgres. Это ceiling (не reservation): обычный RSS ~250МБ, лимит
+    # лишь ограничивает разгон. Основной `backend` остаётся без лимита (стабилен).
+    # nginx-фейловер означает: даже если backend2 не поднимется — /api жив на backend.
+    mem_limit: 1g
     depends_on:
       postgres:
         condition: service_healthy
