@@ -111,14 +111,14 @@ export default function BookingCreateScreen() {
     placeholderData: (prev) => prev,
   });
 
-  // Selected client detail (для имени/телефона/списка авто).
+  // Selected client detail (для имени/телефона/списка авто). Засевается из
+  // выбранного объекта при тапе (см. ниже), поэтому к моменту enabled здесь
+  // уже лежит готовая карточка — getById только дотягивает свежий список авто.
   const { data: clientData } = useQuery<Client>({
     queryKey: ['client-detail', clientId],
     queryFn: async () => (await clientsApi.getById(clientId)).data,
     enabled: !!clientId,
   });
-  const clientCars = clientData?.cars;
-  const selectedCar = clientCars?.find((c) => c.id === carId);
 
   // Flatten поиск в плоский список «клиент + авто» как в Кассе.
   const plateResults = useMemo(() => {
@@ -130,6 +130,23 @@ export default function BookingCreateScreen() {
     }
     return out;
   }, [searchResults]);
+
+  // Выбранный клиент. Как в Кассе (CheckCreateScreen): пока getById в пути,
+  // берём объект из текущего поиска, чтобы карточка появилась МГНОВЕННО и не
+  // «пропадала» (не откатывалась к полю поиска). После прихода свежих данных
+  // clientData их заменяет.
+  const selectedClient = clientData ?? searchResults?.find((c) => c.id === clientId);
+  const clientCars = selectedClient?.cars;
+  const selectedCar = clientCars?.find((c) => c.id === carId);
+
+  // Засеять кеш ['client-detail', id] выбранным объектом → карточка рисуется
+  // в этом же кадре, без сетевого ожидания и без мигания обратно на поиск.
+  const seedClientDetail = (client: Client, car: Car | null) => {
+    queryClient.setQueryData<Client>(['client-detail', client.id], {
+      ...client,
+      cars: car ? [car, ...(client.cars || []).filter((c) => c.id !== car.id)] : client.cars || [],
+    });
+  };
 
   // ── Masters ────────────────────────────────────────────────────────────
   const { data: allUsers } = useQuery<User[]>({
@@ -211,6 +228,8 @@ export default function BookingCreateScreen() {
   // QuickClientCreate колбэки — подставляем созданного/выбранного клиента.
   const handleClientCreated = (client: Client, car: Car | null) => {
     setShowQuickCreate(false);
+    // Засеваем кеш карточки → selected-card мгновенно (как в Кассе).
+    seedClientDetail(client, car);
     setClientId(client.id);
     setCarId(car?.id || '');
     setPlateSearch('');
@@ -253,7 +272,7 @@ export default function BookingCreateScreen() {
           {/* ═══ КЛИЕНТ ═══ */}
           <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>КЛИЕНТ</Text>
 
-          {clientId && clientData ? (
+          {clientId && selectedClient ? (
             <View
               style={[styles.selectedCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
             >
@@ -263,11 +282,11 @@ export default function BookingCreateScreen() {
                 </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={[styles.selectedName, { color: palette.text.primary }]} numberOfLines={1}>
-                    {clientData.fullName}
+                    {selectedClient.fullName}
                   </Text>
-                  {!!clientData.phone && (
+                  {!!selectedClient.phone && (
                     <Text style={[styles.selectedPhone, { color: palette.text.tertiary }]} numberOfLines={1}>
-                      {formatPhone(clientData.phone)}
+                      {formatPhone(selectedClient.phone)}
                     </Text>
                   )}
                 </View>
@@ -322,6 +341,10 @@ export default function BookingCreateScreen() {
                       style={[styles.resultItem, { borderBottomColor: palette.border.subtle }]}
                       onPress={() => {
                         haptic('select');
+                        // Сидируем карточку выбранного клиента в кеш ДО смены
+                        // clientId — selected-card покажется в этом же кадре,
+                        // getById ниже только дотянет полный список авто.
+                        seedClientDetail(client, car);
                         setClientId(client.id);
                         setCarId(car.id);
                         setPlateSearch('');

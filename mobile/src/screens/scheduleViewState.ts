@@ -69,24 +69,33 @@ export function decideScheduleView(input: ScheduleViewInput): ScheduleView {
   const { gridReady, isLoadingUsers, isErrorUsers, isSuccessUsers, activeUsersCount, hasCachedUsers, scheduleError } =
     input;
 
-  // 0. Push-анимация ещё идёт — грид не монтируем.
-  if (!gridReady) return 'skeleton';
-
-  // 1. Есть мастера — показываем грид независимо от статуса запроса.
+  // 0. Есть мастера для показа — рисуем грид СРАЗУ, даже до gridReady.
+  //    Почему перед gridReady-gate: при возврате на вкладку «График»
+  //    (или повторном открытии экрана) GridTab перемонтируется, gridReady
+  //    на кадр-другой снова false, но данные уже в кэше (persistentCache +
+  //    placeholderData). Если бы gridReady выигрывал, пользователь видел бы
+  //    мелькание скелетона на КАЖДОМ заходе — это и есть «открывается со
+  //    второго раза» с точки зрения восприятия. Когда мастера уже есть,
+  //    показываем их без задержки. Для честного cold-start (кэша нет,
+  //    activeUsersCount === 0) ниже остаётся skeleton-гейт по gridReady.
   if (activeUsersCount > 0) return 'grid';
 
-  // С этого места activeUsersCount === 0.
+  // 0b. Мастеров пока нет И грид ещё не смонтирован (push-анимация / первый
+  //     кадр) → skeleton. Это исходный gridReady-gate для пустого старта.
+  if (!gridReady) return 'skeleton';
 
-  // 2. Запрос подтверждённо успешен и пусто → честный empty-state.
+  // С этого места activeUsersCount === 0 И gridReady === true.
+
+  // 1. Запрос подтверждённо успешен и пусто → честный empty-state.
   //    Это ЕДИНСТВЕННОЕ место, где разрешено «Нет мастеров».
   if (isSuccessUsers) return 'empty';
 
-  // 3. Ошибка и нет подтверждённых данных → error-state.
+  // 2. Ошибка и нет подтверждённых данных → error-state.
   //    (И ошибка пользователей, и падение расписания — оба ведут сюда,
   //    т.к. без мастеров грид всё равно не построить.)
   if ((isErrorUsers || scheduleError) && !hasCachedUsers) return 'error';
 
-  // 4. Всё остальное — первая загрузка или stale-рефетч пустого кэша,
+  // 3. Всё остальное — первая загрузка или stale-рефетч пустого кэша,
   //    результат ещё не подтверждён → skeleton, НЕ «Нет мастеров».
   //    `isLoadingUsers` и `hasCachedUsers` здесь информативны, но в любом
   //    из этих под-случаев правильный ответ — skeleton.

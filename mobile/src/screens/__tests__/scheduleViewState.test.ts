@@ -21,10 +21,16 @@ const base: ScheduleViewInput = {
 
 describe('decideScheduleView', () => {
   describe('gridReady gate', () => {
-    it('grid не готов → skeleton, даже если данные уже есть', () => {
-      expect(decideScheduleView({ ...base, gridReady: false, isSuccessUsers: true, activeUsersCount: 5 })).toBe(
-        'skeleton',
-      );
+    it('grid не готов И мастеров нет (cold start) → skeleton', () => {
+      expect(decideScheduleView({ ...base, gridReady: false, activeUsersCount: 0 })).toBe('skeleton');
+    });
+
+    it('grid не готов, НО мастера уже в кэше → grid сразу (без мелькания скелетона на повторном заходе)', () => {
+      // При возврате на вкладку GridTab перемонтируется, gridReady на кадр
+      // снова false, но данные уже есть (persistentCache + placeholderData).
+      // Показываем грид немедленно — иначе пользователь видит «открывается
+      // со второго раза».
+      expect(decideScheduleView({ ...base, gridReady: false, activeUsersCount: 5 })).toBe('grid');
     });
   });
 

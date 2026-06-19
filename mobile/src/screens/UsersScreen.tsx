@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { usersApi, productsApi, uploadsApi } from '../api/services';
+import { usersApi, productsApi, uploadsApi, permissionTemplatesApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
@@ -36,6 +36,7 @@ import type {
   SectionVisibility,
   ItemVisibility,
   PermissionKey,
+  PermissionTemplate,
 } from '../../../shared/types';
 import {
   UserRole,
@@ -154,6 +155,21 @@ function permissionsFromRoleDefaults(role: UserRole): Record<PermissionKey, bool
   const defaults = ROLE_PERMISSION_DEFAULTS[role] ?? {};
   const map = {} as Record<PermissionKey, boolean>;
   for (const key of PERMISSION_KEYS) map[key] = defaults[key] === true;
+  return map;
+}
+
+/**
+ * Materialize a full PermissionKey→bool map from a role TEMPLATE's stored
+ * permission blob. Templates persist `Record<string, boolean>`; the matrix
+ * needs every canonical key present (a key absent from the template ⇒ `false`),
+ * exactly like {@link permissionsFromRoleDefaults}. Applying a template = filling
+ * the local matrix from this map, then saving through the SAME self-lockout-
+ * protected updatePermissions path the manual toggles use — so the matrix and
+ * the server never diverge (one write, not two).
+ */
+function permissionsFromTemplate(tpl: Record<string, boolean>): Record<PermissionKey, boolean> {
+  const map = {} as Record<PermissionKey, boolean>;
+  for (const key of PERMISSION_KEYS) map[key] = tpl[key] === true;
   return map;
 }
 
@@ -453,6 +469,18 @@ export default function UsersScreen() {
   // stale seed. Seeded false; set true the moment openEdit kicks off the fetch.
   const [permissionsLoading, setPermissionsLoading] = useState(false);
 
+  // ── Role templates (saved permission blueprints) ──────────────────────────
+  // `templatesSheetOpen` shows the «Применить роль» picker (also the manage hub:
+  // rename/delete live there). `templateNameDraft` backs the inline name prompt
+  // for «Сохранить как роль» (RNModal — Alert.prompt is iOS-only, this screen is
+  // shared with Android). `renamingTemplate` switches that same prompt to rename
+  // mode. A small name modal beats Alert.prompt for cross-platform parity.
+  const [templatesSheetOpen, setTemplatesSheetOpen] = useState(false);
+  const [nameModalMode, setNameModalMode] = useState<'create' | 'rename' | null>(null);
+  const [templateNameDraft, setTemplateNameDraft] = useState('');
+  const [renamingTemplate, setRenamingTemplate] = useState<PermissionTemplate | null>(null);
+  const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
+
   // Commission modal
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
   const [commissionUserName, setCommissionUserName] = useState('');
@@ -577,6 +605,79 @@ export default function UsersScreen() {
       setCommissionUserId(null);
     },
     onError: (err: any) => Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка сохранения'),
+  });
+
+  // ── Role templates ─────────────────────────────────────────────────────────
+  // Server gate is director/admin/superadmin — match it so the gated endpoint is
+  // never hit by a plain `user_management` admin who'd just get a 403. The query
+  // is lazy (only fetches while the «Применить роль» sheet is open) so opening an
+  // employee for a quick toggle costs no extra request.
+  const canManageTemplates =
+    currentUser?.role === 'director' || currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
+
+  const {
+    data: templates = [],
+    isLoading: templatesLoading,
+    isError: templatesError,
+    refetch: refetchTemplates,
+  } = useQuery({
+    queryKey: ['permission-templates'],
+    queryFn: () => permissionTemplatesApi.list(),
+    select: (res) => (Array.isArray(res.data) ? res.data : []),
+    enabled: canManageTemplates && templatesSheetOpen,
+  });
+
+  // Save the CURRENT matrix as a named template. Sparse-friendly: persists the
+  // full canonical map (every key) so applying it later is deterministic.
+  const createTemplateMutation = useMutation({
+    mutationFn: (name: string) =>
+      // UserPermissions is a fixed-key boolean object — structurally a
+      // Record<string, boolean> but lacks the index signature TS wants, so
+      // widen through `unknown` (the values are all booleans, safe).
+      permissionTemplatesApi.create({
+        name,
+        permissions: form.permissions as unknown as Record<string, boolean>,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permission-templates'] });
+      haptic('success');
+      Alert.alert('Готово', 'Роль сохранена. Её можно применить к любому сотруднику.');
+      setNameModalMode(null);
+      setTemplateNameDraft('');
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить роль');
+    },
+  });
+
+  const renameTemplateMutation = useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => permissionTemplatesApi.update(id, { name }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permission-templates'] });
+      haptic('success');
+      setNameModalMode(null);
+      setRenamingTemplate(null);
+      setTemplateNameDraft('');
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось переименовать роль');
+    },
+  });
+
+  const deleteTemplateMutation = useMutation({
+    mutationFn: (id: string) => permissionTemplatesApi.remove(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['permission-templates'] });
+      haptic('success');
+      setDeleteTemplateId(null);
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось удалить роль');
+      setDeleteTemplateId(null);
+    },
   });
 
   // Product search for commission modal.
@@ -806,6 +907,66 @@ export default function UsersScreen() {
         ...(editingSelf ? { user_management: true } : null),
       },
     }));
+  };
+
+  // ── Role-template actions ──────────────────────────────────────────────────
+  // «Сохранить как роль» → open the inline name prompt in create mode.
+  const openSaveAsTemplate = () => {
+    if (editedIsOwnerClass) return;
+    haptic('tap');
+    setRenamingTemplate(null);
+    setTemplateNameDraft('');
+    setNameModalMode('create');
+  };
+
+  // Confirm the name prompt: branch create vs rename. Trimmed-empty guarded.
+  const submitTemplateName = () => {
+    const name = templateNameDraft.trim();
+    if (!name) {
+      Alert.alert('Ошибка', 'Введите название роли');
+      return;
+    }
+    if (nameModalMode === 'rename' && renamingTemplate) {
+      renameTemplateMutation.mutate({ id: renamingTemplate.id, name });
+    } else {
+      createTemplateMutation.mutate(name);
+    }
+  };
+
+  // «Применить роль» → open the picker sheet (also the manage hub).
+  const openTemplatesSheet = () => {
+    if (editedIsOwnerClass) return;
+    haptic('tap');
+    setTemplatesSheetOpen(true);
+  };
+
+  // Apply a template: fill the local matrix from its saved map, then close the
+  // sheet so the owner reviews the loaded toggles and saves through the normal
+  // (self-lockout-protected) path — exactly like a role preset, so the matrix
+  // and the eventual server write never diverge. Editing-self keeps
+  // user_management pinned on. Works identically for a brand-new unsaved user.
+  const applyTemplate = (tpl: PermissionTemplate) => {
+    if (editedIsOwnerClass) return;
+    haptic('impact');
+    const next = permissionsFromTemplate(tpl.permissions);
+    setForm((prev) => ({
+      ...prev,
+      permissions: {
+        ...prev.permissions,
+        ...next,
+        ...(editingSelf ? { user_management: true } : null),
+      },
+    }));
+    setTemplatesSheetOpen(false);
+    Alert.alert('Роль загружена', `«${tpl.name}» применена к матрице. Нажмите «Сохранить», чтобы записать.`);
+  };
+
+  // Open the name prompt in rename mode for an existing template.
+  const openRenameTemplate = (tpl: PermissionTemplate) => {
+    haptic('tap');
+    setRenamingTemplate(tpl);
+    setTemplateNameDraft(tpl.name);
+    setNameModalMode('rename');
   };
 
   const toggleSection = (key: SectionKey) => {
@@ -1287,6 +1448,43 @@ export default function UsersScreen() {
                   ))}
                 </View>
 
+                {/* Role templates — saved, named permission blueprints. Distinct
+                    from the quick role-defaults presets above: these are the
+                    owner's OWN saved roles, applied to / managed across
+                    employees. Director/admin/superadmin only (server gate). */}
+                {canManageTemplates && (
+                  <View style={styles.templateActionRow}>
+                    <TouchableOpacity
+                      style={[
+                        styles.templateActionBtn,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      ]}
+                      onPress={openSaveAsTemplate}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Сохранить текущие права как роль"
+                    >
+                      <Ionicons name="bookmark-outline" size={14} color={palette.text.secondary} />
+                      <Text style={[styles.templateActionText, { color: palette.text.secondary }]}>
+                        Сохранить как роль
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.templateActionBtn,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      ]}
+                      onPress={openTemplatesSheet}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Применить сохранённую роль"
+                    >
+                      <Ionicons name="albums-outline" size={14} color={palette.text.secondary} />
+                      <Text style={[styles.templateActionText, { color: palette.text.secondary }]}>Применить роль</Text>
+                    </TouchableOpacity>
+                  </View>
+                )}
+
                 {permissionsLoading ? (
                   <View style={styles.permLoading}>
                     <ActivityIndicator size="small" color={colors.primary[600]} />
@@ -1354,6 +1552,156 @@ export default function UsersScreen() {
             </TouchableOpacity>
           </View>
         </ScrollView>
+
+        {/* ── Templates picker / manage sheet ────────────────────────────────
+            Opened by «Применить роль». Tapping a row loads it into the matrix
+            (applyTemplate). Each row also exposes rename + delete. Nested inside
+            the edit Modal so it overlays the open employee form. */}
+        <Modal visible={templatesSheetOpen} onClose={() => setTemplatesSheetOpen(false)} title="Роли">
+          {templatesLoading ? (
+            <View style={styles.permLoading}>
+              <ActivityIndicator size="small" color={colors.primary[600]} />
+            </View>
+          ) : templatesError ? (
+            <View style={styles.templatesStateWrap}>
+              <Ionicons name="cloud-offline-outline" size={28} color={palette.text.tertiary} />
+              <Text style={[styles.templatesStateText, { color: palette.text.secondary }]}>
+                Не удалось загрузить роли
+              </Text>
+              <TouchableOpacity
+                style={[styles.templatesRetryBtn, { borderColor: palette.border.strong }]}
+                onPress={() => refetchTemplates()}
+              >
+                <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Повторить</Text>
+              </TouchableOpacity>
+            </View>
+          ) : templates.length === 0 ? (
+            <View style={styles.templatesStateWrap}>
+              <Ionicons name="albums-outline" size={28} color={palette.text.tertiary} />
+              <Text style={[styles.templatesStateText, { color: palette.text.secondary }]}>
+                Пока нет сохранённых ролей
+              </Text>
+              <Text style={[styles.templatesStateHint, { color: palette.text.tertiary }]}>
+                Настройте права сотрудника и нажмите «Сохранить как роль», чтобы создать первую.
+              </Text>
+            </View>
+          ) : (
+            <View style={{ gap: spacing[2] }}>
+              <Text style={[styles.sectionVisHint, { color: palette.text.tertiary, marginBottom: spacing[1] }]}>
+                Нажмите на роль, чтобы загрузить её права в матрицу. Затем сохраните сотрудника.
+              </Text>
+              {templates.map((tpl) => {
+                const grantedCount = PERMISSION_KEYS.filter((k) => tpl.permissions[k] === true).length;
+                return (
+                  <View
+                    key={tpl.id}
+                    style={[
+                      styles.templateRow,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    ]}
+                  >
+                    <TouchableOpacity
+                      style={styles.templateRowMain}
+                      onPress={() => applyTemplate(tpl)}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Применить роль ${tpl.name}`}
+                    >
+                      <View style={[styles.templateRowIcon, { backgroundColor: colors.primary[50] }]}>
+                        <Ionicons name="shield-half-outline" size={16} color={colors.primary[600]} />
+                      </View>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={[styles.templateRowName, { color: palette.text.primary }]} numberOfLines={1}>
+                          {tpl.name}
+                        </Text>
+                        <Text style={[styles.templateRowSub, { color: palette.text.tertiary }]}>
+                          {grantedCount} {grantedCount === 1 ? 'право' : grantedCount < 5 ? 'права' : 'прав'}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.templateRowAction}
+                      onPress={() => openRenameTemplate(tpl)}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Переименовать роль ${tpl.name}`}
+                    >
+                      <Ionicons name="pencil-outline" size={16} color={palette.text.secondary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.templateRowAction}
+                      onPress={() => {
+                        haptic('warning');
+                        setDeleteTemplateId(tpl.id);
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Удалить роль ${tpl.name}`}
+                    >
+                      <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
+                    </TouchableOpacity>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+        </Modal>
+
+        {/* ── Name prompt (create / rename) ─────────────────────────────────
+            Cross-platform replacement for Alert.prompt (iOS-only). One modal,
+            two modes driven by nameModalMode. */}
+        <Modal
+          visible={nameModalMode !== null}
+          onClose={() => {
+            setNameModalMode(null);
+            setRenamingTemplate(null);
+            setTemplateNameDraft('');
+          }}
+          title={nameModalMode === 'rename' ? 'Переименовать роль' : 'Новая роль'}
+        >
+          <View style={styles.formField}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Название роли</Text>
+            <TextInput
+              value={templateNameDraft}
+              onChangeText={setTemplateNameDraft}
+              style={[
+                styles.formInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              ]}
+              placeholder="Напр. Старший мастер"
+              placeholderTextColor={palette.text.tertiary}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={submitTemplateName}
+            />
+            {nameModalMode === 'create' && (
+              <Text style={[styles.sectionVisHint, { color: palette.text.tertiary, marginTop: spacing[2] }]}>
+                Сохранит текущий набор прав из матрицы как роль, которую можно применять к сотрудникам.
+              </Text>
+            )}
+          </View>
+          <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+            <TouchableOpacity
+              style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+              onPress={() => {
+                setNameModalMode(null);
+                setRenamingTemplate(null);
+                setTemplateNameDraft('');
+              }}
+            >
+              <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.submitBtn}
+              onPress={submitTemplateName}
+              disabled={createTemplateMutation.isPending || renameTemplateMutation.isPending}
+            >
+              {createTemplateMutation.isPending || renameTemplateMutation.isPending ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <Text style={styles.submitBtnText}>Сохранить</Text>
+              )}
+            </TouchableOpacity>
+          </View>
+        </Modal>
       </Modal>
 
       {/* Product Commission Modal */}
@@ -1544,6 +1892,18 @@ export default function UsersScreen() {
         title="Уволить сотрудника?"
         message="Сотрудник переместится в «Уволенные» и пропадёт из списков, графика и Кассы. В течение года его можно вернуть."
         confirmText="Уволить"
+        variant="danger"
+      />
+
+      <ConfirmDialog
+        visible={!!deleteTemplateId}
+        onClose={() => setDeleteTemplateId(null)}
+        onConfirm={() => {
+          if (deleteTemplateId) deleteTemplateMutation.mutate(deleteTemplateId);
+        }}
+        title="Удалить роль?"
+        message="Роль будет удалена безвозвратно. Сотрудники, к которым она уже применена, сохранят свои права без изменений."
+        confirmText="Удалить"
         variant="danger"
       />
     </View>
@@ -1743,6 +2103,50 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   presetChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  // Role-template actions («Сохранить как роль» / «Применить роль») + the
+  // templates picker sheet rows and its empty/error states.
+  templateActionRow: { flexDirection: 'row', gap: spacing[2], marginTop: spacing[2], marginBottom: spacing[1] },
+  templateActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  templateActionText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  templateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    paddingLeft: spacing[3],
+    paddingRight: spacing[1],
+  },
+  templateRowMain: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+  },
+  templateRowIcon: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  templateRowName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  templateRowSub: { fontSize: 11, marginTop: 2 },
+  templateRowAction: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  templatesStateWrap: { alignItems: 'center', justifyContent: 'center', gap: spacing[2], paddingVertical: spacing[8] },
+  templatesStateText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  templatesStateHint: { fontSize: 12, lineHeight: 17, textAlign: 'center', paddingHorizontal: spacing[4] },
+  templatesRetryBtn: {
+    marginTop: spacing[2],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
   permLoading: { paddingVertical: spacing[6], alignItems: 'center', justifyContent: 'center' },
   permOwnerNote: {
     flexDirection: 'row',

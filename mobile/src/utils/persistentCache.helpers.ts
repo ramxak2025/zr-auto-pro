@@ -118,7 +118,9 @@ export const PERSISTED_KEYS = [
   'users-for-filter',
   // Warehouse-document tab inside ChecksScreen. Replaces the older
   // 'stock-movements' / 'supplier-deliveries' pair — the journal feed
-  // is now a single unified endpoint. Key shape: ['journal-warehouse-docs', kind].
+  // is now a single unified endpoint. Key shape: ['journal-warehouse-docs']
+  // (no kind suffix — the full feed is fetched once and the active kind
+  // chip is applied client-side, so all chips share one cache entry).
   'journal-warehouse-docs',
   // ── Other heavy lists (cold-start instant) ─────────────────────
   // Services screen uses ['services', { search, page, limit }].

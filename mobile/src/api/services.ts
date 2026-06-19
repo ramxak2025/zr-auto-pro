@@ -38,6 +38,7 @@ import {
   createKnowledgeApi,
   createNotificationsApi,
   createBookingsApi,
+  createPermissionTemplatesApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -81,6 +82,10 @@ export const journalApi = createJournalApi(api);
 export const knowledgeApi = createKnowledgeApi(api);
 export const notificationsApi = createNotificationsApi(api);
 export const bookingsApi = createBookingsApi(api);
+// Role templates — saved permission blueprints applied to employees. Gated
+// director/admin/superadmin server-side; consumed by UsersScreen's permission
+// matrix («Сохранить как роль» / «Применить роль»).
+export const permissionTemplatesApi = createPermissionTemplatesApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {

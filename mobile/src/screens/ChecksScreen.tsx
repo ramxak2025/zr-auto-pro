@@ -549,18 +549,42 @@ export default function ChecksScreen() {
   // ── Warehouse documents (unified journal feed) ──────────────────
   // Single source of truth: `journalApi.warehouseDocs(...)` merges
   // stock_movements + supplier_payments serverside and returns a
-  // pre-sorted JournalDoc[]. The `type` filter narrows by kind so we
-  // don't ship rows the user has filtered out.
-  const { data: warehouseDocs = [], isLoading: warehouseLoading } = useQuery<JournalDoc[]>({
-    queryKey: ['journal-warehouse-docs', warehouseKind],
+  // pre-sorted JournalDoc[].
+  //
+  // We deliberately fetch the FULL feed (no `?type=` param) and filter
+  // by `kind` on the client below. Reasons:
+  //   1. Robustness — the server's `?type=` whitelist (journal.controller
+  //      WarehouseDocsQueryDto `@IsIn`) lagged behind the kinds the FE
+  //      offers: `customer_return` was added to the journal everywhere
+  //      EXCEPT that DTO, so `?type=customer_return` 400'd and the
+  //      «Возврат клиента» chip showed an empty list. Filtering the loaded
+  //      list by `kind` makes every chip work regardless of the DTO and
+  //      future-proofs new kinds without a backend round-trip.
+  //   2. Speed — the backend already caps the feed at 500 rows, so one
+  //      cached fetch + an in-memory filter is instant when switching
+  //      chips (no per-chip refetch / white flash). Mirrors the existing
+  //      client-side `returnsOnly` filter on the checks tab.
+  // The cache key has no `warehouseKind`, so all chips share one entry.
+  const { data: allWarehouseDocs = [], isLoading: warehouseLoading } = useQuery<JournalDoc[]>({
+    queryKey: ['journal-warehouse-docs'],
     queryFn: async () => {
-      const res = await journalApi.warehouseDocs(warehouseKind ? { type: warehouseKind } : {});
+      const res = await journalApi.warehouseDocs({});
       return Array.isArray(res.data) ? res.data : [];
     },
     staleTime: 60_000,
     enabled: activeTab === 'warehouse',
     placeholderData: (prev) => prev,
   });
+
+  // Apply the active kind chip on the client. `null` («Все») passes
+  // everything through. Each non-null chip shows EXACTLY its own kind —
+  // the backend `kind` is already canonical (stock_movements.type →
+  // kind mapping lives in journal.service.ts), so this is a 1:1 match
+  // with no duplicates and no empty-from-bad-mapping results.
+  const warehouseDocs = useMemo(
+    () => (warehouseKind ? allWarehouseDocs.filter((d) => d.kind === warehouseKind) : allWarehouseDocs),
+    [allWarehouseDocs, warehouseKind],
+  );
 
   // Optimistic delete — UX feels instant because the row disappears
   // BEFORE the server confirms. The rollback path restores the cache
@@ -1209,14 +1233,23 @@ export default function ChecksScreen() {
             </ScrollView>
           </AutexaGlassHeader>
 
-          {/* Cold-start path: skeleton only on the very first fetch.
-             After we have any data (even from a different kind filter),
-             rely on `placeholderData` to keep the list painted during
-             the next refetch — no white flash on filter switch. */}
-          {isWarehouseLoading && warehouseDocs.length === 0 ? (
+          {/* Cold-start path: skeleton only while the very first (unfiltered)
+             fetch is in flight. Switching chips never shows a skeleton —
+             the feed is already loaded and we filter it in memory.
+             Empty state is filter-aware: distinguish «no documents at all»
+             from «no documents of THIS kind», so an empty chip reads as a
+             real (correct) result, not a broken filter. */}
+          {isWarehouseLoading && allWarehouseDocs.length === 0 ? (
             <ListSkeleton count={8} />
           ) : warehouseDocs.length === 0 ? (
-            <EmptyState title="Документов не найдено" description="Складские движения и поставки появятся здесь" />
+            warehouseKind && allWarehouseDocs.length > 0 ? (
+              <EmptyState
+                title={`Нет документов: ${journalKindLabels[warehouseKind].toLowerCase()}`}
+                description="Измените фильтр или выберите «Все»"
+              />
+            ) : (
+              <EmptyState title="Документов не найдено" description="Складские движения и поставки появятся здесь" />
+            )
           ) : (
             <FlashList
               data={warehouseDocs}

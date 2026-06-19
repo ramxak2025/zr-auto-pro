@@ -1050,6 +1050,9 @@ function GridTab() {
     //      auto-dismissing banner (never a blocking Alert per tap);
     //   5. on success → background-refetch to swap the temp row for the real
     //      one (and refresh «Сегодня»). The guard clears in `finally`.
+    // Selection haptic the instant the value is applied — tactile
+    // confirmation that the status is SET now, not after a round-trip.
+    haptic('select');
     setQuickPopup(null);
     cellInFlight.current.add(cellKey);
     const previous = applyOptimistic(userId, date, base, entry);
@@ -1495,11 +1498,14 @@ function GridTab() {
         {quickPopup && (
           <View style={styles.quickActions}>
             {[
+              // Icons + hues mirror the grid cell language (getCellDot) and
+              // the «Сегодня» list (getStatusInfo) one-to-one, so a status
+              // looks identical wherever it appears: popup, cell, today row.
               {
                 type: 'shift',
                 label: 'Смена',
                 icon: 'checkmark' as const,
-                iconColor: colors.green[700],
+                iconColor: colors.green[600],
                 bg: colors.green[50],
                 gradient: [colors.green[50], colors.green[100]],
               },
@@ -1515,31 +1521,31 @@ function GridTab() {
                 type: 'sick',
                 label: 'Больничный',
                 icon: 'medkit-outline' as const,
-                iconColor: colors.rose[500],
+                iconColor: colors.rose[600],
                 bg: colors.rose[50],
                 gradient: [colors.rose[50], '#ffe4e6'],
               },
               {
                 type: 'late_minor',
                 label: 'Опоздал <1ч',
-                icon: 'alarm-outline' as const,
-                iconColor: colors.yellow[600],
-                bg: colors.yellow[50],
-                gradient: [colors.yellow[50], '#fef9c3'],
+                icon: 'time-outline' as const,
+                iconColor: colors.amber[600],
+                bg: colors.amber[50],
+                gradient: [colors.amber[50], '#fef9c3'],
               },
               {
                 type: 'late_major',
                 label: 'Опоздал >1ч',
                 icon: 'warning-outline' as const,
-                iconColor: colors.orange[500],
+                iconColor: colors.orange[600],
                 bg: colors.orange[50],
                 gradient: [colors.orange[50], '#fed7aa'],
               },
               {
                 type: 'absent',
                 label: 'Прогул',
-                icon: 'close-circle-outline' as const,
-                iconColor: colors.red[500],
+                icon: 'close' as const,
+                iconColor: colors.red[600],
                 bg: colors.red[50],
                 gradient: [colors.red[50], '#fecaca'],
               },
@@ -1612,121 +1618,148 @@ function TodayTab() {
   const working = statuses.filter((s) => s.isWorking && !(s.note || '').toLowerCase().includes('больнич'));
   const notWorking = statuses.filter((s) => !s.isWorking || (s.note || '').toLowerCase().includes('больнич'));
 
-  const getStatusInfo = (s: TodayEmployeeStatus) => {
+  // Status descriptor for the "Сегодня" list — mirrors the GridTab cell
+  // icon language EXACTLY (getCellDot): clean Ionicons in semantic colours,
+  // NO emojis. `icon` is rendered inside a soft tinted circle; `tint` is the
+  // semantic colour; `softBg` the matching shade-50 / dark-alpha pill fill so
+  // a row reads at a glance the same way the calendar cell does.
+  const getStatusInfo = (
+    s: TodayEmployeeStatus,
+  ): {
+    label: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    tint: string;
+    softBg: string;
+  } => {
     const note = (s.note || '').toLowerCase();
     if (note.includes('больнич'))
-      return {
-        label: 'Больничный',
-        emoji: '🤒',
-        color: colors.rose[700],
-        bgColor: colors.rose[50],
-        borderColor: colors.rose[400],
-      };
+      return { label: 'Больничный', icon: 'medkit-outline', tint: colors.rose[600], softBg: colors.rose[50] };
     if (s.isDayOff)
-      return {
-        label: 'Выходной',
-        emoji: '😴',
-        color: colors.gray[600],
-        bgColor: colors.gray[100],
-        borderColor: colors.gray[300],
-      };
+      return { label: 'Выходной', icon: 'moon-outline', tint: colors.gray[500], softBg: colors.gray[100] };
     if (s.lateStatus === 'late_major')
       return {
-        label: s.lateMinutes ? `Опоздание ${s.lateMinutes} мин` : 'Опоздание >1ч',
-        emoji: '🚨',
-        color: colors.orange[700],
-        bgColor: colors.orange[50],
-        borderColor: colors.orange[400],
+        label: s.lateMinutes ? `Опоздание ${s.lateMinutes} мин` : 'Опоздание больше часа',
+        icon: 'warning-outline',
+        tint: colors.orange[600],
+        softBg: colors.orange[50],
       };
     if (s.lateStatus === 'late_minor')
       return {
-        label: s.lateMinutes ? `Опоздание ${s.lateMinutes} мин` : 'Опоздание <1ч',
-        emoji: '⏰',
-        color: colors.yellow[700],
-        bgColor: colors.yellow[50],
-        borderColor: colors.yellow[400],
+        label: s.lateMinutes ? `Опоздание ${s.lateMinutes} мин` : 'Опоздание меньше часа',
+        icon: 'time-outline',
+        tint: colors.amber[600],
+        softBg: colors.amber[50],
       };
     if (s.isWorking)
-      return {
-        label: 'На смене',
-        emoji: '✅',
-        color: colors.green[700],
-        bgColor: colors.green[50],
-        borderColor: colors.green[300],
-      };
+      return { label: 'На смене', icon: 'checkmark-circle', tint: colors.green[600], softBg: colors.green[50] };
     if (s.hasSchedule && !s.isDayOff)
-      return {
-        label: 'Прогул',
-        emoji: '❌',
-        color: colors.red[700],
-        bgColor: colors.red[50],
-        borderColor: colors.red[300],
-      };
-    return {
-      label: 'Нет смены',
-      emoji: '➖',
-      color: colors.gray[500],
-      bgColor: colors.gray[50],
-      borderColor: colors.gray[200],
-    };
+      return { label: 'Прогул', icon: 'close', tint: colors.red[600], softBg: colors.red[50] };
+    return { label: 'Нет смены', icon: 'remove-outline', tint: colors.gray[400], softBg: colors.gray[50] };
   };
 
   const todayDate = new Date().toLocaleDateString('ru-RU', { weekday: 'long', day: 'numeric', month: 'long' });
+
+  // Single source for one row — reused by the "На смене" and "Отсутствуют"
+  // sections. Apple grouped-list feel: SF-style icon in a soft tinted
+  // circle (same icon language as the grid cells), name + status line,
+  // optional shift / arrival meta. No emoji, no saturated card body.
+  const renderRow = (s: TodayEmployeeStatus, idx: number) => {
+    const info = getStatusInfo(s);
+    return (
+      <AnimatedCard key={s.userId} index={Math.min(idx + 2, 7)} onPress={() => openEmployee(navigation, s.userId)}>
+        <View style={[styles.todayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View style={[styles.todayStatusIcon, { backgroundColor: info.softBg }]}>
+            <Ionicons name={info.icon} size={20} color={info.tint} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[styles.todayName, { color: palette.text.primary }]} numberOfLines={1}>
+              {s.fullName}
+            </Text>
+            <Text style={[styles.todayStatusLabel, { color: info.tint }]} numberOfLines={1}>
+              {info.label}
+            </Text>
+            {(s.shiftStart && s.shiftEnd) || s.actualArrival ? (
+              <View style={styles.todayInfoRow}>
+                {s.shiftStart && s.shiftEnd ? (
+                  <View style={styles.todayMetaChip}>
+                    <Ionicons name="time-outline" size={12} color={palette.text.tertiary} />
+                    <Text style={[styles.todayShift, { color: palette.text.secondary }]}>
+                      {s.shiftStart}–{s.shiftEnd}
+                    </Text>
+                  </View>
+                ) : null}
+                {s.actualArrival ? (
+                  <View style={styles.todayMetaChip}>
+                    <Ionicons name="log-in-outline" size={12} color={palette.text.tertiary} />
+                    <Text style={[styles.todayShift, { color: palette.text.secondary }]}>
+                      {new Date(s.actualArrival).toLocaleTimeString('ru-RU', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </Text>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
+            {s.note ? (
+              <Text style={[styles.todayNote, { color: palette.text.tertiary }]} numberOfLines={1}>
+                {s.note}
+              </Text>
+            ) : null}
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+        </View>
+      </AnimatedCard>
+    );
+  };
 
   return (
     <ScrollView
       contentContainerStyle={[styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }]}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />}
+      showsVerticalScrollIndicator={false}
     >
-      {/* Date header card */}
+      {/* Date header — clean Apple-style, no saturated gradient. Large
+          capitalised date over a muted "сегодня" eyebrow, with a neutral
+          headcount chip on the trailing edge. */}
       <AnimatedCard index={0}>
-        <LinearGradient
-          colors={[colors.primary[600], colors.primary[700]] as [string, string]}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.todayDateCard}
-        >
-          <View style={styles.todayDateIconWrap}>
-            <Ionicons name="today-outline" size={22} color={colors.white} />
-          </View>
+        <View style={[styles.todayDateCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.todayDateLabel}>Сегодня</Text>
-            <Text style={styles.todayDateText}>{todayDate}</Text>
+            <Text style={[styles.todayDateLabel, { color: palette.text.tertiary }]}>СЕГОДНЯ</Text>
+            <Text style={[styles.todayDateText, { color: palette.text.primary }]}>{todayDate}</Text>
           </View>
-          <View style={styles.todayTotalBadge}>
-            <Text style={styles.todayTotalText}>{statuses.length}</Text>
-            <Text style={styles.todayTotalLabel}>чел.</Text>
+          <View style={[styles.todayTotalBadge, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="people-outline" size={15} color={palette.text.secondary} />
+            <Text style={[styles.todayTotalText, { color: palette.text.primary }]}>{statuses.length}</Text>
           </View>
-        </LinearGradient>
+        </View>
       </AnimatedCard>
 
-      {/* Status summary pills */}
+      {/* Summary — two calm cards, icon in a soft tinted circle. */}
       <AnimatedCard index={1}>
         <View style={styles.todayStatsRow}>
-          <LinearGradient
-            colors={[colors.green[50], colors.green[100]] as [string, string]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.todayStatCard}
+          <View
+            style={[styles.todayStatCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           >
-            <View style={styles.todayStatIconWrap}>
-              <Ionicons name="checkmark" size={20} color={colors.green[700]} />
+            <View style={[styles.todayStatIconWrap, { backgroundColor: colors.green[50] }]}>
+              <Ionicons name="checkmark-circle" size={20} color={colors.green[600]} />
             </View>
-            <Text style={[styles.todayStatNum, { color: colors.green[700] }]}>{working.length}</Text>
-            <Text style={[styles.todayStatLabel, { color: colors.green[600] }]}>На смене</Text>
-          </LinearGradient>
-          <LinearGradient
-            colors={[colors.gray[50], colors.gray[100]] as [string, string]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.todayStatCard}
+            <View>
+              <Text style={[styles.todayStatNum, { color: palette.text.primary }]}>{working.length}</Text>
+              <Text style={[styles.todayStatLabel, { color: palette.text.tertiary }]}>На смене</Text>
+            </View>
+          </View>
+          <View
+            style={[styles.todayStatCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           >
-            <View style={styles.todayStatIconWrap}>
-              <Ionicons name="moon-outline" size={20} color={colors.gray[500]} />
+            <View style={[styles.todayStatIconWrap, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="moon-outline" size={20} color={palette.text.secondary} />
             </View>
-            <Text style={[styles.todayStatNum, { color: colors.gray[700] }]}>{notWorking.length}</Text>
-            <Text style={[styles.todayStatLabel, { color: colors.gray[500] }]}>Отсутствуют</Text>
-          </LinearGradient>
+            <View>
+              <Text style={[styles.todayStatNum, { color: palette.text.primary }]}>{notWorking.length}</Text>
+              <Text style={[styles.todayStatLabel, { color: palette.text.tertiary }]}>Отсутствуют</Text>
+            </View>
+          </View>
         </View>
       </AnimatedCard>
 
@@ -1743,52 +1776,24 @@ function TodayTab() {
           </View>
           <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>Расписание не настроено</Text>
           <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>
-            Добавьте смены в разделе "График"
+            Добавьте смены в разделе «График»
           </Text>
         </View>
       ) : (
-        statuses.map((s, idx) => {
-          const info = getStatusInfo(s);
-          // Calm list look: white card, coloured left-accent stripe, emoji
-          // + status label keep the colour so the row remains scannable,
-          // but the card body stays neutral. The bold colour palette now
-          // lives in the GridTab heatmap.
-          return (
-            <AnimatedCard key={s.userId} index={idx + 2} onPress={() => openEmployee(navigation, s.userId)}>
-              <View
-                style={[styles.todayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              >
-                <View style={[styles.todayCardAccent, { backgroundColor: info.borderColor }]} />
-                <View style={styles.todayCardContent}>
-                  <Text style={styles.todayEmoji} allowFontScaling={false}>
-                    {info.emoji}
-                  </Text>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.todayName, { color: palette.text.primary }]}>{s.fullName}</Text>
-                    <Text style={[styles.todayStatusLabel, { color: info.color }]}>{info.label}</Text>
-                    <View style={styles.todayInfoRow}>
-                      {s.shiftStart && s.shiftEnd && (
-                        <Text style={[styles.todayShift, { color: palette.text.secondary }]}>
-                          {s.shiftStart} — {s.shiftEnd}
-                        </Text>
-                      )}
-                      {s.actualArrival && (
-                        <Text style={[styles.todayShift, { color: palette.text.secondary }]}>
-                          {'  ·  '}пришёл{' '}
-                          {new Date(s.actualArrival).toLocaleTimeString('ru-RU', {
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </Text>
-                      )}
-                    </View>
-                    {s.note ? <Text style={[styles.todayNote, { color: palette.text.tertiary }]}>{s.note}</Text> : null}
-                  </View>
-                </View>
-              </View>
-            </AnimatedCard>
-          );
-        })
+        <>
+          {working.length > 0 && (
+            <>
+              <Text style={[styles.todaySectionTitle, { color: palette.text.tertiary }]}>НА СМЕНЕ</Text>
+              {working.map((s, idx) => renderRow(s, idx))}
+            </>
+          )}
+          {notWorking.length > 0 && (
+            <>
+              <Text style={[styles.todaySectionTitle, { color: palette.text.tertiary }]}>ОТСУТСТВУЮТ</Text>
+              {notWorking.map((s, idx) => renderRow(s, working.length + idx))}
+            </>
+          )}
+        </>
       )}
     </ScrollView>
   );
@@ -3408,49 +3413,47 @@ const styles = StyleSheet.create({
   },
 
   // ── Today Tab ──
+  // Section eyebrow above each grouped list (Apple Settings style).
+  todaySectionTitle: {
+    fontSize: 12,
+    fontWeight: fontWeight.semibold,
+    letterSpacing: 0.4,
+    marginTop: spacing[2],
+    marginBottom: -spacing[1],
+    marginLeft: spacing[1],
+  },
   todayDateCard: {
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: borderRadius['2xl'],
-    padding: spacing[4],
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: spacing[3.5],
+    paddingHorizontal: spacing[4],
     gap: spacing[3],
   },
-  todayDateIconWrap: {
-    width: 42,
-    height: 42,
-    borderRadius: 21,
-    backgroundColor: colors.white + '20',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   todayDateLabel: {
-    fontSize: fontSize.xs,
-    color: colors.white + 'B0',
-    fontWeight: fontWeight.medium,
+    fontSize: 11,
+    fontWeight: fontWeight.semibold,
+    letterSpacing: 0.6,
   },
   todayDateText: {
-    fontSize: fontSize.lg,
-    fontWeight: fontWeight.bold,
-    color: colors.white,
-    textTransform: 'capitalize',
-    marginTop: 1,
-  },
-  todayTotalBadge: {
-    backgroundColor: colors.white + '20',
-    borderRadius: borderRadius.xl,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[1.5],
-    alignItems: 'center',
-  },
-  todayTotalText: {
     fontSize: fontSize.xl,
     fontWeight: fontWeight.bold,
-    color: colors.white,
+    textTransform: 'capitalize',
+    marginTop: 2,
+    letterSpacing: -0.3,
   },
-  todayTotalLabel: {
-    fontSize: 9,
-    color: colors.white + '90',
-    fontWeight: fontWeight.medium,
+  todayTotalBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+  },
+  todayTotalText: {
+    fontSize: fontSize.base,
+    fontWeight: fontWeight.bold,
   },
   todayStatsRow: {
     flexDirection: 'row',
@@ -3458,53 +3461,50 @@ const styles = StyleSheet.create({
   },
   todayStatCard: {
     flex: 1,
-    borderRadius: borderRadius['2xl'],
-    padding: spacing[3.5],
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[1],
+    gap: spacing[2.5],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3.5],
   },
   todayStatIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.white + '70',
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: 'center',
     justifyContent: 'center',
   },
   todayStatNum: {
     fontSize: fontSize['2xl'],
     fontWeight: fontWeight.bold,
+    letterSpacing: -0.5,
   },
   todayStatLabel: {
     fontSize: fontSize.xs,
     fontWeight: fontWeight.medium,
+    marginTop: -1,
   },
-  // Calm Today-tab card — bold heatmap colours moved to GridTab. Here
-  // we keep a white surface with a coloured left-accent stripe; the
-  // emoji and the status label stay coloured so the row still reads
-  // at a glance.
+  // Calm Today-tab row — neutral surface, status conveyed by an SF-style
+  // icon in a soft tinted circle (same icon language as the grid cells).
   todayCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
     backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.gray[200],
-    overflow: 'hidden',
-    flexDirection: 'row',
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3.5],
   },
-  todayCardAccent: {
-    width: 4,
-  },
-  todayCardContent: {
-    flex: 1,
-    flexDirection: 'row',
+  todayStatusIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: 'center',
-    gap: spacing[3],
-    paddingVertical: spacing[3.5],
-    paddingHorizontal: spacing[4],
-  },
-  todayEmoji: {
-    fontSize: 26,
-    lineHeight: 32,
+    justifyContent: 'center',
   },
   todayName: {
     fontSize: 16,
@@ -3515,25 +3515,32 @@ const styles = StyleSheet.create({
   todayStatusLabel: {
     fontSize: 13,
     fontWeight: fontWeight.semibold,
-    marginTop: 2,
+    marginTop: 1,
     letterSpacing: -0.1,
   },
   todayInfoRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginTop: 4,
+    marginTop: 5,
+    gap: spacing[1.5],
     flexWrap: 'wrap',
   },
+  // Small inline meta chip: clock / arrival icon + time.
+  todayMetaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
   todayShift: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: fontWeight.medium,
     color: colors.gray[600],
   },
   todayNote: {
-    fontSize: 13,
+    fontSize: 12,
     fontStyle: 'italic',
     color: colors.gray[500],
-    marginTop: 4,
+    marginTop: 3,
   },
 
   // ── Shifts Stats ──
