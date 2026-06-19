@@ -38,6 +38,7 @@ import { JournalModule } from './journal/journal.module';
 import { KnowledgeModule } from './knowledge/knowledge.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { BookingsModule } from './bookings/bookings.module';
+import { PermissionTemplatesModule } from './permission-templates/permission-templates.module';
 
 @Module({
   imports: [
@@ -79,6 +80,7 @@ import { BookingsModule } from './bookings/bookings.module';
     KnowledgeModule,
     NotificationsModule,
     BookingsModule,
+    PermissionTemplatesModule,
   ],
   providers: [MigrationRunner],
 })

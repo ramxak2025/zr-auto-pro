@@ -420,6 +420,22 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
   },
 };
 
+/**
+ * Named permission template («роль»): a tenant-defined, reusable set of
+ * action-permissions. A template is just a saved blueprint — applying it to an
+ * employee COPIES `permissions` into that user's `permissions` map (a one-shot
+ * copy, exactly like PATCH /users/:id/permissions; there is no live link back).
+ * `permissions` is the SAME shape as {@link UserPermissions}. Backend table:
+ * migration 077_permission_templates.sql; API: createPermissionTemplatesApi.
+ */
+export interface PermissionTemplate {
+  id: string;
+  name: string;
+  permissions: Record<string, boolean>;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 export interface Client {
   id: string;
   fullName: string;

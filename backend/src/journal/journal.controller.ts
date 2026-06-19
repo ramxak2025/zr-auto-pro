@@ -15,10 +15,23 @@ class WarehouseDocsQueryDto {
   to?: string;
 
   @IsOptional()
-  @IsIn(['purchase', 'return_to_supplier', 'defect_transfer', 'writeoff', 'supplier_payment', 'used_purchase'])
+  // 'customer_return' was added to JournalService + shared JournalDoc + the mobile
+  // chips in 479ff21 but NOT here — so ?type=customer_return failed @IsIn → 400 and
+  // broke the «Возврат клиента» filter. Keep this whitelist in sync with the kinds
+  // JournalService.getWarehouseDocs can return.
+  @IsIn([
+    'purchase',
+    'return_to_supplier',
+    'customer_return',
+    'defect_transfer',
+    'writeoff',
+    'supplier_payment',
+    'used_purchase',
+  ])
   type?:
     | 'purchase'
     | 'return_to_supplier'
+    | 'customer_return'
     | 'defect_transfer'
     | 'writeoff'
     | 'supplier_payment'

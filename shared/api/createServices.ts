@@ -19,6 +19,7 @@ interface HttpClient {
 import type {
   User,
   UserPermissions,
+  PermissionTemplate,
   SectionVisibility,
   ItemVisibility,
   Tenant,
@@ -1108,5 +1109,27 @@ export function createBookingsApi(api: HttpClient) {
     convert: (id: string, data: ConvertBookingRequest) => api.post<Booking>(`/bookings/${id}/convert`, data),
     getSettings: () => api.get<BookingSettings>('/bookings/settings'),
     updateSettings: (data: UpdateBookingSettingsRequest) => api.patch<BookingSettings>('/bookings/settings', data),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Permission templates («роли») — tenant-defined, reusable permission sets.
+//  All routes are director/admin/superadmin-gated and tenant-scoped server-side
+//  (same gate as the user permissions editor). `apply` copies a template's
+//  permission map onto a user; the server reuses updatePermissions there, so
+//  the self-lockout guard (you can't strip your own user_management) applies —
+//  apply() echoes back the user's RESULTING permission map.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createPermissionTemplatesApi(api: HttpClient) {
+  return {
+    list: () => api.get<PermissionTemplate[]>('/permission-templates'),
+    create: (data: { name: string; permissions: Record<string, boolean> }) =>
+      api.post<PermissionTemplate>('/permission-templates', data),
+    update: (id: string, data: { name?: string; permissions?: Record<string, boolean> }) =>
+      api.patch<PermissionTemplate>(`/permission-templates/${id}`, data),
+    remove: (id: string) => api.delete<{ success: true }>(`/permission-templates/${id}`),
+    apply: (id: string, userId: string) =>
+      api.post<UserPermissions>(`/permission-templates/${id}/apply/${userId}`),
   };
 }
