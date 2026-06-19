@@ -512,6 +512,9 @@ export default function BookingCreateScreen() {
             {
               backgroundColor: palette.bg.card,
               borderTopColor: palette.border.subtle,
+              // Поднять липкую панель «Сохранить» НАД плавающим таб-баром, иначе
+              // кнопка уезжает под него (tabBarHeight уже учитывает home-indicator).
+              marginBottom: tabBarHeight,
             },
           ]}
         >
@@ -832,6 +835,7 @@ const styles = StyleSheet.create({
   saveBar: {
     paddingHorizontal: spacing[4],
     paddingTop: spacing[3],
+    paddingBottom: spacing[3],
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   saveBtn: {
