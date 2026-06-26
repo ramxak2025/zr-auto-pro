@@ -14,6 +14,7 @@ import CheckCreateScreen from '../screens/CheckCreateScreen';
 import CheckDetailScreen from '../screens/CheckDetailScreen';
 import ClientsScreen from '../screens/ClientsScreen';
 import ClientDetailScreen from '../screens/ClientDetailScreen';
+import CarDetailScreen from '../screens/CarDetailScreen';
 import ServicesScreen from '../screens/ServicesScreen';
 import SuppliersScreen from '../screens/SuppliersScreen';
 import SupplierDetailScreen from '../screens/SupplierDetailScreen';
@@ -167,6 +168,23 @@ export type RootStackParamList = {
    */
   ClientDetail: { id: string; focusCarId?: string };
   /**
+   * CarDetail — dedicated drill-down for ONE car (per-car stats + that
+   * car's checks). Pushed from ClientDetailScreen's «Гараж» on a car tap.
+   * Display fields (makeModel/plateNumber/clientName) are passed so the
+   * hero paints instantly; the checks are fetched via carsApi.checks.
+   * Registered on BOTH MoreStack and the root Stack (like ClientDetail) so
+   * `navigate('CarDetail')` resolves to whichever copy of ClientDetail is
+   * currently mounted — keeping the floating tab bar visible when in-section.
+   */
+  CarDetail: {
+    carId: string;
+    clientId?: string;
+    clientName?: string;
+    makeModel?: string;
+    plateNumber?: string;
+    noPlate?: boolean;
+  };
+  /**
    * `openDefectReturn` — set when the caller (typically the suppliers
    * list "Возврат брака" header CTA) wants the detail screen to
    * auto-open the defect-return modal once supplier + defect warehouse
@@ -247,6 +265,9 @@ function MoreStackNavigator() {
         back goes detail → section list → Ещё, never straight to Главная.
       */}
       <MoreStack.Screen name="ClientDetail" component={ClientDetailScreen} />
+      {/* CarDetail — garage drill-down from ClientDetail; lives in MoreStack
+          so the tab bar stays visible (back goes car → client → list). */}
+      <MoreStack.Screen name="CarDetail" component={CarDetailScreen} />
       <MoreStack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
       <MoreStack.Screen name="CheckDetail" component={CheckDetailScreen} />
       <MoreStack.Screen name="Employees" component={EmployeesScreen} />
@@ -545,6 +566,7 @@ export default function AppNavigator() {
           <Stack.Screen name="Main" component={MainShell} />
           <Stack.Screen name="CheckCreate" component={CheckCreateScreen} options={{ animation: 'slide_from_bottom' }} />
           <Stack.Screen name="ClientDetail" component={ClientDetailScreen} />
+          <Stack.Screen name="CarDetail" component={CarDetailScreen} />
           <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
         </>
       )}

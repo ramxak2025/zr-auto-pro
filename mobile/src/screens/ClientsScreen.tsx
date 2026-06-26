@@ -568,9 +568,15 @@ export default function ClientsScreen() {
   // and drove translateX through RN Animated, which desyncs on Fabric
   // cell reuse. See the rationale block at the top of ClientListRow.tsx.
   const renderClient = useCallback(
-    ({ item }: { item: Client; index: number }) => (
+    ({ item, index }: { item: Client; index: number }) => (
       <ClientListRow
         item={item}
+        // First / last cell of the inset group → rounded top / bottom corners.
+        // `displayClients.length` is in the deps so the bottom rounding tracks
+        // the true tail; a page appending (length grows) just re-rounds the new
+        // last row — a cheap style change, never an identity churn.
+        isFirst={index === 0}
+        isLast={index === displayClients.length - 1}
         canDelete={canDelete}
         palette={palette}
         onPress={openClientDetail}
@@ -579,7 +585,7 @@ export default function ClientsScreen() {
         onDeleteRequest={requestDelete}
       />
     ),
-    [canDelete, palette, openClientDetail, prefetchClientDetail, openEditModal, requestDelete],
+    [displayClients.length, canDelete, palette, openClientDetail, prefetchClientDetail, openEditModal, requestDelete],
   );
 
   // Plate-result row renderer (#19.3). The госномер is the visual anchor
@@ -629,7 +635,9 @@ export default function ClientsScreen() {
     [tabBarHeight],
   );
   const clientListContentStyle = useMemo(
-    () => ({ ...styles.list, paddingBottom: tabBarHeight + spacing[4] }),
+    // paddingTop gives the rounded first cell a little air below the search /
+    // chips when the retail hero header isn't shown (search / filter active).
+    () => ({ ...styles.list, paddingTop: spacing[2], paddingBottom: tabBarHeight + spacing[4] }),
     [tabBarHeight],
   );
 

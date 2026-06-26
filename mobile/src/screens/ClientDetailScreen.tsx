@@ -656,6 +656,24 @@ export default function ClientDetailScreen() {
     }
   };
 
+  // Prefetch the car's checks the instant the user starts tapping a garage
+  // card, so CarDetailScreen opens straight from cache. Key + limit mirror
+  // CarDetailScreen's query EXACTLY (['car-checks', carId, 'full'], 200) —
+  // diverge and the prefetch silently misses.
+  const prefetchCarDetail = useCallback(
+    (carId: string) => {
+      queryClient.prefetchQuery({
+        queryKey: ['car-checks', carId, 'full'],
+        queryFn: async (): Promise<Check[]> => {
+          const res = await carsApi.checks(carId, { limit: 200 });
+          return Array.isArray(res.data) ? res.data : [];
+        },
+        staleTime: 60_000,
+      });
+    },
+    [queryClient],
+  );
+
   // Stable row-open handler (RNPERF-6) — CheckRow is memoised, so the
   // callback identity must survive re-renders or the memo is useless.
   const openCheck = useCallback(
@@ -1032,6 +1050,18 @@ export default function ClientDetailScreen() {
                   spent={cs?.spent ?? 0}
                   lastMileage={cs?.lastMileage ?? null}
                   canEdit={canEditMeta}
+                  onPress={() => {
+                    haptic('select');
+                    navigation.navigate('CarDetail', {
+                      carId: car.id,
+                      clientId: id,
+                      clientName: client.fullName,
+                      makeModel: car.makeModel,
+                      plateNumber: car.plateNumber,
+                      noPlate: car.noPlate,
+                    });
+                  }}
+                  onPressIn={() => prefetchCarDetail(car.id)}
                   onEdit={() => openEditCar(car)}
                   onDelete={() => setDeleteCarId(car.id)}
                 />
@@ -1393,16 +1423,34 @@ interface CarCardProps {
   /** Последний пробег (из самого свежего чека с пробегом). */
   lastMileage: number | null;
   canEdit: boolean;
+  /** Drill-down — open the dedicated car screen (per-car stats + history). */
+  onPress: () => void;
+  /** Fires on finger-down so the car-history prefetch lands before the push. */
+  onPressIn: () => void;
   onEdit: () => void;
   onDelete: () => void;
 }
-function CarCard({ car, palette, index, spent, lastMileage, canEdit, onEdit, onDelete }: CarCardProps) {
+function CarCard({
+  car,
+  palette,
+  index,
+  spent,
+  lastMileage,
+  canEdit,
+  onPress,
+  onPressIn,
+  onEdit,
+  onDelete,
+}: CarCardProps) {
   const carColor = getCarColor(car.id);
   const plate = (car.plateNumber || '').toUpperCase();
   return (
     <AnimatedCard
       style={[styles.carCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       index={index + 1}
+      onPress={onPress}
+      onPressIn={onPressIn}
+      activeOpacity={0.7}
     >
       <View style={styles.carTop}>
         <View style={styles.carInfo}>
@@ -1424,16 +1472,22 @@ function CarCard({ car, palette, index, spent, lastMileage, canEdit, onEdit, onD
             )}
           </View>
         </View>
-        {canEdit ? (
-          <View style={styles.carActions}>
-            <TouchableOpacity onPress={onEdit} style={styles.iconBtn} hitSlop={8}>
-              <Ionicons name="create-outline" size={16} color={palette.text.tertiary} />
-            </TouchableOpacity>
-            <TouchableOpacity onPress={onDelete} style={styles.iconBtn} hitSlop={8}>
-              <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
-            </TouchableOpacity>
-          </View>
-        ) : null}
+        {/* Trailing cluster: edit/delete (gated) + a chevron that signals the
+            card is now a navigable drill-down. The icon buttons are their own
+            touch targets, so they fire instead of the card's onPress. */}
+        <View style={styles.carTopRight}>
+          {canEdit ? (
+            <View style={styles.carActions}>
+              <TouchableOpacity onPress={onEdit} style={styles.iconBtn} hitSlop={8}>
+                <Ionicons name="create-outline" size={16} color={palette.text.tertiary} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={onDelete} style={styles.iconBtn} hitSlop={8}>
+                <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
+              </TouchableOpacity>
+            </View>
+          ) : null}
+          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} style={styles.carChevron} />
+        </View>
       </View>
 
       {car.comment ? <Text style={[styles.carComment, { color: palette.text.tertiary }]}>{car.comment}</Text> : null}
@@ -1972,6 +2026,8 @@ const styles = StyleSheet.create({
     marginTop: 6,
   },
   plateBadgeText: { fontSize: 11, fontWeight: '700', letterSpacing: 0.5, textTransform: 'uppercase' },
+  carTopRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[0.5] },
+  carChevron: { marginLeft: spacing[0.5], opacity: 0.9 },
   carActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[0.5] },
   iconBtn: { padding: spacing[2], borderRadius: borderRadius.md },
   carComment: {

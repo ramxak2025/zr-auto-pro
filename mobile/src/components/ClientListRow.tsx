@@ -52,6 +52,11 @@ import type { Client } from '../../../shared/types';
 // `accent.primary` so it tracks brand + dark-mode automatically.
 const DESTRUCTIVE = colors.red[500];
 
+// Outer radius of the inset group — continuous-corner feel (matches the
+// app's squircle language). Applied to the first row's top + last row's
+// bottom so the whole group reads as one rounded card.
+const GROUP_RADIUS = 16;
+
 // ─── Avatar helpers (mirror ClientDetailScreen so initials/colour match) ───
 export function getInitials(name: string): string {
   const parts = (name || '').trim().split(/\s+/);
@@ -82,6 +87,11 @@ interface ClientListRowProps {
   /** Semantic palette — stable identity per theme mode (memoised inside
    *  ThemeContext), so passing the whole object keeps React.memo effective. */
   palette: SemanticPalette;
+  /** First row of the group — rounds the TOP corners (Apple inset-grouped). */
+  isFirst?: boolean;
+  /** Last row of the group — rounds the BOTTOM corners and drops the
+   *  trailing hairline (the rounded edge IS the visual terminator). */
+  isLast?: boolean;
   onPress: (id: string) => void;
   /** Fires on `onPressIn` so the detail prefetch lands BEFORE the push. */
   onPressInRow: (id: string) => void;
@@ -93,6 +103,8 @@ function ClientListRowBase({
   item,
   canDelete,
   palette,
+  isFirst,
+  isLast,
   onPress,
   onPressInRow,
   onEdit,
@@ -180,7 +192,7 @@ function ClientListRowBase({
       {/* Text column + hairline divider live in one block so the divider
           starts AFTER the avatar (Apple Mail / Settings inset separators),
           never edge-to-edge under the avatar. */}
-      <View style={[styles.body, { borderBottomColor: surface.divider }]}>
+      <View style={[styles.body, { borderBottomColor: surface.divider }, isLast && styles.bodyLast]}>
         <View style={styles.info}>
           <Text style={[styles.cardName, { color: palette.text.primary }]} numberOfLines={1}>
             {item.fullName}
@@ -216,15 +228,33 @@ function ClientListRowBase({
     </TouchableOpacity>
   );
 
+  // ── Inset-grouped container ───────────────────────────────────────────
+  // Every row is a cell of ONE continuous rounded group (Apple Settings /
+  // Contacts inset-grouped table), NOT a free-floating card. The white
+  // surface + inset hairline separators read as a single smooth list; the
+  // group's rounded corners live ONLY on the first/last cell, drawn here as
+  // a cheap per-recycle style change (no element-identity churn, so the
+  // FlashList hardening that stopped rows «пропадают» stays intact). No
+  // per-row shadow — separators carry the structure, so nothing re-clips an
+  // elevation as cells recycle.
+  const groupStyle = [
+    styles.group,
+    { backgroundColor: surface.rowBg },
+    isFirst && styles.groupFirst,
+    isLast && styles.groupLast,
+  ];
+
   // Permission gate — `canDelete` is constant for the session (role +
   // permissions don't change while the list scrolls), so this conditional
   // never flips element identity mid-scroll.
-  if (!canDelete) return card;
+  if (!canDelete) return <View style={groupStyle}>{card}</View>;
 
   return (
-    <ReanimatedSwipeable ref={swipeRef} renderRightActions={renderRightActions} overshootRight={false}>
-      {card}
-    </ReanimatedSwipeable>
+    <View style={groupStyle}>
+      <ReanimatedSwipeable ref={swipeRef} renderRightActions={renderRightActions} overshootRight={false}>
+        {card}
+      </ReanimatedSwipeable>
+    </View>
   );
 }
 
@@ -232,6 +262,23 @@ const ClientListRow = React.memo(ClientListRowBase);
 export default ClientListRow;
 
 const styles = StyleSheet.create({
+  // Inset-grouped wrapper — horizontal gutters lift the white group off the
+  // gray canvas; rows stack with NO vertical margin so the surface stays
+  // continuous. overflow:hidden only matters on the rounded first/last cells
+  // (it clips the corner + the swipe reveal to the inset width).
+  group: {
+    marginHorizontal: spacing[4],
+  },
+  groupFirst: {
+    borderTopLeftRadius: GROUP_RADIUS,
+    borderTopRightRadius: GROUP_RADIUS,
+    overflow: 'hidden',
+  },
+  groupLast: {
+    borderBottomLeftRadius: GROUP_RADIUS,
+    borderBottomRightRadius: GROUP_RADIUS,
+    overflow: 'hidden',
+  },
   // The whole row is the tap surface. Padding sits on the row (leading +
   // vertical), the hairline divider sits on `body` so it stays inset past
   // the avatar — the Apple Mail / Settings separator convention.
@@ -267,6 +314,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3],
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
+  // Last cell of the group: the rounded bottom edge terminates the list, so
+  // the trailing separator would read as a stray line just inside the curve.
+  bodyLast: { borderBottomWidth: 0 },
   info: { flex: 1, minWidth: 0 },
   cardName: { fontSize: 16, fontWeight: '600', letterSpacing: -0.2 },
   subLine: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 2 },
