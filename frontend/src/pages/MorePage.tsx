@@ -23,6 +23,7 @@ import {
   Package,
   BookOpen,
   Bell,
+  ClipboardList,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -95,6 +96,14 @@ const menuItems: MenuItem[] = [
     path: '/cashflow',
     icon: ArrowRightLeft,
     featureKey: 'cashflow_view',
+    color: 'bg-teal-50',
+    iconColor: 'text-teal-600',
+  },
+  {
+    label: 'Кассовая смена',
+    description: 'Z-отчёт, инкассация, сверка кассы',
+    path: '/cash-shift',
+    icon: ClipboardList,
     color: 'bg-teal-50',
     iconColor: 'text-teal-600',
   },

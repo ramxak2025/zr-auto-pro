@@ -21,6 +21,7 @@ import {
   Megaphone,
   Lock,
   GraduationCap,
+  ClipboardList,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { subscriptionApi } from '../api/services';
@@ -29,7 +30,6 @@ import { useRoutePrefetch } from '../hooks/useRoutePrefetch';
 import { useOfflineSync } from '../hooks/useOfflineSync';
 import type { UserPermissions, SubscriptionInfo } from '../types';
 import { roleLabels } from '../../../shared/utils/formatters';
-
 
 interface NavItem {
   label: string;
@@ -45,8 +45,15 @@ const navItems: NavItem[] = [
   { label: 'Касса', path: '/checks', icon: Receipt, permission: 'checks_view' },
   { label: 'Склад', path: '/products', icon: Package, permission: 'warehouse_access' },
   { label: 'Услуги', path: '/services', icon: Wrench, featureKey: 'services_view' },
-  { label: 'Поставщики', path: '/suppliers', icon: Truck, permission: 'suppliers_access', featureKey: 'suppliers_view' },
+  {
+    label: 'Поставщики',
+    path: '/suppliers',
+    icon: Truck,
+    permission: 'suppliers_access',
+    featureKey: 'suppliers_view',
+  },
   { label: 'Движение денег', path: '/cashflow', icon: Wallet, featureKey: 'cashflow_view' },
+  { label: 'Кассовая смена', path: '/cash-shift', icon: ClipboardList },
   { label: 'Зарплата', path: '/salary', icon: Wallet, featureKey: 'salary_view' },
   { label: 'Расписание', path: '/schedule', icon: CalendarDays, featureKey: 'schedule_view' },
   { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports', featureKey: 'reports_view' },
@@ -67,7 +74,29 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
   { label: 'Склад', path: '/products', icon: Package, matchPaths: ['/products'] },
   { label: 'Касса', path: '/checks/new', icon: Receipt, matchPaths: ['/checks/new'], isCenter: true },
   { label: 'Журнал', path: '/checks', icon: BookOpen, matchPaths: ['/checks'] },
-  { label: 'Ещё', path: '/more', icon: MoreHorizontal, matchPaths: ['/more', '/clients', '/services', '/suppliers', '/salary', '/reports', '/users', '/cashflow', '/schedule', '/tariff', '/clients/retail', '/marketing', '/calls', '/equipment', '/knowledge'] },
+  {
+    label: 'Ещё',
+    path: '/more',
+    icon: MoreHorizontal,
+    matchPaths: [
+      '/more',
+      '/clients',
+      '/services',
+      '/suppliers',
+      '/salary',
+      '/reports',
+      '/users',
+      '/cashflow',
+      '/cash-shift',
+      '/schedule',
+      '/tariff',
+      '/clients/retail',
+      '/marketing',
+      '/calls',
+      '/equipment',
+      '/knowledge',
+    ],
+  },
 ];
 
 const roleBadgeColors: Record<string, string> = {
@@ -92,7 +121,8 @@ function getPageTitle(pathname: string): string[] {
 function isTabActive(tab: TabItem & { isCenter?: boolean }, pathname: string): boolean {
   if (tab.path === '/checks/new') return pathname === '/checks/new';
   if (tab.path === '/dashboard') return pathname === '/dashboard' || pathname === '/';
-  if (tab.path === '/checks') return pathname === '/checks' || (pathname.startsWith('/checks/') && pathname !== '/checks/new');
+  if (tab.path === '/checks')
+    return pathname === '/checks' || (pathname.startsWith('/checks/') && pathname !== '/checks/new');
   if (tab.matchPaths) return tab.matchPaths.some((p) => pathname === p || pathname.startsWith(p + '/'));
   return pathname === tab.path;
 }
@@ -180,7 +210,11 @@ const DesktopSidebar = memo(function DesktopSidebar({
             <p className="truncate text-sm font-medium text-gray-900">{userName}</p>
             <p className="truncate text-xs text-gray-500">{roleLabel}</p>
           </div>
-          <button onClick={onLogout} className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 transition-colors" title="Выход">
+          <button
+            onClick={onLogout}
+            className="p-1.5 text-gray-400 hover:text-red-500 rounded-lg hover:bg-gray-100 transition-colors"
+            title="Выход"
+          >
             <LogOut className="h-4 w-4" />
           </button>
         </div>
@@ -240,11 +274,23 @@ const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps)
           }
 
           return (
-            <NavLink key={tab.path} to={tab.path} replace className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors">
-              <div className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}>
-                <Icon className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`} strokeWidth={active ? 2.2 : 1.8} />
+            <NavLink
+              key={tab.path}
+              to={tab.path}
+              replace
+              className="flex flex-col items-center justify-center gap-0.5 w-16 py-1.5 transition-colors"
+            >
+              <div
+                className={`flex items-center justify-center h-8 w-8 rounded-xl transition-colors ${active ? 'bg-primary-50' : ''}`}
+              >
+                <Icon
+                  className={`h-[22px] w-[22px] ${active ? 'text-primary-600' : 'text-gray-400'}`}
+                  strokeWidth={active ? 2.2 : 1.8}
+                />
               </div>
-              <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>{tab.label}</span>
+              <span className={`text-[10px] font-medium ${active ? 'text-primary-600' : 'text-gray-400'}`}>
+                {tab.label}
+              </span>
             </NavLink>
           );
         })}
@@ -268,36 +314,45 @@ export default function Layout() {
   // Fetch subscription for feature gating in sidebar
   const { data: sub } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
-    queryFn: async () => { const res = await subscriptionApi.get(); return res.data; },
+    queryFn: async () => {
+      const res = await subscriptionApi.get();
+      return res.data;
+    },
     staleTime: 5 * 60 * 1000,
   });
 
-  const currentPlan = sub?.plans?.find(p => p.name === sub?.planName);
+  const currentPlan = sub?.plans?.find((p) => p.name === sub?.planName);
   const planFeatures: string[] = Array.isArray(currentPlan?.features) ? currentPlan!.features : [];
   const isBypass = user?.role === 'superadmin';
 
-  const isFeatureLocked = useMemo(() => (featureKey?: string) => {
-    if (!featureKey || isBypass || !sub) return false;
-    return !planFeatures.includes(featureKey);
-  }, [isBypass, sub, planFeatures]);
+  const isFeatureLocked = useMemo(
+    () => (featureKey?: string) => {
+      if (!featureKey || isBypass || !sub) return false;
+      return !planFeatures.includes(featureKey);
+    },
+    [isBypass, sub, planFeatures],
+  );
 
   const breadcrumbs = getPageTitle(location.pathname);
-  const roleLabel = user?.role ? (roleLabels[user.role] || user.role) : '';
+  const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userName = user?.fullName || 'User';
   const userInitial = user?.fullName?.charAt(0) || 'U';
   const tenantName = user?.tenant?.name || '';
 
   // Memoize to prevent unnecessary re-renders of child components
-  const sidebarProps = useMemo(() => ({
-    userName,
-    userAvatar: user?.avatar,
-    userInitial,
-    tenantName,
-    roleLabel,
-    hasPermission,
-    isFeatureLocked,
-    onLogout: logout,
-  }), [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, isFeatureLocked, logout]);
+  const sidebarProps = useMemo(
+    () => ({
+      userName,
+      userAvatar: user?.avatar,
+      userInitial,
+      tenantName,
+      roleLabel,
+      hasPermission,
+      isFeatureLocked,
+      onLogout: logout,
+    }),
+    [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, isFeatureLocked, logout],
+  );
 
   return (
     <div className="flex h-[100dvh] overflow-hidden bg-gray-50">
@@ -312,18 +367,25 @@ export default function Layout() {
             {breadcrumbs.map((crumb, index) => (
               <span key={index} className="flex items-center gap-1.5">
                 {index > 0 && <ChevronRight className="h-4 w-4 text-gray-400" />}
-                <span className={index === breadcrumbs.length - 1 ? 'font-semibold text-gray-900' : 'text-gray-500'}>{crumb}</span>
+                <span className={index === breadcrumbs.length - 1 ? 'font-semibold text-gray-900' : 'text-gray-500'}>
+                  {crumb}
+                </span>
               </span>
             ))}
           </div>
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2.5">
               <span className="text-sm font-medium text-gray-700">{userName}</span>
-              <span className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${roleBadgeColors[user?.role || ''] || 'bg-gray-100 text-gray-600'}`}>
+              <span
+                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${roleBadgeColors[user?.role || ''] || 'bg-gray-100 text-gray-600'}`}
+              >
                 {roleLabel}
               </span>
             </div>
-            <button onClick={logout} className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700">
+            <button
+              onClick={logout}
+              className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium text-gray-500 transition-colors hover:bg-gray-100 hover:text-gray-700"
+            >
               <LogOut className="h-4 w-4" />
               <span className="hidden sm:inline">Выход</span>
             </button>

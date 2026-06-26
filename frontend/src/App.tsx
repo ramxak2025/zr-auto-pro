@@ -62,6 +62,7 @@ const SupplierDetailPage = lazyWithRetry(() => import('./pages/SupplierDetailPag
 const SalaryPage = lazyWithRetry(() => import('./pages/SalaryPage'));
 const ReportsPage = lazyWithRetry(() => import('./pages/ReportsPage'));
 const CashFlowPage = lazyWithRetry(() => import('./pages/CashFlowPage'));
+const CashShiftPage = lazyWithRetry(() => import('./pages/CashShiftPage'));
 const UsersPage = lazyWithRetry(() => import('./pages/UsersPage'));
 const EmployeesPage = lazyWithRetry(() => import('./pages/EmployeesPage'));
 const EmployeeDetailPage = lazyWithRetry(() => import('./pages/EmployeeDetailPage'));
@@ -157,95 +158,110 @@ export default function App() {
 
   // Check subscription for non-superadmin users
   const subscriptionBlocked =
-    user &&
-    user.role !== UserRole.SUPERADMIN &&
-    user.tenant &&
-    isSubscriptionExpired(user.tenant.subscriptionEnd);
+    user && user.role !== UserRole.SUPERADMIN && user.tenant && isSubscriptionExpired(user.tenant.subscriptionEnd);
 
   return (
     <ErrorBoundary>
-    <Suspense fallback={<div className="flex items-center justify-center h-32"><div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>}>
-      <Routes>
-        {/* Public: Review page (no auth) */}
-        <Route path="/review/:token" element={<ReviewPublicPage />} />
+      <Suspense
+        fallback={
+          <div className="flex items-center justify-center h-32">
+            <div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        }
+      >
+        <Routes>
+          {/* Public: Review page (no auth) */}
+          <Route path="/review/:token" element={<ReviewPublicPage />} />
 
-        {/* Public: Login */}
-        <Route
-          path="/login"
-          element={user ? <Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace /> : <LoginPage />}
-        />
+          {/* Public: Login */}
+          <Route
+            path="/login"
+            element={
+              user ? (
+                <Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace />
+              ) : (
+                <LoginPage />
+              )
+            }
+          />
 
-        {/* Protected routes */}
-        {user ? (
-          <>
-            {/* Subscription blocked — show block screen for all routes */}
-            {subscriptionBlocked ? (
-              <Route path="*" element={<SubscriptionBlockedPage />} />
-            ) : (
-              <>
-                {/* Main app routes inside Layout */}
-                <Route element={<Layout />}>
-                  <Route path="/" element={
-                    user.role === UserRole.SUPERADMIN
-                      ? <Navigate to="/admin/dashboard" replace />
-                      : <Navigate to="/dashboard" replace />
-                  } />
-                  <Route path="/dashboard" element={<DashboardPage />} />
-                  <Route path="/checks" element={<ChecksPage />} />
-                  <Route path="/checks/new" element={<CheckCreatePage />} />
-                  <Route path="/checks/:id/edit" element={<CheckCreatePage />} />
-                  <Route path="/checks/:id" element={<CheckDetailPage />} />
-                  <Route path="/clients" element={gated('clients_view', <ClientsPage />)} />
-                  <Route path="/clients/retail" element={gated('clients_view', <RetailChecksPage />)} />
-                  <Route path="/clients/import" element={gated('clients_view', <ImportClientsCarsPage />)} />
-                  <Route path="/clients/:id" element={gated('clients_view', <ClientDetailPage />)} />
-                  <Route path="/cars" element={gated('clients_view', <CarsPage />)} />
-                  <Route path="/products" element={<ProductsPage />} />
-                  <Route path="/services" element={gated('services_view', <ServicesPage />)} />
-                  <Route path="/suppliers" element={gated('suppliers_view', <SuppliersPage />)} />
-                  <Route path="/suppliers/:id" element={gated('suppliers_view', <SupplierDetailPage />)} />
-                  <Route path="/salary" element={gated('salary_view', <SalaryPage />)} />
-                  <Route path="/reports" element={gated('reports_view', <ReportsPage />)} />
-                  <Route path="/cashflow" element={gated('cashflow_view', <CashFlowPage />)} />
-                  <Route path="/expenses" element={<ExpensesPage />} />
-                  <Route path="/users" element={gated('users_manage', <UsersPage />)} />
-                  <Route path="/employees" element={<EmployeesPage />} />
-                  <Route path="/employees/:id" element={<EmployeeDetailPage />} />
-                  <Route path="/schedule" element={gated('schedule_view', <SchedulePage />)} />
-                  <Route path="/more" element={<MorePage />} />
-                  <Route path="/notifications" element={<NotificationSettingsPage />} />
-                  <Route path="/tariff" element={<TariffPage />} />
-                  <Route path="/marketing" element={<MarketingPage />} />
-                  <Route path="/calls" element={<CallsPage />} />
-                  <Route path="/equipment" element={<EquipmentPage />} />
-                  <Route path="/knowledge" element={<KnowledgeBasePage />} />
-                  <Route path="/company-settings" element={<CompanySettingsPage />} />
-                </Route>
-
-                {/* Admin routes inside AdminLayout (superadmin only) */}
-                {user.role === UserRole.SUPERADMIN && (
-                  <Route element={<AdminLayout />}>
-                    <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
-                    <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
-                    <Route path="/admin/tenants" element={<AdminTenantsPage />} />
-                    <Route path="/admin/tenants/:id" element={<AdminTenantDetailPage />} />
-                    <Route path="/admin/plans" element={<AdminPlansPage />} />
-                    <Route path="/admin/broadcast" element={<AdminBroadcastPage />} />
-                    <Route path="/admin/audit-log" element={<AdminAuditLogPage />} />
+          {/* Protected routes */}
+          {user ? (
+            <>
+              {/* Subscription blocked — show block screen for all routes */}
+              {subscriptionBlocked ? (
+                <Route path="*" element={<SubscriptionBlockedPage />} />
+              ) : (
+                <>
+                  {/* Main app routes inside Layout */}
+                  <Route element={<Layout />}>
+                    <Route
+                      path="/"
+                      element={
+                        user.role === UserRole.SUPERADMIN ? (
+                          <Navigate to="/admin/dashboard" replace />
+                        ) : (
+                          <Navigate to="/dashboard" replace />
+                        )
+                      }
+                    />
+                    <Route path="/dashboard" element={<DashboardPage />} />
+                    <Route path="/checks" element={<ChecksPage />} />
+                    <Route path="/checks/new" element={<CheckCreatePage />} />
+                    <Route path="/checks/:id/edit" element={<CheckCreatePage />} />
+                    <Route path="/checks/:id" element={<CheckDetailPage />} />
+                    <Route path="/clients" element={gated('clients_view', <ClientsPage />)} />
+                    <Route path="/clients/retail" element={gated('clients_view', <RetailChecksPage />)} />
+                    <Route path="/clients/import" element={gated('clients_view', <ImportClientsCarsPage />)} />
+                    <Route path="/clients/:id" element={gated('clients_view', <ClientDetailPage />)} />
+                    <Route path="/cars" element={gated('clients_view', <CarsPage />)} />
+                    <Route path="/products" element={<ProductsPage />} />
+                    <Route path="/services" element={gated('services_view', <ServicesPage />)} />
+                    <Route path="/suppliers" element={gated('suppliers_view', <SuppliersPage />)} />
+                    <Route path="/suppliers/:id" element={gated('suppliers_view', <SupplierDetailPage />)} />
+                    <Route path="/salary" element={gated('salary_view', <SalaryPage />)} />
+                    <Route path="/reports" element={gated('reports_view', <ReportsPage />)} />
+                    <Route path="/cashflow" element={gated('cashflow_view', <CashFlowPage />)} />
+                    <Route path="/cash-shift" element={<CashShiftPage />} />
+                    <Route path="/expenses" element={<ExpensesPage />} />
+                    <Route path="/users" element={gated('users_manage', <UsersPage />)} />
+                    <Route path="/employees" element={<EmployeesPage />} />
+                    <Route path="/employees/:id" element={<EmployeeDetailPage />} />
+                    <Route path="/schedule" element={gated('schedule_view', <SchedulePage />)} />
+                    <Route path="/more" element={<MorePage />} />
+                    <Route path="/notifications" element={<NotificationSettingsPage />} />
+                    <Route path="/tariff" element={<TariffPage />} />
+                    <Route path="/marketing" element={<MarketingPage />} />
+                    <Route path="/calls" element={<CallsPage />} />
+                    <Route path="/equipment" element={<EquipmentPage />} />
+                    <Route path="/knowledge" element={<KnowledgeBasePage />} />
+                    <Route path="/company-settings" element={<CompanySettingsPage />} />
                   </Route>
-                )}
 
-                {/* Catch-all: redirect to dashboard */}
-                <Route path="*" element={<Navigate to="/" replace />} />
-              </>
-            )}
-          </>
-        ) : (
-          /* Not logged in: redirect everything to login */
-          <Route path="*" element={<Navigate to="/login" replace />} />
-        )}
-      </Routes>
-    </Suspense>
+                  {/* Admin routes inside AdminLayout (superadmin only) */}
+                  {user.role === UserRole.SUPERADMIN && (
+                    <Route element={<AdminLayout />}>
+                      <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
+                      <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
+                      <Route path="/admin/tenants" element={<AdminTenantsPage />} />
+                      <Route path="/admin/tenants/:id" element={<AdminTenantDetailPage />} />
+                      <Route path="/admin/plans" element={<AdminPlansPage />} />
+                      <Route path="/admin/broadcast" element={<AdminBroadcastPage />} />
+                      <Route path="/admin/audit-log" element={<AdminAuditLogPage />} />
+                    </Route>
+                  )}
+
+                  {/* Catch-all: redirect to dashboard */}
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </>
+              )}
+            </>
+          ) : (
+            /* Not logged in: redirect everything to login */
+            <Route path="*" element={<Navigate to="/login" replace />} />
+          )}
+        </Routes>
+      </Suspense>
     </ErrorBoundary>
   );
 }
