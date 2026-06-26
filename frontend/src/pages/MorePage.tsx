@@ -24,6 +24,7 @@ import {
   BookOpen,
   Bell,
   ClipboardList,
+  Coins,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -106,6 +107,14 @@ const menuItems: MenuItem[] = [
     icon: ClipboardList,
     color: 'bg-teal-50',
     iconColor: 'text-teal-600',
+  },
+  {
+    label: 'Дебиторка',
+    description: 'Клиенты с непогашенным долгом',
+    path: '/debtors',
+    icon: Coins,
+    color: 'bg-red-50',
+    iconColor: 'text-red-600',
   },
   {
     label: 'Зарплата',

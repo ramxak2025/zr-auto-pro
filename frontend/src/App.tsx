@@ -63,6 +63,7 @@ const SalaryPage = lazyWithRetry(() => import('./pages/SalaryPage'));
 const ReportsPage = lazyWithRetry(() => import('./pages/ReportsPage'));
 const CashFlowPage = lazyWithRetry(() => import('./pages/CashFlowPage'));
 const CashShiftPage = lazyWithRetry(() => import('./pages/CashShiftPage'));
+const DebtorsPage = lazyWithRetry(() => import('./pages/DebtorsPage'));
 const UsersPage = lazyWithRetry(() => import('./pages/UsersPage'));
 const EmployeesPage = lazyWithRetry(() => import('./pages/EmployeesPage'));
 const EmployeeDetailPage = lazyWithRetry(() => import('./pages/EmployeeDetailPage'));
@@ -223,6 +224,7 @@ export default function App() {
                     <Route path="/reports" element={gated('reports_view', <ReportsPage />)} />
                     <Route path="/cashflow" element={gated('cashflow_view', <CashFlowPage />)} />
                     <Route path="/cash-shift" element={<CashShiftPage />} />
+                    <Route path="/debtors" element={<DebtorsPage />} />
                     <Route path="/expenses" element={<ExpensesPage />} />
                     <Route path="/users" element={gated('users_manage', <UsersPage />)} />
                     <Route path="/employees" element={<EmployeesPage />} />

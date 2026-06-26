@@ -22,6 +22,7 @@ import {
   Lock,
   GraduationCap,
   ClipboardList,
+  Coins,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { subscriptionApi } from '../api/services';
@@ -54,6 +55,7 @@ const navItems: NavItem[] = [
   },
   { label: 'Движение денег', path: '/cashflow', icon: Wallet, featureKey: 'cashflow_view' },
   { label: 'Кассовая смена', path: '/cash-shift', icon: ClipboardList },
+  { label: 'Дебиторка', path: '/debtors', icon: Coins },
   { label: 'Зарплата', path: '/salary', icon: Wallet, featureKey: 'salary_view' },
   { label: 'Расписание', path: '/schedule', icon: CalendarDays, featureKey: 'schedule_view' },
   { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports', featureKey: 'reports_view' },
@@ -88,6 +90,7 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
       '/users',
       '/cashflow',
       '/cash-shift',
+      '/debtors',
       '/schedule',
       '/tariff',
       '/clients/retail',

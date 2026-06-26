@@ -5,6 +5,7 @@ import {
   ArrowLeft,
   Edit2,
   Plus,
+  Minus,
   Trash2,
   User,
   Phone,
@@ -14,25 +15,31 @@ import {
   FileText,
   ChevronDown,
   ChevronUp,
+  ChevronRight,
   Search,
   UserCheck,
   Loader2,
   Clock,
   Percent,
   TrendingUp,
+  Coins,
+  AlertCircle,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
-import { clientsApi, carsApi, checksApi } from '../api/services';
+import { clientsApi, carsApi, checksApi, debtsApi } from '../api/services';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
-import { Client, Car as CarType, Check } from '../types';
+import { useAuth } from '../contexts/AuthContext';
+import { Client, Car as CarType, Check, ClientDebtSummary, UserRole } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
+
+const formatMoney = (amount: number) => amount.toLocaleString('ru-RU') + ' ₽';
 
 // ---- Car Checks Expandable Panel ----
 function CarChecksPanel({ carId }: { carId: string }) {
@@ -99,11 +106,7 @@ function CarChecksPanel({ carId }: { carId: string }) {
   }
 
   if (checks.length === 0) {
-    return (
-      <div className="py-4 text-center text-sm text-gray-400">
-        Нет чеков для этого автомобиля
-      </div>
-    );
+    return <div className="py-4 text-center text-sm text-gray-400">Нет чеков для этого автомобиля</div>;
   }
 
   return (
@@ -121,13 +124,15 @@ function CarChecksPanel({ carId }: { carId: string }) {
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-sm font-bold text-gray-900">#{check.number}</span>
                 {check.isDeferred && (
-                  <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">Отложен</span>
+                  <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
+                    Отложен
+                  </span>
                 )}
-                <span className={paymentBadge(check.paymentMethod)}>
-                  {paymentLabel(check.paymentMethod)}
-                </span>
+                <span className={paymentBadge(check.paymentMethod)}>{paymentLabel(check.paymentMethod)}</span>
               </div>
-              <span className="text-sm font-bold text-gray-900 flex-shrink-0">{formatCurrency(check.totalRevenue)}</span>
+              <span className="text-sm font-bold text-gray-900 flex-shrink-0">
+                {formatCurrency(check.totalRevenue)}
+              </span>
             </div>
             <div className="flex items-center gap-3 mt-1 text-xs text-gray-400">
               <span>{formatDate(check.date || check.createdAt)}</span>
@@ -164,9 +169,7 @@ function ClientSearchAutocomplete({
     enabled: search.length >= 1,
   });
 
-  const clients: Client[] = (clientsData?.data || []).filter(
-    (c) => c.id !== excludeClientId
-  );
+  const clients: Client[] = (clientsData?.data || []).filter((c) => c.id !== excludeClientId);
 
   // Close dropdown on click outside
   useEffect(() => {
@@ -239,9 +242,7 @@ function ClientSearchAutocomplete({
               <span className="ml-2 text-sm text-gray-500">Поиск...</span>
             </div>
           ) : clients.length === 0 ? (
-            <div className="py-4 text-center text-sm text-gray-400">
-              Клиенты не найдены
-            </div>
+            <div className="py-4 text-center text-sm text-gray-400">Клиенты не найдены</div>
           ) : (
             clients.map((client) => (
               <button
@@ -254,9 +255,7 @@ function ClientSearchAutocomplete({
                   <User className="w-4 h-4 text-gray-500" />
                 </div>
                 <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">
-                    {client.fullName}
-                  </p>
+                  <p className="text-sm font-medium text-gray-900 truncate">{client.fullName}</p>
                   <p className="text-xs text-gray-500">{formatPhone(client.phone)}</p>
                 </div>
               </button>
@@ -264,6 +263,288 @@ function ClientSearchAutocomplete({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// ---- Client Debt / Receivables Section ----
+function ClientDebtSection({ clientId, clientName }: { clientId: string; clientName: string }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { isRole } = useAuth();
+  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [mode, setMode] = useState<'charge' | 'payment'>('charge');
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+  const [deleteEntryId, setDeleteEntryId] = useState<string | null>(null);
+
+  const { data: summary, isLoading } = useQuery<ClientDebtSummary>({
+    queryKey: ['debts', 'client', clientId],
+    queryFn: async () => {
+      const res = await debtsApi.clientLedger(clientId);
+      return res.data;
+    },
+    enabled: !!clientId,
+  });
+
+  // Push the fresh summary straight into the cache (instant UI) and invalidate
+  // the debtors overview so the list stays in sync.
+  const applySummary = (next: ClientDebtSummary) => {
+    queryClient.setQueryData(['debts', 'client', clientId], next);
+    queryClient.invalidateQueries({ queryKey: ['debts', 'client', clientId] });
+    queryClient.invalidateQueries({ queryKey: ['debts', 'debtors'] });
+  };
+
+  const chargeMutation = useMutation({
+    mutationFn: (data: { amount: number; reason?: string }) =>
+      debtsApi.charge({ clientId, amount: data.amount, reason: data.reason }),
+    onSuccess: (res) => {
+      applySummary(res.data);
+      toast.success('Долг добавлен');
+      closeModal();
+    },
+    onError: () => toast.error('Не удалось добавить долг'),
+  });
+
+  const paymentMutation = useMutation({
+    mutationFn: (data: { amount: number; reason?: string }) =>
+      debtsApi.payment({ clientId, amount: data.amount, reason: data.reason }),
+    onSuccess: (res) => {
+      applySummary(res.data);
+      toast.success('Оплата принята');
+      closeModal();
+    },
+    onError: () => toast.error('Не удалось принять оплату'),
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (entryId: string) => debtsApi.remove(entryId),
+    onSuccess: (res) => {
+      applySummary(res.data);
+      toast.success('Операция удалена');
+      setDeleteEntryId(null);
+    },
+    onError: () => {
+      toast.error('Не удалось удалить операцию');
+      setDeleteEntryId(null);
+    },
+  });
+
+  const openModal = (next: 'charge' | 'payment') => {
+    setMode(next);
+    setAmount('');
+    setReason('');
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setAmount('');
+    setReason('');
+  };
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const value = Number(amount.replace(',', '.'));
+    if (!Number.isFinite(value) || value <= 0) {
+      toast.error('Введите сумму больше нуля');
+      return;
+    }
+    const payload = { amount: value, reason: reason.trim() || undefined };
+    if (mode === 'charge') chargeMutation.mutate(payload);
+    else paymentMutation.mutate(payload);
+  };
+
+  const balance = summary?.balance ?? 0;
+  const ledger = summary?.ledger ?? [];
+  const deferredChecks = summary?.deferredChecks ?? [];
+  const submitting = chargeMutation.isPending || paymentMutation.isPending;
+
+  return (
+    <div className="card p-6 mb-6">
+      {/* Header + balance + actions */}
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-rose-50 rounded-lg">
+            <Coins className="w-5 h-5 text-rose-600" />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-gray-900">Долги клиента</h2>
+            {isLoading ? (
+              <p className="text-sm text-gray-400">Загрузка…</p>
+            ) : balance > 0 ? (
+              <p className="text-sm">
+                <span className="text-gray-500">Долг: </span>
+                <span className="font-bold text-red-600">{formatMoney(balance)}</span>
+              </p>
+            ) : balance < 0 ? (
+              <p className="text-sm">
+                <span className="text-gray-500">Кредит: </span>
+                <span className="font-bold text-green-600">{formatMoney(Math.abs(balance))}</span>
+              </p>
+            ) : (
+              <p className="text-sm font-medium text-gray-500">Нет долга</p>
+            )}
+          </div>
+        </div>
+
+        {canManage && (
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => openModal('charge')} className="btn-secondary btn-sm">
+              <Plus className="w-4 h-4" />
+              Добавить долг
+            </button>
+            <button type="button" onClick={() => openModal('payment')} className="btn-primary btn-sm">
+              <Minus className="w-4 h-4" />
+              Принять оплату
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Ledger */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-6">
+          <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
+        </div>
+      ) : ledger.length === 0 ? (
+        <p className="text-sm text-gray-400 py-2">Операций по долгам пока нет</p>
+      ) : (
+        <div className="divide-y divide-gray-100">
+          {ledger.map((entry) => {
+            const isCharge = entry.type === 'charge';
+            return (
+              <div key={entry.id} className="flex items-center gap-3 py-3">
+                <div
+                  className={`flex h-9 w-9 items-center justify-center rounded-xl flex-shrink-0 ${
+                    isCharge ? 'bg-red-50' : 'bg-green-50'
+                  }`}
+                >
+                  {isCharge ? <Plus className="w-4 h-4 text-red-500" /> : <Minus className="w-4 h-4 text-green-600" />}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-gray-900">
+                    {isCharge ? 'Начисление долга' : 'Погашение'}
+                    {entry.reason && <span className="font-normal text-gray-500"> · {entry.reason}</span>}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-400 mt-0.5">
+                    <span>{format(new Date(entry.createdAt), 'dd.MM.yy HH:mm', { locale: ru })}</span>
+                    {entry.createdByName && <span>· {entry.createdByName}</span>}
+                    {entry.checkId && (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/checks/${entry.checkId}`)}
+                        className="text-primary-600 hover:text-primary-700 font-medium"
+                      >
+                        · Чек{entry.checkNumber ? ` #${entry.checkNumber}` : ''}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <span className={`text-sm font-bold whitespace-nowrap ${isCharge ? 'text-red-600' : 'text-green-600'}`}>
+                  {isCharge ? '+' : '−'}
+                  {formatMoney(entry.amount)}
+                </span>
+                {canManage && (
+                  <button
+                    type="button"
+                    onClick={() => setDeleteEntryId(entry.id)}
+                    className="p-1.5 text-gray-300 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors flex-shrink-0"
+                    title="Удалить операцию"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Read-only deferred checks (NOT counted in balance) */}
+      {deferredChecks.length > 0 && (
+        <div className="mt-5 pt-4 border-t border-gray-100">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertCircle className="w-4 h-4 text-amber-500" />
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Незакрытые заказ-наряды</p>
+          </div>
+          <div className="space-y-2">
+            {deferredChecks.map((dc) => (
+              <button
+                key={dc.id}
+                type="button"
+                onClick={() => navigate(`/checks/${dc.id}`)}
+                className="w-full flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50/50 px-3 py-2.5 text-left hover:bg-amber-50 transition-colors"
+              >
+                <FileText className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-gray-900">Заказ-наряд #{dc.number}</p>
+                  <p className="text-xs text-gray-400">{format(new Date(dc.date), 'dd.MM.yy', { locale: ru })}</p>
+                </div>
+                <span className="text-sm font-bold text-gray-900 whitespace-nowrap">
+                  {formatMoney(dc.totalRevenue)}
+                </span>
+                <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Charge / Payment modal */}
+      <Modal isOpen={modalOpen} onClose={closeModal} title={mode === 'charge' ? 'Добавить долг' : 'Принять оплату'}>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Клиент: <span className="font-medium text-gray-700">{clientName}</span>
+          </p>
+          <div>
+            <label className="label">Сумма</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="0.01"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="input"
+              placeholder="0"
+              autoFocus
+              required
+            />
+          </div>
+          <div>
+            <label className="label">Комментарий</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="input"
+              placeholder={mode === 'charge' ? 'За что долг (необязательно)' : 'Комментарий (необязательно)'}
+            />
+          </div>
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={closeModal} className="btn-secondary">
+              Отмена
+            </button>
+            <button type="submit" disabled={submitting} className="btn-primary">
+              {submitting ? 'Сохраняем…' : mode === 'charge' ? 'Добавить долг' : 'Принять оплату'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Delete ledger entry confirm */}
+      <ConfirmDialog
+        isOpen={!!deleteEntryId}
+        onClose={() => setDeleteEntryId(null)}
+        onConfirm={() => deleteEntryId && removeMutation.mutate(deleteEntryId)}
+        title="Удалить операцию"
+        message="Эта операция будет удалена из истории долгов, баланс пересчитается. Действие нельзя отменить."
+        confirmText="Удалить"
+        variant="danger"
+      />
     </div>
   );
 }
@@ -331,8 +612,7 @@ export default function ClientDetailPage() {
 
   // Client update mutation
   const updateClientMutation = useMutation({
-    mutationFn: (data: { fullName: string; phone: string; comment?: string }) =>
-      clientsApi.update(id!, data),
+    mutationFn: (data: { fullName: string; phone: string; comment?: string }) => clientsApi.update(id!, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients', id] });
       queryClient.invalidateQueries({ queryKey: ['clients'] });
@@ -360,8 +640,13 @@ export default function ClientDetailPage() {
   });
 
   const updateCarMutation = useMutation({
-    mutationFn: ({ carId, data }: { carId: string; data: { plateNumber: string; makeModel: string; comment?: string; clientId?: string } }) =>
-      carsApi.update(carId, data),
+    mutationFn: ({
+      carId,
+      data,
+    }: {
+      carId: string;
+      data: { plateNumber: string; makeModel: string; comment?: string; clientId?: string };
+    }) => carsApi.update(carId, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients', id] });
       queryClient.invalidateQueries({ queryKey: ['clients'] });
@@ -527,10 +812,7 @@ export default function ClientDetailPage() {
   return (
     <div>
       {/* Back button */}
-      <button
-        onClick={() => navigate('/clients')}
-        className="btn-secondary mb-4"
-      >
+      <button onClick={() => navigate('/clients')} className="btn-secondary mb-4">
         <ArrowLeft className="w-4 h-4" />
         Назад к клиентам
       </button>
@@ -538,9 +820,7 @@ export default function ClientDetailPage() {
       {/* Client Info Card */}
       <div className="card p-6 mb-6">
         <div className="flex items-start justify-between mb-4">
-          <h2 className="text-xl font-semibold text-gray-900">
-            Информация о клиенте
-          </h2>
+          <h2 className="text-xl font-semibold text-gray-900">Информация о клиенте</h2>
           <button onClick={openClientEditModal} className="btn-secondary">
             <Edit2 className="w-4 h-4" />
             Редактировать
@@ -592,19 +872,20 @@ export default function ClientDetailPage() {
         </div>
       </div>
 
+      {/* Debt / Receivables Section */}
+      <ClientDebtSection clientId={id!} clientName={client.fullName} />
+
       {/* Cars Section */}
       <div className="card p-6 mb-6">
         <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-gray-900">
-            Автомобили ({client.cars?.length || 0})
-          </h2>
+          <h2 className="text-lg font-semibold text-gray-900">Автомобили ({client.cars?.length || 0})</h2>
           <button onClick={openAddCarModal} className="btn-primary">
             <Plus className="w-4 h-4" />
             Добавить авто
           </button>
         </div>
 
-        {(!client.cars || client.cars.length === 0) ? (
+        {!client.cars || client.cars.length === 0 ? (
           <EmptyState
             icon={Car}
             title="Нет автомобилей"
@@ -629,13 +910,9 @@ export default function ClientDetailPage() {
                       <Car className="w-5 h-5 text-gray-600" />
                     </div>
                     <div className="min-w-0">
-                      <p className="font-semibold text-gray-900">
-                        {car.plateNumber}
-                      </p>
+                      <p className="font-semibold text-gray-900">{car.plateNumber}</p>
                       <p className="text-sm text-gray-500">{car.makeModel}</p>
-                      {car.comment && (
-                        <p className="text-xs text-gray-400 mt-0.5">{car.comment}</p>
-                      )}
+                      {car.comment && <p className="text-xs text-gray-400 mt-0.5">{car.comment}</p>}
                     </div>
                     <div className="ml-auto mr-2">
                       {expandedCarId === car.id ? (
@@ -686,32 +963,41 @@ export default function ClientDetailPage() {
 
       {/* Recent Checks Section — journal-style cards */}
       <div className="card p-6">
-        <h2 className="text-lg font-semibold text-gray-900 mb-4">
-          Последние чеки
-        </h2>
+        <h2 className="text-lg font-semibold text-gray-900 mb-4">Последние чеки</h2>
 
         {recentChecks.length === 0 ? (
-          <EmptyState
-            icon={FileText}
-            title="Нет чеков"
-            description="У клиента пока нет чеков"
-          />
+          <EmptyState icon={FileText} title="Нет чеков" description="У клиента пока нет чеков" />
         ) : (
           <div className="space-y-3">
             {recentChecks.map((check) => {
-              const paymentLabels: Record<string, string> = { cash: 'Наличные', card: 'Карта', warranty: 'Гарантия', cash_card: 'Нал/Карта' };
-              const paymentBadges: Record<string, string> = { cash: 'badge-green', card: 'badge-blue', warranty: 'badge-yellow', cash_card: 'badge-gray' };
+              const paymentLabels: Record<string, string> = {
+                cash: 'Наличные',
+                card: 'Карта',
+                warranty: 'Гарантия',
+                cash_card: 'Нал/Карта',
+              };
+              const paymentBadges: Record<string, string> = {
+                cash: 'badge-green',
+                card: 'badge-blue',
+                warranty: 'badge-yellow',
+                cash_card: 'badge-gray',
+              };
               return (
-                <div key={check.id} onClick={() => navigate(`/checks/${check.id}`)}
+                <div
+                  key={check.id}
+                  onClick={() => navigate(`/checks/${check.id}`)}
                   className={`rounded-2xl border shadow-sm overflow-hidden active:scale-[0.99] transition-all cursor-pointer ${
                     check.isDeferred ? 'bg-red-50/50 border-red-200' : 'bg-white border-gray-100'
-                  }`}>
+                  }`}
+                >
                   <div className="px-4 pt-3.5 pb-2.5">
                     <div className="flex items-center justify-between mb-2.5">
                       <div className="flex items-center gap-2 min-w-0">
                         <span className="text-base font-bold text-gray-900">#{check.number}</span>
                         {check.isDeferred && (
-                          <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">Отложен</span>
+                          <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                            Отложен
+                          </span>
                         )}
                         <span className={`flex-shrink-0 ${paymentBadges[check.paymentMethod] ?? 'badge-gray'}`}>
                           {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
@@ -734,23 +1020,25 @@ export default function ClientDetailPage() {
                       </div>
                     )}
                   </div>
-                  <div className={`px-4 py-2.5 border-t flex items-center justify-between gap-3 ${
-                    check.isDeferred ? 'border-red-100 bg-red-50/30' : 'border-gray-50 bg-gray-50/50'
-                  }`}>
+                  <div
+                    className={`px-4 py-2.5 border-t flex items-center justify-between gap-3 ${
+                      check.isDeferred ? 'border-red-100 bg-red-50/30' : 'border-gray-50 bg-gray-50/50'
+                    }`}
+                  >
                     <div className="flex items-center gap-3 text-xs text-gray-400 min-w-0">
                       <div className="flex items-center gap-1">
                         <Clock className="w-3 h-3" />
                         <span>{format(new Date(check.date || check.createdAt), 'dd.MM.yy HH:mm', { locale: ru })}</span>
                       </div>
-                      {check.master && (
-                        <span className="truncate">{check.master.fullName}</span>
-                      )}
+                      {check.master && <span className="truncate">{check.master.fullName}</span>}
                     </div>
                     <div className="flex items-center gap-3 flex-shrink-0">
                       {(check.discount ?? 0) > 0 && (
                         <div className="flex items-center gap-0.5">
                           <Percent className="w-3 h-3 text-orange-400" />
-                          <span className="text-xs font-medium text-orange-500">-{formatCurrency(check.discount ?? 0)}</span>
+                          <span className="text-xs font-medium text-orange-500">
+                            -{formatCurrency(check.discount ?? 0)}
+                          </span>
                         </div>
                       )}
                       <span className="text-sm font-bold text-gray-900">{formatCurrency(check.totalRevenue)}</span>
@@ -764,11 +1052,7 @@ export default function ClientDetailPage() {
       </div>
 
       {/* Client Edit Modal */}
-      <Modal
-        isOpen={clientModalOpen}
-        onClose={() => setClientModalOpen(false)}
-        title="Редактировать клиента"
-      >
+      <Modal isOpen={clientModalOpen} onClose={() => setClientModalOpen(false)} title="Редактировать клиента">
         <form onSubmit={handleClientSubmit} className="space-y-4">
           <div>
             <label className="label">ФИО</label>
@@ -784,12 +1068,7 @@ export default function ClientDetailPage() {
 
           <div>
             <label className="label">Телефон</label>
-            <PhoneInput
-              value={phone}
-              onChange={setPhone}
-              placeholder="+7 (___) ___-__-__"
-              required
-            />
+            <PhoneInput value={phone} onChange={setPhone} placeholder="+7 (___) ___-__-__" required />
           </div>
 
           <div>
@@ -804,18 +1083,10 @@ export default function ClientDetailPage() {
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={() => setClientModalOpen(false)}
-              className="btn-secondary"
-            >
+            <button type="button" onClick={() => setClientModalOpen(false)} className="btn-secondary">
               Отмена
             </button>
-            <button
-              type="submit"
-              disabled={updateClientMutation.isPending}
-              className="btn-primary"
-            >
+            <button type="submit" disabled={updateClientMutation.isPending} className="btn-primary">
               Сохранить
             </button>
           </div>
@@ -871,11 +1142,7 @@ export default function ClientDetailPage() {
               <p className="text-xs text-gray-500 mb-2">
                 Текущий владелец: <span className="font-medium text-gray-700">{client.fullName}</span>
               </p>
-              <ClientSearchAutocomplete
-                selectedClient={newOwner}
-                onSelect={setNewOwner}
-                excludeClientId={id}
-              />
+              <ClientSearchAutocomplete selectedClient={newOwner} onSelect={setNewOwner} excludeClientId={id} />
               {newOwner && (
                 <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
                   <UserCheck className="w-3 h-3" />
