@@ -32,7 +32,8 @@ import QueryErrorState from '../components/QueryErrorState';
 import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import ArticleRow from '../components/knowledge/ArticleRow';
-import FilterChips from '../components/knowledge/FilterChips';
+import CategoryRow from '../components/knowledge/CategoryRow';
+import CourseCard from '../components/knowledge/CourseCard';
 import { Text } from '../platform/Typography';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -42,17 +43,19 @@ import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius, colors } from '../theme';
 import { haptic } from '../platform/haptics';
+import { rootCategories } from '../utils/knowledgeTree';
 import { UserRole } from '../../../shared/types';
-import type { KnowledgeArticle, KnowledgeCategory, KnowledgeCourse } from '../../../shared/types';
+import type {
+  KnowledgeArticle,
+  KnowledgeCategory,
+  KnowledgeCourse,
+  KnowledgeSearchResults,
+} from '../../../shared/types';
 
 const STALE = 60_000;
 
-/** Search facet: human label → backend `hasAttachmentType` value. */
-const FACETS: { label: string; value: 'video' | 'document' | 'image' }[] = [
-  { label: 'С видео', value: 'video' },
-  { label: 'С документами', value: 'document' },
-  { label: 'С фото', value: 'image' },
-];
+/** Smart search needs ≥2 chars (server returns empty buckets below that). */
+const MIN_QUERY = 2;
 
 export default function KnowledgeBaseScreen() {
   const navigation = useNavigation<any>();
@@ -63,11 +66,10 @@ export default function KnowledgeBaseScreen() {
 
   const [search, setSearch] = React.useState('');
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
-  // Attachment-type facet (null = любые). Active facet alone (без текста) тоже
-  // запускает поиск — например «показать все статьи с видео».
-  const [facetLabel, setFacetLabel] = React.useState<string | null>(null);
-  const facetValue = React.useMemo(() => FACETS.find((f) => f.label === facetLabel)?.value ?? null, [facetLabel]);
-  const isSearching = debouncedSearch.length > 0 || facetValue !== null;
+  // The search bar drives the GLOBAL smart search (articles + folders + courses).
+  // Any text collapses the screen into ranked results; <2 chars shows a hint.
+  const isSearching = debouncedSearch.length > 0;
+  const queryReady = debouncedSearch.length >= MIN_QUERY;
 
   // ── Categories ──────────────────────────────────────────────────────────
   const { data: categories, refetch: refetchCategories } = useQuery<KnowledgeCategory[]>({
@@ -134,25 +136,26 @@ export default function KnowledgeBaseScreen() {
     refetchRecent();
   }, [refetchCategories, refetchCourses, refetchPending, refetchPinned, refetchRecent]);
 
-  // ── Search results ──────────────────────────────────────────────────────
+  // ── Global smart search (articles + folders + courses) ───────────────────
+  // knowledgeApi.search ranks across all three; below MIN_QUERY chars the
+  // server returns empty buckets, so we only fire the query when it's ready.
   const {
     data: results,
     isFetching: searchFetching,
     isError: searchError,
     refetch: refetchSearch,
-  } = useQuery<KnowledgeArticle[]>({
-    queryKey: ['knowledge-articles', 'search', debouncedSearch, facetValue],
-    queryFn: async () =>
-      (
-        await knowledgeApi.listArticles({
-          ...(debouncedSearch ? { search: debouncedSearch } : {}),
-          ...(facetValue ? { hasAttachmentType: facetValue } : {}),
-        })
-      ).data,
-    enabled: isSearching,
+  } = useQuery<KnowledgeSearchResults>({
+    queryKey: ['knowledge-search', debouncedSearch],
+    queryFn: async () => (await knowledgeApi.search(debouncedSearch)).data,
+    enabled: queryReady,
     staleTime: 30_000,
     retry: 1,
   });
+
+  const resultCount = results ? results.articles.length + results.categories.length + results.courses.length : 0;
+
+  // Root-level folders only — subfolders surface after drilling into a folder.
+  const rootCats = React.useMemo(() => (categories ? rootCategories(categories) : []), [categories]);
 
   const openArticle = React.useCallback(
     (article: KnowledgeArticle) => {
@@ -165,6 +168,13 @@ export default function KnowledgeBaseScreen() {
     (cat: KnowledgeCategory) => {
       haptic('tap');
       navigation.navigate('KnowledgeCategory', { categoryId: cat.id, name: cat.name });
+    },
+    [navigation],
+  );
+
+  const openCourse = React.useCallback(
+    (course: KnowledgeCourse) => {
+      navigation.navigate('KnowledgeCourseDetail', { id: course.id, title: course.title });
     },
     [navigation],
   );
@@ -219,45 +229,67 @@ export default function KnowledgeBaseScreen() {
           />
         }
       >
-        <SearchInput value={search} onChange={setSearch} placeholder="Поиск по базе знаний" />
-
-        {/* Фасеты — фильтр по типу вложения. Виден всегда; выбор фасета сам
-            запускает поиск (даже без текста). */}
-        <View style={styles.facets}>
-          <FilterChips
-            options={FACETS.map((f) => f.label)}
-            value={facetLabel}
-            onChange={setFacetLabel}
-            allLabel="Любые"
-          />
-        </View>
+        <SearchInput value={search} onChange={setSearch} placeholder="Поиск: статьи, папки, курсы" />
 
         {isSearching ? (
-          // ── SEARCH RESULTS — honest state machine: skeleton → error
-          // (никогда не «ничего не найдено» при упавшем запросе) → list →
-          // truly-empty success.
+          // ── SMART SEARCH — honest state machine: too-short hint → skeleton →
+          // error (никогда не «ничего не найдено» при упавшем запросе) →
+          // ranked buckets (статьи / папки / курсы) → truly-empty success.
           <View style={styles.section}>
-            {results === undefined && searchFetching ? (
+            {!queryReady ? (
+              <EmptyState
+                icon="search"
+                title="Введите минимум 2 символа"
+                description="Ищем по статьям, папкам и курсам базы знаний."
+              />
+            ) : results === undefined && searchFetching ? (
               <ListSkeleton count={5} />
             ) : searchError && results === undefined ? (
               <QueryErrorState description="Проверьте соединение и попробуйте снова." onRetry={() => refetchSearch()} />
             ) : results === undefined ? (
               <ListSkeleton count={5} />
-            ) : results.length > 0 ? (
-              <View style={styles.rowList}>
-                {results.map((a) => (
-                  <ArticleRow key={a.id} article={a} onPress={openArticle} />
-                ))}
+            ) : resultCount > 0 ? (
+              <View style={styles.results}>
+                {results.articles.length > 0 ? (
+                  <View>
+                    <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
+                      Статьи
+                    </Text>
+                    <View style={styles.rowList}>
+                      {results.articles.map((a) => (
+                        <ArticleRow key={a.id} article={a} onPress={openArticle} />
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
+                {results.categories.length > 0 ? (
+                  <View>
+                    <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Папки</Text>
+                    <View style={styles.rowList}>
+                      {results.categories.map((c) => (
+                        <CategoryRow key={c.id} category={c} onPress={openCategory} />
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
+                {results.courses.length > 0 ? (
+                  <View>
+                    <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Курсы</Text>
+                    <View style={styles.courseList}>
+                      {results.courses.map((c) => (
+                        <CourseCard key={c.id} course={c} onPress={openCourse} />
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
               </View>
             ) : (
               <EmptyState
                 icon="search"
                 title="Ничего не найдено"
-                description={
-                  debouncedSearch
-                    ? `По запросу «${debouncedSearch}»${facetLabel ? ` (${facetLabel.toLowerCase()})` : ''} статей нет. Попробуйте другие слова.`
-                    : `Статей с фильтром «${facetLabel}» пока нет.`
-                }
+                description={`По запросу «${debouncedSearch}» ничего нет. Попробуйте другие слова.`}
               />
             )}
           </View>
@@ -393,12 +425,12 @@ export default function KnowledgeBaseScreen() {
               </View>
             ) : null}
 
-            {/* ── Категории ────────────────────────────────────────────── */}
-            {categories && categories.length > 0 ? (
+            {/* ── Категории (только корневые папки; подпапки — внутри) ──── */}
+            {rootCats.length > 0 ? (
               <View style={styles.section}>
                 <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Категории</Text>
                 <View style={styles.tileGrid}>
-                  {categories.map((cat) => (
+                  {rootCats.map((cat) => (
                     <Pressable
                       key={cat.id}
                       onPress={() => openCategory(cat)}
@@ -479,7 +511,8 @@ const styles = StyleSheet.create({
   sectionTitle: { marginLeft: spacing[1], marginBottom: spacing[2] },
   groupHeader: { marginTop: spacing[1] },
   rowList: { gap: spacing[2] },
-  facets: { marginTop: spacing[2], marginBottom: spacing[3] },
+  results: { gap: spacing[5] },
+  courseList: { gap: spacing[3.5] },
 
   headerBtn: {
     width: 36,

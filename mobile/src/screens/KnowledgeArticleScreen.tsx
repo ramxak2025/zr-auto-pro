@@ -30,6 +30,7 @@ import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
 import CachedImage from '../components/CachedImage';
 import Markdown from '../components/knowledge/Markdown';
+import KnowledgeBlocks from '../components/KnowledgeBlocks';
 import VideoEmbed from '../components/knowledge/VideoEmbed';
 import { Text } from '../platform/Typography';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -335,9 +336,12 @@ export default function KnowledgeArticleScreen() {
             </View>
           ) : null}
 
-          {/* Body */}
+          {/* Body — block-based content (079) wins; otherwise the markdown
+              body; otherwise an honest «нет содержимого» note. */}
           <View style={styles.bodyWrap}>
-            {article.body?.trim() ? (
+            {article.blocks && article.blocks.length > 0 ? (
+              <KnowledgeBlocks blocks={article.blocks} />
+            ) : article.body?.trim() ? (
               <Markdown content={article.body} />
             ) : (
               <Text variant="body" style={{ color: palette.text.tertiary }}>
