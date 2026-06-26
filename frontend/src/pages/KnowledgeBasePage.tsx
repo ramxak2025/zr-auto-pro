@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   BookOpen,
@@ -14,6 +14,7 @@ import {
   Check,
   Users as UsersIcon,
   FolderPlus,
+  Folder,
   Eye,
   EyeOff,
   Loader2,
@@ -27,17 +28,28 @@ import {
   AlertCircle,
   CalendarClock,
   RefreshCw,
+  Home,
+  Blocks,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi, uploadsApi } from '../api/services';
-import type { KnowledgeArticle, KnowledgeArticleType, KnowledgeAttachment, KnowledgeCategory } from '../types';
+import type {
+  KnowledgeArticle,
+  KnowledgeArticleType,
+  KnowledgeAttachment,
+  KnowledgeBlock,
+  KnowledgeCategory,
+  KnowledgeCourse,
+} from '../types';
 import { UserRole } from '../types';
 import { formatDateTime, formatDateShort } from '../../../shared/utils/formatters';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import EmptyState from '../components/EmptyState';
 import MarkdownView from '../components/MarkdownView';
+import ArticleBlocksReader from '../components/knowledge/ArticleBlocks';
+import BlockEditor from '../components/knowledge/BlockEditor';
 import LearningCenter from './knowledge/LearningCenter';
 import TroubleshootingReference from './knowledge/TroubleshootingReference';
 
@@ -46,9 +58,9 @@ import TroubleshootingReference from './knowledge/TroubleshootingReference';
 // ───────────────────────────────────────────────────────────────────────
 const KEY = {
   categories: ['knowledge', 'categories'] as const,
-  articles: (categoryId: string | null, type: KnowledgeArticleType | null, search: string) =>
-    ['knowledge', 'articles', { categoryId, type, search }] as const,
+  articlesByType: (type: KnowledgeArticleType) => ['knowledge', 'articles', { type }] as const,
   article: (id: string) => ['knowledge', 'article', id] as const,
+  search: (q: string) => ['knowledge', 'search', q] as const,
   acks: (id: string) => ['knowledge', 'acks', id] as const,
   pendingCount: ['knowledge', 'regulations', 'pending-count'] as const,
 };
@@ -69,20 +81,33 @@ function pluralizeViews(n: number): string {
   return 'просмотров';
 }
 
+/** Pull a human message out of an axios-style error (NestJS validation may return string[]). */
+function errMessage(err: unknown, fallback: string): string {
+  const m = (err as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
+  if (Array.isArray(m)) return m.filter(Boolean).join(', ') || fallback;
+  return m || fallback;
+}
+
 type View = { mode: 'browse' } | { mode: 'reader'; id: string };
-type Section = 'articles' | 'learning' | 'troubleshooting';
+/** The four KB pillars. «База знаний» / «Регламенты» are folder-browsed article sets. */
+type Section = 'knowledge' | 'regulations' | 'learning' | 'troubleshooting';
+
+const SECTION_TYPE: Record<'knowledge' | 'regulations', KnowledgeArticleType> = {
+  knowledge: 'article',
+  regulations: 'regulation',
+};
 
 export default function KnowledgeBasePage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const isManager = !!user && [UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN].includes(user.role);
 
-  const [section, setSection] = useState<Section>('articles');
+  const [section, setSection] = useState<Section>('knowledge');
   const [view, setView] = useState<View>({ mode: 'browse' });
   const [searchInput, setSearchInput] = useState('');
   const [search, setSearch] = useState('');
-  const [activeCategory, setActiveCategory] = useState<string | null>(null);
-  const [activeType, setActiveType] = useState<KnowledgeArticleType | null>(null);
+  const [folderId, setFolderId] = useState<string | null>(null);
+  const [learningCourseId, setLearningCourseId] = useState<string | null>(null);
 
   // Debounce the search input → query param.
   const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -91,6 +116,15 @@ export default function KnowledgeBasePage() {
     if (searchTimer.current) clearTimeout(searchTimer.current);
     searchTimer.current = setTimeout(() => setSearch(value.trim()), 300);
   };
+  const clearSearch = () => {
+    if (searchTimer.current) clearTimeout(searchTimer.current);
+    setSearchInput('');
+    setSearch('');
+  };
+
+  const isArticleSection = section === 'knowledge' || section === 'regulations';
+  const sectionType: KnowledgeArticleType | null = isArticleSection ? SECTION_TYPE[section] : null;
+  const searchActive = search.length >= 2;
 
   // ── Data ────────────────────────────────────────────────────────────
   const { data: categories = [] } = useQuery({
@@ -99,27 +133,78 @@ export default function KnowledgeBasePage() {
     staleTime: 5 * 60 * 1000,
   });
 
+  // Fetch the whole article set for the active section type once; the folder
+  // view filters it client-side by `categoryId`. Slim payloads → cheap.
   const { data: articles = [], isLoading: articlesLoading } = useQuery({
-    queryKey: KEY.articles(activeCategory, activeType, search),
-    queryFn: async () =>
-      (
-        await knowledgeApi.listArticles({
-          categoryId: activeCategory || undefined,
-          type: activeType || undefined,
-          search: search || undefined,
-        })
-      ).data,
+    queryKey: sectionType ? KEY.articlesByType(sectionType) : ['knowledge', 'articles', 'none'],
+    queryFn: async () => (await knowledgeApi.listArticles({ type: sectionType! })).data,
+    enabled: sectionType !== null,
   });
 
-  const pinned = useMemo(() => articles.filter((a) => a.pinned), [articles]);
-  const recent = useMemo(() => articles.filter((a) => !a.pinned), [articles]);
+  const { data: searchResults, isFetching: searchFetching } = useQuery({
+    queryKey: KEY.search(search),
+    queryFn: async () => (await knowledgeApi.search(search)).data,
+    enabled: searchActive,
+    placeholderData: (prev) => prev,
+  });
 
-  // ── Author modal state ──────────────────────────────────────────────
+  // ── Category tree (parentId) ────────────────────────────────────────
+  const categoryById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories]);
+  const childrenByParent = useMemo(() => {
+    const m = new Map<string | null, KnowledgeCategory[]>();
+    for (const c of categories) {
+      const p = c.parentId ?? null;
+      if (!m.has(p)) m.set(p, []);
+      m.get(p)!.push(c);
+    }
+    for (const list of m.values()) list.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru'));
+    return m;
+  }, [categories]);
+
+  // Breadcrumb path root → current folder.
+  const breadcrumb = useMemo(() => {
+    const path: KnowledgeCategory[] = [];
+    const seen = new Set<string>();
+    let cur = folderId ? categoryById.get(folderId) : undefined;
+    while (cur && !seen.has(cur.id)) {
+      path.unshift(cur);
+      seen.add(cur.id);
+      cur = cur.parentId ? categoryById.get(cur.parentId) : undefined;
+    }
+    return path;
+  }, [folderId, categoryById]);
+
+  // If the open folder was deleted (children orphan to root), fall back to root.
+  useEffect(() => {
+    if (folderId && categories.length > 0 && !categoryById.has(folderId)) setFolderId(null);
+  }, [folderId, categories.length, categoryById]);
+
+  const subfolders = childrenByParent.get(folderId) ?? [];
+  const folderArticles = useMemo(
+    () => articles.filter((a) => (a.categoryId ?? null) === folderId),
+    [articles, folderId],
+  );
+  const pinned = useMemo(() => folderArticles.filter((a) => a.pinned), [folderArticles]);
+  const rest = useMemo(() => folderArticles.filter((a) => !a.pinned), [folderArticles]);
+
+  const countDirectArticles = (catId: string) => articles.filter((a) => (a.categoryId ?? null) === catId).length;
+
+  // ── Modal state ─────────────────────────────────────────────────────
   const [editorArticle, setEditorArticle] = useState<KnowledgeArticle | 'new' | null>(null);
-  const [categoryManagerOpen, setCategoryManagerOpen] = useState(false);
+  const [folderManager, setFolderManager] = useState<{ presetParent: string | null } | null>(null);
 
-  const invalidateLists = () => queryClient.invalidateQueries({ queryKey: ['knowledge', 'articles'] });
+  const invalidateLists = () => {
+    if (sectionType) queryClient.invalidateQueries({ queryKey: KEY.articlesByType(sectionType) });
+    queryClient.invalidateQueries({ queryKey: ['knowledge', 'articles'] });
+    queryClient.invalidateQueries({ queryKey: ['knowledge', 'search'] });
+  };
 
+  const goToSection = (next: Section) => {
+    setSection(next);
+    setFolderId(null);
+  };
+
+  // ── Reader (full-page) ──────────────────────────────────────────────
   if (view.mode === 'reader') {
     return (
       <ArticleReader
@@ -146,136 +231,194 @@ export default function KnowledgeBasePage() {
           </div>
           <div>
             <h1 className="page-title">База знаний</h1>
-            <p className="text-sm text-gray-500">Статьи, обучение и справочник автосервиса</p>
+            <p className="text-sm text-gray-500">Регламенты, учебный центр и справочные материалы</p>
           </div>
         </div>
-        {isManager && section === 'articles' && (
+        {isManager && isArticleSection && !searchActive && (
           <div className="flex items-center gap-2">
-            <button onClick={() => setCategoryManagerOpen(true)} className="btn-secondary btn-sm" title="Категории">
+            <button
+              onClick={() => setFolderManager({ presetParent: folderId })}
+              className="btn-secondary btn-sm"
+              title="Папки"
+            >
               <FolderPlus className="h-4 w-4" />
-              <span className="hidden sm:inline">Категории</span>
+              <span className="hidden sm:inline">Папки</span>
             </button>
             <button onClick={() => setEditorArticle('new')} className="btn-primary btn-sm">
               <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">Новая статья</span>
+              <span className="hidden sm:inline">{section === 'regulations' ? 'Новый регламент' : 'Новая статья'}</span>
             </button>
           </div>
         )}
       </div>
 
-      {/* Section tabs */}
-      <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
-        <SectionTab
-          label="Статьи"
-          icon={FileText}
-          active={section === 'articles'}
-          onClick={() => setSection('articles')}
+      {/* Smart global search */}
+      <div className="relative">
+        <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
+        <input
+          type="search"
+          value={searchInput}
+          onChange={(e) => onSearchChange(e.target.value)}
+          placeholder="Поиск по статьям, регламентам, папкам и курсам…"
+          className="input pl-10 pr-10"
         />
-        <SectionTab
-          label="Учебный центр"
-          icon={GraduationCap}
-          active={section === 'learning'}
-          onClick={() => setSection('learning')}
-        />
-        <SectionTab
-          label="Справочник"
-          icon={Wrench}
-          active={section === 'troubleshooting'}
-          onClick={() => setSection('troubleshooting')}
-        />
+        {searchInput && (
+          <button
+            onClick={clearSearch}
+            className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            aria-label="Очистить"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        )}
       </div>
 
-      {section === 'learning' && <LearningCenter isManager={isManager} categories={categories} />}
-
-      {section === 'troubleshooting' && <TroubleshootingReference isManager={isManager} />}
-
-      {section === 'articles' && (
+      {searchActive ? (
+        <SearchResultsPanel
+          results={searchResults}
+          loading={searchFetching && !searchResults}
+          query={search}
+          onOpenArticle={(id) => setView({ mode: 'reader', id })}
+          onOpenCategory={(id) => {
+            clearSearch();
+            goToSection('knowledge');
+            setFolderId(id);
+          }}
+          onOpenCourse={(id) => {
+            clearSearch();
+            setLearningCourseId(id);
+            setSection('learning');
+          }}
+        />
+      ) : (
         <>
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 h-4 w-4 text-gray-400" />
-            <input
-              type="search"
-              value={searchInput}
-              onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Поиск по статьям и регламентам…"
-              className="input pl-10"
+          {/* Section tabs */}
+          <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
+            <SectionTab
+              label="База знаний"
+              icon={BookOpen}
+              active={section === 'knowledge'}
+              onClick={() => goToSection('knowledge')}
             />
-          </div>
-
-          {/* Type + category filters */}
-          <div className="flex flex-wrap gap-2">
-            <TypeChip label="Всё" active={activeType === null} onClick={() => setActiveType(null)} />
-            <TypeChip label="Статьи" active={activeType === 'article'} onClick={() => setActiveType('article')} />
-            <TypeChip
+            <SectionTab
               label="Регламенты"
-              active={activeType === 'regulation'}
-              onClick={() => setActiveType('regulation')}
+              icon={ShieldCheck}
+              active={section === 'regulations'}
+              onClick={() => goToSection('regulations')}
+            />
+            <SectionTab
+              label="Учебный центр"
+              icon={GraduationCap}
+              active={section === 'learning'}
+              onClick={() => goToSection('learning')}
+            />
+            <SectionTab
+              label="Справочник"
+              icon={Wrench}
+              active={section === 'troubleshooting'}
+              onClick={() => goToSection('troubleshooting')}
             />
           </div>
 
-          <div className="flex flex-col gap-6 lg:flex-row">
-            {/* Category sidebar */}
-            <aside className="lg:w-56 lg:flex-shrink-0">
-              <div className="card overflow-hidden">
+          {section === 'learning' && (
+            <LearningCenter
+              key={learningCourseId ?? 'grid'}
+              isManager={isManager}
+              categories={categories}
+              initialCourseId={learningCourseId ?? undefined}
+            />
+          )}
+
+          {section === 'troubleshooting' && <TroubleshootingReference isManager={isManager} />}
+
+          {isArticleSection && (
+            <div className="space-y-5">
+              {/* Breadcrumbs */}
+              <nav className="flex flex-wrap items-center gap-1 text-sm">
                 <button
-                  onClick={() => setActiveCategory(null)}
-                  className={`flex w-full items-center justify-between px-4 py-2.5 text-sm transition-colors ${
-                    activeCategory === null
-                      ? 'bg-primary-50 font-semibold text-primary-700'
-                      : 'text-gray-700 hover:bg-gray-50'
+                  onClick={() => setFolderId(null)}
+                  className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 transition-colors ${
+                    folderId === null ? 'font-semibold text-gray-900' : 'text-gray-500 hover:text-gray-700'
                   }`}
                 >
-                  Все категории
+                  <Home className="h-3.5 w-3.5" />
+                  {section === 'regulations' ? 'Регламенты' : 'Все папки'}
                 </button>
-                {categories.map((cat) => (
-                  <button
-                    key={cat.id}
-                    onClick={() => setActiveCategory(cat.id)}
-                    className={`flex w-full items-center justify-between border-t border-gray-100 px-4 py-2.5 text-sm transition-colors ${
-                      activeCategory === cat.id
-                        ? 'bg-primary-50 font-semibold text-primary-700'
-                        : 'text-gray-700 hover:bg-gray-50'
-                    }`}
-                  >
-                    <span className="truncate">{cat.name}</span>
-                    <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
-                  </button>
+                {breadcrumb.map((c) => (
+                  <span key={c.id} className="flex items-center gap-1">
+                    <ChevronRight className="h-3.5 w-3.5 text-gray-300" />
+                    <button
+                      onClick={() => setFolderId(c.id)}
+                      className={`rounded-lg px-2 py-1 transition-colors ${
+                        c.id === folderId ? 'font-semibold text-gray-900' : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      {c.name}
+                    </button>
+                  </span>
                 ))}
-                {categories.length === 0 && (
-                  <p className="border-t border-gray-100 px-4 py-3 text-xs text-gray-400">Категорий пока нет</p>
-                )}
-              </div>
-            </aside>
+              </nav>
 
-            {/* Articles */}
-            <div className="flex-1 space-y-6">
               {articlesLoading ? (
                 <div className="flex justify-center py-16">
                   <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
                 </div>
-              ) : articles.length === 0 ? (
+              ) : subfolders.length === 0 && folderArticles.length === 0 ? (
                 <EmptyState
-                  icon={BookOpen}
-                  title="Ничего не найдено"
+                  icon={section === 'regulations' ? ShieldCheck : BookOpen}
+                  title="Здесь пока пусто"
                   description={
-                    search
-                      ? 'Попробуйте изменить запрос или выбрать другую категорию.'
-                      : isManager
-                        ? 'Создайте первую статью, чтобы наполнить базу знаний.'
-                        : 'В этой категории пока нет материалов.'
+                    isManager ? 'Создайте папку или добавьте первый материал.' : 'В этом разделе пока нет материалов.'
                   }
                   action={
-                    isManager && !search
-                      ? { label: 'Создать статью', onClick: () => setEditorArticle('new') }
+                    isManager
+                      ? {
+                          label: section === 'regulations' ? 'Новый регламент' : 'Новая статья',
+                          onClick: () => setEditorArticle('new'),
+                        }
                       : undefined
                   }
                 />
               ) : (
                 <>
+                  {/* Subfolders */}
+                  {(subfolders.length > 0 || isManager) && (
+                    <section>
+                      <div className="mb-2.5 flex items-center justify-between">
+                        <h2 className="flex items-center gap-1.5 text-sm font-semibold text-gray-500">
+                          <Folder className="h-4 w-4" /> Папки
+                        </h2>
+                        {isManager && (
+                          <button
+                            onClick={() => setFolderManager({ presetParent: folderId })}
+                            className="btn-ghost btn-sm text-primary-600"
+                          >
+                            <FolderPlus className="h-4 w-4" /> Новая папка
+                          </button>
+                        )}
+                      </div>
+                      {subfolders.length > 0 ? (
+                        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                          {subfolders.map((cat) => (
+                            <FolderTile
+                              key={cat.id}
+                              category={cat}
+                              articleCount={countDirectArticles(cat.id)}
+                              subfolderCount={(childrenByParent.get(cat.id) ?? []).length}
+                              onOpen={() => setFolderId(cat.id)}
+                            />
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-sm text-gray-400">Подпапок нет</p>
+                      )}
+                    </section>
+                  )}
+
+                  {/* Pinned articles */}
                   {pinned.length > 0 && (
                     <section>
-                      <h2 className="mb-3 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
+                      <h2 className="mb-2.5 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
                         <Pin className="h-4 w-4" /> Закреплённые
                       </h2>
                       <div className="grid gap-3 sm:grid-cols-2">
@@ -285,24 +428,32 @@ export default function KnowledgeBasePage() {
                       </div>
                     </section>
                   )}
-                  <section>
-                    {pinned.length > 0 && <h2 className="mb-3 text-sm font-semibold text-gray-500">Все материалы</h2>}
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      {recent.map((a) => (
-                        <ArticleCard key={a.id} article={a} onOpen={() => setView({ mode: 'reader', id: a.id })} />
-                      ))}
-                    </div>
-                  </section>
+
+                  {/* Articles in this folder */}
+                  {rest.length > 0 && (
+                    <section>
+                      <h2 className="mb-2.5 text-sm font-semibold text-gray-500">
+                        {section === 'regulations' ? 'Регламенты' : 'Материалы'}
+                      </h2>
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        {rest.map((a) => (
+                          <ArticleCard key={a.id} article={a} onOpen={() => setView({ mode: 'reader', id: a.id })} />
+                        ))}
+                      </div>
+                    </section>
+                  )}
                 </>
               )}
             </div>
-          </div>
+          )}
 
-          {/* Author modal (from browse view) */}
-          {isManager && editorArticle && (
+          {/* Author modal */}
+          {isManager && isArticleSection && editorArticle && (
             <ArticleEditorModal
               article={editorArticle === 'new' ? null : editorArticle}
               categories={categories}
+              defaultType={sectionType ?? 'article'}
+              defaultCategoryId={folderId}
               onClose={() => setEditorArticle(null)}
               onSaved={() => {
                 setEditorArticle(null);
@@ -311,12 +462,13 @@ export default function KnowledgeBasePage() {
             />
           )}
 
-          {/* Category manager modal */}
-          {isManager && (
-            <CategoryManagerModal
-              isOpen={categoryManagerOpen}
-              onClose={() => setCategoryManagerOpen(false)}
+          {/* Folder manager */}
+          {isManager && folderManager && (
+            <FolderManagerModal
+              presetParent={folderManager.presetParent}
               categories={categories}
+              childrenByParent={childrenByParent}
+              onClose={() => setFolderManager(null)}
             />
           )}
         </>
@@ -342,7 +494,7 @@ function SectionTab({
   return (
     <button
       onClick={onClick}
-      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+      className={`flex flex-1 items-center justify-center gap-1.5 rounded-lg px-2 py-2 text-sm font-medium transition-colors ${
         active ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
       }`}
     >
@@ -353,17 +505,32 @@ function SectionTab({
 }
 
 // ───────────────────────────────────────────────────────────────────────
-//  Type filter chip
+//  Folder tile
 // ───────────────────────────────────────────────────────────────────────
-function TypeChip({ label, active, onClick }: { label: string; active: boolean; onClick: () => void }) {
+function FolderTile({
+  category,
+  articleCount,
+  subfolderCount,
+  onOpen,
+}: {
+  category: KnowledgeCategory;
+  articleCount: number;
+  subfolderCount: number;
+  onOpen: () => void;
+}) {
+  const parts: string[] = [];
+  if (subfolderCount > 0) parts.push(`${subfolderCount} подпапк${subfolderCount === 1 ? 'а' : 'и'}`);
+  if (articleCount > 0) parts.push(`${articleCount} матер.`);
   return (
-    <button
-      onClick={onClick}
-      className={`press-soft rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors ${
-        active ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
-      }`}
-    >
-      {label}
+    <button onClick={onOpen} className="card-interactive flex items-center gap-3 p-4 text-left">
+      <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+        <Folder className="h-5 w-5" />
+      </span>
+      <span className="min-w-0 flex-1">
+        <span className="block truncate text-sm font-semibold text-gray-900">{category.name}</span>
+        <span className="block text-xs text-gray-400">{parts.length > 0 ? parts.join(' · ') : 'Пусто'}</span>
+      </span>
+      <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
     </button>
   );
 }
@@ -398,6 +565,118 @@ function ArticleCard({ article, onOpen }: { article: KnowledgeArticle; onOpen: (
         )}
       </div>
     </button>
+  );
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Search results panel (ranked: articles / categories / courses)
+// ───────────────────────────────────────────────────────────────────────
+function SearchResultsPanel({
+  results,
+  loading,
+  query,
+  onOpenArticle,
+  onOpenCategory,
+  onOpenCourse,
+}: {
+  results:
+    | { query: string; articles: KnowledgeArticle[]; categories: KnowledgeCategory[]; courses: KnowledgeCourse[] }
+    | undefined;
+  loading: boolean;
+  query: string;
+  onOpenArticle: (id: string) => void;
+  onOpenCategory: (id: string) => void;
+  onOpenCourse: (id: string) => void;
+}) {
+  if (loading) {
+    return (
+      <div className="flex justify-center py-16">
+        <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
+      </div>
+    );
+  }
+
+  const articles = results?.articles ?? [];
+  const categories = results?.categories ?? [];
+  const courses = results?.courses ?? [];
+  const total = articles.length + categories.length + courses.length;
+
+  if (total === 0) {
+    return (
+      <EmptyState
+        icon={Search}
+        title="Ничего не найдено"
+        description={`По запросу «${query}» ничего не нашлось. Попробуйте изменить формулировку.`}
+      />
+    );
+  }
+
+  return (
+    <div className="space-y-6">
+      <p className="text-sm text-gray-500">
+        Результаты по запросу «<span className="font-medium text-gray-700">{query}</span>»
+      </p>
+
+      {categories.length > 0 && (
+        <section>
+          <h2 className="mb-2.5 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
+            <Folder className="h-4 w-4" /> Папки ({categories.length})
+          </h2>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {categories.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => onOpenCategory(c.id)}
+                className="card-interactive flex items-center gap-3 p-3 text-left"
+              >
+                <Folder className="h-4 w-4 flex-shrink-0 text-amber-500" />
+                <span className="flex-1 truncate text-sm font-medium text-gray-800">{c.name}</span>
+                <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {articles.length > 0 && (
+        <section>
+          <h2 className="mb-2.5 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
+            <FileText className="h-4 w-4" /> Статьи и регламенты ({articles.length})
+          </h2>
+          <div className="grid gap-3 sm:grid-cols-2">
+            {articles.map((a) => (
+              <ArticleCard key={a.id} article={a} onOpen={() => onOpenArticle(a.id)} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {courses.length > 0 && (
+        <section>
+          <h2 className="mb-2.5 flex items-center gap-1.5 text-sm font-semibold text-gray-500">
+            <GraduationCap className="h-4 w-4" /> Курсы ({courses.length})
+          </h2>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {courses.map((c) => (
+              <button
+                key={c.id}
+                onClick={() => onOpenCourse(c.id)}
+                className="card-interactive flex items-center gap-3 p-3 text-left"
+              >
+                <GraduationCap className="h-4 w-4 flex-shrink-0 text-primary-500" />
+                <span className="min-w-0 flex-1">
+                  <span className="block truncate text-sm font-medium text-gray-800">{c.title}</span>
+                  {typeof c.progressPercent === 'number' && (
+                    <span className="block text-xs text-gray-400">Прогресс {c.progressPercent}%</span>
+                  )}
+                </span>
+                <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+    </div>
   );
 }
 
@@ -497,6 +776,7 @@ function ArticleReader({
   }
 
   const isRegulation = article.type === 'regulation';
+  const hasBlocks = !!article.blocks && article.blocks.length > 0;
 
   return (
     // pb-24 on mobile keeps the regulation «Ознакомлен» button (and feedback
@@ -596,9 +876,11 @@ function ArticleReader({
             </div>
           )}
 
-          {/* Body */}
+          {/* Body — block content (079) takes priority; markdown is the fallback */}
           <div className="mt-6">
-            {article.body ? (
+            {hasBlocks ? (
+              <ArticleBlocksReader blocks={article.blocks!} />
+            ) : article.body ? (
               <MarkdownView>{article.body}</MarkdownView>
             ) : (
               <p className="text-sm italic text-gray-400">Содержимое не заполнено.</p>
@@ -672,6 +954,8 @@ function ArticleReader({
         <ArticleEditorModal
           article={editorArticle === 'new' ? null : editorArticle}
           categories={categories}
+          defaultType={article.type}
+          defaultCategoryId={article.categoryId ?? null}
           onClose={onCloseEditor}
           onSaved={() => {
             onCloseEditor();
@@ -773,23 +1057,33 @@ function AcksModal({ articleId, onClose }: { articleId: string; onClose: () => v
 
 // ───────────────────────────────────────────────────────────────────────
 //  Article editor (create / edit) — manager only
+//  Two content modes share one save: rich BLOCKS (079) and markdown BODY.
+//  We send both; the reader prefers non-empty blocks and falls back to body.
 // ───────────────────────────────────────────────────────────────────────
 function ArticleEditorModal({
   article,
   categories,
+  defaultType,
+  defaultCategoryId,
   onClose,
   onSaved,
 }: {
   article: KnowledgeArticle | null;
   categories: KnowledgeCategory[];
+  defaultType: KnowledgeArticleType;
+  defaultCategoryId: string | null;
   onClose: () => void;
   onSaved: () => void;
 }) {
   const isEdit = !!article;
   const [title, setTitle] = useState(article?.title ?? '');
   const [body, setBody] = useState(article?.body ?? '');
-  const [type, setType] = useState<KnowledgeArticleType>(article?.type ?? 'article');
-  const [categoryId, setCategoryId] = useState<string>(article?.categoryId ?? '');
+  const [blocks, setBlocks] = useState<KnowledgeBlock[]>(article?.blocks ?? []);
+  const [contentMode, setContentMode] = useState<'blocks' | 'markdown'>(
+    article?.blocks && article.blocks.length > 0 ? 'blocks' : 'markdown',
+  );
+  const [type, setType] = useState<KnowledgeArticleType>(article?.type ?? defaultType);
+  const [categoryId, setCategoryId] = useState<string>(article?.categoryId ?? defaultCategoryId ?? '');
   const [coverImage, setCoverImage] = useState<string | null>(article?.coverImage ?? null);
   const [attachments, setAttachments] = useState<KnowledgeAttachment[]>(article?.attachments ?? []);
   const [pinned, setPinned] = useState(article?.pinned ?? false);
@@ -805,11 +1099,18 @@ function ArticleEditorModal({
   const coverInputRef = useRef<HTMLInputElement>(null);
   const attachInputRef = useRef<HTMLInputElement>(null);
 
+  // Categories flattened with indentation so subfolders are pickable.
+  const categoryOptions = useMemo(() => flattenCategories(categories), [categories]);
+
   const saveMutation = useMutation({
     mutationFn: () => {
+      // Drop empty blocks so a half-filled block never trips server validation;
+      // send [] to clear blocks (→ reader falls back to the markdown body).
+      const cleanBlocks = sanitizeBlocks(blocks);
       const payload = {
         title: title.trim(),
         body,
+        blocks: cleanBlocks,
         type,
         categoryId: categoryId || null,
         coverImage: coverImage || null,
@@ -828,7 +1129,7 @@ function ArticleEditorModal({
       toast.success(isEdit ? 'Статья обновлена' : 'Статья создана');
       onSaved();
     },
-    onError: () => toast.error('Не удалось сохранить'),
+    onError: (err) => toast.error(errMessage(err, 'Не удалось сохранить')),
   });
 
   const handleCoverUpload = async (file: File) => {
@@ -861,7 +1162,7 @@ function ArticleEditorModal({
   const canSave = title.trim().length > 0 && !saveMutation.isPending;
 
   return (
-    <Modal isOpen onClose={onClose} title={isEdit ? 'Редактирование' : 'Новая статья'} size="xl">
+    <Modal isOpen onClose={onClose} title={isEdit ? 'Редактирование' : 'Новый материал'} size="xl">
       <div className="space-y-4">
         {/* Title */}
         <div>
@@ -901,52 +1202,86 @@ function ArticleEditorModal({
             </div>
           </div>
           <div>
-            <label className="label">Категория</label>
+            <label className="label">Папка</label>
             <select value={categoryId} onChange={(e) => setCategoryId(e.target.value)} className="input">
-              <option value="">Без категории</option>
-              {categories.map((c) => (
+              <option value="">Без папки</option>
+              {categoryOptions.map((c) => (
                 <option key={c.id} value={c.id}>
-                  {c.name}
+                  {`${'  '.repeat(c.depth)}${c.name}`}
                 </option>
               ))}
             </select>
           </div>
         </div>
 
-        {/* Body — markdown editor + live preview */}
+        {/* Content — blocks (rich) OR markdown */}
         <div>
-          <div className="mb-1.5 flex items-center justify-between">
-            <label className="label mb-0">Содержание (Markdown)</label>
-            <button type="button" onClick={() => setShowPreview((v) => !v)} className="btn-ghost btn-sm">
-              {showPreview ? (
-                <>
-                  <EyeOff className="h-3.5 w-3.5" /> Скрыть превью
-                </>
-              ) : (
-                <>
-                  <Eye className="h-3.5 w-3.5" /> Превью
-                </>
-              )}
-            </button>
+          <div className="mb-2 flex items-center justify-between">
+            <label className="label mb-0">Содержание</label>
+            <div className="flex rounded-lg border border-gray-200 p-0.5">
+              <button
+                type="button"
+                onClick={() => setContentMode('blocks')}
+                className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold ${
+                  contentMode === 'blocks' ? 'bg-primary-600 text-white' : 'text-gray-500'
+                }`}
+              >
+                <Blocks className="h-3.5 w-3.5" /> Блоки
+              </button>
+              <button
+                type="button"
+                onClick={() => setContentMode('markdown')}
+                className={`inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-semibold ${
+                  contentMode === 'markdown' ? 'bg-primary-600 text-white' : 'text-gray-500'
+                }`}
+              >
+                <FileText className="h-3.5 w-3.5" /> Markdown
+              </button>
+            </div>
           </div>
-          <div className={showPreview ? 'grid gap-3 lg:grid-cols-2' : ''}>
-            <textarea
-              value={body}
-              onChange={(e) => setBody(e.target.value)}
-              placeholder="# Заголовок&#10;&#10;Поддерживается **markdown**: списки, таблицы, ссылки, цитаты…"
-              rows={14}
-              className="input resize-y font-mono text-[13px] leading-relaxed"
-            />
-            {showPreview && (
-              <div className="max-h-[22rem] overflow-y-auto rounded-lg border border-gray-200 bg-gray-50/50 p-4">
-                {body.trim() ? (
-                  <MarkdownView>{body}</MarkdownView>
-                ) : (
-                  <p className="text-sm italic text-gray-400">Превью появится здесь…</p>
+
+          {contentMode === 'blocks' ? (
+            <>
+              <BlockEditor blocks={blocks} onChange={setBlocks} />
+              <p className="mt-2 text-xs text-gray-400">
+                Блоки рендерятся в этом порядке. Если блоков нет — показывается Markdown-содержание.
+              </p>
+            </>
+          ) : (
+            <div>
+              <div className="mb-1.5 flex items-center justify-end">
+                <button type="button" onClick={() => setShowPreview((v) => !v)} className="btn-ghost btn-sm">
+                  {showPreview ? (
+                    <>
+                      <EyeOff className="h-3.5 w-3.5" /> Скрыть превью
+                    </>
+                  ) : (
+                    <>
+                      <Eye className="h-3.5 w-3.5" /> Превью
+                    </>
+                  )}
+                </button>
+              </div>
+              <div className={showPreview ? 'grid gap-3 lg:grid-cols-2' : ''}>
+                <textarea
+                  value={body}
+                  onChange={(e) => setBody(e.target.value)}
+                  placeholder="# Заголовок&#10;&#10;Поддерживается **markdown**: списки, таблицы, ссылки, цитаты…"
+                  rows={14}
+                  className="input resize-y font-mono text-[13px] leading-relaxed"
+                />
+                {showPreview && (
+                  <div className="max-h-[22rem] overflow-y-auto rounded-lg border border-gray-200 bg-gray-50/50 p-4">
+                    {body.trim() ? (
+                      <MarkdownView>{body}</MarkdownView>
+                    ) : (
+                      <p className="text-sm italic text-gray-400">Превью появится здесь…</p>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
 
         {/* Cover image */}
@@ -1112,31 +1447,37 @@ function ArticleEditorModal({
 }
 
 // ───────────────────────────────────────────────────────────────────────
-//  Category manager — add / rename / delete (manager only)
+//  Folder manager — create subfolders, rename, move (parentId), delete.
+//  Surfaces the server's 400 cycle-rejection as a friendly message.
 // ───────────────────────────────────────────────────────────────────────
-function CategoryManagerModal({
-  isOpen,
-  onClose,
+function FolderManagerModal({
+  presetParent,
   categories,
+  childrenByParent,
+  onClose,
 }: {
-  isOpen: boolean;
-  onClose: () => void;
+  presetParent: string | null;
   categories: KnowledgeCategory[];
+  childrenByParent: Map<string | null, KnowledgeCategory[]>;
+  onClose: () => void;
 }) {
   const queryClient = useQueryClient();
   const [newName, setNewName] = useState('');
+  const [newParent, setNewParent] = useState<string>(presetParent ?? '');
   const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
+  const options = useMemo(() => flattenCategories(categories), [categories]);
   const invalidate = () => queryClient.invalidateQueries({ queryKey: KEY.categories });
 
   const createMutation = useMutation({
-    mutationFn: (name: string) => knowledgeApi.createCategory({ name }),
+    mutationFn: (vars: { name: string; parentId: string | null }) =>
+      knowledgeApi.createCategory({ name: vars.name, parentId: vars.parentId }),
     onSuccess: () => {
       invalidate();
       setNewName('');
     },
-    onError: () => toast.error('Не удалось создать категорию'),
+    onError: (err) => toast.error(errMessage(err, 'Не удалось создать папку')),
   });
 
   const renameMutation = useMutation({
@@ -1145,7 +1486,14 @@ function CategoryManagerModal({
       invalidate();
       setEditing(null);
     },
-    onError: () => toast.error('Не удалось переименовать'),
+    onError: (err) => toast.error(errMessage(err, 'Не удалось переименовать')),
+  });
+
+  const moveMutation = useMutation({
+    mutationFn: (vars: { id: string; parentId: string | null }) =>
+      knowledgeApi.updateCategory(vars.id, { parentId: vars.parentId }),
+    onSuccess: () => invalidate(),
+    onError: (err) => toast.error(errMessage(err, 'Нельзя переместить папку внутрь самой себя или своей подпапки')),
   });
 
   const deleteMutation = useMutation({
@@ -1155,82 +1503,138 @@ function CategoryManagerModal({
       queryClient.invalidateQueries({ queryKey: ['knowledge', 'articles'] });
       setConfirmDeleteId(null);
     },
-    onError: () => toast.error('Не удалось удалить категорию'),
+    onError: (err) => toast.error(errMessage(err, 'Не удалось удалить папку')),
   });
+
+  // Descendant set for a category — invalid move targets (would create a cycle).
+  const descendantsOf = (id: string): Set<string> => {
+    const out = new Set<string>();
+    const stack = [...(childrenByParent.get(id) ?? [])];
+    while (stack.length) {
+      const c = stack.pop()!;
+      if (out.has(c.id)) continue;
+      out.add(c.id);
+      stack.push(...(childrenByParent.get(c.id) ?? []));
+    }
+    return out;
+  };
 
   return (
     <>
-      <Modal isOpen={isOpen} onClose={onClose} title="Категории" size="md">
+      <Modal isOpen onClose={onClose} title="Папки базы знаний" size="lg">
         <div className="space-y-4">
-          {/* Add */}
-          <div className="flex gap-2">
-            <input
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && newName.trim()) createMutation.mutate(newName.trim());
-              }}
-              placeholder="Новая категория"
-              className="input flex-1"
-            />
-            <button
-              onClick={() => newName.trim() && createMutation.mutate(newName.trim())}
-              disabled={!newName.trim() || createMutation.isPending}
-              className="btn-primary"
-            >
-              <Plus className="h-4 w-4" />
-            </button>
+          {/* Create */}
+          <div className="rounded-xl border border-gray-200 bg-gray-50/60 p-3">
+            <label className="label">Новая папка</label>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newName.trim())
+                    createMutation.mutate({ name: newName.trim(), parentId: newParent || null });
+                }}
+                placeholder="Название папки"
+                className="input flex-1"
+              />
+              <select value={newParent} onChange={(e) => setNewParent(e.target.value)} className="input sm:w-52">
+                <option value="">В корне</option>
+                {options.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {`${'  '.repeat(c.depth)}${c.name}`}
+                  </option>
+                ))}
+              </select>
+              <button
+                onClick={() =>
+                  newName.trim() && createMutation.mutate({ name: newName.trim(), parentId: newParent || null })
+                }
+                disabled={!newName.trim() || createMutation.isPending}
+                className="btn-primary"
+              >
+                <Plus className="h-4 w-4" /> <span className="hidden sm:inline">Добавить</span>
+              </button>
+            </div>
           </div>
 
-          {/* List */}
+          {/* Tree list */}
           <div className="divide-y divide-gray-100 rounded-lg border border-gray-200">
-            {categories.length === 0 ? (
-              <p className="px-3 py-4 text-center text-sm text-gray-400">Категорий пока нет</p>
+            {options.length === 0 ? (
+              <p className="px-3 py-4 text-center text-sm text-gray-400">Папок пока нет</p>
             ) : (
-              categories.map((cat) => (
-                <div key={cat.id} className="flex items-center gap-2 px-3 py-2.5">
-                  {editing?.id === cat.id ? (
-                    <>
-                      <input
-                        value={editing.name}
-                        onChange={(e) => setEditing({ id: cat.id, name: e.target.value })}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' && editing.name.trim())
-                            renameMutation.mutate({ id: cat.id, name: editing.name.trim() });
-                        }}
-                        className="input flex-1 py-1.5"
-                        autoFocus
-                      />
-                      <button
-                        onClick={() =>
-                          editing.name.trim() && renameMutation.mutate({ id: cat.id, name: editing.name.trim() })
-                        }
-                        className="text-green-600 hover:text-green-700"
-                      >
-                        <Check className="h-4 w-4" />
-                      </button>
-                      <button onClick={() => setEditing(null)} className="text-gray-400 hover:text-gray-600">
-                        <X className="h-4 w-4" />
-                      </button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="flex-1 truncate text-sm text-gray-800">{cat.name}</span>
-                      <button
-                        onClick={() => setEditing({ id: cat.id, name: cat.name })}
-                        className="text-gray-400 hover:text-primary-600"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </button>
-                      <button onClick={() => setConfirmDeleteId(cat.id)} className="text-gray-400 hover:text-red-600">
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    </>
-                  )}
-                </div>
-              ))
+              options.map((cat) => {
+                const forbidden = descendantsOf(cat.id);
+                return (
+                  <div key={cat.id} className="flex items-center gap-2 px-3 py-2.5">
+                    <span style={{ width: cat.depth * 16 }} className="flex-shrink-0" />
+                    <Folder className="h-4 w-4 flex-shrink-0 text-amber-500" />
+                    {editing?.id === cat.id ? (
+                      <>
+                        <input
+                          value={editing.name}
+                          onChange={(e) => setEditing({ id: cat.id, name: e.target.value })}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter' && editing.name.trim())
+                              renameMutation.mutate({ id: cat.id, name: editing.name.trim() });
+                          }}
+                          className="input flex-1 py-1.5"
+                          autoFocus
+                        />
+                        <button
+                          onClick={() =>
+                            editing.name.trim() && renameMutation.mutate({ id: cat.id, name: editing.name.trim() })
+                          }
+                          className="text-green-600 hover:text-green-700"
+                        >
+                          <Check className="h-4 w-4" />
+                        </button>
+                        <button onClick={() => setEditing(null)} className="text-gray-400 hover:text-gray-600">
+                          <X className="h-4 w-4" />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="flex-1 truncate text-sm text-gray-800">{cat.name}</span>
+                        {/* Move under another folder */}
+                        <select
+                          value={cat.parentId ?? ''}
+                          onChange={(e) => moveMutation.mutate({ id: cat.id, parentId: e.target.value || null })}
+                          title="Переместить в…"
+                          className="rounded-lg border border-gray-200 bg-white px-2 py-1 text-xs text-gray-600 focus:border-primary-500 focus:outline-none"
+                        >
+                          <option value="">Корень</option>
+                          {options
+                            .filter((o) => o.id !== cat.id && !forbidden.has(o.id))
+                            .map((o) => (
+                              <option key={o.id} value={o.id}>
+                                {`${'  '.repeat(o.depth)}${o.name}`}
+                              </option>
+                            ))}
+                        </select>
+                        <button
+                          onClick={() => setEditing({ id: cat.id, name: cat.name })}
+                          className="text-gray-400 hover:text-primary-600"
+                          title="Переименовать"
+                        >
+                          <Pencil className="h-4 w-4" />
+                        </button>
+                        <button
+                          onClick={() => setConfirmDeleteId(cat.id)}
+                          className="text-gray-400 hover:text-red-600"
+                          title="Удалить"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </>
+                    )}
+                  </div>
+                );
+              })
             )}
           </div>
+          <p className="text-xs text-gray-400">
+            Удаление папки не удаляет материалы и подпапки — они перемещаются в корень.
+          </p>
         </div>
       </Modal>
 
@@ -1238,11 +1642,52 @@ function CategoryManagerModal({
         isOpen={!!confirmDeleteId}
         onClose={() => setConfirmDeleteId(null)}
         onConfirm={() => confirmDeleteId && deleteMutation.mutate(confirmDeleteId)}
-        title="Удалить категорию?"
-        message="Статьи этой категории останутся, но потеряют привязку к ней."
+        title="Удалить папку?"
+        message="Материалы и вложенные папки сохранятся и переместятся в корень базы знаний."
         confirmText="Удалить"
         variant="danger"
       />
     </>
   );
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Helpers
+// ───────────────────────────────────────────────────────────────────────
+
+/** Flatten the category tree depth-first, carrying a depth for indentation. */
+function flattenCategories(categories: KnowledgeCategory[]): (KnowledgeCategory & { depth: number })[] {
+  const childrenByParent = new Map<string | null, KnowledgeCategory[]>();
+  for (const c of categories) {
+    const p = c.parentId ?? null;
+    if (!childrenByParent.has(p)) childrenByParent.set(p, []);
+    childrenByParent.get(p)!.push(c);
+  }
+  for (const list of childrenByParent.values())
+    list.sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ru'));
+
+  const out: (KnowledgeCategory & { depth: number })[] = [];
+  const seen = new Set<string>();
+  const walk = (parent: string | null, depth: number) => {
+    for (const c of childrenByParent.get(parent) ?? []) {
+      if (seen.has(c.id)) continue; // guard against any malformed cyclic data
+      seen.add(c.id);
+      out.push({ ...c, depth });
+      walk(c.id, depth + 1);
+    }
+  };
+  walk(null, 0);
+  // Any orphans whose parent isn't in the set (shouldn't happen) — append at root.
+  for (const c of categories) if (!seen.has(c.id)) out.push({ ...c, depth: 0 });
+  return out;
+}
+
+/** Drop empty/whitespace-only blocks so partial blocks never fail validation. */
+function sanitizeBlocks(blocks: KnowledgeBlock[]): KnowledgeBlock[] {
+  return blocks.filter((b) => {
+    if (b.type === 'text' || b.type === 'heading') return b.text.trim().length > 0;
+    if (b.type === 'image') return b.url.trim().length > 0;
+    if (b.type === 'video') return b.url.trim().length > 0;
+    return false;
+  });
 }

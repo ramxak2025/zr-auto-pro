@@ -43,11 +43,16 @@ type LearningView =
 export default function LearningCenter({
   isManager,
   categories,
+  initialCourseId,
 }: {
   isManager: boolean;
   categories: KnowledgeCategory[];
+  /** When set (e.g. opened from global search), start on that course's detail view. */
+  initialCourseId?: string;
 }) {
-  const [view, setView] = useState<LearningView>({ mode: 'grid' });
+  const [view, setView] = useState<LearningView>(
+    initialCourseId ? { mode: 'course', courseId: initialCourseId } : { mode: 'grid' },
+  );
 
   if (view.mode === 'course') {
     return (
