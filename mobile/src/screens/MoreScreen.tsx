@@ -162,6 +162,21 @@ const menuSections: MenuSection[] = [
         iconColor: colors.teal[600],
       },
       {
+        // Кассовая смена / Z-отчёт / Инкассация. Owner-class tool (open/close/
+        // collect role-gated to director/admin/superadmin AND server-enforced);
+        // viewing the live Z-report is open to any tenant user who reaches it.
+        // Reuses the 'cashflow' item-key so the owner's per-employee finance
+        // visibility toggle governs it consistently with «Движение денег».
+        label: 'Кассовая смена',
+        description: 'Z-отчёт, инкассация, сверка кассы',
+        screen: 'CashShift',
+        itemKey: 'cashflow',
+        roles: ['director', 'admin', 'superadmin'],
+        icon: 'file-tray-full-outline',
+        iconBg: colors.green[50],
+        iconColor: colors.green[600],
+      },
+      {
         label: 'Зарплата',
         description: 'Заработок мастеров',
         screen: 'Salary',

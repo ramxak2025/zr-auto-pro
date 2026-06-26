@@ -22,6 +22,7 @@ import SupplierDetailScreen from '../screens/SupplierDetailScreen';
 import SalaryScreen from '../screens/SalaryScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import CashFlowScreen from '../screens/CashFlowScreen';
+import CashShiftScreen from '../screens/CashShiftScreen';
 import ExpensesScreen from '../screens/ExpensesScreen';
 import UsersScreen from '../screens/UsersScreen';
 import ScheduleScreen from '../screens/ScheduleScreen';
@@ -315,6 +316,12 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Services" component={GatedServices} />
       <MoreStack.Screen name="Suppliers" component={GatedSuppliers} />
       <MoreStack.Screen name="CashFlow" component={GatedCashFlow} />
+      {/* Кассовая смена / Z-отчёт / Инкассация — UNGATED by plan-feature
+          (no FeatureGate): viewing the current shift / Z-report / history is
+          open to any tenant user, while open/close/collect are role-gated
+          inside the screen AND enforced server-side. Lives in MoreStack so the
+          floating tab bar stays visible (back goes detail → Ещё). */}
+      <MoreStack.Screen name="CashShift" component={CashShiftScreen} />
       <MoreStack.Screen name="Salary" component={GatedSalary} />
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
       <MoreStack.Screen name="Reports" component={GatedReports} />

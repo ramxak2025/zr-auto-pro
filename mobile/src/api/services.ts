@@ -39,6 +39,7 @@ import {
   createNotificationsApi,
   createBookingsApi,
   createPermissionTemplatesApi,
+  createCashShiftsApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -86,6 +87,10 @@ export const bookingsApi = createBookingsApi(api);
 // director/admin/superadmin server-side; consumed by UsersScreen's permission
 // matrix («Сохранить как роль» / «Применить роль»).
 export const permissionTemplatesApi = createPermissionTemplatesApi(api);
+// Кассовая смена / Z-отчёт / Инкассация — backend cash-shifts/ (migration 080).
+// open/close/collect owner-gated server-side; current/report/list readable by
+// any tenant user. Every response carries a recomputed Z-report.
+export const cashShiftsApi = createCashShiftsApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {
