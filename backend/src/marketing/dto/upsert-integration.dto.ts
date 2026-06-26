@@ -1,8 +1,8 @@
 import { IsBoolean, IsIn, IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 
 // Mirrors the CHECK constraint on messaging_integrations.provider_type
-// (007 + 008 migrations).
-export const PROVIDER_TYPES = ['whatsapp', 'sms', 'smsru', 'moizvonki', 'email'] as const;
+// (007 + 008 + 087 migrations). 087 added 'telegram'.
+export const PROVIDER_TYPES = ['whatsapp', 'sms', 'smsru', 'moizvonki', 'email', 'telegram'] as const;
 
 /**
  * Write DTO for POST /marketing/integrations. Before this DTO the endpoint
@@ -41,6 +41,25 @@ export class UpsertIntegrationDto {
   @IsString()
   @MaxLength(500, { message: 'Webhook URL слишком длинный' })
   webhookUrl?: string;
+
+  /**
+   * WhatsApp Cloud API phoneNumberId (the {phoneNumberId} path segment). Not a
+   * secret — the Bearer token goes in `apiKey`. Ignored by other providers.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64, { message: 'phoneNumberId слишком длинный' })
+  phoneNumberId?: string;
+
+  /**
+   * Telegram target chat_id (owner/staff chat). Not a secret — the bot token
+   * goes in `apiKey`. Ignored by other providers. See TelegramAdapter for why
+   * Telegram is an owner/staff channel, not a per-client one.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64, { message: 'chat_id слишком длинный' })
+  chatId?: string;
 
   @IsOptional()
   @IsBoolean()

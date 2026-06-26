@@ -17,15 +17,104 @@ interface MessagingProviderAdapter {
   sendMessage(phone: string, message: string): Promise<{ success: boolean; error?: string }>;
 }
 
+// ─── WhatsApp Cloud API Real Adapter ─────────────────────────────────
+// Sends a plain-text message to the client phone via Meta's WhatsApp Cloud API:
+//   POST https://graph.facebook.com/v19.0/{phoneNumberId}/messages
+//   Authorization: Bearer {token}        (token = the integration's api_key)
+//   { messaging_product:'whatsapp', to, type:'text', text:{ body } }
+// Config = phoneNumberId (messaging_integrations.phone_number_id) + token
+// (api_key). Inert until BOTH are set: with either missing it reports a clear
+// not-configured error instead of calling the API. The Bearer token is NEVER
+// logged.
 class WhatsAppAdapter implements MessagingProviderAdapter {
   constructor(
-    private apiKey: string,
-    private senderPhone: string,
+    private token: string,
+    private phoneNumberId: string,
   ) {}
-  async sendMessage(phone: string, message: string) {
-    // Real implementation would call WhatsApp Business API here
-    Logger.log(`[WhatsApp → ${phone}] ${message.substring(0, 60)}...`, 'WhatsAppAdapter');
-    return { success: true };
+
+  async sendMessage(phone: string, message: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.token || !this.phoneNumberId) {
+      return { success: false, error: 'WhatsApp не настроен: укажите phoneNumberId и токен' };
+    }
+    try {
+      // Cloud API wants the number in international form, digits only (no +).
+      const cleanPhone = phone.replace(/[\s\-+()]/g, '');
+      const url = `https://graph.facebook.com/v19.0/${encodeURIComponent(this.phoneNumberId)}/messages`;
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messaging_product: 'whatsapp',
+          to: cleanPhone,
+          type: 'text',
+          text: { body: message },
+        }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      // Log status + phone only — NEVER the token or full request headers.
+      Logger.log(`[WhatsApp → ${cleanPhone}] http=${response.status}`, 'WhatsAppAdapter');
+
+      if (response.ok && Array.isArray(data?.messages) && data.messages.length > 0) {
+        return { success: true };
+      }
+      const apiError = data?.error?.message || `HTTP ${response.status}`;
+      return { success: false, error: `WhatsApp Cloud API: ${apiError}` };
+    } catch (err: any) {
+      Logger.error(`[WhatsApp] Network error: ${err.message}`, 'WhatsAppAdapter');
+      return { success: false, error: `WhatsApp сетевая ошибка: ${err.message}` };
+    }
+  }
+}
+
+// ─── Telegram Bot API Real Adapter ───────────────────────────────────
+// Sends via the Bot API: POST https://api.telegram.org/bot{token}/sendMessage.
+//
+// IMPORTANT LIMITATION: Telegram bots CANNOT message an arbitrary phone number —
+// a user must first /start the bot, after which we'd know their numeric chat_id.
+// We therefore model Telegram as an OWNER/STAFF notification channel: every send
+// goes to ONE configured chat_id (the shop's owner/staff chat or group), NOT to
+// the client's phone. The `phone` argument is intentionally ignored. This is the
+// honest behaviour — if a tenant selects Telegram as their active provider, the
+// review / win-back / car-ready messages land in the owner's chat, not the
+// client's phone. Config = bot token (api_key) + telegram_chat_id. Inert until
+// both are set. The bot token is NEVER logged.
+class TelegramAdapter implements MessagingProviderAdapter {
+  constructor(
+    private botToken: string,
+    private chatId: string,
+  ) {}
+
+  async sendMessage(phone: string, message: string): Promise<{ success: boolean; error?: string }> {
+    if (!this.botToken || !this.chatId) {
+      return { success: false, error: 'Telegram не настроен: укажите токен бота и chat_id' };
+    }
+    try {
+      // `phone` is ignored on purpose (see class doc) — destination is chat_id.
+      const response = await fetch(`https://api.telegram.org/bot${this.botToken}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: this.chatId, text: message }),
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      // Log status only — never the bot token (it lives in the URL we don't log).
+      Logger.log(`[Telegram → chat ${this.chatId}] http=${response.status}, ok=${data?.ok}`, 'TelegramAdapter');
+
+      if (response.ok && data?.ok === true) {
+        return { success: true };
+      }
+      return { success: false, error: `Telegram: ${data?.description || `HTTP ${response.status}`}` };
+    } catch (err: any) {
+      Logger.error(`[Telegram] Network error: ${err.message}`, 'TelegramAdapter');
+      return { success: false, error: `Telegram сетевая ошибка: ${err.message}` };
+    }
   }
 }
 
@@ -184,7 +273,12 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   private createAdapter(row: any): MessagingProviderAdapter {
     switch (row.provider_type) {
       case 'whatsapp':
-        return new WhatsAppAdapter(row.api_key, row.sender_phone || '');
+        // WhatsApp Cloud API: api_key = Bearer token, phone_number_id = sender id.
+        return new WhatsAppAdapter(row.api_key, row.phone_number_id || '');
+      case 'telegram':
+        // Telegram Bot API: api_key = bot token, telegram_chat_id = target chat
+        // (owner/staff notifications — see TelegramAdapter doc for the limitation).
+        return new TelegramAdapter(row.api_key, row.telegram_chat_id || '');
       case 'smsru':
         return new SmsRuAdapter(row.api_key, row.sender_name || '');
       case 'moizvonki':
@@ -234,6 +328,101 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  // ─── «Машина готова» (car-ready) auto-notification ───────────────
+  // Per-tenant settings (car_ready_settings, migration 087): a master switch +
+  // a message template with {number}/{car}/{clientName} placeholders. Disabled
+  // by default → fully inert until the owner turns it on.
+
+  private static readonly CAR_READY_DEFAULT_TEMPLATE =
+    'Здравствуйте! Ваш автомобиль {car} готов. Заказ-наряд №{number}. Будем рады видеть вас!';
+
+  async getCarReadySettings(tenantId: string): Promise<{ enabled: boolean; messageTemplate: string }> {
+    const { rows } = await this.pool.query(
+      `SELECT enabled, message_template FROM car_ready_settings WHERE tenant_id=$1`,
+      [tenantId],
+    );
+    if (rows.length === 0) {
+      // Upsert-on-read default row (mirrors getSettings / loyalty pattern).
+      await this.pool.query(`INSERT INTO car_ready_settings (tenant_id) VALUES ($1) ON CONFLICT DO NOTHING`, [
+        tenantId,
+      ]);
+      return { enabled: false, messageTemplate: MarketingService.CAR_READY_DEFAULT_TEMPLATE };
+    }
+    return {
+      enabled: rows[0].enabled,
+      messageTemplate: rows[0].message_template ?? MarketingService.CAR_READY_DEFAULT_TEMPLATE,
+    };
+  }
+
+  async updateCarReadySettings(
+    tenantId: string,
+    dto: { enabled?: boolean; messageTemplate?: string },
+  ): Promise<{ enabled: boolean; messageTemplate: string }> {
+    await this.pool.query(
+      `INSERT INTO car_ready_settings (tenant_id, enabled, message_template)
+       VALUES ($1, COALESCE($2, false), COALESCE($3, $4))
+       ON CONFLICT (tenant_id) DO UPDATE SET
+         enabled=COALESCE($2, car_ready_settings.enabled),
+         message_template=COALESCE($3, car_ready_settings.message_template),
+         updated_at=now()`,
+      [
+        tenantId,
+        typeof dto.enabled === 'boolean' ? dto.enabled : null,
+        typeof dto.messageTemplate === 'string' ? dto.messageTemplate : null,
+        MarketingService.CAR_READY_DEFAULT_TEMPLATE,
+      ],
+    );
+    return this.getCarReadySettings(tenantId);
+  }
+
+  /**
+   * Fire the «машина готова» notification for one check. Called fire-and-forget
+   * by ChecksService.setWorkStatus AFTER a successful transition INTO 'ready'.
+   * NEVER throws to the caller's critical path — every failure path returns a
+   * `{ sent:false, reason }` shape; the caller additionally wraps it in .catch().
+   *
+   * Tenant-scoped: every query is filtered by tenantId, so a check / client /
+   * car from another tenant can never be read or messaged. Sends nothing when
+   * the feature is disabled, the check has no client, or the client has no phone.
+   * Reuses the shared `sendClientMessage` adapter path — no new send logic.
+   */
+  async notifyCarReady(
+    tenantId: string,
+    checkId: string,
+  ): Promise<{
+    sent: boolean;
+    reason?: 'disabled' | 'not_found' | 'no_phone' | 'no_provider' | 'error';
+    error?: string;
+  }> {
+    const settings = await this.getCarReadySettings(tenantId);
+    if (!settings.enabled) return { sent: false, reason: 'disabled' };
+
+    const { rows } = await this.pool.query(
+      `SELECT ch.number,
+              cl.full_name AS client_name, cl.phone AS client_phone,
+              ca.make_model, ca.plate_number
+       FROM checks ch
+       LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+       LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
+       WHERE ch.id=$1 AND ch.tenant_id=$2`,
+      [checkId, tenantId],
+    );
+    if (rows.length === 0) return { sent: false, reason: 'not_found' };
+    const r = rows[0];
+    if (!r.client_phone || !String(r.client_phone).trim()) return { sent: false, reason: 'no_phone' };
+
+    const carLabel = [r.make_model, r.plate_number]
+      .filter((v) => v && String(v).trim())
+      .join(' ')
+      .trim();
+    const message = (settings.messageTemplate || MarketingService.CAR_READY_DEFAULT_TEMPLATE)
+      .replace(/\{number\}/g, r.number != null ? String(r.number) : '')
+      .replace(/\{car\}/g, carLabel || 'автомобиль')
+      .replace(/\{clientName\}/g, r.client_name || 'клиент');
+
+    return this.sendClientMessage(tenantId, r.client_phone, message);
+  }
+
   // ─── Token Generation ────────────────────────────────────────────
   private generateToken(): string {
     return crypto.randomBytes(32).toString('hex');
@@ -249,8 +438,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   private static readonly KEEP_API_KEY_SENTINEL = '_existing_';
 
   async getIntegrations(tenantId: string) {
+    // NOTE: api_key (the secret: WhatsApp Bearer token / Telegram bot token /
+    // SMS api_id) is intentionally NOT selected — it never leaves the server.
+    // phone_number_id and telegram_chat_id are non-secret routing config, so the
+    // UI can show/edit them.
     const { rows } = await this.pool.query(
-      `SELECT id, provider_type, sender_name, sender_phone, webhook_url, is_active, created_at
+      `SELECT id, provider_type, sender_name, sender_phone, webhook_url,
+              phone_number_id, telegram_chat_id, is_active, created_at
        FROM messaging_integrations WHERE tenant_id=$1 ORDER BY created_at`,
       [tenantId],
     );
@@ -260,6 +454,8 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       senderName: r.sender_name,
       senderPhone: r.sender_phone,
       webhookUrl: r.webhook_url,
+      phoneNumberId: r.phone_number_id,
+      chatId: r.telegram_chat_id,
       isActive: r.is_active,
       createdAt: r.created_at,
     }));
@@ -285,14 +481,17 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       }
       await this.pool.query(
         `UPDATE messaging_integrations SET provider_type=$1, api_key=$2, sender_name=$3,
-         sender_phone=$4, webhook_url=$5, is_active=$6, updated_at=now()
-         WHERE id=$7 AND tenant_id=$8`,
+         sender_phone=$4, webhook_url=$5, phone_number_id=$6, telegram_chat_id=$7,
+         is_active=$8, updated_at=now()
+         WHERE id=$9 AND tenant_id=$10`,
         [
           dto.providerType,
           apiKey,
           dto.senderName || null,
           dto.senderPhone || null,
           dto.webhookUrl || null,
+          dto.phoneNumberId || null,
+          dto.chatId || null,
           dto.isActive !== false,
           dto.id,
           tenantId,
@@ -304,8 +503,9 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
         throw new BadRequestException({ message: 'Введите API-ключ' });
       }
       await this.pool.query(
-        `INSERT INTO messaging_integrations (tenant_id, provider_type, api_key, sender_name, sender_phone, webhook_url)
-         VALUES ($1,$2,$3,$4,$5,$6)`,
+        `INSERT INTO messaging_integrations
+           (tenant_id, provider_type, api_key, sender_name, sender_phone, webhook_url, phone_number_id, telegram_chat_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
         [
           tenantId,
           dto.providerType,
@@ -313,6 +513,8 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
           dto.senderName || null,
           dto.senderPhone || null,
           dto.webhookUrl || null,
+          dto.phoneNumberId || null,
+          dto.chatId || null,
         ],
       );
     }

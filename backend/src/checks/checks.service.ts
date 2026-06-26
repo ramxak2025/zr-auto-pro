@@ -12,6 +12,7 @@ import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { WarrantyService } from '../warranty/warranty.service';
 import { PushService } from '../push/push.service';
+import { MarketingService } from '../marketing/marketing.service';
 import { parseFields, filterShape } from '../common/field-filter';
 import { ttlCache } from '../common/ttl-cache';
 import { invalidateReportsForTenant } from '../common/reports-cache';
@@ -76,6 +77,10 @@ export class ChecksService {
     @Inject(PG_POOL) private pool: Pool,
     private warranty: WarrantyService,
     @Optional() private pushService?: PushService,
+    // Reused for the «машина готова» auto-notification (fire-and-forget from
+    // setWorkStatus). @Optional so a missing provider can never break check
+    // writes; the module wires it in, so in practice it's always present.
+    @Optional() private marketing?: MarketingService,
   ) {}
 
   /**
@@ -513,16 +518,50 @@ export class ChecksService {
         message: `Недопустимый статус. Ожидается одно из: ${WORK_STATUSES.join(', ')}`,
       });
     }
-    // Tenant-scoped single-column update. RETURNING id only confirms the row
-    // exists in this tenant; the full payload is re-read via getById below.
+    // Tenant-scoped single-column update. The `before` CTE captures the prior
+    // work_status in the SAME statement so we can detect a *transition* INTO
+    // 'ready' (and not re-fire when it was already 'ready'). RETURNING id also
+    // confirms the row exists in this tenant; the full payload is re-read via
+    // getById below.
     const { rows } = await this.pool.query(
-      `UPDATE checks SET work_status=$1 WHERE id=$2 AND tenant_id=$3 RETURNING id`,
+      `WITH before AS (
+         SELECT work_status FROM checks WHERE id=$2 AND tenant_id=$3
+       )
+       UPDATE checks SET work_status=$1
+       FROM before
+       WHERE checks.id=$2 AND checks.tenant_id=$3
+       RETURNING checks.id AS id, before.work_status AS old_status`,
       [workStatus, id, tenantID],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+    const previousStatus: string | null = rows[0].old_status ?? null;
+
     // No report-cache invalidation / cash-changed push: the board flag does not
     // move money, so the financial caches stay valid.
+
+    // «Машина готова» auto-notification — ONLY on the transition INTO 'ready'
+    // (skip if it was already 'ready'). FIRE-AND-FORGET: deliberately NOT
+    // awaited and fully guarded, so it can never block, delay, or fail the
+    // status change above. Nothing about the returned check is altered by it.
+    if (workStatus === 'ready' && previousStatus !== 'ready') {
+      this.fireCarReadyNotification(id, tenantID);
+    }
+
     return this.getById(id, tenantID);
+  }
+
+  /**
+   * Best-effort «машина готова» client message. Fire-and-forget: never awaited,
+   * never throws into the caller — a messaging failure (no provider, no phone,
+   * network error) is swallowed with a warn log. Tenant isolation and the
+   * "has a client with a phone" check live in MarketingService.notifyCarReady.
+   * Tokens are never logged (handled inside the adapters).
+   */
+  private fireCarReadyNotification(checkId: string, tenantID: string): void {
+    if (!this.marketing) return;
+    void this.marketing.notifyCarReady(tenantID, checkId).catch((err) => {
+      this.logger.warn(`car-ready notify failed for check ${checkId}: ${err?.message ?? err}`);
+    });
   }
 
   /**

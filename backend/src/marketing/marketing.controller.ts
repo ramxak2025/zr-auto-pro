@@ -8,6 +8,7 @@ import { UpsertIntegrationDto } from './dto/upsert-integration.dto';
 import { UpsertPlatformLinkDto } from './dto/upsert-platform-link.dto';
 import { UpdateReviewSettingsDto } from './dto/update-review-settings.dto';
 import { UpdateReminderSettingsDto } from './dto/update-reminder-settings.dto';
+import { UpdateCarReadySettingsDto } from './dto/update-car-ready-settings.dto';
 import { WinbackSendDto } from './dto/winback-send.dto';
 import { ReminderService } from './reminder.service';
 
@@ -99,6 +100,22 @@ export class MarketingController {
   @Patch('settings')
   updateSettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateReviewSettingsDto) {
     return this.marketingService.updateSettings(user.tenantID, dto);
+  }
+
+  // ─── Car-ready («машина готова») notification settings ───────────
+  // Read open to any tenant user (like review settings); write gated by
+  // marketing_access (owner-class roles bypass via permissions.guard).
+  @UseGuards(JwtAuthGuard)
+  @Get('car-ready')
+  getCarReadySettings(@CurrentUser() user: JwtPayload) {
+    return this.marketingService.getCarReadySettings(user.tenantID);
+  }
+
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
+  @Patch('car-ready')
+  updateCarReadySettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateCarReadySettingsDto) {
+    return this.marketingService.updateCarReadySettings(user.tenantID, dto);
   }
 
   // ─── Reminder Settings (protected) ───────────────────────────────

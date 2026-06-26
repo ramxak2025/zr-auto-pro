@@ -1319,14 +1319,36 @@ export interface ReviewAlert {
 export interface MessagingIntegration {
   id: string;
   // Mirrors the messaging_integrations.provider_type CHECK constraint —
-  // migration 008 already widened the DB to include smsru / moizvonki.
+  // 008 widened the DB to smsru / moizvonki; 087 added telegram.
   // Anything outside this union will be rejected by the backend DTO.
-  providerType: 'whatsapp' | 'sms' | 'smsru' | 'moizvonki' | 'email';
+  providerType: 'whatsapp' | 'sms' | 'smsru' | 'moizvonki' | 'email' | 'telegram';
   senderName?: string;
   senderPhone?: string;
   webhookUrl?: string;
+  // WhatsApp Cloud API phoneNumberId (087). Non-secret routing config — the
+  // Bearer token is write-only (api_key) and never returned. Only meaningful
+  // for providerType === 'whatsapp'.
+  phoneNumberId?: string;
+  // Telegram target chat_id (087). Telegram bots cannot DM an arbitrary phone,
+  // so Telegram messages go to this configured owner/staff chat, NOT the
+  // client's phone. The bot token is write-only (api_key). Only meaningful for
+  // providerType === 'telegram'.
+  chatId?: string;
   isActive: boolean;
   createdAt: string;
+}
+
+/**
+ * «Машина готова» auto-notification settings (car_ready_settings, migration 087).
+ * When `enabled`, a check transitioning to work_status 'ready' (kanban board)
+ * sends the client a templated message via the tenant's active messaging
+ * provider. Placeholders in `messageTemplate`: {number} (order number), {car}
+ * (make/model + plate), {clientName}. Disabled by default.
+ * GET/PATCH /marketing/car-ready.
+ */
+export interface CarReadyNotificationSettings {
+  enabled: boolean;
+  messageTemplate: string;
 }
 
 export interface ReviewPlatformLink {

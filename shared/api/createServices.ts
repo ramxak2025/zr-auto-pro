@@ -53,6 +53,7 @@ import type {
   ReviewResponse,
   ReviewAlert,
   MessagingIntegration,
+  CarReadyNotificationSettings,
   ReviewPlatformLink,
   ReviewSettings,
   PublicReviewData,
@@ -783,6 +784,10 @@ export function createMarketingApi(api: HttpClient) {
       senderName?: string;
       senderPhone?: string;
       webhookUrl?: string;
+      // WhatsApp Cloud API phoneNumberId (087).
+      phoneNumberId?: string;
+      // Telegram owner/staff chat_id (087).
+      chatId?: string;
       isActive?: boolean;
     }) => api.post<MessagingIntegration[]>('/marketing/integrations', data),
     removeIntegration: (id: string) => api.delete(`/marketing/integrations/${id}`),
@@ -792,6 +797,10 @@ export function createMarketingApi(api: HttpClient) {
     removePlatformLink: (id: string) => api.delete(`/marketing/platform-links/${id}`),
     getSettings: () => api.get<ReviewSettings>('/marketing/settings'),
     updateSettings: (data: Partial<ReviewSettings>) => api.patch<ReviewSettings>('/marketing/settings', data),
+    // «Машина готова» auto-notification settings (087).
+    getCarReadySettings: () => api.get<CarReadyNotificationSettings>('/marketing/car-ready'),
+    updateCarReadySettings: (data: Partial<CarReadyNotificationSettings>) =>
+      api.patch<CarReadyNotificationSettings>('/marketing/car-ready', data),
     testIntegration: (id?: string) => api.post('/marketing/integrations/test', { id }),
     sendSms: (data: { phone: string; text: string }) => api.post('/marketing/sms/send', data),
     getReminderSettings: () => api.get<ReminderSettings>('/marketing/reminders'),
