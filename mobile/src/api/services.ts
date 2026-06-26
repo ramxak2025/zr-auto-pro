@@ -43,6 +43,8 @@ import {
   createDebtsApi,
   createLoyaltyApi,
   createPurchaseOrdersApi,
+  createPaymentsApi,
+  createFiscalApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -112,6 +114,19 @@ export const loyaltyApi = createLoyaltyApi(api);
 // after a receive. Consumed by PurchaseOrders / PurchaseOrderCreate /
 // PurchaseOrderDetail screens (entry: «Заказы поставщикам» в разделе Склад).
 export const purchaseOrdersApi = createPurchaseOrdersApi(api);
+// Эквайринг (приём оплаты картой / СБП) — backend payments/ (ЮKassa / Тинькофф).
+// getSettings/updateSettings owner-class gated server-side (director/admin/
+// superadmin); the secret key is WRITE-ONLY — getSettings returns only a mask +
+// hasSecretKey. INERT until the owner enters real shopId + secretKey AND flips
+// enabled on (POST /payments/create returns 422 before that). Consumed by the
+// PaymentIntegrations settings screen (раздел «Ещё» → «Приём оплат и касса»).
+export const paymentsApi = createPaymentsApi(api);
+// Онлайн-касса / фискализация 54-ФЗ (АТОЛ) — backend fiscal/. getSettings/
+// updateSettings owner-class gated server-side; the АТОЛ password is WRITE-ONLY —
+// getSettings returns only a mask + hasPassword. INERT until login + password +
+// groupCode are entered AND enabled is on. Consumed by the same
+// PaymentIntegrations settings screen (section «Онлайн-касса 54-ФЗ»).
+export const fiscalApi = createFiscalApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {

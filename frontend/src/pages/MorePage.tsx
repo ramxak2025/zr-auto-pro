@@ -26,6 +26,7 @@ import {
   ClipboardList,
   Coins,
   ShoppingCart,
+  Plug,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -213,6 +214,15 @@ const menuItems: MenuItem[] = [
     path: '/company-settings',
     icon: Building2,
     roles: ['director', 'superadmin'],
+    color: 'bg-slate-50',
+    iconColor: 'text-slate-600',
+  },
+  {
+    label: 'Интеграции',
+    description: 'Эквайринг, СБП и онлайн-касса 54-ФЗ',
+    path: '/integrations',
+    icon: Plug,
+    roles: ['director', 'admin', 'superadmin'],
     color: 'bg-slate-50',
     iconColor: 'text-slate-600',
   },

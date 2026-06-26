@@ -378,6 +378,22 @@ const menuSections: MenuSection[] = [
         iconColor: colors.slate[600],
       },
       {
+        // Приём оплат (эквайринг ЮKassa/Тинькофф) + онлайн-касса 54-ФЗ (АТОЛ).
+        // Company-level financial config — concept-adjacent to «Настройки
+        // компании», so we reuse its item-key 'company-settings' (a new shared
+        // item-key would break the ITEM_KEYS drift-guard). Distinct title so it
+        // doesn't duplicate the marketing «Интеграции» row above. Owner-class:
+        // role-filtered here AND the screen + backend self-gate.
+        label: 'Приём оплат и касса',
+        description: 'Эквайринг (карта/СБП) и онлайн-касса 54-ФЗ',
+        screen: 'PaymentIntegrations',
+        itemKey: 'company-settings',
+        roles: ['director', 'admin', 'superadmin'],
+        icon: 'receipt-outline',
+        iconBg: colors.blue[50],
+        iconColor: colors.blue[600],
+      },
+      {
         label: 'Подписка',
         description: 'Тариф и оплата',
         screen: 'Subscription',

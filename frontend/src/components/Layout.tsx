@@ -110,6 +110,9 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
       '/calls',
       '/equipment',
       '/knowledge',
+      '/company-settings',
+      '/integrations',
+      '/notifications',
     ],
   },
 ];

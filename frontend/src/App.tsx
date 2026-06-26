@@ -78,6 +78,7 @@ const RetailChecksPage = lazyWithRetry(() => import('./pages/RetailChecksPage'))
 const ExpensesPage = lazyWithRetry(() => import('./pages/ExpensesPage'));
 const MarketingPage = lazyWithRetry(() => import('./pages/MarketingPage'));
 const CompanySettingsPage = lazyWithRetry(() => import('./pages/CompanySettingsPage'));
+const IntegrationsPage = lazyWithRetry(() => import('./pages/IntegrationsPage'));
 const CallsPage = lazyWithRetry(() => import('./pages/CallsPage'));
 const EquipmentPage = lazyWithRetry(() => import('./pages/EquipmentPage'));
 const KnowledgeBasePage = lazyWithRetry(() => import('./pages/KnowledgeBasePage'));
@@ -250,6 +251,7 @@ export default function App() {
                     <Route path="/equipment" element={<EquipmentPage />} />
                     <Route path="/knowledge" element={<KnowledgeBasePage />} />
                     <Route path="/company-settings" element={<CompanySettingsPage />} />
+                    <Route path="/integrations" element={<IntegrationsPage />} />
                   </Route>
 
                   {/* Admin routes inside AdminLayout (superadmin only) */}

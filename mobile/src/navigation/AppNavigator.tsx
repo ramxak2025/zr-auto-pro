@@ -57,6 +57,7 @@ import DismissedEmployeesScreen from '../screens/DismissedEmployeesScreen';
 import TrashScreen from '../screens/TrashScreen';
 import MailingsScreen from '../screens/MailingsScreen';
 import IntegrationsScreen from '../screens/IntegrationsScreen';
+import PaymentIntegrationsScreen from '../screens/PaymentIntegrationsScreen';
 import WarehouseAnalyticsScreen from '../screens/WarehouseAnalyticsScreen';
 import BookingsScreen from '../screens/BookingsScreen';
 import BookingDetailScreen from '../screens/BookingDetailScreen';
@@ -364,6 +365,10 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Equipment" component={EquipmentStackNavigator} />
       <MoreStack.Screen name="Users" component={GatedUsers} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
+      {/* Приём оплат (эквайринг) + онлайн-касса 54-ФЗ. Owner-class; lives in
+          MoreStack so the floating tab bar stays visible (like CompanySettings).
+          Screen self-gates non-owners; menu row is roles-filtered too. */}
+      <MoreStack.Screen name="PaymentIntegrations" component={PaymentIntegrationsScreen} />
       {/* UNGATED — every role manages their own notification preferences. */}
       <MoreStack.Screen name="NotificationSettings" component={NotificationSettingsScreen} />
     </MoreStack.Navigator>

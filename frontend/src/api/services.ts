@@ -34,6 +34,8 @@ import {
   createLoyaltyApi,
   createPurchaseOrdersApi,
   createAdminApi,
+  createPaymentsApi,
+  createFiscalApi,
 } from '../../../shared/api/createServices';
 
 // Re-export all API request types for any file that imports them from here
@@ -113,6 +115,8 @@ export const debtsApi = createDebtsApi(api);
 export const loyaltyApi = createLoyaltyApi(api);
 export const purchaseOrdersApi = createPurchaseOrdersApi(api);
 export const adminApi = createAdminApi(api);
+export const paymentsApi = createPaymentsApi(api);
+export const fiscalApi = createFiscalApi(api);
 
 // --- Platform-specific: Image compression + Upload (uses Canvas API) ---
 
