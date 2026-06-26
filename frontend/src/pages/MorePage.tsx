@@ -25,6 +25,7 @@ import {
   Bell,
   ClipboardList,
   Coins,
+  ShoppingCart,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -86,6 +87,16 @@ const menuItems: MenuItem[] = [
     description: 'Поставки и расчёты',
     path: '/suppliers',
     icon: Truck,
+    permission: 'suppliers_access',
+    featureKey: 'suppliers_view',
+    color: 'bg-amber-50',
+    iconColor: 'text-amber-600',
+  },
+  {
+    label: 'Заказы поставщикам',
+    description: 'Закупки и приёмка на склад',
+    path: '/purchase-orders',
+    icon: ShoppingCart,
     permission: 'suppliers_access',
     featureKey: 'suppliers_view',
     color: 'bg-amber-50',

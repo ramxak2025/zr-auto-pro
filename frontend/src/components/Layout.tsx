@@ -24,6 +24,7 @@ import {
   ClipboardList,
   Coins,
   LayoutGrid,
+  ShoppingCart,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { subscriptionApi } from '../api/services';
@@ -52,6 +53,13 @@ const navItems: NavItem[] = [
     label: 'Поставщики',
     path: '/suppliers',
     icon: Truck,
+    permission: 'suppliers_access',
+    featureKey: 'suppliers_view',
+  },
+  {
+    label: 'Заказы поставщикам',
+    path: '/purchase-orders',
+    icon: ShoppingCart,
     permission: 'suppliers_access',
     featureKey: 'suppliers_view',
   },
@@ -88,6 +96,7 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
       '/clients',
       '/services',
       '/suppliers',
+      '/purchase-orders',
       '/salary',
       '/reports',
       '/users',

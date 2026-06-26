@@ -60,6 +60,9 @@ const ProductsPage = lazyWithRetry(() => import('./pages/ProductsPage'));
 const ServicesPage = lazyWithRetry(() => import('./pages/ServicesPage'));
 const SuppliersPage = lazyWithRetry(() => import('./pages/SuppliersPage'));
 const SupplierDetailPage = lazyWithRetry(() => import('./pages/SupplierDetailPage'));
+const PurchaseOrdersPage = lazyWithRetry(() => import('./pages/PurchaseOrdersPage'));
+const PurchaseOrderEditPage = lazyWithRetry(() => import('./pages/PurchaseOrderEditPage'));
+const PurchaseOrderDetailPage = lazyWithRetry(() => import('./pages/PurchaseOrderDetailPage'));
 const SalaryPage = lazyWithRetry(() => import('./pages/SalaryPage'));
 const ReportsPage = lazyWithRetry(() => import('./pages/ReportsPage'));
 const CashFlowPage = lazyWithRetry(() => import('./pages/CashFlowPage'));
@@ -222,6 +225,13 @@ export default function App() {
                     <Route path="/services" element={gated('services_view', <ServicesPage />)} />
                     <Route path="/suppliers" element={gated('suppliers_view', <SuppliersPage />)} />
                     <Route path="/suppliers/:id" element={gated('suppliers_view', <SupplierDetailPage />)} />
+                    <Route path="/purchase-orders" element={gated('suppliers_view', <PurchaseOrdersPage />)} />
+                    <Route path="/purchase-orders/new" element={gated('suppliers_view', <PurchaseOrderEditPage />)} />
+                    <Route
+                      path="/purchase-orders/:id/edit"
+                      element={gated('suppliers_view', <PurchaseOrderEditPage />)}
+                    />
+                    <Route path="/purchase-orders/:id" element={gated('suppliers_view', <PurchaseOrderDetailPage />)} />
                     <Route path="/salary" element={gated('salary_view', <SalaryPage />)} />
                     <Route path="/reports" element={gated('reports_view', <ReportsPage />)} />
                     <Route path="/cashflow" element={gated('cashflow_view', <CashFlowPage />)} />
