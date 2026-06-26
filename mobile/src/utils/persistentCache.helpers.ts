@@ -41,6 +41,11 @@ export const PERSISTED_KEYS = [
   'users',
   // Suppliers / clients / cars / equipment
   'suppliers',
+  // Заказы поставщикам — list keyed ['purchase-orders', { status, supplierId }].
+  // Small fixed param space (5 statuses × supplier), NOT search-volatile, so the
+  // «Заказы поставщикам» list renders instantly from cache on cold start and
+  // survives a transient first-fetch failure (matching every other section).
+  'purchase-orders',
   // ClientsScreen people-list — useInfiniteQuery keyed
   // ['clients-infinite', { search, filter, source }]. The base variant
   // (search: '', filter: 'all', source: null) is what cold start needs;

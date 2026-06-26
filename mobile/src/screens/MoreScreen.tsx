@@ -255,6 +255,22 @@ const menuSections: MenuSection[] = [
         iconColor: colors.amber[600],
       },
       {
+        // Заказы поставщикам + приёмка (backend purchase-orders/). Часть раздела
+        // «Поставщики» (закупки), поэтому переиспользуем те же гейты —
+        // item-key 'suppliers', право suppliers_access и feature suppliers_view
+        // (новый shared item-key сломал бы ITEM_KEYS drift-guard). Создание/
+        // оформление/приёмка role-gated внутри экранов И на сервере.
+        label: 'Заказы поставщикам',
+        description: 'Закупки, оформление и приёмка',
+        screen: 'PurchaseOrders',
+        itemKey: 'suppliers',
+        permission: 'suppliers_access',
+        featureKey: 'suppliers_view',
+        icon: 'clipboard-outline',
+        iconBg: colors.amber[50],
+        iconColor: colors.amber[700],
+      },
+      {
         label: 'Имущество',
         description: 'Инструменты и оборудование',
         screen: 'Equipment',

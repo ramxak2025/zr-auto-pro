@@ -42,6 +42,7 @@ import {
   createCashShiftsApi,
   createDebtsApi,
   createLoyaltyApi,
+  createPurchaseOrdersApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -104,6 +105,13 @@ export const debtsApi = createDebtsApi(api);
 // refreshed per-client summary so the UI updates instantly (CompanySettings
 // loyalty section + ClientDetailScreen bonus section).
 export const loyaltyApi = createLoyaltyApi(api);
+// Заказы поставщикам + приёмка — backend purchase-orders/. list/getById/
+// suggestions readable by any tenant user; create/update/order/receive/cancel
+// owner-class gated server-side (director/admin/superadmin). receive credits
+// product stock (income path) — clients invalidate ['products']/['stock-movements']
+// after a receive. Consumed by PurchaseOrders / PurchaseOrderCreate /
+// PurchaseOrderDetail screens (entry: «Заказы поставщикам» в разделе Склад).
+export const purchaseOrdersApi = createPurchaseOrdersApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {

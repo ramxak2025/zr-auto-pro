@@ -20,6 +20,9 @@ import CarDetailScreen from '../screens/CarDetailScreen';
 import ServicesScreen from '../screens/ServicesScreen';
 import SuppliersScreen from '../screens/SuppliersScreen';
 import SupplierDetailScreen from '../screens/SupplierDetailScreen';
+import PurchaseOrdersScreen from '../screens/PurchaseOrdersScreen';
+import PurchaseOrderCreateScreen from '../screens/PurchaseOrderCreateScreen';
+import PurchaseOrderDetailScreen from '../screens/PurchaseOrderDetailScreen';
 import SalaryScreen from '../screens/SalaryScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import CashFlowScreen from '../screens/CashFlowScreen';
@@ -135,6 +138,10 @@ const GatedClients = gated('clients_view', ClientsScreen);
 const GatedCars = gated('clients_view', CarsScreen);
 const GatedServices = gated('services_view', ServicesScreen);
 const GatedSuppliers = gated('suppliers_view', SuppliersScreen);
+// Заказы поставщикам — same subscription gate as Suppliers (закупки — часть
+// раздела «Поставщики»). Module-scope identity so the MoreStack doesn't remount
+// the screen mid-push (same rationale as the other gated screens above).
+const GatedPurchaseOrders = gated('suppliers_view', PurchaseOrdersScreen);
 const GatedCashFlow = gated('cashflow_view', CashFlowScreen);
 const GatedSalary = gated('salary_view', SalaryScreen);
 const GatedReports = gated('reports_view', ReportsScreen);
@@ -317,6 +324,15 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Cars" component={GatedCars} />
       <MoreStack.Screen name="Services" component={GatedServices} />
       <MoreStack.Screen name="Suppliers" component={GatedSuppliers} />
+      {/* Заказы поставщикам + приёмка — list / create / detail live in MoreStack
+          so the floating tab bar stays visible (back goes detail → list → Ещё,
+          like Записи / Поставщики). Create (draft) and Detail (order/receive/
+          cancel) push onto THIS stack; receive credits product stock and the
+          detail screen invalidates ['products']/['stock-movements'] so Склад is
+          fresh. Write actions are role-gated inside the screens AND server-side. */}
+      <MoreStack.Screen name="PurchaseOrders" component={GatedPurchaseOrders} />
+      <MoreStack.Screen name="PurchaseOrderCreate" component={PurchaseOrderCreateScreen} />
+      <MoreStack.Screen name="PurchaseOrderDetail" component={PurchaseOrderDetailScreen} />
       <MoreStack.Screen name="CashFlow" component={GatedCashFlow} />
       {/* Кассовая смена / Z-отчёт / Инкассация — UNGATED by plan-feature
           (no FeatureGate): viewing the current shift / Z-report / history is
