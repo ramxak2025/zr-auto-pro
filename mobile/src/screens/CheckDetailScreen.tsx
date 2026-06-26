@@ -17,10 +17,9 @@ import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import * as Print from 'expo-print';
-import * as Sharing from 'expo-sharing';
 import * as ImagePicker from 'expo-image-picker';
 import { checksApi, myCompanyApi, checkPhotosApi, returnsApi, knowledgeApi } from '../api/services';
+import { shareOrderPdf } from '../utils/orderPdf';
 import { resolveCheckDetailState } from './checkDetailViewState';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
 import { useAuth } from '../contexts/AuthContext';
@@ -47,18 +46,6 @@ function formatMoney(v: number) {
   );
 }
 
-// Экранируем любое свободное текстовое значение перед вставкой в HTML чека/PDF.
-// Имена клиента/компании/авто с символами < > & " ' иначе ломают разметку
-// или «съедают» текст в сгенерированном PDF. Применять ко ВСЕМ значениям из
-// данных; числа/даты, которые мы форматируем сами, экранировать не нужно.
-function escapeHtml(value: unknown): string {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
 function formatDate(d: string) {
   return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' });
 }
@@ -233,90 +220,13 @@ export default function CheckDetailScreen() {
     ]);
   };
 
-  const generatePdf = async () => {
+  // «Печать / PDF» заказ-наряда. Всю генерацию HTML + работу с expo-print /
+  // expo-sharing вынесли в src/utils/orderPdf.ts (guarded lazy require: до
+  // батч-prebuild нативные модули не слинкованы → мягкий алерт вместо краша).
+  const generatePdf = () => {
     if (!check) return;
-    const c = company;
-    // Все строковые значения ниже — свободный текст из данных; экранируем их
-    // через escapeHtml перед вставкой в HTML, иначе символы < > & " ' ломают
-    // верстку чека/PDF. Числа и даты форматируем сами — их не экранируем.
-    const companyName = escapeHtml(c?.legalName || c?.name || 'Автосервис');
-    const inn = c?.inn ? `ИНН ${escapeHtml(c.inn)}` : '';
-    const addr = escapeHtml(c?.address || '');
-    const phone = escapeHtml(c?.phone || '');
-    const footer = escapeHtml(c?.receiptFooter || '');
-    const date = formatShortDate(check.date) + ' ' + formatTime(check.date);
-    const safeServices = check.services ?? [];
-    const safeProducts = check.products ?? [];
-    const servicesHtml = safeServices
-      .map(
-        (s) =>
-          `<tr><td>${escapeHtml(s.name)}</td><td style="text-align:right">${s.quantity}</td><td style="text-align:right">${formatMoney(s.total)}</td></tr>`,
-      )
-      .join('');
-    const productsHtml = safeProducts
-      .map(
-        (p) =>
-          `<tr><td>${escapeHtml(p.name)}</td><td style="text-align:right">${p.quantity}</td><td style="text-align:right">${formatMoney(p.totalSell)}</td></tr>`,
-      )
-      .join('');
-    const html = `
-      <html><head><meta charset="utf-8"/><style>
-        body { font-family: sans-serif; font-size: 12px; padding: 16px; }
-        h2 { margin: 0 0 4px; font-size: 16px; }
-        .meta { color: #666; font-size: 11px; margin-bottom: 12px; }
-        table { width: 100%; border-collapse: collapse; margin: 8px 0; }
-        th, td { padding: 4px 0; border-bottom: 1px solid #eee; text-align: left; font-size: 11px; }
-        th { font-weight: 600; color: #333; }
-        .total { font-size: 14px; font-weight: bold; text-align: right; margin-top: 8px; }
-        .footer { text-align: center; margin-top: 16px; font-size: 10px; color: #999; }
-        hr { border: none; border-top: 1px dashed #ccc; margin: 8px 0; }
-      </style></head><body>
-        <h2>${companyName}</h2>
-        <div class="meta">${[inn, addr, phone].filter(Boolean).join(' | ')}</div>
-        <hr/>
-        <div><strong>Чек #${check.number}</strong> от ${date}</div>
-        ${check.client ? `<div>Клиент: ${escapeHtml(check.client.fullName)}</div>` : '<div>Клиент: Розничный покупатель</div>'}
-        ${check.car ? `<div>Авто: ${escapeHtml(check.car.makeModel)} ${escapeHtml(check.car.plateNumber || '')}</div>` : ''}
-        ${check.master ? `<div>Мастер: ${escapeHtml(check.master.fullName)}</div>` : ''}
-        ${
-          safeServices.length > 0
-            ? `
-          <h3 style="margin:12px 0 4px">Услуги</h3>
-          <table><thead><tr><th>Название</th><th style="text-align:right">Кол.</th><th style="text-align:right">Сумма</th></tr></thead>
-          <tbody>${servicesHtml}</tbody></table>
-        `
-            : ''
-        }
-        ${
-          safeProducts.length > 0
-            ? `
-          <h3 style="margin:12px 0 4px">Товары</h3>
-          <table><thead><tr><th>Название</th><th style="text-align:right">Кол.</th><th style="text-align:right">Сумма</th></tr></thead>
-          <tbody>${productsHtml}</tbody></table>
-        `
-            : ''
-        }
-        <hr/>
-        ${(check.discount ?? 0) > 0 ? `<div>Скидка: -${formatMoney(check.discount ?? 0)}</div>` : ''}
-        <div class="total">ИТОГО: ${formatMoney(check.totalRevenue)}</div>
-        <div style="font-size:11px;color:#666;text-align:right">${escapeHtml(paymentLabels[check.paymentMethod] || check.paymentMethod)}</div>
-        ${footer ? `<div class="footer">${footer}</div>` : ''}
-      </body></html>
-    `;
-
-    try {
-      const { uri } = await Print.printToFileAsync({ html, base64: false });
-      if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(uri, {
-          mimeType: 'application/pdf',
-          dialogTitle: `Чек #${check.number}`,
-        });
-      } else {
-        Alert.alert('PDF создан', uri);
-      }
-    } catch {
-      Alert.alert('Ошибка', 'Не удалось создать PDF');
-    }
+    haptic('select');
+    void shareOrderPdf(check, company);
   };
 
   const deleteMutation = useMutation({
@@ -666,8 +576,14 @@ export default function CheckDetailScreen() {
           <Text style={[styles.headerDate, { color: palette.text.tertiary }]}>{formatShortDate(check.date)}</Text>
         </View>
         <View style={styles.headerActions}>
-          <TouchableOpacity onPress={generatePdf} style={[styles.actionBtn, { backgroundColor: palette.bg.muted }]}>
-            <Ionicons name="document-text-outline" size={17} color={colors.violet[600]} />
+          <TouchableOpacity
+            onPress={generatePdf}
+            style={[styles.actionBtn, { backgroundColor: palette.bg.muted }]}
+            accessibilityRole="button"
+            accessibilityLabel="Печать / PDF заказ-наряда"
+            hitSlop={6}
+          >
+            <Ionicons name="print-outline" size={17} color={colors.violet[600]} />
           </TouchableOpacity>
           {/* Возврат заказ-наряда — компактная trailing-иконка в шапке.
               Видна только директору/админу/superadmin. На уже возвращённом

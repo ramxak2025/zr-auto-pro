@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Pencil,
   Printer,
+  FileText,
   LayoutGrid,
 } from 'lucide-react';
 import { format } from 'date-fns';
@@ -33,6 +34,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { WorkStatusBadge, WorkStatusPicker } from '../components/WorkStatusPicker';
 import type { Check, CheckWorkStatus, Tenant } from '../types';
 import { generateReceiptPdf } from '../utils/generateReceiptPdf';
+import { generateOrderPdf } from '../utils/generateOrderPdf';
 import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -157,6 +159,15 @@ export default function CheckDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          {/* Заказ-наряд / акт (A4 PDF) */}
+          <button
+            onClick={() => generateOrderPdf(check, company || user?.tenant)}
+            className="flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-2.5 text-sm font-semibold text-gray-600 hover:text-violet-600 hover:border-violet-200 hover:bg-violet-50 transition-colors"
+            title="Скачать заказ-наряд (PDF) для печати"
+          >
+            <FileText className="w-4 h-4" />
+            <span className="hidden sm:inline">Заказ-наряд</span>
+          </button>
           {/* Print receipt */}
           <button
             onClick={() => generateReceiptPdf(check, company || user?.tenant)}
