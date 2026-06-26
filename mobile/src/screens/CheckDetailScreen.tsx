@@ -33,7 +33,8 @@ import { haptic } from '../platform/haptics';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Check, Tenant } from '../../../shared/types';
+import { WORK_STATUS_ORDER, WORK_STATUS_META } from '../constants/workStatus';
+import type { Check, Tenant, CheckWorkStatus } from '../../../shared/types';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -100,6 +101,12 @@ export default function CheckDetailScreen() {
   // отрезает мастеров сразу).
   const canFileReturn = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
   const [returnModalOpen, setReturnModalOpen] = useState(false);
+  // ── Канбан work-status (доска заказ-нарядов, 082) ───────────────────
+  // Чип статуса + пикер. ОРТОГОНАЛЕН оплате/отложенности — отдельный
+  // board-флаг, визуально не смешивается с бейджами «Закрыт / Отложен /
+  // оплата». Менять может тот, кто редактирует чеки (право checks_edit:
+  // director/superadmin всегда, admin/master по матрице прав).
+  const [workStatusPickerOpen, setWorkStatusPickerOpen] = useState(false);
   const [returnScope, setReturnScope] = useState<ReturnScope>('full');
   const [returnDestination, setReturnDestination] = useState<ReturnDestination>('warehouse');
   const [returnReason, setReturnReason] = useState('');
@@ -377,6 +384,30 @@ export default function CheckDetailScreen() {
     ]);
   };
 
+  // ── Изменение work-status (доска заказ-нарядов, 082) ──────────────
+  // PATCH /checks/:id/work-status. Перерисовываем деталь по свежему
+  // payload'у и инвалидируем доску + журнал, чтобы статус был согласован
+  // во всех ракурсах. Орто-флаг — оплату/возврат не трогаем.
+  const workStatusMutation = useMutation({
+    mutationFn: (target: CheckWorkStatus) => checksApi.setWorkStatus(id, target),
+    onSuccess: async () => {
+      haptic('success');
+      await queryClient.refetchQueries({ queryKey: ['check', id] });
+      queryClient.invalidateQueries({ queryKey: ['checks', 'board'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось изменить статус');
+    },
+  });
+
+  const handlePickWorkStatus = (target: CheckWorkStatus) => {
+    setWorkStatusPickerOpen(false);
+    if (check?.workStatus === target) return;
+    workStatusMutation.mutate(target);
+  };
+
   // ── «Продолжить» по отложенному чеку ──────────────────────────────
   // Открываем кассу в режиме редактирования этого черновика (route.params
   // id). CheckCreateScreen уже умеет гидрировать форму из ['check', id] и
@@ -608,6 +639,10 @@ export default function CheckDetailScreen() {
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   const badge = badgeColors[badgeKey];
   const isDeferred = !!check.isDeferred;
+  // Work-status (board) — отдельный флаг. Менять может тот, кто
+  // редактирует чеки (то же право, что и кнопка «Изменить»).
+  const canSetWorkStatus = hasPermission('checks_edit');
+  const workMeta = check.workStatus ? WORK_STATUS_META[check.workStatus] : null;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
@@ -735,6 +770,48 @@ export default function CheckDetailScreen() {
           )}
           <Text style={[styles.timeChip, { color: palette.text.tertiary }]}>{formatTime(check.date)}</Text>
         </View>
+
+        {/* Work-status (доска заказ-нарядов, 082) — ОТДЕЛЬНАЯ строка, чтобы
+            не смешиваться с бейджами оплаты/«Закрыт»/«Отложен». Тап по чипу
+            открывает пикер; при workStatus=null показываем «Поставить на
+            доску». Виден/интерактивен только при праве на редактирование
+            (для null без права строка скрыта целиком). */}
+        {(workMeta || canSetWorkStatus) && (
+          <View style={styles.workStatusRow}>
+            <Text style={[styles.workStatusLabel, { color: palette.text.tertiary }]}>Доска</Text>
+            {workMeta ? (
+              <TouchableOpacity
+                style={[styles.workChip, { backgroundColor: workMeta.bg, borderColor: workMeta.color }]}
+                onPress={() => {
+                  haptic('select');
+                  setWorkStatusPickerOpen(true);
+                }}
+                disabled={!canSetWorkStatus}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`Статус на доске: ${workMeta.label}`}
+              >
+                <Ionicons name={workMeta.icon} size={13} color={workMeta.color} />
+                <Text style={[styles.workChipText, { color: workMeta.color }]}>{workMeta.label}</Text>
+                {canSetWorkStatus && <Ionicons name="chevron-down" size={11} color={workMeta.color} />}
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.workChipGhost, { borderColor: palette.border.strong }]}
+                onPress={() => {
+                  haptic('select');
+                  setWorkStatusPickerOpen(true);
+                }}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Поставить заказ-наряд на доску"
+              >
+                <Ionicons name="add-circle-outline" size={13} color={palette.text.secondary} />
+                <Text style={[styles.workChipGhostText, { color: palette.text.secondary }]}>Поставить на доску</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         {/* «Принять оплату» — one-tap закрытие отложенного чека.
             Видна только при isDeferred и только с permission checks_edit
@@ -1469,6 +1546,48 @@ export default function CheckDetailScreen() {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      {/* Work-status picker — тот же набор статусов, что и на доске. Текущий
+          помечен и не нажимается. Открывается только при праве checks_edit
+          (чип disabled иначе), поэтому все строки здесь интерактивны. */}
+      <Modal
+        visible={workStatusPickerOpen}
+        onClose={() => setWorkStatusPickerOpen(false)}
+        title={`Статус · Чек #${check.number}`}
+      >
+        <View style={{ gap: spacing[2] }}>
+          <Text style={[styles.wsSheetHint, { color: palette.text.tertiary }]}>Статус на доске заказ-нарядов</Text>
+          {WORK_STATUS_ORDER.map((status) => {
+            const meta = WORK_STATUS_META[status];
+            const isCurrent = check.workStatus === status;
+            return (
+              <TouchableOpacity
+                key={status}
+                style={[
+                  styles.wsSheetRow,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                  isCurrent && { borderColor: meta.color, backgroundColor: meta.bg },
+                ]}
+                activeOpacity={isCurrent ? 1 : 0.7}
+                disabled={isCurrent || workStatusMutation.isPending}
+                onPress={() => handlePickWorkStatus(status)}
+              >
+                <View style={[styles.wsSheetIconWrap, { backgroundColor: meta.bg }]}>
+                  <Ionicons name={meta.icon} size={18} color={meta.color} />
+                </View>
+                <Text style={[styles.wsSheetRowLabel, { color: palette.text.primary }]}>{meta.label}</Text>
+                {isCurrent ? (
+                  <View style={[styles.wsCurrentTag, { backgroundColor: meta.color }]}>
+                    <Text style={styles.wsCurrentTagText}>Текущий</Text>
+                  </View>
+                ) : (
+                  <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -1538,6 +1657,58 @@ const styles = StyleSheet.create({
   },
   paymentChipText: { fontSize: 12, fontWeight: fontWeight.medium },
   timeChip: { fontSize: 12, marginLeft: 'auto' },
+
+  // Work-status (board) — отдельная строка под чипами оплаты.
+  workStatusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  workStatusLabel: {
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  workChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+  },
+  workChipText: { fontSize: 12, fontWeight: fontWeight.semibold },
+  workChipGhost: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+  },
+  workChipGhostText: { fontSize: 12, fontWeight: fontWeight.medium },
+
+  // Work-status picker rows (Modal)
+  wsSheetHint: {
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+    marginBottom: spacing[1],
+  },
+  wsSheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+  },
+  wsSheetIconWrap: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  wsSheetRowLabel: { flex: 1, fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  wsCurrentTag: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
+  wsCurrentTagText: { color: colors.white, fontSize: 10, fontWeight: fontWeight.bold },
 
   // «Принять оплату» — primary CTA для отложенного чека. Зелёная,
   // во всю ширину, в стиле существующих primary-кнопок экрана

@@ -13,6 +13,7 @@ import ProductDetailScreen from '../screens/ProductDetailScreen';
 import ChecksScreen from '../screens/ChecksScreen';
 import CheckCreateScreen from '../screens/CheckCreateScreen';
 import CheckDetailScreen from '../screens/CheckDetailScreen';
+import WorkBoardScreen from '../screens/WorkBoardScreen';
 import ClientsScreen from '../screens/ClientsScreen';
 import ClientDetailScreen from '../screens/ClientDetailScreen';
 import CarDetailScreen from '../screens/CarDetailScreen';
@@ -357,6 +358,11 @@ function ChecksStackNavigator() {
     <ChecksStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <ChecksStack.Screen name="ChecksHome" component={ChecksScreen} />
       <ChecksStack.Screen name="CheckDetail" component={CheckDetailScreen} />
+      {/* «Доска заказ-нарядов» (kanban 082) — lives INSIDE the Checks tab-stack
+          so the floating tab bar stays visible (like Checks → CheckDetail) and
+          a card's «Открыть заказ-наряд» pushes CheckDetail onto THIS stack.
+          Entry point is the «Доска» button in the Журнал (ChecksScreen) header. */}
+      <ChecksStack.Screen name="WorkBoard" component={WorkBoardScreen} />
     </ChecksStack.Navigator>
   );
 }

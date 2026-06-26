@@ -21,6 +21,7 @@ import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
+import { haptic } from '../platform/haptics';
 import { AutexaGlassHeader } from 'autexa-liquid-glass';
 import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
 
@@ -771,6 +772,23 @@ export default function ChecksScreen() {
           Position: above the search row, right-aligned, no chrome unless
           actively fetching. */}
       <View style={styles.freshnessRow}>
+        {/* «Доска» — вход на канбан-доску заказ-нарядов (приёмка → в работе →
+            готов → выдан). Живёт в ChecksStack, поэтому плавающий таб-бар
+            остаётся виден, а back возвращает в Журнал. Доска — другой ракурс
+            тех же чеков, поэтому вход логично рядом с журналом. */}
+        <TouchableOpacity
+          style={[styles.boardEntryBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          onPress={() => {
+            haptic('tap');
+            navigation.navigate('WorkBoard');
+          }}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel="Открыть доску заказ-нарядов"
+        >
+          <Ionicons name="albums-outline" size={15} color={colors.primary[600]} />
+          <Text style={styles.boardEntryText}>Доска</Text>
+        </TouchableOpacity>
         <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
       </View>
 
@@ -1390,13 +1408,25 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.bold,
     color: colors.primary[600],
   },
-  // FreshnessBadge slot — right-aligned, above the search row.
+  // «Доска» entry (left) + FreshnessBadge (right) — single row above search.
   freshnessRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: spacing[4],
-    alignItems: 'flex-end',
     marginBottom: spacing[1],
-    minHeight: 14,
+    minHeight: 28,
   },
+  boardEntryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+  },
+  boardEntryText: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.primary[600] },
   // ── Search + Filter row ─────────────────────────────────────────
   searchRow: {
     flexDirection: 'row',
