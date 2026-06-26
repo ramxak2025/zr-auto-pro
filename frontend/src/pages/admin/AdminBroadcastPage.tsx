@@ -1,10 +1,13 @@
 import { useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
-import { Megaphone, Plus, Trash2, Loader2, Send, Link as LinkIcon, X } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Megaphone, Plus, Trash2, Loader2, Send, Link as LinkIcon, X, Eye, Ban, History } from 'lucide-react';
 import toast from 'react-hot-toast';
+import { format, parseISO } from 'date-fns';
+import { ru } from 'date-fns/locale';
 
 import { notificationsApi } from '../../api/services';
-import type { BroadcastButton } from '../../types';
+import ConfirmDialog from '../../components/ConfirmDialog';
+import type { BroadcastButton, BroadcastHistoryItem } from '../../types';
 
 interface EditableButton {
   label: string;
@@ -15,10 +18,24 @@ interface EditableButton {
 const MAX_BUTTONS = 3;
 
 export default function AdminBroadcastPage() {
+  const queryClient = useQueryClient();
+
   const [title, setTitle] = useState('');
   const [body, setBody] = useState('');
   const [imageUrl, setImageUrl] = useState('');
   const [buttons, setButtons] = useState<EditableButton[]>([]);
+  const [confirmSendOpen, setConfirmSendOpen] = useState(false);
+  const [cancelId, setCancelId] = useState<string | null>(null);
+
+  const {
+    data: history,
+    isLoading: historyLoading,
+    isError: historyError,
+  } = useQuery({
+    queryKey: ['admin-broadcasts'],
+    queryFn: () => notificationsApi.listBroadcasts(),
+    select: (res) => res.data as BroadcastHistoryItem[],
+  });
 
   const sendMutation = useMutation({
     mutationFn: () => {
@@ -42,9 +59,21 @@ export default function AdminBroadcastPage() {
       setBody('');
       setImageUrl('');
       setButtons([]);
+      queryClient.invalidateQueries({ queryKey: ['admin-broadcasts'] });
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.message || 'Не удалось отправить рассылку');
+    },
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: (id: string) => notificationsApi.cancelBroadcast(id),
+    onSuccess: () => {
+      toast.success('Рассылка отменена');
+      queryClient.invalidateQueries({ queryKey: ['admin-broadcasts'] });
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Не удалось отменить рассылку');
     },
   });
 
@@ -74,7 +103,7 @@ export default function AdminBroadcastPage() {
       toast.error('У кнопок-ссылок укажите URL');
       return;
     }
-    sendMutation.mutate();
+    setConfirmSendOpen(true);
   };
 
   return (
@@ -268,6 +297,111 @@ export default function AdminBroadcastPage() {
           </div>
         </div>
       </div>
+
+      {/* History */}
+      <div className="mt-10">
+        <div className="flex items-center gap-2 mb-4">
+          <History className="w-5 h-5 text-gray-500" />
+          <h2 className="text-lg font-semibold text-gray-900">История рассылок</h2>
+        </div>
+
+        {historyLoading ? (
+          <div className="card card-body flex items-center justify-center py-10 text-gray-400">
+            <Loader2 className="w-5 h-5 animate-spin" />
+            <span className="ml-2 text-sm">Загрузка...</span>
+          </div>
+        ) : historyError ? (
+          <div className="card card-body text-center py-10">
+            <p className="text-sm text-red-600">Не удалось загрузить историю рассылок.</p>
+            <button
+              type="button"
+              onClick={() => queryClient.invalidateQueries({ queryKey: ['admin-broadcasts'] })}
+              className="btn-secondary btn-sm mt-3"
+            >
+              Повторить
+            </button>
+          </div>
+        ) : !history || history.length === 0 ? (
+          <div className="card card-body text-center py-10 text-gray-400">
+            <Megaphone className="w-8 h-8 mx-auto mb-2 text-gray-300" />
+            <p className="text-sm">Вы ещё не отправляли рассылок.</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {history.map((item) => {
+              const isCancelled = item.cancelledAt !== null;
+              const isCancelling = cancelMutation.isPending && cancelMutation.variables === item.id;
+              return (
+                <div
+                  key={item.id}
+                  className="bg-white rounded-xl border border-gray-200 shadow-sm px-4 py-3.5 flex items-start justify-between gap-4"
+                >
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="font-semibold text-gray-900 truncate">{item.title}</span>
+                      {isCancelled ? (
+                        <span className="badge-red text-xs">Отменена</span>
+                      ) : (
+                        <span className="badge-green text-xs">Активна</span>
+                      )}
+                    </div>
+                    {item.body && <p className="text-sm text-gray-600 mt-1 line-clamp-2">{item.body}</p>}
+                    <div className="flex items-center gap-3 mt-2 text-xs text-gray-500 flex-wrap">
+                      <span>{format(parseISO(item.createdAt), 'd MMM yyyy, HH:mm', { locale: ru })}</span>
+                      <span className="flex items-center gap-1">
+                        <Eye className="w-3.5 h-3.5" />
+                        {item.seenCount} {item.seenCount === 1 ? 'просмотр' : 'просмотров'}
+                      </span>
+                      {isCancelled && (
+                        <span>
+                          отменена {format(parseISO(item.cancelledAt as string), 'd MMM, HH:mm', { locale: ru })}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+
+                  {!isCancelled && (
+                    <button
+                      type="button"
+                      onClick={() => setCancelId(item.id)}
+                      disabled={isCancelling}
+                      className="flex-shrink-0 flex items-center gap-1.5 px-3 py-2 text-sm font-medium text-red-600 bg-white border border-gray-200 hover:bg-red-50 hover:border-red-200 rounded-lg transition-colors disabled:opacity-50"
+                    >
+                      {isCancelling ? <Loader2 className="w-4 h-4 animate-spin" /> : <Ban className="w-4 h-4" />}
+                      Отменить
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Confirm: send new broadcast */}
+      <ConfirmDialog
+        isOpen={confirmSendOpen}
+        onClose={() => setConfirmSendOpen(false)}
+        onConfirm={() => sendMutation.mutate()}
+        title="Отправить рассылку"
+        message="Объявление получат все владельцы автосервисов. Отправить сейчас?"
+        confirmText="Отправить"
+        variant="primary"
+      />
+
+      {/* Confirm: cancel an active broadcast */}
+      <ConfirmDialog
+        isOpen={!!cancelId}
+        onClose={() => setCancelId(null)}
+        onConfirm={() => {
+          if (cancelId) cancelMutation.mutate(cancelId);
+          setCancelId(null);
+        }}
+        title="Отменить рассылку"
+        message="Объявление перестанет показываться владельцам. Это действие нельзя отменить."
+        confirmText="Отменить рассылку"
+        variant="danger"
+      />
     </div>
   );
 }

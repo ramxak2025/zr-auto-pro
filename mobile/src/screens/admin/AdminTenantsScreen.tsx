@@ -202,6 +202,36 @@ export default function AdminTenantsScreen() {
     onSettled: () => setSaving(false),
   });
 
+  const removeMutation = useMutation({
+    mutationFn: async (tenantId: string) => {
+      await tenantsApi.remove(tenantId);
+    },
+    onSuccess: () => {
+      haptic('success');
+      setEditing(null);
+      invalidate();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось удалить автосервис');
+    },
+  });
+
+  const handleDelete = React.useCallback(() => {
+    if (!editing?.id) return;
+    const name = editing.name.trim() || 'этот автосервис';
+    const tenantId = editing.id;
+    haptic('warning');
+    Alert.alert(
+      'Удалить автосервис?',
+      `«${name}» и все его данные — заказ-наряды, склад, сотрудники, отчёты — будут удалены без возможности восстановления.`,
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Удалить', style: 'destructive', onPress: () => removeMutation.mutate(tenantId) },
+      ],
+    );
+  }, [editing, removeMutation]);
+
   const handleSave = React.useCallback(() => {
     if (!editing) return;
     if (!editing.name.trim()) {
@@ -522,6 +552,24 @@ export default function AdminTenantsScreen() {
                   </>
                 )}
 
+                {/* Destructive: delete the whole tenant (existing only). */}
+                {editing.id ? (
+                  <Pressable
+                    onPress={handleDelete}
+                    disabled={removeMutation.isPending}
+                    style={[styles.deleteTenantBtn, { borderColor: colors.red[200] }]}
+                  >
+                    {removeMutation.isPending ? (
+                      <ActivityIndicator size="small" color={colors.red[600]} />
+                    ) : (
+                      <>
+                        <Ionicons name="trash-outline" size={18} color={colors.red[600]} />
+                        <Text style={[styles.deleteTenantText, { color: colors.red[600] }]}>Удалить автосервис</Text>
+                      </>
+                    )}
+                  </Pressable>
+                ) : null}
+
                 <View style={{ height: spacing[8] }} />
               </ScrollView>
             )}
@@ -722,4 +770,15 @@ const styles = StyleSheet.create({
   pickerOptionMeta: { fontSize: 12, marginTop: 2 },
   pickerClear: { alignItems: 'center', paddingTop: spacing[3.5] },
   pickerClearText: { fontSize: 15, fontWeight: '600' },
+  deleteTenantBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing[4],
+  },
+  deleteTenantText: { fontSize: 15, fontWeight: '700' },
 });

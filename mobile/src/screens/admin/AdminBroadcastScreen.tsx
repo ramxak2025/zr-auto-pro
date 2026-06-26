@@ -10,29 +10,32 @@
  *     a confirm dialog, success haptic + toast.
  */
 import React from 'react';
-import {
-  View,
-  StyleSheet,
-  ScrollView,
-  Pressable,
-  TextInput,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import { View, StyleSheet, ScrollView, Pressable, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { notificationsApi, uploadsApi } from '../../api/services';
 import { getImageUrl } from '../../api/axios';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import BroadcastModal from '../../components/BroadcastModal';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
+import { useAuth } from '../../contexts/AuthContext';
 import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { Broadcast, BroadcastButton } from '../../../../shared/types';
+import type { Broadcast, BroadcastButton, BroadcastHistoryItem } from '../../../../shared/types';
+import { formatDateTime } from './adminShared';
+
+/** Russian plural for «N просмотр / просмотра / просмотров». */
+function pluralViews(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} просмотр`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return `${n} просмотра`;
+  return `${n} просмотров`;
+}
 
 interface DraftButton {
   label: string;
@@ -63,6 +66,9 @@ function extractServerMessage(error: unknown): string {
 export default function AdminBroadcastScreen() {
   const palette = useColors();
   const surface = useIosSurface();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const isSuperadmin = user?.role === 'superadmin';
   const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
 
   const [title, setTitle] = React.useState('');
@@ -76,6 +82,63 @@ export default function AdminBroadcastScreen() {
   // superadmin right after sending (the fan-out targets directors, not the
   // sender, so without this the superadmin sees «ничего не пришло»).
   const [sentBroadcast, setSentBroadcast] = React.useState<Broadcast | null>(null);
+  // Tap a history row → re-open the exact card directors received (read-only).
+  const [historyPreview, setHistoryPreview] = React.useState<Broadcast | null>(null);
+  // Which history row's cancel is in-flight (per-row spinner).
+  const [cancellingId, setCancellingId] = React.useState<string | null>(null);
+
+  // ── Broadcast history (superadmin-only; backend 403s otherwise) ──
+  const historyQuery = useQuery<BroadcastHistoryItem[]>({
+    queryKey: ['admin-broadcasts'],
+    queryFn: async () => (await notificationsApi.listBroadcasts()).data,
+    enabled: isSuperadmin,
+  });
+  const history = historyQuery.data ?? [];
+
+  const cancelMutation = useMutation({
+    mutationFn: async (id: string) => {
+      setCancellingId(id);
+      await notificationsApi.cancelBroadcast(id);
+    },
+    onSuccess: () => {
+      haptic('success');
+      setToast('Рассылка отменена — больше не показывается');
+      setTimeout(() => setToast(null), 2800);
+      queryClient.invalidateQueries({ queryKey: ['admin-broadcasts'] });
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось отменить рассылку. Попробуйте ещё раз.');
+    },
+    onSettled: () => setCancellingId(null),
+  });
+
+  const handleCancel = React.useCallback(
+    (item: BroadcastHistoryItem) => {
+      haptic('warning');
+      Alert.alert(
+        'Отменить рассылку?',
+        `«${item.title}» перестанет показываться владельцам, которые её ещё не видели. Уже показанные карточки не исчезнут. Действие необратимо.`,
+        [
+          { text: 'Назад', style: 'cancel' },
+          { text: 'Отменить рассылку', style: 'destructive', onPress: () => cancelMutation.mutate(item.id) },
+        ],
+      );
+    },
+    [cancelMutation],
+  );
+
+  const openHistoryPreview = React.useCallback((item: BroadcastHistoryItem) => {
+    haptic('tap');
+    setHistoryPreview({
+      id: item.id,
+      title: item.title,
+      body: item.body,
+      imageUrl: item.imageUrl ? (getImageUrl(item.imageUrl) ?? item.imageUrl) : undefined,
+      buttons: item.buttons,
+      createdAt: item.createdAt,
+    });
+  }, []);
 
   // Sanitise draft → the exact shape createBroadcast / BroadcastModal expect.
   const cleanButtons = React.useMemo<BroadcastButton[]>(
@@ -112,7 +175,7 @@ export default function AdminBroadcastScreen() {
         // `imageUrl` is stored ABSOLUTE (the uploader saves the resolved URL),
         // so it passes the backend `@IsUrl` check. A manually typed relative
         // path is resolved here too as a safety net.
-        imageUrl: imageUrl.trim() ? getImageUrl(imageUrl.trim()) ?? imageUrl.trim() : undefined,
+        imageUrl: imageUrl.trim() ? (getImageUrl(imageUrl.trim()) ?? imageUrl.trim()) : undefined,
         buttons: cleanButtons.length > 0 ? cleanButtons : undefined,
       });
       return res.data;
@@ -127,6 +190,8 @@ export default function AdminBroadcastScreen() {
       setTimeout(() => setToast(null), 2800);
       // Show the superadmin the EXACT card owners will receive (confirmation).
       setSentBroadcast(created);
+      // Surface it in the history list immediately.
+      queryClient.invalidateQueries({ queryKey: ['admin-broadcasts'] });
     },
     onError: (error: unknown) => {
       haptic('error');
@@ -166,21 +231,39 @@ export default function AdminBroadcastScreen() {
       return;
     }
     haptic('warning');
+    // Final review — show the superadmin exactly what will go out before the
+    // irreversible fan-out (push + in-app card to every tenant owner).
+    const buttonsLine = cleanButtons.length > 0 ? `\nКнопки: ${cleanButtons.map((b) => b.label).join(', ')}` : '';
+    const imageLine = imageUrl.trim() ? '\nС изображением' : '';
     Alert.alert(
       'Отправить всем владельцам?',
-      'Объявление получат владельцы всех тенантов в виде push-уведомления и карточки в приложении.',
+      `«${title.trim()}»\n\n${body.trim()}${imageLine}${buttonsLine}\n\nОбъявление получат владельцы всех тенантов в виде push-уведомления и карточки в приложении.`,
       [
         { text: 'Отмена', style: 'cancel' },
         { text: 'Отправить', style: 'destructive', onPress: () => sendMutation.mutate() },
       ],
     );
-  }, [title, body, sendMutation]);
+  }, [title, body, imageUrl, cleanButtons, sendMutation]);
 
   const addButton = React.useCallback(() => {
     if (buttons.length >= MAX_BUTTONS) return;
     haptic('tap');
     setButtons([...buttons, { label: '', action: 'dismiss', url: '' }]);
   }, [buttons]);
+
+  // Hard gate — this whole cabinet is superadmin-only (the backend also 403s
+  // create/list/cancel, but never render the authoring UI to anyone else).
+  if (!isSuperadmin) {
+    return (
+      <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader title="Рассылка" subtitle="Объявление владельцам" />
+        <View style={styles.gateBlock}>
+          <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
+          <Text style={[styles.gateText, { color: palette.text.secondary }]}>Раздел доступен только суперадмину.</Text>
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
@@ -251,7 +334,12 @@ export default function AdminBroadcastScreen() {
               <Ionicons name="close-circle" size={20} color={palette.text.tertiary} />
             </Pressable>
           )}
-          <Pressable onPress={pickImage} disabled={uploading} style={[styles.uploadBtn, { backgroundColor: palette.accent.primarySoft }]} hitSlop={6}>
+          <Pressable
+            onPress={pickImage}
+            disabled={uploading}
+            style={[styles.uploadBtn, { backgroundColor: palette.accent.primarySoft }]}
+            hitSlop={6}
+          >
             {uploading ? (
               <ActivityIndicator size="small" color={palette.accent.primaryText} />
             ) : (
@@ -320,7 +408,11 @@ export default function AdminBroadcastScreen() {
             </View>
             {btn.action === 'link' && (
               <TextInput
-                style={[styles.input, styles.linkInput, { color: palette.text.primary, borderColor: palette.border.subtle }]}
+                style={[
+                  styles.input,
+                  styles.linkInput,
+                  { color: palette.text.primary, borderColor: palette.border.subtle },
+                ]}
                 placeholder="https://…"
                 placeholderTextColor={palette.text.tertiary}
                 value={btn.url}
@@ -348,6 +440,80 @@ export default function AdminBroadcastScreen() {
             </>
           )}
         </Pressable>
+
+        {/* ── История рассылок ── */}
+        <Text style={[styles.label, styles.historyHead, { color: palette.text.tertiary }]}>История рассылок</Text>
+
+        {historyQuery.isLoading ? (
+          <View style={styles.historyState}>
+            <ActivityIndicator color={palette.accent.primary} />
+          </View>
+        ) : historyQuery.isError ? (
+          <View style={styles.historyState}>
+            <Ionicons name="cloud-offline-outline" size={32} color={palette.text.tertiary} />
+            <Text style={[styles.historyStateText, { color: palette.text.secondary }]}>
+              Не удалось загрузить историю
+            </Text>
+            <Pressable
+              onPress={() => {
+                haptic('tap');
+                historyQuery.refetch();
+              }}
+              style={[styles.retryBtn, { backgroundColor: palette.accent.primarySoft }]}
+            >
+              <Text style={[styles.retryText, { color: palette.accent.primaryText }]}>Повторить</Text>
+            </Pressable>
+          </View>
+        ) : history.length === 0 ? (
+          <View style={styles.historyState}>
+            <Ionicons name="megaphone-outline" size={32} color={palette.text.tertiary} />
+            <Text style={[styles.historyStateText, { color: palette.text.secondary }]}>
+              Пока нет отправленных объявлений
+            </Text>
+          </View>
+        ) : (
+          history.map((item) => {
+            const cancelled = item.cancelledAt != null;
+            return (
+              <Pressable
+                key={item.id}
+                onPress={() => openHistoryPreview(item)}
+                style={[styles.historyCard, surface.card]}
+              >
+                <View style={styles.historyTopRow}>
+                  <Text style={[styles.historyTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                    {item.title}
+                  </Text>
+                  <View style={[styles.badge, { backgroundColor: cancelled ? colors.gray[100] : colors.green[50] }]}>
+                    <Text style={[styles.badgeText, { color: cancelled ? colors.gray[600] : colors.green[700] }]}>
+                      {cancelled ? 'Отменена' : 'Активна'}
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.historyMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  {formatDateTime(item.createdAt)} · {pluralViews(item.seenCount)}
+                </Text>
+                {!cancelled && (
+                  <Pressable
+                    onPress={() => handleCancel(item)}
+                    disabled={cancellingId === item.id}
+                    style={[styles.cancelBtn, { borderColor: palette.border.subtle }]}
+                    hitSlop={4}
+                  >
+                    {cancellingId === item.id ? (
+                      <ActivityIndicator size="small" color={colors.red[500]} />
+                    ) : (
+                      <>
+                        <Ionicons name="close-circle-outline" size={16} color={colors.red[500]} />
+                        <Text style={[styles.cancelText, { color: colors.red[500] }]}>Отменить рассылку</Text>
+                      </>
+                    )}
+                  </Pressable>
+                )}
+              </Pressable>
+            );
+          })
+        )}
       </ScrollView>
 
       {/* Live preview — the ACTUAL BroadcastModal owners will see. */}
@@ -356,6 +522,9 @@ export default function AdminBroadcastScreen() {
       {/* Self-preview after sending — the real broadcast the server created,
           so the superadmin always sees the result of a successful send. */}
       <BroadcastModal broadcast={sentBroadcast} onDismiss={() => setSentBroadcast(null)} />
+
+      {/* History row preview — re-open exactly what directors received. */}
+      <BroadcastModal broadcast={historyPreview} onDismiss={() => setHistoryPreview(null)} />
 
       {/* Toast */}
       {toast && (
@@ -415,6 +584,43 @@ const styles = StyleSheet.create({
     marginTop: spacing[5],
   },
   sendText: { color: colors.white, fontSize: 16, fontWeight: '700' },
+  // Gate
+  gateBlock: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[8],
+  },
+  gateText: { fontSize: 15, textAlign: 'center', lineHeight: 21 },
+  // History
+  historyHead: { marginTop: spacing[6] },
+  historyState: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[8], gap: spacing[2.5] },
+  historyStateText: { fontSize: 14, textAlign: 'center' },
+  retryBtn: {
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.full,
+    marginTop: spacing[1],
+  },
+  retryText: { fontSize: 14, fontWeight: '700' },
+  historyCard: { paddingHorizontal: spacing[4], paddingVertical: spacing[3.5], gap: spacing[1.5] },
+  historyTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[2] },
+  historyTitle: { fontSize: 15, fontWeight: '700', flex: 1 },
+  badge: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
+  badgeText: { fontSize: 10, fontWeight: '700' },
+  historyMeta: { fontSize: 12 },
+  cancelBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing[1],
+  },
+  cancelText: { fontSize: 13, fontWeight: '600' },
   toast: {
     position: 'absolute',
     left: spacing[5],

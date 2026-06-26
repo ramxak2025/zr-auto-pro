@@ -20,12 +20,13 @@ import {
   ActivityIndicator,
   Modal,
   TextInput,
+  Switch,
   Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
-import { tenantsApi, plansApi } from '../../api/services';
+import { tenantsApi, plansApi, usersApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
@@ -34,8 +35,64 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { Tenant, Plan, TenantMetrics } from '../../../../shared/types';
-import { formatMoney, formatFullDate, formatDateTime, isExpired, tenantStatus, StatusChip } from './adminShared';
+import type { Tenant, Plan, TenantMetrics, User, PermissionKey } from '../../../../shared/types';
+import { UserRole, PERMISSION_KEYS, ROLE_PERMISSION_DEFAULTS } from '../../../../shared/types';
+import type { UpdateUserRequest } from '../../../../shared/api/types';
+import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
+import {
+  formatMoney,
+  formatFullDate,
+  formatDateTime,
+  isExpired,
+  tenantStatus,
+  StatusChip,
+  InitialAvatar,
+} from './adminShared';
+
+/** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
+const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [
+  { role: UserRole.DIRECTOR, label: 'Директор' },
+  { role: UserRole.ADMIN, label: 'Админ' },
+  { role: UserRole.MASTER, label: 'Мастер' },
+];
+
+const ROLE_LABELS: Record<string, string> = {
+  superadmin: 'Суперадмин',
+  director: 'Директор',
+  admin: 'Админ',
+  master: 'Мастер',
+};
+
+/** Materialize a full PermissionKey→bool map from a role's sparse defaults. */
+function permissionsForRole(role: UserRole): Record<PermissionKey, boolean> {
+  const defaults = ROLE_PERMISSION_DEFAULTS[role] ?? {};
+  const map = {} as Record<PermissionKey, boolean>;
+  for (const key of PERMISSION_KEYS) map[key] = defaults[key] === true;
+  return map;
+}
+
+/** Editable employee form state. Strings for controlled inputs; coerced on save. */
+interface UserDraft {
+  id?: string;
+  fullName: string;
+  phone: string;
+  password: string;
+  role: UserRole;
+  salaryPercent: string;
+  isActive: boolean;
+}
+
+function toUserDraft(u?: User): UserDraft {
+  return {
+    id: u?.id,
+    fullName: u?.fullName ?? '',
+    phone: u?.phone ? formatPhone(u.phone) : '',
+    password: '',
+    role: u?.role ?? UserRole.MASTER,
+    salaryPercent: u ? String(u.salaryPercent ?? 0) : '0',
+    isActive: u ? u.isActive : true,
+  };
+}
 
 export default function AdminTenantDetailScreen() {
   const navigation = useNavigation<any>();
@@ -50,11 +107,25 @@ export default function AdminTenantDetailScreen() {
   const [customExtendOpen, setCustomExtendOpen] = React.useState(false);
   const [customDays, setCustomDays] = React.useState('');
   const [busy, setBusy] = React.useState<null | 'extend' | 'plan' | 'toggle' | 'impersonate'>(null);
+  const [editingUser, setEditingUser] = React.useState<UserDraft | null>(null);
+  const [savingUser, setSavingUser] = React.useState(false);
 
-  const { data: tenant } = useQuery<Tenant>({
+  const {
+    data: tenant,
+    isLoading: tenantLoading,
+    isError: tenantError,
+    refetch: refetchTenant,
+  } = useQuery<Tenant>({
     queryKey: ['admin-tenant', id],
     queryFn: async () => (await tenantsApi.getById(id)).data,
   });
+
+  // Active employees of THIS tenant (embedded in getById). Defensive filter:
+  // hide dismissed/purged even if a stale snapshot still carries them.
+  const tenantUsers = React.useMemo(
+    () => (tenant?.users ?? []).filter((u) => !u.dismissedAt && !u.purgedAt),
+    [tenant?.users],
+  );
 
   const { data: metrics } = useQuery<TenantMetrics>({
     queryKey: ['admin-tenant-metrics', id],
@@ -119,6 +190,120 @@ export default function AdminTenantDetailScreen() {
     },
     onSettled: () => setBusy(null),
   });
+
+  // ── Per-tenant employee management (parity with web AdminTenantDetailPage) ──
+  const saveUserMutation = useMutation({
+    mutationFn: async (draft: UserDraft) => {
+      setSavingUser(true);
+      const salaryPercent = Number(draft.salaryPercent) || 0;
+      if (draft.id) {
+        const payload: UpdateUserRequest = {
+          fullName: draft.fullName.trim(),
+          phone: normalizePhone(draft.phone),
+          role: draft.role,
+          salaryPercent,
+          isActive: draft.isActive,
+          ...(draft.password ? { password: draft.password } : {}),
+        };
+        await usersApi.update(draft.id, payload);
+      } else {
+        // `tenantId` lets the superadmin create the user UNDER the target tenant
+        // (the backend honours it for superadmin). Extra fields beyond
+        // CreateUserRequest are accepted server-side; passing a variable keeps
+        // TS structural typing happy.
+        const payload = {
+          fullName: draft.fullName.trim(),
+          phone: normalizePhone(draft.phone),
+          password: draft.password,
+          role: draft.role,
+          salaryPercent,
+          isActive: draft.isActive,
+          tenantId: id,
+          permissions: permissionsForRole(draft.role),
+        };
+        await usersApi.create(payload);
+      }
+    },
+    onSuccess: () => {
+      haptic('success');
+      setEditingUser(null);
+      queryClient.invalidateQueries({ queryKey: ['admin-tenant', id] });
+      queryClient.invalidateQueries({ queryKey: ['admin-tenant-metrics', id] });
+    },
+    onError: (error: unknown) => {
+      haptic('error');
+      const msg = (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message;
+      const reason = Array.isArray(msg) ? msg.filter((m): m is string => typeof m === 'string').join('\n') : msg;
+      Alert.alert(
+        'Ошибка',
+        typeof reason === 'string' && reason.trim()
+          ? reason
+          : editingUser?.id
+            ? 'Не удалось сохранить сотрудника'
+            : 'Не удалось создать сотрудника',
+      );
+    },
+    onSettled: () => setSavingUser(false),
+  });
+
+  const deleteUserMutation = useMutation({
+    mutationFn: async (userId: string) => {
+      await usersApi.remove(userId);
+    },
+    onSuccess: () => {
+      haptic('success');
+      setEditingUser(null);
+      queryClient.invalidateQueries({ queryKey: ['admin-tenant', id] });
+      queryClient.invalidateQueries({ queryKey: ['admin-tenant-metrics', id] });
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось уволить сотрудника');
+    },
+  });
+
+  const handleSaveUser = React.useCallback(() => {
+    if (!editingUser) return;
+    if (!editingUser.fullName.trim()) {
+      haptic('error');
+      Alert.alert('Укажите имя', 'Имя сотрудника обязательно.');
+      return;
+    }
+    if (!editingUser.phone.trim() || !isValidPhone(editingUser.phone)) {
+      haptic('error');
+      Alert.alert('Неверный телефон', 'Введите корректный номер телефона.');
+      return;
+    }
+    if (!editingUser.id && editingUser.password.length < 6) {
+      haptic('error');
+      Alert.alert('Нужен пароль', 'При создании сотрудника укажите пароль (минимум 6 символов).');
+      return;
+    }
+    if (editingUser.id && editingUser.password && editingUser.password.length < 6) {
+      haptic('error');
+      Alert.alert('Слабый пароль', 'Пароль должен быть не короче 6 символов.');
+      return;
+    }
+    saveUserMutation.mutate(editingUser);
+  }, [editingUser, saveUserMutation]);
+
+  const handleDeleteUser = React.useCallback(() => {
+    if (!editingUser?.id) return;
+    const name = editingUser.fullName.trim() || 'Сотрудник';
+    haptic('warning');
+    Alert.alert(
+      'Уволить сотрудника?',
+      `«${name}» переедет в «Уволенные». Историю заказ-нарядов и смен это не затронет.`,
+      [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Уволить',
+          style: 'destructive',
+          onPress: () => editingUser.id && deleteUserMutation.mutate(editingUser.id),
+        },
+      ],
+    );
+  }, [editingUser, deleteUserMutation]);
 
   const handleExtend = React.useCallback(() => {
     haptic('tap');
@@ -202,9 +387,25 @@ export default function AdminTenantDetailScreen() {
 
   if (!tenant) {
     return (
-      <View style={[styles.root, styles.center, { backgroundColor: palette.bg.canvas }]}>
+      <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
         <IosScreenHeader title="Тенант" onBack={() => navigation.goBack()} />
-        <ActivityIndicator color={palette.accent.primary} style={{ marginTop: spacing[10] }} />
+        {tenantError && !tenantLoading ? (
+          <View style={styles.stateBlock}>
+            <Ionicons name="cloud-offline-outline" size={40} color={palette.text.tertiary} />
+            <Text style={[styles.stateText, { color: palette.text.secondary }]}>Не удалось загрузить тенанта</Text>
+            <Pressable
+              onPress={() => {
+                haptic('tap');
+                refetchTenant();
+              }}
+              style={[styles.retryBtn, { backgroundColor: palette.accent.primarySoft }]}
+            >
+              <Text style={[styles.retryText, { color: palette.accent.primaryText }]}>Повторить</Text>
+            </Pressable>
+          </View>
+        ) : (
+          <ActivityIndicator color={palette.accent.primary} style={{ marginTop: spacing[10] }} />
+        )}
       </View>
     );
   }
@@ -334,6 +535,62 @@ export default function AdminTenantDetailScreen() {
             )}
           </Pressable>
         </View>
+
+        {/* Employees */}
+        <View style={styles.employeesHead}>
+          <Text style={[styles.sectionLabel, { color: palette.text.tertiary, marginTop: 0 }]}>
+            Сотрудники ({tenantUsers.length})
+          </Text>
+          <Pressable
+            onPress={() => {
+              haptic('tap');
+              setEditingUser(toUserDraft());
+            }}
+            style={[styles.employeesAdd, { backgroundColor: palette.accent.primary }]}
+            hitSlop={6}
+          >
+            <Ionicons name="add" size={18} color={colors.white} />
+          </Pressable>
+        </View>
+
+        {tenantUsers.length === 0 ? (
+          <View style={[styles.card, surface.card, styles.emptyUsers]}>
+            <Ionicons name="people-outline" size={28} color={palette.text.tertiary} />
+            <Text style={[styles.emptyUsersText, { color: palette.text.secondary }]}>
+              У этого автосервиса пока нет сотрудников
+            </Text>
+          </View>
+        ) : (
+          <View style={{ gap: spacing[2.5] }}>
+            {tenantUsers.map((u) => (
+              <Pressable
+                key={u.id}
+                onPress={() => {
+                  haptic('tap');
+                  setEditingUser(toUserDraft(u));
+                }}
+                style={[styles.userRow, surface.card]}
+              >
+                <InitialAvatar name={u.fullName} palette={palette} size={38} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {u.fullName}
+                  </Text>
+                  <Text style={[styles.userMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                    {ROLE_LABELS[u.role] ?? u.role}
+                    {u.phone ? ` · ${formatPhone(u.phone)}` : ''}
+                  </Text>
+                </View>
+                {!u.isActive && (
+                  <View style={[styles.userBadge, { backgroundColor: colors.gray[100] }]}>
+                    <Text style={[styles.userBadgeText, { color: colors.gray[600] }]}>Выкл</Text>
+                  </View>
+                )}
+                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+              </Pressable>
+            ))}
+          </View>
+        )}
       </ScrollView>
 
       {/* Custom-days extend modal */}
@@ -377,6 +634,154 @@ export default function AdminTenantDetailScreen() {
             </View>
           </Pressable>
         </Pressable>
+      </Modal>
+
+      {/* Create / edit employee sheet */}
+      <Modal
+        visible={!!editingUser}
+        transparent
+        statusBarTranslucent
+        animationType="slide"
+        onRequestClose={() => setEditingUser(null)}
+      >
+        <View style={styles.sheetBackdrop}>
+          <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
+            <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
+              <Pressable onPress={() => setEditingUser(null)} hitSlop={8}>
+                <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
+              </Pressable>
+              <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>
+                {editingUser?.id ? 'Сотрудник' : 'Новый сотрудник'}
+              </Text>
+              <Pressable onPress={handleSaveUser} disabled={savingUser} hitSlop={8}>
+                {savingUser ? (
+                  <ActivityIndicator size="small" color={palette.accent.primary} />
+                ) : (
+                  <Text style={[styles.sheetSave, { color: palette.accent.primary }]}>Сохранить</Text>
+                )}
+              </Pressable>
+            </View>
+
+            {editingUser && (
+              <ScrollView
+                contentContainerStyle={styles.sheetScroll}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Имя</Text>
+                <View style={[styles.inputWrap, surface.cardCompact]}>
+                  <TextInput
+                    style={[styles.sheetInput, { color: palette.text.primary }]}
+                    placeholder="ФИО сотрудника"
+                    placeholderTextColor={palette.text.tertiary}
+                    value={editingUser.fullName}
+                    onChangeText={(v) => setEditingUser({ ...editingUser, fullName: v })}
+                  />
+                </View>
+
+                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Телефон</Text>
+                <View style={[styles.inputWrap, surface.cardCompact]}>
+                  <TextInput
+                    style={[styles.sheetInput, { color: palette.text.primary }]}
+                    placeholder="+7 (___) ___-__-__"
+                    placeholderTextColor={palette.text.tertiary}
+                    keyboardType="phone-pad"
+                    value={editingUser.phone}
+                    onChangeText={(v) => setEditingUser({ ...editingUser, phone: formatPhone(v) })}
+                  />
+                </View>
+
+                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>
+                  {editingUser.id ? 'Новый пароль (необязательно)' : 'Пароль'}
+                </Text>
+                <View style={[styles.inputWrap, surface.cardCompact]}>
+                  <TextInput
+                    style={[styles.sheetInput, { color: palette.text.primary }]}
+                    placeholder="Минимум 6 символов"
+                    placeholderTextColor={palette.text.tertiary}
+                    secureTextEntry
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    value={editingUser.password}
+                    onChangeText={(v) => setEditingUser({ ...editingUser, password: v })}
+                  />
+                </View>
+
+                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Роль</Text>
+                <View style={styles.roleRow}>
+                  {SELECTABLE_ROLES.map(({ role, label }) => {
+                    const on = editingUser.role === role;
+                    return (
+                      <Pressable
+                        key={role}
+                        onPress={() => {
+                          haptic('select');
+                          setEditingUser({ ...editingUser, role });
+                        }}
+                        style={[
+                          styles.roleChip,
+                          {
+                            backgroundColor: on ? palette.accent.primary : palette.bg.card,
+                            borderColor: on ? palette.accent.primary : palette.border.subtle,
+                          },
+                        ]}
+                      >
+                        <Text style={[styles.roleChipText, { color: on ? colors.white : palette.text.secondary }]}>
+                          {label}
+                        </Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+
+                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Процент зарплаты</Text>
+                <View style={[styles.inputWrap, surface.cardCompact]}>
+                  <TextInput
+                    style={[styles.sheetInput, { color: palette.text.primary }]}
+                    placeholder="0"
+                    placeholderTextColor={palette.text.tertiary}
+                    keyboardType="number-pad"
+                    value={editingUser.salaryPercent}
+                    onChangeText={(v) => setEditingUser({ ...editingUser, salaryPercent: v.replace(/[^0-9]/g, '') })}
+                  />
+                </View>
+
+                <View style={[styles.switchBox, surface.cardCompact]}>
+                  <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
+                    {editingUser.isActive ? 'Активен' : 'Отключён'}
+                  </Text>
+                  <Switch
+                    value={editingUser.isActive}
+                    onValueChange={(v) => {
+                      haptic('select');
+                      setEditingUser({ ...editingUser, isActive: v });
+                    }}
+                    trackColor={{ true: palette.accent.primary }}
+                  />
+                </View>
+
+                {editingUser.id && (
+                  <Pressable
+                    onPress={handleDeleteUser}
+                    disabled={deleteUserMutation.isPending}
+                    style={[styles.deleteUserBtn, { borderColor: colors.red[200] }]}
+                  >
+                    {deleteUserMutation.isPending ? (
+                      <ActivityIndicator size="small" color={colors.red[600]} />
+                    ) : (
+                      <>
+                        <Ionicons name="person-remove-outline" size={18} color={colors.red[600]} />
+                        <Text style={[styles.deleteUserText, { color: colors.red[600] }]}>Уволить сотрудника</Text>
+                      </>
+                    )}
+                  </Pressable>
+                )}
+
+                <View style={{ height: spacing[8] }} />
+              </ScrollView>
+            )}
+          </View>
+        </View>
       </Modal>
     </View>
   );
@@ -530,7 +935,10 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius['2xl'],
     padding: spacing[5],
     gap: spacing[3],
-    ...Platform.select({ ios: { shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 24 }, android: { elevation: 12 } }),
+    ...Platform.select({
+      ios: { shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 24 },
+      android: { elevation: 12 },
+    }),
   },
   modalTitle: { fontSize: 17, fontWeight: '700' },
   modalInput: {
@@ -551,4 +959,83 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
   },
   modalConfirmText: { color: colors.white, fontSize: 15, fontWeight: '700' },
+  // Error / retry state
+  stateBlock: { alignItems: 'center', justifyContent: 'center', paddingTop: spacing[16], gap: spacing[3] },
+  stateText: { fontSize: 15, textAlign: 'center' },
+  retryBtn: { paddingHorizontal: spacing[5], paddingVertical: spacing[2.5], borderRadius: borderRadius.full },
+  retryText: { fontSize: 14, fontWeight: '700' },
+  // Employees
+  employeesHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing[2],
+    marginLeft: spacing[1],
+  },
+  employeesAdd: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  emptyUsers: { alignItems: 'center', gap: spacing[2], paddingVertical: spacing[6] },
+  emptyUsersText: { fontSize: 14, textAlign: 'center' },
+  userRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+  },
+  userName: { fontSize: 15, fontWeight: '700' },
+  userMeta: { fontSize: 12, marginTop: 2 },
+  userBadge: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
+  userBadgeText: { fontSize: 10, fontWeight: '700' },
+  // Employee sheet
+  sheetBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', justifyContent: 'flex-end' },
+  sheet: {
+    maxHeight: '92%',
+    borderTopLeftRadius: borderRadius['3xl'],
+    borderTopRightRadius: borderRadius['3xl'],
+    paddingTop: spacing[2],
+  },
+  sheetHandleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  sheetCancel: { fontSize: 15, fontWeight: '500' },
+  sheetTitle: { fontSize: 16, fontWeight: '700' },
+  sheetSave: { fontSize: 15, fontWeight: '700' },
+  sheetScroll: { padding: spacing[4], gap: spacing[2] },
+  fieldLabel: { fontSize: 12, fontWeight: '600', marginLeft: spacing[1], marginTop: spacing[2] },
+  inputWrap: { paddingHorizontal: spacing[3] },
+  sheetInput: { fontSize: 16, paddingVertical: spacing[3] },
+  roleRow: { flexDirection: 'row', gap: spacing[2] },
+  roleChip: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  roleChipText: { fontSize: 14, fontWeight: '600' },
+  switchBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginTop: spacing[3],
+  },
+  switchLabel: { fontSize: 15, fontWeight: '600' },
+  deleteUserBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing[5],
+  },
+  deleteUserText: { fontSize: 15, fontWeight: '700' },
 });
