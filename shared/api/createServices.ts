@@ -125,6 +125,11 @@ import type {
   Payment,
   AcquiringMethod,
   PaymentProviderName,
+  FiscalSettings,
+  FiscalReceipt,
+  FiscalProviderName,
+  FiscalSno,
+  FiscalVat,
 } from '../types';
 import type {
   LoginRequest,
@@ -1362,5 +1367,60 @@ export function createPaymentsApi(api: HttpClient) {
       api.post<Payment>('/payments/create', data),
     /** Poll one payment's status (tenant-scoped). Re-syncs pending from provider. */
     get: (id: string) => api.get<Payment>(`/payments/${id}`),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Онлайн-касса / фискализация 54-ФЗ. Backend: fiscal/ (migration 086).
+//  Provider-agnostic — АТОЛ Онлайн (ATOL Online v4) is implemented for real.
+//
+//  settings get/update are owner-class (director/admin/superadmin) gated
+//  server-side; `fiscalize` is gated to the cashier-capable set (the roles that
+//  work the cash screen / close checks); `getReceipt` (poll) is open to any tenant
+//  user, tenant-scoped. The АТОЛ password is WRITE-ONLY — getSettings returns only
+//  a mask. АТОЛ is poll-based, so there is NO webhook in this client API.
+//
+//  INERT until configured: `fiscalize` returns 422 until the owner enters real
+//  АТОЛ login + password + group_code AND flips `enabled` on. Nothing fiscalizes
+//  before that. The receipt itself is built SERVER-SIDE from the check — the
+//  client only supplies where to send it (email/phone).
+// ───────────────────────────────────────────────────────────────────────
+
+export function createFiscalApi(api: HttpClient) {
+  return {
+    /** Masked per-tenant АТОЛ config. Owner-class. Never returns the raw password. */
+    getSettings: () => api.get<FiscalSettings>('/fiscal/settings'),
+    /**
+     * Owner-class partial update. Send `password` only when (re)entering it — an
+     * omitted/empty password leaves the stored secret untouched (the form shows a
+     * mask, not the real value).
+     */
+    updateSettings: (data: {
+      provider?: FiscalProviderName;
+      enabled?: boolean;
+      login?: string;
+      password?: string;
+      groupCode?: string;
+      sno?: FiscalSno;
+      inn?: string;
+      paymentAddress?: string;
+      companyEmail?: string;
+      vat?: FiscalVat;
+    }) => api.patch<FiscalSettings>('/fiscal/settings', data),
+    /**
+     * Fiscalize a closed check (заказ-наряд). 422 when the kassa is disabled/
+     * unconfigured. The receipt is built server-side from the check; pass `email`
+     * and/or `phone` for the electronic receipt (≥1 required by 54-ФЗ — falls back
+     * to the check's client phone). Poll `getReceipt(checkId)` until status leaves
+     * 'pending'.
+     */
+    fiscalize: (data: { checkId: string; email?: string; phone?: string }) =>
+      api.post<FiscalReceipt>('/fiscal/fiscalize', data),
+    /**
+     * Latest fiscal receipt for a check (tenant-scoped). Re-syncs a 'pending'
+     * receipt straight from the operator (АТОЛ is poll-based). 404 until the check
+     * has been fiscalized at least once.
+     */
+    getReceipt: (checkId: string) => api.get<FiscalReceipt>(`/fiscal/receipt/${checkId}`),
   };
 }

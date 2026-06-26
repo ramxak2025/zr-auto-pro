@@ -2103,3 +2103,73 @@ export interface Payment {
    */
   qr?: string | null;
 }
+
+// ───────────────────────────────────────────────────────────────────────
+//  Онлайн-касса / фискализация 54-ФЗ. Backend: fiscal/ (migration 086).
+//  Provider-agnostic — АТОЛ Онлайн (ATOL Online v4) is implemented for real.
+//  The module is INERT until the owner enters АТОЛ login + password + group_code
+//  AND flips `enabled` on: POST /fiscal/fiscalize returns 422 until then. АТОЛ is
+//  POLL-based (no webhook) — GET /fiscal/receipt/:checkId re-syncs a pending
+//  receipt straight from the operator.
+//
+//  Distinct from the acquiring `Payment` above: that COLLECTS money online;
+//  фискализация registers a legal 54-ФЗ receipt (ФД № + ФПД + ссылка ОФД) for a
+//  closed check with the tax authority via the OFD operator.
+// ───────────────────────────────────────────────────────────────────────
+
+export type FiscalProviderName = 'atol';
+/** Система налогообложения (tax system) reported on the receipt. */
+export type FiscalSno = 'osn' | 'usn_income' | 'usn_income_outcome' | 'envd' | 'esn' | 'patent';
+/** vat.type for receipt items. Most autoservices use 'none'. */
+export type FiscalVat = 'none' | 'vat0' | 'vat10' | 'vat20' | 'vat110' | 'vat120';
+/** Normalized фискализация lifecycle: sent → done / failed. */
+export type FiscalStatus = 'pending' | 'done' | 'failed';
+
+/**
+ * Masked per-tenant фискализация config (GET /fiscal/settings). Owner-class only.
+ * The raw `password` is NEVER sent to a client — only a mask + a "configured" flag.
+ */
+export interface FiscalSettings {
+  provider: FiscalProviderName;
+  enabled: boolean;
+  /** АТОЛ API login (semi-public); shown in full. */
+  login: string | null;
+  /** Masked password like '••••1234', or null when none stored. NEVER the raw value. */
+  passwordMask: string | null;
+  /** True when a password is stored, so the UI can show "configured". */
+  hasPassword: boolean;
+  /** АТОЛ group_code (код группы ККТ). */
+  groupCode: string | null;
+  sno: FiscalSno | null;
+  inn: string | null;
+  /** Адрес расчётов (place of settlement / shop address). */
+  paymentAddress: string | null;
+  /** Email организации-отправителя чека. */
+  companyEmail: string | null;
+  vat: FiscalVat | string;
+  updatedAt: string | null;
+}
+
+/** One фискализация ledger row (POST /fiscal/fiscalize response, GET /fiscal/receipt/:checkId). */
+export interface FiscalReceipt {
+  id: string;
+  tenantId: string;
+  provider: FiscalProviderName;
+  /** The заказ-наряд this receipt fiscalizes. */
+  checkId: string | null;
+  /** Idempotence key sent to the operator (АТОЛ external_id). */
+  externalId: string;
+  /** Operator document uuid (АТОЛ). NULL only if /sell never returned one. */
+  providerUuid: string | null;
+  status: FiscalStatus;
+  /** ФД — фискальный документ № (filled once done). */
+  fiscalDocNumber: string | null;
+  /** ФП/ФПД — фискальный признак документа (filled once done). */
+  fiscalSign: string | null;
+  /** Ссылка на чек в ОФД, если оператор её вернул. */
+  ofdReceiptUrl: string | null;
+  /** Текст ошибки при status='failed'. */
+  error: string | null;
+  createdAt: string;
+  doneAt: string | null;
+}

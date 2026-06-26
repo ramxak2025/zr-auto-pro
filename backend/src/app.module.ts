@@ -44,6 +44,7 @@ import { DebtsModule } from './debts/debts.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { PaymentsModule } from './payments/payments.module';
+import { FiscalModule } from './fiscal/fiscal.module';
 
 @Module({
   imports: [
@@ -91,6 +92,7 @@ import { PaymentsModule } from './payments/payments.module';
     LoyaltyModule,
     PurchaseOrdersModule,
     PaymentsModule,
+    FiscalModule,
   ],
   providers: [MigrationRunner],
 })
