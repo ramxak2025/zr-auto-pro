@@ -646,6 +646,97 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  // ─── Win-back segment («давно не приезжал») ──────────────────────
+  private static readonly WINBACK_DEFAULT_DAYS = 90;
+  private static readonly WINBACK_MAX_ROWS = 500;
+
+  private normalizeWinbackDays(days?: number): number {
+    const n = Math.floor(Number(days));
+    if (!Number.isFinite(n) || n < 1) return MarketingService.WINBACK_DEFAULT_DAYS;
+    return Math.min(n, 3650);
+  }
+
+  /**
+   * Clients to win back: those whose most recent NON-deferred check is older
+   * than `days` days, PLUS clients who never had a (non-deferred) check at all.
+   * Tenant-scoped. Excludes the pinned retail buyer (053 — `is_retail`, no
+   * follow-up by design) and anyone without a phone (can't message them).
+   * Never-visited clients sort first (treated as the longest-absent). Row count
+   * is capped so a huge tenant can't return an unbounded list.
+   */
+  async getWinbackSegment(
+    tenantId: string,
+    days?: number,
+  ): Promise<Array<{ clientId: string; name: string; phone: string; lastVisit: string | null; totalChecks: number }>> {
+    const n = this.normalizeWinbackDays(days);
+    const { rows } = await this.pool.query(
+      `SELECT cl.id, cl.full_name, cl.phone,
+              MAX(ch.date) AS last_visit,
+              COUNT(ch.id) AS total_checks
+       FROM clients cl
+       LEFT JOIN checks ch
+         ON ch.client_id = cl.id
+        AND ch.tenant_id = $1
+        AND ch.is_deferred = false
+       WHERE cl.tenant_id = $1
+         AND cl.is_retail = false
+         AND cl.phone IS NOT NULL
+         AND btrim(cl.phone) <> ''
+       GROUP BY cl.id, cl.full_name, cl.phone
+       HAVING MAX(ch.date) IS NULL
+           OR MAX(ch.date) <= now() - ($2 * interval '1 day')
+       ORDER BY MAX(ch.date) ASC NULLS FIRST
+       LIMIT $3`,
+      [tenantId, n, MarketingService.WINBACK_MAX_ROWS],
+    );
+    return rows.map((r) => ({
+      clientId: r.id,
+      name: r.full_name,
+      phone: r.phone,
+      lastVisit: r.last_visit ?? null,
+      totalChecks: parseInt(r.total_checks, 10) || 0,
+    }));
+  }
+
+  /**
+   * Send `message` to every client in the win-back segment via the EXISTING
+   * messaging path — `sendClientMessage`, the same tenant adapter the review /
+   * reminder flows use. No new send logic: we just loop the shared single-send.
+   * When the tenant has no messaging provider configured, the first send
+   * reports `no_provider`; we stop early (avoids N pointless adapter lookups)
+   * and return clear counts instead of throwing.
+   */
+  async winbackSend(
+    tenantId: string,
+    days: number,
+    message: string,
+  ): Promise<{ sent: number; failed: number; total: number }> {
+    const text = (message || '').trim();
+    if (!text) throw new BadRequestException({ message: 'Сообщение не может быть пустым' });
+
+    const segment = await this.getWinbackSegment(tenantId, days);
+    const total = segment.length;
+    let sent = 0;
+    let failed = 0;
+
+    for (const client of segment) {
+      const result = await this.sendClientMessage(tenantId, client.phone, text);
+      if (result.sent) {
+        sent++;
+      } else {
+        failed++;
+        // No provider configured → the same holds for every remaining client.
+        // Count the rest as not-sent and stop. Clear counts, no throw.
+        if (result.reason === 'no_provider') {
+          failed = total - sent;
+          break;
+        }
+      }
+    }
+
+    return { sent, failed, total };
+  }
+
   // ─── Job Processor: Scan for completed checks ────────────────────
   private async scanCompletedChecks() {
     try {

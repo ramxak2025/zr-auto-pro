@@ -1400,6 +1400,27 @@ export interface ReminderSettings {
 }
 
 // ───────────────────────────────────────────────────────────────────────
+//  Win-back («давно не приезжал») — derived segment, no dedicated table
+// ───────────────────────────────────────────────────────────────────────
+
+/** A client in the win-back segment (GET /marketing/winback?days=N). */
+export interface WinbackClient {
+  clientId: string;
+  name: string;
+  phone: string;
+  /** Most recent non-deferred visit (ISO). null = never visited (longest absent). */
+  lastVisit: string | null;
+  totalChecks: number;
+}
+
+/** Result of POST /marketing/winback/send. */
+export interface WinbackSendResult {
+  sent: number;
+  failed: number;
+  total: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────
 //  Returns
 // ───────────────────────────────────────────────────────────────────────
 

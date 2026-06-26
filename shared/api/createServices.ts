@@ -62,6 +62,8 @@ import type {
   CheckTemplate,
   CallFunnel,
   ReminderSettings,
+  WinbackClient,
+  WinbackSendResult,
   CheckReturn,
   ScheduleSettings,
   EmployeeProfile,
@@ -787,6 +789,11 @@ export function createMarketingApi(api: HttpClient) {
     updateReminderSettings: (data: Partial<ReminderSettings>) =>
       api.post<ReminderSettings>('/marketing/reminders', data),
     sendReminders: () => api.post<{ sent: number; errors: number }>('/marketing/reminders/send'),
+    // Win-back («давно не приезжал»): preview the segment, then broadcast.
+    winback: (days?: number) =>
+      api.get<WinbackClient[]>('/marketing/winback', { params: days != null ? { days } : undefined }),
+    winbackSend: (data: { days: number; message: string }) =>
+      api.post<WinbackSendResult>('/marketing/winback/send', data),
   };
 }
 

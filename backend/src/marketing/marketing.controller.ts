@@ -8,6 +8,7 @@ import { UpsertIntegrationDto } from './dto/upsert-integration.dto';
 import { UpsertPlatformLinkDto } from './dto/upsert-platform-link.dto';
 import { UpdateReviewSettingsDto } from './dto/update-review-settings.dto';
 import { UpdateReminderSettingsDto } from './dto/update-reminder-settings.dto';
+import { WinbackSendDto } from './dto/winback-send.dto';
 import { ReminderService } from './reminder.service';
 
 @Controller('marketing')
@@ -119,6 +120,27 @@ export class MarketingController {
   @Post('reminders/send')
   sendReminders(@CurrentUser() user: JwtPayload) {
     return this.reminderService.sendForTenant(user.tenantID);
+  }
+
+  // ─── Win-back («давно не приезжал») ──────────────────────────────
+  // Both read and send are gated by marketing_access. Owner-class roles
+  // (superadmin / director / admin) bypass the permission check entirely
+  // (permissions.guard OWNER_CLASS_ROLES) — so the read is open to owner-class
+  // and the send is effectively restricted to them; a master needs an explicit
+  // marketing_access grant. Mirrors the existing reminders/send gate.
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
+  @Get('winback')
+  getWinback(@CurrentUser() user: JwtPayload, @Query('days') days?: string) {
+    const parsed = days ? parseInt(days, 10) : undefined;
+    return this.marketingService.getWinbackSegment(user.tenantID, parsed);
+  }
+
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
+  @Post('winback/send')
+  winbackSend(@CurrentUser() user: JwtPayload, @Body() dto: WinbackSendDto) {
+    return this.marketingService.winbackSend(user.tenantID, dto.days, dto.message);
   }
 
   // ─── Public Review Endpoints (no auth) ────────────────────────────
