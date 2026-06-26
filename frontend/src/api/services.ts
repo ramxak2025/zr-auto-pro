@@ -31,6 +31,7 @@ import {
   createBookingsApi,
   createCashShiftsApi,
   createDebtsApi,
+  createLoyaltyApi,
   createAdminApi,
 } from '../../../shared/api/createServices';
 
@@ -108,6 +109,7 @@ export const notificationsApi = createNotificationsApi(api);
 export const bookingsApi = createBookingsApi(api);
 export const cashShiftsApi = createCashShiftsApi(api);
 export const debtsApi = createDebtsApi(api);
+export const loyaltyApi = createLoyaltyApi(api);
 export const adminApi = createAdminApi(api);
 
 // --- Platform-specific: Image compression + Upload (uses Canvas API) ---

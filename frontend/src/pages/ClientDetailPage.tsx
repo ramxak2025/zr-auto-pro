@@ -24,11 +24,12 @@ import {
   TrendingUp,
   Coins,
   AlertCircle,
+  Gift,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
-import { clientsApi, carsApi, checksApi, debtsApi } from '../api/services';
+import { clientsApi, carsApi, checksApi, debtsApi, loyaltyApi } from '../api/services';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
@@ -36,7 +37,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
 import { useAuth } from '../contexts/AuthContext';
-import { Client, Car as CarType, Check, ClientDebtSummary, UserRole } from '../types';
+import { Client, Car as CarType, Check, ClientDebtSummary, ClientBonusSummary, BonusType, UserRole } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
 
 const formatMoney = (amount: number) => amount.toLocaleString('ru-RU') + ' ₽';
@@ -549,6 +550,250 @@ function ClientDebtSection({ clientId, clientName }: { clientId: string; clientN
   );
 }
 
+// ---- Client Loyalty / Bonus Section ----
+function ClientLoyaltySection({ clientId, clientName }: { clientId: string; clientName: string }) {
+  const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { isRole } = useAuth();
+  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+
+  const [modalOpen, setModalOpen] = useState(false);
+  const [mode, setMode] = useState<BonusType>('accrual');
+  const [amount, setAmount] = useState('');
+  const [reason, setReason] = useState('');
+
+  const { data: summary, isLoading } = useQuery<ClientBonusSummary>({
+    queryKey: ['loyalty', 'client', clientId],
+    queryFn: async () => {
+      const res = await loyaltyApi.clientSummary(clientId);
+      return res.data;
+    },
+    enabled: !!clientId,
+  });
+
+  // Push the fresh summary into the cache (instant UI) + invalidate to refetch.
+  const applySummary = (next: ClientBonusSummary) => {
+    queryClient.setQueryData(['loyalty', 'client', clientId], next);
+    queryClient.invalidateQueries({ queryKey: ['loyalty', 'client', clientId] });
+  };
+
+  const adjustMutation = useMutation({
+    mutationFn: (data: { amount: number; type: BonusType; reason: string }) =>
+      loyaltyApi.adjust({ clientId, amount: data.amount, type: data.type, reason: data.reason }),
+    onSuccess: (res) => {
+      applySummary(res.data);
+      toast.success(mode === 'accrual' ? 'Бонусы начислены' : 'Бонусы списаны');
+      closeModal();
+    },
+    onError: () => toast.error('Не удалось выполнить операцию'),
+  });
+
+  const openModal = (next: BonusType) => {
+    setMode(next);
+    setAmount('');
+    setReason('');
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setAmount('');
+    setReason('');
+  };
+
+  const balance = summary?.balance ?? 0;
+  const ledger = summary?.ledger ?? [];
+  const enabled = summary?.enabled ?? false;
+
+  const handleSubmit = (e: FormEvent) => {
+    e.preventDefault();
+    const value = Number(amount.replace(',', '.'));
+    if (!Number.isFinite(value) || value <= 0) {
+      toast.error('Введите сумму больше нуля');
+      return;
+    }
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      toast.error('Укажите причину корректировки');
+      return;
+    }
+    if (mode === 'redemption' && value > balance) {
+      toast.error('Сумма больше доступного баланса');
+      return;
+    }
+    adjustMutation.mutate({ amount: value, type: mode, reason: trimmedReason });
+  };
+
+  return (
+    <div className="card p-6 mb-6">
+      {/* Header + balance + actions */}
+      <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
+        <div className="flex items-center gap-3">
+          <div className="p-2 bg-violet-50 rounded-lg">
+            <Gift className="w-5 h-5 text-violet-600" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2">
+              <h2 className="text-lg font-semibold text-gray-900">Бонусы клиента</h2>
+              {!isLoading && !enabled && (
+                <span className="text-[10px] font-semibold uppercase tracking-wide bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">
+                  Программа отключена
+                </span>
+              )}
+            </div>
+            {isLoading ? (
+              <p className="text-sm text-gray-400">Загрузка…</p>
+            ) : (
+              <p className="text-sm">
+                <span className="text-gray-500">Баланс: </span>
+                <span className="font-bold text-violet-600">{formatMoney(balance)}</span>
+              </p>
+            )}
+          </div>
+        </div>
+
+        {canManage && (
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={() => openModal('accrual')} className="btn-secondary btn-sm">
+              <Plus className="w-4 h-4" />
+              Начислить
+            </button>
+            <button
+              type="button"
+              onClick={() => openModal('redemption')}
+              disabled={balance <= 0}
+              className="btn-secondary btn-sm disabled:opacity-50"
+            >
+              <Minus className="w-4 h-4" />
+              Списать
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Totals */}
+      {!isLoading && (summary?.totalAccrued || summary?.totalRedeemed) ? (
+        <div className="flex flex-wrap gap-2 mb-4">
+          <div className="flex items-center gap-1.5 rounded-lg bg-green-50 px-3 py-1.5">
+            <TrendingUp className="w-3.5 h-3.5 text-green-600" />
+            <span className="text-xs text-gray-500">Начислено всего:</span>
+            <span className="text-xs font-bold text-green-600">{formatMoney(summary?.totalAccrued ?? 0)}</span>
+          </div>
+          <div className="flex items-center gap-1.5 rounded-lg bg-orange-50 px-3 py-1.5">
+            <Coins className="w-3.5 h-3.5 text-orange-600" />
+            <span className="text-xs text-gray-500">Списано всего:</span>
+            <span className="text-xs font-bold text-orange-600">{formatMoney(summary?.totalRedeemed ?? 0)}</span>
+          </div>
+        </div>
+      ) : null}
+
+      {/* Ledger */}
+      {isLoading ? (
+        <div className="flex items-center justify-center py-6">
+          <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
+        </div>
+      ) : ledger.length === 0 ? (
+        <p className="text-sm text-gray-400 py-2">Бонусных операций пока нет</p>
+      ) : (
+        <div className="divide-y divide-gray-100">
+          {ledger.map((entry) => {
+            const isAccrual = entry.type === 'accrual';
+            return (
+              <div key={entry.id} className="flex items-center gap-3 py-3">
+                <div
+                  className={`flex h-9 w-9 items-center justify-center rounded-xl flex-shrink-0 ${
+                    isAccrual ? 'bg-green-50' : 'bg-orange-50'
+                  }`}
+                >
+                  {isAccrual ? (
+                    <Plus className="w-4 h-4 text-green-600" />
+                  ) : (
+                    <Minus className="w-4 h-4 text-orange-600" />
+                  )}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-gray-900">
+                    {isAccrual ? 'Начисление бонусов' : 'Списание бонусов'}
+                    {entry.reason && <span className="font-normal text-gray-500"> · {entry.reason}</span>}
+                  </p>
+                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-400 mt-0.5">
+                    <span>{format(new Date(entry.createdAt), 'dd.MM.yy HH:mm', { locale: ru })}</span>
+                    {entry.createdByName && <span>· {entry.createdByName}</span>}
+                    {entry.checkId && (
+                      <button
+                        type="button"
+                        onClick={() => navigate(`/checks/${entry.checkId}`)}
+                        className="text-primary-600 hover:text-primary-700 font-medium"
+                      >
+                        · Чек{entry.checkNumber ? ` #${entry.checkNumber}` : ''}
+                      </button>
+                    )}
+                  </div>
+                </div>
+                <span
+                  className={`text-sm font-bold whitespace-nowrap ${isAccrual ? 'text-green-600' : 'text-orange-600'}`}
+                >
+                  {isAccrual ? '+' : '−'}
+                  {formatMoney(entry.amount)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Accrue / Redeem modal */}
+      <Modal isOpen={modalOpen} onClose={closeModal} title={mode === 'accrual' ? 'Начислить бонусы' : 'Списать бонусы'}>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Клиент: <span className="font-medium text-gray-700">{clientName}</span>
+            {mode === 'redemption' && (
+              <>
+                {' '}
+                · Доступно: <span className="font-medium text-violet-600">{formatMoney(balance)}</span>
+              </>
+            )}
+          </p>
+          <div>
+            <label className="label">Сумма бонусов</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              min="0"
+              step="1"
+              value={amount}
+              onChange={(e) => setAmount(e.target.value)}
+              className="input"
+              placeholder="0"
+              autoFocus
+              required
+            />
+          </div>
+          <div>
+            <label className="label">Причина</label>
+            <input
+              type="text"
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              className="input"
+              placeholder={mode === 'accrual' ? 'За что начисление' : 'За что списание'}
+              required
+            />
+          </div>
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={closeModal} className="btn-secondary">
+              Отмена
+            </button>
+            <button type="submit" disabled={adjustMutation.isPending} className="btn-primary">
+              {adjustMutation.isPending ? 'Сохраняем…' : mode === 'accrual' ? 'Начислить' : 'Списать'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
 // ---- Main Page Component ----
 export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -874,6 +1119,9 @@ export default function ClientDetailPage() {
 
       {/* Debt / Receivables Section */}
       <ClientDebtSection clientId={id!} clientName={client.fullName} />
+
+      {/* Loyalty / Bonus Section */}
+      <ClientLoyaltySection clientId={id!} clientName={client.fullName} />
 
       {/* Cars Section */}
       <div className="card p-6 mb-6">
