@@ -40,6 +40,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { BookingsModule } from './bookings/bookings.module';
 import { PermissionTemplatesModule } from './permission-templates/permission-templates.module';
 import { CashShiftsModule } from './cash-shifts/cash-shifts.module';
+import { DebtsModule } from './debts/debts.module';
 
 @Module({
   imports: [
@@ -83,6 +84,7 @@ import { CashShiftsModule } from './cash-shifts/cash-shifts.module';
     BookingsModule,
     PermissionTemplatesModule,
     CashShiftsModule,
+    DebtsModule,
   ],
   providers: [MigrationRunner],
 })

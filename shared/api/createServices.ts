@@ -109,6 +109,8 @@ import type {
   BookingSettings,
   CashShift,
   CashShiftReport,
+  ClientDebtSummary,
+  Debtor,
 } from '../types';
 import type {
   LoginRequest,
@@ -1176,5 +1178,30 @@ export function createCashShiftsApi(api: HttpClient) {
     /** Record an инкассация; returns the refreshed Z-report. */
     collect: (id: string, data: { amount: number; note?: string }) =>
       api.post<CashShiftReport>(`/cash-shifts/${id}/collect`, data),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Дебиторка / долги клиентов (client receivables / debts ledger).
+//  Backend: debts/ (migration 081). charge/payment/delete are owner-class
+//  gated server-side; client ledger / debtors overview are readable by any
+//  tenant user. Every mutation returns the refreshed per-client summary so
+//  the UI updates instantly.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createDebtsApi(api: HttpClient) {
+  return {
+    /** Add a 'charge' (client owes more). Returns the refreshed client summary. */
+    charge: (data: { clientId: string; amount: number; reason?: string; checkId?: string }) =>
+      api.post<ClientDebtSummary>('/debts/charge', data),
+    /** Record a repayment. Overpayment allowed → balance may go negative. */
+    payment: (data: { clientId: string; amount: number; reason?: string }) =>
+      api.post<ClientDebtSummary>('/debts/payment', data),
+    /** Per-client balance + ledger (newest-first) + read-only deferred-check context. */
+    clientLedger: (clientId: string) => api.get<ClientDebtSummary>(`/debts/client/${clientId}`),
+    /** Clients with a positive outstanding balance, ordered by balance desc. */
+    debtors: () => api.get<Debtor[]>('/debts/debtors'),
+    /** Delete one ledger entry (admin correction). Returns the refreshed summary. */
+    remove: (id: string) => api.delete<ClientDebtSummary>(`/debts/${id}`),
   };
 }

@@ -773,6 +773,70 @@ export interface CashShiftReport {
   windowEnd: string;
 }
 
+// ───────────────────────────────────────────────────────────────────────
+//  Дебиторка / долги клиентов (client receivables / debts ledger).
+//  Backend: debts/ (migration 081). A plain double-sided ledger per client.
+//  charge = client owes more, payment = repayment. Balance = Σcharge − Σpayment
+//  (never clamped — may go negative when the client overpays / has credit).
+// ───────────────────────────────────────────────────────────────────────
+
+export type ClientDebtType = 'charge' | 'payment';
+
+/** One movement in a client's debt ledger. */
+export interface ClientDebtEntry {
+  id: string;
+  tenantId: string;
+  clientId: string;
+  /** Positive money amount of this single movement; direction is in `type`. */
+  amount: number;
+  /** 'charge' = долг вырос, 'payment' = погашение. */
+  type: ClientDebtType;
+  reason?: string | null;
+  /** Soft link to the originating check, if any (nulled if that check is deleted). */
+  checkId?: string | null;
+  /** Denormalised from the checks join — present when checkId links to a check. */
+  checkNumber?: string | null;
+  createdBy?: string | null;
+  /** Denormalised from the users join. */
+  createdByName?: string | null;
+  createdAt: string;
+}
+
+/** Read-only context inside a debt summary — an outstanding deferred check. */
+export interface DebtDeferredCheck {
+  id: string;
+  number: string;
+  date: string;
+  totalRevenue: number;
+}
+
+/**
+ * Per-client debt summary. Returned by GET /debts/client/:clientId and by the
+ * charge / payment / delete mutations (so the UI updates instantly).
+ *
+ *   balance = Σcharge − Σpayment  (may be negative = client has credit)
+ *
+ * `deferredChecks` is READ-ONLY context (outstanding is_deferred checks) and is
+ * NOT counted in `balance` — purely informational for the per-client UI.
+ */
+export interface ClientDebtSummary {
+  clientId: string;
+  clientName?: string | null;
+  clientPhone?: string | null;
+  balance: number;
+  ledger: ClientDebtEntry[];
+  deferredChecks: DebtDeferredCheck[];
+}
+
+/** One row in the debtors overview — a client with a positive balance. */
+export interface Debtor {
+  clientId: string;
+  name: string;
+  phone?: string | null;
+  /** Positive outstanding balance (Σcharge − Σpayment). */
+  balance: number;
+}
+
 export interface Supplier {
   id: string;
   name: string;
