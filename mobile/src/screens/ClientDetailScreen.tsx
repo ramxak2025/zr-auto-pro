@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { clientsApi, carsApi, checksApi, debtsApi } from '../api/services';
+import { clientsApi, carsApi, checksApi, debtsApi, loyaltyApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import Modal from '../components/Modal';
@@ -33,7 +33,7 @@ import LoyaltyBadge from '../components/LoyaltyBadge';
 import SectionHeader from '../components/SectionHeader';
 import { UserRole } from '../../../shared/types';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Client, Car, Check, ClientDebtSummary } from '../../../shared/types';
+import type { Client, Car, Check, ClientDebtSummary, ClientBonusSummary, BonusType } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { haptic } from '../platform/haptics';
 import { detectPlateMode } from '../utils/plateMask';
@@ -183,6 +183,10 @@ export default function ClientDetailScreen() {
   // Role-gated to director/admin/superadmin (and enforced server-side); a
   // master sees the balance + ledger read-only without the action buttons.
   const canManageDebt = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+  // Бонусы / лояльность — ручное начисление/списание (adjust) внутри карточки.
+  // Owner-class (director/admin/superadmin), enforced server-side. A master
+  // sees the balance + ledger read-only without the action buttons.
+  const canManageLoyalty = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
   const { id, focusCarId } = route.params as { id: string; focusCarId?: string };
   const isRetail = id === '__retail__';
   const [refreshing, setRefreshing] = useState(false);
@@ -959,6 +963,13 @@ export default function ClientDetailScreen() {
             read-only «Незакрытые заказ-наряды» list. Self-contained: owns its
             own query + mutations + amount-prompt modal. */}
         <ClientDebtSection clientId={id} canManage={canManageDebt} palette={palette} onOpenCheck={openCheck} />
+
+        {/* БОНУСЫ — программа лояльности. Баланс (крупно), всего начислено /
+            списано, и леджер движений (accrual зелёным +, redemption оранжевым
+            −). Owner-class «Начислить» / «Списать» — ручная корректировка
+            (adjust). Секция сама прячется, если программа выключена И баланс 0
+            (см. ClientBonusSection) — чтобы не засорять карточку. */}
+        <ClientBonusSection clientId={id} canManage={canManageLoyalty} palette={palette} />
 
         {/* STAFF-ONLY: notes + source + comment. Visible to EVERY staff
             member (#19.4). Editing notes/source stays gated to canEditMeta —
@@ -2149,6 +2160,279 @@ const debtStyles = StyleSheet.create({
   },
   submitBtnDisabled: { opacity: 0.5 },
   submitBtnText: { color: colors.white, fontSize: 16, fontWeight: fontWeight.semibold },
+});
+
+// ── ClientBonusSection (Бонусы / лояльность) ──────────────────────────
+// Per-client bonus ledger. Reads GET /loyalty/client/:id (balance + totals +
+// newest-first ledger). «Начислить» (adjust accrual) and «Списать» (adjust
+// redemption) are owner-class manual corrections — role-gated here and
+// enforced server-side — each requiring a reason. Every mutation returns the
+// refreshed summary, which we write straight into cache so the balance + ledger
+// update instantly, then invalidate ['loyalty','client',id].
+//
+// The whole section self-hides when the programme is OFF *and* the balance is 0
+// — there's simply nothing to show, so we don't clutter the card. A leftover
+// balance after a programme is switched off still renders (it stays spendable).
+interface ClientBonusSectionProps {
+  clientId: string;
+  canManage: boolean;
+  palette: ReturnType<typeof useColors>;
+}
+
+function ClientBonusSection({ clientId, canManage, palette }: ClientBonusSectionProps) {
+  const queryClient = useQueryClient();
+  const [promptMode, setPromptMode] = useState<BonusType | null>(null);
+  const [amountText, setAmountText] = useState('');
+  const [reasonText, setReasonText] = useState('');
+
+  const { data: summary } = useQuery<ClientBonusSummary>({
+    queryKey: ['loyalty', 'client', clientId],
+    queryFn: async () => (await loyaltyApi.clientSummary(clientId)).data,
+  });
+
+  const applySummary = useCallback(
+    (data: ClientBonusSummary) => {
+      queryClient.setQueryData(['loyalty', 'client', clientId], data);
+      queryClient.invalidateQueries({ queryKey: ['loyalty', 'client', clientId] });
+    },
+    [queryClient, clientId],
+  );
+
+  const closePrompt = useCallback(() => {
+    setPromptMode(null);
+    setAmountText('');
+    setReasonText('');
+  }, []);
+
+  const adjustMutation = useMutation({
+    mutationFn: (data: { amount: number; type: BonusType; reason: string }) =>
+      loyaltyApi.adjust({ clientId, amount: data.amount, type: data.type, reason: data.reason }),
+    onSuccess: (res) => {
+      applySummary(res.data);
+      haptic('success');
+      closePrompt();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось изменить бонусы');
+    },
+  });
+
+  const openPrompt = (mode: BonusType) => {
+    haptic('tap');
+    setAmountText('');
+    setReasonText('');
+    setPromptMode(mode);
+  };
+
+  const parsedAmount = useMemo(() => {
+    const normalized = amountText.replace(/\s/g, '').replace(',', '.');
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : NaN;
+  }, [amountText]);
+  const amountValid = Number.isFinite(parsedAmount) && parsedAmount > 0;
+  const reasonValid = reasonText.trim().length > 0;
+  const submitting = adjustMutation.isPending;
+
+  const handleSubmit = () => {
+    // adjust requires a reason server-side — both fields gate submit.
+    if (!amountValid || !reasonValid || submitting || !promptMode) return;
+    adjustMutation.mutate({ amount: parsedAmount, type: promptMode, reason: reasonText.trim() });
+  };
+
+  // Hide until the first load lands (no flash of empty), then hide entirely
+  // when the programme is off AND there's nothing accumulated.
+  const balance = summary?.balance ?? 0;
+  if (!summary) return null;
+  if (!summary.enabled && balance === 0) return null;
+
+  const ledger = summary.ledger ?? [];
+
+  return (
+    <>
+      <SectionHeader title="Бонусы" />
+      <AnimatedCard
+        style={[styles.metaCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        index={2}
+      >
+        {/* Balance header — prominent, on-brand accent. */}
+        <View style={debtStyles.balanceRow}>
+          <View style={[debtStyles.balanceIcon, { backgroundColor: palette.accent.primarySoft }]}>
+            <Ionicons name="gift" size={18} color={palette.accent.primaryText} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[debtStyles.balanceLabel, { color: palette.text.tertiary }]}>Бонусный баланс</Text>
+            <Text
+              style={[debtStyles.balanceValue, { color: palette.accent.primaryText }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
+              {formatMoney(balance)}
+            </Text>
+          </View>
+        </View>
+
+        {/* Totals — всего начислено / списано за всё время. */}
+        <View style={[bonusStyles.totalsRow, { borderTopColor: palette.border.subtle }]}>
+          <View style={bonusStyles.totalItem}>
+            <Text style={[bonusStyles.totalLabel, { color: palette.text.tertiary }]}>Начислено всего</Text>
+            <Text style={[bonusStyles.totalValue, { color: colors.green[600] }]} numberOfLines={1} adjustsFontSizeToFit>
+              {formatMoney(summary.totalAccrued)}
+            </Text>
+          </View>
+          <View style={[bonusStyles.totalDivider, { backgroundColor: palette.border.subtle }]} />
+          <View style={bonusStyles.totalItem}>
+            <Text style={[bonusStyles.totalLabel, { color: palette.text.tertiary }]}>Списано всего</Text>
+            <Text
+              style={[bonusStyles.totalValue, { color: colors.orange[600] }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+            >
+              {formatMoney(summary.totalRedeemed)}
+            </Text>
+          </View>
+        </View>
+
+        {!summary.enabled ? (
+          <Text style={[bonusStyles.disabledNote, { color: palette.text.tertiary }]}>
+            Программа лояльности выключена — накопленные бонусы можно списать.
+          </Text>
+        ) : null}
+
+        {/* Action buttons — owner-class manual adjust. «Списать» disabled at 0. */}
+        {canManage ? (
+          <View style={debtStyles.actionsRow}>
+            <TouchableOpacity
+              style={[debtStyles.actionBtn, { backgroundColor: colors.green[50] }]}
+              onPress={() => openPrompt('accrual')}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add-circle-outline" size={16} color={colors.green[600]} />
+              <Text style={[debtStyles.actionBtnText, { color: colors.green[600] }]}>Начислить</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[debtStyles.actionBtn, { backgroundColor: colors.orange[50] }, balance <= 0 && { opacity: 0.5 }]}
+              onPress={() => openPrompt('redemption')}
+              activeOpacity={0.7}
+              disabled={balance <= 0}
+            >
+              <Ionicons name="remove-circle-outline" size={16} color={colors.orange[600]} />
+              <Text style={[debtStyles.actionBtnText, { color: colors.orange[600] }]}>Списать</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {/* Ledger — newest first. Accrual green (+), redemption orange (−). */}
+        {ledger.length > 0 ? (
+          <View style={[debtStyles.ledgerWrap, { borderTopColor: palette.border.subtle }]}>
+            {ledger.map((entry) => {
+              const isAccrual = entry.type === 'accrual';
+              const entryColor = isAccrual ? colors.green[600] : colors.orange[600];
+              const meta = [
+                entry.checkNumber ? `Чек №${entry.checkNumber}` : null,
+                entry.createdByName || null,
+                formatDate(entry.createdAt),
+              ]
+                .filter(Boolean)
+                .join(' · ');
+              return (
+                <View key={entry.id} style={[debtStyles.ledgerRow, { borderBottomColor: palette.border.subtle }]}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[debtStyles.ledgerReason, { color: palette.text.primary }]} numberOfLines={1}>
+                      {entry.reason || (isAccrual ? 'Начисление бонусов' : 'Списание бонусов')}
+                    </Text>
+                    {meta ? (
+                      <Text style={[debtStyles.ledgerMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                        {meta}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Text style={[debtStyles.ledgerAmount, { color: entryColor }]}>
+                    {isAccrual ? '+' : '−'}
+                    {formatMoney(entry.amount)}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : (
+          <Text style={[debtStyles.emptyLedger, { color: palette.text.tertiary }]}>Движений по бонусам пока нет</Text>
+        )}
+      </AnimatedCard>
+
+      {/* Amount + reason prompt — Modal + TextInput (Android-safe). adjust
+          requires a reason, so both fields gate the submit. */}
+      <Modal
+        visible={promptMode !== null}
+        onClose={closePrompt}
+        title={promptMode === 'accrual' ? 'Начислить бонусы' : 'Списать бонусы'}
+      >
+        <Text style={[debtStyles.fieldLabel, { color: palette.text.secondary }]}>Сумма бонусов, ₽</Text>
+        <TextInput
+          style={[
+            debtStyles.input,
+            { backgroundColor: palette.bg.muted, color: palette.text.primary, borderColor: palette.border.subtle },
+          ]}
+          value={amountText}
+          onChangeText={setAmountText}
+          placeholder="0"
+          placeholderTextColor={palette.text.tertiary}
+          keyboardType="decimal-pad"
+          autoFocus
+          returnKeyType="done"
+        />
+        {promptMode === 'redemption' ? (
+          <Text style={[bonusStyles.availableHint, { color: palette.text.tertiary }]}>
+            Доступно к списанию: {formatMoney(balance)}
+          </Text>
+        ) : null}
+        <Text style={[debtStyles.fieldLabel, { color: palette.text.secondary, marginTop: spacing[3] }]}>Причина</Text>
+        <TextInput
+          style={[
+            debtStyles.input,
+            { backgroundColor: palette.bg.muted, color: palette.text.primary, borderColor: palette.border.subtle },
+          ]}
+          value={reasonText}
+          onChangeText={setReasonText}
+          placeholder={promptMode === 'accrual' ? 'За что начисление' : 'За что списание'}
+          placeholderTextColor={palette.text.tertiary}
+          returnKeyType="done"
+        />
+        <TouchableOpacity
+          style={[
+            debtStyles.submitBtn,
+            { backgroundColor: promptMode === 'accrual' ? colors.green[600] : colors.orange[600] },
+            (!amountValid || !reasonValid || submitting) && debtStyles.submitBtnDisabled,
+          ]}
+          onPress={handleSubmit}
+          disabled={!amountValid || !reasonValid || submitting}
+          activeOpacity={0.85}
+        >
+          {submitting ? (
+            <ActivityIndicator size="small" color={colors.white} />
+          ) : (
+            <Text style={debtStyles.submitBtnText}>{promptMode === 'accrual' ? 'Начислить' : 'Списать'}</Text>
+          )}
+        </TouchableOpacity>
+      </Modal>
+    </>
+  );
+}
+
+const bonusStyles = StyleSheet.create({
+  totalsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: spacing[3.5],
+    paddingTop: spacing[3],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  totalItem: { flex: 1, alignItems: 'center' },
+  totalDivider: { width: StyleSheet.hairlineWidth, height: 30 },
+  totalLabel: { fontSize: 12, fontWeight: fontWeight.medium },
+  totalValue: { fontSize: 16, fontWeight: fontWeight.bold, letterSpacing: -0.2, marginTop: 3 },
+  disabledNote: { fontSize: 12, marginTop: spacing[3], lineHeight: 17 },
+  availableHint: { fontSize: 12, marginTop: spacing[1.5] },
 });
 
 const styles = StyleSheet.create({

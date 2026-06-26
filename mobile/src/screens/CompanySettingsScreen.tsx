@@ -15,16 +15,17 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { myCompanyApi } from '../api/services';
+import { myCompanyApi, loyaltyApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { Tenant } from '../../../shared/types';
+import type { Tenant, LoyaltySettings } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { haptic } from '../platform/haptics';
 
 interface CompanyForm {
   name: string;
@@ -329,9 +330,15 @@ export default function CompanySettingsScreen() {
             </AnimatedCard>
           )}
 
+          {/* Программа лояльности — owner-class. Self-contained card: owns its
+              own query + form + save (decoupled from the company «Сохранить»
+              flow above), so saving cashback config never touches tenant
+              fields and vice-versa. */}
+          {canManageShifts && <LoyaltySettingsSection index={3} />}
+
           {/* Save */}
           {dirty && (
-            <AnimatedCard index={3}>
+            <AnimatedCard index={4}>
               <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={mutation.isPending}>
                 {mutation.isPending ? (
                   <ActivityIndicator color={colors.white} size="small" />
@@ -349,6 +356,182 @@ export default function CompanySettingsScreen() {
     </View>
   );
 }
+
+// ── Программа лояльности (loyalty / cashback config) ───────────────────
+// Owner-class card. Reads GET /loyalty/settings (a default row is auto-created
+// server-side on first read) and PATCHes it. Kept self-contained — its own
+// query, draft state and save — so it never entangles with the tenant
+// «Сохранить настройки» flow. The percent fields stay editable even when the
+// programme is off (the config is retained), exactly like the backend keeps an
+// existing balance spendable after a disable.
+function LoyaltySettingsSection({ index }: { index: number }) {
+  const palette = useColors();
+  const queryClient = useQueryClient();
+
+  const { data: settings } = useQuery<LoyaltySettings>({
+    queryKey: ['loyalty', 'settings'],
+    queryFn: async () => (await loyaltyApi.getSettings()).data,
+  });
+
+  const [enabled, setEnabled] = useState(false);
+  // Stored as sanitised digit strings; clamped to 0..100 on save.
+  const [accrualText, setAccrualText] = useState('0');
+  const [redeemText, setRedeemText] = useState('0');
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setEnabled(settings.enabled);
+      setAccrualText(String(settings.accrualPercent ?? 0));
+      setRedeemText(String(settings.redeemMaxPercent ?? 0));
+      setDirty(false);
+    }
+  }, [settings]);
+
+  const mutation = useMutation({
+    mutationFn: (data: { enabled: boolean; accrualPercent: number; redeemMaxPercent: number }) =>
+      loyaltyApi.updateSettings(data),
+    onSuccess: (res) => {
+      // Write the fresh config straight into cache so any open client bonus
+      // card / cash flow reads the new percentages instantly.
+      queryClient.setQueryData(['loyalty', 'settings'], res.data);
+      queryClient.invalidateQueries({ queryKey: ['loyalty', 'settings'] });
+      haptic('success');
+      setDirty(false);
+      Alert.alert('Готово', 'Настройки лояльности сохранены');
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось сохранить');
+    },
+  });
+
+  const clampPercent = (t: string) => {
+    const n = Number(t.replace(/\D/g, ''));
+    if (!Number.isFinite(n)) return 0;
+    return Math.min(100, Math.max(0, n));
+  };
+  const accrualPercent = clampPercent(accrualText);
+  const redeemMaxPercent = clampPercent(redeemText);
+
+  const onPercentChange = (setter: (v: string) => void) => (v: string) => {
+    setter(v.replace(/\D/g, '').slice(0, 3));
+    setDirty(true);
+  };
+
+  const handleSave = () => {
+    if (mutation.isPending) return;
+    mutation.mutate({ enabled, accrualPercent, redeemMaxPercent });
+  };
+
+  const cardStyle = StyleSheet.flatten([
+    styles.card,
+    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+  ]);
+  const cardTitleStyle = StyleSheet.flatten([styles.cardTitle, { color: palette.text.primary }]);
+  const labelStyle = StyleSheet.flatten([styles.label, { color: palette.text.secondary }]);
+  const inputStyle = StyleSheet.flatten([
+    styles.input,
+    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+  ]);
+
+  return (
+    <AnimatedCard index={index}>
+      <View style={cardStyle}>
+        <View style={styles.cardHeader}>
+          <Ionicons name="gift-outline" size={16} color={palette.text.tertiary} />
+          <Text style={cardTitleStyle}>Программа лояльности</Text>
+        </View>
+
+        {/* Master switch. */}
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleTextWrap}>
+            <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>Бонусы клиентам</Text>
+            <Text style={[styles.toggleSub, { color: palette.text.secondary }]}>
+              Клиенты копят бонусы с чеков и оплачивают ими часть следующего заказа. Выключение не сжигает уже
+              накопленные бонусы — их по-прежнему можно потратить.
+            </Text>
+          </View>
+          <Switch
+            value={enabled}
+            onValueChange={(v) => {
+              setEnabled(v);
+              setDirty(true);
+            }}
+            trackColor={{ false: palette.border.subtle, true: palette.accent.primary }}
+            thumbColor={Platform.OS === 'android' ? colors.white : undefined}
+            ios_backgroundColor={palette.border.subtle}
+          />
+        </View>
+
+        {/* Percent fields — accrual (cashback) + max redeem share. */}
+        <View style={styles.rowFields}>
+          <View style={{ flex: 1 }}>
+            <Text style={labelStyle}>Кешбэк с чека, %</Text>
+            <TextInput
+              value={accrualText}
+              onChangeText={onPercentChange(setAccrualText)}
+              style={inputStyle}
+              placeholder="5"
+              placeholderTextColor={palette.text.tertiary}
+              keyboardType="number-pad"
+              maxLength={3}
+            />
+            <Text style={[styles.hint, { color: palette.text.tertiary }]}>
+              Сколько % от суммы чека вернётся клиенту бонусами
+            </Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={labelStyle}>Оплата бонусами, макс %</Text>
+            <TextInput
+              value={redeemText}
+              onChangeText={onPercentChange(setRedeemText)}
+              style={inputStyle}
+              placeholder="30"
+              placeholderTextColor={palette.text.tertiary}
+              keyboardType="number-pad"
+              maxLength={3}
+            />
+            <Text style={[styles.hint, { color: palette.text.tertiary }]}>
+              Какую долю чека разрешено оплатить бонусами
+            </Text>
+          </View>
+        </View>
+
+        {dirty && (
+          <TouchableOpacity
+            style={[loyaltyStyles.saveBtn, { backgroundColor: palette.accent.primary }]}
+            onPress={handleSave}
+            disabled={mutation.isPending}
+            activeOpacity={0.85}
+          >
+            {mutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <>
+                <Ionicons name="checkmark-circle-outline" size={17} color={colors.white} />
+                <Text style={loyaltyStyles.saveBtnText}>Сохранить лояльность</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        )}
+      </View>
+    </AnimatedCard>
+  );
+}
+
+const loyaltyStyles = StyleSheet.create({
+  saveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3],
+    marginTop: spacing[1],
+  },
+  saveBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.white },
+});
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },

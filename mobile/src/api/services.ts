@@ -41,6 +41,7 @@ import {
   createPermissionTemplatesApi,
   createCashShiftsApi,
   createDebtsApi,
+  createLoyaltyApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -97,6 +98,12 @@ export const cashShiftsApi = createCashShiftsApi(api);
 // tenant user. Every mutation returns the refreshed per-client summary so the
 // UI updates instantly (DebtorsScreen + ClientDetailScreen debt section).
 export const debtsApi = createDebtsApi(api);
+// Программа лояльности / бонусы / кешбэк — backend loyalty/ (migration 083).
+// settings PATCH + adjust owner-class gated server-side; accrue/redeem gated to
+// cashier roles; reads open to any tenant user. Every mutation returns the
+// refreshed per-client summary so the UI updates instantly (CompanySettings
+// loyalty section + ClientDetailScreen bonus section).
+export const loyaltyApi = createLoyaltyApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {
