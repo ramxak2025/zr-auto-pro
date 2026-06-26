@@ -11,5 +11,8 @@ import { AuthModule } from '../auth/auth.module';
   imports: [AuthModule],
   controllers: [TenantsController, AdminAuditController],
   providers: [TenantsService, AuditService],
+  // AuditService is exported so NotificationsModule can audit-log broadcast
+  // cancels through the SAME append-only admin_audit_log writer.
+  exports: [AuditService],
 })
 export class TenantsModule {}

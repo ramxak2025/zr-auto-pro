@@ -1,7 +1,8 @@
-import { Injectable, Inject, Logger } from '@nestjs/common';
+import { Injectable, Inject, Logger, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { PushService } from '../push/push.service';
+import { AuditService, AuditActor } from '../tenants/audit.service';
 import { CreateBroadcastDto } from './dto/notifications.dto';
 
 // Shape returned to clients — matches the shared `Broadcast` type
@@ -21,6 +22,21 @@ export interface Broadcast {
   createdAt: string;
 }
 
+// History row for the superadmin broadcast cabinet (GET /admin/broadcasts).
+// Matches the shared `BroadcastHistoryItem` type (shared/types/index.ts).
+// `cancelledAt` is the revoke marker (null = live); `seenCount` is how many
+// directors have acknowledged it.
+export interface BroadcastHistoryItem {
+  id: string;
+  title: string;
+  body: string;
+  imageUrl?: string;
+  buttons: BroadcastButton[];
+  createdAt: string;
+  cancelledAt: string | null;
+  seenCount: number;
+}
+
 /**
  * Notifications domain (066 + 067):
  *   * per-user mute preferences (opt-out model — a row == muted);
@@ -36,6 +52,7 @@ export class NotificationsService {
   constructor(
     @Inject(PG_POOL) private pool: Pool,
     private push: PushService,
+    private audit: AuditService,
   ) {}
 
   // ─── Preferences ───────────────────────────────────────────────────────────
@@ -78,12 +95,19 @@ export class NotificationsService {
 
   // ─── Broadcasts (read side) ──────────────────────────────────────────────────
 
-  /** Broadcasts this user has NOT yet seen, newest first, capped at 5. */
+  /**
+   * Broadcasts this user has NOT yet seen, newest first, capped at 5.
+   *
+   * `cancelled_at IS NULL` is filtered at SOURCE: cancelling a broadcast
+   * (DELETE /admin/broadcast/:id) makes it instantly disappear for EVERY
+   * director on their next foreground fetch — no per-user seen backfill.
+   */
   async listUnseenBroadcasts(userId: string): Promise<Broadcast[]> {
     const { rows } = await this.pool.query(
       `SELECT b.id, b.title, b.body, b.image_url, b.buttons, b.created_at
          FROM notification_broadcasts b
-        WHERE NOT EXISTS (
+        WHERE b.cancelled_at IS NULL
+          AND NOT EXISTS (
           SELECT 1 FROM notification_broadcast_seen s
            WHERE s.broadcast_id = b.id AND s.user_id = $1
         )
@@ -102,6 +126,55 @@ export class NotificationsService {
        ON CONFLICT (broadcast_id, user_id) DO NOTHING`,
       [broadcastId, userId],
     );
+    return { ok: true };
+  }
+
+  // ─── Broadcasts (admin history + revoke — superadmin) ────────────────────────
+
+  /**
+   * Full broadcast history for the superadmin cabinet, newest-first.
+   * `seenCount` = how many directors have acknowledged each broadcast.
+   * LEFT JOIN so a broadcast nobody has seen yet still reports seen_count = 0.
+   */
+  async listBroadcasts(): Promise<BroadcastHistoryItem[]> {
+    const { rows } = await this.pool.query(
+      `SELECT b.id, b.title, b.body, b.image_url, b.buttons, b.created_at, b.cancelled_at,
+              COUNT(s.broadcast_id)::int AS seen_count
+         FROM notification_broadcasts b
+         LEFT JOIN notification_broadcast_seen s ON s.broadcast_id = b.id
+        GROUP BY b.id
+        ORDER BY b.created_at DESC
+        LIMIT 100`,
+    );
+    return rows.map(mapBroadcastHistory);
+  }
+
+  /**
+   * Revoke a broadcast: stamp `cancelled_at` so it stops surfacing to every
+   * director at once (the unseen query filters `cancelled_at IS NULL`).
+   * Idempotent — COALESCE preserves the original cancel instant on re-cancel.
+   * Throws NotFound only when the id doesn't exist. Audit-logged as
+   * `broadcast_cancel` (best-effort, mirrors the tenants audit pattern).
+   */
+  async cancelBroadcast(id: string, actor: AuditActor): Promise<{ ok: true }> {
+    const { rows } = await this.pool.query(
+      `UPDATE notification_broadcasts
+          SET cancelled_at = COALESCE(cancelled_at, now())
+        WHERE id = $1
+        RETURNING id, title, cancelled_at`,
+      [id],
+    );
+    if (rows.length === 0) {
+      throw new NotFoundException('Broadcast not found');
+    }
+    const row = rows[0] as { id: string; title: string; cancelled_at: Date | string };
+    const cancelledAt = typeof row.cancelled_at === 'string' ? row.cancelled_at : row.cancelled_at.toISOString();
+    await this.audit.log(actor, 'broadcast_cancel', {
+      targetType: 'broadcast',
+      targetId: row.id,
+      targetName: row.title,
+      detail: { cancelledAt },
+    });
     return { ok: true };
   }
 
@@ -172,5 +245,33 @@ function mapBroadcast(row: {
     imageUrl: row.image_url ?? undefined,
     buttons,
     createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+  };
+}
+
+function mapBroadcastHistory(row: {
+  id: string;
+  title: string;
+  body: string;
+  image_url: string | null;
+  buttons: unknown;
+  created_at: Date | string;
+  cancelled_at: Date | string | null;
+  seen_count: number;
+}): BroadcastHistoryItem {
+  const buttons = Array.isArray(row.buttons) ? (row.buttons as BroadcastButton[]) : [];
+  return {
+    id: row.id,
+    title: row.title,
+    body: row.body,
+    imageUrl: row.image_url ?? undefined,
+    buttons,
+    createdAt: typeof row.created_at === 'string' ? row.created_at : row.created_at.toISOString(),
+    cancelledAt:
+      row.cancelled_at === null
+        ? null
+        : typeof row.cancelled_at === 'string'
+          ? row.cancelled_at
+          : row.cancelled_at.toISOString(),
+    seenCount: typeof row.seen_count === 'number' ? row.seen_count : Number(row.seen_count ?? 0),
   };
 }

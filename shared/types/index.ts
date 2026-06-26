@@ -101,6 +101,24 @@ export interface Broadcast {
   createdAt: string;
 }
 
+/**
+ * One row of superadmin broadcast history (GET /admin/broadcasts, newest-first,
+ * superadmin-only). `cancelledAt` is the revoke marker: `null` = live and still
+ * surfacing to directors; a timestamp means it was cancelled (DELETE
+ * /admin/broadcast/:id) and no longer reaches anyone. `seenCount` is how many
+ * directors have acknowledged it.
+ */
+export interface BroadcastHistoryItem {
+  id: string;
+  title: string;
+  body: string;
+  imageUrl?: string;
+  buttons: BroadcastButton[];
+  createdAt: string;
+  cancelledAt: string | null;
+  seenCount: number;
+}
+
 /** Data payload carried by the broadcast push (data.type === 'superadmin_broadcast'). */
 export interface BroadcastPayload {
   type: 'superadmin_broadcast';

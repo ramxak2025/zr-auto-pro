@@ -1,5 +1,6 @@
-import { Controller, Get, Post, Put, Body, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Put, Delete, Body, Param, UseGuards } from '@nestjs/common';
 import { NotificationsService } from './notifications.service';
+import { AuditService, AuditActor } from '../tenants/audit.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -45,18 +46,40 @@ export class NotificationsController {
 }
 
 /**
- * Superadmin-only broadcast authoring. Separate controller because the route
- * lives under `/admin`, not `/notifications`. Same global JwtAuthGuard; the
- * @Roles('superadmin') below is enforced by RolesGuard.
+ * Superadmin-only broadcast authoring, history and revoke. Separate controller
+ * because the route lives under `/admin`, not `/notifications`. Same global
+ * JwtAuthGuard; the @Roles('superadmin') below is enforced by RolesGuard.
  */
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('admin')
 export class AdminBroadcastController {
-  constructor(private notifications: NotificationsService) {}
+  constructor(
+    private notifications: NotificationsService,
+    private audit: AuditService,
+  ) {}
+
+  /** Build the audit actor for a superadmin action (name resolved best-effort). */
+  private async actor(user: JwtPayload): Promise<AuditActor> {
+    return { userId: user.userID, name: await this.audit.resolveActorName(user.userID) };
+  }
 
   @Roles('superadmin')
   @Post('broadcast')
   createBroadcast(@CurrentUser() user: JwtPayload, @Body() dto: CreateBroadcastDto) {
     return this.notifications.broadcast(user.userID, dto);
+  }
+
+  /** Full broadcast history, newest-first, with per-broadcast seen counts. */
+  @Roles('superadmin')
+  @Get('broadcasts')
+  listBroadcasts() {
+    return this.notifications.listBroadcasts();
+  }
+
+  /** Revoke a broadcast — it instantly stops surfacing to every director. */
+  @Roles('superadmin')
+  @Delete('broadcast/:id')
+  async cancelBroadcast(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.notifications.cancelBroadcast(id, await this.actor(user));
   }
 }

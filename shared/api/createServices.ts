@@ -98,6 +98,7 @@ import type {
   NotificationPreferences,
   NotificationCategory,
   Broadcast,
+  BroadcastHistoryItem,
   TenantMetrics,
   ImpersonateResponse,
   AuditLogEntry,
@@ -1090,6 +1091,12 @@ export function createNotificationsApi(api: HttpClient) {
 
     // Superadmin → director broadcast authoring.
     createBroadcast: (payload: CreateBroadcastRequest) => api.post<Broadcast>('/admin/broadcast', payload),
+
+    // Superadmin broadcast cabinet: history (newest-first, with seenCount) and
+    // revoke. cancelBroadcast stamps cancelled_at server-side, so the broadcast
+    // instantly stops surfacing to EVERY director on their next foreground fetch.
+    listBroadcasts: () => api.get<BroadcastHistoryItem[]>('/admin/broadcasts'),
+    cancelBroadcast: (id: string) => api.delete<{ ok: true }>(`/admin/broadcast/${id}`),
   };
 }
 
