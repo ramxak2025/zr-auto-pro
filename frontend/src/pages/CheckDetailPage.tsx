@@ -21,6 +21,7 @@ import {
   ShieldCheck,
   Pencil,
   Printer,
+  LayoutGrid,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -29,7 +30,8 @@ import { checksApi, myCompanyApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ConfirmDialog from '../components/ConfirmDialog';
-import type { Check, Tenant } from '../types';
+import { WorkStatusBadge, WorkStatusPicker } from '../components/WorkStatusPicker';
+import type { Check, CheckWorkStatus, Tenant } from '../types';
 import { generateReceiptPdf } from '../utils/generateReceiptPdf';
 import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -82,6 +84,19 @@ export default function CheckDetailPage() {
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.message ?? 'Ошибка при завершении чека');
+    },
+  });
+
+  const workStatusMutation = useMutation({
+    mutationFn: (workStatus: CheckWorkStatus) => checksApi.setWorkStatus(id!, workStatus),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['check', id] });
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      toast.success('Статус работы обновлён');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message ?? 'Не удалось изменить статус работы');
     },
   });
 
@@ -187,9 +202,50 @@ export default function CheckDetailPage() {
       {check.isDeferred && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4">
           <p className="text-sm font-semibold text-red-700">Чек отложен (черновик)</p>
-          <p className="text-xs text-red-500 mt-0.5">Не учитывается в статистике. Нажмите «Редактировать» чтобы дописать услуги или товары.</p>
+          <p className="text-xs text-red-500 mt-0.5">
+            Не учитывается в статистике. Нажмите «Редактировать» чтобы дописать услуги или товары.
+          </p>
         </div>
       )}
+
+      {/* Work-status (kanban board) — orthogonal to payment / deferred state */}
+      <div className="card card-body animate-fade-in-up" style={{ animationDelay: '0ms' }}>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-8 h-8 rounded-lg bg-primary-50 flex items-center justify-center flex-shrink-0">
+              <LayoutGrid className="w-4 h-4 text-primary-600" />
+            </div>
+            <div className="min-w-0">
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-base font-semibold text-gray-900">{'Статус работы'}</h2>
+                <WorkStatusBadge status={check.workStatus} />
+              </div>
+              <p className="text-xs text-gray-400 mt-0.5">{'Доска приёмки. Не влияет на оплату.'}</p>
+            </div>
+          </div>
+          {hasPermission('checks_edit') && (
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {check.workStatus ? (
+                <WorkStatusPicker
+                  value={check.workStatus}
+                  disabled={workStatusMutation.isPending}
+                  onChange={(status) => workStatusMutation.mutate(status)}
+                />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => workStatusMutation.mutate('accepted')}
+                  disabled={workStatusMutation.isPending}
+                  className="flex items-center gap-2 rounded-xl bg-primary-50 px-4 py-2.5 text-sm font-semibold text-primary-600 hover:bg-primary-100 transition-colors disabled:opacity-50"
+                >
+                  <LayoutGrid className="w-4 h-4" />
+                  {'Поставить на доску'}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
 
       {/* Info cards - Client, Car, Master, Mileage */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
@@ -210,9 +266,7 @@ export default function CheckDetailPage() {
               <ChevronRight className="w-4 h-4 text-gray-300 group-hover:text-primary-400 transition-colors" />
             </div>
             <p className="text-sm font-semibold text-gray-900 truncate">{check.client?.fullName ?? '—'}</p>
-            {check.client?.phone && (
-              <p className="text-xs text-gray-400 mt-0.5">{formatPhone(check.client.phone)}</p>
-            )}
+            {check.client?.phone && <p className="text-xs text-gray-400 mt-0.5">{formatPhone(check.client.phone)}</p>}
           </Link>
         ) : (
           <div className="stat-card animate-fade-in-up" style={{ animationDelay: '0ms' }}>
@@ -234,7 +288,9 @@ export default function CheckDetailPage() {
               check.clientId ? 'hover:border-primary-200 hover:shadow-md' : ''
             }`}
             style={{ animationDelay: '80ms' }}
-            onClick={(e) => { if (!check.clientId) e.preventDefault(); }}
+            onClick={(e) => {
+              if (!check.clientId) e.preventDefault();
+            }}
           >
             <div className="flex items-center justify-between mb-1.5">
               <div className="flex items-center gap-2">
@@ -248,9 +304,7 @@ export default function CheckDetailPage() {
               )}
             </div>
             <p className="text-sm font-semibold text-gray-900 truncate">{check.car.makeModel}</p>
-            {check.car.plateNumber && (
-              <p className="text-xs text-gray-400 mt-0.5">{check.car.plateNumber}</p>
-            )}
+            {check.car.plateNumber && <p className="text-xs text-gray-400 mt-0.5">{check.car.plateNumber}</p>}
           </Link>
         ) : (
           <div className="stat-card animate-fade-in-up" style={{ animationDelay: '80ms' }}>
@@ -300,11 +354,15 @@ export default function CheckDetailPage() {
             <div className="flex items-center gap-2">
               <Wrench className="w-4 h-4 text-gray-400" />
               <h2 className="text-base font-semibold text-gray-900">{'Услуги'}</h2>
-              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{check.services.length}</span>
+              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                {check.services.length}
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-gray-700">{formatMoney(check.serviceTotal)}</span>
-              <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${servicesOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown
+                className={`w-4 h-4 text-gray-400 transition-transform ${servicesOpen ? 'rotate-180' : ''}`}
+              />
             </div>
           </button>
           {servicesOpen && (
@@ -316,14 +374,14 @@ export default function CheckDetailPage() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-gray-900">{svc.name}</p>
-                        {svc.master?.fullName && (
-                          <p className="text-xs text-gray-400 mt-0.5">{svc.master.fullName}</p>
-                        )}
+                        {svc.master?.fullName && <p className="text-xs text-gray-400 mt-0.5">{svc.master.fullName}</p>}
                       </div>
                       <div className="text-right flex-shrink-0">
                         <p className="text-sm font-semibold text-gray-900">{formatMoney(svc.total)}</p>
                         {svc.quantity > 1 && (
-                          <p className="text-xs text-gray-400">{svc.quantity} x {formatMoney(svc.price)}</p>
+                          <p className="text-xs text-gray-400">
+                            {svc.quantity} x {formatMoney(svc.price)}
+                          </p>
                         )}
                       </div>
                     </div>
@@ -373,11 +431,15 @@ export default function CheckDetailPage() {
             <div className="flex items-center gap-2">
               <Package className="w-4 h-4 text-gray-400" />
               <h2 className="text-base font-semibold text-gray-900">{'Товары'}</h2>
-              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">{check.products.length}</span>
+              <span className="text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
+                {check.products.length}
+              </span>
             </div>
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-gray-700">{formatMoney(check.productTotal)}</span>
-              <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${productsOpen ? 'rotate-180' : ''}`} />
+              <ChevronDown
+                className={`w-4 h-4 text-gray-400 transition-transform ${productsOpen ? 'rotate-180' : ''}`}
+              />
             </div>
           </button>
           {productsOpen && (
@@ -390,7 +452,9 @@ export default function CheckDetailPage() {
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-gray-900">{prod.name}</p>
                         {prod.quantity > 1 && (
-                          <p className="text-xs text-gray-400 mt-0.5">{prod.quantity} x {formatMoney(prod.sellPrice)}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">
+                            {prod.quantity} x {formatMoney(prod.sellPrice)}
+                          </p>
                         )}
                       </div>
                       <p className="text-sm font-semibold text-gray-900 flex-shrink-0">{formatMoney(prod.totalSell)}</p>
@@ -435,7 +499,9 @@ export default function CheckDetailPage() {
             <div className="flex items-center gap-2">
               <ShieldCheck className="w-4 h-4 text-amber-600" />
               <h2 className="text-base font-semibold text-amber-900">Гарантия выдана</h2>
-              <span className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">{check.warrantyClaims.length}</span>
+              <span className="text-xs text-amber-700 bg-amber-100 px-2 py-0.5 rounded-full">
+                {check.warrantyClaims.length}
+              </span>
             </div>
           </div>
           <div className="divide-y divide-gray-50">
@@ -448,9 +514,11 @@ export default function CheckDetailPage() {
                 <div key={claim.id} className="px-4 py-3 sm:px-5 flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
-                        claim.kind === 'product' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
-                      }`}>
+                      <span
+                        className={`text-[10px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
+                          claim.kind === 'product' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
+                        }`}
+                      >
                         {claim.kind === 'product' ? 'Товар' : 'Услуга'}
                       </span>
                       <p className="text-sm font-medium text-gray-900 truncate">{claim.itemName || '—'}</p>
@@ -459,9 +527,7 @@ export default function CheckDetailPage() {
                       <Clock className="w-3 h-3 text-gray-400" />
                       <span className="text-xs text-gray-500">{claim.warrantyDays} дн.</span>
                       <span className="text-gray-300 text-xs">·</span>
-                      <span className="text-xs text-gray-500">
-                        до {format(expires, 'd MMM yyyy', { locale: ru })}
-                      </span>
+                      <span className="text-xs text-gray-500">до {format(expires, 'd MMM yyyy', { locale: ru })}</span>
                     </div>
                   </div>
                   <div className="flex-shrink-0 self-center">
@@ -529,7 +595,8 @@ export default function CheckDetailPage() {
                     <span className="text-sm font-bold text-gray-700">{'Чистая прибыль'}</span>
                   </div>
                   <span className={`text-base font-bold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                    {check.profit >= 0 ? '+' : ''}{formatMoney(check.profit)}
+                    {check.profit >= 0 ? '+' : ''}
+                    {formatMoney(check.profit)}
                   </span>
                 </div>
               </div>
@@ -540,9 +607,13 @@ export default function CheckDetailPage() {
         {/* Payment method card */}
         <div className="card card-body animate-fade-in-up" style={{ animationDelay: '560ms' }}>
           <h2 className="text-base font-semibold text-gray-900 mb-4">{'Оплата'}</h2>
-          <div className={`inline-flex items-center gap-2.5 rounded-xl px-4 py-3 ${paymentMethodColors[check.paymentMethod] ?? 'text-gray-600 bg-gray-100'}`}>
+          <div
+            className={`inline-flex items-center gap-2.5 rounded-xl px-4 py-3 ${paymentMethodColors[check.paymentMethod] ?? 'text-gray-600 bg-gray-100'}`}
+          >
             <PaymentIcon className="w-5 h-5" />
-            <span className="text-sm font-semibold">{paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}</span>
+            <span className="text-sm font-semibold">
+              {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
+            </span>
           </div>
           {check.paymentMethod === 'cash_card' && (check.cashAmount > 0 || check.cardAmount > 0) && (
             <div className="mt-4 space-y-2.5">
@@ -570,7 +641,9 @@ export default function CheckDetailPage() {
                 <MessageSquare className="w-4 h-4 text-amber-400" />
                 <span className="text-sm font-medium text-gray-700">{'Комментарий'}</span>
               </div>
-              <p className="text-sm text-amber-700 whitespace-pre-wrap bg-amber-50 rounded-lg p-3 border border-amber-100">{check.comment}</p>
+              <p className="text-sm text-amber-700 whitespace-pre-wrap bg-amber-50 rounded-lg p-3 border border-amber-100">
+                {check.comment}
+              </p>
             </div>
           )}
         </div>

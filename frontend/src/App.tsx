@@ -49,6 +49,7 @@ const LoginPage = lazyWithRetry(() => import('./pages/LoginPage'));
 const SubscriptionBlockedPage = lazyWithRetry(() => import('./pages/SubscriptionBlockedPage'));
 const DashboardPage = lazyWithRetry(() => import('./pages/DashboardPage'));
 const ChecksPage = lazyWithRetry(() => import('./pages/ChecksPage'));
+const WorkBoardPage = lazyWithRetry(() => import('./pages/WorkBoardPage'));
 const CheckCreatePage = lazyWithRetry(() => import('./pages/CheckCreatePage'));
 const CheckDetailPage = lazyWithRetry(() => import('./pages/CheckDetailPage'));
 const ClientsPage = lazyWithRetry(() => import('./pages/ClientsPage'));
@@ -208,6 +209,7 @@ export default function App() {
                     />
                     <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/checks" element={<ChecksPage />} />
+                    <Route path="/work-board" element={<WorkBoardPage />} />
                     <Route path="/checks/new" element={<CheckCreatePage />} />
                     <Route path="/checks/:id/edit" element={<CheckCreatePage />} />
                     <Route path="/checks/:id" element={<CheckDetailPage />} />

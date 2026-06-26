@@ -23,6 +23,7 @@ import {
   GraduationCap,
   ClipboardList,
   Coins,
+  LayoutGrid,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { subscriptionApi } from '../api/services';
@@ -44,6 +45,7 @@ const navItems: NavItem[] = [
   { label: 'Главная', path: '/dashboard', icon: LayoutDashboard },
   { label: 'Клиенты', path: '/clients', icon: Users, permission: 'clients_view', featureKey: 'clients_view' },
   { label: 'Касса', path: '/checks', icon: Receipt, permission: 'checks_view' },
+  { label: 'Доска работ', path: '/work-board', icon: LayoutGrid, permission: 'checks_view' },
   { label: 'Склад', path: '/products', icon: Package, permission: 'warehouse_access' },
   { label: 'Услуги', path: '/services', icon: Wrench, featureKey: 'services_view' },
   {
@@ -82,6 +84,7 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
     icon: MoreHorizontal,
     matchPaths: [
       '/more',
+      '/work-board',
       '/clients',
       '/services',
       '/suppliers',
