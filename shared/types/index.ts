@@ -599,6 +599,13 @@ export enum PaymentMethod {
   CASH_CARD = 'cash_card',
 }
 
+/**
+ * Канбан-статус заказ-наряда (board 082): приёмка → в работе → готов → выдан.
+ * ORTHOGONAL to payment state — purely a board-tracking flag. NULL/undefined =
+ * not tracked on the board (e.g. all historical checks).
+ */
+export type CheckWorkStatus = 'accepted' | 'in_progress' | 'ready' | 'delivered';
+
 export interface Check {
   id: string;
   number: number;
@@ -633,7 +640,23 @@ export interface Check {
   returnedAt?: string | null;
   returnDestination?: 'warehouse' | 'defect' | null;
   returnScope?: 'full' | 'partial' | null;
+  /**
+   * Канбан work-status (082). NULL = не на доске. Additive & orthogonal to
+   * payment — existing consumers safely ignore it.
+   */
+  workStatus?: CheckWorkStatus | null;
   createdAt: string;
+}
+
+/**
+ * Kanban board response from GET /checks/board (082). Each column is a list of
+ * checks with that work_status, newest-first, capped server-side (≈100/column).
+ */
+export interface ChecksBoard {
+  accepted: Check[];
+  in_progress: Check[];
+  ready: Check[];
+  delivered: Check[];
 }
 
 // ───────────────────────────────────────────────────────────────────────

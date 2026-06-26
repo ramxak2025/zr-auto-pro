@@ -31,6 +31,13 @@ interface ChecksActor {
 const TENANT_OWNED_TABLES = new Set(['users', 'clients', 'cars', 'services', 'products']);
 
 /**
+ * Allowed kanban work-statuses for a заказ-наряд (migration 082). Orthogonal to
+ * payment state — purely a board-tracking flag. Order is the board column order.
+ */
+const WORK_STATUSES = ['accepted', 'in_progress', 'ready', 'delivered'] as const;
+type WorkStatus = (typeof WORK_STATUSES)[number];
+
+/**
  * Opaque keyset cursor for the checks journal: base64url of `<date>|<id>`.
  * `date` is the row's ISO timestamp, `id` its UUID — together they form the
  * (date DESC, id DESC) keyset. Opaque on purpose so the FE just round-trips
@@ -255,6 +262,10 @@ export class ChecksService {
       returnedAt: row.returned_at ?? null,
       returnDestination: row.return_destination ?? null,
       returnScope: row.return_scope ?? null,
+      // 082: kanban work-status (приёмка/в работе/готов/выдан). Purely a
+      // tracking flag — orthogonal to payment/cash/stock. NULL on historical
+      // rows (not tracked on the board). Additive; existing consumers ignore it.
+      workStatus: row.work_status ?? null,
       createdAt: row.created_at,
     };
   }
@@ -485,6 +496,98 @@ export class ChecksService {
     ch.warrantyClaims = await this.warranty.listForCheck(tenantID, id);
 
     return ch;
+  }
+
+  /**
+   * Set the kanban work-status of a check (082). PURELY a tracking flag —
+   * touches NOTHING financial: no revenue, payment, stock, salary, warranty or
+   * return state is read or written here. Just validates the value is one of the
+   * four allowed and writes the single `work_status` column, tenant-scoped.
+   *
+   * Returns the full updated check (same shape as getById) so the FE can update
+   * its detail/board cache in place.
+   */
+  async setWorkStatus(id: string, tenantID: string, workStatus: unknown): Promise<any> {
+    if (typeof workStatus !== 'string' || !WORK_STATUSES.includes(workStatus as WorkStatus)) {
+      throw new BadRequestException({
+        message: `Недопустимый статус. Ожидается одно из: ${WORK_STATUSES.join(', ')}`,
+      });
+    }
+    // Tenant-scoped single-column update. RETURNING id only confirms the row
+    // exists in this tenant; the full payload is re-read via getById below.
+    const { rows } = await this.pool.query(
+      `UPDATE checks SET work_status=$1 WHERE id=$2 AND tenant_id=$3 RETURNING id`,
+      [workStatus, id, tenantID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+    // No report-cache invalidation / cash-changed push: the board flag does not
+    // move money, so the financial caches stay valid.
+    return this.getById(id, tenantID);
+  }
+
+  /**
+   * Kanban board of заказ-наряды that carry a work_status (082). Only rows where
+   * work_status IS NOT NULL appear (historical untracked checks are excluded).
+   * Tenant-scoped; respects the SAME checks_view_all visibility rule as the
+   * journal (a master without it sees only their own checks). Each column is
+   * newest-first and capped at `perColumn` (default 100) via a window function
+   * so one busy column can't return an unbounded set.
+   *
+   * Returns { accepted, in_progress, ready, delivered } — each a Check[] carrying
+   * the same client/car/master denormalised fields as the journal list rows.
+   */
+  async getBoard(tenantID: string, actor?: ChecksActor, perColumn = 100): Promise<Record<WorkStatus, any[]>> {
+    let where = 'ch.tenant_id = $1 AND ch.work_status IS NOT NULL';
+    const params: any[] = [tenantID];
+    let idx = 2;
+
+    // Same narrowing as getAll: a master without checks_view_all sees only their
+    // own checks. Never widens visibility, never touches tenant scope.
+    if (actor && actor.role === 'master' && !userHasPermission(actor, 'checks_view_all')) {
+      where += ` AND ch.master_id = $${idx++}`;
+      params.push(actor.userID);
+    }
+
+    params.push(perColumn);
+    const { rows } = await this.pool.query(
+      `SELECT * FROM (
+         SELECT ch.*,
+                m.full_name as master_name, m.avatar as master_avatar,
+                cl.full_name as client_name, cl.phone as client_phone,
+                ca.plate_number, ca.make_model,
+                ROW_NUMBER() OVER (PARTITION BY ch.work_status ORDER BY ch.date DESC, ch.id DESC) AS rn
+         FROM checks ch
+         LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
+         LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+         LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
+         WHERE ${where}
+       ) sub
+       WHERE sub.rn <= $${idx}
+       ORDER BY sub.date DESC, sub.id DESC`,
+      params,
+    );
+
+    const board: Record<WorkStatus, any[]> = {
+      accepted: [],
+      in_progress: [],
+      ready: [],
+      delivered: [],
+    };
+    for (const row of rows) {
+      const ch: any = this.mapCheck(row);
+      if (row.master_id) {
+        ch.master = { id: row.master_id, fullName: row.master_name, avatar: row.master_avatar };
+      }
+      if (row.client_id) {
+        ch.client = { id: row.client_id, fullName: row.client_name, phone: row.client_phone };
+      }
+      if (row.car_id) {
+        ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
+      }
+      const col = ch.workStatus as WorkStatus;
+      if (col in board) board[col].push(ch);
+    }
+    return board;
   }
 
   async create(tenantID: string, userID: string, userRole: string, dto: any) {

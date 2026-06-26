@@ -30,6 +30,8 @@ import type {
   ProductPriceHistoryEntry,
   Service,
   Check,
+  CheckWorkStatus,
+  ChecksBoard,
   Supplier,
   Delivery,
   SupplierPayment,
@@ -421,6 +423,18 @@ export function createChecksApi(api: HttpClient) {
     create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),
     update: (id: string, data: UpdateCheckRequest) => api.patch<Check>(`/checks/${id}`, data),
     remove: (id: string) => api.delete(`/checks/${id}`),
+    /**
+     * Kanban board (082): active заказ-наряды grouped by work_status, tenant
+     * scoped, newest-first per column. Additive — does not affect any other
+     * checks call.
+     */
+    board: () => api.get<ChecksBoard>('/checks/board'),
+    /**
+     * Move a check along the kanban board (082). Orthogonal to payment — sets
+     * only the work_status flag; returns the full updated check. Additive.
+     */
+    setWorkStatus: (id: string, workStatus: CheckWorkStatus) =>
+      api.patch<Check>(`/checks/${id}/work-status`, { workStatus }),
   };
 }
 

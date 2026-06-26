@@ -42,9 +42,31 @@ export class ChecksController {
     return this.checksService.getLastVisit(user.tenantID, { clientId, carId });
   }
 
+  /**
+   * Kanban board (082): заказ-наряды grouped by work_status, tenant-scoped.
+   * Declared BEFORE `:id` so the literal path isn't swallowed by the param route.
+   * Returns { accepted, in_progress, ready, delivered }, each newest-first.
+   */
+  @Roles('director', 'admin', 'master', 'superadmin')
+  @Get('board')
+  getBoard(@CurrentUser() user: JwtPayload) {
+    return this.checksService.getBoard(user.tenantID, user);
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.checksService.getById(id, user.tenantID);
+  }
+
+  /**
+   * Set the kanban work-status (082). Additive, orthogonal to payment — masters
+   * move their own work along the board, owner-class roles move anything. Path
+   * has two segments so it never collides with `@Patch(':id')`.
+   */
+  @Roles('director', 'admin', 'master', 'superadmin')
+  @Patch(':id/work-status')
+  setWorkStatus(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { workStatus?: string }) {
+    return this.checksService.setWorkStatus(id, user.tenantID, dto?.workStatus);
   }
 
   @Post()
