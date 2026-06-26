@@ -207,6 +207,81 @@ export class StockMovementsService {
     }
   }
 
+  /**
+   * Transaction-aware income — increments product stock and writes the EXACT same
+   * `income` stock_movement a manual receiving produces, but runs on a
+   * CALLER-OWNED PoolClient/transaction instead of opening its own.
+   *
+   * This is the reuse seam for Purchase-Order receiving: the PO status flip and
+   * every per-item stock income must commit (or roll back) together, which is
+   * impossible through the public `create()` — that method BEGIN/COMMITs
+   * internally and would commit the income before the PO row is even touched.
+   *
+   * The stock math is NOT forked: it delegates to the very same private
+   * `applySingleWarehouse` helper that `create({ type: 'income' })` uses, so
+   * cost/stock behave identically to manual receiving (income adjusts stock
+   * only, never cost_price). The optional `supplierId` is linked onto the
+   * resulting movement row (stock_movements.supplier_id) so the journal can
+   * attribute the receipt to its supplier.
+   *
+   * Caller MUST already have an open transaction on `client`. This method never
+   * issues BEGIN / COMMIT / ROLLBACK itself.
+   */
+  async applyIncomeTx(
+    client: PoolClient,
+    tenantID: string,
+    userID: string | null,
+    params: {
+      productId: string;
+      quantity: number;
+      purchasePrice?: number;
+      warehouseId?: string;
+      supplierId?: string;
+      reason?: string;
+    },
+  ): Promise<{ id: string; stockAfter: number; warehouseId: string }> {
+    if (!params?.productId) {
+      throw new BadRequestException({ message: 'Товар обязателен' });
+    }
+    const qty = parseFloat(String(params.quantity));
+    if (!isFinite(qty) || qty <= 0) {
+      throw new BadRequestException({ message: 'Количество должно быть положительным' });
+    }
+
+    const product = await this.assertProductInTenant(client, params.productId, tenantID);
+    const purchasePrice =
+      params.purchasePrice !== undefined && params.purchasePrice !== null
+        ? parseFloat(String(params.purchasePrice))
+        : parseFloat(String(product.cost_price)) || 0;
+
+    // Record the movement on the product's own warehouse by default (mirrors the
+    // /products/:id/stock manual income path); `applySingleWarehouse` falls back
+    // to the tenant's "main" warehouse when this is undefined.
+    const warehouseId = params.warehouseId ?? product.warehouse_id ?? undefined;
+
+    const result = await this.applySingleWarehouse(
+      client,
+      tenantID,
+      userID,
+      { type: 'income', productId: params.productId, quantity: qty, warehouseId, reason: params.reason },
+      qty,
+      purchasePrice,
+    );
+
+    // Link the income movement to its supplier (the income INSERT in
+    // applySingleWarehouse intentionally has no supplier column in its param
+    // list; we attach it here without forking the stock math).
+    if (params.supplierId) {
+      await client.query('UPDATE stock_movements SET supplier_id=$1 WHERE id=$2 AND tenant_id=$3', [
+        params.supplierId,
+        result.id,
+        tenantID,
+      ]);
+    }
+
+    return { id: result.id, stockAfter: result.stockAfter, warehouseId: result.warehouseId };
+  }
+
   // ── inventory / income / expense ────────────────────────────────────────
   // `_purchasePrice` is accepted to match the signature of the other apply*
   // helpers (so the switch-case in `create()` stays clean) but the

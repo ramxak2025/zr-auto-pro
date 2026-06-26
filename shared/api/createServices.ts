@@ -116,6 +116,9 @@ import type {
   LoyaltySettings,
   ClientBonusSummary,
   BonusType,
+  PurchaseOrder,
+  PurchaseOrderStatus,
+  PurchaseOrderSuggestionGroup,
 } from '../types';
 import type {
   LoginRequest,
@@ -1255,5 +1258,56 @@ export function createLoyaltyApi(api: HttpClient) {
     /** Owner-class manual correction (accrual/redemption with a required reason). */
     adjust: (data: { clientId: string; amount: number; type: BonusType; reason: string }) =>
       api.post<ClientBonusSummary>('/loyalty/adjust', data),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Заказы поставщикам + приёмка (purchase orders + receiving).
+//  Backend: purchase-orders/ (migration 084). Reads (list / detail /
+//  suggestions) are open to any tenant user; every mutation is owner-class
+//  (director / admin / superadmin) server-side.
+//
+//  Receiving credits stock through the SAME `income` stock-movement path manual
+//  receiving uses, transactionally (PO status + stock both succeed or both
+//  fail). create / update / order / receive / cancel all return the refreshed
+//  full order (header + items) so the UI updates instantly.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createPurchaseOrdersApi(api: HttpClient) {
+  return {
+    /** Paginated list, newest-first. Filter by status and/or supplier. */
+    list: (params?: { status?: PurchaseOrderStatus; supplierId?: string; page?: number; limit?: number }) =>
+      api.get<PaginatedResponse<PurchaseOrder>>('/purchase-orders', { params }),
+    /** Full order: header + items. */
+    getById: (id: string) => api.get<PurchaseOrder>(`/purchase-orders/${id}`),
+    /** Create a draft order (computes total). */
+    create: (data: {
+      supplierId: string;
+      note?: string;
+      items: Array<{ productId: string; quantity: number; costPrice: number }>;
+    }) => api.post<PurchaseOrder>('/purchase-orders', data),
+    /** Edit a draft (items replace the whole set; total recomputed). */
+    update: (
+      id: string,
+      data: {
+        supplierId?: string;
+        note?: string | null;
+        items?: Array<{ productId: string; quantity: number; costPrice: number }>;
+      },
+    ) => api.patch<PurchaseOrder>(`/purchase-orders/${id}`, data),
+    /** draft → ordered. */
+    order: (id: string) => api.post<PurchaseOrder>(`/purchase-orders/${id}/order`, {}),
+    /**
+     * Receive (full or partial). Omit `items` to receive the full outstanding
+     * quantity of every line; pass `items` to receive deltas on specific lines.
+     * Each receipt credits stock via the income path. Fully received ⇒ status
+     * 'received'; partial ⇒ stays 'ordered'.
+     */
+    receive: (id: string, data?: { items?: Array<{ itemId: string; receivedQuantity: number }> }) =>
+      api.post<PurchaseOrder>(`/purchase-orders/${id}/receive`, data ?? {}),
+    /** Cancel (only if not yet received). */
+    cancel: (id: string) => api.post<PurchaseOrder>(`/purchase-orders/${id}/cancel`, {}),
+    /** Low-stock products grouped by preferred supplier — prefill a new order. */
+    suggestions: () => api.get<PurchaseOrderSuggestionGroup[]>('/purchase-orders/suggestions'),
   };
 }

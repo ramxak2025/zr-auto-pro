@@ -964,6 +964,79 @@ export interface SupplierPayment {
   comment?: string;
 }
 
+// ───────────────────────────────────────────────────────────────────────
+//  Заказы поставщикам + приёмка (purchase orders + receiving).
+//  Backend: purchase-orders/ (migration 084). Lifecycle:
+//    draft → ordered → received   (or → cancelled while not yet received).
+//  Receiving credits product stock through the SAME `income` stock-movement
+//  path manual receiving uses (transactional: PO status + every stock income
+//  commit or roll back together). ADDITIVE — does NOT touch any existing write
+//  path; it only calls the income service.
+// ───────────────────────────────────────────────────────────────────────
+
+export type PurchaseOrderStatus = 'draft' | 'ordered' | 'received' | 'cancelled';
+
+/** One line on a purchase order. `name` + `costPrice` are snapshots at create time. */
+export interface PurchaseOrderItem {
+  id: string;
+  purchaseOrderId: string;
+  productId: string;
+  /** Product name snapshot (survives later renames). */
+  name: string;
+  /** Ordered quantity. */
+  quantity: number;
+  /** Per-unit purchase price. */
+  costPrice: number;
+  /** How much has been received so far (partial receipts accumulate here). */
+  receivedQuantity: number;
+  /** quantity * costPrice (server-computed convenience). */
+  total: number;
+}
+
+/**
+ * A purchase order header. `items` is present on detail / mutation responses;
+ * list responses omit it and expose `itemCount` instead.
+ */
+export interface PurchaseOrder {
+  id: string;
+  supplierId: string;
+  supplierName?: string | null;
+  status: PurchaseOrderStatus;
+  note?: string | null;
+  /** Σ(quantity * costPrice) over the items. */
+  total: number;
+  /** Line count — present on list responses (items omitted there). */
+  itemCount?: number;
+  createdBy?: string | null;
+  createdByName?: string | null;
+  /** Set when the order leaves `draft` (or backfilled on first receive). */
+  orderedAt?: string | null;
+  /** Set only when the order is fully received. */
+  receivedAt?: string | null;
+  createdAt: string;
+  /** Present on detail / mutation responses; omitted on list. */
+  items?: PurchaseOrderItem[];
+}
+
+/** One row in the reorder-suggestions response, scoped to a preferred supplier. */
+export interface PurchaseOrderSuggestionItem {
+  productId: string;
+  name: string;
+  stock: number;
+  minStock: number;
+  costPrice: number;
+  /** Hint quantity to reorder (restore at least to min stock); UI may override. */
+  suggestedQuantity: number;
+}
+
+/** GET /purchase-orders/suggestions → low-stock products grouped by preferred supplier. */
+export interface PurchaseOrderSuggestionGroup {
+  /** null = products without a preferred supplier. */
+  supplierId: string | null;
+  supplierName: string | null;
+  items: PurchaseOrderSuggestionItem[];
+}
+
 export type StockMovementType =
   | 'income'
   | 'expense'

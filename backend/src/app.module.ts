@@ -42,6 +42,7 @@ import { PermissionTemplatesModule } from './permission-templates/permission-tem
 import { CashShiftsModule } from './cash-shifts/cash-shifts.module';
 import { DebtsModule } from './debts/debts.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
+import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 
 @Module({
   imports: [
@@ -87,6 +88,7 @@ import { LoyaltyModule } from './loyalty/loyalty.module';
     CashShiftsModule,
     DebtsModule,
     LoyaltyModule,
+    PurchaseOrdersModule,
   ],
   providers: [MigrationRunner],
 })
