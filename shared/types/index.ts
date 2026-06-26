@@ -860,6 +860,66 @@ export interface Debtor {
   balance: number;
 }
 
+// ───────────────────────────────────────────────────────────────────────
+//  Программа лояльности / бонусы / кешбэк (loyalty / bonus / cashback).
+//  Backend: loyalty/ (migration 083). Per-tenant config + single-sided bonus
+//  ledger per client. accrual = bonus credited, redemption = bonus spent.
+//  balance = Σaccrual − Σredemption (never negative — a redemption that would
+//  overdraw is rejected 400). ADDITIVE — does NOT touch the checks write path;
+//  the cash UI calls accrue/redeem explicitly. Apple Wallet is a later task.
+// ───────────────────────────────────────────────────────────────────────
+
+export type BonusType = 'accrual' | 'redemption';
+
+/** Per-tenant loyalty config. Returned by GET/PATCH /loyalty/settings. */
+export interface LoyaltySettings {
+  /** Master switch. While false: no accrual (422); existing balance still spendable. */
+  enabled: boolean;
+  /** % of a check total credited as bonus on accrual (0..100). */
+  accrualPercent: number;
+  /** Max % of a single check payable with bonus on redemption (0..100). */
+  redeemMaxPercent: number;
+  updatedAt?: string | null;
+}
+
+/** One movement in a client's bonus ledger. */
+export interface BonusEntry {
+  id: string;
+  tenantId: string;
+  clientId: string;
+  /** Positive money amount of this single movement; direction is in `type`. */
+  amount: number;
+  /** 'accrual' = бонус начислен, 'redemption' = бонус списан. */
+  type: BonusType;
+  reason?: string | null;
+  /** Soft link to the originating check, if any (nulled if that check is deleted). */
+  checkId?: string | null;
+  /** Denormalised from the checks join — present when checkId links to a check. */
+  checkNumber?: string | null;
+  createdBy?: string | null;
+  /** Denormalised from the users join. */
+  createdByName?: string | null;
+  createdAt: string;
+}
+
+/**
+ * Per-client bonus summary. Returned by GET /loyalty/client/:clientId and by the
+ * accrue / redeem / adjust mutations (so the UI updates instantly).
+ *
+ *   balance = Σaccrual − Σredemption  (never negative)
+ */
+export interface ClientBonusSummary {
+  clientId: string;
+  clientName?: string | null;
+  clientPhone?: string | null;
+  /** Mirrors loyalty_settings.enabled so the UI can show/hide accrue/redeem. */
+  enabled: boolean;
+  balance: number;
+  totalAccrued: number;
+  totalRedeemed: number;
+  ledger: BonusEntry[];
+}
+
 export interface Supplier {
   id: string;
   name: string;

@@ -113,6 +113,9 @@ import type {
   CashShiftReport,
   ClientDebtSummary,
   Debtor,
+  LoyaltySettings,
+  ClientBonusSummary,
+  BonusType,
 } from '../types';
 import type {
   LoginRequest,
@@ -1217,5 +1220,40 @@ export function createDebtsApi(api: HttpClient) {
     debtors: () => api.get<Debtor[]>('/debts/debtors'),
     /** Delete one ledger entry (admin correction). Returns the refreshed summary. */
     remove: (id: string) => api.delete<ClientDebtSummary>(`/debts/${id}`),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Программа лояльности / бонусы / кешбэк (loyalty / bonus / cashback).
+//  Backend: loyalty/ (migration 083). settings PATCH + adjust are owner-class
+//  gated server-side; accrue/redeem are gated to cashier-capable roles; reads
+//  (settings, per-client summary) are open to any tenant user. Every mutation
+//  returns the refreshed per-client summary so the UI updates instantly.
+//
+//  ADDITIVE: this does NOT modify the checks create/update write path — the cash
+//  UI calls accrue/redeem explicitly at/after a sale. Apple Wallet is separate.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createLoyaltyApi(api: HttpClient) {
+  return {
+    /** Per-tenant loyalty config (default row auto-created on first read). */
+    getSettings: () => api.get<LoyaltySettings>('/loyalty/settings'),
+    /** Owner-class partial update of the loyalty config. */
+    updateSettings: (data: { enabled?: boolean; accrualPercent?: number; redeemMaxPercent?: number }) =>
+      api.patch<LoyaltySettings>('/loyalty/settings', data),
+    /** Per-client balance + ledger (newest-first). */
+    clientSummary: (clientId: string) => api.get<ClientBonusSummary>(`/loyalty/client/${clientId}`),
+    /**
+     * Credit bonus. Omit `amount` + pass `checkId` to auto-compute
+     * round(checkTotal * accrualPercent / 100). No-op/422 when loyalty disabled.
+     */
+    accrue: (data: { clientId: string; checkId?: string; amount?: number }) =>
+      api.post<ClientBonusSummary>('/loyalty/accrue', data),
+    /** Spend bonus. Validated ≤ balance and (with checkId) ≤ checkTotal*redeemMaxPercent/100. */
+    redeem: (data: { clientId: string; checkId?: string; amount: number }) =>
+      api.post<ClientBonusSummary>('/loyalty/redeem', data),
+    /** Owner-class manual correction (accrual/redemption with a required reason). */
+    adjust: (data: { clientId: string; amount: number; type: BonusType; reason: string }) =>
+      api.post<ClientBonusSummary>('/loyalty/adjust', data),
   };
 }
