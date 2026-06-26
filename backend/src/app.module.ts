@@ -43,6 +43,7 @@ import { CashShiftsModule } from './cash-shifts/cash-shifts.module';
 import { DebtsModule } from './debts/debts.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
 import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
+import { PaymentsModule } from './payments/payments.module';
 
 @Module({
   imports: [
@@ -89,6 +90,7 @@ import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
     DebtsModule,
     LoyaltyModule,
     PurchaseOrdersModule,
+    PaymentsModule,
   ],
   providers: [MigrationRunner],
 })

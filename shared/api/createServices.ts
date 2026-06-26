@@ -121,6 +121,10 @@ import type {
   PurchaseOrder,
   PurchaseOrderStatus,
   PurchaseOrderSuggestionGroup,
+  PaymentIntegrationSettings,
+  Payment,
+  AcquiringMethod,
+  PaymentProviderName,
 } from '../types';
 import type {
   LoginRequest,
@@ -1316,5 +1320,47 @@ export function createPurchaseOrdersApi(api: HttpClient) {
     cancel: (id: string) => api.post<PurchaseOrder>(`/purchase-orders/${id}/cancel`, {}),
     /** Low-stock products grouped by preferred supplier — prefill a new order. */
     suggestions: () => api.get<PurchaseOrderSuggestionGroup[]>('/purchase-orders/suggestions'),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Эквайринг + СБП (online acquiring + Faster Payments). Backend: payments/
+//  (migration 085). Provider-agnostic — ЮKassa real, Tinkoff reserved.
+//
+//  settings get/update are owner-class (director/admin/superadmin) gated
+//  server-side; `create` is gated to the cashier-capable set (the roles that
+//  work the cash screen / create checks); `get` (poll) is open to any tenant
+//  user, tenant-scoped. The secret key is WRITE-ONLY — getSettings returns only a
+//  mask. The webhook is server-only (the acquirer posts to it) and is NOT part of
+//  this client API by design.
+//
+//  INERT until configured: `create` returns 422 until the owner enters real
+//  ЮKassa shopId + secretKey AND flips `enabled` on. Nothing charges before that.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createPaymentsApi(api: HttpClient) {
+  return {
+    /** Masked per-tenant acquiring config. Owner-class. Never returns the raw key. */
+    getSettings: () => api.get<PaymentIntegrationSettings>('/payments/settings'),
+    /**
+     * Owner-class partial update. Send `secretKey` only when (re)entering a key —
+     * an omitted/empty key leaves the stored secret untouched (the form shows a
+     * mask, not the real value).
+     */
+    updateSettings: (data: {
+      provider?: PaymentProviderName;
+      enabled?: boolean;
+      shopId?: string;
+      secretKey?: string;
+    }) => api.patch<PaymentIntegrationSettings>('/payments/settings', data),
+    /**
+     * Create an online payment. 422 when acquiring is disabled/unconfigured.
+     * SBP → response carries `qr` (the СБП-QR payload); card → `confirmationUrl`
+     * (redirect). Poll `get(id)` until status leaves 'pending'.
+     */
+    create: (data: { amount: number; description?: string; method?: AcquiringMethod; checkId?: string; returnUrl?: string }) =>
+      api.post<Payment>('/payments/create', data),
+    /** Poll one payment's status (tenant-scoped). Re-syncs pending from provider. */
+    get: (id: string) => api.get<Payment>(`/payments/${id}`),
   };
 }

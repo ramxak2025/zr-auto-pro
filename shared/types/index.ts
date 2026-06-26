@@ -2044,3 +2044,62 @@ export interface KnowledgeForCar {
   /** Troubleshooting entries for this make (empty when no make given). */
   troubleshooting: Troubleshooting[];
 }
+
+// ───────────────────────────────────────────────────────────────────────
+//  Эквайринг + СБП (online acquiring + Faster Payments). Backend: payments/
+//  (migration 085). Provider-agnostic — ЮKassa is implemented for real, Tinkoff
+//  is reserved. The module is INERT until the owner pastes real ЮKassa keys in
+//  settings: POST /payments/create returns 422 until then.
+//
+//  NOTE: distinct from the check-tender `enum PaymentMethod` (cash/card/warranty)
+//  above — that is how a closed check was paid; `AcquiringMethod` is how an online
+//  payment is collected (СБП-QR vs card redirect).
+// ───────────────────────────────────────────────────────────────────────
+
+export type PaymentProviderName = 'yookassa' | 'tinkoff';
+/** How an online payment is collected: 'sbp' → СБП-QR, 'card' → card redirect. */
+export type AcquiringMethod = 'sbp' | 'card';
+/** Normalized online-payment lifecycle. */
+export type PaymentStatus = 'pending' | 'succeeded' | 'canceled';
+
+/**
+ * Masked per-tenant acquiring config (GET /payments/settings). Owner-class only.
+ * The raw secret key is NEVER sent to a client — only a mask + a "configured" flag.
+ */
+export interface PaymentIntegrationSettings {
+  provider: PaymentProviderName;
+  enabled: boolean;
+  /** Semi-public shop identifier (ЮKassa shopId); shown in full. */
+  shopId: string | null;
+  /** Masked secret like '••••1234', or null when none stored. NEVER the raw key. */
+  secretKeyMask: string | null;
+  /** True when a secret key is stored, so the UI can show "configured". */
+  hasSecretKey: boolean;
+  updatedAt: string | null;
+}
+
+/** One payment ledger row (POST /payments/create response, GET /payments/:id). */
+export interface Payment {
+  id: string;
+  tenantId: string;
+  provider: PaymentProviderName;
+  /** Provider-side payment id (ЮKassa payment.id). */
+  providerPaymentId: string | null;
+  amount: number;
+  currency: string;
+  description: string | null;
+  method: AcquiringMethod | null;
+  status: PaymentStatus;
+  /** URL the client opens to pay (card redirect / SBP). */
+  confirmationUrl: string | null;
+  /** Optional link to the заказ-наряд this payment settles. */
+  checkId: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  paidAt: string | null;
+  /**
+   * SBP-QR payload (a string to render as a QR / open). Present ONLY on the
+   * create response for the СБП flow — it is ephemeral and never persisted.
+   */
+  qr?: string | null;
+}
