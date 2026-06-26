@@ -80,13 +80,16 @@ const FALLBACK_VISUAL: MovementVisual = {
   sign: '',
 };
 
-function visualFor(type: StockMovementType): MovementVisual {
+// Exported so ProductDetailScreen can render an inline "recent movements"
+// slice with the EXACT same type→icon/colour/label/sign mapping as the full
+// modal — single source of truth, no duplicated movement semantics.
+export function visualFor(type: StockMovementType): MovementVisual {
   return MOVEMENT_VISUALS[type] ?? FALLBACK_VISUAL;
 }
 
 // ─── Дата/время движения ─────────────────────────────────────────────────────
 // «16 июня, 14:32» — компактно, по-русски, в локальной зоне устройства.
-function formatMovementDateTime(iso: string): string {
+export function formatMovementDateTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
   try {
@@ -107,7 +110,7 @@ function formatMovementDateTime(iso: string): string {
 }
 
 // Количество без хвостовых нулей: 5, 2.5, 0.75.
-function formatQty(value: number): string {
+export function formatQty(value: number): string {
   if (!Number.isFinite(value)) return '0';
   return String(Math.round(value * 1000) / 1000);
 }

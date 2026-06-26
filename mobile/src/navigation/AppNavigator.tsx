@@ -9,6 +9,7 @@ import PlatformTabBar from './TabBar';
 import LoginScreen from '../screens/LoginScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import ProductsScreen from '../screens/ProductsScreen';
+import ProductDetailScreen from '../screens/ProductDetailScreen';
 import ChecksScreen from '../screens/ChecksScreen';
 import CheckCreateScreen from '../screens/CheckCreateScreen';
 import CheckDetailScreen from '../screens/CheckDetailScreen';
@@ -61,6 +62,7 @@ import AdminShellNavigator from './AdminShellNavigator';
 import ImpersonationBanner from '../components/ImpersonationBanner';
 import { View } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
+import type { Product } from '../../../shared/types';
 
 // Feature descriptions for lock screens
 const FEATURE_GATES: Record<string, { title: string; description: string; benefits: string[] }> = {
@@ -208,7 +210,13 @@ export type TabParamList = {
 // выше в дереве категорий. Старый внутренний state `activePath` теперь
 // читается из route.params.
 export type ProductsStackParamList = {
-  ProductsHome: { activePath?: string[] } | undefined;
+  // `editProduct` is set by ProductDetailScreen's «Изменить» on the route it
+  // pops back to — ProductsScreen consumes it once to open its edit modal,
+  // reusing the form instead of duplicating it.
+  ProductsHome: { activePath?: string[]; editProduct?: Product } | undefined;
+  // Dedicated product drill-down. Pushed on row tap; the passed `product`
+  // seeds instant paint while the screen revalidates the full shape.
+  ProductDetail: { product: Product };
 };
 
 // EquipmentStackParamList — два экрана, корневой grid и detail на сотрудника.
@@ -353,6 +361,10 @@ function ProductsStackNavigator() {
   return (
     <ProductsStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <ProductsStack.Screen name="ProductsHome" component={ProductsScreen} />
+      {/* Product drill-down — lives INSIDE the Products tab-stack (like
+          Checks → CheckDetail) so the floating tab bar stays visible and
+          iOS edge-swipe pops back to the warehouse list. */}
+      <ProductsStack.Screen name="ProductDetail" component={ProductDetailScreen} />
     </ProductsStack.Navigator>
   );
 }

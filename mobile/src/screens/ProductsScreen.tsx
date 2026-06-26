@@ -153,7 +153,8 @@ interface ProductRowProps {
   index: number;
   hideCategory: boolean;
   canSeeCostPrice: boolean;
-  onOpenEdit: (product: Product) => void;
+  /** Row tap — opens the dedicated ProductDetailScreen. */
+  onOpenDetail: (product: Product) => void;
   onOpenPhoto: (uri: string) => void;
   /** Long-press handler — when present, shown via AnimatedCard.onLongPress.
    *  Used by ProductsScreen to open the per-product action sheet (move to
@@ -175,7 +176,7 @@ const ProductRow = React.memo(function ProductRow({
   index,
   hideCategory,
   canSeeCostPrice,
-  onOpenEdit,
+  onOpenDetail,
   onOpenPhoto,
   onLongPress,
   onSetSellPrice,
@@ -194,7 +195,7 @@ const ProductRow = React.memo(function ProductRow({
     <AnimatedCard
       index={index}
       style={[styles.productCard, { backgroundColor: rowBg, borderBottomColor: separatorColor }]}
-      onPress={() => onOpenEdit(item)}
+      onPress={() => onOpenDetail(item)}
       onLongPress={onLongPress ? () => onLongPress(item) : undefined}
     >
       <View style={styles.productRow}>
@@ -956,6 +957,26 @@ export default function ProductsScreen() {
     setModalOpen(true);
   }, []);
 
+  // Row tap → dedicated detail screen (pushed onto THIS Products tab-stack so
+  // the floating tab bar stays visible and edge-swipe pops back to the list).
+  const openDetail = useCallback(
+    (p: Product) => {
+      haptic('tap');
+      navigation.navigate('ProductDetail', { product: p });
+    },
+    [navigation],
+  );
+
+  // ProductDetailScreen's «Изменить» reuses THIS screen's edit modal: it sets
+  // `editProduct` on our route and pops back. Consume it once, open the modal,
+  // then clear the param so a re-focus/re-render doesn't re-open it.
+  const editProductParam: Product | undefined = route.params?.editProduct;
+  React.useEffect(() => {
+    if (!editProductParam) return;
+    openEdit(editProductParam);
+    navigation.setParams({ editProduct: undefined });
+  }, [editProductParam, openEdit, navigation]);
+
   const closeModal = () => {
     setModalOpen(false);
     setEditingProduct(null);
@@ -1478,7 +1499,7 @@ export default function ProductsScreen() {
         index={index}
         hideCategory={!!search}
         canSeeCostPrice={canSeeCostPrice}
-        onOpenEdit={openEdit}
+        onOpenDetail={openDetail}
         onOpenPhoto={setFullscreenPhoto}
         // Long-press only enabled on the main warehouse — moving FROM
         // defect/used isn't a defined movement type yet.
@@ -1497,7 +1518,7 @@ export default function ProductsScreen() {
     [
       search,
       canSeeCostPrice,
-      openEdit,
+      openDetail,
       isMainWarehouse,
       isUsedWarehouse,
       canManageWarehouse,

@@ -27,6 +27,7 @@ import type {
   Client,
   Car,
   Product,
+  ProductPriceHistoryEntry,
   Service,
   Check,
   Supplier,
@@ -348,6 +349,8 @@ export function createProductsApi(api: HttpClient) {
     updateStock: (id: string, data: StockUpdateRequest) => api.post<{ stock: number }>(`/products/${id}/stock`, data),
     getProductMovements: (id: string) => api.get<any[]>(`/products/${id}/movements`),
     getProductPriceHistory: (id: string) => api.get<any[]>(`/products/${id}/price-history`),
+    /** Typed price-change ledger for ONE product (newest first, ≤50 rows). */
+    priceHistory: (id: string) => api.get<ProductPriceHistoryEntry[]>(`/products/${id}/price-history`),
     exportCsv: () => api.get('/products/export-csv', { responseType: 'blob' }),
     importCsv: (
       items: Array<{

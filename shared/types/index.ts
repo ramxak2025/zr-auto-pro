@@ -515,6 +515,23 @@ export interface Product {
   createdAt: string;
 }
 
+/**
+ * One row of a product's price-change ledger — returned by
+ * `GET /products/:id/price-history` (productsApi.priceHistory). Backend
+ * orders newest-first, capped at 50 rows. The cost fields are role-sensitive
+ * on the client (masters don't see cost), so consumers must gate them the
+ * same way they gate `costPrice` on the product itself.
+ */
+export interface ProductPriceHistoryEntry {
+  id: string;
+  costPriceBefore: number;
+  costPriceAfter: number;
+  sellPriceBefore: number;
+  sellPriceAfter: number;
+  user: { id: string; fullName: string } | null;
+  createdAt: string;
+}
+
 export interface Service {
   id: string;
   name: string;
