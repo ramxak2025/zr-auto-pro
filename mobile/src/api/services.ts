@@ -40,6 +40,7 @@ import {
   createBookingsApi,
   createPermissionTemplatesApi,
   createCashShiftsApi,
+  createDebtsApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -91,6 +92,11 @@ export const permissionTemplatesApi = createPermissionTemplatesApi(api);
 // open/close/collect owner-gated server-side; current/report/list readable by
 // any tenant user. Every response carries a recomputed Z-report.
 export const cashShiftsApi = createCashShiftsApi(api);
+// Дебиторка / долги клиентов — backend debts/ (migration 081). charge/payment/
+// delete owner-class gated server-side; clientLedger/debtors readable by any
+// tenant user. Every mutation returns the refreshed per-client summary so the
+// UI updates instantly (DebtorsScreen + ClientDetailScreen debt section).
+export const debtsApi = createDebtsApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {

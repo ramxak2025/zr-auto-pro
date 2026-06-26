@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { clientsApi, carsApi, checksApi } from '../api/services';
+import { clientsApi, carsApi, checksApi, debtsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import Modal from '../components/Modal';
@@ -33,7 +33,7 @@ import LoyaltyBadge from '../components/LoyaltyBadge';
 import SectionHeader from '../components/SectionHeader';
 import { UserRole } from '../../../shared/types';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Client, Car, Check } from '../../../shared/types';
+import type { Client, Car, Check, ClientDebtSummary } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { haptic } from '../platform/haptics';
 import { detectPlateMode } from '../utils/plateMask';
@@ -179,6 +179,10 @@ export default function ClientDetailScreen() {
   // (#19.4) — only the ability to CHANGE notes/source stays gated, so a
   // master sees the info read-only but can't reshape it.
   const canEditMeta = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
+  // Дебиторка — начисление долга / приём оплаты внутри карточки клиента.
+  // Role-gated to director/admin/superadmin (and enforced server-side); a
+  // master sees the balance + ledger read-only without the action buttons.
+  const canManageDebt = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
   const { id, focusCarId } = route.params as { id: string; focusCarId?: string };
   const isRetail = id === '__retail__';
   const [refreshing, setRefreshing] = useState(false);
@@ -949,6 +953,12 @@ export default function ClientDetailScreen() {
             palette={palette}
           />
         </View>
+
+        {/* ДОЛГИ — per-client receivables ledger (дебиторка). Balance header,
+            charge/payment buttons (role-gated), the movements ledger, and a
+            read-only «Незакрытые заказ-наряды» list. Self-contained: owns its
+            own query + mutations + amount-prompt modal. */}
+        <ClientDebtSection clientId={id} canManage={canManageDebt} palette={palette} onOpenCheck={openCheck} />
 
         {/* STAFF-ONLY: notes + source + comment. Visible to EVERY staff
             member (#19.4). Editing notes/source stays gated to canEditMeta —
@@ -1783,6 +1793,363 @@ function NotesEditorModal({ visible, initialValue, palette, saving, onClose, onS
     </Modal>
   );
 }
+
+// ── ClientDebtSection (Дебиторка) ──────────────────────────────────────
+// Per-client receivables ledger. Reads GET /debts/client/:id (balance +
+// newest-first ledger + read-only deferred-check context). «Добавить долг»
+// (charge) and «Принять оплату» (payment) are role-gated to director / admin /
+// superadmin (and enforced server-side). Both mutations return the refreshed
+// summary, which we write straight into the cache so the balance + ledger
+// update instantly, then invalidate the per-client + debtors-overview keys.
+interface ClientDebtSectionProps {
+  clientId: string;
+  canManage: boolean;
+  palette: ReturnType<typeof useColors>;
+  /** Stable opener — a tap on a deferred check opens its CheckDetail. */
+  onOpenCheck: (checkId: string) => void;
+}
+
+function ClientDebtSection({ clientId, canManage, palette, onOpenCheck }: ClientDebtSectionProps) {
+  const queryClient = useQueryClient();
+  const [promptMode, setPromptMode] = useState<'charge' | 'payment' | null>(null);
+  const [amountText, setAmountText] = useState('');
+  const [reasonText, setReasonText] = useState('');
+
+  const { data: summary, isLoading } = useQuery<ClientDebtSummary>({
+    queryKey: ['debts', 'client', clientId],
+    queryFn: async () => (await debtsApi.clientLedger(clientId)).data,
+  });
+
+  // Instant cache write from the mutation's returned summary, then a
+  // background revalidation of THIS client + the debtors overview.
+  const applySummary = useCallback(
+    (data: ClientDebtSummary) => {
+      queryClient.setQueryData(['debts', 'client', clientId], data);
+      queryClient.invalidateQueries({ queryKey: ['debts', 'client', clientId] });
+      queryClient.invalidateQueries({ queryKey: ['debts', 'debtors'] });
+    },
+    [queryClient, clientId],
+  );
+
+  const closePrompt = useCallback(() => {
+    setPromptMode(null);
+    setAmountText('');
+    setReasonText('');
+  }, []);
+
+  const chargeMutation = useMutation({
+    mutationFn: (data: { amount: number; reason?: string }) =>
+      debtsApi.charge({ clientId, amount: data.amount, reason: data.reason }),
+    onSuccess: (res) => {
+      applySummary(res.data);
+      haptic('success');
+      closePrompt();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось добавить долг');
+    },
+  });
+
+  const paymentMutation = useMutation({
+    mutationFn: (data: { amount: number; reason?: string }) =>
+      debtsApi.payment({ clientId, amount: data.amount, reason: data.reason }),
+    onSuccess: (res) => {
+      applySummary(res.data);
+      haptic('success');
+      closePrompt();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось принять оплату');
+    },
+  });
+
+  const openPrompt = (mode: 'charge' | 'payment') => {
+    haptic('tap');
+    setAmountText('');
+    setReasonText('');
+    setPromptMode(mode);
+  };
+
+  // Parse "1 200,50" / "1200.5" → number. NaN / ≤0 disables submit.
+  const parsedAmount = useMemo(() => {
+    const normalized = amountText.replace(/\s/g, '').replace(',', '.');
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : NaN;
+  }, [amountText]);
+  const amountValid = Number.isFinite(parsedAmount) && parsedAmount > 0;
+  const submitting = chargeMutation.isPending || paymentMutation.isPending;
+
+  const handleSubmit = () => {
+    if (!amountValid || submitting) return;
+    const reason = reasonText.trim() ? reasonText.trim() : undefined;
+    if (promptMode === 'charge') chargeMutation.mutate({ amount: parsedAmount, reason });
+    else if (promptMode === 'payment') paymentMutation.mutate({ amount: parsedAmount, reason });
+  };
+
+  const balance = summary?.balance ?? 0;
+  const owes = balance > 0;
+  const credit = balance < 0;
+  const balanceColor = owes ? colors.red[600] : credit ? colors.green[600] : palette.text.secondary;
+  const balanceLabel = owes ? 'Долг клиента' : credit ? 'Переплата / кредит' : 'Задолженности нет';
+  const ledger = summary?.ledger ?? [];
+  const deferred = summary?.deferredChecks ?? [];
+
+  return (
+    <>
+      <SectionHeader title="Долги" />
+      <AnimatedCard
+        style={[styles.metaCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        index={2}
+      >
+        {/* Balance header */}
+        <View style={debtStyles.balanceRow}>
+          <View
+            style={[
+              debtStyles.balanceIcon,
+              { backgroundColor: owes ? colors.red[50] : credit ? colors.green[50] : palette.bg.muted },
+            ]}
+          >
+            <Ionicons name={owes ? 'arrow-up' : credit ? 'arrow-down' : 'checkmark'} size={18} color={balanceColor} />
+          </View>
+          <View style={{ flex: 1, minWidth: 0 }}>
+            <Text style={[debtStyles.balanceLabel, { color: palette.text.tertiary }]}>{balanceLabel}</Text>
+            <Text style={[debtStyles.balanceValue, { color: balanceColor }]} numberOfLines={1} adjustsFontSizeToFit>
+              {formatMoney(Math.abs(balance))}
+            </Text>
+          </View>
+          {isLoading && !summary ? <ActivityIndicator size="small" color={palette.text.tertiary} /> : null}
+        </View>
+
+        {/* Action buttons — role-gated to director/admin/superadmin. */}
+        {canManage ? (
+          <View style={debtStyles.actionsRow}>
+            <TouchableOpacity
+              style={[debtStyles.actionBtn, { backgroundColor: colors.red[50] }]}
+              onPress={() => openPrompt('charge')}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add-circle-outline" size={16} color={colors.red[600]} />
+              <Text style={[debtStyles.actionBtnText, { color: colors.red[600] }]}>Добавить долг</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[debtStyles.actionBtn, { backgroundColor: colors.green[50] }]}
+              onPress={() => openPrompt('payment')}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
+              <Text style={[debtStyles.actionBtnText, { color: colors.green[600] }]}>Принять оплату</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
+        {/* Ledger — newest first. Charge red (+), payment green (−). */}
+        {ledger.length > 0 ? (
+          <View style={[debtStyles.ledgerWrap, { borderTopColor: palette.border.subtle }]}>
+            {ledger.map((entry) => {
+              const isCharge = entry.type === 'charge';
+              const entryColor = isCharge ? colors.red[600] : colors.green[600];
+              const meta = [
+                entry.checkNumber ? `Чек №${entry.checkNumber}` : null,
+                entry.createdByName || null,
+                formatDate(entry.createdAt),
+              ]
+                .filter(Boolean)
+                .join(' · ');
+              return (
+                <View key={entry.id} style={[debtStyles.ledgerRow, { borderBottomColor: palette.border.subtle }]}>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[debtStyles.ledgerReason, { color: palette.text.primary }]} numberOfLines={1}>
+                      {entry.reason || (isCharge ? 'Начисление долга' : 'Оплата')}
+                    </Text>
+                    {meta ? (
+                      <Text style={[debtStyles.ledgerMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                        {meta}
+                      </Text>
+                    ) : null}
+                  </View>
+                  <Text style={[debtStyles.ledgerAmount, { color: entryColor }]}>
+                    {isCharge ? '+' : '−'}
+                    {formatMoney(entry.amount)}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        ) : !isLoading ? (
+          <Text style={[debtStyles.emptyLedger, { color: palette.text.tertiary }]}>Движений по долгу пока нет</Text>
+        ) : null}
+      </AnimatedCard>
+
+      {/* Read-only «Незакрытые заказ-наряды» — outstanding deferred checks,
+          NOT counted in the balance. Tap opens the check. */}
+      {deferred.length > 0 ? (
+        <>
+          <SectionHeader title="Незакрытые заказ-наряды" count={deferred.length} />
+          <AnimatedCard
+            style={[styles.metaCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            index={3}
+          >
+            {deferred.map((dc, i) => (
+              <TouchableOpacity
+                key={dc.id}
+                style={[
+                  debtStyles.deferredRow,
+                  i < deferred.length - 1
+                    ? { borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: palette.border.subtle }
+                    : null,
+                ]}
+                onPress={() => {
+                  haptic('select');
+                  onOpenCheck(dc.id);
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={[debtStyles.deferredIcon, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="document-text-outline" size={15} color={palette.text.secondary} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[debtStyles.deferredNumber, { color: palette.text.primary }]} numberOfLines={1}>
+                    Заказ-наряд №{dc.number}
+                  </Text>
+                  <Text style={[debtStyles.deferredMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                    {formatDate(dc.date)}
+                  </Text>
+                </View>
+                <Text style={[debtStyles.deferredTotal, { color: palette.text.secondary }]}>
+                  {formatMoney(dc.totalRevenue)}
+                </Text>
+                <Ionicons name="chevron-forward" size={15} color={palette.text.tertiary} />
+              </TouchableOpacity>
+            ))}
+          </AnimatedCard>
+        </>
+      ) : null}
+
+      {/* Amount prompt — Modal + TextInput (Android-safe; never Alert.prompt). */}
+      <Modal
+        visible={promptMode !== null}
+        onClose={closePrompt}
+        title={promptMode === 'charge' ? 'Добавить долг' : 'Принять оплату'}
+      >
+        <Text style={[debtStyles.fieldLabel, { color: palette.text.secondary }]}>Сумма, ₽</Text>
+        <TextInput
+          style={[
+            debtStyles.input,
+            { backgroundColor: palette.bg.muted, color: palette.text.primary, borderColor: palette.border.subtle },
+          ]}
+          value={amountText}
+          onChangeText={setAmountText}
+          placeholder="0"
+          placeholderTextColor={palette.text.tertiary}
+          keyboardType="decimal-pad"
+          autoFocus
+          returnKeyType="done"
+        />
+        <Text style={[debtStyles.fieldLabel, { color: palette.text.secondary, marginTop: spacing[3] }]}>
+          Комментарий (необязательно)
+        </Text>
+        <TextInput
+          style={[
+            debtStyles.input,
+            { backgroundColor: palette.bg.muted, color: palette.text.primary, borderColor: palette.border.subtle },
+          ]}
+          value={reasonText}
+          onChangeText={setReasonText}
+          placeholder={promptMode === 'charge' ? 'За что долг' : 'Комментарий к оплате'}
+          placeholderTextColor={palette.text.tertiary}
+          returnKeyType="done"
+        />
+        <TouchableOpacity
+          style={[
+            debtStyles.submitBtn,
+            { backgroundColor: promptMode === 'charge' ? colors.red[600] : colors.green[600] },
+            (!amountValid || submitting) && debtStyles.submitBtnDisabled,
+          ]}
+          onPress={handleSubmit}
+          disabled={!amountValid || submitting}
+          activeOpacity={0.85}
+        >
+          {submitting ? (
+            <ActivityIndicator size="small" color={colors.white} />
+          ) : (
+            <Text style={debtStyles.submitBtnText}>{promptMode === 'charge' ? 'Добавить долг' : 'Принять оплату'}</Text>
+          )}
+        </TouchableOpacity>
+      </Modal>
+    </>
+  );
+}
+
+const debtStyles = StyleSheet.create({
+  balanceRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  balanceIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  balanceLabel: { fontSize: 12, fontWeight: fontWeight.medium },
+  balanceValue: { fontSize: 22, fontWeight: fontWeight.bold, letterSpacing: -0.4, marginTop: 2 },
+
+  actionsRow: { flexDirection: 'row', gap: spacing[2.5], marginTop: spacing[3.5] },
+  actionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+  },
+  actionBtnText: { fontSize: 13, fontWeight: fontWeight.semibold },
+
+  ledgerWrap: { marginTop: spacing[3.5], borderTopWidth: StyleSheet.hairlineWidth, paddingTop: spacing[1] },
+  ledgerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[2.5],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  ledgerReason: { fontSize: 14, fontWeight: fontWeight.medium },
+  ledgerMeta: { fontSize: 12, marginTop: 2 },
+  ledgerAmount: { fontSize: 15, fontWeight: fontWeight.bold, letterSpacing: -0.2 },
+  emptyLedger: { fontSize: 13, marginTop: spacing[3], textAlign: 'center' },
+
+  deferredRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3] },
+  deferredIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deferredNumber: { fontSize: 14, fontWeight: fontWeight.semibold },
+  deferredMeta: { fontSize: 12, marginTop: 2 },
+  deferredTotal: { fontSize: 14, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
+
+  fieldLabel: { fontSize: 13, fontWeight: fontWeight.medium, marginBottom: spacing[1.5] },
+  input: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+    fontSize: 16,
+  },
+  submitBtn: {
+    marginTop: spacing[5],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 52,
+  },
+  submitBtnDisabled: { opacity: 0.5 },
+  submitBtnText: { color: colors.white, fontSize: 16, fontWeight: fontWeight.semibold },
+});
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },

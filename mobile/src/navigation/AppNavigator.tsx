@@ -23,6 +23,7 @@ import SalaryScreen from '../screens/SalaryScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import CashFlowScreen from '../screens/CashFlowScreen';
 import CashShiftScreen from '../screens/CashShiftScreen';
+import DebtorsScreen from '../screens/DebtorsScreen';
 import ExpensesScreen from '../screens/ExpensesScreen';
 import UsersScreen from '../screens/UsersScreen';
 import ScheduleScreen from '../screens/ScheduleScreen';
@@ -322,6 +323,12 @@ function MoreStackNavigator() {
           inside the screen AND enforced server-side. Lives in MoreStack so the
           floating tab bar stays visible (back goes detail → Ещё). */}
       <MoreStack.Screen name="CashShift" component={CashShiftScreen} />
+      {/* Долги клиентов / дебиторка — backend debts/ (migration 081). Lives in
+          MoreStack so the floating tab bar stays visible and a tap on a debtor
+          row pushes ClientDetail onto THIS stack (back goes client → list → Ещё).
+          Viewing is open to any tenant user; charge/payment inside ClientDetail
+          are role-gated AND enforced server-side. */}
+      <MoreStack.Screen name="Debtors" component={DebtorsScreen} />
       <MoreStack.Screen name="Salary" component={GatedSalary} />
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
       <MoreStack.Screen name="Reports" component={GatedReports} />
