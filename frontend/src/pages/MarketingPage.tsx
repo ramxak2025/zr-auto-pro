@@ -1,34 +1,82 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  BarChart3, Star, AlertTriangle, Bell, Settings, Link2, MessageSquare,
-  Plus, Trash2, Save, ExternalLink, TrendingUp, Users,
-  Send, Eye, ThumbsUp, ThumbsDown, Loader2, X, ChevronLeft, ChevronRight, ChevronDown,
-  Trophy, Medal,
+  BarChart3,
+  Star,
+  AlertTriangle,
+  Bell,
+  Settings,
+  Link2,
+  MessageSquare,
+  Plus,
+  Trash2,
+  Save,
+  ExternalLink,
+  TrendingUp,
+  Users,
+  Send,
+  Eye,
+  ThumbsUp,
+  ThumbsDown,
+  Loader2,
+  X,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  Trophy,
+  Medal,
+  RotateCcw,
+  Info,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { marketingApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../types';
 import type {
-  MarketingDashboard, ReviewResponse, ReviewAlert,
-  MessagingIntegration, ReviewPlatformLink, ReviewSettings,
+  MarketingDashboard,
+  ReviewResponse,
+  ReviewAlert,
+  MessagingIntegration,
+  ReviewPlatformLink,
+  ReviewSettings,
+  WinbackSendResult,
 } from '../types';
 
-type Tab = 'dashboard' | 'reviews' | 'integrations' | 'settings';
+type Tab = 'dashboard' | 'reviews' | 'winback' | 'integrations' | 'settings';
 
 const tabs: { key: Tab; label: string; icon: typeof BarChart3 }[] = [
   { key: 'dashboard', label: 'Обзор', icon: BarChart3 },
   { key: 'reviews', label: 'Отзывы', icon: Star },
+  { key: 'winback', label: 'Возврат', icon: RotateCcw },
   { key: 'integrations', label: 'Каналы', icon: MessageSquare },
   { key: 'settings', label: 'Настройки', icon: Settings },
 ];
+
+// ─── Russian plural helper ──────────────────────────────────────────
+function plural(n: number, forms: [string, string, string]): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return forms[0];
+  if (mod10 >= 2 && mod10 <= 4 && !(mod100 >= 12 && mod100 <= 14)) return forms[1];
+  return forms[2];
+}
+
+// «N дней назад» / «ни разу» from an ISO last-visit timestamp.
+function lastVisitLabel(iso: string | null): string {
+  if (!iso) return 'ни разу';
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return '—';
+  const days = Math.max(0, Math.floor((Date.now() - then) / 86_400_000));
+  if (days === 0) return 'сегодня';
+  return `${days} ${plural(days, ['день', 'дня', 'дней'])} назад`;
+}
 
 // ─── Stars Component ────────────────────────────────────────────────
 function Stars({ rating, size = 'sm' }: { rating: number; size?: 'sm' | 'md' | 'lg' }) {
   const cls = size === 'lg' ? 'h-6 w-6' : size === 'md' ? 'h-5 w-5' : 'h-4 w-4';
   return (
     <div className="flex gap-0.5">
-      {[1, 2, 3, 4, 5].map(i => (
+      {[1, 2, 3, 4, 5].map((i) => (
         <Star key={i} className={`${cls} ${i <= rating ? 'fill-amber-400 text-amber-400' : 'text-gray-200'}`} />
       ))}
     </div>
@@ -36,29 +84,44 @@ function Stars({ rating, size = 'sm' }: { rating: number; size?: 'sm' | 'md' | '
 }
 
 // ─── Dashboard Tab ──────────────────────────────────────────────────
-function DashboardTab({ data, alerts, onAlertRead }: { data: MarketingDashboard | null; alerts: ReviewAlert[]; onAlertRead: (id: string) => void }) {
-  if (!data) return (
-    <div className="text-center py-12">
-      <BarChart3 className="h-10 w-10 text-gray-200 mx-auto mb-3" />
-      <p className="text-sm text-gray-500">Нет данных</p>
-      <p className="text-xs text-gray-400 mt-1">Данные появятся после получения первых отзывов</p>
-    </div>
-  );
+function DashboardTab({
+  data,
+  alerts,
+  onAlertRead,
+}: {
+  data: MarketingDashboard | null;
+  alerts: ReviewAlert[];
+  onAlertRead: (id: string) => void;
+}) {
+  if (!data)
+    return (
+      <div className="text-center py-12">
+        <BarChart3 className="h-10 w-10 text-gray-200 mx-auto mb-3" />
+        <p className="text-sm text-gray-500">Нет данных</p>
+        <p className="text-xs text-gray-400 mt-1">Данные появятся после получения первых отзывов</p>
+      </div>
+    );
 
   const statCards = [
     { label: 'Всего отзывов', value: data.totalReviews, icon: Star, color: 'text-amber-600', bg: 'bg-amber-50' },
-    { label: 'Средний балл', value: data.avgRating.toFixed(1), icon: TrendingUp, color: 'text-green-600', bg: 'bg-green-50' },
+    {
+      label: 'Средний балл',
+      value: data.avgRating.toFixed(1),
+      icon: TrendingUp,
+      color: 'text-green-600',
+      bg: 'bg-green-50',
+    },
     { label: 'Отправлено', value: data.tokensSent, icon: Send, color: 'text-blue-600', bg: 'bg-blue-50' },
     { label: 'Отвечено', value: `${data.responseRate}%`, icon: Eye, color: 'text-violet-600', bg: 'bg-violet-50' },
   ];
 
-  const unreadAlerts = alerts.filter(a => !a.isRead);
+  const unreadAlerts = alerts.filter((a) => !a.isRead);
 
   return (
     <div className="space-y-5">
       {/* Stats grid */}
       <div className="grid grid-cols-2 gap-3">
-        {statCards.map(s => {
+        {statCards.map((s) => {
           const Icon = s.icon;
           return (
             <div key={s.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
@@ -81,16 +144,25 @@ function DashboardTab({ data, alerts, onAlertRead }: { data: MarketingDashboard 
           {[
             { label: 'Отправлено ссылок', value: data.tokensSent, pct: 100 },
             { label: 'Получено ответов', value: data.tokensResponded, pct: data.responseRate },
-            { label: 'Положительных (4-5)', value: data.positiveReviews, pct: data.totalReviews > 0 ? Math.round(data.positiveReviews / data.totalReviews * 100) : 0 },
+            {
+              label: 'Положительных (4-5)',
+              value: data.positiveReviews,
+              pct: data.totalReviews > 0 ? Math.round((data.positiveReviews / data.totalReviews) * 100) : 0,
+            },
             { label: 'Перешли на площадку', value: data.publicRedirects, pct: data.conversionRate },
-          ].map(f => (
+          ].map((f) => (
             <div key={f.label}>
               <div className="flex justify-between text-xs mb-1">
                 <span className="text-gray-600">{f.label}</span>
-                <span className="font-medium text-gray-900">{f.value} ({f.pct}%)</span>
+                <span className="font-medium text-gray-900">
+                  {f.value} ({f.pct}%)
+                </span>
               </div>
               <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                <div className="h-full bg-violet-500 rounded-full transition-all" style={{ width: `${Math.min(f.pct, 100)}%` }} />
+                <div
+                  className="h-full bg-violet-500 rounded-full transition-all"
+                  style={{ width: `${Math.min(f.pct, 100)}%` }}
+                />
               </div>
             </div>
           ))}
@@ -105,7 +177,7 @@ function DashboardTab({ data, alerts, onAlertRead }: { data: MarketingDashboard 
             <h3 className="text-sm font-semibold text-gray-900">Рейтинг мастеров</h3>
           </div>
           <div className="space-y-3">
-            {data.employeeRatings.map(e => (
+            {data.employeeRatings.map((e) => (
               <div key={e.employeeId} className="flex items-center gap-3">
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 truncate">{e.employeeName}</p>
@@ -137,19 +209,16 @@ function DashboardTab({ data, alerts, onAlertRead }: { data: MarketingDashboard 
             <h3 className="text-sm font-semibold text-gray-900">Уведомления ({unreadAlerts.length})</h3>
           </div>
           <div className="space-y-2">
-            {unreadAlerts.slice(0, 5).map(a => (
+            {unreadAlerts.slice(0, 5).map((a) => (
               <div key={a.id} className="flex items-start gap-3 p-3 bg-red-50 rounded-xl">
                 <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900">
                     {a.alertType === 'consecutive_negative'
                       ? `${a.employeeName}: 3 негативных подряд`
-                      : `Риск ухода: ${a.clientName}`
-                    }
+                      : `Риск ухода: ${a.clientName}`}
                   </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {new Date(a.createdAt).toLocaleDateString('ru-RU')}
-                  </p>
+                  <p className="text-xs text-gray-500 mt-0.5">{new Date(a.createdAt).toLocaleDateString('ru-RU')}</p>
                 </div>
                 <button onClick={() => onAlertRead(a.id)} className="text-gray-400 hover:text-gray-600">
                   <X className="h-4 w-4" />
@@ -164,14 +233,22 @@ function DashboardTab({ data, alerts, onAlertRead }: { data: MarketingDashboard 
 }
 
 // ─── Reviews Tab ────────────────────────────────────────────────────
-function ReviewsTab({ reviews, loading, month, onMonthChange }: {
-  reviews: ReviewResponse[]; loading: boolean; month: string; onMonthChange: (m: string) => void;
+function ReviewsTab({
+  reviews,
+  loading,
+  month,
+  onMonthChange,
+}: {
+  reviews: ReviewResponse[];
+  loading: boolean;
+  month: string;
+  onMonthChange: (m: string) => void;
 }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [selectedMasterId, setSelectedMasterId] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'positive' | 'negative'>('all');
 
-  const filteredReviews = reviews.filter(r => {
+  const filteredReviews = reviews.filter((r) => {
     if (filter === 'positive') return r.rating >= 4;
     if (filter === 'negative') return r.rating <= 3;
     return true;
@@ -179,8 +256,8 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
 
   const totalReviews = reviews.length;
   const avgRating = totalReviews > 0 ? (reviews.reduce((s, r) => s + r.rating, 0) / totalReviews).toFixed(1) : '0.0';
-  const positiveCount = reviews.filter(r => r.rating >= 4).length;
-  const negativeCount = reviews.filter(r => r.rating <= 3).length;
+  const positiveCount = reviews.filter((r) => r.rating >= 4).length;
+  const negativeCount = reviews.filter((r) => r.rating <= 3).length;
 
   const monthLabel = (() => {
     const [y, m] = month.split('-');
@@ -199,7 +276,7 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
   // Compute per-employee ratings from reviews
   const employeeStats = (() => {
     const map: Record<string, { name: string; total: number; sum: number; negative: number }> = {};
-    reviews.forEach(r => {
+    reviews.forEach((r) => {
       if (!r.employeeId || !r.employeeName) return;
       if (!map[r.employeeId]) map[r.employeeId] = { name: r.employeeName, total: 0, sum: 0, negative: 0 };
       map[r.employeeId].total++;
@@ -232,7 +309,10 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
             <p className="text-[10px] text-gray-400 mt-0.5">Всего</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 text-center">
-            <p className="text-2xl font-bold text-amber-500">{avgRating}<span className="text-sm">★</span></p>
+            <p className="text-2xl font-bold text-amber-500">
+              {avgRating}
+              <span className="text-sm">★</span>
+            </p>
             <p className="text-[10px] text-gray-400 mt-0.5">Средний</p>
           </div>
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3 text-center">
@@ -245,20 +325,31 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
       {/* Filter chips */}
       {reviews.length > 0 && (
         <div className="flex gap-2">
-          <button onClick={() => setFilter('all')} className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-colors ${filter === 'all' ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-50 text-gray-500'}`}>
+          <button
+            onClick={() => setFilter('all')}
+            className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-colors ${filter === 'all' ? 'bg-primary-50 text-primary-700 border border-primary-200' : 'bg-gray-50 text-gray-500'}`}
+          >
             Все ({totalReviews})
           </button>
-          <button onClick={() => setFilter('positive')} className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-colors ${filter === 'positive' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-gray-50 text-gray-500'}`}>
+          <button
+            onClick={() => setFilter('positive')}
+            className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-colors ${filter === 'positive' ? 'bg-green-50 text-green-700 border border-green-200' : 'bg-gray-50 text-gray-500'}`}
+          >
             👍 ({positiveCount})
           </button>
-          <button onClick={() => setFilter('negative')} className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-colors ${filter === 'negative' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-gray-50 text-gray-500'}`}>
+          <button
+            onClick={() => setFilter('negative')}
+            className={`flex-1 py-2 rounded-xl text-xs font-semibold transition-colors ${filter === 'negative' ? 'bg-red-50 text-red-700 border border-red-200' : 'bg-gray-50 text-gray-500'}`}
+          >
             👎 ({negativeCount})
           </button>
         </div>
       )}
 
       {loading ? (
-        <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>
+        <div className="flex justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+        </div>
       ) : reviews.length === 0 ? (
         <div className="text-center py-12">
           <Star className="h-10 w-10 text-gray-200 mx-auto mb-3" />
@@ -278,71 +369,110 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
                   const avgRounded = Math.round(e.avg * 10) / 10;
                   const isGood = avgRounded >= 4;
                   const isSelected = selectedMasterId === e.id;
-                  const masterReviews = reviews.filter(r => r.employeeId === e.id);
+                  const masterReviews = reviews.filter((r) => r.employeeId === e.id);
                   return (
                     <div key={e.id}>
                       <button
                         onClick={() => setSelectedMasterId(isSelected ? null : e.id)}
                         className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all text-left ${
-                          isSelected ? 'bg-primary-50 border border-primary-200' : isGood ? 'bg-green-50 hover:bg-green-100' : 'bg-red-50 hover:bg-red-100'
+                          isSelected
+                            ? 'bg-primary-50 border border-primary-200'
+                            : isGood
+                              ? 'bg-green-50 hover:bg-green-100'
+                              : 'bg-red-50 hover:bg-red-100'
                         }`}
                       >
-                        <div className={`flex-shrink-0 flex items-center justify-center h-8 w-8 rounded-full text-sm font-bold text-white ${
-                          idx === 0 ? 'bg-amber-500' : idx === 1 ? 'bg-gray-400' : idx === 2 ? 'bg-amber-700' : 'bg-gray-300'
-                        }`}>
+                        <div
+                          className={`flex-shrink-0 flex items-center justify-center h-8 w-8 rounded-full text-sm font-bold text-white ${
+                            idx === 0
+                              ? 'bg-amber-500'
+                              : idx === 1
+                                ? 'bg-gray-400'
+                                : idx === 2
+                                  ? 'bg-amber-700'
+                                  : 'bg-gray-300'
+                          }`}
+                        >
                           {idx + 1}
                         </div>
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-gray-900 truncate">{e.name}</p>
                           <div className="flex items-center gap-2 mt-0.5">
                             <Stars rating={Math.round(e.avg)} />
-                            <span className={`text-xs font-bold ${isGood ? 'text-green-600' : 'text-red-600'}`}>{avgRounded}</span>
+                            <span className={`text-xs font-bold ${isGood ? 'text-green-600' : 'text-red-600'}`}>
+                              {avgRounded}
+                            </span>
                           </div>
                         </div>
                         <div className="text-right flex-shrink-0">
                           <p className="text-sm font-bold text-gray-900">{e.count}</p>
-                          <p className="text-[10px] text-gray-400">отзыв{e.count === 1 ? '' : e.count < 5 ? 'а' : 'ов'}</p>
+                          <p className="text-[10px] text-gray-400">
+                            отзыв{e.count === 1 ? '' : e.count < 5 ? 'а' : 'ов'}
+                          </p>
                         </div>
                         {e.negative > 0 && <AlertTriangle className="h-4 w-4 text-red-500 flex-shrink-0" />}
-                        <ChevronDown className={`h-4 w-4 text-gray-300 flex-shrink-0 transition-transform ${isSelected ? 'rotate-180' : ''}`} />
+                        <ChevronDown
+                          className={`h-4 w-4 text-gray-300 flex-shrink-0 transition-transform ${isSelected ? 'rotate-180' : ''}`}
+                        />
                       </button>
 
                       {/* Expanded: master's review history */}
                       {isSelected && (
                         <div className="mt-2 ml-3 border-l-2 border-primary-200 pl-3 space-y-2">
                           <div className="flex items-center gap-4 text-xs text-gray-500 py-1">
-                            <span className="flex items-center gap-1"><ThumbsUp className="h-3 w-3 text-green-500" />{masterReviews.filter(r => r.rating >= 4).length} положит.</span>
-                            <span className="flex items-center gap-1"><ThumbsDown className="h-3 w-3 text-red-500" />{e.negative} негатив.</span>
+                            <span className="flex items-center gap-1">
+                              <ThumbsUp className="h-3 w-3 text-green-500" />
+                              {masterReviews.filter((r) => r.rating >= 4).length} положит.
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <ThumbsDown className="h-3 w-3 text-red-500" />
+                              {e.negative} негатив.
+                            </span>
                           </div>
                           {masterReviews.length === 0 ? (
                             <p className="text-xs text-gray-400 py-2">Нет отзывов за этот период</p>
                           ) : (
-                            masterReviews.map(r => {
+                            masterReviews.map((r) => {
                               const good = r.rating >= 4;
                               return (
                                 <div key={r.id} className={`p-3 rounded-lg ${good ? 'bg-green-50' : 'bg-red-50'}`}>
                                   <div className="flex items-center gap-2">
-                                    <div className={`flex-shrink-0 flex items-center justify-center h-6 w-6 rounded-full text-[10px] font-bold text-white ${good ? 'bg-green-500' : 'bg-red-500'}`}>
+                                    <div
+                                      className={`flex-shrink-0 flex items-center justify-center h-6 w-6 rounded-full text-[10px] font-bold text-white ${good ? 'bg-green-500' : 'bg-red-500'}`}
+                                    >
                                       {r.rating}
                                     </div>
                                     <div className="flex-1 min-w-0">
                                       {r.clientId ? (
-                                        <a href={`/clients/${r.clientId}`} className="text-sm font-medium text-primary-600 hover:underline truncate block">{r.clientName || 'Клиент'}</a>
+                                        <a
+                                          href={`/clients/${r.clientId}`}
+                                          className="text-sm font-medium text-primary-600 hover:underline truncate block"
+                                        >
+                                          {r.clientName || 'Клиент'}
+                                        </a>
                                       ) : (
-                                        <p className="text-sm font-medium text-gray-900 truncate">{r.clientName || 'Клиент'}</p>
+                                        <p className="text-sm font-medium text-gray-900 truncate">
+                                          {r.clientName || 'Клиент'}
+                                        </p>
                                       )}
                                     </div>
                                     <span className="text-[10px] text-gray-400 flex-shrink-0">
-                                      {new Date(r.createdAt).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' })}
+                                      {new Date(r.createdAt).toLocaleDateString('ru-RU', {
+                                        day: 'numeric',
+                                        month: 'short',
+                                      })}
                                     </span>
                                   </div>
                                   {(r.carMakeModel || r.carPlate) && (
                                     <p className="text-xs text-gray-500 mt-1 ml-8">
-                                      {r.carMakeModel}{r.carPlate && ` · ${r.carPlate}`}
+                                      {r.carMakeModel}
+                                      {r.carPlate && ` · ${r.carPlate}`}
                                     </p>
                                   )}
                                   {r.comment && (
-                                    <p className={`text-xs mt-1.5 ml-8 ${good ? 'text-green-700' : 'text-red-700'}`}>{r.comment}</p>
+                                    <p className={`text-xs mt-1.5 ml-8 ${good ? 'text-green-700' : 'text-red-700'}`}>
+                                      {r.comment}
+                                    </p>
                                   )}
                                 </div>
                               );
@@ -361,7 +491,7 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
             <h3 className="text-sm font-semibold text-gray-900 mb-3">Все отзывы</h3>
             <div className="space-y-1">
-              {filteredReviews.map(r => {
+              {filteredReviews.map((r) => {
                 const isGood = r.rating >= 4;
                 const isExpanded = expandedId === r.id;
                 return (
@@ -372,9 +502,11 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
                         isGood ? 'hover:bg-green-50' : 'hover:bg-red-50'
                       } ${isExpanded ? (isGood ? 'bg-green-50' : 'bg-red-50') : ''}`}
                     >
-                      <div className={`flex-shrink-0 flex items-center justify-center h-7 w-7 rounded-full text-xs font-bold text-white ${
-                        isGood ? 'bg-green-500' : 'bg-red-500'
-                      }`}>
+                      <div
+                        className={`flex-shrink-0 flex items-center justify-center h-7 w-7 rounded-full text-xs font-bold text-white ${
+                          isGood ? 'bg-green-500' : 'bg-red-500'
+                        }`}
+                      >
                         {r.rating}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -386,16 +518,24 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
                         </p>
                       </div>
                       {r.clientId && (
-                        <a href={`/clients/${r.clientId}`} onClick={e => e.stopPropagation()} className="text-xs text-primary-500 hover:underline flex-shrink-0">
+                        <a
+                          href={`/clients/${r.clientId}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-xs text-primary-500 hover:underline flex-shrink-0"
+                        >
                           Профиль
                         </a>
                       )}
                       {r.comment && (
-                        <ChevronDown className={`h-4 w-4 text-gray-400 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`} />
+                        <ChevronDown
+                          className={`h-4 w-4 text-gray-400 flex-shrink-0 transition-transform ${isExpanded ? 'rotate-180' : ''}`}
+                        />
                       )}
                     </button>
                     {isExpanded && r.comment && (
-                      <div className={`mx-3 mb-1 px-3 py-2 rounded-lg text-sm ${isGood ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+                      <div
+                        className={`mx-3 mb-1 px-3 py-2 rounded-lg text-sm ${isGood ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}
+                      >
                         {r.comment}
                       </div>
                     )}
@@ -412,8 +552,12 @@ function ReviewsTab({ reviews, loading, month, onMonthChange }: {
 
 // ─── Integrations Tab ───────────────────────────────────────────────
 function IntegrationsTab({
-  integrations, platformLinks, onSaveIntegration, onRemoveIntegration,
-  onSavePlatformLink, onRemovePlatformLink,
+  integrations,
+  platformLinks,
+  onSaveIntegration,
+  onRemoveIntegration,
+  onSavePlatformLink,
+  onRemovePlatformLink,
 }: {
   integrations: MessagingIntegration[];
   platformLinks: ReviewPlatformLink[];
@@ -423,13 +567,29 @@ function IntegrationsTab({
   onRemovePlatformLink: (id: string) => void;
 }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({ providerType: 'moizvonki', apiKey: '', senderName: '', senderPhone: '', webhookUrl: '' });
+  const [form, setForm] = useState({
+    providerType: 'moizvonki',
+    apiKey: '',
+    senderName: '',
+    senderPhone: '',
+    webhookUrl: '',
+  });
   const [linkForm, setLinkForm] = useState({ platform: 'google', url: '' });
   const [showLinkForm, setShowLinkForm] = useState(false);
 
-  const providerLabels: Record<string, string> = { moizvonki: 'Мои Звонки', smsru: 'SMS.RU', whatsapp: 'WhatsApp', sms: 'SMS', email: 'Email' };
+  const providerLabels: Record<string, string> = {
+    moizvonki: 'Мои Звонки',
+    smsru: 'SMS.RU',
+    whatsapp: 'WhatsApp',
+    sms: 'SMS',
+    email: 'Email',
+  };
   const platformLabels: Record<string, string> = { google: 'Google Maps', yandex: 'Яндекс', '2gis': '2ГИС' };
-  const platformColors: Record<string, string> = { google: 'bg-blue-50 text-blue-600', yandex: 'bg-red-50 text-red-600', '2gis': 'bg-green-50 text-green-600' };
+  const platformColors: Record<string, string> = {
+    google: 'bg-blue-50 text-blue-600',
+    yandex: 'bg-red-50 text-red-600',
+    '2gis': 'bg-green-50 text-green-600',
+  };
 
   return (
     <div className="space-y-5">
@@ -449,8 +609,11 @@ function IntegrationsTab({
           <div className="space-y-3 mb-4 p-3 bg-gray-50 rounded-xl">
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">Тип</label>
-              <select value={form.providerType} onChange={e => setForm({ ...form, providerType: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm">
+              <select
+                value={form.providerType}
+                onChange={(e) => setForm({ ...form, providerType: e.target.value })}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              >
                 <option value="moizvonki">Мои Звонки</option>
                 <option value="smsru">SMS.RU</option>
                 <option value="whatsapp">WhatsApp</option>
@@ -463,23 +626,44 @@ function IntegrationsTab({
             {form.providerType === 'moizvonki' && (
               <>
                 <div>
-                  <label className="text-xs font-medium text-gray-600 mb-1 block">Домен (поддомен в moizvonki.ru)</label>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">
+                    Домен (поддомен в moizvonki.ru)
+                  </label>
                   <div className="flex items-center gap-0">
-                    <input value={form.webhookUrl} onChange={e => setForm({ ...form, webhookUrl: e.target.value.toLowerCase().replace(/[^a-z0-9\-]/g, '') })}
-                      className="flex-1 rounded-l-lg border border-r-0 border-gray-200 px-3 py-2 text-sm" placeholder="mycompany" />
-                    <span className="bg-gray-100 border border-gray-200 rounded-r-lg px-3 py-2 text-xs text-gray-500">.moizvonki.ru</span>
+                    <input
+                      value={form.webhookUrl}
+                      onChange={(e) =>
+                        setForm({ ...form, webhookUrl: e.target.value.toLowerCase().replace(/[^a-z0-9\-]/g, '') })
+                      }
+                      className="flex-1 rounded-l-lg border border-r-0 border-gray-200 px-3 py-2 text-sm"
+                      placeholder="mycompany"
+                    />
+                    <span className="bg-gray-100 border border-gray-200 rounded-r-lg px-3 py-2 text-xs text-gray-500">
+                      .moizvonki.ru
+                    </span>
                   </div>
-                  <p className="text-xs text-gray-400 mt-1">Например: если ваш адрес mycompany.moizvonki.ru — введите mycompany</p>
+                  <p className="text-xs text-gray-400 mt-1">
+                    Например: если ваш адрес mycompany.moizvonki.ru — введите mycompany
+                  </p>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">Email (логин в Мои Звонки)</label>
-                  <input type="email" value={form.senderName} onChange={e => setForm({ ...form, senderName: e.target.value })}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="user@mail.ru" />
+                  <input
+                    type="email"
+                    value={form.senderName}
+                    onChange={(e) => setForm({ ...form, senderName: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="user@mail.ru"
+                  />
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">Ключ API</label>
-                  <input value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="Скопируйте из Настройки → Интеграция" />
+                  <input
+                    value={form.apiKey}
+                    onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="Скопируйте из Настройки → Интеграция"
+                  />
                   <p className="text-xs text-gray-400 mt-1">Личный кабинет → Настройки → Интеграция → Ключ API</p>
                 </div>
               </>
@@ -490,14 +674,22 @@ function IntegrationsTab({
               <>
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">API ID (из кабинета sms.ru)</label>
-                  <input value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX" />
+                  <input
+                    value={form.apiKey}
+                    onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX"
+                  />
                   <p className="text-xs text-gray-400 mt-1">Скопируйте API ID из sms.ru → Настройки</p>
                 </div>
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">Имя отправителя (опц.)</label>
-                  <input value={form.senderName} onChange={e => setForm({ ...form, senderName: e.target.value })}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="Одобренное в sms.ru" />
+                  <input
+                    value={form.senderName}
+                    onChange={(e) => setForm({ ...form, senderName: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="Одобренное в sms.ru"
+                  />
                 </div>
               </>
             )}
@@ -507,26 +699,42 @@ function IntegrationsTab({
               <>
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">API ключ</label>
-                  <input value={form.apiKey} onChange={e => setForm({ ...form, apiKey: e.target.value })}
-                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="Ваш API ключ" />
+                  <input
+                    value={form.apiKey}
+                    onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="Ваш API ключ"
+                  />
                 </div>
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <label className="text-xs font-medium text-gray-600 mb-1 block">Имя отправителя</label>
-                    <input value={form.senderName} onChange={e => setForm({ ...form, senderName: e.target.value })}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+                    <input
+                      value={form.senderName}
+                      onChange={(e) => setForm({ ...form, senderName: e.target.value })}
+                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    />
                   </div>
                   <div>
                     <label className="text-xs font-medium text-gray-600 mb-1 block">Телефон</label>
-                    <input value={form.senderPhone} onChange={e => setForm({ ...form, senderPhone: e.target.value })}
-                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+                    <input
+                      value={form.senderPhone}
+                      onChange={(e) => setForm({ ...form, senderPhone: e.target.value })}
+                      className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    />
                   </div>
                 </div>
               </>
             )}
 
-            <button onClick={() => { onSaveIntegration(form); setShowForm(false); setForm({ providerType: 'moizvonki', apiKey: '', senderName: '', senderPhone: '', webhookUrl: '' }); }}
-              className="w-full bg-violet-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-violet-700 transition-colors">
+            <button
+              onClick={() => {
+                onSaveIntegration(form);
+                setShowForm(false);
+                setForm({ providerType: 'moizvonki', apiKey: '', senderName: '', senderPhone: '', webhookUrl: '' });
+              }}
+              className="w-full bg-violet-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-violet-700 transition-colors"
+            >
               Сохранить
             </button>
           </div>
@@ -536,11 +744,13 @@ function IntegrationsTab({
           <p className="text-sm text-gray-400 text-center py-4">Нет настроенных провайдеров</p>
         ) : (
           <div className="space-y-2">
-            {integrations.map(i => (
+            {integrations.map((i) => (
               <div key={i.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                 <div className="flex items-center gap-2">
                   <div className={`h-2 w-2 rounded-full ${i.isActive ? 'bg-green-500' : 'bg-gray-300'}`} />
-                  <span className="text-sm font-medium text-gray-900">{providerLabels[i.providerType] || i.providerType}</span>
+                  <span className="text-sm font-medium text-gray-900">
+                    {providerLabels[i.providerType] || i.providerType}
+                  </span>
                   {i.senderName && <span className="text-xs text-gray-500">({i.senderName})</span>}
                 </div>
                 <button onClick={() => onRemoveIntegration(i.id)} className="text-gray-400 hover:text-red-500">
@@ -568,8 +778,11 @@ function IntegrationsTab({
           <div className="space-y-3 mb-4 p-3 bg-gray-50 rounded-xl">
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">Площадка</label>
-              <select value={linkForm.platform} onChange={e => setLinkForm({ ...linkForm, platform: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm">
+              <select
+                value={linkForm.platform}
+                onChange={(e) => setLinkForm({ ...linkForm, platform: e.target.value })}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+              >
                 <option value="google">Google Maps</option>
                 <option value="yandex">Яндекс</option>
                 <option value="2gis">2ГИС</option>
@@ -577,11 +790,21 @@ function IntegrationsTab({
             </div>
             <div>
               <label className="text-xs font-medium text-gray-600 mb-1 block">Ссылка</label>
-              <input value={linkForm.url} onChange={e => setLinkForm({ ...linkForm, url: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" placeholder="https://..." />
+              <input
+                value={linkForm.url}
+                onChange={(e) => setLinkForm({ ...linkForm, url: e.target.value })}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                placeholder="https://..."
+              />
             </div>
-            <button onClick={() => { onSavePlatformLink(linkForm); setShowLinkForm(false); setLinkForm({ platform: 'google', url: '' }); }}
-              className="w-full bg-violet-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-violet-700 transition-colors">
+            <button
+              onClick={() => {
+                onSavePlatformLink(linkForm);
+                setShowLinkForm(false);
+                setLinkForm({ platform: 'google', url: '' });
+              }}
+              className="w-full bg-violet-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-violet-700 transition-colors"
+            >
               Сохранить
             </button>
           </div>
@@ -591,13 +814,20 @@ function IntegrationsTab({
           <p className="text-sm text-gray-400 text-center py-4">Добавьте ссылки на площадки для отзывов</p>
         ) : (
           <div className="space-y-2">
-            {platformLinks.map(l => (
+            {platformLinks.map((l) => (
               <div key={l.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                 <div className="flex items-center gap-2">
-                  <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${platformColors[l.platform] || 'bg-gray-100 text-gray-600'}`}>
+                  <span
+                    className={`text-xs font-semibold px-2 py-0.5 rounded-full ${platformColors[l.platform] || 'bg-gray-100 text-gray-600'}`}
+                  >
                     {platformLabels[l.platform] || l.platform}
                   </span>
-                  <a href={l.url} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline truncate max-w-[140px]">
+                  <a
+                    href={l.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs text-blue-500 hover:underline truncate max-w-[140px]"
+                  >
                     {l.url}
                   </a>
                 </div>
@@ -614,7 +844,13 @@ function IntegrationsTab({
 }
 
 // ─── Settings Tab ───────────────────────────────────────────────────
-function SettingsTab({ settings, onSave }: { settings: ReviewSettings | null; onSave: (s: Partial<ReviewSettings>) => void }) {
+function SettingsTab({
+  settings,
+  onSave,
+}: {
+  settings: ReviewSettings | null;
+  onSave: (s: Partial<ReviewSettings>) => void;
+}) {
   const [form, setForm] = useState<Partial<ReviewSettings>>({});
   const [dirty, setDirty] = useState(false);
 
@@ -626,11 +862,16 @@ function SettingsTab({ settings, onSave }: { settings: ReviewSettings | null; on
   }, [settings]);
 
   const update = (patch: Partial<ReviewSettings>) => {
-    setForm(prev => ({ ...prev, ...patch }));
+    setForm((prev) => ({ ...prev, ...patch }));
     setDirty(true);
   };
 
-  if (!settings) return <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>;
+  if (!settings)
+    return (
+      <div className="flex justify-center py-12">
+        <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+      </div>
+    );
 
   return (
     <div className="space-y-5">
@@ -639,15 +880,24 @@ function SettingsTab({ settings, onSave }: { settings: ReviewSettings | null; on
 
         <div>
           <label className="text-xs font-medium text-gray-600 mb-1 block">Время отправки</label>
-          <input type="time" value={form.sendTime || '20:00'} onChange={e => update({ sendTime: e.target.value })}
-            className="w-36 rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+          <input
+            type="time"
+            value={form.sendTime || '20:00'}
+            onChange={(e) => update({ sendTime: e.target.value })}
+            className="w-36 rounded-lg border border-gray-200 px-3 py-2 text-sm"
+          />
         </div>
 
         <div>
           <label className="text-xs font-medium text-gray-600 mb-1 block">Задержка (часов)</label>
-          <input type="number" min={0} max={48} value={form.feedbackDelayHours ?? 2}
-            onChange={e => update({ feedbackDelayHours: parseInt(e.target.value) || 0 })}
-            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm" />
+          <input
+            type="number"
+            min={0}
+            max={48}
+            value={form.feedbackDelayHours ?? 2}
+            onChange={(e) => update({ feedbackDelayHours: parseInt(e.target.value) || 0 })}
+            className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+          />
           <p className="text-xs text-gray-400 mt-1">Через сколько часов отправлять, если время уже прошло</p>
         </div>
 
@@ -656,9 +906,13 @@ function SettingsTab({ settings, onSave }: { settings: ReviewSettings | null; on
             <p className="text-sm font-medium text-gray-900">Автоотправка</p>
             <p className="text-xs text-gray-500">Отправлять запрос отзыва автоматически</p>
           </div>
-          <button onClick={() => update({ autoSendEnabled: !form.autoSendEnabled })}
-            className={`relative w-11 h-6 rounded-full transition-colors ${form.autoSendEnabled ? 'bg-violet-600' : 'bg-gray-200'}`}>
-            <span className={`absolute top-0.5 left-0.5 h-5 w-5 bg-white rounded-full shadow transition-transform ${form.autoSendEnabled ? 'translate-x-5' : ''}`} />
+          <button
+            onClick={() => update({ autoSendEnabled: !form.autoSendEnabled })}
+            className={`relative w-11 h-6 rounded-full transition-colors ${form.autoSendEnabled ? 'bg-violet-600' : 'bg-gray-200'}`}
+          >
+            <span
+              className={`absolute top-0.5 left-0.5 h-5 w-5 bg-white rounded-full shadow transition-transform ${form.autoSendEnabled ? 'translate-x-5' : ''}`}
+            />
           </button>
         </div>
       </div>
@@ -668,12 +922,14 @@ function SettingsTab({ settings, onSave }: { settings: ReviewSettings | null; on
         <textarea
           rows={4}
           value={form.messageTemplate || ''}
-          onChange={e => update({ messageTemplate: e.target.value })}
+          onChange={(e) => update({ messageTemplate: e.target.value })}
           className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-none"
         />
         <div className="flex flex-wrap gap-1.5">
-          {['{clientName}', '{tenantName}', '{reviewLink}', '{motivation}'].map(tag => (
-            <span key={tag} className="text-xs bg-violet-50 text-violet-600 px-2 py-0.5 rounded-full font-mono">{tag}</span>
+          {['{clientName}', '{tenantName}', '{reviewLink}', '{motivation}'].map((tag) => (
+            <span key={tag} className="text-xs bg-violet-50 text-violet-600 px-2 py-0.5 rounded-full font-mono">
+              {tag}
+            </span>
           ))}
         </div>
       </div>
@@ -681,23 +937,205 @@ function SettingsTab({ settings, onSave }: { settings: ReviewSettings | null; on
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
         <h3 className="text-sm font-semibold text-gray-900">Подарок за отзыв</h3>
         <p className="text-xs text-gray-500">
-          Эта фраза показывается клиенту на странице оценки и подставляется вместо <code>{'{motivation}'}</code> в шаблоне.
+          Эта фраза показывается клиенту на странице оценки и подставляется вместо <code>{'{motivation}'}</code> в
+          шаблоне.
         </p>
         <textarea
           rows={3}
           value={form.motivationMessage || ''}
-          onChange={e => update({ motivationMessage: e.target.value })}
+          onChange={(e) => update({ motivationMessage: e.target.value })}
           placeholder="Например: Замена воздушного фильтра в подарок за честный отзыв"
           className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-none"
         />
       </div>
 
       {dirty && (
-        <button onClick={() => { onSave(form); setDirty(false); }}
-          className="w-full flex items-center justify-center gap-2 bg-violet-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-violet-700 transition-colors">
+        <button
+          onClick={() => {
+            onSave(form);
+            setDirty(false);
+          }}
+          className="w-full flex items-center justify-center gap-2 bg-violet-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-violet-700 transition-colors"
+        >
           <Save className="h-4 w-4" />
           Сохранить настройки
         </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Win-back Tab («Возвращение клиентов») ──────────────────────────
+const WINBACK_PRESETS = [30, 60, 90, 180];
+
+const DEFAULT_WINBACK_MESSAGE =
+  'Здравствуйте! Давно не виделись — соскучились по вашему автомобилю. ' +
+  'Будем рады видеть вас снова: запишитесь на бесплатную диагностику в удобное время.';
+
+function WinbackTab({ onGoToIntegrations }: { onGoToIntegrations: () => void }) {
+  const queryClient = useQueryClient();
+  const [days, setDays] = useState(90);
+  const [message, setMessage] = useState(DEFAULT_WINBACK_MESSAGE);
+  const [result, setResult] = useState<WinbackSendResult | null>(null);
+
+  // Preview the segment. Same `days` feeds both preview and send.
+  const preview = useQuery({
+    queryKey: ['marketing', 'winback', days],
+    queryFn: () => marketingApi.winback(days).then((r) => r.data),
+  });
+
+  const clients = preview.data ?? [];
+  const total = clients.length;
+
+  const sendMutation = useMutation({
+    mutationFn: () => marketingApi.winbackSend({ days, message: message.trim() }).then((r) => r.data),
+    onSuccess: (res) => {
+      setResult(res);
+      // Segment may shrink after a successful broadcast — refresh the preview.
+      queryClient.invalidateQueries({ queryKey: ['marketing', 'winback'] });
+    },
+    onError: () => toast.error('Не удалось отправить рассылку'),
+  });
+
+  const pickDays = (d: number) => {
+    setDays(d);
+    setResult(null); // previous result belongs to a different segment
+    sendMutation.reset();
+  };
+
+  const trimmed = message.trim();
+  const canSend = total > 0 && trimmed.length > 0 && !sendMutation.isPending;
+
+  return (
+    <div className="space-y-4">
+      {/* Intro */}
+      <div>
+        <h2 className="text-base font-bold text-gray-900">Возвращение клиентов</h2>
+        <p className="text-sm text-gray-500 mt-0.5">
+          Найдите тех, кто давно не приезжал, и пригласите их одним сообщением.
+        </p>
+      </div>
+
+      {/* Period presets */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
+        <p className="text-sm font-semibold text-gray-900">Не приезжали более</p>
+        <div className="flex gap-2 mt-3">
+          {WINBACK_PRESETS.map((d) => (
+            <button
+              key={d}
+              onClick={() => pickDays(d)}
+              className={`flex-1 py-2 rounded-xl text-sm font-semibold transition-colors ${
+                days === d
+                  ? 'bg-primary-50 text-primary-700 border border-primary-200'
+                  : 'bg-gray-50 text-gray-500 hover:text-gray-700'
+              }`}
+            >
+              {d} дн.
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Segment preview */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-3 border-b border-gray-100">
+          <div className="flex items-center gap-2">
+            <Users className="h-4 w-4 text-gray-400" />
+            <h3 className="text-sm font-semibold text-gray-900">Сегмент</h3>
+          </div>
+          <span className="text-sm font-bold text-violet-600">{total}</span>
+        </div>
+
+        {preview.isLoading ? (
+          <div className="flex justify-center py-10">
+            <Loader2 className="h-6 w-6 animate-spin text-gray-300" />
+          </div>
+        ) : preview.isError ? (
+          <p className="text-sm text-gray-400 text-center py-8">Не удалось загрузить сегмент</p>
+        ) : total === 0 ? (
+          <div className="text-center py-10">
+            <RotateCcw className="h-9 w-9 text-gray-200 mx-auto mb-2" />
+            <p className="text-sm text-gray-500">Нет клиентов, которые так давно не приезжали</p>
+            <p className="text-xs text-gray-400 mt-1">Попробуйте уменьшить период</p>
+          </div>
+        ) : (
+          <div className="max-h-96 overflow-y-auto divide-y divide-gray-50">
+            {clients.map((c) => (
+              <div key={c.clientId} className="flex items-center gap-3 px-4 py-2.5">
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{c.name || 'Без имени'}</p>
+                  <p className="text-xs text-gray-400 truncate">{c.phone || '—'}</p>
+                </div>
+                <div className="text-right flex-shrink-0">
+                  <p className="text-xs font-medium text-gray-600">{lastVisitLabel(c.lastVisit)}</p>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    {c.totalChecks} {plural(c.totalChecks, ['заказ', 'заказа', 'заказов'])}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Compose message */}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
+        <h3 className="text-sm font-semibold text-gray-900">Сообщение</h3>
+        <textarea
+          rows={4}
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          placeholder="Текст приглашения для клиентов…"
+          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-none"
+        />
+        <p className="text-xs text-gray-400">
+          {total > 0
+            ? `Сообщение получат ${total} ${plural(total, ['клиент', 'клиента', 'клиентов'])} из сегмента.`
+            : 'В выбранном сегменте пока никого нет.'}
+        </p>
+      </div>
+
+      {/* Send */}
+      <button
+        onClick={() => sendMutation.mutate()}
+        disabled={!canSend}
+        className="w-full flex items-center justify-center gap-2 bg-violet-600 text-white rounded-xl py-3 text-sm font-medium hover:bg-violet-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+      >
+        {sendMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+        Отправить{total > 0 ? ` (${total})` : ''}
+      </button>
+
+      {/* Result */}
+      {result && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
+          <div className="grid grid-cols-3 gap-2 text-center">
+            <div>
+              <p className="text-2xl font-bold text-green-600">{result.sent}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Отправлено</p>
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-red-500">{result.failed}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Ошибок</p>
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-gray-900">{result.total}</p>
+              <p className="text-[10px] text-gray-400 mt-0.5">Всего</p>
+            </div>
+          </div>
+
+          {result.sent === 0 && result.total > 0 && (
+            <div className="flex items-start gap-2 p-3 bg-blue-50 rounded-xl">
+              <Info className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
+              <p className="text-xs text-blue-800">
+                Сообщения не отправлены — не подключён провайдер рассылок. Подключите его в разделе{' '}
+                <button onClick={onGoToIntegrations} className="font-semibold underline">
+                  «Каналы»
+                </button>
+                .
+              </p>
+            </div>
+          )}
+        </div>
       )}
     </div>
   );
@@ -730,31 +1168,35 @@ function MasterRatingView() {
     try {
       const res = await marketingApi.getReviews({ month: m });
       setReviews(res.data);
-    } catch { /* empty */ } finally {
+    } catch {
+      /* empty */
+    } finally {
       setLoading(false);
     }
   }, []);
 
-  useEffect(() => { onMonthChange(month); }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    onMonthChange(month);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Build ranking from reviews
   const ranking = (() => {
     const map: Record<string, { name: string; total: number; sum: number }> = {};
-    reviews.forEach(r => {
+    reviews.forEach((r) => {
       if (!r.employeeId || !r.employeeName) return;
       if (!map[r.employeeId]) map[r.employeeId] = { name: r.employeeName, total: 0, sum: 0 };
       map[r.employeeId].total++;
       map[r.employeeId].sum += r.rating;
     });
     return Object.entries(map)
-      .map(([id, s]) => ({ id, name: s.name, count: s.total, avg: Math.round(s.sum / s.total * 10) / 10 }))
+      .map(([id, s]) => ({ id, name: s.name, count: s.total, avg: Math.round((s.sum / s.total) * 10) / 10 }))
       .sort((a, b) => b.avg - a.avg || b.count - a.count);
   })();
 
   const placeColors = [
-    'from-amber-400 to-yellow-500',   // 1st — gold
-    'from-gray-300 to-gray-400',      // 2nd — silver
-    'from-amber-600 to-orange-500',   // 3rd — bronze
+    'from-amber-400 to-yellow-500', // 1st — gold
+    'from-gray-300 to-gray-400', // 2nd — silver
+    'from-amber-600 to-orange-500', // 3rd — bronze
   ];
 
   const placeBg = [
@@ -776,20 +1218,28 @@ function MasterRatingView() {
 
       {/* Month picker */}
       <div className="flex items-center justify-center gap-3">
-        <button onClick={() => shiftMonth(-1)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 active:scale-95 transition-all">
+        <button
+          onClick={() => shiftMonth(-1)}
+          className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 active:scale-95 transition-all"
+        >
           <ChevronLeft className="h-5 w-5" />
         </button>
         <div className="bg-white border border-gray-200 rounded-xl px-5 py-2 shadow-sm min-w-[160px] text-center">
           <span className="text-sm font-semibold text-gray-900 capitalize">{monthLabel}</span>
         </div>
-        <button onClick={() => shiftMonth(1)} className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 active:scale-95 transition-all">
+        <button
+          onClick={() => shiftMonth(1)}
+          className="p-2 rounded-xl hover:bg-gray-100 text-gray-500 active:scale-95 transition-all"
+        >
           <ChevronRight className="h-5 w-5" />
         </button>
       </div>
 
       {/* Content */}
       {loading ? (
-        <div className="flex justify-center py-16"><Loader2 className="h-7 w-7 animate-spin text-gray-300" /></div>
+        <div className="flex justify-center py-16">
+          <Loader2 className="h-7 w-7 animate-spin text-gray-300" />
+        </div>
       ) : ranking.length === 0 ? (
         <div className="text-center py-16">
           <Star className="h-12 w-12 text-gray-200 mx-auto mb-3" />
@@ -812,8 +1262,16 @@ function MasterRatingView() {
                 <div className="flex items-center gap-3">
                   {/* Place badge */}
                   {isTop3 ? (
-                    <div className={`flex items-center justify-center h-10 w-10 rounded-xl bg-gradient-to-br ${placeColors[idx]} text-white font-bold text-sm shadow-sm flex-shrink-0`}>
-                      {place === 1 ? <Trophy className="h-5 w-5" /> : place === 2 ? <Medal className="h-5 w-5" /> : place}
+                    <div
+                      className={`flex items-center justify-center h-10 w-10 rounded-xl bg-gradient-to-br ${placeColors[idx]} text-white font-bold text-sm shadow-sm flex-shrink-0`}
+                    >
+                      {place === 1 ? (
+                        <Trophy className="h-5 w-5" />
+                      ) : place === 2 ? (
+                        <Medal className="h-5 w-5" />
+                      ) : (
+                        place
+                      )}
                     </div>
                   ) : (
                     <div className="flex items-center justify-center h-10 w-10 rounded-xl bg-gray-100 text-gray-500 font-bold text-sm flex-shrink-0">
@@ -823,12 +1281,16 @@ function MasterRatingView() {
 
                   {/* Name & stars */}
                   <div className="flex-1 min-w-0">
-                    <p className={`font-semibold truncate ${place === 1 ? 'text-base text-gray-900' : 'text-sm text-gray-800'}`}>
+                    <p
+                      className={`font-semibold truncate ${place === 1 ? 'text-base text-gray-900' : 'text-sm text-gray-800'}`}
+                    >
                       {m.name}
                     </p>
                     <div className="flex items-center gap-1.5 mt-0.5">
                       <Stars rating={Math.round(m.avg)} size={place === 1 ? 'md' : 'sm'} />
-                      <span className={`text-xs font-bold ${m.avg >= 4 ? 'text-green-600' : m.avg >= 3 ? 'text-amber-600' : 'text-red-600'}`}>
+                      <span
+                        className={`text-xs font-bold ${m.avg >= 4 ? 'text-green-600' : m.avg >= 3 ? 'text-amber-600' : 'text-red-600'}`}
+                      >
                         {m.avg.toFixed(1)}
                       </span>
                     </div>
@@ -836,7 +1298,9 @@ function MasterRatingView() {
 
                   {/* Review count */}
                   <div className="text-right flex-shrink-0">
-                    <p className={`font-bold ${place === 1 ? 'text-lg text-gray-900' : 'text-base text-gray-700'}`}>{m.count}</p>
+                    <p className={`font-bold ${place === 1 ? 'text-lg text-gray-900' : 'text-base text-gray-700'}`}>
+                      {m.count}
+                    </p>
                     <p className="text-[10px] text-gray-400 uppercase tracking-wide">
                       отзыв{m.count === 1 ? '' : m.count < 5 ? 'а' : 'ов'}
                     </p>
@@ -872,41 +1336,46 @@ export default function MarketingPage() {
 
   const loadDashboard = useCallback(async () => {
     try {
-      const [dashRes, alertsRes] = await Promise.all([
-        marketingApi.getDashboard(),
-        marketingApi.getAlerts(),
-      ]);
+      const [dashRes, alertsRes] = await Promise.all([marketingApi.getDashboard(), marketingApi.getAlerts()]);
       setDashboard(dashRes.data);
       setAlerts(alertsRes.data);
-    } catch { /* empty */ }
+    } catch {
+      /* empty */
+    }
   }, []);
 
-  const loadReviews = useCallback(async (month?: string) => {
-    setReviewsLoading(true);
-    try {
-      const res = await marketingApi.getReviews({ month: month || reviewMonth });
-      setReviews(res.data);
-    } catch { /* empty */ } finally {
-      setReviewsLoading(false);
-    }
-  }, [reviewMonth]);
+  const loadReviews = useCallback(
+    async (month?: string) => {
+      setReviewsLoading(true);
+      try {
+        const res = await marketingApi.getReviews({ month: month || reviewMonth });
+        setReviews(res.data);
+      } catch {
+        /* empty */
+      } finally {
+        setReviewsLoading(false);
+      }
+    },
+    [reviewMonth],
+  );
 
   const loadIntegrations = useCallback(async () => {
     try {
-      const [intRes, linkRes] = await Promise.all([
-        marketingApi.getIntegrations(),
-        marketingApi.getPlatformLinks(),
-      ]);
+      const [intRes, linkRes] = await Promise.all([marketingApi.getIntegrations(), marketingApi.getPlatformLinks()]);
       setIntegrations(intRes.data);
       setPlatformLinks(linkRes.data);
-    } catch { /* empty */ }
+    } catch {
+      /* empty */
+    }
   }, []);
 
   const loadSettings = useCallback(async () => {
     try {
       const res = await marketingApi.getSettings();
       setSettings(res.data);
-    } catch { /* empty */ }
+    } catch {
+      /* empty */
+    }
   }, []);
 
   useEffect(() => {
@@ -926,8 +1395,10 @@ export default function MarketingPage() {
   const handleAlertRead = async (id: string) => {
     try {
       await marketingApi.markAlertRead(id);
-      setAlerts(prev => prev.map(a => a.id === id ? { ...a, isRead: true } : a));
-    } catch { toast.error('Ошибка'); }
+      setAlerts((prev) => prev.map((a) => (a.id === id ? { ...a, isRead: true } : a)));
+    } catch {
+      toast.error('Ошибка');
+    }
   };
 
   const handleSaveIntegration = async (data: any) => {
@@ -935,15 +1406,19 @@ export default function MarketingPage() {
       const res = await marketingApi.upsertIntegration(data);
       setIntegrations(res.data);
       toast.success('Провайдер сохранён');
-    } catch { toast.error('Ошибка сохранения'); }
+    } catch {
+      toast.error('Ошибка сохранения');
+    }
   };
 
   const handleRemoveIntegration = async (id: string) => {
     try {
       await marketingApi.removeIntegration(id);
-      setIntegrations(prev => prev.filter(i => i.id !== id));
+      setIntegrations((prev) => prev.filter((i) => i.id !== id));
       toast.success('Удалено');
-    } catch { toast.error('Ошибка удаления'); }
+    } catch {
+      toast.error('Ошибка удаления');
+    }
   };
 
   const handleSavePlatformLink = async (data: any) => {
@@ -951,15 +1426,19 @@ export default function MarketingPage() {
       const res = await marketingApi.upsertPlatformLink(data);
       setPlatformLinks(res.data);
       toast.success('Ссылка сохранена');
-    } catch { toast.error('Ошибка сохранения'); }
+    } catch {
+      toast.error('Ошибка сохранения');
+    }
   };
 
   const handleRemovePlatformLink = async (id: string) => {
     try {
       await marketingApi.removePlatformLink(id);
-      setPlatformLinks(prev => prev.filter(l => l.id !== id));
+      setPlatformLinks((prev) => prev.filter((l) => l.id !== id));
       toast.success('Удалено');
-    } catch { toast.error('Ошибка удаления'); }
+    } catch {
+      toast.error('Ошибка удаления');
+    }
   };
 
   const handleSaveSettings = async (data: Partial<ReviewSettings>) => {
@@ -967,7 +1446,9 @@ export default function MarketingPage() {
       const res = await marketingApi.updateSettings(data);
       setSettings(res.data);
       toast.success('Настройки сохранены');
-    } catch { toast.error('Ошибка сохранения'); }
+    } catch {
+      toast.error('Ошибка сохранения');
+    }
   };
 
   // Masters only see the rating leaderboard
@@ -983,15 +1464,18 @@ export default function MarketingPage() {
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
-        {tabs.map(t => {
+        {tabs.map((t) => {
           const Icon = t.icon;
           const isActive = activeTab === t.key;
           return (
-            <button key={t.key} onClick={() => setActiveTab(t.key)}
-              className={`flex-1 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-colors
-                ${isActive ? 'bg-white text-violet-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}>
-              <Icon className="h-3.5 w-3.5" />
-              {t.label}
+            <button
+              key={t.key}
+              onClick={() => setActiveTab(t.key)}
+              className={`flex-1 min-w-0 flex items-center justify-center gap-1.5 py-2 rounded-lg text-xs font-medium transition-colors
+                ${isActive ? 'bg-white text-violet-600 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+            >
+              <Icon className="h-3.5 w-3.5 flex-shrink-0" />
+              <span className="truncate">{t.label}</span>
             </button>
           );
         })}
@@ -999,16 +1483,24 @@ export default function MarketingPage() {
 
       {/* Tab content */}
       {loading ? (
-        <div className="flex justify-center py-12"><Loader2 className="h-6 w-6 animate-spin text-gray-400" /></div>
+        <div className="flex justify-center py-12">
+          <Loader2 className="h-6 w-6 animate-spin text-gray-400" />
+        </div>
       ) : (
         <>
           {activeTab === 'dashboard' && <DashboardTab data={dashboard} alerts={alerts} onAlertRead={handleAlertRead} />}
-          {activeTab === 'reviews' && <ReviewsTab reviews={reviews} loading={reviewsLoading} month={reviewMonth} onMonthChange={setReviewMonth} />}
+          {activeTab === 'reviews' && (
+            <ReviewsTab reviews={reviews} loading={reviewsLoading} month={reviewMonth} onMonthChange={setReviewMonth} />
+          )}
+          {activeTab === 'winback' && <WinbackTab onGoToIntegrations={() => setActiveTab('integrations')} />}
           {activeTab === 'integrations' && (
             <IntegrationsTab
-              integrations={integrations} platformLinks={platformLinks}
-              onSaveIntegration={handleSaveIntegration} onRemoveIntegration={handleRemoveIntegration}
-              onSavePlatformLink={handleSavePlatformLink} onRemovePlatformLink={handleRemovePlatformLink}
+              integrations={integrations}
+              platformLinks={platformLinks}
+              onSaveIntegration={handleSaveIntegration}
+              onRemoveIntegration={handleRemoveIntegration}
+              onSavePlatformLink={handleSavePlatformLink}
+              onRemovePlatformLink={handleRemovePlatformLink}
             />
           )}
           {activeTab === 'settings' && <SettingsTab settings={settings} onSave={handleSaveSettings} />}

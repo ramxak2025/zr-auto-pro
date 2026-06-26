@@ -44,6 +44,7 @@ import KnowledgeTroubleshootingScreen from '../screens/KnowledgeTroubleshootingS
 import KnowledgeTroubleshootingDetailScreen from '../screens/KnowledgeTroubleshootingDetailScreen';
 import KnowledgeTroubleshootingEditorScreen from '../screens/KnowledgeTroubleshootingEditorScreen';
 import MarketingScreen from '../screens/MarketingScreen';
+import WinbackScreen from '../screens/WinbackScreen';
 import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
@@ -350,6 +351,12 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
       <MoreStack.Screen name="Reports" component={GatedReports} />
       <MoreStack.Screen name="Marketing" component={MarketingScreen} />
+      {/* «Возвращение клиентов» — win-back outreach reached from the Marketing
+          screen (Отзывы → карточка). Lives in MoreStack so the floating tab bar
+          stays visible (back goes Winback → Marketing → Ещё). Owner-class gated
+          inside the screen (director/admin/superadmin), same as the Marketing
+          owner-only editors. */}
+      <MoreStack.Screen name="Winback" component={WinbackScreen} />
       <MoreStack.Screen name="Calls" component={CallsScreen} />
       <MoreStack.Screen name="Mailings" component={MailingsScreen} />
       <MoreStack.Screen name="Integrations" component={IntegrationsScreen} />

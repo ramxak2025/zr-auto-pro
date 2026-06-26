@@ -466,8 +466,9 @@ function ClientSourcesCard() {
 
 function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
   const palette = useColors();
+  const navigation = useNavigation<any>();
   const { isRole } = useAuth();
-  // Only owner-level roles configure the client-source list.
+  // Only owner-level roles configure the client-source list AND run win-back.
   const canEditSources = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
   const dashboardQuery = useQuery({
@@ -561,6 +562,35 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
         </View>
         <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
       </Pressable>
+
+      {/* Win-back outreach — owner-class only (same role family as the
+          client-source editor below). Opens the «Возвращение клиентов»
+          screen registered on the MoreStack. */}
+      {canEditSources && (
+        <Pressable
+          onPress={() => {
+            haptic('tap');
+            navigation.navigate('Winback');
+          }}
+          style={({ pressed }) => [
+            styles.ctaCard,
+            {
+              backgroundColor: palette.bg.card,
+              borderColor: palette.border.subtle,
+              opacity: pressed ? 0.85 : 1,
+            },
+          ]}
+        >
+          <View style={[styles.ctaIcon, { backgroundColor: colors.teal[50] }]}>
+            <Ionicons name="repeat-outline" size={18} color={colors.teal[600]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.ctaTitle, { color: palette.text.primary }]}>Возвращение клиентов</Text>
+            <Text style={[styles.ctaSub, { color: palette.text.secondary }]}>Напишите тем, кто давно не приезжал</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+        </Pressable>
+      )}
 
       {/* Motivational gift editor */}
       <MotivationCard />
