@@ -2675,22 +2675,23 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scroll: { flex: 1 },
-  scrollContent: { padding: spacing[3], gap: spacing[3], paddingBottom: spacing[12] },
+  scrollContent: { padding: spacing[3], gap: spacing[2.5], paddingBottom: spacing[12] },
 
   // ═══ Section containers with distinct backgrounds ═══
   sectionClient: {
     backgroundColor: colors.blue[50],
     borderRadius: borderRadius['2xl'],
-    padding: spacing[4],
-    gap: spacing[2.5],
+    padding: spacing[3.5],
+    gap: spacing[2],
     borderWidth: 1,
     borderColor: colors.blue[100],
   },
   sectionItems: {
-    backgroundColor: colors.white,
+    // Surface comes from the inline `palette.bg.card` override in render —
+    // no hardcoded white here so dark mode tints correctly.
     borderRadius: borderRadius['2xl'],
-    padding: spacing[4],
-    gap: spacing[3],
+    padding: spacing[3.5],
+    gap: spacing[2.5],
     borderWidth: 1,
     borderColor: colors.gray[100],
     shadowColor: colors.black,
@@ -2701,7 +2702,7 @@ const styles = StyleSheet.create({
   sectionComment: {
     backgroundColor: colors.purple[50],
     borderRadius: borderRadius['2xl'],
-    padding: spacing[4],
+    padding: spacing[3.5],
     gap: spacing[2],
     borderWidth: 1,
     borderColor: colors.purple[100],
@@ -2709,12 +2710,12 @@ const styles = StyleSheet.create({
   sectionPayment: {
     backgroundColor: colors.green[50],
     borderRadius: borderRadius['2xl'],
-    padding: spacing[4],
-    gap: spacing[3],
+    padding: spacing[3.5],
+    gap: spacing[2.5],
     borderWidth: 1,
     borderColor: colors.green[100],
   },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: spacing[1] },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginBottom: 0 },
   sectionLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[800] },
   templateChip: {
     flexDirection: 'row',
@@ -2949,7 +2950,7 @@ const styles = StyleSheet.create({
   linesSection: {
     backgroundColor: colors.gray[50],
     borderRadius: borderRadius.xl,
-    padding: spacing[3.5],
+    padding: spacing[3],
     borderWidth: 1,
     borderColor: colors.gray[100],
   },
@@ -2957,7 +2958,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: spacing[2],
+    marginBottom: spacing[1.5],
   },
   linesSectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
   sectionIcon: { width: 28, height: 28, borderRadius: borderRadius.md, alignItems: 'center', justifyContent: 'center' },
@@ -2977,14 +2978,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   lineItem: {
-    backgroundColor: colors.white,
+    // Surface from the inline `palette.bg.elevated` override — no hardcoded
+    // white so the row tints in dark mode.
     borderRadius: borderRadius.lg,
-    padding: spacing[3],
-    marginBottom: spacing[2],
+    padding: spacing[2.5],
+    marginBottom: spacing[1.5],
     borderWidth: 1,
     borderColor: colors.gray[100],
   },
-  lineTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[1] },
+  lineTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing[0.5] },
   lineName: {
     fontSize: fontSize.sm,
     fontWeight: fontWeight.medium,
@@ -3000,7 +3002,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     paddingHorizontal: spacing[2],
     paddingVertical: 3,
-    marginBottom: spacing[2],
+    marginBottom: spacing[1.5],
     alignSelf: 'flex-start',
   },
   lineMasterText: { fontSize: 11, color: colors.primary[700], fontWeight: fontWeight.medium },
@@ -3065,7 +3067,7 @@ const styles = StyleSheet.create({
     borderColor: colors.gray[100],
     borderRadius: borderRadius.xl,
     paddingHorizontal: spacing[3.5],
-    paddingVertical: spacing[2.5],
+    paddingVertical: spacing[2],
   },
   discountLabel: { fontSize: fontSize.sm, color: colors.gray[500], flex: 1 },
   discountInput: {
@@ -3088,14 +3090,14 @@ const styles = StyleSheet.create({
   commentInput: {
     fontSize: fontSize.sm,
     color: colors.gray[900],
-    minHeight: 44,
+    minHeight: 40,
     textAlignVertical: 'top',
-    backgroundColor: colors.white,
+    // Surface from the inline `palette.bg.muted` override — no hardcoded white.
     borderWidth: 1,
     borderColor: colors.purple[200],
     borderRadius: borderRadius.xl,
     paddingHorizontal: spacing[3.5],
-    paddingVertical: spacing[2.5],
+    paddingVertical: spacing[2],
   },
   commentInlineWrap: { marginTop: spacing[2] },
   commentInline: {
@@ -3112,28 +3114,28 @@ const styles = StyleSheet.create({
   },
   // Summary
   summaryCard: {
-    backgroundColor: colors.white,
+    // Surface from the inline `palette.bg.card` override — no hardcoded white.
     borderRadius: borderRadius['2xl'],
     borderWidth: 2,
     borderColor: colors.primary[100],
-    padding: spacing[4],
+    padding: spacing[3.5],
   },
   summaryTitle: {
     fontSize: 11,
     fontWeight: fontWeight.bold,
     color: colors.gray[400],
     letterSpacing: 1,
-    marginBottom: spacing[3],
+    marginBottom: spacing[2],
   },
   summaryRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingVertical: spacing[1.5],
+    paddingVertical: spacing[1],
   },
   summaryLabel: { fontSize: fontSize.sm, color: colors.gray[500] },
   summaryValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
-  summaryDivider: { height: 1, backgroundColor: colors.gray[100], marginVertical: spacing[1.5] },
+  summaryDivider: { height: 1, backgroundColor: colors.gray[100], marginVertical: spacing[1] },
   summaryTotalLabel: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
   summaryTotalValue: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.primary[600] },
   // Payment
@@ -3142,7 +3144,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
-    paddingVertical: spacing[2.5],
+    paddingVertical: spacing[2],
     paddingHorizontal: spacing[3],
     borderRadius: borderRadius.xl,
     borderWidth: 1.5,
@@ -3157,9 +3159,9 @@ const styles = StyleSheet.create({
   paymentSelectorHint: { fontSize: 11, fontWeight: fontWeight.medium, letterSpacing: -0.1 },
   paymentSelectorValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.2, marginTop: 1 },
   splitWrap: {
-    backgroundColor: colors.white,
+    // Surface from the inline `palette.bg.muted` override — no hardcoded white.
     borderRadius: borderRadius.xl,
-    padding: spacing[3],
+    padding: spacing[2.5],
     borderWidth: 1,
     borderColor: colors.green[200],
   },
@@ -3186,11 +3188,11 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2.5],
-    backgroundColor: colors.white,
+    // Surface from the inline `palette.bg.muted` override — no hardcoded white.
     borderRadius: borderRadius.xl,
     borderWidth: 1,
     borderColor: colors.green[200],
-    padding: spacing[3],
+    padding: spacing[2.5],
   },
   deferToggleActive: { borderColor: colors.amber[200], backgroundColor: colors.amber[50] },
   deferredEditHint: {
@@ -3215,7 +3217,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing[2],
-    paddingVertical: spacing[4],
+    paddingVertical: spacing[3.5],
   },
   submitBtnText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.bold },
   // Form / Picker shared

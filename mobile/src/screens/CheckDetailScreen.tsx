@@ -33,7 +33,7 @@ import { haptic } from '../platform/haptics';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Check, Tenant, KnowledgeForCar, KnowledgeArticle } from '../../../shared/types';
+import type { Check, Tenant } from '../../../shared/types';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -84,161 +84,6 @@ const paymentIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
   warranty: 'shield-checkmark-outline',
   cash_card: 'swap-horizontal-outline',
 };
-
-/** Parse the car make (first token) from a "make model" string, e.g.
- *  "Lada Priora" → "Lada". Empty when no usable text. */
-function parseCarMake(makeModel?: string | null): string {
-  if (!makeModel) return '';
-  return makeModel.trim().split(/\s+/)[0] || '';
-}
-
-/**
- * KnowledgeForCarRow — additive, below-the-main-content affordance on the
- * check detail. Surfaces the contextual Knowledge Base for the check's car
- * make (regulations + typical works) and, when present, intake/handover
- * checklists. Renders NOTHING when there's nothing relevant. Crash-safe
- * deep-nav via the `MoreTab` nested route (KB screens live in MoreStack).
- */
-function KnowledgeForCarRow({
-  makeModel,
-  navigation,
-  palette,
-}: {
-  makeModel?: string | null;
-  navigation: any;
-  palette: ReturnType<typeof useColors>;
-}) {
-  const [open, setOpen] = useState(false);
-  const make = useMemo(() => parseCarMake(makeModel), [makeModel]);
-
-  const { data: forCar } = useQuery<KnowledgeForCar>({
-    queryKey: ['knowledge-for-car', make],
-    queryFn: async () => (await knowledgeApi.forCar({ make })).data,
-    enabled: !!make,
-    staleTime: 10 * 60_000,
-    placeholderData: (prev) => prev,
-  });
-  // Checklists are make-agnostic — only fetched once the sheet is opened
-  // so we never spend a request on a screen the user doesn't expand.
-  const { data: checklists } = useQuery<KnowledgeArticle[]>({
-    queryKey: ['knowledge-checklists'],
-    queryFn: async () => (await knowledgeApi.listChecklists()).data,
-    enabled: open,
-    staleTime: 10 * 60_000,
-    placeholderData: (prev) => prev,
-  });
-
-  const articles = forCar?.articles ?? [];
-  const troubleshooting = forCar?.troubleshooting ?? [];
-  const lists = checklists ?? [];
-  const hasContent = articles.length > 0 || troubleshooting.length > 0;
-
-  const openArticle = (articleId: string) => {
-    setOpen(false);
-    navigation.navigate('MoreTab', { screen: 'KnowledgeArticle', params: { id: articleId } });
-  };
-  const openTrouble = (id: string) => {
-    setOpen(false);
-    navigation.navigate('MoreTab', { screen: 'KnowledgeTroubleshootingDetail', params: { id } });
-  };
-
-  if (!make || !hasContent) return null;
-
-  return (
-    <>
-      <TouchableOpacity
-        onPress={() => setOpen(true)}
-        activeOpacity={0.7}
-        style={[styles.kbRow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-        accessibilityLabel={`Регламенты и типовые работы для ${make}`}
-      >
-        <View style={[styles.kbRowIcon, { backgroundColor: colors.indigo[50] }]}>
-          <Ionicons name="book" size={16} color={colors.indigo[600]} />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.kbRowTitle, { color: palette.text.primary }]} numberOfLines={1}>
-            Регламенты и типовые работы
-          </Text>
-          <Text style={[styles.kbRowSub, { color: palette.text.tertiary }]} numberOfLines={1}>
-            для марки {make}
-          </Text>
-        </View>
-        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-      </TouchableOpacity>
-
-      <Modal visible={open} onClose={() => setOpen(false)} title={`База знаний · ${make}`}>
-        {articles.length > 0 && (
-          <View style={styles.kbSheetGroup}>
-            <Text style={[styles.kbSheetGroupLabel, { color: palette.text.tertiary }]}>РЕГЛАМЕНТЫ И СТАТЬИ</Text>
-            {articles.map((a) => (
-              <TouchableOpacity
-                key={a.id}
-                onPress={() => openArticle(a.id)}
-                activeOpacity={0.7}
-                style={[styles.kbSheetRow, { borderBottomColor: palette.border.subtle }]}
-              >
-                <Ionicons
-                  name={a.type === 'regulation' ? 'shield-checkmark-outline' : 'document-text-outline'}
-                  size={16}
-                  color={colors.indigo[600]}
-                />
-                <Text style={[styles.kbSheetRowText, { color: palette.text.primary }]} numberOfLines={2}>
-                  {a.title}
-                </Text>
-                <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-        {troubleshooting.length > 0 && (
-          <View style={styles.kbSheetGroup}>
-            <Text style={[styles.kbSheetGroupLabel, { color: palette.text.tertiary }]}>ТИПОВЫЕ НЕИСПРАВНОСТИ</Text>
-            {troubleshooting.map((t) => (
-              <TouchableOpacity
-                key={t.id}
-                onPress={() => openTrouble(t.id)}
-                activeOpacity={0.7}
-                style={[styles.kbSheetRow, { borderBottomColor: palette.border.subtle }]}
-              >
-                <Ionicons name="construct-outline" size={16} color={colors.orange[500]} />
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.kbSheetRowText, { color: palette.text.primary }]} numberOfLines={2}>
-                    {t.title}
-                  </Text>
-                  {!!t.system && (
-                    <Text style={[styles.kbSheetRowSub, { color: palette.text.tertiary }]} numberOfLines={1}>
-                      {t.system}
-                    </Text>
-                  )}
-                </View>
-                <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-        {lists.length > 0 && (
-          <View style={styles.kbSheetGroup}>
-            <Text style={[styles.kbSheetGroupLabel, { color: palette.text.tertiary }]}>ЧЕК-ЛИСТЫ ПРИЁМКИ/ВЫДАЧИ</Text>
-            {lists.map((a) => (
-              <TouchableOpacity
-                key={a.id}
-                onPress={() => openArticle(a.id)}
-                activeOpacity={0.7}
-                style={[styles.kbSheetRow, { borderBottomColor: palette.border.subtle }]}
-              >
-                <Ionicons name="checkbox-outline" size={16} color={colors.teal[600]} />
-                <Text style={[styles.kbSheetRowText, { color: palette.text.primary }]} numberOfLines={2}>
-                  {a.title}
-                </Text>
-                <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-              </TouchableOpacity>
-            ))}
-          </View>
-        )}
-      </Modal>
-    </>
-  );
-}
 
 export default function CheckDetailScreen() {
   const route = useRoute<any>();
@@ -1047,10 +892,6 @@ export default function CheckDetailScreen() {
           ) : null}
         </View>
 
-        {/* Contextual Knowledge Base — regulations / typical works for this
-            car make + intake-handover checklists. Self-hides when empty. */}
-        {check.car && <KnowledgeForCarRow makeModel={check.car.makeModel} navigation={navigation} palette={palette} />}
-
         {/* Comment */}
         {check.comment && (
           <View style={[styles.commentCard, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
@@ -1776,43 +1617,6 @@ const styles = StyleSheet.create({
     borderColor: colors.primary[200],
   },
   plateTagText: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.primary[700], letterSpacing: 0.5 },
-
-  // ── Contextual Knowledge-Base affordance ────────────────────────────────
-  kbRow: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: spacing[3],
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[4],
-  },
-  kbRowIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center' as const,
-    justifyContent: 'center' as const,
-  },
-  kbRowTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, letterSpacing: -0.1 },
-  kbRowSub: { fontSize: 12, marginTop: 1 },
-  kbSheetGroup: { marginBottom: spacing[2] },
-  kbSheetGroupLabel: {
-    fontSize: 11,
-    fontWeight: '700' as const,
-    letterSpacing: 1,
-    textTransform: 'uppercase' as const,
-    marginBottom: spacing[1],
-  },
-  kbSheetRow: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: spacing[2.5],
-    paddingVertical: spacing[3],
-    borderBottomWidth: StyleSheet.hairlineWidth,
-  },
-  kbSheetRowText: { flex: 1, fontSize: 14, fontWeight: '500' as const, letterSpacing: -0.1 },
-  kbSheetRowSub: { fontSize: 12, marginTop: 2 },
 
   // Comment
   commentCard: {
