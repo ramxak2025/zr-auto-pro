@@ -87,6 +87,7 @@ import type {
   JournalDoc,
   KnowledgeCategory,
   KnowledgeArticle,
+  KnowledgeSearchResults,
   KnowledgeAcksResponse,
   RegulationUserSummary,
   ArticleFeedbackResult,
@@ -1015,6 +1016,10 @@ export function createKnowledgeApi(api: HttpClient) {
     updateCategory: (id: string, data: Partial<KnowledgeCategoryInput>) =>
       api.patch<KnowledgeCategory>(`/knowledge/categories/${id}`, data),
     deleteCategory: (id: string) => api.delete<{ message: string }>(`/knowledge/categories/${id}`),
+
+    // Global smart search across articles (title + body + block text), category
+    // names and course names. Tenant-scoped + ranked. Empty buckets when q < 2 chars.
+    search: (q: string) => api.get<KnowledgeSearchResults>('/knowledge/search', { params: { q } }),
 
     // Articles — list is slim (no body/attachments), getArticle is full.
     listArticles: (params?: ListArticlesParams) => api.get<KnowledgeArticle[]>('/knowledge/articles', { params }),

@@ -63,6 +63,17 @@ export class KnowledgeController {
     return this.knowledge.deleteCategory(user.tenantID, id);
   }
 
+  // ─── Global smart search ────────────────────────────────────────────────────
+  // Tenant-scoped search across articles (title + body + block text), category
+  // names and course names. READ: any authenticated user (non-managers see only
+  // published items, enforced in the service). Distinct /search segment → no
+  // collision with the /articles, /courses, /troubleshooting :id routes.
+
+  @Get('search')
+  search(@CurrentUser() user: JwtPayload, @Query('q') q?: string) {
+    return this.knowledge.search(user.tenantID, user.role, user.userID, q ?? '');
+  }
+
   // ─── A. Учебный центр — courses & lessons ──────────────────────────────────
   // Declared before /articles routes; distinct /courses prefix → no collision.
 

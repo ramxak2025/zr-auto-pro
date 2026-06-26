@@ -6,6 +6,7 @@ import type {
   User,
   KnowledgeArticleType,
   KnowledgeAttachment,
+  KnowledgeBlock,
   KnowledgeQuizQuestion,
   TroubleshootingSeverity,
   BroadcastButton,
@@ -527,12 +528,24 @@ export interface KnowledgeCategoryInput {
   /** Ionicons name for the UI. */
   icon?: string | null;
   sortOrder?: number;
+  /**
+   * Parent category for folders/subfolders (079). Pass null (on update) to move
+   * the category back to the root. The server rejects cycles with a 400.
+   */
+  parentId?: string | null;
 }
 
 export interface KnowledgeArticleInput {
   title: string;
-  /** Markdown body. */
+  /** Markdown body. Kept alongside `blocks` for fallback rendering. */
   body?: string;
+  /**
+   * Block-based content (079) — ordered text/heading/image/VK-video blocks. Pass
+   * [] to clear blocks (renderers then fall back to `body`). `body` is never
+   * replaced by setting `blocks`. Each block is deep-validated server-side;
+   * unknown types or non-VK video URLs are rejected with a 400.
+   */
+  blocks?: KnowledgeBlock[];
   type?: KnowledgeArticleType;
   /** Pass null to clear the category on update. */
   categoryId?: string | null;

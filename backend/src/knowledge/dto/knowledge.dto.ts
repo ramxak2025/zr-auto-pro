@@ -30,6 +30,11 @@ export class CreateCategoryDto {
   @IsOptional()
   @IsInt()
   sortOrder?: number;
+
+  /** Parent category for folders/subfolders. Omit/null = root-level category. */
+  @IsOptional()
+  @IsUUID()
+  parentId?: string | null;
 }
 
 export class UpdateCategoryDto {
@@ -46,6 +51,12 @@ export class UpdateCategoryDto {
   @IsOptional()
   @IsInt()
   sortOrder?: number;
+
+  // Move under a parent (or send null to move back to root). The service rejects
+  // cycles (a category cannot become its own ancestor) with 400.
+  @IsOptional()
+  @IsUUID()
+  parentId?: string | null;
 }
 
 // ─── Attachments ────────────────────────────────────────────────────────────
@@ -108,6 +119,17 @@ export class CreateArticleDto {
   @Type(() => AttachmentDto)
   attachments?: AttachmentDto[];
 
+  /**
+   * Block-based content — ordered array of text/heading/image/VK-video blocks.
+   * Kept loosely typed here (discriminated-union shape); KnowledgeService deeply
+   * validates every block and rejects garbage / unknown types with a 400.
+   * When set, it does NOT replace `body` (kept for fallback rendering).
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  blocks?: unknown[];
+
   @IsOptional()
   @IsBoolean()
   pinned?: boolean;
@@ -162,6 +184,15 @@ export class UpdateArticleDto {
   @ValidateNested({ each: true })
   @Type(() => AttachmentDto)
   attachments?: AttachmentDto[];
+
+  /**
+   * Block-based content (see CreateArticleDto.blocks). Send [] to clear blocks
+   * (renderers then fall back to `body`). Deeply validated in KnowledgeService.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(500)
+  blocks?: unknown[];
 
   @IsOptional()
   @IsBoolean()

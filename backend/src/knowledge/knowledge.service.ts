@@ -32,6 +32,14 @@ type Attachment = {
 };
 type QuizQuestion = { question: string; options: string[]; correctIndex: number };
 
+// Block-based article content (079). Discriminated union mirrored 1:1 in
+// shared/types KnowledgeBlock. Persisted to knowledge_articles.blocks JSONB.
+type KnowledgeBlock =
+  | { type: 'text'; text: string }
+  | { type: 'heading'; text: string; level?: 2 | 3 }
+  | { type: 'image'; url: string; caption?: string }
+  | { type: 'video'; provider: 'vk'; url: string; caption?: string };
+
 // Default categories + starter articles seeded once per tenant on first read.
 // Mirrors the client_sources DEFAULT_SOURCES lazy-seed: an empty tenant never
 // sees a blank screen. Icons are Ionicons names for the mobile/web UI.
@@ -457,7 +465,7 @@ export class KnowledgeService {
   async listCategories(tenantID: string) {
     await this.ensureSeed(tenantID);
     const { rows } = await this.pool.query(
-      `SELECT id, name, icon, sort_order
+      `SELECT id, name, icon, sort_order, parent_id
        FROM knowledge_categories WHERE tenant_id=$1
        ORDER BY sort_order, name`,
       [tenantID],
@@ -466,10 +474,14 @@ export class KnowledgeService {
   }
 
   async createCategory(tenantID: string, dto: CreateCategoryDto) {
+    const parentId = dto.parentId ?? null;
+    // A brand-new category can't yet form a cycle, but its parent must exist in
+    // the same tenant (passing null id → existence-only check).
+    await this.assertCategoryParentValid(tenantID, null, parentId);
     const { rows } = await this.pool.query(
-      `INSERT INTO knowledge_categories (tenant_id, name, icon, sort_order)
-       VALUES ($1, $2, $3, $4) RETURNING id, name, icon, sort_order`,
-      [tenantID, dto.name.trim(), dto.icon ?? null, dto.sortOrder ?? 0],
+      `INSERT INTO knowledge_categories (tenant_id, name, icon, sort_order, parent_id)
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, name, icon, sort_order, parent_id`,
+      [tenantID, dto.name.trim(), dto.icon ?? null, dto.sortOrder ?? 0, parentId],
     );
     return mapCategory(rows[0]);
   }
@@ -490,6 +502,13 @@ export class KnowledgeService {
       sets.push(`sort_order=$${i++}`);
       vals.push(dto.sortOrder);
     }
+    if (dto.parentId !== undefined) {
+      // Reject cycles (own-parent / ancestor loops) BEFORE writing. Validated
+      // against the live tree so a category can never become its own ancestor.
+      await this.assertCategoryParentValid(tenantID, id, dto.parentId ?? null);
+      sets.push(`parent_id=$${i++}`);
+      vals.push(dto.parentId ?? null);
+    }
     if (sets.length === 0) {
       const existing = await this.getCategoryOrThrow(tenantID, id);
       return existing;
@@ -497,7 +516,7 @@ export class KnowledgeService {
     vals.push(id, tenantID);
     const { rows } = await this.pool.query(
       `UPDATE knowledge_categories SET ${sets.join(', ')}
-       WHERE id=$${i++} AND tenant_id=$${i} RETURNING id, name, icon, sort_order`,
+       WHERE id=$${i++} AND tenant_id=$${i} RETURNING id, name, icon, sort_order, parent_id`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Категория не найдена' });
@@ -506,7 +525,8 @@ export class KnowledgeService {
 
   async deleteCategory(tenantID: string, id: string) {
     // ON DELETE SET NULL on articles.category_id — articles survive, just lose
-    // their category.
+    // their category. ON DELETE SET NULL on knowledge_categories.parent_id (079)
+    // — child categories survive too, orphaned back to the root level.
     const res = await this.pool.query('DELETE FROM knowledge_categories WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     if (res.rowCount === 0) throw new NotFoundException({ message: 'Категория не найдена' });
     return { message: 'Удалено' };
@@ -514,11 +534,42 @@ export class KnowledgeService {
 
   private async getCategoryOrThrow(tenantID: string, id: string) {
     const { rows } = await this.pool.query(
-      'SELECT id, name, icon, sort_order FROM knowledge_categories WHERE id=$1 AND tenant_id=$2',
+      'SELECT id, name, icon, sort_order, parent_id FROM knowledge_categories WHERE id=$1 AND tenant_id=$2',
       [id, tenantID],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Категория не найдена' });
     return mapCategory(rows[0]);
+  }
+
+  /**
+   * Validate a proposed parent for category `id` (null `id` = create). Ensures
+   * the parent exists in this tenant and that assigning it introduces no cycle:
+   * walking up from `parentId` must never reach `id` (which would make a
+   * category its own ancestor). Rejects with 400 on violation. `seen` guards
+   * against any pre-existing loop so the walk always terminates.
+   */
+  private async assertCategoryParentValid(tenantID: string, id: string | null, parentId: string | null): Promise<void> {
+    if (parentId == null) return;
+    if (id != null && parentId === id) {
+      throw new BadRequestException({ message: 'Категория не может быть вложена сама в себя' });
+    }
+    const seen = new Set<string>();
+    let cursor: string | null = parentId;
+    while (cursor) {
+      if (id != null && cursor === id) {
+        throw new BadRequestException({ message: 'Циклическая вложенность категорий запрещена' });
+      }
+      if (seen.has(cursor)) break; // pre-existing loop safety — terminate the walk
+      seen.add(cursor);
+      const { rows }: { rows: { parent_id: string | null }[] } = await this.pool.query(
+        'SELECT parent_id FROM knowledge_categories WHERE id=$1 AND tenant_id=$2',
+        [cursor, tenantID],
+      );
+      if (rows.length === 0) {
+        throw new BadRequestException({ message: 'Родительская категория не найдена' });
+      }
+      cursor = rows[0].parent_id;
+    }
   }
 
   // ─── Articles ─────────────────────────────────────────────────────────────
@@ -590,7 +641,7 @@ export class KnowledgeService {
 
     const { rows } = await this.pool.query(
       `SELECT id, title, type, category_id, pinned, cover_image, updated_at,
-              mandatory, due_date, car_make, view_count,
+              mandatory, due_date, car_make, view_count, blocks,
               left(body, 200) AS excerpt_src
        FROM knowledge_articles
        WHERE ${where.join(' AND ')}
@@ -602,6 +653,90 @@ export class KnowledgeService {
   }
 
   /**
+   * Global smart search across the whole base, tenant-scoped:
+   *   - articles: title + body + block text (text/caption of every block),
+   *     ranked title(3) > body(1) > block(1), then pinned, then recency;
+   *   - categories: by name (cheap);
+   *   - courses: by title/description (cheap, with per-user progress).
+   * Non-managers only see published articles/courses. A query shorter than 2
+   * chars returns empty buckets (avoids whole-table ILIKE scans). The title/body
+   * predicates hit the pg_trgm GIN indexes (063); block text is a JSONB scan.
+   */
+  async search(tenantID: string, role: string, userID: string, rawQ: string) {
+    await this.ensureSeed(tenantID);
+    const q = (rawQ ?? '').trim();
+    if (q.length < 2) {
+      return { query: q, articles: [], categories: [], courses: [] };
+    }
+    const term = `%${q}%`;
+    const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+
+    // Articles — title + body + block text. The block-text EXISTS subquery reads
+    // every block's `text`/`caption` so a hit only inside a block still matches.
+    const { rows: articleRows } = await this.pool.query(
+      `SELECT id, title, type, category_id, pinned, cover_image, updated_at,
+              mandatory, due_date, car_make, view_count, blocks,
+              left(body, 200) AS excerpt_src,
+              ( (CASE WHEN title ILIKE $2 THEN 3 ELSE 0 END)
+              + (CASE WHEN body  ILIKE $2 THEN 1 ELSE 0 END)
+              + (CASE WHEN EXISTS (
+                    SELECT 1 FROM jsonb_array_elements(COALESCE(blocks, '[]'::jsonb)) AS b
+                    WHERE (b->>'text') ILIKE $2 OR (b->>'caption') ILIKE $2
+                  ) THEN 1 ELSE 0 END) ) AS score
+       FROM knowledge_articles
+       WHERE tenant_id=$1
+         ${isManager ? '' : 'AND published = true'}
+         AND ( title ILIKE $2 OR body ILIKE $2 OR EXISTS (
+                 SELECT 1 FROM jsonb_array_elements(COALESCE(blocks, '[]'::jsonb)) AS b
+                 WHERE (b->>'text') ILIKE $2 OR (b->>'caption') ILIKE $2
+               ) )
+       ORDER BY score DESC, pinned DESC, updated_at DESC
+       LIMIT 50`,
+      [tenantID, term],
+    );
+
+    // Categories — by name. Cheap; trigram index on name not present but the set
+    // is small per tenant.
+    const { rows: categoryRows } = await this.pool.query(
+      `SELECT id, name, icon, sort_order, parent_id
+       FROM knowledge_categories
+       WHERE tenant_id=$1 AND name ILIKE $2
+       ORDER BY name
+       LIMIT 20`,
+      [tenantID, term],
+    );
+
+    // Courses — by title/description, with per-user progress (same shape as
+    // listCourses). $3 (userID) is always referenced — no orphan placeholder.
+    const { rows: courseRows } = await this.pool.query(
+      `SELECT c.id, c.title, c.description, c.cover_image, c.category_id, c.published,
+              c.sort_order, c.created_at, c.updated_at,
+              (SELECT COUNT(*) FROM knowledge_lessons l WHERE l.course_id = c.id)::int AS lesson_count,
+              (SELECT COUNT(*) FROM knowledge_lessons l
+                 JOIN knowledge_lesson_progress p ON p.lesson_id = l.id AND p.user_id = $3
+                WHERE l.course_id = c.id)::int AS completed_lessons,
+              EXISTS(
+                SELECT 1 FROM knowledge_course_completion cc
+                WHERE cc.course_id = c.id AND cc.user_id = $3
+              ) AS completed
+       FROM knowledge_courses c
+       WHERE c.tenant_id=$1
+         ${isManager ? '' : 'AND c.published = true'}
+         AND (c.title ILIKE $2 OR c.description ILIKE $2)
+       ORDER BY c.sort_order, c.created_at
+       LIMIT 20`,
+      [tenantID, term, userID],
+    );
+
+    return {
+      query: q,
+      articles: articleRows.map(mapArticleSlim),
+      categories: categoryRows.map(mapCategory),
+      courses: courseRows.map(mapCourseSlim),
+    };
+  }
+
+  /**
    * Full article. For type='regulation' includes `acknowledged` = whether the
    * CURRENT user has acked it. Non-managers can't open unpublished drafts.
    */
@@ -610,7 +745,7 @@ export class KnowledgeService {
     const { rows } = await this.pool.query(
       `SELECT a.id, a.category_id, a.type, a.title, a.body, a.cover_image, a.attachments,
               a.pinned, a.published, a.created_by, a.created_at, a.updated_at,
-              a.version, a.mandatory, a.due_date, a.view_count, a.car_make,
+              a.version, a.mandatory, a.due_date, a.view_count, a.car_make, a.blocks,
               c.name AS category_name,
               -- Acked = an ack row exists AT THE CURRENT version. A bumped
               -- version (new revision) re-requires acknowledgment.
@@ -643,16 +778,20 @@ export class KnowledgeService {
 
   async createArticle(tenantID: string, createdBy: string | null, dto: CreateArticleDto) {
     const attachments = sanitizeAttachments(dto.attachments);
+    // Deep-validate blocks; throws 400 on garbage / unknown type. Empty → NULL
+    // column so renderers fall back to the markdown `body`.
+    const blocks = validateBlocks(dto.blocks);
+    const blocksJson = blocks.length ? JSON.stringify(blocks) : null;
     const type = dto.type ?? 'article';
     const mandatory = dto.mandatory ?? false;
     const published = dto.published ?? true;
     const { rows } = await this.pool.query(
       `INSERT INTO knowledge_articles
          (tenant_id, category_id, type, title, body, cover_image, attachments, pinned, published,
-          created_by, mandatory, due_date, car_make)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13)
+          created_by, mandatory, due_date, car_make, blocks)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14::jsonb)
        RETURNING id, category_id, type, title, body, cover_image, attachments, pinned, published,
-                 created_by, created_at, updated_at, version, mandatory, due_date, view_count, car_make`,
+                 created_by, created_at, updated_at, version, mandatory, due_date, view_count, car_make, blocks`,
       [
         tenantID,
         dto.categoryId ?? null,
@@ -667,6 +806,7 @@ export class KnowledgeService {
         mandatory,
         dto.dueDate ?? null,
         dto.carMake ?? null,
+        blocksJson,
       ],
     );
     const row = rows[0];
@@ -729,6 +869,13 @@ export class KnowledgeService {
       sets.push(`attachments=$${i++}::jsonb`);
       vals.push(JSON.stringify(sanitizeAttachments(dto.attachments)));
     }
+    if (dto.blocks !== undefined) {
+      // Deep-validate (throws 400 on garbage). [] → NULL so the renderer falls
+      // back to `body`. `body` is never touched here — both can coexist.
+      const blocks = validateBlocks(dto.blocks);
+      sets.push(`blocks=$${i++}::jsonb`);
+      vals.push(blocks.length ? JSON.stringify(blocks) : null);
+    }
     if (dto.pinned !== undefined) {
       sets.push(`pinned=$${i++}`);
       vals.push(dto.pinned);
@@ -767,7 +914,7 @@ export class KnowledgeService {
       `UPDATE knowledge_articles SET ${sets.join(', ')}
        WHERE id=$${i++} AND tenant_id=$${i}
        RETURNING id, category_id, type, title, body, cover_image, attachments, pinned, published,
-                 created_by, created_at, updated_at, version, mandatory, due_date, view_count, car_make`,
+                 created_by, created_at, updated_at, version, mandatory, due_date, view_count, car_make, blocks`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Статья не найдена' });
@@ -1598,6 +1745,8 @@ function mapCategory(r: any) {
     name: r.name,
     icon: r.icon ?? undefined,
     sortOrder: r.sort_order ?? 0,
+    // 079: parent for folders/subfolders. null/absent = root-level category.
+    parentId: r.parent_id ?? undefined,
   };
 }
 
@@ -1615,6 +1764,9 @@ function mapArticleSlim(r: any) {
     dueDate: r.due_date ?? undefined,
     carMake: r.car_make ?? undefined,
     viewCount: r.view_count ?? 0,
+    // 079: present only when the SELECT pulled the `blocks` column; undefined
+    // (omitted) otherwise. Empty/null blocks → undefined (fall back to body).
+    blocks: parseBlocks(r.blocks),
   };
 }
 
@@ -1627,6 +1779,8 @@ function mapArticleFull(r: any) {
     title: r.title,
     body: r.body ?? '',
     excerpt: bodyToExcerpt(r.body),
+    // 079: ordered block content. undefined when empty/null → render `body`.
+    blocks: parseBlocks(r.blocks),
     coverImage: r.cover_image ?? undefined,
     attachments: parseAttachments(r.attachments),
     pinned: !!r.pinned,
@@ -1736,6 +1890,134 @@ function sanitizeAttachments(input: unknown): Attachment[] {
     out.push(att);
   }
   return out;
+}
+
+// ─── Article blocks (079) ─────────────────────────────────────────────────────
+
+const BLOCK_HEADING_LEVELS: readonly number[] = [2, 3];
+
+/**
+ * True when `url` is a well-formed http(s) URL on a VK host (vk.com / vk.ru /
+ * vkvideo.ru, or a subdomain). VK video embeds are `vk.com/video_ext.php?...`;
+ * shareable links are `vk.com/video-123_456`. Anything else — other hosts,
+ * javascript:/data:, malformed strings — is rejected so a `video` block can
+ * never smuggle an arbitrary embed URL.
+ */
+function isVkVideoUrl(url: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return false;
+  const host = parsed.hostname.toLowerCase();
+  const VK_HOSTS = ['vk.com', 'vk.ru', 'vkvideo.ru', 'm.vk.com'];
+  return VK_HOSTS.some((h) => host === h || host.endsWith(`.${h}`));
+}
+
+/**
+ * Deep-validate the block array supplied by the client and return a normalised,
+ * trusted copy. Throws BadRequestException (→ 400) on ANY malformed input:
+ * not-an-array, non-object element, unknown `type`, missing required field of a
+ * known type, bad heading level, or a non-VK video URL. No silent dropping —
+ * garbage is rejected outright. null/undefined → [] (caller stores NULL).
+ */
+function validateBlocks(input: unknown): KnowledgeBlock[] {
+  if (input === null || input === undefined) return [];
+  if (!Array.isArray(input)) {
+    throw new BadRequestException({ message: 'blocks должен быть массивом' });
+  }
+  const out: KnowledgeBlock[] = [];
+  input.forEach((raw, idx) => {
+    const n = idx + 1;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new BadRequestException({ message: `Блок #${n}: ожидается объект` });
+    }
+    const b = raw as Record<string, unknown>;
+    switch (b.type) {
+      case 'text': {
+        if (typeof b.text !== 'string') {
+          throw new BadRequestException({ message: `Блок #${n} (text): поле text обязательно` });
+        }
+        out.push({ type: 'text', text: b.text });
+        break;
+      }
+      case 'heading': {
+        if (typeof b.text !== 'string') {
+          throw new BadRequestException({ message: `Блок #${n} (heading): поле text обязательно` });
+        }
+        const block: KnowledgeBlock = { type: 'heading', text: b.text };
+        if (b.level !== undefined) {
+          if (typeof b.level !== 'number' || !BLOCK_HEADING_LEVELS.includes(b.level)) {
+            throw new BadRequestException({ message: `Блок #${n} (heading): level должен быть 2 или 3` });
+          }
+          block.level = b.level as 2 | 3;
+        }
+        out.push(block);
+        break;
+      }
+      case 'image': {
+        if (typeof b.url !== 'string' || !b.url) {
+          throw new BadRequestException({ message: `Блок #${n} (image): поле url обязательно` });
+        }
+        const block: KnowledgeBlock = { type: 'image', url: b.url };
+        if (b.caption !== undefined) {
+          if (typeof b.caption !== 'string') {
+            throw new BadRequestException({ message: `Блок #${n} (image): caption должен быть строкой` });
+          }
+          block.caption = b.caption;
+        }
+        out.push(block);
+        break;
+      }
+      case 'video': {
+        if (b.provider !== 'vk') {
+          throw new BadRequestException({ message: `Блок #${n} (video): поддерживается только provider 'vk'` });
+        }
+        if (typeof b.url !== 'string' || !isVkVideoUrl(b.url)) {
+          throw new BadRequestException({ message: `Блок #${n} (video): некорректная ссылка на видео VK` });
+        }
+        const block: KnowledgeBlock = { type: 'video', provider: 'vk', url: b.url };
+        if (b.caption !== undefined) {
+          if (typeof b.caption !== 'string') {
+            throw new BadRequestException({ message: `Блок #${n} (video): caption должен быть строкой` });
+          }
+          block.caption = b.caption;
+        }
+        out.push(block);
+        break;
+      }
+      default:
+        throw new BadRequestException({ message: `Блок #${n}: неизвестный тип «${String(b.type)}»` });
+    }
+  });
+  return out;
+}
+
+/**
+ * Parse the stored `blocks` JSONB (string or already-parsed array) back into a
+ * trusted block array for responses. Re-runs validation defensively and returns
+ * `undefined` when empty/null/invalid so renderers fall back to the `body`.
+ */
+function parseBlocks(raw: unknown): KnowledgeBlock[] | undefined {
+  if (raw === null || raw === undefined) return undefined;
+  let arr: unknown = raw;
+  if (typeof raw === 'string') {
+    try {
+      arr = JSON.parse(raw);
+    } catch {
+      return undefined;
+    }
+  }
+  if (!Array.isArray(arr) || arr.length === 0) return undefined;
+  try {
+    const blocks = validateBlocks(arr);
+    return blocks.length ? blocks : undefined;
+  } catch {
+    // Stored data should already be valid; never fail a read over it.
+    return undefined;
+  }
 }
 
 // ─── Courses / lessons mappers ────────────────────────────────────────────────

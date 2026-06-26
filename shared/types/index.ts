@@ -1471,6 +1471,13 @@ export interface KnowledgeCategory {
   /** Ionicons name for the UI (e.g. 'document-text-outline'). */
   icon?: string;
   sortOrder: number;
+  /**
+   * Parent category id for folders/subfolders (079). Absent/null = a root-level
+   * category. Build the tree client-side by grouping on `parentId`. Deleting a
+   * parent orphans its children to the root (ON DELETE SET NULL), never deletes
+   * them. The server rejects cycles (a category can't become its own ancestor).
+   */
+  parentId?: string;
 }
 
 export interface KnowledgeAttachment {
@@ -1490,6 +1497,26 @@ export interface KnowledgeAttachment {
 export type KnowledgeArticleType = 'article' | 'regulation';
 
 /**
+ * Block-based article content (079) — an ordered, interleaved array of content
+ * blocks: paragraphs, headings, images (with caption) and VK videos. When an
+ * article has `blocks`, render them in order; when `blocks` is absent/empty,
+ * fall back to the markdown `body`.
+ *
+ * Notes for the renderer:
+ *   - `video` is VK-only (`provider: 'vk'`). The `url` is a VK link
+ *     (`vk.com/video-123_456`); to embed, expect the player URL form
+ *     `https://vk.com/video_ext.php?...` inside an <iframe>/WebView.
+ *   - `heading.level` defaults to 2 when omitted.
+ *   - `image.url` / `video.url` are validated server-side (VK host whitelist for
+ *     video) — unknown block types or bad video URLs are rejected with a 400.
+ */
+export type KnowledgeBlock =
+  | { type: 'text'; text: string }
+  | { type: 'heading'; text: string; level?: 2 | 3 }
+  | { type: 'image'; url: string; caption?: string }
+  | { type: 'video'; provider: 'vk'; url: string; caption?: string };
+
+/**
  * Full article shape. The slim list endpoint (`listArticles`) returns a subset:
  * id, title, type, categoryId, pinned, coverImage, updatedAt, excerpt — the
  * heavy fields (body, attachments, acknowledged) are populated only by
@@ -1504,6 +1531,11 @@ export interface KnowledgeArticle {
   title: string;
   /** Markdown. Empty string on the slim list; full text on getArticle. */
   body: string;
+  /**
+   * Block-based content (079). Present (on both list + detail) only when the
+   * article has blocks; absent/empty → render the markdown `body` instead.
+   */
+  blocks?: KnowledgeBlock[];
   /** Short plain-text preview derived from the body (present on both list + detail). */
   excerpt?: string;
   coverImage?: string;
@@ -1565,6 +1597,21 @@ export interface ArticleFeedbackResult {
   notHelpfulCount: number;
   /** The vote just recorded by THIS user. */
   myFeedback: boolean;
+}
+
+/**
+ * Response of GET /knowledge/search?q=… — global, tenant-scoped smart search.
+ * `articles` are slim (ranked: title > body > block-text), `categories` match by
+ * name, `courses` by title/description (with this user's progress). All buckets
+ * are empty when the query is shorter than 2 characters. Non-managers only see
+ * published articles/courses.
+ */
+export interface KnowledgeSearchResults {
+  /** The trimmed query that was executed. */
+  query: string;
+  articles: KnowledgeArticle[];
+  categories: KnowledgeCategory[];
+  courses: KnowledgeCourse[];
 }
 
 // ───────────────────────────────────────────────────────────────────────

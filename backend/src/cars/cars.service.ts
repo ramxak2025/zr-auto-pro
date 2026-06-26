@@ -217,7 +217,7 @@ export class CarsService {
 
     const { rows } = await this.pool.query(
       `SELECT ch.id, ch.number, ch.date, ch.total_revenue, ch.payment_method, ch.is_returned,
-              ch.is_deferred, m.full_name as master_name, ca.plate_number, ca.make_model,
+              ch.is_deferred, ch.mileage, m.full_name as master_name, ca.plate_number, ca.make_model,
               cl.full_name as client_name, cl.phone as client_phone
        FROM checks ch
        LEFT JOIN users m ON m.id = ch.master_id
@@ -236,6 +236,9 @@ export class CarsService {
       paymentMethod: r.payment_method,
       isReturned: !!r.is_returned,
       isDeferred: !!r.is_deferred,
+      // 001 checks.mileage (INT, nullable). CarDetailScreen derives «Пробег»
+      // from the latest non-null value and net «Потрачено» from non-returned rows.
+      mileage: r.mileage ?? null,
       masterName: r.master_name,
       carPlate: r.plate_number,
       carMakeModel: r.make_model,
