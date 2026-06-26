@@ -692,6 +692,87 @@ export interface BookingSettings {
   channel: 'auto' | 'sms' | 'whatsapp';
 }
 
+// ───────────────────────────────────────────────────────────────────────
+//  Кассовая смена / Z-отчёт / Инкассация (cash shift / Z-report / collection).
+//  Backend: cash-shifts/ module (migration 080_cash_shifts). ADDITIVE — purely
+//  read-aggregated from existing checks/expenses; does not change cash-flow,
+//  checks or expenses write behaviour. At most ONE open shift per tenant.
+// ───────────────────────────────────────────────────────────────────────
+
+export type CashShiftStatus = 'open' | 'closed';
+
+export interface CashShift {
+  id: string;
+  tenantId: string;
+  openedBy?: string | null;
+  /** Denormalised from the users join. */
+  openedByName?: string | null;
+  openedAt: string;
+  /** Разменная касса / float counted in the drawer at open. */
+  openingAmount: number;
+  closedBy?: string | null;
+  closedByName?: string | null;
+  closedAt?: string | null;
+  /** Фактический нал при закрытии. Null while open. */
+  closingAmount?: number | null;
+  /** Расчётный остаток, frozen at close. Null while open. */
+  expectedAmount?: number | null;
+  /** closingAmount − expectedAmount (>0 излишек, <0 недостача). Null while open. */
+  difference?: number | null;
+  status: CashShiftStatus;
+  note?: string | null;
+  createdAt: string;
+}
+
+export interface CashCollection {
+  id: string;
+  tenantId: string;
+  shiftId: string;
+  amount: number;
+  collectedBy?: string | null;
+  collectedByName?: string | null;
+  collectedAt: string;
+  note?: string | null;
+  createdAt: string;
+}
+
+/**
+ * Z-отчёт — the reconciliation of one shift window [windowStart, windowEnd].
+ * Returned by open / close / current / report / collect.
+ *
+ *   expectedAmount = openingAmount + cashSales − cashExpenses − collectionsTotal
+ *   difference     = factualAmount − expectedAmount   (null while the shift is open)
+ *
+ * cashSales/cardSales come from checks.cash_amount / checks.card_amount over
+ * non-deferred checks in the window, so a split-payment check is counted by
+ * tender and returns are already netted in place. cashExpenses = approved
+ * expenses in the window (treated as cash out of the drawer).
+ */
+export interface CashShiftReport {
+  shift: CashShift;
+  /** Net cash taken from sales (Σ checks.cash_amount, non-deferred, returns netted). */
+  cashSales: number;
+  /** Net card taken from sales (Σ checks.card_amount, non-deferred, returns netted). */
+  cardSales: number;
+  /** Σ checks.total_revenue in the window (cash + card + any warranty). */
+  totalRevenue: number;
+  /** Σ approved expenses in the window — cash outflow from the drawer. */
+  cashExpenses: number;
+  /** Σ инкассация for this shift. */
+  collectionsTotal: number;
+  /** Count of non-deferred checks in the window. */
+  checksCount: number;
+  openingAmount: number;
+  expectedAmount: number;
+  /** Фактический нал при закрытии. Null while the shift is open. */
+  factualAmount: number | null;
+  /** factualAmount − expectedAmount. Null while the shift is open. */
+  difference: number | null;
+  collections: CashCollection[];
+  windowStart: string;
+  windowEnd: string;
+}
+
 export interface Supplier {
   id: string;
   name: string;

@@ -107,6 +107,8 @@ import type {
   Booking,
   BookingMutationResult,
   BookingSettings,
+  CashShift,
+  CashShiftReport,
 } from '../types';
 import type {
   LoginRequest,
@@ -1146,5 +1148,33 @@ export function createPermissionTemplatesApi(api: HttpClient) {
     remove: (id: string) => api.delete<{ success: true }>(`/permission-templates/${id}`),
     apply: (id: string, userId: string) =>
       api.post<UserPermissions>(`/permission-templates/${id}/apply/${userId}`),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Кассовая смена / Z-отчёт / Инкассация (cash shift / Z-report / collection).
+//  Backend: cash-shifts/ (migration 080). open/close/collect are owner-class
+//  gated server-side; current/report/list are readable by any tenant user.
+//  Every response carries the recomputed Z-report so the UI updates instantly.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createCashShiftsApi(api: HttpClient) {
+  return {
+    /** Open a shift. 409 if one is already open for the tenant. */
+    open: (data: { openingAmount: number; note?: string }) =>
+      api.post<CashShiftReport>('/cash-shifts/open', data),
+    /** Close the shift; returns the final Z-report with computed difference. */
+    close: (id: string, data: { closingAmount: number; note?: string }) =>
+      api.post<CashShiftReport>(`/cash-shifts/${id}/close`, data),
+    /** The currently-open shift with live Z-report, or null when none is open. */
+    current: () => api.get<CashShiftReport | null>('/cash-shifts/current'),
+    /** Full Z-report for one shift (live for open, frozen headline for closed). */
+    report: (id: string) => api.get<CashShiftReport>(`/cash-shifts/${id}/report`),
+    /** Paginated shift history, newest first. */
+    list: (params?: { page?: number; limit?: number }) =>
+      api.get<PaginatedResponse<CashShift>>('/cash-shifts', { params }),
+    /** Record an инкассация; returns the refreshed Z-report. */
+    collect: (id: string, data: { amount: number; note?: string }) =>
+      api.post<CashShiftReport>(`/cash-shifts/${id}/collect`, data),
   };
 }
