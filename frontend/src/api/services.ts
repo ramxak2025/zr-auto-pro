@@ -31,6 +31,7 @@ import {
   createBookingsApi,
   createCashShiftsApi,
   createDebtsApi,
+  createInstallmentsApi,
   createLoyaltyApi,
   createPurchaseOrdersApi,
   createAdminApi,
@@ -114,6 +115,7 @@ export const notificationsApi = createNotificationsApi(api);
 export const bookingsApi = createBookingsApi(api);
 export const cashShiftsApi = createCashShiftsApi(api);
 export const debtsApi = createDebtsApi(api);
+export const installmentsApi = createInstallmentsApi(api);
 export const loyaltyApi = createLoyaltyApi(api);
 export const purchaseOrdersApi = createPurchaseOrdersApi(api);
 export const adminApi = createAdminApi(api);

@@ -45,6 +45,7 @@ import type { SalarySummary, UserRole, TodayEmployeeStatus, Shift } from '../typ
 import { UserRole as UserRoleEnum } from '../types';
 import { useNavigate } from 'react-router-dom';
 import CallsWidget from '../components/CallsWidget';
+import InstallmentsWidget from '../components/InstallmentsWidget';
 
 // ---------------------------------------------------------------------------
 // Skeleton loader for cards
@@ -715,6 +716,8 @@ function AdminDashboard() {
         <StaffStatusCircles />
       </div>
       <div className="space-y-5">
+        {/* Upcoming / overdue installment payments (owner-class). */}
+        <InstallmentsWidget />
         {/* Calls today (replaces the old employee ranking widget — owner asked
             to surface telephony on the dashboard instead, since the employees
             section already exposes per-master ranking inside each profile). */}

@@ -23,14 +23,13 @@ import {
   Percent,
   TrendingUp,
   Coins,
-  AlertCircle,
   Gift,
   Wallet,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
-import { clientsApi, carsApi, checksApi, debtsApi, loyaltyApi, walletApi } from '../api/services';
+import { clientsApi, carsApi, checksApi, installmentsApi, loyaltyApi, walletApi } from '../api/services';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
@@ -42,7 +41,8 @@ import {
   Client,
   Car as CarType,
   Check,
-  ClientDebtSummary,
+  InstallmentClientLedger,
+  InstallmentPlan,
   ClientBonusSummary,
   BonusType,
   UserRole,
@@ -89,6 +89,8 @@ function CarChecksPanel({ carId }: { carId: string }) {
         return 'Гарантия';
       case 'cash_card':
         return 'Нал + Карта';
+      case 'installment':
+        return 'Рассрочка';
       default:
         return method;
     }
@@ -278,284 +280,120 @@ function ClientSearchAutocomplete({
   );
 }
 
-// ---- Client Debt / Receivables Section ----
+// ---- Client Installments Section (Рассрочка) ----
 function ClientDebtSection({ clientId, clientName }: { clientId: string; clientName: string }) {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
-  const [modalOpen, setModalOpen] = useState(false);
-  const [mode, setMode] = useState<'charge' | 'payment'>('charge');
-  const [amount, setAmount] = useState('');
-  const [reason, setReason] = useState('');
-  const [deleteEntryId, setDeleteEntryId] = useState<string | null>(null);
-
-  const { data: summary, isLoading } = useQuery<ClientDebtSummary>({
-    queryKey: ['debts', 'client', clientId],
+  const { data: ledger, isLoading } = useQuery<InstallmentClientLedger>({
+    queryKey: ['installments', 'client', clientId],
     queryFn: async () => {
-      const res = await debtsApi.clientLedger(clientId);
+      const res = await installmentsApi.clientLedger(clientId);
       return res.data;
     },
     enabled: !!clientId,
   });
 
-  // Push the fresh summary straight into the cache (instant UI) and invalidate
-  // the debtors overview so the list stays in sync.
-  const applySummary = (next: ClientDebtSummary) => {
-    queryClient.setQueryData(['debts', 'client', clientId], next);
-    queryClient.invalidateQueries({ queryKey: ['debts', 'client', clientId] });
-    queryClient.invalidateQueries({ queryKey: ['debts', 'debtors'] });
+  const plans = ledger?.plans ?? [];
+  const totalRemaining = ledger?.totalRemaining ?? 0;
+  const recentPayments = (ledger?.payments ?? []).slice(0, 4);
+
+  const statusBadge = (plan: InstallmentPlan) => {
+    if (plan.status === 'closed') return <span className="badge-green">Закрыта</span>;
+    if (plan.overdue) return <span className="badge-red">Просрочена</span>;
+    return <span className="badge-blue">Открыта</span>;
   };
 
-  const chargeMutation = useMutation({
-    mutationFn: (data: { amount: number; reason?: string }) =>
-      debtsApi.charge({ clientId, amount: data.amount, reason: data.reason }),
-    onSuccess: (res) => {
-      applySummary(res.data);
-      toast.success('Долг добавлен');
-      closeModal();
-    },
-    onError: () => toast.error('Не удалось добавить долг'),
-  });
-
-  const paymentMutation = useMutation({
-    mutationFn: (data: { amount: number; reason?: string }) =>
-      debtsApi.payment({ clientId, amount: data.amount, reason: data.reason }),
-    onSuccess: (res) => {
-      applySummary(res.data);
-      toast.success('Оплата принята');
-      closeModal();
-    },
-    onError: () => toast.error('Не удалось принять оплату'),
-  });
-
-  const removeMutation = useMutation({
-    mutationFn: (entryId: string) => debtsApi.remove(entryId),
-    onSuccess: (res) => {
-      applySummary(res.data);
-      toast.success('Операция удалена');
-      setDeleteEntryId(null);
-    },
-    onError: () => {
-      toast.error('Не удалось удалить операцию');
-      setDeleteEntryId(null);
-    },
-  });
-
-  const openModal = (next: 'charge' | 'payment') => {
-    setMode(next);
-    setAmount('');
-    setReason('');
-    setModalOpen(true);
+  const fmtDate = (d?: string | null) => {
+    if (!d) return '—';
+    const parts = d.slice(0, 10).split('-');
+    return parts.length === 3 ? `${parts[2]}.${parts[1]}.${parts[0]}` : d;
   };
-
-  const closeModal = () => {
-    setModalOpen(false);
-    setAmount('');
-    setReason('');
-  };
-
-  const handleSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    const value = Number(amount.replace(',', '.'));
-    if (!Number.isFinite(value) || value <= 0) {
-      toast.error('Введите сумму больше нуля');
-      return;
-    }
-    const payload = { amount: value, reason: reason.trim() || undefined };
-    if (mode === 'charge') chargeMutation.mutate(payload);
-    else paymentMutation.mutate(payload);
-  };
-
-  const balance = summary?.balance ?? 0;
-  const ledger = summary?.ledger ?? [];
-  const deferredChecks = summary?.deferredChecks ?? [];
-  const submitting = chargeMutation.isPending || paymentMutation.isPending;
 
   return (
     <div className="card p-6 mb-6">
-      {/* Header + balance + actions */}
+      {/* Header + outstanding balance + manage link */}
       <div className="flex flex-wrap items-start justify-between gap-4 mb-4">
         <div className="flex items-center gap-3">
-          <div className="p-2 bg-rose-50 rounded-lg">
-            <Coins className="w-5 h-5 text-rose-600" />
+          <div className="p-2 bg-violet-50 rounded-lg">
+            <Coins className="w-5 h-5 text-violet-600" />
           </div>
           <div>
-            <h2 className="text-lg font-semibold text-gray-900">Долги клиента</h2>
+            <h2 className="text-lg font-semibold text-gray-900">Рассрочка</h2>
             {isLoading ? (
               <p className="text-sm text-gray-400">Загрузка…</p>
-            ) : balance > 0 ? (
+            ) : totalRemaining > 0 ? (
               <p className="text-sm">
-                <span className="text-gray-500">Долг: </span>
-                <span className="font-bold text-red-600">{formatMoney(balance)}</span>
-              </p>
-            ) : balance < 0 ? (
-              <p className="text-sm">
-                <span className="text-gray-500">Кредит: </span>
-                <span className="font-bold text-green-600">{formatMoney(Math.abs(balance))}</span>
+                <span className="text-gray-500">Остаток: </span>
+                <span className="font-bold text-rose-600">{formatMoney(totalRemaining)}</span>
               </p>
             ) : (
-              <p className="text-sm font-medium text-gray-500">Нет долга</p>
+              <p className="text-sm font-medium text-gray-500">Нет активной рассрочки</p>
             )}
           </div>
         </div>
 
-        {canManage && (
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={() => openModal('charge')} className="btn-secondary btn-sm">
-              <Plus className="w-4 h-4" />
-              Добавить долг
-            </button>
-            <button type="button" onClick={() => openModal('payment')} className="btn-primary btn-sm">
-              <Minus className="w-4 h-4" />
-              Принять оплату
-            </button>
-          </div>
+        {plans.length > 0 && (
+          <button type="button" onClick={() => navigate('/installments')} className="btn-secondary btn-sm">
+            Управлять
+          </button>
         )}
       </div>
 
-      {/* Ledger */}
+      {/* Plans */}
       {isLoading ? (
         <div className="flex items-center justify-center py-6">
           <Loader2 className="w-5 h-5 text-gray-400 animate-spin" />
         </div>
-      ) : ledger.length === 0 ? (
-        <p className="text-sm text-gray-400 py-2">Операций по долгам пока нет</p>
+      ) : plans.length === 0 ? (
+        <p className="text-sm text-gray-400 py-2">У клиента {clientName} нет заказ-нарядов в рассрочку</p>
       ) : (
-        <div className="divide-y divide-gray-100">
-          {ledger.map((entry) => {
-            const isCharge = entry.type === 'charge';
-            return (
-              <div key={entry.id} className="flex items-center gap-3 py-3">
-                <div
-                  className={`flex h-9 w-9 items-center justify-center rounded-xl flex-shrink-0 ${
-                    isCharge ? 'bg-red-50' : 'bg-green-50'
-                  }`}
-                >
-                  {isCharge ? <Plus className="w-4 h-4 text-red-500" /> : <Minus className="w-4 h-4 text-green-600" />}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-gray-900">
-                    {isCharge ? 'Начисление долга' : 'Погашение'}
-                    {entry.reason && <span className="font-normal text-gray-500"> · {entry.reason}</span>}
+        <div className="space-y-2.5">
+          {plans.map((plan) => (
+            <button
+              key={plan.id}
+              type="button"
+              onClick={() => navigate('/installments')}
+              className="w-full flex items-center gap-3 rounded-xl border border-gray-200 px-3.5 py-3 text-left hover:bg-gray-50 transition-colors"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <p className="text-sm font-semibold text-gray-900">
+                    {plan.checkNumber ? `Заказ-наряд #${plan.checkNumber}` : 'Рассрочка'}
                   </p>
-                  <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-gray-400 mt-0.5">
-                    <span>{format(new Date(entry.createdAt), 'dd.MM.yy HH:mm', { locale: ru })}</span>
-                    {entry.createdByName && <span>· {entry.createdByName}</span>}
-                    {entry.checkId && (
-                      <button
-                        type="button"
-                        onClick={() => navigate(`/checks/${entry.checkId}`)}
-                        className="text-primary-600 hover:text-primary-700 font-medium"
-                      >
-                        · Чек{entry.checkNumber ? ` #${entry.checkNumber}` : ''}
-                      </button>
-                    )}
-                  </div>
+                  {statusBadge(plan)}
                 </div>
-                <span className={`text-sm font-bold whitespace-nowrap ${isCharge ? 'text-red-600' : 'text-green-600'}`}>
-                  {isCharge ? '+' : '−'}
-                  {formatMoney(entry.amount)}
-                </span>
-                {canManage && (
-                  <button
-                    type="button"
-                    onClick={() => setDeleteEntryId(entry.id)}
-                    className="p-1.5 text-gray-300 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors flex-shrink-0"
-                    title="Удалить операцию"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {formatMoney(plan.paid)} из {formatMoney(plan.total)}
+                  {plan.status === 'open' && plan.nextPaymentDate ? ` · след. ${fmtDate(plan.nextPaymentDate)}` : ''}
+                </p>
               </div>
-            );
-          })}
+              <div className="text-right flex-shrink-0">
+                <p className="text-[11px] text-gray-400">Остаток</p>
+                <p className="text-sm font-bold text-gray-900">{formatMoney(plan.remaining)}</p>
+              </div>
+              <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
+            </button>
+          ))}
         </div>
       )}
 
-      {/* Read-only deferred checks (NOT counted in balance) */}
-      {deferredChecks.length > 0 && (
+      {/* Recent payments across the client's plans */}
+      {recentPayments.length > 0 && (
         <div className="mt-5 pt-4 border-t border-gray-100">
-          <div className="flex items-center gap-2 mb-3">
-            <AlertCircle className="w-4 h-4 text-amber-500" />
-            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Незакрытые заказ-наряды</p>
-          </div>
-          <div className="space-y-2">
-            {deferredChecks.map((dc) => (
-              <button
-                key={dc.id}
-                type="button"
-                onClick={() => navigate(`/checks/${dc.id}`)}
-                className="w-full flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50/50 px-3 py-2.5 text-left hover:bg-amber-50 transition-colors"
-              >
-                <FileText className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-semibold text-gray-900">Заказ-наряд #{dc.number}</p>
-                  <p className="text-xs text-gray-400">{format(new Date(dc.date), 'dd.MM.yy', { locale: ru })}</p>
-                </div>
-                <span className="text-sm font-bold text-gray-900 whitespace-nowrap">
-                  {formatMoney(dc.totalRevenue)}
-                </span>
-                <ChevronRight className="w-4 h-4 text-gray-300 flex-shrink-0" />
-              </button>
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Последние платежи</p>
+          <div className="divide-y divide-gray-100">
+            {recentPayments.map((pm) => (
+              <div key={pm.id} className="flex items-center justify-between gap-3 py-2">
+                <p className="text-xs text-gray-400">
+                  {format(new Date(pm.paidAt), 'dd.MM.yy HH:mm', { locale: ru })}
+                  {pm.createdByName ? ` · ${pm.createdByName}` : ''}
+                </p>
+                <span className="text-sm font-bold text-green-600 whitespace-nowrap">{formatMoney(pm.amount)}</span>
+              </div>
             ))}
           </div>
         </div>
       )}
-
-      {/* Charge / Payment modal */}
-      <Modal isOpen={modalOpen} onClose={closeModal} title={mode === 'charge' ? 'Добавить долг' : 'Принять оплату'}>
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <p className="text-sm text-gray-500">
-            Клиент: <span className="font-medium text-gray-700">{clientName}</span>
-          </p>
-          <div>
-            <label className="label">Сумма</label>
-            <input
-              type="number"
-              inputMode="decimal"
-              min="0"
-              step="0.01"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="input"
-              placeholder="0"
-              autoFocus
-              required
-            />
-          </div>
-          <div>
-            <label className="label">Комментарий</label>
-            <input
-              type="text"
-              value={reason}
-              onChange={(e) => setReason(e.target.value)}
-              className="input"
-              placeholder={mode === 'charge' ? 'За что долг (необязательно)' : 'Комментарий (необязательно)'}
-            />
-          </div>
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button type="button" onClick={closeModal} className="btn-secondary">
-              Отмена
-            </button>
-            <button type="submit" disabled={submitting} className="btn-primary">
-              {submitting ? 'Сохраняем…' : mode === 'charge' ? 'Добавить долг' : 'Принять оплату'}
-            </button>
-          </div>
-        </form>
-      </Modal>
-
-      {/* Delete ledger entry confirm */}
-      <ConfirmDialog
-        isOpen={!!deleteEntryId}
-        onClose={() => setDeleteEntryId(null)}
-        onConfirm={() => deleteEntryId && removeMutation.mutate(deleteEntryId)}
-        title="Удалить операцию"
-        message="Эта операция будет удалена из истории долгов, баланс пересчитается. Действие нельзя отменить."
-        confirmText="Удалить"
-        variant="danger"
-      />
     </div>
   );
 }
@@ -1289,12 +1127,14 @@ export default function ClientDetailPage() {
                 card: 'Карта',
                 warranty: 'Гарантия',
                 cash_card: 'Нал/Карта',
+                installment: 'Рассрочка',
               };
               const paymentBadges: Record<string, string> = {
                 cash: 'badge-green',
                 card: 'badge-blue',
                 warranty: 'badge-yellow',
                 cash_card: 'badge-gray',
+                installment: 'badge-blue',
               };
               return (
                 <div

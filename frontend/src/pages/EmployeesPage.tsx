@@ -23,10 +23,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
-import {
-  Calendar, ChevronRight, Clock, Pencil, Receipt,
-  TrendingDown, TrendingUp, Users,
-} from 'lucide-react';
+import { Calendar, ChevronRight, Clock, Pencil, Receipt, TrendingDown, TrendingUp, Users } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { usersApi, scheduleApi, salaryApi } from '../api/services';
 import EmptyState from '../components/EmptyState';
@@ -34,14 +31,13 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import type { User, ScheduleEntry, MasterSalary } from '../types';
 import { roleLabels } from '../../../shared/utils/formatters';
 import {
-  PERIOD_OPTIONS, PERIOD_LABEL_CASUAL,
-  resolvePeriod, aggregateAttendance,
+  PERIOD_OPTIONS,
+  PERIOD_LABEL_CASUAL,
+  resolvePeriod,
+  aggregateAttendance,
   type PeriodKey,
 } from '../utils/employeePeriod';
-import {
-  computeAchievements,
-  type Achievement, type AchievementInput,
-} from '../utils/employeeAchievements';
+import { computeAchievements, type Achievement, type AchievementInput } from '../utils/employeeAchievements';
 
 const roleBadgeColors: Record<string, string> = {
   superadmin: 'bg-red-50 text-red-700',
@@ -51,7 +47,9 @@ const roleBadgeColors: Record<string, string> = {
 };
 
 const formatMoney = (v: number): string =>
-  Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
+  Math.round(v)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 
 const NO_GROUP = '__NO_GROUP__';
 
@@ -63,7 +61,10 @@ export default function EmployeesPage() {
   // ── Data ────────────────────────────────────────────────────────────
   const { data: users, isLoading: usersLoading } = useQuery<User[]>({
     queryKey: ['users-all'],
-    queryFn: async () => { const res = await usersApi.getAll(); return res.data; },
+    queryFn: async () => {
+      const res = await usersApi.getAll();
+      return res.data;
+    },
     staleTime: 60_000,
   });
 
@@ -98,10 +99,7 @@ export default function EmployeesPage() {
   // ── Derived ─────────────────────────────────────────────────────────
   const activeUsers = useMemo(() => (users ?? []).filter((u) => u.isActive), [users]);
 
-  const attendance = useMemo(
-    () => aggregateAttendance(scheduleEntries ?? []),
-    [scheduleEntries],
-  );
+  const attendance = useMemo(() => aggregateAttendance(scheduleEntries ?? []), [scheduleEntries]);
 
   const salaryByUser = useMemo(() => {
     const map = new Map<string, MasterSalary>();
@@ -149,12 +147,11 @@ export default function EmployeesPage() {
       arr.sort((a, b) => a.fullName.localeCompare(b.fullName, 'ru'));
     }
     // Stable group order: named groups alphabetical, then "Без группы" last.
-    return Array.from(buckets.entries())
-      .sort((a, b) => {
-        if (a[0] === NO_GROUP) return 1;
-        if (b[0] === NO_GROUP) return -1;
-        return a[0].localeCompare(b[0], 'ru');
-      });
+    return Array.from(buckets.entries()).sort((a, b) => {
+      if (a[0] === NO_GROUP) return 1;
+      if (b[0] === NO_GROUP) return -1;
+      return a[0].localeCompare(b[0], 'ru');
+    });
   }, [activeUsers]);
 
   // ── Group rename — patches every member of the group at once. ──────
@@ -183,11 +180,7 @@ export default function EmployeesPage() {
 
   return (
     <div className="space-y-4 pb-8">
-      <Header
-        period={period}
-        onPeriodChange={setPeriod}
-        totalActive={activeUsers.length}
-      />
+      <Header period={period} onPeriodChange={setPeriod} totalActive={activeUsers.length} />
 
       {groups.map(([groupKey, members]) => (
         <GroupSection
@@ -209,7 +202,9 @@ export default function EmployeesPage() {
 // ─── Header — title + period switcher ────────────────────────────────
 
 function Header({
-  period, onPeriodChange, totalActive,
+  period,
+  onPeriodChange,
+  totalActive,
 }: {
   period: PeriodKey;
   onPeriodChange: (p: PeriodKey) => void;
@@ -238,9 +233,7 @@ function Header({
                 type="button"
                 onClick={() => onPeriodChange(p.key)}
                 className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
-                  active
-                    ? 'bg-gray-900 text-white shadow-sm'
-                    : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
+                  active ? 'bg-gray-900 text-white shadow-sm' : 'text-gray-500 hover:text-gray-900 hover:bg-gray-50'
                 }`}
               >
                 {p.label}
@@ -256,8 +249,14 @@ function Header({
 // ─── Group section — header (with rename) + employee cards ───────────
 
 function GroupSection({
-  groupKey, members, attendance, salaryByUser, prevSalaryByUser,
-  achievements, period, onRename,
+  groupKey,
+  members,
+  attendance,
+  salaryByUser,
+  prevSalaryByUser,
+  achievements,
+  period,
+  onRename,
 }: {
   groupKey: string;
   members: User[];
@@ -317,7 +316,7 @@ function GroupSection({
       </div>
 
       {/* Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
         {members.map((u, idx) => (
           <EmployeeCard
             key={u.id}
@@ -338,7 +337,13 @@ function GroupSection({
 // ─── Employee card ──────────────────────────────────────────────────
 
 function EmployeeCard({
-  user, attendance, salary, prevSalary, achievements, period, index,
+  user,
+  attendance,
+  salary,
+  prevSalary,
+  achievements,
+  period,
+  index,
 }: {
   user: User;
   attendance?: ReturnType<typeof aggregateAttendance> extends Map<infer _, infer V> ? V : never;
@@ -349,14 +354,17 @@ function EmployeeCard({
   index: number;
 }) {
   const navigate = useNavigate();
-  const initials = user.fullName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+  const initials = user.fullName
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
   const roleClass = roleBadgeColors[user.role] || roleBadgeColors.master;
 
   const earnings = salary?.totalEarnings ?? 0;
   const prevEarnings = prevSalary?.totalEarnings ?? 0;
-  const earningsDeltaPct = prevEarnings > 0
-    ? Math.round(((earnings - prevEarnings) / prevEarnings) * 100)
-    : null;
+  const earningsDeltaPct = prevEarnings > 0 ? Math.round(((earnings - prevEarnings) / prevEarnings) * 100) : null;
 
   const worked = attendance?.worked ?? 0;
   const avgPerShift = worked > 0 ? earnings / worked : 0;
@@ -401,11 +409,13 @@ function EmployeeCard({
           icon={<Clock className="h-3 w-3" />}
           label="Опоздания"
           value={attendance ? String((attendance.lateMinor ?? 0) + (attendance.lateMajor ?? 0)) : '—'}
-          hint={attendance && attendance.lateMajor > 0
-            ? `${attendance.lateMajor} >1 ч`
-            : attendance && attendance.lateMinor > 0
-              ? 'все <1 ч'
-              : undefined}
+          hint={
+            attendance && attendance.lateMajor > 0
+              ? `${attendance.lateMajor} >1 ч`
+              : attendance && attendance.lateMinor > 0
+                ? 'все <1 ч'
+                : undefined
+          }
           tone={attendance && attendance.lateMajor > 0 ? 'warn' : undefined}
         />
       </div>
@@ -425,13 +435,20 @@ function EmployeeCard({
                       : 'bg-gray-100 text-gray-500'
                 }`}
               >
-                {earningsDeltaPct > 0 ? <TrendingUp className="h-2.5 w-2.5" /> : <TrendingDown className="h-2.5 w-2.5" />}
-                {earningsDeltaPct > 0 ? '+' : ''}{earningsDeltaPct}%
+                {earningsDeltaPct > 0 ? (
+                  <TrendingUp className="h-2.5 w-2.5" />
+                ) : (
+                  <TrendingDown className="h-2.5 w-2.5" />
+                )}
+                {earningsDeltaPct > 0 ? '+' : ''}
+                {earningsDeltaPct}%
               </span>
             )}
           </div>
           <div className="flex items-center gap-2 text-[11px] text-gray-500 mt-0.5">
-            <span>{salary.checkCount} {pluralChecks(salary.checkCount)}</span>
+            <span>
+              {salary.checkCount} {pluralChecks(salary.checkCount)}
+            </span>
             {avgPerShift > 0 && (
               <>
                 <span className="text-gray-300">·</span>
@@ -481,7 +498,11 @@ function EmployeeCard({
 // ─── Atoms ──────────────────────────────────────────────────────────
 
 function Stat({
-  icon, label, value, hint, tone,
+  icon,
+  label,
+  value,
+  hint,
+  tone,
 }: {
   icon?: React.ReactNode;
   label: string;
@@ -511,4 +532,3 @@ function pluralChecks(n: number): string {
   if (mod10 >= 2 && mod10 <= 4) return 'чека';
   return 'чеков';
 }
-

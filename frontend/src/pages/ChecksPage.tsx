@@ -80,7 +80,13 @@ const paymentMethodBadge: Record<string, string> = {
   card: 'badge-blue',
   warranty: 'badge-yellow',
   cash_card: 'badge-gray',
+  installment: 'badge-blue',
 };
+
+// Shared `paymentMethodLabels` predates «Рассрочка»; extend it locally so an
+// installment check never surfaces the raw English «installment».
+const paymentMethodLabel = (method: string): string =>
+  method === 'installment' ? 'Рассрочка' : (paymentMethodLabels[method] ?? method);
 
 // ─── Memoized mobile check card ──────────────────────────────────────────────
 const MobileCheckCard = memo(function MobileCheckCard({
@@ -113,7 +119,7 @@ const MobileCheckCard = memo(function MobileCheckCard({
               </span>
             )}
             <span className={`flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
-              {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
+              {paymentMethodLabel(check.paymentMethod)}
             </span>
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -421,9 +427,9 @@ export default function ChecksPage() {
           </div>
 
           {/* Desktop table */}
-          <div className="hidden md:block table-container">
+          <div className="hidden md:block table-container overflow-y-auto md:max-h-[calc(100vh-12rem)]">
             <table className="table">
-              <thead>
+              <thead className="sticky top-0 z-10">
                 <tr>
                   <th>#</th>
                   <th>Дата</th>
@@ -503,7 +509,7 @@ export default function ChecksPage() {
                     )}
                     <td>
                       <span className={paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}>
-                        {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
+                        {paymentMethodLabel(check.paymentMethod)}
                       </span>
                     </td>
                     {canDelete && (

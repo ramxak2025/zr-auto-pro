@@ -1019,7 +1019,7 @@ function FolderTile({
   return (
     <div
       className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all ${
-        recentlyChecked ? 'border-green-200 bg-green-50/50' : 'border-gray-100 bg-white'
+        recentlyChecked ? 'border-green-200 bg-green-50/50' : 'border-gray-100 bg-white hover:border-gray-200'
       }`}
     >
       {/* Drag handle — long-press / press-and-drag to reorder */}
@@ -2169,7 +2169,9 @@ export default function ProductsPage() {
   // Render product list — each row: thumbnail | name | stock | costPrice? | sellPrice
   function renderProductList(products: Product[], isSearch?: boolean) {
     return (
-      <div className="space-y-1">
+      // Mobile: single full-width column. Desktop: multi-column grid so the
+      // warehouse fills wide monitors instead of one stretched column.
+      <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-x-3 gap-y-1">
         {products.map((product) => {
           const isLow = product.stock <= product.minStock;
           const isSelected = selectedProducts.has(product.id);
@@ -2184,7 +2186,9 @@ export default function ProductsPage() {
               }}
               onKeyDown={(e) => e.key === 'Enter' && setDetailTarget(product)}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-xl border cursor-pointer active:bg-gray-50 transition-all ${
-                isSelected ? 'border-primary-500 bg-primary-50/50' : 'border-gray-100 bg-white'
+                isSelected
+                  ? 'border-primary-500 bg-primary-50/50'
+                  : 'border-gray-100 bg-white hover:border-gray-200 hover:bg-gray-50'
               }`}
             >
               {/* Select checkbox */}
@@ -2279,6 +2283,7 @@ export default function ProductsPage() {
               title="Экспорт CSV"
             >
               <Download className="h-4 w-4" />
+              <span className="hidden xl:inline">Экспорт</span>
             </button>
             <button
               type="button"
@@ -2287,6 +2292,7 @@ export default function ProductsPage() {
               title="Импорт из Excel / CSV"
             >
               <Upload className="h-4 w-4" />
+              <span className="hidden xl:inline">Импорт</span>
             </button>
             <input
               ref={fileInputRef}
@@ -2302,6 +2308,7 @@ export default function ProductsPage() {
               title="Корзина"
             >
               <Trash2 className="h-4 w-4" />
+              <span className="hidden xl:inline">Корзина</span>
             </button>
             <button
               type="button"
@@ -2310,6 +2317,7 @@ export default function ProductsPage() {
               title="Складские операции"
             >
               <Warehouse className="h-4 w-4" />
+              <span className="hidden xl:inline">Операции</span>
             </button>
             <button
               type="button"
@@ -2355,7 +2363,7 @@ export default function ProductsPage() {
 
       {/* Warehouse stats for owner */}
       {isOwner && warehouseStats && (
-        <div className="grid grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
           <div className="rounded-xl bg-indigo-50 p-3">
             <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Себестоимость склада</p>
             <p className="text-base font-bold text-indigo-700 mt-0.5">{formatMoney(warehouseStats.totalCostValue)}</p>
@@ -3048,7 +3056,7 @@ export default function ProductsPage() {
 
             <div className="max-h-80 overflow-auto rounded-xl border border-gray-200">
               <table className="w-full text-sm">
-                <thead className="sticky top-0 bg-gray-50">
+                <thead className="sticky top-0 z-10 bg-gray-50">
                   <tr>
                     <th className="px-3 py-2 text-left font-medium text-gray-600">Название</th>
                     <th className="px-3 py-2 text-left font-medium text-gray-600">Группа</th>

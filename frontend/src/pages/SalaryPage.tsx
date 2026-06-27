@@ -82,11 +82,7 @@ function PaymentHistorySection({ userId }: { userId: string }) {
   }
 
   if (!payments || payments.length === 0) {
-    return (
-      <p className="py-3 text-xs text-gray-400 text-center">
-        Нет выплат
-      </p>
-    );
+    return <p className="py-3 text-xs text-gray-400 text-center">Нет выплат</p>;
   }
 
   return (
@@ -95,37 +91,23 @@ function PaymentHistorySection({ userId }: { userId: string }) {
         <div key={p.id} className="flex items-center justify-between py-2 px-1">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-gray-800">
-                {formatMoney(p.amount)}
-              </span>
+              <span className="text-xs font-semibold text-gray-800">{formatMoney(p.amount)}</span>
               <span
                 className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                  p.type === 'advance'
-                    ? 'bg-orange-50 text-orange-600'
-                    : 'bg-green-50 text-green-600'
+                  p.type === 'advance' ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-600'
                 }`}
               >
                 {p.type === 'advance' ? 'Аванс' : 'Зарплата'}
               </span>
-              {p.monthYear && (
-                <span className="text-[10px] text-gray-400">
-                  {formatMonthYear(p.monthYear)}
-                </span>
-              )}
+              {p.monthYear && <span className="text-[10px] text-gray-400">{formatMonthYear(p.monthYear)}</span>}
             </div>
-            {p.comment && (
-              <p className="text-[10px] text-gray-400 truncate mt-0.5">
-                {p.comment}
-              </p>
-            )}
+            {p.comment && <p className="text-[10px] text-gray-400 truncate mt-0.5">{p.comment}</p>}
           </div>
           <div className="text-right flex-shrink-0 ml-3">
             <p className="text-[10px] text-gray-400">
               {format(new Date(p.createdAt || p.date), 'dd.MM.yyyy', { locale: ru })}
             </p>
-            {p.creatorName && (
-              <p className="text-[10px] text-gray-300">{p.creatorName}</p>
-            )}
+            {p.creatorName && <p className="text-[10px] text-gray-300">{p.creatorName}</p>}
           </div>
         </div>
       ))}
@@ -168,46 +150,32 @@ function MasterSalaryView() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <div className="stat-card">
           <div className="stat-label">Сегодня</div>
-          <div className="stat-value text-green-600">
-            {formatMoney(summary.today)}
-          </div>
+          <div className="stat-value text-green-600">{formatMoney(summary.today)}</div>
           {summary.todayChecks !== undefined && (
-            <p className="text-xs text-gray-400 mt-1">
-              {summary.todayChecks} чек(ов)
-            </p>
+            <p className="text-xs text-gray-400 mt-1">{summary.todayChecks} чек(ов)</p>
           )}
         </div>
         <div className="stat-card">
           <div className="stat-label">Неделя</div>
-          <div className="stat-value text-blue-600">
-            {formatMoney(summary.week)}
-          </div>
+          <div className="stat-value text-blue-600">{formatMoney(summary.week)}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Месяц</div>
-          <div className="stat-value text-purple-600">
-            {formatMoney(summary.month)}
-          </div>
+          <div className="stat-value text-purple-600">{formatMoney(summary.month)}</div>
           {summary.monthChecks !== undefined && (
-            <p className="text-xs text-gray-400 mt-1">
-              {summary.monthChecks} чек(ов)
-            </p>
+            <p className="text-xs text-gray-400 mt-1">{summary.monthChecks} чек(ов)</p>
           )}
         </div>
         <div className="stat-card">
           <div className="stat-label">Всего</div>
-          <div className="stat-value text-gray-900">
-            {formatMoney(summary.total)}
-          </div>
+          <div className="stat-value text-gray-900">{formatMoney(summary.total)}</div>
         </div>
       </div>
 
       {/* Today breakdown by payment method */}
       <div className="card">
         <div className="card-body">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">
-            Сегодня по способу оплаты
-          </h2>
+          <h2 className="text-lg font-semibold text-gray-900 mb-4">Сегодня по способу оплаты</h2>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div className="flex items-center gap-3 p-3 bg-green-50 rounded-lg">
               <div className="p-2 bg-green-100 rounded-lg">
@@ -215,9 +183,7 @@ function MasterSalaryView() {
               </div>
               <div>
                 <p className="text-sm text-green-700">Наличные</p>
-                <p className="text-lg font-semibold text-green-800">
-                  {formatMoney(summary.todayCash || 0)}
-                </p>
+                <p className="text-lg font-semibold text-green-800">{formatMoney(summary.todayCash || 0)}</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
@@ -226,9 +192,7 @@ function MasterSalaryView() {
               </div>
               <div>
                 <p className="text-sm text-blue-700">Карта</p>
-                <p className="text-lg font-semibold text-blue-800">
-                  {formatMoney(summary.todayCard || 0)}
-                </p>
+                <p className="text-lg font-semibold text-blue-800">{formatMoney(summary.todayCard || 0)}</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-3 bg-orange-50 rounded-lg">
@@ -237,9 +201,7 @@ function MasterSalaryView() {
               </div>
               <div>
                 <p className="text-sm text-orange-700">Гарантия</p>
-                <p className="text-lg font-semibold text-orange-800">
-                  {formatMoney(summary.todayWarranty || 0)}
-                </p>
+                <p className="text-lg font-semibold text-orange-800">{formatMoney(summary.todayWarranty || 0)}</p>
               </div>
             </div>
           </div>
@@ -272,7 +234,7 @@ function AdminSalaryView() {
     queryFn: () => salaryApi.getAll({ dateFrom, dateTo }),
     select: (res) => {
       const d = res.data;
-      return Array.isArray(d) ? (d as MasterSalary[]) : ((d as any).data || []) as MasterSalary[];
+      return Array.isArray(d) ? (d as MasterSalary[]) : (((d as any).data || []) as MasterSalary[]);
     },
   });
 
@@ -371,13 +333,33 @@ function AdminSalaryView() {
       {isLoading ? (
         <LoadingSpinner />
       ) : masters.length === 0 ? (
-        <EmptyState
-          icon={Users}
-          title="Нет данных"
-          description="За выбранный период нет данных по зарплатам"
-        />
+        <EmptyState icon={Users} title="Нет данных" description="За выбранный период нет данных по зарплатам" />
       ) : (
         <>
+          {/* Summary KPIs — fill desktop width */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+            <div className="stat-card">
+              <div className="stat-label">Выручка</div>
+              <div className="stat-value text-gray-900">{formatMoney(totalRevenue)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Начислено</div>
+              <div className="stat-value text-green-600">{formatMoney(totalEarnings)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Выплачено</div>
+              <div className="stat-value text-blue-600">{formatMoney(totalPaid)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Остаток</div>
+              <div className="stat-value text-red-600">{formatMoney(totalRemaining)}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Чеков</div>
+              <div className="stat-value text-gray-900">{totalChecks}</div>
+            </div>
+          </div>
+
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
             {masters.map((master) => {
@@ -389,31 +371,21 @@ function AdminSalaryView() {
                 >
                   <div className="p-4">
                     <div className="flex items-center justify-between mb-2">
-                      <span className="font-semibold text-gray-900 text-sm">
-                        {master.masterName}
-                      </span>
-                      <span className="text-xs text-gray-400">
-                        {master.salaryPercent}%
-                      </span>
+                      <span className="font-semibold text-gray-900 text-sm">{master.masterName}</span>
+                      <span className="text-xs text-gray-400">{master.salaryPercent}%</span>
                     </div>
                     <div className="flex items-center justify-between mb-3">
                       <div>
                         <p className="text-[10px] text-gray-400 uppercase">Выручка</p>
-                        <p className="text-sm font-medium text-gray-900">
-                          {formatMoney(master.totalRevenue)}
-                        </p>
+                        <p className="text-sm font-medium text-gray-900">{formatMoney(master.totalRevenue)}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-[10px] text-gray-400 uppercase">Заработок</p>
-                        <p className="text-sm font-bold text-green-600">
-                          {formatMoney(master.totalEarnings)}
-                        </p>
+                        <p className="text-sm font-bold text-green-600">{formatMoney(master.totalEarnings)}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-[10px] text-gray-400 uppercase">Чеков</p>
-                        <p className="text-sm font-medium text-gray-600">
-                          {master.checkCount}
-                        </p>
+                        <p className="text-sm font-medium text-gray-600">{master.checkCount}</p>
                       </div>
                     </div>
 
@@ -421,9 +393,7 @@ function AdminSalaryView() {
                     <div className="flex items-center justify-between mb-3 bg-gray-50 rounded-lg px-3 py-2">
                       <div>
                         <p className="text-[10px] text-gray-400 uppercase">Выплачено</p>
-                        <p className="text-sm font-medium text-blue-600">
-                          {formatMoney(master.paidAmount || 0)}
-                        </p>
+                        <p className="text-sm font-medium text-blue-600">{formatMoney(master.paidAmount || 0)}</p>
                       </div>
                       <div className="text-right">
                         <p className="text-[10px] text-gray-400 uppercase">Остаток</p>
@@ -447,11 +417,7 @@ function AdminSalaryView() {
                         className="btn-secondary flex-shrink-0 text-xs py-2 px-3"
                       >
                         <History className="w-3.5 h-3.5" />
-                        {isExpanded ? (
-                          <ChevronUp className="w-3.5 h-3.5" />
-                        ) : (
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        )}
+                        {isExpanded ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
                       </button>
                     </div>
                   </div>
@@ -459,9 +425,7 @@ function AdminSalaryView() {
                   {/* Expandable payment history */}
                   {isExpanded && (
                     <div className="border-t border-gray-100 bg-gray-50 px-4 py-2">
-                      <p className="text-[10px] text-gray-400 uppercase font-bold mb-1">
-                        История выплат
-                      </p>
+                      <p className="text-[10px] text-gray-400 uppercase font-bold mb-1">История выплат</p>
                       <PaymentHistorySection userId={master.masterId} />
                     </div>
                   )}
@@ -474,12 +438,8 @@ function AdminSalaryView() {
               <div className="flex items-center justify-between">
                 <span className="font-bold text-gray-900 text-sm">Итого</span>
                 <div className="flex items-center gap-4 text-sm">
-                  <span className="font-semibold text-gray-900">
-                    {formatMoney(totalRevenue)}
-                  </span>
-                  <span className="font-bold text-green-600">
-                    {formatMoney(totalEarnings)}
-                  </span>
+                  <span className="font-semibold text-gray-900">{formatMoney(totalRevenue)}</span>
+                  <span className="font-bold text-green-600">{formatMoney(totalEarnings)}</span>
                 </div>
               </div>
             </div>
@@ -506,33 +466,18 @@ function AdminSalaryView() {
                   return (
                     <>
                       <tr key={master.masterId}>
-                        <td className="font-medium text-gray-900">
-                          {master.masterName}
-                        </td>
-                        <td className="text-right text-gray-600">
-                          {master.salaryPercent}%
-                        </td>
-                        <td className="text-right text-gray-900">
-                          {formatMoney(master.totalRevenue)}
-                        </td>
-                        <td className="text-right font-medium text-green-600">
-                          {formatMoney(master.totalEarnings)}
-                        </td>
-                        <td className="text-right text-blue-600">
-                          {formatMoney(master.paidAmount || 0)}
-                        </td>
+                        <td className="font-medium text-gray-900">{master.masterName}</td>
+                        <td className="text-right text-gray-600">{master.salaryPercent}%</td>
+                        <td className="text-right text-gray-900">{formatMoney(master.totalRevenue)}</td>
+                        <td className="text-right font-medium text-green-600">{formatMoney(master.totalEarnings)}</td>
+                        <td className="text-right text-blue-600">{formatMoney(master.paidAmount || 0)}</td>
                         <td className="text-right font-medium text-red-600">
                           {formatMoney(master.remainingAmount ?? master.totalEarnings)}
                         </td>
-                        <td className="text-right text-gray-600">
-                          {master.checkCount}
-                        </td>
+                        <td className="text-right text-gray-600">{master.checkCount}</td>
                         <td className="text-right">
                           <div className="flex items-center justify-end gap-1">
-                            <button
-                              onClick={() => openPayModal(master)}
-                              className="btn-primary text-xs py-1.5 px-3"
-                            >
+                            <button onClick={() => openPayModal(master)} className="btn-primary text-xs py-1.5 px-3">
                               <Banknote className="w-3.5 h-3.5" />
                               Выплатить
                             </button>
@@ -541,11 +486,7 @@ function AdminSalaryView() {
                               className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
                               title="История выплат"
                             >
-                              {isExpanded ? (
-                                <ChevronUp className="w-4 h-4" />
-                              ) : (
-                                <ChevronDown className="w-4 h-4" />
-                              )}
+                              {isExpanded ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                             </button>
                           </div>
                         </td>
@@ -568,21 +509,11 @@ function AdminSalaryView() {
                 <tr className="border-t-2 border-gray-300">
                   <td className="font-semibold text-gray-900">Итого</td>
                   <td></td>
-                  <td className="text-right font-semibold text-gray-900">
-                    {formatMoney(totalRevenue)}
-                  </td>
-                  <td className="text-right font-semibold text-green-600">
-                    {formatMoney(totalEarnings)}
-                  </td>
-                  <td className="text-right font-semibold text-blue-600">
-                    {formatMoney(totalPaid)}
-                  </td>
-                  <td className="text-right font-semibold text-red-600">
-                    {formatMoney(totalRemaining)}
-                  </td>
-                  <td className="text-right font-semibold text-gray-600">
-                    {totalChecks}
-                  </td>
+                  <td className="text-right font-semibold text-gray-900">{formatMoney(totalRevenue)}</td>
+                  <td className="text-right font-semibold text-green-600">{formatMoney(totalEarnings)}</td>
+                  <td className="text-right font-semibold text-blue-600">{formatMoney(totalPaid)}</td>
+                  <td className="text-right font-semibold text-red-600">{formatMoney(totalRemaining)}</td>
+                  <td className="text-right font-semibold text-gray-600">{totalChecks}</td>
                   <td></td>
                 </tr>
               </tfoot>
@@ -607,9 +538,7 @@ function AdminSalaryView() {
                 type="button"
                 onClick={() => setPayForm({ ...payForm, type: 'salary' })}
                 className={`flex-1 py-2 text-sm font-medium transition-colors ${
-                  payForm.type === 'salary'
-                    ? 'bg-green-600 text-white'
-                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                  payForm.type === 'salary' ? 'bg-green-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
                 }`}
               >
                 Зарплата
@@ -618,9 +547,7 @@ function AdminSalaryView() {
                 type="button"
                 onClick={() => setPayForm({ ...payForm, type: 'advance' })}
                 className={`flex-1 py-2 text-sm font-medium transition-colors ${
-                  payForm.type === 'advance'
-                    ? 'bg-orange-500 text-white'
-                    : 'bg-white text-gray-600 hover:bg-gray-50'
+                  payForm.type === 'advance' ? 'bg-orange-500 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
                 }`}
               >
                 Аванс
@@ -673,18 +600,10 @@ function AdminSalaryView() {
 
           {/* Actions */}
           <div className="flex justify-end gap-3 pt-2">
-            <button
-              type="button"
-              onClick={() => setPayModalOpen(false)}
-              className="btn-secondary"
-            >
+            <button type="button" onClick={() => setPayModalOpen(false)} className="btn-secondary">
               Отмена
             </button>
-            <button
-              type="submit"
-              disabled={createPaymentMutation.isPending}
-              className="btn-primary"
-            >
+            <button type="submit" disabled={createPaymentMutation.isPending} className="btn-primary">
               {createPaymentMutation.isPending ? (
                 <Loader2 className="w-4 h-4 animate-spin" />
               ) : (

@@ -42,7 +42,10 @@ export default function CashFlowPage() {
 
   const { data: mastersData } = useQuery<User[]>({
     queryKey: ['masters'],
-    queryFn: async () => { const res = await usersApi.getMasters(); return res.data; },
+    queryFn: async () => {
+      const res = await usersApi.getMasters();
+      return res.data;
+    },
     enabled: canFilterByMaster,
   });
 
@@ -85,7 +88,9 @@ export default function CashFlowPage() {
             >
               <option value="">Все мастера</option>
               {mastersData.map((m) => (
-                <option key={m.id} value={m.id}>{m.fullName}</option>
+                <option key={m.id} value={m.id}>
+                  {m.fullName}
+                </option>
               ))}
             </select>
           </div>
@@ -99,36 +104,28 @@ export default function CashFlowPage() {
             <Banknote className="w-4 h-4 text-green-500" />
             <div className="stat-label">Наличные</div>
           </div>
-          <div className="stat-value text-green-600">
-            {formatMoney(totals.cash)}
-          </div>
+          <div className="stat-value text-green-600">{formatMoney(totals.cash)}</div>
         </div>
         <div className="stat-card">
           <div className="flex items-center gap-2 mb-1">
             <CreditCard className="w-4 h-4 text-blue-500" />
             <div className="stat-label">Карта</div>
           </div>
-          <div className="stat-value text-blue-600">
-            {formatMoney(totals.card)}
-          </div>
+          <div className="stat-value text-blue-600">{formatMoney(totals.card)}</div>
         </div>
         <div className="stat-card">
           <div className="flex items-center gap-2 mb-1">
             <Shield className="w-4 h-4 text-orange-500" />
             <div className="stat-label">Гарантия</div>
           </div>
-          <div className="stat-value text-orange-600">
-            {formatMoney(totals.warranty)}
-          </div>
+          <div className="stat-value text-orange-600">{formatMoney(totals.warranty)}</div>
         </div>
         <div className="stat-card">
           <div className="flex items-center gap-2 mb-1">
             <Wallet className="w-4 h-4 text-gray-700" />
             <div className="stat-label">Итого</div>
           </div>
-          <div className="stat-value text-gray-900">
-            {formatMoney(totals.total)}
-          </div>
+          <div className="stat-value text-gray-900">{formatMoney(totals.total)}</div>
         </div>
       </div>
 
@@ -136,11 +133,7 @@ export default function CashFlowPage() {
       {isLoading ? (
         <LoadingSpinner />
       ) : days.length === 0 ? (
-        <EmptyState
-          icon={Wallet}
-          title="Нет данных"
-          description="За выбранный период нет движения денежных средств"
-        />
+        <EmptyState icon={Wallet} title="Нет данных" description="За выбранный период нет движения денежных средств" />
       ) : (
         <>
           {/* Mobile cards */}
@@ -154,18 +147,33 @@ export default function CashFlowPage() {
                   <span className="font-bold text-gray-900 text-sm">{formatMoney(day.total)}</span>
                 </div>
                 <div className="flex items-center gap-3 text-xs">
-                  {day.cash > 0 && <span className="text-green-600"><Banknote className="w-3 h-3 inline mr-0.5" />{formatMoney(day.cash)}</span>}
-                  {day.card > 0 && <span className="text-blue-600"><CreditCard className="w-3 h-3 inline mr-0.5" />{formatMoney(day.card)}</span>}
-                  {day.warranty > 0 && <span className="text-orange-600"><Shield className="w-3 h-3 inline mr-0.5" />{formatMoney(day.warranty)}</span>}
+                  {day.cash > 0 && (
+                    <span className="text-green-600">
+                      <Banknote className="w-3 h-3 inline mr-0.5" />
+                      {formatMoney(day.cash)}
+                    </span>
+                  )}
+                  {day.card > 0 && (
+                    <span className="text-blue-600">
+                      <CreditCard className="w-3 h-3 inline mr-0.5" />
+                      {formatMoney(day.card)}
+                    </span>
+                  )}
+                  {day.warranty > 0 && (
+                    <span className="text-orange-600">
+                      <Shield className="w-3 h-3 inline mr-0.5" />
+                      {formatMoney(day.warranty)}
+                    </span>
+                  )}
                 </div>
               </div>
             ))}
           </div>
 
           {/* Desktop table */}
-          <div className="hidden md:block table-container">
+          <div className="hidden md:block table-container overflow-y-auto md:max-h-[calc(100vh-20rem)]">
             <table className="table">
-              <thead>
+              <thead className="sticky top-0 z-10">
                 <tr>
                   <th>Дата</th>
                   <th className="text-right">Наличные</th>
@@ -180,36 +188,22 @@ export default function CashFlowPage() {
                     <td className="font-medium text-gray-900">
                       {format(new Date(day.date), 'dd MMM yyyy', { locale: ru })}
                     </td>
-                    <td className="text-right text-green-600">
-                      {day.cash > 0 ? formatMoney(day.cash) : '\u2014'}
-                    </td>
-                    <td className="text-right text-blue-600">
-                      {day.card > 0 ? formatMoney(day.card) : '\u2014'}
-                    </td>
+                    <td className="text-right text-green-600">{day.cash > 0 ? formatMoney(day.cash) : '\u2014'}</td>
+                    <td className="text-right text-blue-600">{day.card > 0 ? formatMoney(day.card) : '\u2014'}</td>
                     <td className="text-right text-orange-600">
                       {day.warranty > 0 ? formatMoney(day.warranty) : '\u2014'}
                     </td>
-                    <td className="text-right font-semibold text-gray-900">
-                      {formatMoney(day.total)}
-                    </td>
+                    <td className="text-right font-semibold text-gray-900">{formatMoney(day.total)}</td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
-                <tr className="border-t-2 border-gray-300 bg-gray-50">
+                <tr className="border-t-2 border-gray-300 bg-gray-50 [&>td]:sticky [&>td]:bottom-0 [&>td]:z-10 [&>td]:bg-gray-50">
                   <td className="font-bold text-gray-900">Итого</td>
-                  <td className="text-right font-bold text-green-600">
-                    {formatMoney(totals.cash)}
-                  </td>
-                  <td className="text-right font-bold text-blue-600">
-                    {formatMoney(totals.card)}
-                  </td>
-                  <td className="text-right font-bold text-orange-600">
-                    {formatMoney(totals.warranty)}
-                  </td>
-                  <td className="text-right font-bold text-gray-900">
-                    {formatMoney(totals.total)}
-                  </td>
+                  <td className="text-right font-bold text-green-600">{formatMoney(totals.cash)}</td>
+                  <td className="text-right font-bold text-blue-600">{formatMoney(totals.card)}</td>
+                  <td className="text-right font-bold text-orange-600">{formatMoney(totals.warranty)}</td>
+                  <td className="text-right font-bold text-gray-900">{formatMoney(totals.total)}</td>
                 </tr>
               </tfoot>
             </table>

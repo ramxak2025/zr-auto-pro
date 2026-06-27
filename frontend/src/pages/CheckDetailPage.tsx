@@ -43,6 +43,7 @@ const paymentMethodIcons: Record<string, typeof Banknote> = {
   card: CreditCard,
   warranty: ShieldCheck,
   cash_card: CreditCard,
+  installment: CreditCard,
 };
 
 const paymentMethodColors: Record<string, string> = {
@@ -50,7 +51,12 @@ const paymentMethodColors: Record<string, string> = {
   card: 'text-blue-600 bg-blue-50',
   warranty: 'text-yellow-600 bg-yellow-50',
   cash_card: 'text-gray-600 bg-gray-100',
+  installment: 'text-violet-600 bg-violet-50',
 };
+
+// Shared `paymentMethodLabels` predates «Рассрочка»; extend locally.
+const paymentMethodLabel = (method: string): string =>
+  method === 'installment' ? 'Рассрочка' : (paymentMethodLabels[method] ?? method);
 
 export default function CheckDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -632,9 +638,7 @@ export default function CheckDetailPage() {
             className={`inline-flex items-center gap-2.5 rounded-xl px-4 py-3 ${paymentMethodColors[check.paymentMethod] ?? 'text-gray-600 bg-gray-100'}`}
           >
             <PaymentIcon className="w-5 h-5" />
-            <span className="text-sm font-semibold">
-              {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
-            </span>
+            <span className="text-sm font-semibold">{paymentMethodLabel(check.paymentMethod)}</span>
           </div>
           {check.paymentMethod === 'cash_card' && (check.cashAmount > 0 || check.cardAmount > 0) && (
             <div className="mt-4 space-y-2.5">

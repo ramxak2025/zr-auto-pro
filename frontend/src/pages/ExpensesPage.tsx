@@ -1,13 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  Plus,
-  Trash2,
-  Wallet,
-  Tag,
-  Loader2,
-  X,
-} from 'lucide-react';
+import { Plus, Trash2, Wallet, Tag, Loader2, X } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
@@ -20,7 +13,9 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 
 const formatCurrency = (value: number) =>
-  Math.round(value).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD';
+  Math.round(value)
+    .toString()
+    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' \u20BD';
 
 export default function ExpensesPage() {
   const queryClient = useQueryClient();
@@ -46,12 +41,18 @@ export default function ExpensesPage() {
 
   const { data: categories = [] } = useQuery({
     queryKey: ['expense-categories'],
-    queryFn: async () => { const res = await expensesApi.getCategories(); return res.data; },
+    queryFn: async () => {
+      const res = await expensesApi.getCategories();
+      return res.data;
+    },
   });
 
   const { data: expenses = [], isLoading } = useQuery({
     queryKey: ['expenses', dateFrom, dateTo],
-    queryFn: async () => { const res = await expensesApi.getAll({ dateFrom, dateTo }); return res.data; },
+    queryFn: async () => {
+      const res = await expensesApi.getAll({ dateFrom, dateTo });
+      return res.data;
+    },
   });
 
   const createMutation = useMutation({
@@ -122,7 +123,7 @@ export default function ExpensesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex items-center gap-3">
           <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100">
             <Wallet className="h-5 w-5 text-rose-600" />
@@ -134,7 +135,10 @@ export default function ExpensesPage() {
         </div>
         {isDirector && (
           <div className="flex items-center gap-2">
-            <button onClick={() => setCatModalOpen(true)} className="btn-secondary text-xs flex-1 sm:flex-none justify-center">
+            <button
+              onClick={() => setCatModalOpen(true)}
+              className="btn-secondary text-xs flex-1 sm:flex-none justify-center"
+            >
               <Tag className="w-3.5 h-3.5" /> Категории
             </button>
             <button onClick={() => setModalOpen(true)} className="btn-primary flex-1 sm:flex-none justify-center">
@@ -144,7 +148,14 @@ export default function ExpensesPage() {
         )}
       </div>
 
-      <DatePeriodPicker dateFrom={dateFrom} dateTo={dateTo} onChange={(f, t) => { setDateFrom(f); setDateTo(t); }} />
+      <DatePeriodPicker
+        dateFrom={dateFrom}
+        dateTo={dateTo}
+        onChange={(f, t) => {
+          setDateFrom(f);
+          setDateTo(t);
+        }}
+      />
 
       {/* Summary */}
       <div className="rounded-2xl bg-gradient-to-br from-rose-500 to-rose-700 p-5 text-white">
@@ -154,18 +165,18 @@ export default function ExpensesPage() {
 
       {/* Category breakdown */}
       {categoryBreakdown.length > 0 && (
-        <div className="rounded-2xl bg-white border border-gray-100 shadow-sm overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-50">
+        <div className="card overflow-hidden">
+          <div className="px-4 py-3 border-b border-gray-100">
             <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">По категориям</p>
           </div>
-          <div className="divide-y divide-gray-50">
+          <div className="grid grid-cols-1 gap-px bg-gray-100 sm:grid-cols-2 lg:grid-cols-3">
             {categoryBreakdown.map((cat) => (
-              <div key={cat.name} className="flex items-center justify-between px-4 py-3">
-                <div className="flex items-center gap-2.5">
-                  <div className="w-2 h-2 rounded-full bg-rose-400" />
-                  <span className="text-sm font-medium text-gray-800">{cat.name}</span>
+              <div key={cat.name} className="flex items-center justify-between gap-3 bg-white px-4 py-3">
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <div className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0" />
+                  <span className="text-sm font-medium text-gray-800 truncate">{cat.name}</span>
                 </div>
-                <span className="text-sm font-bold text-gray-900">{formatCurrency(cat.total)}</span>
+                <span className="text-sm font-bold text-gray-900 whitespace-nowrap">{formatCurrency(cat.total)}</span>
               </div>
             ))}
           </div>
@@ -178,33 +189,91 @@ export default function ExpensesPage() {
       ) : expenses.length === 0 ? (
         <EmptyState icon={Wallet} title="Нет расходов" description="Добавьте расходы за выбранный период" />
       ) : (
-        <div className="space-y-2">
-          {expenses.map((exp: any) => (
-            <div key={exp.id} className="rounded-xl bg-white border border-gray-100 shadow-sm p-4 flex items-center gap-3">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-0.5">
-                  <span className="text-sm font-bold text-gray-900">{formatCurrency(exp.amount)}</span>
-                  {exp.categoryName && (
-                    <span className="text-[10px] font-semibold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded-full">{exp.categoryName}</span>
-                  )}
+        <>
+          {/* Mobile cards */}
+          <div className="md:hidden space-y-2">
+            {expenses.map((exp: any) => (
+              <div
+                key={exp.id}
+                className="rounded-xl bg-white border border-gray-100 shadow-sm p-4 flex items-center gap-3"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-sm font-bold text-gray-900">{formatCurrency(exp.amount)}</span>
+                    {exp.categoryName && (
+                      <span className="text-[10px] font-semibold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded-full">
+                        {exp.categoryName}
+                      </span>
+                    )}
+                  </div>
+                  {exp.description && <p className="text-xs text-gray-500 truncate">{exp.description}</p>}
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
+                    {exp.userName ? ` · ${exp.userName}` : ''}
+                  </p>
                 </div>
-                {exp.description && <p className="text-xs text-gray-500 truncate">{exp.description}</p>}
-                <p className="text-[10px] text-gray-400 mt-0.5">
-                  {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
-                  {exp.userName ? ` · ${exp.userName}` : ''}
-                </p>
+                {isDirector && (
+                  <button
+                    onClick={() => setDeleteId(exp.id)}
+                    className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
               </div>
-              {isDirector && (
-                <button
-                  onClick={() => setDeleteId(exp.id)}
-                  className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+
+          {/* Desktop table */}
+          <div className="hidden md:block table-container overflow-y-auto md:max-h-[calc(100vh-22rem)]">
+            <table className="table">
+              <thead className="sticky top-0 z-10">
+                <tr>
+                  <th>Сумма</th>
+                  <th>Категория</th>
+                  <th>Описание</th>
+                  <th>Дата</th>
+                  <th>Сотрудник</th>
+                  {isDirector && <th className="w-10"></th>}
+                </tr>
+              </thead>
+              <tbody>
+                {expenses.map((exp) => (
+                  <tr key={exp.id}>
+                    <td className="font-semibold text-gray-900 whitespace-nowrap">{formatCurrency(exp.amount)}</td>
+                    <td>
+                      {exp.categoryName ? (
+                        <span className="text-[10px] font-semibold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded-full">
+                          {exp.categoryName}
+                        </span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
+                    <td className="max-w-[320px] truncate text-gray-600" title={exp.description || undefined}>
+                      {exp.description || <span className="text-gray-300">—</span>}
+                    </td>
+                    <td className="whitespace-nowrap text-gray-500">
+                      {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
+                    </td>
+                    <td className="text-gray-500">{exp.userName || '—'}</td>
+                    {isDirector && (
+                      <td>
+                        <button
+                          type="button"
+                          onClick={() => setDeleteId(exp.id)}
+                          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
       )}
 
       {/* Add expense modal */}
@@ -219,7 +288,9 @@ export default function ExpensesPage() {
             >
               <option value="">Без категории</option>
               {categories.map((c: any) => (
-                <option key={c.id} value={c.id}>{c.name}</option>
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
               ))}
             </select>
           </div>
@@ -257,7 +328,9 @@ export default function ExpensesPage() {
             />
           </div>
           <div className="flex justify-end gap-3 pt-2">
-            <button type="button" onClick={() => setModalOpen(false)} className="btn-secondary">Отмена</button>
+            <button type="button" onClick={() => setModalOpen(false)} className="btn-secondary">
+              Отмена
+            </button>
             <button type="submit" disabled={createMutation.isPending} className="btn-primary">
               {createMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
               Добавить
@@ -310,7 +383,10 @@ export default function ExpensesPage() {
       <ConfirmDialog
         isOpen={!!deleteId}
         onClose={() => setDeleteId(null)}
-        onConfirm={() => { if (deleteId) deleteMutation.mutate(deleteId); setDeleteId(null); }}
+        onConfirm={() => {
+          if (deleteId) deleteMutation.mutate(deleteId);
+          setDeleteId(null);
+        }}
         title="Удалить расход"
         message="Вы уверены, что хотите удалить этот расход?"
         confirmText="Удалить"

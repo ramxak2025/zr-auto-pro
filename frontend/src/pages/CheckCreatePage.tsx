@@ -376,8 +376,9 @@ export default function CheckCreatePage() {
   const { id: editCheckId } = useParams<{ id: string }>();
   const isEditMode = !!editCheckId;
   const queryClient = useQueryClient();
-  const { user, isRole } = useAuth();
+  const { user, isRole, hasPermission } = useAuth();
   const canEditDate = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const canSellInstallment = hasPermission('sell_installment');
 
   // Plate number search state
   const [plateSearch, setPlateSearch] = useState('');
@@ -399,6 +400,12 @@ export default function CheckCreatePage() {
   const [cashGiven, setCashGiven] = useState<number>(0);
   const [cashAmount, setCashAmount] = useState<number>(0);
   const [cardAmount, setCardAmount] = useState<number>(0);
+
+  // Рассрочка (installment): первый взнос (нал + карта) + дата следующего платежа.
+  const [installmentCash, setInstallmentCash] = useState<number>(0);
+  const [installmentCard, setInstallmentCard] = useState<number>(0);
+  const [installmentNextDate, setInstallmentNextDate] = useState('');
+  const [installmentComment, setInstallmentComment] = useState('');
 
   // Service lines
   const [serviceLines, setServiceLines] = useState<ServiceLineForm[]>([]);
@@ -824,7 +831,13 @@ export default function CheckCreatePage() {
     } else if (paymentMethod === 'cash_card') {
       finalCash = cashAmount;
       finalCard = Math.max(totalRevenue - cashAmount, 0);
+    } else if (paymentMethod === 'installment') {
+      // Первый взнос (down payment) — наличными + картой; остаток уйдёт в план.
+      finalCash = installmentCash;
+      finalCard = installmentCard;
     }
+
+    const isInstallment = paymentMethod === 'installment';
 
     const payload = {
       clientId: selectedClient?.id || '',
@@ -839,7 +852,14 @@ export default function CheckCreatePage() {
       cashAmount: finalCash,
       cardAmount: finalCard,
       comment: comment || undefined,
-      isDeferred,
+      // Рассрочка — всегда реальная продажа, отложить нельзя.
+      isDeferred: isInstallment ? false : isDeferred,
+      ...(isInstallment
+        ? {
+            installmentNextPaymentDate: installmentNextDate || undefined,
+            installmentComment: installmentComment.trim() || undefined,
+          }
+        : {}),
     };
 
     if (isEditMode) {
@@ -1350,7 +1370,7 @@ export default function CheckCreatePage() {
                 {'\u041E\u043F\u043B\u0430\u0442\u0430'}
               </h3>
 
-              <div className="grid grid-cols-4 gap-2 mb-4">
+              <div className={`grid ${canSellInstallment ? 'grid-cols-5' : 'grid-cols-4'} gap-2 mb-4`}>
                 <button
                   type="button"
                   onClick={() => setPaymentMethod('cash')}
@@ -1399,6 +1419,22 @@ export default function CheckCreatePage() {
                   <Receipt className="w-5 h-5" />
                   <span className="text-[10px] font-semibold">{'\u0413\u0430\u0440.'}</span>
                 </button>
+                {canSellInstallment && (
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('installment')}
+                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                      paymentMethod === 'installment'
+                        ? 'border-violet-500 bg-violet-50 text-violet-700'
+                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                    }`}
+                  >
+                    <CalendarDays className="w-5 h-5" />
+                    <span className="text-[10px] font-semibold">
+                      {'\u0420\u0430\u0441\u0441\u0440\u043e\u0447\u043a\u0430'}
+                    </span>
+                  </button>
+                )}
               </div>
 
               {paymentMethod === 'cash' && (
@@ -1456,26 +1492,87 @@ export default function CheckCreatePage() {
                 </div>
               )}
 
-              <label
-                className={`flex items-center gap-2 cursor-pointer mt-3 rounded-lg px-3 py-2.5 border transition-colors ${
-                  isDeferred ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'
-                }`}
-              >
-                <input
-                  type="checkbox"
-                  checked={isDeferred}
-                  onChange={(e) => setIsDeferred(e.target.checked)}
-                  className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
-                />
-                <div>
-                  <span className={`text-sm font-medium ${isDeferred ? 'text-red-700' : 'text-gray-700'}`}>
-                    Отложить чек
-                  </span>
-                  <p className="text-[10px] text-gray-400 mt-0.5">
-                    Сохранить как черновик. Можно продолжить позже. Нельзя закрыть смену с отложенными чеками.
-                  </p>
+              {paymentMethod === 'installment' && (
+                <div className="bg-violet-50 rounded-xl p-4 space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wider text-violet-700">{'Первый взнос'}</p>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Banknote className="w-4 h-4 text-green-600" />
+                      <label className="text-sm font-medium text-gray-700">{'Наличными:'}</label>
+                    </div>
+                    <input
+                      type="number"
+                      value={installmentCash || ''}
+                      onChange={(e) => setInstallmentCash(Number(e.target.value))}
+                      className="input w-36 text-right text-lg font-bold"
+                      placeholder="0"
+                      max={totalRevenue}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="w-4 h-4 text-blue-600" />
+                      <label className="text-sm font-medium text-gray-700">{'Картой:'}</label>
+                    </div>
+                    <input
+                      type="number"
+                      value={installmentCard || ''}
+                      onChange={(e) => setInstallmentCard(Number(e.target.value))}
+                      className="input w-36 text-right text-lg font-bold"
+                      placeholder="0"
+                      max={totalRevenue}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-t border-violet-200 pt-2">
+                    <span className="text-sm font-medium text-gray-700">{'Остаток в рассрочку:'}</span>
+                    <span className="text-lg font-bold text-violet-700">
+                      {formatCurrency(Math.max(totalRevenue - installmentCash - installmentCard, 0))}
+                    </span>
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">{'Дата следующего платежа'}</label>
+                    <input
+                      type="date"
+                      value={installmentNextDate}
+                      onChange={(e) => setInstallmentNextDate(e.target.value)}
+                      className="input"
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-sm font-medium text-gray-700">{'Комментарий'}</label>
+                    <input
+                      type="text"
+                      value={installmentComment}
+                      onChange={(e) => setInstallmentComment(e.target.value)}
+                      className="input"
+                      placeholder={'Условия рассрочки (необязательно)'}
+                    />
+                  </div>
                 </div>
-              </label>
+              )}
+
+              {paymentMethod !== 'installment' && (
+                <label
+                  className={`flex items-center gap-2 cursor-pointer mt-3 rounded-lg px-3 py-2.5 border transition-colors ${
+                    isDeferred ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={isDeferred}
+                    onChange={(e) => setIsDeferred(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                  />
+                  <div>
+                    <span className={`text-sm font-medium ${isDeferred ? 'text-red-700' : 'text-gray-700'}`}>
+                      Отложить чек
+                    </span>
+                    <p className="text-[10px] text-gray-400 mt-0.5">
+                      Сохранить как черновик. Можно продолжить позже. Нельзя закрыть смену с отложенными чеками.
+                    </p>
+                  </div>
+                </label>
+              )}
             </div>
           )}
 

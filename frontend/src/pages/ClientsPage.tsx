@@ -59,8 +59,7 @@ export default function ClientsPage() {
 
   // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: { fullName: string; phone: string; comment?: string }) =>
-      clientsApi.create(data),
+    mutationFn: (data: { fullName: string; phone: string; comment?: string }) => clientsApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       toast.success('Клиент создан');
@@ -229,7 +228,7 @@ export default function ClientsPage() {
       </div>
 
       {/* Search */}
-      <div className="mb-4">
+      <div className="mb-4 max-w-md">
         <SearchInput
           value={search}
           onChange={(val) => {
@@ -268,11 +267,7 @@ export default function ClientsPage() {
           icon={Users}
           title="Нет клиентов"
           description={search ? 'По вашему запросу ничего не найдено' : 'Добавьте первого клиента'}
-          action={
-            !search
-              ? { label: 'Добавить клиента', onClick: openCreateModal }
-              : undefined
-          }
+          action={!search ? { label: 'Добавить клиента', onClick: openCreateModal } : undefined}
         />
       ) : (
         <>
@@ -313,15 +308,15 @@ export default function ClientsPage() {
           </div>
 
           {/* Desktop table */}
-          <div className="hidden md:block table-container">
-            <table className="table">
+          <div className="hidden md:block table-container md:max-h-[70vh]">
+            <table className="table [&_th]:sticky [&_th]:top-0 [&_th]:z-10">
               <thead>
                 <tr>
                   <th>Имя</th>
                   <th>Телефон</th>
                   <th>Кол-во авто</th>
                   <th>Дата</th>
-                  <th className="w-24">Действия</th>
+                  <th className="w-24 text-right">Действия</th>
                 </tr>
               </thead>
               <tbody>
@@ -334,9 +329,7 @@ export default function ClientsPage() {
                     <td>
                       <div className="flex items-center gap-2">
                         <Users className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        <span className="font-medium text-gray-900">
-                          {client.fullName}
-                        </span>
+                        <span className="font-medium text-gray-900">{client.fullName}</span>
                       </div>
                     </td>
                     <td>
@@ -346,9 +339,7 @@ export default function ClientsPage() {
                       </div>
                     </td>
                     <td>
-                      <span className="badge-info">
-                        {client.cars?.length || 0}
-                      </span>
+                      <span className="badge-info">{client.cars?.length || 0}</span>
                     </td>
                     <td>
                       <div className="flex items-center gap-2 text-gray-500">
@@ -357,7 +348,7 @@ export default function ClientsPage() {
                       </div>
                     </td>
                     <td>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center justify-end gap-1">
                         <button
                           onClick={(e) => openEditModal(client, e)}
                           className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
@@ -380,21 +371,12 @@ export default function ClientsPage() {
             </table>
           </div>
 
-          <Pagination
-            page={page}
-            total={total}
-            limit={limit}
-            onChange={setPage}
-          />
+          <Pagination page={page} total={total} limit={limit} onChange={setPage} />
         </>
       )}
 
       {/* Create/Edit Modal */}
-      <Modal
-        isOpen={modalOpen}
-        onClose={closeModal}
-        title={editingClient ? 'Редактировать клиента' : 'Новый клиент'}
-      >
+      <Modal isOpen={modalOpen} onClose={closeModal} title={editingClient ? 'Редактировать клиента' : 'Новый клиент'}>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="label">ФИО</label>
@@ -410,12 +392,7 @@ export default function ClientsPage() {
 
           <div>
             <label className="label">Телефон</label>
-            <PhoneInput
-              value={phone}
-              onChange={setPhone}
-              placeholder="+7 (___) ___-__-__"
-              required
-            />
+            <PhoneInput value={phone} onChange={setPhone} placeholder="+7 (___) ___-__-__" required />
           </div>
 
           <div>

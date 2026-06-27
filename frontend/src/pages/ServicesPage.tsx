@@ -51,8 +51,13 @@ export default function ServicesPage() {
 
   // Mutations
   const createMutation = useMutation({
-    mutationFn: (data: { name: string; category?: string; defaultPrice: number; masterPercent?: number | null; warrantyDays?: number | null }) =>
-      servicesApi.create(data),
+    mutationFn: (data: {
+      name: string;
+      category?: string;
+      defaultPrice: number;
+      masterPercent?: number | null;
+      warrantyDays?: number | null;
+    }) => servicesApi.create(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       toast.success('Услуга создана');
@@ -64,8 +69,19 @@ export default function ServicesPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: { name: string; category?: string; defaultPrice: number; masterPercent?: number | null; warrantyDays?: number | null } }) =>
-      servicesApi.update(id, data),
+    mutationFn: ({
+      id,
+      data,
+    }: {
+      id: string;
+      data: {
+        name: string;
+        category?: string;
+        defaultPrice: number;
+        masterPercent?: number | null;
+        warrantyDays?: number | null;
+      };
+    }) => servicesApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['services'] });
       toast.success('Услуга обновлена');
@@ -165,7 +181,7 @@ export default function ServicesPage() {
       </div>
 
       {/* Search */}
-      <div className="mb-4">
+      <div className="mb-4 max-w-md">
         <SearchInput
           value={search}
           onChange={(val) => {
@@ -190,14 +206,10 @@ export default function ServicesPage() {
           icon={Wrench}
           title="Нет услуг"
           description={
-            search || categoryFilter !== 'Все'
-              ? 'По вашему запросу ничего не найдено'
-              : 'Добавьте первую услугу'
+            search || categoryFilter !== 'Все' ? 'По вашему запросу ничего не найдено' : 'Добавьте первую услугу'
           }
           action={
-            !search && categoryFilter === 'Все'
-              ? { label: 'Добавить услугу', onClick: openCreateModal }
-              : undefined
+            !search && categoryFilter === 'Все' ? { label: 'Добавить услугу', onClick: openCreateModal } : undefined
           }
         />
       ) : (
@@ -224,9 +236,7 @@ export default function ServicesPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-3">
-                  {service.category && (
-                    <span className="badge-default text-[11px]">{service.category}</span>
-                  )}
+                  {service.category && <span className="badge-default text-[11px]">{service.category}</span>}
                   <span className="text-sm font-medium text-gray-900">{formatCurrency(service.defaultPrice)}</span>
                 </div>
               </div>
@@ -234,14 +244,14 @@ export default function ServicesPage() {
           </div>
 
           {/* Desktop table */}
-          <div className="hidden md:block table-container">
-            <table className="table">
+          <div className="hidden md:block table-container md:max-h-[70vh]">
+            <table className="table [&_th]:sticky [&_th]:top-0 [&_th]:z-10">
               <thead>
                 <tr>
                   <th>Название</th>
                   <th>Категория</th>
                   <th>Цена по умолчанию</th>
-                  <th className="w-24">Действия</th>
+                  <th className="w-24 text-right">Действия</th>
                 </tr>
               </thead>
               <tbody>
@@ -250,9 +260,7 @@ export default function ServicesPage() {
                     <td>
                       <div className="flex items-center gap-2">
                         <Wrench className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        <span className="font-medium text-gray-900">
-                          {service.name}
-                        </span>
+                        <span className="font-medium text-gray-900">{service.name}</span>
                       </div>
                     </td>
                     <td>
@@ -262,11 +270,9 @@ export default function ServicesPage() {
                         <span className="text-gray-400">—</span>
                       )}
                     </td>
-                    <td className="font-medium text-gray-900">
-                      {formatCurrency(service.defaultPrice)}
-                    </td>
+                    <td className="font-medium text-gray-900">{formatCurrency(service.defaultPrice)}</td>
                     <td>
-                      <div className="flex items-center gap-1">
+                      <div className="flex items-center justify-end gap-1">
                         <button
                           onClick={(e) => openEditModal(service, e)}
                           className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
@@ -289,21 +295,12 @@ export default function ServicesPage() {
             </table>
           </div>
 
-          <Pagination
-            page={page}
-            total={total}
-            limit={limit}
-            onChange={setPage}
-          />
+          <Pagination page={page} total={total} limit={limit} onChange={setPage} />
         </>
       )}
 
       {/* Create/Edit Service Modal */}
-      <Modal
-        isOpen={modalOpen}
-        onClose={closeModal}
-        title={editingService ? 'Редактировать услугу' : 'Новая услуга'}
-      >
+      <Modal isOpen={modalOpen} onClose={closeModal} title={editingService ? 'Редактировать услугу' : 'Новая услуга'}>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="label">Название</label>

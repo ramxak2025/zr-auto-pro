@@ -121,12 +121,12 @@ const menuItems: MenuItem[] = [
     iconColor: 'text-teal-600',
   },
   {
-    label: 'Дебиторка',
-    description: 'Клиенты с непогашенным долгом',
-    path: '/debtors',
+    label: 'Рассрочка',
+    description: 'Продажи в рассрочку и график платежей',
+    path: '/installments',
     icon: Coins,
-    color: 'bg-red-50',
-    iconColor: 'text-red-600',
+    color: 'bg-violet-50',
+    iconColor: 'text-violet-600',
   },
   {
     label: 'Зарплата',

@@ -57,8 +57,7 @@ export default function SuppliersPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: SupplierFormData }) =>
-      suppliersApi.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: SupplierFormData }) => suppliersApi.update(id, data),
     onSuccess: () => {
       toast.success('Поставщик обновлен');
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
@@ -110,10 +109,10 @@ export default function SuppliersPage() {
   const total = data?.total || 0;
 
   return (
-    <div className="space-y-6">
+    <div>
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold text-gray-900">Поставщики</h1>
+      <div className="page-header">
+        <h1 className="page-title">Поставщики</h1>
         <button onClick={openCreateModal} className="btn-primary">
           <Plus className="w-4 h-4" />
           Новый поставщик
@@ -121,14 +120,16 @@ export default function SuppliersPage() {
       </div>
 
       {/* Search */}
-      <SearchInput
-        value={search}
-        onChange={(val) => {
-          setSearch(val);
-          setPage(1);
-        }}
-        placeholder="Поиск по названию, контакту..."
-      />
+      <div className="mb-4 max-w-md">
+        <SearchInput
+          value={search}
+          onChange={(val) => {
+            setSearch(val);
+            setPage(1);
+          }}
+          placeholder="Поиск по названию, контакту..."
+        />
+      </div>
 
       {/* Table */}
       {isLoading ? (
@@ -149,9 +150,7 @@ export default function SuppliersPage() {
                 key={supplier.id}
                 onClick={() => navigate(`/suppliers/${supplier.id}`)}
                 className={`rounded-xl border shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer ${
-                  supplier.isSystem
-                    ? 'bg-primary-50/30 border-primary-200'
-                    : 'bg-white border-gray-100'
+                  supplier.isSystem ? 'bg-primary-50/30 border-primary-200' : 'bg-white border-gray-100'
                 }`}
               >
                 <div className="flex items-center justify-between mb-2">
@@ -172,20 +171,22 @@ export default function SuppliersPage() {
                 {supplier.contactPerson && !supplier.isSystem && (
                   <p className="text-xs text-gray-500 mb-1">{supplier.contactPerson}</p>
                 )}
-                {supplier.isSystem ? (
-                  <p className="text-xs text-gray-500 mb-1">Покупка б/у у клиентов</p>
-                ) : null}
+                {supplier.isSystem ? <p className="text-xs text-gray-500 mb-1">Покупка б/у у клиентов</p> : null}
                 <div className="flex items-center gap-4 text-xs text-gray-500">
-                  <span>Закупки: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPurchases)}</span></span>
-                  <span>Оплачено: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPaid)}</span></span>
+                  <span>
+                    Закупки: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPurchases)}</span>
+                  </span>
+                  <span>
+                    Оплачено: <span className="font-medium text-gray-700">{formatMoney(supplier.totalPaid)}</span>
+                  </span>
                 </div>
               </div>
             ))}
           </div>
 
           {/* Desktop table */}
-          <div className="hidden md:block table-container">
-            <table className="table">
+          <div className="hidden md:block table-container md:max-h-[70vh]">
+            <table className="table [&_th]:sticky [&_th]:top-0 [&_th]:z-10">
               <thead>
                 <tr>
                   <th>Название</th>
@@ -200,9 +201,7 @@ export default function SuppliersPage() {
                 {suppliers.map((supplier) => (
                   <tr
                     key={supplier.id}
-                    className={`cursor-pointer hover:bg-gray-50 ${
-                      supplier.isSystem ? 'bg-primary-50/30' : ''
-                    }`}
+                    className={`cursor-pointer hover:bg-gray-50 ${supplier.isSystem ? 'bg-primary-50/30' : ''}`}
                     onClick={() => navigate(`/suppliers/${supplier.id}`)}
                   >
                     <td className="font-medium text-gray-900">
@@ -216,17 +215,13 @@ export default function SuppliersPage() {
                       </div>
                     </td>
                     <td className="text-gray-600">
-                      {supplier.isSystem ? '\u041f\u043e\u043a\u0443\u043f\u043a\u0430 \u0431/\u0443 \u0443 \u043a\u043b\u0438\u0435\u043d\u0442\u043e\u0432' : supplier.contactPerson || '\u2014'}
+                      {supplier.isSystem
+                        ? '\u041f\u043e\u043a\u0443\u043f\u043a\u0430 \u0431/\u0443 \u0443 \u043a\u043b\u0438\u0435\u043d\u0442\u043e\u0432'
+                        : supplier.contactPerson || '\u2014'}
                     </td>
-                    <td className="text-gray-600">
-                      {supplier.isSystem ? '\u2014' : supplier.phone || '\u2014'}
-                    </td>
-                    <td className="text-right text-gray-900">
-                      {formatMoney(supplier.totalPurchases)}
-                    </td>
-                    <td className="text-right text-gray-900">
-                      {formatMoney(supplier.totalPaid)}
-                    </td>
+                    <td className="text-gray-600">{supplier.isSystem ? '\u2014' : supplier.phone || '\u2014'}</td>
+                    <td className="text-right text-gray-900">{formatMoney(supplier.totalPurchases)}</td>
+                    <td className="text-right text-gray-900">{formatMoney(supplier.totalPaid)}</td>
                     <td
                       className={`text-right font-medium ${
                         supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'
@@ -240,12 +235,7 @@ export default function SuppliersPage() {
             </table>
           </div>
 
-          <Pagination
-            page={page}
-            total={total}
-            limit={limit}
-            onChange={setPage}
-          />
+          <Pagination page={page} total={total} limit={limit} onChange={setPage} />
         </>
       )}
 
@@ -275,9 +265,7 @@ export default function SuppliersPage() {
                 type="text"
                 className="input pl-10"
                 value={form.contactPerson}
-                onChange={(e) =>
-                  setForm({ ...form, contactPerson: e.target.value })
-                }
+                onChange={(e) => setForm({ ...form, contactPerson: e.target.value })}
                 placeholder="Иван Иванов"
               />
             </div>
@@ -311,11 +299,7 @@ export default function SuppliersPage() {
               Отмена
             </button>
             <button type="submit" disabled={isSubmitting} className="btn-primary">
-              {isSubmitting
-                ? 'Сохранение...'
-                : editingSupplier
-                ? 'Сохранить'
-                : 'Создать'}
+              {isSubmitting ? 'Сохранение...' : editingSupplier ? 'Сохранить' : 'Создать'}
             </button>
           </div>
         </form>
