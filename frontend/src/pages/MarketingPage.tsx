@@ -10,6 +10,7 @@ import {
   MessageSquare,
   Plus,
   Trash2,
+  Pencil,
   Save,
   ExternalLink,
   TrendingUp,
@@ -40,6 +41,7 @@ import type {
   ReviewPlatformLink,
   ReviewSettings,
   WinbackSendResult,
+  CarReadyNotificationSettings,
 } from '../types';
 
 type Tab = 'dashboard' | 'reviews' | 'winback' | 'integrations' | 'settings';
@@ -550,37 +552,152 @@ function ReviewsTab({
   );
 }
 
+// ─── «Машина готова» auto-notification card (owner-class) ───────────
+function CarReadyCard({
+  settings,
+  onSave,
+}: {
+  settings: CarReadyNotificationSettings | null;
+  onSave: (s: Partial<CarReadyNotificationSettings>) => void;
+}) {
+  const [form, setForm] = useState<CarReadyNotificationSettings>({ enabled: false, messageTemplate: '' });
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setForm(settings);
+      setDirty(false);
+    }
+  }, [settings]);
+
+  if (!settings)
+    return (
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex justify-center">
+        <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
+      </div>
+    );
+
+  const update = (patch: Partial<CarReadyNotificationSettings>) => {
+    setForm((prev) => ({ ...prev, ...patch }));
+    setDirty(true);
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <Bell className="h-4 w-4 text-gray-400" />
+          <h3 className="text-sm font-semibold text-gray-900">Уведомление «Машина готова»</h3>
+        </div>
+        <button
+          onClick={() => update({ enabled: !form.enabled })}
+          className={`relative w-11 h-6 rounded-full transition-colors ${form.enabled ? 'bg-violet-600' : 'bg-gray-200'}`}
+          aria-label="Включить уведомление"
+        >
+          <span
+            className={`absolute top-0.5 left-0.5 h-5 w-5 bg-white rounded-full shadow transition-transform ${form.enabled ? 'translate-x-5' : ''}`}
+          />
+        </button>
+      </div>
+      <p className="text-xs text-gray-500">
+        Когда заказ-наряд переходит в статус «Готов», клиенту автоматически уходит сообщение через активный провайдер
+        рассылок выше.
+      </p>
+      <div>
+        <label className="text-xs font-medium text-gray-600 mb-1 block">Шаблон сообщения</label>
+        <textarea
+          rows={4}
+          value={form.messageTemplate}
+          onChange={(e) => update({ messageTemplate: e.target.value })}
+          placeholder="Здравствуйте, {clientName}! Ваш автомобиль {car} по заказу {number} готов к выдаче."
+          className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm resize-none"
+        />
+        <div className="flex flex-wrap gap-1.5 mt-2">
+          {['{number}', '{car}', '{clientName}'].map((tag) => (
+            <span key={tag} className="text-xs bg-violet-50 text-violet-600 px-2 py-0.5 rounded-full font-mono">
+              {tag}
+            </span>
+          ))}
+        </div>
+      </div>
+      {dirty && (
+        <button
+          onClick={() => {
+            onSave(form);
+            setDirty(false);
+          }}
+          className="w-full flex items-center justify-center gap-2 bg-violet-600 text-white rounded-xl py-2.5 text-sm font-medium hover:bg-violet-700 transition-colors"
+        >
+          <Save className="h-4 w-4" />
+          Сохранить
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Integrations Tab ───────────────────────────────────────────────
 function IntegrationsTab({
   integrations,
   platformLinks,
+  carReadySettings,
   onSaveIntegration,
   onRemoveIntegration,
   onSavePlatformLink,
   onRemovePlatformLink,
+  onSaveCarReady,
 }: {
   integrations: MessagingIntegration[];
   platformLinks: ReviewPlatformLink[];
+  carReadySettings: CarReadyNotificationSettings | null;
   onSaveIntegration: (d: any) => void;
   onRemoveIntegration: (id: string) => void;
   onSavePlatformLink: (d: any) => void;
   onRemovePlatformLink: (id: string) => void;
+  onSaveCarReady: (s: Partial<CarReadyNotificationSettings>) => void;
 }) {
   const [showForm, setShowForm] = useState(false);
-  const [form, setForm] = useState({
+  // `editingId` set → editing an existing provider (upsert by id).
+  // api_key is write-only: backend never returns the secret, so on edit we
+  // start it blank and only the non-secret routing fields are pre-filled.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const emptyForm = {
     providerType: 'moizvonki',
     apiKey: '',
     senderName: '',
     senderPhone: '',
     webhookUrl: '',
-  });
+    phoneNumberId: '',
+    chatId: '',
+  };
+  const [form, setForm] = useState(emptyForm);
   const [linkForm, setLinkForm] = useState({ platform: 'google', url: '' });
   const [showLinkForm, setShowLinkForm] = useState(false);
+
+  const resetForm = () => {
+    setForm(emptyForm);
+    setEditingId(null);
+  };
+
+  const startEdit = (i: MessagingIntegration) => {
+    setForm({
+      providerType: i.providerType,
+      apiKey: '', // write-only — never returned by the backend
+      senderName: i.senderName || '',
+      senderPhone: i.senderPhone || '',
+      webhookUrl: i.webhookUrl || '',
+      phoneNumberId: i.phoneNumberId || '',
+      chatId: i.chatId || '',
+    });
+    setEditingId(i.id);
+    setShowForm(true);
+  };
 
   const providerLabels: Record<string, string> = {
     moizvonki: 'Мои Звонки',
     smsru: 'SMS.RU',
     whatsapp: 'WhatsApp',
+    telegram: 'Telegram',
     sms: 'SMS',
     email: 'Email',
   };
@@ -600,7 +717,17 @@ function IntegrationsTab({
             <MessageSquare className="h-4 w-4 text-gray-400" />
             <h3 className="text-sm font-semibold text-gray-900">Провайдеры рассылок</h3>
           </div>
-          <button onClick={() => setShowForm(!showForm)} className="text-violet-600 hover:text-violet-700">
+          <button
+            onClick={() => {
+              if (showForm) {
+                setShowForm(false);
+              } else {
+                resetForm();
+                setShowForm(true);
+              }
+            }}
+            className="text-violet-600 hover:text-violet-700"
+          >
             <Plus className="h-5 w-5" />
           </button>
         </div>
@@ -612,11 +739,13 @@ function IntegrationsTab({
               <select
                 value={form.providerType}
                 onChange={(e) => setForm({ ...form, providerType: e.target.value })}
-                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                disabled={!!editingId}
+                className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-500"
               >
                 <option value="moizvonki">Мои Звонки</option>
                 <option value="smsru">SMS.RU</option>
                 <option value="whatsapp">WhatsApp</option>
+                <option value="telegram">Telegram</option>
                 <option value="sms">SMS (другой)</option>
                 <option value="email">Email</option>
               </select>
@@ -694,8 +823,72 @@ function IntegrationsTab({
               </>
             )}
 
-            {/* Generic SMS / WhatsApp / Email fields */}
-            {!['moizvonki', 'smsru'].includes(form.providerType) && (
+            {/* WhatsApp Cloud API: access token (secret) + phone number id (routing) */}
+            {form.providerType === 'whatsapp' && (
+              <>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Access token (постоянный)</label>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={form.apiKey}
+                    onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder={editingId ? 'Оставьте пустым, чтобы не менять' : 'Bearer-токен WhatsApp Cloud API'}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Хранится зашифрованно и не показывается повторно.</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Phone number ID</label>
+                  <input
+                    value={form.phoneNumberId}
+                    onChange={(e) => setForm({ ...form, phoneNumberId: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="напр. 123456789012345"
+                  />
+                  <p className="text-xs text-gray-400 mt-1">
+                    Meta for Developers → WhatsApp → API Setup → Phone number ID.
+                  </p>
+                </div>
+              </>
+            )}
+
+            {/* Telegram bot: bot token (secret) + target chat id (owner/staff chat) */}
+            {form.providerType === 'telegram' && (
+              <>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Токен бота</label>
+                  <input
+                    type="password"
+                    autoComplete="new-password"
+                    value={form.apiKey}
+                    onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder={editingId ? 'Оставьте пустым, чтобы не менять' : '123456:ABC-DEF1234...'}
+                  />
+                  <p className="text-xs text-gray-400 mt-1">Получите у @BotFather. Хранится зашифрованно.</p>
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">Chat ID</label>
+                  <input
+                    value={form.chatId}
+                    onChange={(e) => setForm({ ...form, chatId: e.target.value })}
+                    className="w-full rounded-lg border border-gray-200 px-3 py-2 text-sm"
+                    placeholder="напр. -1001234567890"
+                  />
+                </div>
+                <div className="flex items-start gap-2 p-3 bg-blue-50 rounded-xl">
+                  <Info className="h-4 w-4 text-blue-500 mt-0.5 flex-shrink-0" />
+                  <p className="text-xs text-blue-800">
+                    Telegram-бот не пишет клиенту на телефон — уведомление приходит в указанный чат владельца или
+                    сотрудников.
+                  </p>
+                </div>
+              </>
+            )}
+
+            {/* Generic SMS / Email fields */}
+            {!['moizvonki', 'smsru', 'whatsapp', 'telegram'].includes(form.providerType) && (
               <>
                 <div>
                   <label className="text-xs font-medium text-gray-600 mb-1 block">API ключ</label>
@@ -729,9 +922,9 @@ function IntegrationsTab({
 
             <button
               onClick={() => {
-                onSaveIntegration(form);
+                onSaveIntegration(editingId ? { ...form, id: editingId } : form);
                 setShowForm(false);
-                setForm({ providerType: 'moizvonki', apiKey: '', senderName: '', senderPhone: '', webhookUrl: '' });
+                resetForm();
               }}
               className="w-full bg-violet-600 text-white rounded-lg py-2 text-sm font-medium hover:bg-violet-700 transition-colors"
             >
@@ -746,21 +939,45 @@ function IntegrationsTab({
           <div className="space-y-2">
             {integrations.map((i) => (
               <div key={i.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
-                <div className="flex items-center gap-2">
-                  <div className={`h-2 w-2 rounded-full ${i.isActive ? 'bg-green-500' : 'bg-gray-300'}`} />
+                <div className="flex items-center gap-2 min-w-0">
+                  <div
+                    className={`h-2 w-2 rounded-full flex-shrink-0 ${i.isActive ? 'bg-green-500' : 'bg-gray-300'}`}
+                  />
                   <span className="text-sm font-medium text-gray-900">
                     {providerLabels[i.providerType] || i.providerType}
                   </span>
-                  {i.senderName && <span className="text-xs text-gray-500">({i.senderName})</span>}
+                  {i.senderName && <span className="text-xs text-gray-500 truncate">({i.senderName})</span>}
+                  {i.providerType === 'whatsapp' && i.phoneNumberId && (
+                    <span className="text-xs text-gray-500 truncate">· ID {i.phoneNumberId}</span>
+                  )}
+                  {i.providerType === 'telegram' && i.chatId && (
+                    <span className="text-xs text-gray-500 truncate">· чат {i.chatId}</span>
+                  )}
                 </div>
-                <button onClick={() => onRemoveIntegration(i.id)} className="text-gray-400 hover:text-red-500">
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div className="flex items-center gap-1 flex-shrink-0">
+                  <button
+                    onClick={() => startEdit(i)}
+                    className="p-1 text-gray-400 hover:text-violet-600"
+                    aria-label="Изменить"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    onClick={() => onRemoveIntegration(i.id)}
+                    className="p-1 text-gray-400 hover:text-red-500"
+                    aria-label="Удалить"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
             ))}
           </div>
         )}
       </div>
+
+      {/* «Машина готова» auto-notification (owner-class) — uses the active provider above */}
+      <CarReadyCard settings={carReadySettings} onSave={onSaveCarReady} />
 
       {/* Platform links */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
@@ -1326,6 +1543,7 @@ export default function MarketingPage() {
   const [alerts, setAlerts] = useState<ReviewAlert[]>([]);
   const [integrations, setIntegrations] = useState<MessagingIntegration[]>([]);
   const [platformLinks, setPlatformLinks] = useState<ReviewPlatformLink[]>([]);
+  const [carReadySettings, setCarReadySettings] = useState<CarReadyNotificationSettings | null>(null);
   const [settings, setSettings] = useState<ReviewSettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [reviewsLoading, setReviewsLoading] = useState(false);
@@ -1361,9 +1579,14 @@ export default function MarketingPage() {
 
   const loadIntegrations = useCallback(async () => {
     try {
-      const [intRes, linkRes] = await Promise.all([marketingApi.getIntegrations(), marketingApi.getPlatformLinks()]);
+      const [intRes, linkRes, carRes] = await Promise.all([
+        marketingApi.getIntegrations(),
+        marketingApi.getPlatformLinks(),
+        marketingApi.getCarReadySettings(),
+      ]);
       setIntegrations(intRes.data);
       setPlatformLinks(linkRes.data);
+      setCarReadySettings(carRes.data);
     } catch {
       /* empty */
     }
@@ -1451,6 +1674,16 @@ export default function MarketingPage() {
     }
   };
 
+  const handleSaveCarReady = async (data: Partial<CarReadyNotificationSettings>) => {
+    try {
+      const res = await marketingApi.updateCarReadySettings(data);
+      setCarReadySettings(res.data);
+      toast.success('Настройки сохранены');
+    } catch {
+      toast.error('Ошибка сохранения');
+    }
+  };
+
   // Masters only see the rating leaderboard
   if (isMaster) return <MasterRatingView />;
 
@@ -1497,10 +1730,12 @@ export default function MarketingPage() {
             <IntegrationsTab
               integrations={integrations}
               platformLinks={platformLinks}
+              carReadySettings={carReadySettings}
               onSaveIntegration={handleSaveIntegration}
               onRemoveIntegration={handleRemoveIntegration}
               onSavePlatformLink={handleSavePlatformLink}
               onRemovePlatformLink={handleRemovePlatformLink}
+              onSaveCarReady={handleSaveCarReady}
             />
           )}
           {activeTab === 'settings' && <SettingsTab settings={settings} onSave={handleSaveSettings} />}

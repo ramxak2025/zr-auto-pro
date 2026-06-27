@@ -3,7 +3,8 @@
  *
  * Visual catalogue of available providers grouped by category:
  *   • Телефония и звонки    — МоиЗвонки (SMS+phone), Мегафон ВАТС
- *   • WhatsApp              — Wappi
+ *   • Мессенджеры           — WhatsApp Cloud API, Telegram (бот → чат персонала)
+ *   • Автоуведомления       — «Машина готова» (toggle + шаблон сообщения)
  *   • Площадки отзывов      — Google / Яндекс / 2GIS / Авито (URL only)
  *
  * Provider cards render the connection status pulled from
@@ -16,12 +17,17 @@
  *   • toggle the integration on/off;
  *   • delete an existing connection.
  *
- * Backend constraints (after migration 054):
+ * Backend constraints (after migrations 054 + 087):
  *   • messaging_integrations.provider_type ∈
- *     ('whatsapp','sms','smsru','moizvonki','email')
- *     We pick the most appropriate enum for each card.
+ *     ('whatsapp','sms','smsru','moizvonki','email','telegram')
+ *     We pick the most appropriate enum for each card. 087 added Telegram
+ *     plus two non-secret routing fields: `phoneNumberId` (WhatsApp Cloud API
+ *     phone number id) and `chatId` (Telegram owner/staff chat). The api_key
+ *     (Bearer token / bot token) stays write-only — never returned by the API.
  *   • review_platform_links.platform ∈ ('google','yandex','2gis','avito').
  *     Avito is a first-class platform now — owner pastes a profile URL.
+ *   • car_ready_settings (087): { enabled, messageTemplate } — auto-notify the
+ *     client when a check moves to «готова». Sent via the active provider.
  *
  * Owner-reported fixes (2026-05):
  *   • "Нет значка раздела Интеграции, нет значка Мегафон ВАТС" — both
@@ -66,7 +72,7 @@ type ProviderKind = 'phone' | 'whatsapp';
 interface ProviderDef {
   key: string;
   /** DB provider_type to store under. */
-  dbType: 'whatsapp' | 'sms' | 'smsru' | 'moizvonki' | 'email';
+  dbType: 'whatsapp' | 'sms' | 'smsru' | 'moizvonki' | 'email' | 'telegram';
   kind: ProviderKind;
   name: string;
   description: string;
@@ -79,6 +85,12 @@ interface ProviderDef {
   needsPhone?: boolean;
   /** Show senderName field. */
   needsName?: boolean;
+  /** Show WhatsApp Cloud API «Phone number ID» field → phoneNumberId. */
+  needsPhoneNumberId?: boolean;
+  /** Show Telegram «Chat ID» field → chatId. */
+  needsChatId?: boolean;
+  /** Provider-specific notice rendered at the top of the config modal. */
+  hint?: string;
 }
 
 const PHONE_PROVIDERS: ProviderDef[] = [
@@ -106,17 +118,35 @@ const PHONE_PROVIDERS: ProviderDef[] = [
   },
 ];
 
-const WHATSAPP_PROVIDERS: ProviderDef[] = [
+// Messengers share the same DB table (one row per provider_type). Each card
+// maps to exactly ONE provider_type so it round-trips through getIntegrations
+// without two cards fighting over the same row.
+const MESSENGER_PROVIDERS: ProviderDef[] = [
   {
-    key: 'wappi',
+    key: 'whatsapp',
     dbType: 'whatsapp',
     kind: 'whatsapp',
-    name: 'Wappi',
-    description: 'WhatsApp Business API через Wappi',
+    name: 'WhatsApp Business',
+    description: 'WhatsApp Cloud API — сообщения клиентам',
     iconName: 'logo-whatsapp',
     tone: { bg: '#dcf8c6', fg: '#075E54' },
-    apiKeyLabel: 'API токен Wappi',
-    needsPhone: true,
+    // Cloud API auth = a permanent Bearer access token (write-only → apiKey)
+    // routed by a Phone number ID (non-secret → phoneNumberId).
+    apiKeyLabel: 'Access token',
+    needsPhoneNumberId: true,
+  },
+  {
+    key: 'telegram',
+    dbType: 'telegram',
+    kind: 'whatsapp',
+    name: 'Telegram',
+    description: 'Уведомления через Telegram-бота',
+    iconName: 'paper-plane-outline',
+    tone: { bg: '#e1f3fb', fg: '#229ED9' },
+    // Bot token (write-only → apiKey) + target chat (non-secret → chatId).
+    apiKeyLabel: 'Токен бота',
+    needsChatId: true,
+    hint: 'Telegram отправляет уведомления в чат владельца/персонала, не клиенту',
   },
 ];
 
@@ -357,16 +387,22 @@ function ProviderModal({
   const [apiKey, setApiKey] = useState('');
   const [senderPhone, setSenderPhone] = useState('');
   const [senderName, setSenderName] = useState('');
+  const [phoneNumberId, setPhoneNumberId] = useState('');
+  const [chatId, setChatId] = useState('');
   const [isActive, setIsActive] = useState(true);
   const [testStatus, setTestStatus] = useState<'idle' | 'ok' | 'err'>('idle');
   const [copied, setCopied] = useState(false);
 
-  // Re-initialise fields whenever a different provider opens.
+  // Re-initialise fields whenever a different provider opens. The api_key is
+  // write-only (never returned), so it always starts blank; the non-secret
+  // routing fields (phoneNumberId / chatId) are pre-filled from the server.
   React.useEffect(() => {
     if (!provider) return;
     setApiKey('');
     setSenderPhone(existing?.senderPhone || '');
     setSenderName(existing?.senderName || '');
+    setPhoneNumberId(existing?.phoneNumberId || '');
+    setChatId(existing?.chatId || '');
     setIsActive(existing ? existing.isActive : true);
     setTestStatus('idle');
     setCopied(false);
@@ -420,12 +456,24 @@ function ProviderModal({
       Alert.alert('Ошибка', `Введите ${provider.apiKeyLabel}`);
       return;
     }
+    if (provider.needsPhoneNumberId && !phoneNumberId.trim()) {
+      Alert.alert('Ошибка', 'Введите Phone number ID');
+      return;
+    }
+    if (provider.needsChatId && !chatId.trim()) {
+      Alert.alert('Ошибка', 'Введите Chat ID');
+      return;
+    }
     save.mutate({
       id: existing?.id,
       providerType: provider.dbType,
+      // Sentinel «keep existing» — backend leaves the stored token untouched
+      // when the owner doesn't re-enter the write-only key on edit.
       apiKey: apiKey.trim() || '_existing_',
       senderName: senderName.trim() || undefined,
       senderPhone: senderPhone.trim() || undefined,
+      phoneNumberId: provider.needsPhoneNumberId ? phoneNumberId.trim() || undefined : undefined,
+      chatId: provider.needsChatId ? chatId.trim() || undefined : undefined,
       webhookUrl,
       isActive,
     });
@@ -467,7 +515,20 @@ function ProviderModal({
         </View>
       </View>
 
-      {/* API key */}
+      {/* Provider-specific notice (e.g. Telegram routes to owner/staff chat) */}
+      {provider.hint && (
+        <View
+          style={[
+            styles.notice,
+            { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted, marginBottom: spacing[3] },
+          ]}
+        >
+          <Ionicons name="information-circle-outline" size={16} color={palette.text.secondary} />
+          <Text style={[styles.noticeText, { color: palette.text.secondary }]}>{provider.hint}</Text>
+        </View>
+      )}
+
+      {/* API key (write-only — masked on edit, only sent when re-entered) */}
       <View style={styles.formField}>
         <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{provider.apiKeyLabel}</Text>
         <TextInput
@@ -488,6 +549,59 @@ function ProviderModal({
           placeholderTextColor={palette.text.tertiary}
         />
       </View>
+
+      {/* WhatsApp Cloud API — Phone number ID (non-secret routing id) */}
+      {provider.needsPhoneNumberId && (
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Phone number ID</Text>
+          <TextInput
+            value={phoneNumberId}
+            onChangeText={setPhoneNumberId}
+            style={[
+              styles.formInput,
+              {
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="number-pad"
+            placeholder="Напр. 123456789012345"
+            placeholderTextColor={palette.text.tertiary}
+          />
+          <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+            Из Meta for Developers → WhatsApp → API Setup
+          </Text>
+        </View>
+      )}
+
+      {/* Telegram — Chat ID (owner/staff chat the bot posts to) */}
+      {provider.needsChatId && (
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Chat ID</Text>
+          <TextInput
+            value={chatId}
+            onChangeText={setChatId}
+            style={[
+              styles.formInput,
+              {
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+              },
+            ]}
+            autoCapitalize="none"
+            autoCorrect={false}
+            placeholder="Напр. -1001234567890"
+            placeholderTextColor={palette.text.tertiary}
+          />
+          <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+            ID чата или группы. Узнать можно через @userinfobot
+          </Text>
+        </View>
+      )}
 
       {provider.needsPhone && (
         <View style={styles.formField}>
@@ -898,11 +1012,11 @@ export default function IntegrationsScreen() {
               ))}
             </View>
 
-            {/* WhatsApp */}
+            {/* Messengers — WhatsApp Cloud API + Telegram */}
             <View style={{ height: spacing[5] }} />
-            <SectionHeader title="WhatsApp" hint="Сообщения клиентам" />
+            <SectionHeader title="Мессенджеры" hint="WhatsApp и Telegram" />
             <View style={{ gap: spacing[2.5] }}>
-              {WHATSAPP_PROVIDERS.map((p, idx) => (
+              {MESSENGER_PROVIDERS.map((p, idx) => (
                 <ProviderCard
                   key={p.key}
                   provider={p}
@@ -915,6 +1029,11 @@ export default function IntegrationsScreen() {
                 />
               ))}
             </View>
+
+            {/* «Машина готова» auto-notification */}
+            <View style={{ height: spacing[5] }} />
+            <SectionHeader title="Автоуведомления" hint="Когда машина готова" />
+            <CarReadySection />
 
             {/* Platforms */}
             <View style={{ height: spacing[5] }} />
@@ -929,7 +1048,7 @@ export default function IntegrationsScreen() {
                     haptic('tap');
                     setOpenPlatform(p);
                   }}
-                  index={idx + 3}
+                  index={idx + 4}
                 />
               ))}
             </View>
@@ -947,6 +1066,144 @@ export default function IntegrationsScreen() {
         existing={openPlatform ? findLink(openPlatform) : undefined}
         onClose={() => setOpenPlatform(null)}
       />
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  «Машина готова» auto-notification section
+// ─────────────────────────────────────────────────────────────────────
+
+const DEFAULT_CAR_READY_TEMPLATE =
+  'Здравствуйте, {clientName}! Ваш автомобиль {car} готов к выдаче. Заказ-наряд №{number}. Спасибо, что выбрали нас!';
+
+const CAR_READY_PLACEHOLDERS = '{number} — номер заказа · {car} — авто · {clientName} — имя клиента';
+
+function CarReadySection() {
+  const palette = useColors();
+  const queryClient = useQueryClient();
+
+  const [enabled, setEnabled] = useState(false);
+  const [template, setTemplate] = useState(DEFAULT_CAR_READY_TEMPLATE);
+  // Hydrate the form once from the server, then let the owner edit freely —
+  // a background refetch must not clobber unsaved keystrokes.
+  const hydrated = React.useRef(false);
+
+  const settingsQuery = useQuery({
+    queryKey: ['marketing-car-ready'],
+    queryFn: async () => (await marketingApi.getCarReadySettings()).data,
+    staleTime: 60_000,
+  });
+
+  React.useEffect(() => {
+    if (settingsQuery.data && !hydrated.current) {
+      hydrated.current = true;
+      setEnabled(!!settingsQuery.data.enabled);
+      setTemplate(settingsQuery.data.messageTemplate || DEFAULT_CAR_READY_TEMPLATE);
+    }
+  }, [settingsQuery.data]);
+
+  const save = useMutation({
+    mutationFn: () =>
+      marketingApi.updateCarReadySettings({
+        enabled,
+        messageTemplate: template.trim() || DEFAULT_CAR_READY_TEMPLATE,
+      }),
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['marketing-car-ready'] });
+      Alert.alert('Готово', 'Настройки уведомления сохранены');
+    },
+    onError: (e: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', e?.response?.data?.message || 'Не удалось сохранить');
+    },
+  });
+
+  const handleSave = () => {
+    if (enabled && !template.trim()) {
+      Alert.alert('Ошибка', 'Введите текст уведомления');
+      return;
+    }
+    save.mutate();
+  };
+
+  return (
+    <View style={[styles.carReadyCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+      {/* Enable toggle */}
+      <TouchableOpacity
+        style={[styles.activeRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        onPress={() => {
+          haptic('select');
+          setEnabled((v) => !v);
+        }}
+        accessibilityRole="switch"
+        accessibilityState={{ checked: enabled }}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.activeLabel, { color: palette.text.primary }]}>Уведомлять клиента</Text>
+          <Text style={[styles.activeSub, { color: palette.text.tertiary }]}>
+            Сообщение уйдёт автоматически, когда машина переходит в статус «Готова»
+          </Text>
+        </View>
+        <View
+          style={[styles.switchTrack, { backgroundColor: enabled ? palette.accent.primary : palette.border.strong }]}
+        >
+          <View style={[styles.switchThumb, { transform: [{ translateX: enabled ? 20 : 2 }] }]} />
+        </View>
+      </TouchableOpacity>
+
+      {/* Template editor */}
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Текст сообщения</Text>
+        <TextInput
+          value={template}
+          onChangeText={setTemplate}
+          style={[
+            styles.formInput,
+            styles.templateInput,
+            {
+              backgroundColor: palette.bg.muted,
+              borderColor: palette.border.subtle,
+              color: palette.text.primary,
+            },
+          ]}
+          multiline
+          textAlignVertical="top"
+          placeholder={DEFAULT_CAR_READY_TEMPLATE}
+          placeholderTextColor={palette.text.tertiary}
+        />
+        <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+          Переменные: {CAR_READY_PLACEHOLDERS}
+        </Text>
+      </View>
+
+      {/* Channel note */}
+      <View style={[styles.notice, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}>
+        <Ionicons name="information-circle-outline" size={16} color={palette.text.secondary} />
+        <Text style={[styles.noticeText, { color: palette.text.secondary }]}>
+          Отправляется через активный канал (WhatsApp / Telegram / SMS). Подключите его выше.
+        </Text>
+      </View>
+
+      <TouchableOpacity
+        style={[
+          styles.primaryBtn,
+          { backgroundColor: palette.accent.primary, marginTop: spacing[3] },
+          save.isPending && { opacity: 0.6 },
+        ]}
+        onPress={handleSave}
+        disabled={save.isPending || settingsQuery.isLoading}
+      >
+        {save.isPending ? (
+          <ActivityIndicator size="small" color={colors.white} />
+        ) : (
+          <>
+            <Ionicons name="checkmark" size={16} color={colors.white} />
+            <Text style={styles.primaryBtnText}>Сохранить</Text>
+          </>
+        )}
+      </TouchableOpacity>
     </View>
   );
 }
@@ -1045,6 +1302,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[3.5],
     paddingVertical: spacing[2.5],
     fontSize: fontSize.sm,
+  },
+  templateInput: {
+    minHeight: 96,
+    lineHeight: 20,
+    paddingTop: spacing[2.5],
+  },
+
+  // «Машина готова» card
+  carReadyCard: {
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    padding: spacing[4],
   },
 
   // Webhook row
