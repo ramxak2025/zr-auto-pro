@@ -551,6 +551,18 @@ export class TenantsService {
     return this.removeInternal(id);
   }
 
+  /**
+   * Public, audit-less entry to the authoritative tenant teardown cascade.
+   * Used by the self-service account-deletion grace-period purge (AccountService)
+   * so the physical delete is performed by the SAME ordered cascade as the
+   * superadmin `remove()` action — no duplicated DELETE logic that could drift
+   * from the schema. The deletion was already audited at REQUEST time, so this
+   * batch path intentionally does not re-audit.
+   */
+  async purgeTenantData(id: string) {
+    return this.removeInternal(id);
+  }
+
   private async removeInternal(id: string) {
     // Full cascade delete — manually remove child records in correct order
     // to avoid FK constraint violations (some FKs lack ON DELETE CASCADE)

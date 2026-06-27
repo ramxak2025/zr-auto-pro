@@ -48,6 +48,7 @@ import { FiscalModule } from './fiscal/fiscal.module';
 import { TelephonyModule } from './telephony/telephony.module';
 import { WalletModule } from './wallet/wallet.module';
 import { InstallmentsModule } from './installments/installments.module';
+import { AccountModule } from './account/account.module';
 
 @Module({
   imports: [
@@ -99,6 +100,7 @@ import { InstallmentsModule } from './installments/installments.module';
     TelephonyModule,
     WalletModule,
     InstallmentsModule,
+    AccountModule,
   ],
   providers: [MigrationRunner],
 })

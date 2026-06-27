@@ -145,6 +145,8 @@ import type {
   LoginRequest,
   LoginResponse,
   RegisterRequest,
+  DeleteAccountRequest,
+  DeleteAccountResponse,
   PaginationParams,
   ChecksParams,
   CarsQuery,
@@ -205,6 +207,12 @@ export function createAuthApi(api: HttpClient) {
     me: () => api.get<User>('/auth/me'),
     logout: () => api.post('/auth/logout'),
     updateAvatar: (avatar: string) => api.patch<{ avatar: string }>('/auth/avatar', { avatar }),
+    // In-app account deletion (Apple Guideline 5.1.1(v) + Google Play). Director
+    // → closes the whole tenant account (access revoked now, purge after grace);
+    // a non-owner employee → anonymizes + retires their own record. Requires the
+    // current password + an explicit confirm flag. After a 200, the client must
+    // drop its token and return to the login screen.
+    deleteAccount: (data: DeleteAccountRequest) => api.post<DeleteAccountResponse>('/account/delete', data),
   };
 }
 

@@ -12,7 +12,9 @@ import { AuthModule } from '../auth/auth.module';
   controllers: [TenantsController, AdminAuditController],
   providers: [TenantsService, AuditService],
   // AuditService is exported so NotificationsModule can audit-log broadcast
-  // cancels through the SAME append-only admin_audit_log writer.
-  exports: [AuditService],
+  // cancels through the SAME append-only admin_audit_log writer. TenantsService
+  // is exported so AccountModule's grace-period purge cron can reuse the
+  // authoritative tenant-teardown cascade (purgeTenantData → removeInternal).
+  exports: [AuditService, TenantsService],
 })
 export class TenantsModule {}

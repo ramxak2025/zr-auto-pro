@@ -45,6 +45,35 @@ export interface RegisterRequest {
   tenantName?: string;
 }
 
+// ─── Account deletion (Apple 5.1.1(v) / Google Play data-deletion) ──────────────
+
+/** POST /account/delete body — re-confirmation required to avoid accidents. */
+export interface DeleteAccountRequest {
+  /** The caller's CURRENT password — re-authentication. */
+  password: string;
+  /** Explicit confirmation from the destructive dialog (must be true). */
+  confirm: boolean;
+}
+
+/**
+ * Outcome of a deletion request.
+ *   - 'account_deleted'            — a non-owner employee's own record was
+ *                                    anonymized + retired immediately.
+ *   - 'tenant_deletion_requested' — the account holder (director) closed the
+ *                                    whole tenant: access revoked now, physical
+ *                                    purge after the grace window.
+ */
+export type AccountDeletionStatus = 'account_deleted' | 'tenant_deletion_requested';
+
+export interface DeleteAccountResponse {
+  status: AccountDeletionStatus;
+  message: string;
+  /** ISO instant the tenant deletion was requested (tenant branch only). */
+  deletionRequestedAt?: string;
+  /** ISO instant the residual data is physically purged (tenant branch only). */
+  purgeScheduledAt?: string;
+}
+
 export interface PaginationParams {
   page?: number;
   limit?: number;
