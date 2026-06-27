@@ -150,8 +150,11 @@ export default function CashShiftScreen() {
     queryFn: async () => (await cashShiftsApi.current()).data,
     placeholderData: (prev) => prev,
   });
-  const current = currentQuery.data ?? null;
-  const openShiftId = current?.shift.id ?? null;
+  // Бэкенд при отсутствии открытой смены отдаёт null, но пустое тело может прийти
+  // как "" (axios) → "" ?? null === "" (не nullish). Считаем валидной открытой
+  // сменой ТОЛЬКО объект с полем shift — иначе это «смена закрыта», без краша.
+  const current = currentQuery.data && currentQuery.data.shift ? currentQuery.data : null;
+  const openShiftId = current?.shift?.id ?? null;
 
   const listQuery = useQuery({
     queryKey: ['cash-shift', 'list'],
