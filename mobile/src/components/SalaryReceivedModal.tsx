@@ -47,6 +47,7 @@ import Animated, {
 import { LinearGradient } from 'expo-linear-gradient';
 import { Text } from '../platform/Typography';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
 import { haptic } from '../platform/haptics';
 import type { SalaryPayment } from '../../../shared/types';
 
@@ -159,6 +160,7 @@ function formatMoney(v: number): string {
 }
 
 export default function SalaryReceivedModal({ visible, payment, onConfirm, confirming }: SalaryReceivedModalProps) {
+  const palette = useColors();
   const [reduceMotion, setReduceMotion] = React.useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -210,7 +212,10 @@ export default function SalaryReceivedModal({ visible, payment, onConfirm, confi
           ))}
         </View>
 
-        <Animated.View style={[styles.cardWrap, cardStyle]} pointerEvents="box-none">
+        <Animated.View
+          style={[styles.cardWrap, { backgroundColor: palette.bg.elevated }, cardStyle]}
+          pointerEvents="box-none"
+        >
           <LinearGradient
             colors={[colors.green[500], colors.green[700]] as [string, string]}
             start={{ x: 0, y: 0 }}
@@ -220,11 +225,13 @@ export default function SalaryReceivedModal({ visible, payment, onConfirm, confi
             <Ionicons name="mail" size={48} color={colors.white} />
           </LinearGradient>
 
-          <Text style={styles.title}>{title}</Text>
-          <Text style={styles.amount}>{formatMoney(payment.amount)}</Text>
-          <Text style={styles.from}>От {ownerName}</Text>
+          <Text style={[styles.title, { color: palette.text.secondary }]}>{title}</Text>
+          <Text style={[styles.amount, { color: palette.text.primary }]}>{formatMoney(payment.amount)}</Text>
+          <Text style={[styles.from, { color: palette.text.secondary }]}>От {ownerName}</Text>
 
-          {payment.comment ? <Text style={styles.comment}>«{payment.comment}»</Text> : null}
+          {payment.comment ? (
+            <Text style={[styles.comment, { color: palette.text.secondary }]}>«{payment.comment}»</Text>
+          ) : null}
 
           <View style={styles.ctaWrap}>
             <View style={styles.ctaShadowWrap}>
@@ -232,7 +239,9 @@ export default function SalaryReceivedModal({ visible, payment, onConfirm, confi
             </View>
           </View>
 
-          <Text style={styles.hint}>Подтвердите получение денег от руководителя</Text>
+          <Text style={[styles.hint, { color: palette.text.tertiary }]}>
+            Подтвердите получение денег от руководителя
+          </Text>
         </Animated.View>
       </View>
     </RNModal>

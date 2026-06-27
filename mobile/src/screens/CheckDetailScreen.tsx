@@ -34,6 +34,7 @@ import { haptic } from '../platform/haptics';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
+import { buildShadow } from '../platform/iosSurface';
 import { WORK_STATUS_ORDER, WORK_STATUS_META } from '../constants/workStatus';
 import type { Check, Tenant, CheckWorkStatus, FiscalReceipt } from '../../../shared/types';
 
@@ -892,7 +893,13 @@ export default function CheckDetailScreen() {
         )}
 
         {/* Client & info — modern glassmorphism style card */}
-        <View style={[styles.infoCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+        <View
+          style={[
+            styles.infoCard,
+            buildShadow(palette),
+            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          ]}
+        >
           <TouchableOpacity
             style={styles.infoRow}
             activeOpacity={check.clientId ? 0.6 : 1}
@@ -989,7 +996,13 @@ export default function CheckDetailScreen() {
         {/* Services — services может быть undefined в placeholder-данных
             из journal cache; используем безопасную локальную ссылку. */}
         {services.length > 0 && (
-          <View style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View
+            style={[
+              styles.sectionCard,
+              buildShadow(palette),
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            ]}
+          >
             <View style={styles.sectionHeader}>
               <LinearGradient
                 colors={[colors.orange[50], palette.bg.card]}
@@ -1043,7 +1056,13 @@ export default function CheckDetailScreen() {
 
         {/* Products — same defensive pattern as services. */}
         {products.length > 0 && (
-          <View style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View
+            style={[
+              styles.sectionCard,
+              buildShadow(palette),
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            ]}
+          >
             <View style={styles.sectionHeader}>
               <LinearGradient
                 colors={[colors.blue[50], palette.bg.card]}
@@ -1160,7 +1179,13 @@ export default function CheckDetailScreen() {
           description="Прикрепляйте фото повреждений, до/после ремонта"
           benefits={['Документирование работ', 'Защита от споров', 'История ремонта']}
         >
-          <View style={[styles.sectionCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View
+            style={[
+              styles.sectionCard,
+              buildShadow(palette),
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            ]}
+          >
             <View style={styles.sectionHeader}>
               <LinearGradient
                 colors={[colors.teal[50], palette.bg.card]}
@@ -1394,7 +1419,11 @@ export default function CheckDetailScreen() {
           <TouchableOpacity
             style={[
               styles.returnScopeBtn,
-              returnScope === 'full' && [styles.returnScopeBtnActive, { backgroundColor: palette.bg.card }],
+              returnScope === 'full' && [
+                styles.returnScopeBtnActive,
+                buildShadow(palette),
+                { backgroundColor: palette.bg.card },
+              ],
             ]}
             onPress={() => {
               haptic('select');
@@ -1415,7 +1444,11 @@ export default function CheckDetailScreen() {
           <TouchableOpacity
             style={[
               styles.returnScopeBtn,
-              returnScope === 'partial' && [styles.returnScopeBtnActive, { backgroundColor: palette.bg.card }],
+              returnScope === 'partial' && [
+                styles.returnScopeBtnActive,
+                buildShadow(palette),
+                { backgroundColor: palette.bg.card },
+              ],
             ]}
             onPress={() => {
               haptic('select');
@@ -1456,7 +1489,13 @@ export default function CheckDetailScreen() {
                     onPress={() => toggleReturnLine(key)}
                     activeOpacity={0.7}
                   >
-                    <View style={[styles.returnLineCheckbox, row.selected && styles.returnLineCheckboxOn]}>
+                    <View
+                      style={[
+                        styles.returnLineCheckbox,
+                        { backgroundColor: palette.bg.card, borderColor: palette.border.strong },
+                        row.selected && styles.returnLineCheckboxOn,
+                      ]}
+                    >
                       {row.selected && <Ionicons name="checkmark" size={14} color={colors.white} />}
                     </View>
                     <View style={{ flex: 1, minWidth: 0 }}>
@@ -1506,7 +1545,13 @@ export default function CheckDetailScreen() {
                     onPress={() => toggleReturnLine(key)}
                     activeOpacity={0.7}
                   >
-                    <View style={[styles.returnLineCheckbox, row.selected && styles.returnLineCheckboxOn]}>
+                    <View
+                      style={[
+                        styles.returnLineCheckbox,
+                        { backgroundColor: palette.bg.card, borderColor: palette.border.strong },
+                        row.selected && styles.returnLineCheckboxOn,
+                      ]}
+                    >
                       {row.selected && <Ionicons name="checkmark" size={14} color={colors.white} />}
                     </View>
                     <View style={{ flex: 1, minWidth: 0 }}>
@@ -1885,11 +1930,6 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
     padding: spacing[4],
-    shadowColor: colors.black,
-    shadowOpacity: 0.03,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
   },
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   infoIconCircle: {
@@ -1932,11 +1972,6 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
     overflow: 'hidden',
-    shadowColor: colors.black,
-    shadowOpacity: 0.03,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
   },
   sectionHeader: {
     flexDirection: 'row',
@@ -2164,13 +2199,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderRadius: borderRadius.lg,
   },
-  returnScopeBtnActive: {
-    shadowColor: colors.black,
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
-  },
+  returnScopeBtnActive: {},
   returnScopeText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   returnSectionLabel: {
     fontSize: 11,

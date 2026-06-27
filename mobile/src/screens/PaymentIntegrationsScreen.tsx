@@ -630,7 +630,7 @@ function WalletSection({ index }: { index: number }) {
     <AnimatedCard index={index}>
       <View style={s.card}>
         <View style={s.cardHeader}>
-          <View style={[s.iconBadge, { backgroundColor: colors.gray[100] }]}>
+          <View style={[s.iconBadge, { backgroundColor: palette.bg.muted }]}>
             <Ionicons name="wallet" size={18} color={palette.text.primary} />
           </View>
           <View style={{ flex: 1 }}>

@@ -33,7 +33,7 @@ import { haptic } from '../../platform/haptics';
 import { useAuth } from '../../contexts/AuthContext';
 import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
-import { colors, spacing, borderRadius } from '../../theme';
+import { colors, spacing, borderRadius, getBadgeColors } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import type { Tenant, Plan, TenantMetrics, User, PermissionKey } from '../../../../shared/types';
 import { UserRole, PERMISSION_KEYS, ROLE_PERMISSION_DEFAULTS } from '../../../../shared/types';
@@ -582,8 +582,8 @@ export default function AdminTenantDetailScreen() {
                   </Text>
                 </View>
                 {!u.isActive && (
-                  <View style={[styles.userBadge, { backgroundColor: colors.gray[100] }]}>
-                    <Text style={[styles.userBadgeText, { color: colors.gray[600] }]}>Выкл</Text>
+                  <View style={[styles.userBadge, { backgroundColor: getBadgeColors(palette.mode).gray.bg }]}>
+                    <Text style={[styles.userBadgeText, { color: getBadgeColors(palette.mode).gray.text }]}>Выкл</Text>
                   </View>
                 )}
                 <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />

@@ -48,7 +48,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
 import { cashShiftsApi } from '../api/services';
-import { colors, borderRadius, spacing } from '../theme';
+import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
@@ -109,7 +109,7 @@ const Tile = React.memo(function Tile({ label, value, icon, tint, tintBg, palett
   return (
     <View style={[styles.tile, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
       <View style={styles.tileHeader}>
-        <View style={[styles.tileIcon, { backgroundColor: tintBg }]}>
+        <View style={[styles.tileIcon, { backgroundColor: palette.mode === 'dark' ? palette.bg.muted : tintBg }]}>
           <Ionicons name={icon} size={14} color={tint} />
         </View>
         <Text style={[styles.tileLabel, { color: palette.text.secondary }]} numberOfLines={1}>
@@ -465,9 +465,11 @@ function OpenShiftView({ report, isOwner, palette, onCollect, onClose }: OpenShi
       {/* Статус */}
       <View style={[styles.statusCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
         <View style={styles.statusTopRow}>
-          <View style={[styles.statusBadge, { backgroundColor: colors.green[50] }]}>
+          <View style={[styles.statusBadge, { backgroundColor: getBadgeColors(palette.mode).green.bg }]}>
             <View style={[styles.statusDot, { backgroundColor: colors.green[500] }]} />
-            <Text style={[styles.statusBadgeText, { color: colors.green[700] }]}>Смена открыта</Text>
+            <Text style={[styles.statusBadgeText, { color: getBadgeColors(palette.mode).green.text }]}>
+              Смена открыта
+            </Text>
           </View>
         </View>
         <Text style={[styles.statusMeta, { color: palette.text.secondary }]}>
@@ -724,7 +726,14 @@ function ReportDetail({ report, palette }: ReportDetailProps) {
         <View
           style={[
             styles.diffBanner,
-            { backgroundColor: diff === 0 ? palette.bg.muted : diff > 0 ? colors.green[50] : colors.rose[50] },
+            {
+              backgroundColor:
+                diff === 0
+                  ? palette.bg.muted
+                  : diff > 0
+                    ? getBadgeColors(palette.mode).green.bg
+                    : getBadgeColors(palette.mode).red.bg,
+            },
           ]}
         >
           <Text style={[styles.diffBannerLabel, { color: diffTint }]}>{diffLabel}</Text>

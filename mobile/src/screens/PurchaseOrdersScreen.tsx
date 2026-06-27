@@ -34,6 +34,7 @@ import QueryErrorState from '../components/QueryErrorState';
 import { ListSkeleton } from '../components/Skeleton';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
+import { buildShadow } from '../platform/iosSurface';
 import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { colors, borderRadius, spacing } from '../theme';
@@ -290,7 +291,13 @@ export default function PurchaseOrdersScreen() {
         </TouchableOpacity>
 
         {showSupplierDropdown ? (
-          <View style={[styles.dropdown, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View
+            style={[
+              styles.dropdown,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              buildShadow(palette, 'elevated'),
+            ]}
+          >
             <ScrollView style={styles.dropdownScroll} keyboardShouldPersistTaps="handled" nestedScrollEnabled>
               <TouchableOpacity
                 style={[styles.dropdownRow, { borderBottomColor: palette.border.subtle }]}

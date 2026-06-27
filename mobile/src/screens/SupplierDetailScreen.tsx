@@ -56,6 +56,23 @@ export default function SupplierDetailScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
+  // Theme-aware fragments spread over the static (light-default) modal-form
+  // styles so the sheets read correctly in dark mode. Values match the
+  // already-converted form inputs across the app (UsersScreen/Suppliers).
+  const f = React.useMemo(
+    () => ({
+      input: {
+        backgroundColor: palette.bg.muted,
+        borderColor: palette.border.subtle,
+        color: palette.text.primary,
+      },
+      label: { color: palette.text.secondary },
+      actions: { borderTopColor: palette.border.subtle },
+      cancel: { borderColor: palette.border.strong },
+      cancelText: { color: palette.text.secondary },
+    }),
+    [palette],
+  );
   const { id, openDefectReturn } = (route.params ?? {}) as { id: string; openDefectReturn?: boolean };
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'deliveries' | 'payments' | 'returns'>('deliveries');
@@ -519,7 +536,12 @@ export default function SupplierDetailScreen() {
   };
 
   if (isLoading) return <LoadingSpinner />;
-  if (!supplier) return <Text style={{ padding: 20, textAlign: 'center' }}>Поставщик не найден</Text>;
+  if (!supplier)
+    return (
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <Text style={{ padding: 20, textAlign: 'center', color: palette.text.primary }}>Поставщик не найден</Text>
+      </View>
+    );
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -995,27 +1017,35 @@ export default function SupplierDetailScreen() {
           </TouchableOpacity>
 
           {deliveryItems.map((item) => (
-            <View key={item.productId} style={styles.deliveryFormItem}>
+            <View key={item.productId} style={[styles.deliveryFormItem, { borderBottomColor: palette.border.subtle }]}>
               <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={styles.itemName} numberOfLines={1}>
+                <Text style={[styles.itemName, { color: palette.text.primary }]} numberOfLines={1}>
                   {item.productName}
                 </Text>
                 <View style={styles.itemControls}>
-                  <TouchableOpacity onPress={() => updateItemQty(item.productId, -1)} style={styles.qtyBtn}>
-                    <Ionicons name="remove" size={16} color={colors.gray[600]} />
+                  <TouchableOpacity
+                    onPress={() => updateItemQty(item.productId, -1)}
+                    style={[styles.qtyBtn, { backgroundColor: palette.bg.muted }]}
+                  >
+                    <Ionicons name="remove" size={16} color={palette.text.secondary} />
                   </TouchableOpacity>
-                  <Text style={styles.qtyText}>{item.quantity}</Text>
-                  <TouchableOpacity onPress={() => updateItemQty(item.productId, 1)} style={styles.qtyBtn}>
-                    <Ionicons name="add" size={16} color={colors.gray[600]} />
+                  <Text style={[styles.qtyText, { color: palette.text.primary }]}>{item.quantity}</Text>
+                  <TouchableOpacity
+                    onPress={() => updateItemQty(item.productId, 1)}
+                    style={[styles.qtyBtn, { backgroundColor: palette.bg.muted }]}
+                  >
+                    <Ionicons name="add" size={16} color={palette.text.secondary} />
                   </TouchableOpacity>
-                  <Text style={styles.timesSign}>x</Text>
+                  <Text style={[styles.timesSign, { color: palette.text.tertiary }]}>x</Text>
                   <TextInput
                     value={String(item.price)}
                     onChangeText={(v) => updateItemPrice(item.productId, v)}
-                    style={styles.priceInput}
+                    style={[styles.priceInput, f.input]}
                     keyboardType="numeric"
                   />
-                  <Text style={styles.itemTotal}>{formatMoney(item.quantity * item.price)}</Text>
+                  <Text style={[styles.itemTotal, { color: palette.text.secondary }]}>
+                    {formatMoney(item.quantity * item.price)}
+                  </Text>
                 </View>
               </View>
               <TouchableOpacity onPress={() => removeItem(item.productId)} style={{ padding: 4 }}>
@@ -1025,8 +1055,8 @@ export default function SupplierDetailScreen() {
           ))}
 
           {deliveryItems.length > 0 && (
-            <View style={styles.deliveryTotalRow}>
-              <Text style={styles.deliveryTotalLabel}>Итого:</Text>
+            <View style={[styles.deliveryTotalRow, { borderTopColor: palette.border.strong }]}>
+              <Text style={[styles.deliveryTotalLabel, { color: palette.text.primary }]}>Итого:</Text>
               <Text style={styles.deliveryTotalValue}>{formatMoney(deliveryTotal)}</Text>
             </View>
           )}
@@ -1035,34 +1065,36 @@ export default function SupplierDetailScreen() {
               По умолчанию сегодня; тап открывает календарь
               (DateTimePickerModal, тот же, что в Расходах/Кассе). */}
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Дата поставки</Text>
+            <Text style={[styles.formLabel, f.label]}>Дата поставки</Text>
             <TouchableOpacity
-              style={styles.dateField}
+              style={[styles.dateField, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
               onPress={() => setDeliveryDatePickerOpen(true)}
               activeOpacity={0.7}
             >
               <Ionicons name="calendar-outline" size={18} color={colors.primary[600]} />
-              <Text style={styles.dateFieldText}>{formatDate(deliveryDate.toISOString())}</Text>
-              <Ionicons name="chevron-down" size={16} color={colors.gray[400]} style={{ marginLeft: 'auto' }} />
+              <Text style={[styles.dateFieldText, { color: palette.text.primary }]}>
+                {formatDate(deliveryDate.toISOString())}
+              </Text>
+              <Ionicons name="chevron-down" size={16} color={palette.text.tertiary} style={{ marginLeft: 'auto' }} />
             </TouchableOpacity>
           </View>
 
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Комментарий</Text>
+            <Text style={[styles.formLabel, f.label]}>Комментарий</Text>
             <TextInput
               value={deliveryComment}
               onChangeText={setDeliveryComment}
-              style={[styles.formInput, { height: 50, textAlignVertical: 'top' }]}
+              style={[styles.formInput, f.input, { height: 50, textAlignVertical: 'top' }]}
               multiline
               placeholder="Необязательно"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
         </ScrollView>
 
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setDeliveryModalOpen(false)}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, f.actions]}>
+          <TouchableOpacity style={[styles.cancelBtn, f.cancel]} onPress={() => setDeliveryModalOpen(false)}>
+            <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.submitBtn} onPress={handleCreateDelivery}>
             {createDeliveryMutation.isPending ? (
@@ -1114,30 +1146,30 @@ export default function SupplierDetailScreen() {
           </View>
         )}
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Сумма *</Text>
+          <Text style={[styles.formLabel, f.label]}>Сумма *</Text>
           <TextInput
             value={paymentAmount}
             onChangeText={setPaymentAmount}
-            style={styles.formInput}
+            style={[styles.formInput, f.input]}
             keyboardType="numeric"
             placeholder="0"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Комментарий</Text>
+          <Text style={[styles.formLabel, f.label]}>Комментарий</Text>
           <TextInput
             value={paymentComment}
             onChangeText={setPaymentComment}
-            style={[styles.formInput, { height: 50, textAlignVertical: 'top' }]}
+            style={[styles.formInput, f.input, { height: 50, textAlignVertical: 'top' }]}
             multiline
             placeholder="Необязательно"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setPaymentModalOpen(false)}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, f.actions]}>
+          <TouchableOpacity style={[styles.cancelBtn, f.cancel]} onPress={() => setPaymentModalOpen(false)}>
+            <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.submitBtn} onPress={handleCreatePayment}>
             {createPaymentMutation.isPending ? (
@@ -1172,64 +1204,64 @@ export default function SupplierDetailScreen() {
             </Text>
           </View>
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Название товара *</Text>
+            <Text style={[styles.formLabel, f.label]}>Название товара *</Text>
             <TextInput
               value={upName}
               onChangeText={setUpName}
-              style={styles.formInput}
+              style={[styles.formInput, f.input]}
               placeholder="Например: Капот"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Количество *</Text>
+            <Text style={[styles.formLabel, f.label]}>Количество *</Text>
             <TextInput
               value={upQty}
               onChangeText={setUpQty}
-              style={styles.formInput}
+              style={[styles.formInput, f.input]}
               keyboardType="numeric"
               placeholder="0"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Закупочная цена, ₽ *</Text>
+            <Text style={[styles.formLabel, f.label]}>Закупочная цена, ₽ *</Text>
             <TextInput
               value={upPrice}
               onChangeText={setUpPrice}
-              style={styles.formInput}
+              style={[styles.formInput, f.input]}
               keyboardType="numeric"
               placeholder="0"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
           {/* Sell price — опционально. Если оставить пустым, бэк
               запишет sellPrice=null, и в ProductsScreen Б/У-складе
               появится CTA «Установить цену» на этой карточке. */}
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Розничная цена, ₽</Text>
+            <Text style={[styles.formLabel, f.label]}>Розничная цена, ₽</Text>
             <TextInput
               value={upSellPrice}
               onChangeText={setUpSellPrice}
-              style={styles.formInput}
+              style={[styles.formInput, f.input]}
               keyboardType="numeric"
               placeholder="Необязательно — задайте позже"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
-            <Text style={{ fontSize: 11, color: colors.gray[500], marginTop: spacing[1] }}>
+            <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
               Если не заполнено, цена будет{' '}
               {Number(upPrice) > 0 ? `≈ ${formatMoney(Number(upPrice))} (= закупочной)` : 'не установлена'}.{'\n'}
               Установите её позже на складе Б/У.
             </Text>
           </View>
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Папка на складе Б/У</Text>
+            <Text style={[styles.formLabel, f.label]}>Папка на складе Б/У</Text>
             <TextInput
               value={upCategory}
               onChangeText={setUpCategory}
-              style={styles.formInput}
+              style={[styles.formInput, f.input]}
               placeholder="Необязательно"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
             {usedCategories.length > 0 ? (
               <ScrollView
@@ -1242,11 +1274,19 @@ export default function SupplierDetailScreen() {
                 {usedCategories.slice(0, 16).map((cat) => (
                   <TouchableOpacity
                     key={cat.id}
-                    style={[styles.categoryChip, upCategory === cat.path && styles.categoryChipActive]}
+                    style={[
+                      styles.categoryChip,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      upCategory === cat.path && styles.categoryChipActive,
+                    ]}
                     onPress={() => setUpCategory(cat.path)}
                   >
                     <Text
-                      style={[styles.categoryChipText, upCategory === cat.path && styles.categoryChipTextActive]}
+                      style={[
+                        styles.categoryChipText,
+                        { color: palette.text.secondary },
+                        upCategory === cat.path && styles.categoryChipTextActive,
+                      ]}
                       numberOfLines={1}
                     >
                       {cat.path}
@@ -1267,21 +1307,21 @@ export default function SupplierDetailScreen() {
           ) : null}
 
           <View style={styles.formField}>
-            <Text style={styles.formLabel}>Комментарий</Text>
+            <Text style={[styles.formLabel, f.label]}>Комментарий</Text>
             <TextInput
               value={upNote}
               onChangeText={setUpNote}
-              style={[styles.formInput, { height: 50, textAlignVertical: 'top' }]}
+              style={[styles.formInput, f.input, { height: 50, textAlignVertical: 'top' }]}
               multiline
               placeholder="Необязательно"
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
             />
           </View>
         </ScrollView>
 
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setUsedPurchaseModalOpen(false)}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, f.actions]}>
+          <TouchableOpacity style={[styles.cancelBtn, f.cancel]} onPress={() => setUsedPurchaseModalOpen(false)}>
+            <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.submitBtn} onPress={handleSubmitUsedPurchase}>
             {usedPurchaseMutation.isPending ? (
@@ -1327,14 +1367,14 @@ export default function SupplierDetailScreen() {
         ) : null}
 
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Количество *</Text>
+          <Text style={[styles.formLabel, f.label]}>Количество *</Text>
           <TextInput
             value={defectQty}
             onChangeText={setDefectQty}
-            style={styles.formInput}
+            style={[styles.formInput, f.input]}
             keyboardType="numeric"
             placeholder="0"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             editable={!!defectProduct}
           />
           {defectProduct && defectProduct.stock > 0 ? (
@@ -1345,14 +1385,14 @@ export default function SupplierDetailScreen() {
         </View>
 
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Закупочная цена, ₽ *</Text>
+          <Text style={[styles.formLabel, f.label]}>Закупочная цена, ₽ *</Text>
           <TextInput
             value={defectPurchasePrice}
             onChangeText={setDefectPurchasePrice}
-            style={styles.formInput}
+            style={[styles.formInput, f.input]}
             keyboardType="numeric"
             placeholder="0"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
             editable={!!defectProduct}
           />
         </View>
@@ -1369,20 +1409,20 @@ export default function SupplierDetailScreen() {
         ) : null}
 
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Комментарий</Text>
+          <Text style={[styles.formLabel, f.label]}>Комментарий</Text>
           <TextInput
             value={defectNote}
             onChangeText={setDefectNote}
-            style={[styles.formInput, { height: 50, textAlignVertical: 'top' }]}
+            style={[styles.formInput, f.input, { height: 50, textAlignVertical: 'top' }]}
             multiline
             placeholder="Необязательно"
-            placeholderTextColor={colors.gray[400]}
+            placeholderTextColor={palette.text.tertiary}
           />
         </View>
 
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setReturnDefectModalOpen(false)}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, f.actions]}>
+          <TouchableOpacity style={[styles.cancelBtn, f.cancel]} onPress={() => setReturnDefectModalOpen(false)}>
+            <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.submitBtn} onPress={handleReturnDefect}>
             {returnDefectMutation.isPending ? (
@@ -1437,13 +1477,21 @@ function DefectProductPickerModal({
         value={q}
         onChangeText={setQ}
         placeholder="Поиск по названию"
-        placeholderTextColor={colors.gray[400]}
-        style={[styles.formInput, { marginBottom: spacing[3] }]}
+        placeholderTextColor={palette.text.tertiary}
+        style={[
+          styles.formInput,
+          {
+            marginBottom: spacing[3],
+            backgroundColor: palette.bg.muted,
+            borderColor: palette.border.subtle,
+            color: palette.text.primary,
+          },
+        ]}
       />
       {filtered.length === 0 ? (
         <View style={styles.emptyState}>
-          <Ionicons name="cube-outline" size={36} color={colors.gray[300]} />
-          <Text style={styles.emptyText}>На складе брака ничего нет</Text>
+          <Ionicons name="cube-outline" size={36} color={palette.text.tertiary} />
+          <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>На складе брака ничего нет</Text>
         </View>
       ) : (
         <ScrollView style={{ maxHeight: 360 }} keyboardShouldPersistTaps="handled">
@@ -1462,7 +1510,7 @@ function DefectProductPickerModal({
                   {p.stock} шт · {formatMoney(p.costPrice ?? 0)}
                 </Text>
               </View>
-              <Ionicons name="chevron-forward" size={16} color={colors.gray[300]} />
+              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
             </TouchableOpacity>
           ))}
         </ScrollView>

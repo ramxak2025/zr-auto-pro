@@ -84,11 +84,11 @@ export default function WarrantyBanner({ clientId, carId }: WarrantyBannerProps)
   // alarming. Picked manually because the semantic palette only exposes
   // a brand indigo accent.
   const amber = {
-    bg: palette.bg.canvas === '#0a0d14' ? 'rgba(245, 158, 11, 0.14)' : '#fffbeb',
-    border: palette.bg.canvas === '#0a0d14' ? 'rgba(245, 158, 11, 0.28)' : '#fde68a',
-    icon: palette.bg.canvas === '#0a0d14' ? '#fbbf24' : '#b45309',
-    title: palette.bg.canvas === '#0a0d14' ? '#fcd34d' : '#92400e',
-    body: palette.bg.canvas === '#0a0d14' ? '#fde68a' : '#78350f',
+    bg: palette.mode === 'dark' ? 'rgba(245, 158, 11, 0.14)' : '#fffbeb',
+    border: palette.mode === 'dark' ? 'rgba(245, 158, 11, 0.28)' : '#fde68a',
+    icon: palette.mode === 'dark' ? '#fbbf24' : '#b45309',
+    title: palette.mode === 'dark' ? '#fcd34d' : '#92400e',
+    body: palette.mode === 'dark' ? '#fde68a' : '#78350f',
   };
 
   const visible = expanded ? claims : claims.slice(0, 2);

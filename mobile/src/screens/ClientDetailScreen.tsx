@@ -1279,7 +1279,7 @@ export default function ClientDetailScreen() {
         )}
 
         {filteredChecks.length === 0 ? (
-          <View style={styles.emptyChecks}>
+          <View style={[styles.emptyChecks, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <Ionicons name="receipt-outline" size={32} color={palette.text.tertiary} />
             <Text style={[styles.emptyChecksText, { color: palette.text.tertiary }]}>Нет чеков</Text>
           </View>
@@ -1567,7 +1567,10 @@ const CheckRow = React.memo(function CheckRow({ check, palette, canViewProfit, o
       style={[
         styles.checkCard,
         { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-        check.isDeferred && styles.checkCardDeferred,
+        check.isDeferred &&
+          (palette.mode === 'dark'
+            ? { backgroundColor: 'rgba(239,68,68,0.12)', borderColor: 'rgba(239,68,68,0.32)' }
+            : styles.checkCardDeferred),
       ]}
       onPress={() => onOpen(check.id)}
       activeOpacity={0.7}

@@ -1002,7 +1002,9 @@ function StatTile({
         <Text style={[styles.statTileValue, { color: palette.text.primary }]}>{clamped}</Text>
         <Text style={[styles.statTileUnit, { color: palette.text.tertiary }]}>/100</Text>
       </View>
-      <View style={styles.statTileProgressTrack}>
+      <View
+        style={[styles.statTileProgressTrack, palette.mode === 'dark' && { backgroundColor: 'rgba(255,255,255,0.10)' }]}
+      >
         <View style={[styles.statTileProgressFill, { width: `${clamped}%`, backgroundColor: accent }]} />
       </View>
     </View>
@@ -1222,11 +1224,12 @@ const SERVICE_TIER_META: Record<
 };
 
 function ShiftProgressRing({ progress }: { progress: number }) {
+  const palette = useColors();
   const pct = Math.max(0, Math.min(1, progress));
   const rotation = pct * 360;
   return (
     <View style={styles.ringWrap}>
-      <View style={styles.ringTrack} />
+      <View style={[styles.ringTrack, palette.mode === 'dark' && { borderColor: 'rgba(255,255,255,0.12)' }]} />
       <View
         style={[
           styles.ringFill,

@@ -26,6 +26,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
+import { useShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
@@ -351,10 +352,11 @@ const UserCard = React.memo(function UserCard({
   onDelete,
 }: UserCardProps) {
   const palette = useColors();
+  const shadow = useShadow();
   return (
     <AnimatedCard
       index={index}
-      style={[styles.userCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      style={[styles.userCard, shadow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <TouchableOpacity style={styles.userRow} onPress={() => onEdit(user)} activeOpacity={0.7}>
         <View style={styles.avatarWrap}>

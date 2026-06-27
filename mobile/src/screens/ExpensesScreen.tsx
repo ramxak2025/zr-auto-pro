@@ -1658,7 +1658,12 @@ export default function ExpensesScreen() {
             setFilterEmployeeId('');
             setEmployeePickerOpen(false);
           }}
-          style={[styles.employeeOption, !filterEmployeeId && { backgroundColor: colors.primary[50] }]}
+          style={[
+            styles.employeeOption,
+            !filterEmployeeId && {
+              backgroundColor: palette.mode === 'dark' ? palette.accent.primarySoft : colors.primary[50],
+            },
+          ]}
         >
           <View style={[styles.employeeAvatar, { backgroundColor: palette.bg.muted }]}>
             <Ionicons name="people-outline" size={16} color={palette.text.secondary} />
@@ -1683,7 +1688,12 @@ export default function ExpensesScreen() {
                 setFilterEmployeeId(emp.id);
                 setEmployeePickerOpen(false);
               }}
-              style={[styles.employeeOption, active && { backgroundColor: colors.primary[50] }]}
+              style={[
+                styles.employeeOption,
+                active && {
+                  backgroundColor: palette.mode === 'dark' ? palette.accent.primarySoft : colors.primary[50],
+                },
+              ]}
             >
               <View style={[styles.employeeAvatar, { backgroundColor: palette.bg.muted }]}>
                 <Text style={[styles.employeeAvatarText, { color: palette.text.secondary }]}>

@@ -1126,6 +1126,7 @@ function CreateStorageItemDialog({
 // ─── Trash dialog (opened from header trailing icon) ───────────────────────
 function TrashDialog({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const qc = useQueryClient();
+  const palette = useColors();
   const { data: items = [] } = useQuery({
     queryKey: ['eq-trash'],
     queryFn: async () => (await equipmentApi.getTrash()).data,
@@ -1148,7 +1149,7 @@ function TrashDialog({ visible, onClose }: { visible: boolean; onClose: () => vo
   return (
     <CenteredDialog visible={visible} title="Корзина" onClose={onClose}>
       {items.length === 0 ? (
-        <Text style={styles.emptyText}>Корзина пуста</Text>
+        <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>Корзина пуста</Text>
       ) : (
         <View style={{ gap: spacing[2] }}>
           {items.map((item: any) => {
@@ -1156,10 +1157,16 @@ function TrashDialog({ visible, onClose }: { visible: boolean; onClose: () => vo
               ? Math.max(0, Math.ceil((new Date(item.trashExpiresAt).getTime() - Date.now()) / 86400000))
               : '?';
             return (
-              <View key={item.id} style={[styles.equipItem, { opacity: 0.85 }]}>
+              <View
+                key={item.id}
+                style={[
+                  styles.equipItem,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, opacity: 0.85 },
+                ]}
+              >
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.equipName}>{item.name}</Text>
-                  <Text style={styles.equipMeta}>
+                  <Text style={[styles.equipName, { color: palette.text.primary }]}>{item.name}</Text>
+                  <Text style={[styles.equipMeta, { color: palette.text.tertiary }]}>
                     {item.userName} · {formatMoney(item.cost)} · {daysLeft}д
                   </Text>
                 </View>

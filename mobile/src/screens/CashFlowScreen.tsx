@@ -236,7 +236,11 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
 }: EmployeePickerRowProps) {
   return (
     <TouchableOpacity
-      style={[styles.employeeOption, active && styles.employeeOptionActive]}
+      style={[
+        styles.employeeOption,
+        active && styles.employeeOptionActive,
+        active && palette.mode === 'dark' && { backgroundColor: palette.accent.primarySoft },
+      ]}
       onPress={() => onPick(id, fullName)}
     >
       <View style={styles.employeeAvatar}>
@@ -938,7 +942,11 @@ export default function CashFlowScreen() {
               </TouchableOpacity>
             </View>
             <TouchableOpacity
-              style={[styles.employeeOption, !employeeId && styles.employeeOptionActive]}
+              style={[
+                styles.employeeOption,
+                !employeeId && styles.employeeOptionActive,
+                !employeeId && palette.mode === 'dark' && { backgroundColor: palette.accent.primarySoft },
+              ]}
               onPress={() => {
                 setEmployeeId('');
                 setEmployeeName('');

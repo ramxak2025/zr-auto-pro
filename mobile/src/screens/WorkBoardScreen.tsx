@@ -26,7 +26,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
-  Platform,
   Alert,
   useWindowDimensions,
 } from 'react-native';
@@ -45,6 +44,7 @@ import Modal from '../components/Modal';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
+import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { WORK_STATUS_ORDER, WORK_STATUS_META } from '../constants/workStatus';
 import type { Check, ChecksBoard, CheckWorkStatus } from '../../../shared/types';
@@ -72,7 +72,11 @@ interface BoardCardProps {
 const BoardCard = React.memo(function BoardCard({ check, palette, onPress }: BoardCardProps) {
   return (
     <TouchableOpacity
-      style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      style={[
+        styles.card,
+        buildShadow(palette),
+        { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+      ]}
       activeOpacity={0.7}
       onPress={() => onPress(check)}
       accessibilityRole="button"
@@ -370,11 +374,6 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     padding: spacing[3],
     gap: spacing[1.5],
-    shadowColor: colors.black,
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 1 },
-    ...(Platform.OS === 'android' ? { elevation: 1 } : null),
   },
   cardHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   cardNumber: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },

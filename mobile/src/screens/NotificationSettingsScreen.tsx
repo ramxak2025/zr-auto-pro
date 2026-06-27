@@ -23,7 +23,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { Text } from '../platform/Typography';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import { iosSectionLabel } from '../platform/iosSurface';
+import { iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { notificationsApi } from '../api/services';
@@ -139,6 +139,7 @@ const PrefRow = React.memo(function PrefRow({
 export default function NotificationSettingsScreen() {
   const navigation = useNavigation<any>();
   const palette = useColors();
+  const shadow = useShadow();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
 
@@ -217,7 +218,9 @@ export default function NotificationSettingsScreen() {
 
           <View style={styles.section}>
             <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>КАТЕГОРИИ</Text>
-            <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            <View
+              style={[styles.card, shadow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
               {CATEGORY_ROWS.map((row, idx) => (
                 <PrefRow
                   key={row.key}

@@ -23,7 +23,7 @@ import { countUpcoming } from './bookings/bookingHelpers';
 import type { Booking } from '../../../shared/types';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import { iosCard, iosSectionLabel } from '../platform/iosSurface';
+import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { UserPermissions, SubscriptionInfo, SectionVisibility } from '../../../shared/types';
 import { ALL_ITEM_KEYS } from '../../../shared/types';
@@ -436,6 +436,9 @@ interface MenuRowProps {
   separatorColor: string;
   /** Tertiary tone for chevron / lock — theme-aware. */
   iconMutedColor: string;
+  /** Card colour behind the badge — used as the cut-out ring so the dot
+   * reads against the current surface (white in light, dark card in dark). */
+  badgeRingColor: string;
   /** Optional attention count — renders a red dot/badge on the icon. */
   badgeCount?: number;
 }
@@ -449,6 +452,7 @@ const MenuRow = React.memo(function MenuRow({
   descColor,
   separatorColor,
   iconMutedColor,
+  badgeRingColor,
   badgeCount = 0,
 }: MenuRowProps) {
   return (
@@ -457,7 +461,7 @@ const MenuRow = React.memo(function MenuRow({
         <View style={[styles.menuIcon, { backgroundColor: item.iconBg }]}>
           <Ionicons name={item.icon} size={20} color={locked ? iconMutedColor : item.iconColor} />
           {badgeCount > 0 && (
-            <View style={styles.menuBadge}>
+            <View style={[styles.menuBadge, { borderColor: badgeRingColor }]}>
               <Text style={styles.menuBadgeText}>{badgeCount > 9 ? '9+' : String(badgeCount)}</Text>
             </View>
           )}
@@ -485,6 +489,7 @@ export default function MoreScreen() {
   const navigation = useNavigation<any>();
   const { user, logout, hasPermission, refreshUser, isSectionVisible, isItemVisible } = useAuth();
   const palette = useColors();
+  const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
   const [uploading, setUploading] = useState(false);
@@ -597,6 +602,7 @@ export default function MoreScreen() {
         <Animated.View
           style={[
             styles.userCard,
+            shadow,
             {
               backgroundColor: palette.bg.card,
               borderColor: palette.border.subtle,
@@ -620,6 +626,7 @@ export default function MoreScreen() {
               <TouchableOpacity
                 style={[
                   styles.avatarEditBtn,
+                  shadow,
                   { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
                 ]}
                 onPress={handleAvatarUpload}
@@ -670,7 +677,13 @@ export default function MoreScreen() {
               <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
                 {section.title}
               </Text>
-              <View style={[styles.menuCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+              <View
+                style={[
+                  styles.menuCard,
+                  shadow,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                ]}
+              >
                 {visibleItems.map((item, idx) => (
                   <MenuRow
                     key={item.screen}
@@ -682,6 +695,7 @@ export default function MoreScreen() {
                     descColor={palette.text.secondary}
                     separatorColor={palette.border.subtle}
                     iconMutedColor={palette.text.tertiary}
+                    badgeRingColor={palette.bg.card}
                     badgeCount={
                       item.screen === 'KnowledgeBase'
                         ? pendingRegsCount
@@ -698,7 +712,7 @@ export default function MoreScreen() {
 
         {/* Logout */}
         <TouchableOpacity
-          style={[styles.logoutBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          style={[styles.logoutBtn, shadow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           onPress={() =>
             Alert.alert('Выйти из аккаунта?', 'Вы сможете снова войти по логину и паролю.', [
               { text: 'Отмена', style: 'cancel' },

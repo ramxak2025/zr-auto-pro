@@ -59,7 +59,7 @@ import {
   STORIES_EXPORT_HEIGHT,
   type StoriesShareCardData,
 } from '../components/StoriesShareCard';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
@@ -1300,15 +1300,36 @@ export default function ReportsScreen() {
               >
                 <Text style={[styles.cardTitle, { color: palette.text.tertiary }]}>ЭКСПОРТ</Text>
                 <View style={styles.exportRow}>
-                  <TouchableOpacity style={styles.exportBtn} onPress={exportImage} activeOpacity={0.85}>
+                  <TouchableOpacity
+                    style={[
+                      styles.exportBtn,
+                      { backgroundColor: palette.mode === 'dark' ? palette.bg.muted : 'rgba(0,0,0,0.04)' },
+                    ]}
+                    onPress={exportImage}
+                    activeOpacity={0.85}
+                  >
                     <Ionicons name="sparkles-outline" size={20} color={colors.amber[600]} />
                     <Text style={[styles.exportBtnText, { color: palette.text.primary }]}>Для Stories</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.exportBtn} onPress={exportPdf} activeOpacity={0.85}>
+                  <TouchableOpacity
+                    style={[
+                      styles.exportBtn,
+                      { backgroundColor: palette.mode === 'dark' ? palette.bg.muted : 'rgba(0,0,0,0.04)' },
+                    ]}
+                    onPress={exportPdf}
+                    activeOpacity={0.85}
+                  >
                     <Ionicons name="document-text-outline" size={20} color={colors.primary[600]} />
                     <Text style={[styles.exportBtnText, { color: palette.text.primary }]}>PDF</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity style={styles.exportBtn} onPress={exportTablePdf} activeOpacity={0.85}>
+                  <TouchableOpacity
+                    style={[
+                      styles.exportBtn,
+                      { backgroundColor: palette.mode === 'dark' ? palette.bg.muted : 'rgba(0,0,0,0.04)' },
+                    ]}
+                    onPress={exportTablePdf}
+                    activeOpacity={0.85}
+                  >
                     <Ionicons name="grid-outline" size={20} color={colors.green[600]} />
                     <Text style={[styles.exportBtnText, { color: palette.text.primary }]}>Таблица</Text>
                   </TouchableOpacity>
@@ -1450,9 +1471,31 @@ function FunnelArrow({ palette }: { palette: ReturnType<typeof useColors> }) {
 }
 
 function DeltaChip({ value, suffix = '%', dark = false }: { value: number; suffix?: string; dark?: boolean }) {
+  const palette = useColors();
+  // Theme-aware on-card chip. Light mode keeps the exact green[50]/red[50] +
+  // 700-text look (badgeColors.green/red are identical to those tokens); dark
+  // mode swaps in the translucent badge fills + light text so the chip reads
+  // on the dark card. The flat tone gets a muted surface instead of the
+  // near-invisible rgba(0,0,0,0.06). The `dark` PROP (chip-on-hero-gradient)
+  // is unrelated to theme mode and keeps its white-on-translucent-white look.
+  const badges = getBadgeColors(palette.mode);
   const tone: 'up' | 'down' | 'flat' = value > 0.5 ? 'up' : value < -0.5 ? 'down' : 'flat';
-  const bg = tone === 'up' ? colors.green[50] : tone === 'down' ? colors.red[50] : 'rgba(0,0,0,0.06)';
-  const fg = tone === 'up' ? colors.green[700] : tone === 'down' ? colors.red[700] : colors.gray[600];
+  const bg =
+    tone === 'up'
+      ? badges.green.bg
+      : tone === 'down'
+        ? badges.red.bg
+        : palette.mode === 'dark'
+          ? palette.bg.muted
+          : 'rgba(0,0,0,0.06)';
+  const fg =
+    tone === 'up'
+      ? badges.green.text
+      : tone === 'down'
+        ? badges.red.text
+        : palette.mode === 'dark'
+          ? palette.text.secondary
+          : colors.gray[600];
   const darkBg =
     tone === 'up' ? 'rgba(255,255,255,0.25)' : tone === 'down' ? 'rgba(255,255,255,0.25)' : 'rgba(255,255,255,0.18)';
   const darkFg = colors.white;

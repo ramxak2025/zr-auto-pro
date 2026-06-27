@@ -2094,13 +2094,16 @@ export default function ProductsScreen() {
         presentationStyle="pageSheet"
         onRequestClose={() => setShowInventoryModal(false)}
       >
-        <SafeAreaView style={styles.invFullSafe} edges={['top', 'bottom']}>
+        <SafeAreaView style={[styles.invFullSafe, { backgroundColor: palette.bg.canvas }]} edges={['top', 'bottom']}>
           {/* Header */}
-          <View style={styles.invFullHeader}>
-            <TouchableOpacity onPress={() => setShowInventoryModal(false)} style={styles.invFullBackBtn}>
-              <Ionicons name="arrow-back" size={22} color={colors.gray[900]} />
+          <View style={[styles.invFullHeader, { borderBottomColor: palette.border.subtle }]}>
+            <TouchableOpacity
+              onPress={() => setShowInventoryModal(false)}
+              style={[styles.invFullBackBtn, { backgroundColor: palette.bg.muted }]}
+            >
+              <Ionicons name="arrow-back" size={22} color={palette.text.primary} />
             </TouchableOpacity>
-            <Text style={styles.invFullTitle}>{'Инвентаризация'}</Text>
+            <Text style={[styles.invFullTitle, { color: palette.text.primary }]}>{'Инвентаризация'}</Text>
             <TouchableOpacity
               style={[styles.invFullSubmitBtn, inventoryCommitProgress ? { opacity: 0.6 } : null]}
               onPress={handleInventorySubmit}
@@ -2115,32 +2118,55 @@ export default function ProductsScreen() {
           </View>
 
           {/* Summary bar */}
-          <View style={styles.invSummaryBar}>
-            <View style={styles.invSummaryItem}>
-              <Text style={styles.invSummaryLabel}>{'Проверено'}</Text>
-              <Text style={styles.invSummaryValue}>
+          <View
+            style={[
+              styles.invSummaryBar,
+              { backgroundColor: palette.bg.muted, borderBottomColor: palette.border.subtle },
+            ]}
+          >
+            <View
+              style={[styles.invSummaryItem, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              <Text style={[styles.invSummaryLabel, { color: palette.text.tertiary }]}>{'Проверено'}</Text>
+              <Text style={[styles.invSummaryValue, { color: palette.text.primary }]}>
                 {inventorySummary.checkedCount} {'товаров'}
               </Text>
             </View>
-            <View style={styles.invSummaryItem}>
-              <Text style={styles.invSummaryLabel}>{'Изменено'}</Text>
+            <View
+              style={[styles.invSummaryItem, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              <Text style={[styles.invSummaryLabel, { color: palette.text.tertiary }]}>{'Изменено'}</Text>
               <Text
-                style={[styles.invSummaryValue, inventorySummary.changedCount > 0 && { color: colors.orange[600] }]}
+                style={[
+                  styles.invSummaryValue,
+                  { color: palette.text.primary },
+                  inventorySummary.changedCount > 0 && { color: colors.orange[600] },
+                ]}
               >
                 {inventorySummary.changedCount}
               </Text>
             </View>
             {inventorySummary.shortageAmount > 0 && (
-              <View style={styles.invSummaryItem}>
-                <Text style={styles.invSummaryLabel}>{'Недостача'}</Text>
+              <View
+                style={[
+                  styles.invSummaryItem,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                ]}
+              >
+                <Text style={[styles.invSummaryLabel, { color: palette.text.tertiary }]}>{'Недостача'}</Text>
                 <Text style={[styles.invSummaryValue, { color: colors.red[600] }]}>
                   {formatMoney(inventorySummary.shortageAmount)}
                 </Text>
               </View>
             )}
             {inventorySummary.excessAmount > 0 && (
-              <View style={styles.invSummaryItem}>
-                <Text style={styles.invSummaryLabel}>{'Излишек'}</Text>
+              <View
+                style={[
+                  styles.invSummaryItem,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                ]}
+              >
+                <Text style={[styles.invSummaryLabel, { color: palette.text.tertiary }]}>{'Излишек'}</Text>
                 <Text style={[styles.invSummaryValue, { color: colors.green[600] }]}>
                   {formatMoney(inventorySummary.excessAmount)}
                 </Text>
@@ -2169,13 +2195,19 @@ export default function ProductsScreen() {
               </TouchableOpacity>
               {invActivePath.map((seg, i) => (
                 <React.Fragment key={i}>
-                  <Ionicons name="chevron-forward" size={12} color={colors.gray[300]} />
+                  <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
                   <TouchableOpacity
                     onPress={() => setInvActivePath((prev) => prev.slice(0, i + 1))}
                     style={styles.breadcrumbItem}
                   >
                     <Text
-                      style={[styles.breadcrumbText, i === invActivePath.length - 1 && styles.breadcrumbTextActive]}
+                      style={[
+                        styles.breadcrumbText,
+                        i === invActivePath.length - 1 && [
+                          styles.breadcrumbTextActive,
+                          { color: palette.text.primary },
+                        ],
+                      ]}
                     >
                       {seg}
                     </Text>
@@ -2200,22 +2232,34 @@ export default function ProductsScreen() {
                         key={folderName}
                         style={[
                           styles.invFullFolderCard,
-                          isGreen && { backgroundColor: colors.green[50], borderColor: colors.green[200] },
+                          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                          isGreen &&
+                            (palette.mode === 'dark'
+                              ? { backgroundColor: 'rgba(34,197,94,0.13)', borderColor: 'rgba(34,197,94,0.32)' }
+                              : { backgroundColor: colors.green[50], borderColor: colors.green[200] }),
                         ]}
                         onPress={() => setInvActivePath((prev) => [...prev, folderName])}
                         activeOpacity={0.7}
                       >
-                        <View style={[styles.folderIconBox, isGreen && { backgroundColor: colors.green[100] }]}>
+                        <View
+                          style={[
+                            styles.folderIconBox,
+                            { backgroundColor: palette.accent.primarySoft },
+                            isGreen && {
+                              backgroundColor: palette.mode === 'dark' ? 'rgba(34,197,94,0.18)' : colors.green[100],
+                            },
+                          ]}
+                        >
                           <Ionicons
                             name="folder-open-outline"
                             size={22}
                             color={isGreen ? colors.green[600] : colors.primary[500]}
                           />
                         </View>
-                        <Text style={styles.folderName} numberOfLines={2}>
+                        <Text style={[styles.folderName, { color: palette.text.primary }]} numberOfLines={2}>
                           {folderName}
                         </Text>
-                        <Text style={styles.folderCount}>
+                        <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
                           {info.count} {'шт'}
                         </Text>
                         {isGreen && (
@@ -2241,26 +2285,29 @@ export default function ProductsScreen() {
                 <View
                   style={[
                     styles.invFullProductRow,
-                    (countedInSession || checked24h) && {
-                      backgroundColor: colors.green[50],
-                      borderColor: colors.green[200],
-                    },
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                    (countedInSession || checked24h) &&
+                      (palette.mode === 'dark'
+                        ? { backgroundColor: 'rgba(34,197,94,0.13)', borderColor: 'rgba(34,197,94,0.32)' }
+                        : { backgroundColor: colors.green[50], borderColor: colors.green[200] }),
                   ]}
                 >
                   <View style={styles.invFullProductInfo}>
-                    <Text style={styles.invFullProductName} numberOfLines={2}>
+                    <Text style={[styles.invFullProductName, { color: palette.text.primary }]} numberOfLines={2}>
                       {item.name}
                     </Text>
                     {lastDate && (
-                      <Text style={styles.invFullProductDate}>
+                      <Text style={[styles.invFullProductDate, { color: palette.text.tertiary }]}>
                         {'Проверено: '}
                         {lastDate}
                       </Text>
                     )}
                   </View>
                   <View style={styles.invFullProductStock}>
-                    <Text style={styles.invFullProductStockLabel}>{'Сист.'}</Text>
-                    <Text style={styles.invFullProductStockValue}>{item.stock}</Text>
+                    <Text style={[styles.invFullProductStockLabel, { color: palette.text.tertiary }]}>{'Сист.'}</Text>
+                    <Text style={[styles.invFullProductStockValue, { color: palette.text.secondary }]}>
+                      {item.stock}
+                    </Text>
                   </View>
                   <TextInput
                     value={actualStock}
@@ -2278,11 +2325,16 @@ export default function ProductsScreen() {
                     }}
                     style={[
                       styles.invFullProductInput,
+                      {
+                        backgroundColor: palette.bg.muted,
+                        borderColor: palette.border.subtle,
+                        color: palette.text.primary,
+                      },
                       diff !== 0 && (diff > 0 ? styles.invInputPlus : styles.invInputMinus),
                     ]}
                     keyboardType="numeric"
                     placeholder={String(item.stock)}
-                    placeholderTextColor={colors.gray[400]}
+                    placeholderTextColor={palette.text.tertiary}
                   />
                   {diff !== 0 && (
                     <View
@@ -2308,13 +2360,15 @@ export default function ProductsScreen() {
             ListEmptyComponent={
               !inventorySearch && invSortedFolders.length === 0 ? (
                 <View style={styles.invFullEmpty}>
-                  <Ionicons name="cube-outline" size={40} color={colors.gray[300]} />
-                  <Text style={styles.invFullEmptyText}>{'Нет товаров в этой папке'}</Text>
+                  <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
+                  <Text style={[styles.invFullEmptyText, { color: palette.text.tertiary }]}>
+                    {'Нет товаров в этой папке'}
+                  </Text>
                 </View>
               ) : inventorySearch ? (
                 <View style={styles.invFullEmpty}>
-                  <Ionicons name="search-outline" size={40} color={colors.gray[300]} />
-                  <Text style={styles.invFullEmptyText}>{'Ничего не найдено'}</Text>
+                  <Ionicons name="search-outline" size={40} color={palette.text.tertiary} />
+                  <Text style={[styles.invFullEmptyText, { color: palette.text.tertiary }]}>{'Ничего не найдено'}</Text>
                 </View>
               ) : null
             }

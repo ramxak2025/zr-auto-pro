@@ -43,7 +43,8 @@ import AnimatedCard from '../components/AnimatedCard';
 import QueryErrorState from '../components/QueryErrorState';
 import EmptyState from '../components/EmptyState';
 import { haptic } from '../platform/haptics';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { buildShadow } from '../platform/iosSurface';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { TodayEmployeeStatus, ScheduleEntry, ScheduleSettings, User } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
@@ -401,6 +402,12 @@ function TodayPill({ day }: { day: number; reduceMotion?: boolean }) {
 // Renders 6 ghost rows so the user sees the structure of the grid instead of
 // a generic spinner — much closer to native iOS apps (Calendar, Reminders).
 function GridSkeleton() {
+  const palette = useColors();
+  const dark = palette.mode === 'dark';
+  // Two placeholder shades so the shimmer keeps its layered look in both
+  // modes — darker block for the prominent rows, fainter for secondary.
+  const shadeA = dark ? palette.border.strong : colors.gray[200];
+  const shadeB = dark ? palette.border.subtle : colors.gray[100];
   return (
     <View style={{ flex: 1, paddingTop: 4 }}>
       {[...Array(6)].map((_, i) => (
@@ -415,14 +422,14 @@ function GridSkeleton() {
             opacity: 1 - i * 0.12,
           }}
         >
-          <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: colors.gray[200] }} />
+          <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: shadeA }} />
           <View style={{ flex: 1, gap: 6 }}>
-            <View style={{ width: '50%', height: 11, borderRadius: 4, backgroundColor: colors.gray[200] }} />
-            <View style={{ width: '30%', height: 9, borderRadius: 4, backgroundColor: colors.gray[100] }} />
+            <View style={{ width: '50%', height: 11, borderRadius: 4, backgroundColor: shadeA }} />
+            <View style={{ width: '30%', height: 9, borderRadius: 4, backgroundColor: shadeB }} />
           </View>
           <View style={{ flexDirection: 'row', gap: 4 }}>
             {[...Array(5)].map((__, j) => (
-              <View key={j} style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: colors.gray[100] }} />
+              <View key={j} style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: shadeB }} />
             ))}
           </View>
         </View>
@@ -651,6 +658,7 @@ function GridTab() {
   const navigation = useNavigation<any>();
   const { user } = useAuth();
   const palette = useColors();
+  const dark = palette.mode === 'dark';
   const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
   // Lifted month state — same Date instance across the screen, driven
   // from the IosScreenHeader month picker.
@@ -1204,16 +1212,69 @@ function GridTab() {
         contentContainerStyle={styles.legendRow}
       >
         {[
-          { icon: 'checkmark' as const, color: colors.green[100], bg: colors.green[600], label: 'Отработано' },
-          { icon: 'checkmark' as const, color: colors.green[700], bg: colors.green[50], label: 'Смена' },
-          { icon: 'moon-outline' as const, color: colors.gray[500], bg: colors.gray[100], label: 'Вых' },
-          { icon: 'medkit-outline' as const, color: colors.orange[600], bg: colors.orange[50], label: 'Б/Л' },
-          { icon: 'time-outline' as const, color: colors.amber[600], bg: colors.amber[50], label: '<1ч' },
-          { icon: 'warning-outline' as const, color: colors.red[500], bg: colors.red[50], label: '>1ч' },
-          { icon: 'close' as const, color: colors.red[600], bg: colors.red[50], label: 'Прогул' },
+          // Each legend chip carries a light pair (color/bg) and a dark pair
+          // (darkColor/darkBg) so the chip reads the same way in both modes:
+          // saturated fills stay saturated, pale shade-50 fills become a
+          // translucent tint of the same hue on the dark canvas.
+          {
+            icon: 'checkmark' as const,
+            color: colors.green[100],
+            bg: colors.green[600],
+            darkColor: colors.green[100],
+            darkBg: colors.green[600],
+            label: 'Отработано',
+          },
+          {
+            icon: 'checkmark' as const,
+            color: colors.green[700],
+            bg: colors.green[50],
+            darkColor: colors.green[300],
+            darkBg: 'rgba(34,197,94,0.18)',
+            label: 'Смена',
+          },
+          {
+            icon: 'moon-outline' as const,
+            color: colors.gray[500],
+            bg: colors.gray[100],
+            darkColor: colors.gray[300],
+            darkBg: 'rgba(148,163,184,0.15)',
+            label: 'Вых',
+          },
+          {
+            icon: 'medkit-outline' as const,
+            color: colors.orange[600],
+            bg: colors.orange[50],
+            darkColor: colors.orange[400],
+            darkBg: 'rgba(234,88,12,0.18)',
+            label: 'Б/Л',
+          },
+          {
+            icon: 'time-outline' as const,
+            color: colors.amber[600],
+            bg: colors.amber[50],
+            darkColor: '#fbbf24',
+            darkBg: 'rgba(217,119,6,0.18)',
+            label: '<1ч',
+          },
+          {
+            icon: 'warning-outline' as const,
+            color: colors.red[500],
+            bg: colors.red[50],
+            darkColor: colors.red[400],
+            darkBg: 'rgba(239,68,68,0.16)',
+            label: '>1ч',
+          },
+          {
+            icon: 'close' as const,
+            color: colors.red[600],
+            bg: colors.red[50],
+            darkColor: colors.red[400],
+            darkBg: 'rgba(220,38,38,0.18)',
+            label: 'Прогул',
+          },
         ].map((item) => (
-          <View key={item.label} style={[styles.legendItem, { backgroundColor: item.bg }]}>
-            <Ionicons name={item.icon} size={12} color={item.color} />
+          <View key={item.label} style={[styles.legendItem, { backgroundColor: dark ? item.darkBg : item.bg }]}>
+            <Ionicons name={item.icon} size={12} color={dark ? item.darkColor : item.color} />
             {/* allowFontScaling off: legend sits in a fixed height:34 band and
                 would clip/overflow under large Dynamic Type. */}
             <Text allowFontScaling={false} style={[styles.legendText, { color: palette.text.secondary }]}>
@@ -1454,16 +1515,20 @@ function GridTab() {
                     gap: 12,
                     paddingVertical: 14,
                     paddingHorizontal: 16,
-                    backgroundColor: isCurrent ? colors.primary[50] : 'transparent',
+                    backgroundColor: isCurrent
+                      ? dark
+                        ? palette.accent.primarySoft
+                        : colors.primary[50]
+                      : 'transparent',
                     borderBottomWidth: 0.5,
-                    borderBottomColor: colors.gray[100],
+                    borderBottomColor: palette.border.subtle,
                   }}
                 >
                   <Text
                     style={{
                       fontSize: 11,
                       fontWeight: '700',
-                      color: isCurrent ? colors.primary[600] : colors.gray[400],
+                      color: isCurrent ? colors.primary[600] : palette.text.tertiary,
                       width: 24,
                     }}
                   >
@@ -1472,7 +1537,11 @@ function GridTab() {
                   <Text
                     style={{
                       fontSize: 14,
-                      color: isCurrent ? colors.primary[700] : colors.gray[700],
+                      color: isCurrent
+                        ? dark
+                          ? palette.accent.primaryText
+                          : colors.primary[700]
+                        : palette.text.secondary,
                       flex: 1,
                       fontWeight: isCurrent ? '600' : '500',
                     }}
@@ -1552,20 +1621,25 @@ function GridTab() {
             ].map((item) => (
               <TouchableOpacity key={item.type} style={styles.quickBtn} onPress={() => quickAction(item.type)}>
                 <LinearGradient
-                  colors={item.gradient as [string, string]}
+                  colors={(dark ? [item.iconColor + '26', item.iconColor + '14'] : item.gradient) as [string, string]}
                   style={styles.quickIcon}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
                 >
                   <Ionicons name={item.icon} size={22} color={item.iconColor} />
                 </LinearGradient>
-                <Text style={styles.quickLabel}>{item.label}</Text>
+                <Text style={[styles.quickLabel, { color: palette.text.secondary }]}>{item.label}</Text>
               </TouchableOpacity>
             ))}
             {quickPopup.entry && (
               <TouchableOpacity style={styles.quickBtn} onPress={() => quickAction('delete')}>
                 <LinearGradient
-                  colors={[colors.red[50], colors.red[100]] as [string, string]}
+                  colors={
+                    (dark ? ['rgba(220,38,38,0.26)', 'rgba(220,38,38,0.14)'] : [colors.red[50], colors.red[100]]) as [
+                      string,
+                      string,
+                    ]
+                  }
                   style={styles.quickIcon}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
@@ -1668,7 +1742,12 @@ function TodayTab() {
     return (
       <AnimatedCard key={s.userId} index={Math.min(idx + 2, 7)} onPress={() => openEmployee(navigation, s.userId)}>
         <View style={[styles.todayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-          <View style={[styles.todayStatusIcon, { backgroundColor: info.softBg }]}>
+          <View
+            style={[
+              styles.todayStatusIcon,
+              { backgroundColor: palette.mode === 'dark' ? info.tint + '28' : info.softBg },
+            ]}
+          >
             <Ionicons name={info.icon} size={20} color={info.tint} />
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
@@ -1741,7 +1820,12 @@ function TodayTab() {
           <View
             style={[styles.todayStatCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           >
-            <View style={[styles.todayStatIconWrap, { backgroundColor: colors.green[50] }]}>
+            <View
+              style={[
+                styles.todayStatIconWrap,
+                { backgroundColor: palette.mode === 'dark' ? 'rgba(34,197,94,0.18)' : colors.green[50] },
+              ]}
+            >
               <Ionicons name="checkmark-circle" size={20} color={colors.green[600]} />
             </View>
             <View>
@@ -1802,6 +1886,8 @@ function TodayTab() {
 // ============== SHIFTS TAB ==============
 function ShiftsTab() {
   const tabBarHeight = useTabBarHeight();
+  const palette = useColors();
+  const dark = palette.mode === 'dark';
 
   // Honest month stepper: /schedule/my-stats now accepts dateFrom/dateTo,
   // so the tab consumes the same lifted month state as the grid (header
@@ -1832,34 +1918,39 @@ function ShiftsTab() {
 
   const s: any = stats || {};
 
+  // Dark mode: drop the light pastel gradients (they read as bright tiles
+  // on the dark canvas) for a neutral elevated→card gradient, and lift the
+  // value colour one notch so it pops on the dark surface. Light mode keeps
+  // the exact pastel look.
+  const darkStatGradient: [string, string] = [palette.bg.elevated, palette.bg.card];
   const statItems = [
     {
       label: 'Рабочих дней',
       value: s.totalWorked || 0,
       icon: 'calendar' as const,
-      color: colors.primary[700],
-      gradient: [colors.primary[50], colors.primary[100]],
+      color: dark ? colors.primary[300] : colors.primary[700],
+      gradient: dark ? darkStatGradient : [colors.primary[50], colors.primary[100]],
     },
     {
       label: 'Вовремя',
       value: s.totalOnTime || 0,
       icon: 'checkmark' as const,
-      color: colors.green[700],
-      gradient: [colors.green[50], colors.green[100]],
+      color: dark ? colors.green[300] : colors.green[700],
+      gradient: dark ? darkStatGradient : [colors.green[50], colors.green[100]],
     },
     {
       label: 'Опозданий',
       value: s.totalLate || 0,
       icon: 'alarm-outline' as const,
-      color: colors.orange[600],
-      gradient: [colors.orange[50], '#fed7aa'],
+      color: dark ? colors.orange[400] : colors.orange[600],
+      gradient: dark ? darkStatGradient : [colors.orange[50], '#fed7aa'],
     },
     {
       label: 'Выходных',
       value: s.totalDaysOff || 0,
       icon: 'moon-outline' as const,
-      color: colors.gray[600],
-      gradient: [colors.gray[50], colors.gray[100]],
+      color: dark ? colors.gray[300] : colors.gray[600],
+      gradient: dark ? darkStatGradient : [colors.gray[50], colors.gray[100]],
     },
   ];
 
@@ -1882,7 +1973,12 @@ function ShiftsTab() {
                   style={styles.statCard}
                 >
                   <View style={styles.statCardHeader}>
-                    <View style={[styles.statIcon, { backgroundColor: colors.white + '90' }]}>
+                    <View
+                      style={[
+                        styles.statIcon,
+                        { backgroundColor: dark ? 'rgba(255,255,255,0.08)' : colors.white + '90' },
+                      ]}
+                    >
                       <Ionicons name={item.icon} size={18} color={item.color} />
                     </View>
                   </View>
@@ -1896,23 +1992,28 @@ function ShiftsTab() {
           {/* Late details card with progress bars */}
           {(s.totalLateMinor > 0 || s.totalLateMajor > 0) && (
             <AnimatedCard index={4}>
-              <View style={styles.detailCard}>
+              <View style={[styles.detailCard, buildShadow(palette), { backgroundColor: palette.bg.card }]}>
                 <View style={styles.detailCardHeader}>
-                  <View style={styles.detailHeaderIcon}>
+                  <View
+                    style={[
+                      styles.detailHeaderIcon,
+                      { backgroundColor: dark ? palette.accent.primarySoft : colors.primary[50] },
+                    ]}
+                  >
                     <Ionicons name="analytics-outline" size={16} color={colors.primary[600]} />
                   </View>
-                  <Text style={styles.detailTitle}>Детали опозданий</Text>
+                  <Text style={[styles.detailTitle, { color: palette.text.primary }]}>Детали опозданий</Text>
                 </View>
 
                 <View style={styles.detailSection}>
                   <View style={styles.detailRow}>
                     <View style={styles.detailLabelRow}>
                       <View style={[styles.detailDotIndicator, { backgroundColor: colors.yellow[500] }]} />
-                      <Text style={styles.detailLabel}>Опоздания {'<'}1ч</Text>
+                      <Text style={[styles.detailLabel, { color: palette.text.secondary }]}>Опоздания {'<'}1ч</Text>
                     </View>
                     <Text style={[styles.detailValue, { color: colors.yellow[600] }]}>{s.totalLateMinor || 0}</Text>
                   </View>
-                  <View style={styles.progressBarBg}>
+                  <View style={[styles.progressBarBg, { backgroundColor: palette.bg.muted }]}>
                     <View
                       style={[
                         styles.progressBar,
@@ -1929,11 +2030,11 @@ function ShiftsTab() {
                   <View style={styles.detailRow}>
                     <View style={styles.detailLabelRow}>
                       <View style={[styles.detailDotIndicator, { backgroundColor: colors.orange[500] }]} />
-                      <Text style={styles.detailLabel}>Опоздания {'>'}1ч</Text>
+                      <Text style={[styles.detailLabel, { color: palette.text.secondary }]}>Опоздания {'>'}1ч</Text>
                     </View>
                     <Text style={[styles.detailValue, { color: colors.orange[600] }]}>{s.totalLateMajor || 0}</Text>
                   </View>
-                  <View style={styles.progressBarBg}>
+                  <View style={[styles.progressBarBg, { backgroundColor: palette.bg.muted }]}>
                     <View
                       style={[
                         styles.progressBar,
@@ -1947,12 +2048,14 @@ function ShiftsTab() {
                 </View>
 
                 {s.avgLateMinutes > 0 && (
-                  <View style={styles.avgLateRow}>
-                    <View style={styles.avgLateIconWrap}>
-                      <Ionicons name="hourglass-outline" size={14} color={colors.gray[500]} />
+                  <View style={[styles.avgLateRow, { borderTopColor: palette.border.subtle }]}>
+                    <View style={[styles.avgLateIconWrap, { backgroundColor: palette.bg.muted }]}>
+                      <Ionicons name="hourglass-outline" size={14} color={palette.text.tertiary} />
                     </View>
-                    <Text style={styles.detailLabel}>Ср. опоздание</Text>
-                    <Text style={styles.avgLateValue}>{Math.round(s.avgLateMinutes)} мин</Text>
+                    <Text style={[styles.detailLabel, { color: palette.text.secondary }]}>Ср. опоздание</Text>
+                    <Text style={[styles.avgLateValue, { color: palette.text.primary }]}>
+                      {Math.round(s.avgLateMinutes)} мин
+                    </Text>
                   </View>
                 )}
               </View>
@@ -1968,6 +2071,11 @@ function ShiftsTab() {
 function RatingTab() {
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
+  const dark = palette.mode === 'dark';
+  // Theme-aware badge palette for the small attendance count chips — light
+  // values are byte-identical to the previous shade-50/700 pairs, dark gives
+  // a translucent tinted fill with a light-300 text.
+  const cb = getBadgeColors(palette.mode);
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const d = new Date();
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
@@ -2077,7 +2185,18 @@ function RatingTab() {
         const s = u.stats;
         const medal = idx === 0 ? '🥇' : idx === 1 ? '🥈' : idx === 2 ? '🥉' : null;
         const scoreColor = u.score >= 90 ? colors.green[600] : u.score >= 70 ? colors.yellow[600] : colors.red[500];
-        const scoreBg = u.score >= 90 ? colors.green[50] : u.score >= 70 ? colors.yellow[50] : colors.red[50];
+        const scoreBg =
+          u.score >= 90
+            ? dark
+              ? 'rgba(34,197,94,0.18)'
+              : colors.green[50]
+            : u.score >= 70
+              ? dark
+                ? 'rgba(234,179,8,0.18)'
+                : colors.yellow[50]
+              : dark
+                ? 'rgba(239,68,68,0.16)'
+                : colors.red[50];
         const isExpanded = expandedUserId === u.id;
         const fmtDate = (d: string) => {
           const p = String(d ?? '').split('-');
@@ -2133,8 +2252,8 @@ function RatingTab() {
                     <Text
                       style={{
                         fontSize: 9,
-                        backgroundColor: colors.green[50],
-                        color: colors.green[700],
+                        backgroundColor: cb.green.bg,
+                        color: cb.green.text,
                         paddingHorizontal: 5,
                         paddingVertical: 2,
                         borderRadius: 8,
@@ -2147,8 +2266,8 @@ function RatingTab() {
                       <Text
                         style={{
                           fontSize: 9,
-                          backgroundColor: colors.yellow[50],
-                          color: colors.yellow[700],
+                          backgroundColor: cb.yellow.bg,
+                          color: cb.yellow.text,
                           paddingHorizontal: 5,
                           paddingVertical: 2,
                           borderRadius: 8,
@@ -2162,8 +2281,8 @@ function RatingTab() {
                       <Text
                         style={{
                           fontSize: 9,
-                          backgroundColor: colors.orange[50],
-                          color: colors.orange[600],
+                          backgroundColor: cb.orange.bg,
+                          color: cb.orange.text,
                           paddingHorizontal: 5,
                           paddingVertical: 2,
                           borderRadius: 8,
@@ -2177,8 +2296,8 @@ function RatingTab() {
                       <Text
                         style={{
                           fontSize: 9,
-                          backgroundColor: colors.red[50],
-                          color: colors.red[700],
+                          backgroundColor: cb.red.bg,
+                          color: cb.red.text,
                           paddingHorizontal: 5,
                           paddingVertical: 2,
                           borderRadius: 8,
@@ -2192,8 +2311,8 @@ function RatingTab() {
                       <Text
                         style={{
                           fontSize: 9,
-                          backgroundColor: colors.rose[50],
-                          color: colors.rose[600],
+                          backgroundColor: dark ? 'rgba(244,63,94,0.16)' : colors.rose[50],
+                          color: dark ? '#fda4af' : colors.rose[600],
                           paddingHorizontal: 5,
                           paddingVertical: 2,
                           borderRadius: 8,
@@ -2235,35 +2354,33 @@ function RatingTab() {
               >
                 {s.fullDates.length > 0 && (
                   <Text style={{ fontSize: 11, color: palette.text.secondary }}>
-                    <Text style={{ fontWeight: '700', color: colors.green[700] }}>✓ Полная смена ({s.full}): </Text>
+                    <Text style={{ fontWeight: '700', color: cb.green.text }}>✓ Полная смена ({s.full}): </Text>
                     {s.fullDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
                 {s.lateMinorDates.length > 0 && (
                   <Text style={{ fontSize: 11, color: palette.text.secondary }}>
-                    <Text style={{ fontWeight: '700', color: colors.yellow[700] }}>
-                      ⏰ Опозд. &lt;1ч ({s.lateMinor}):{' '}
-                    </Text>
+                    <Text style={{ fontWeight: '700', color: cb.yellow.text }}>⏰ Опозд. &lt;1ч ({s.lateMinor}): </Text>
                     {s.lateMinorDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
                 {s.lateMajorDates.length > 0 && (
                   <Text style={{ fontSize: 11, color: palette.text.secondary }}>
-                    <Text style={{ fontWeight: '700', color: colors.orange[600] }}>
-                      ⚠ Опозд. &gt;1ч ({s.lateMajor}):{' '}
-                    </Text>
+                    <Text style={{ fontWeight: '700', color: cb.orange.text }}>⚠ Опозд. &gt;1ч ({s.lateMajor}): </Text>
                     {s.lateMajorDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
                 {s.absentDates.length > 0 && (
                   <Text style={{ fontSize: 11, color: palette.text.secondary }}>
-                    <Text style={{ fontWeight: '700', color: colors.red[700] }}>❌ Прогул ({s.absent}): </Text>
+                    <Text style={{ fontWeight: '700', color: cb.red.text }}>❌ Прогул ({s.absent}): </Text>
                     {s.absentDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
                 {s.sickDates.length > 0 && (
                   <Text style={{ fontSize: 11, color: palette.text.secondary }}>
-                    <Text style={{ fontWeight: '700', color: colors.rose[600] }}>🏥 Больничный ({s.sick}): </Text>
+                    <Text style={{ fontWeight: '700', color: dark ? '#fda4af' : colors.rose[600] }}>
+                      🏥 Больничный ({s.sick}):{' '}
+                    </Text>
                     {s.sickDates.map(fmtDate).join(', ')}
                   </Text>
                 )}
@@ -2344,6 +2461,7 @@ function SettingsTab() {
   const queryClient = useQueryClient();
   const { user } = useAuth();
   const palette = useColors();
+  const dark = palette.mode === 'dark';
   const [settingsTab, setSettingsTab] = useState<'daysoff' | 'modes' | 'shifts'>('daysoff');
   const tabBarHeight = useTabBarHeight();
 
@@ -2480,7 +2598,7 @@ function SettingsTab() {
   return (
     <ScrollView contentContainerStyle={[styles.tabContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
       {/* Segmented sub-tabs */}
-      <View style={styles.subTabs}>
+      <View style={[styles.subTabs, { backgroundColor: palette.bg.muted }]}>
         <TouchableOpacity
           style={[styles.subTabItem, settingsTab === 'daysoff' && styles.subTabActive]}
           onPress={() => setSettingsTab('daysoff')}
@@ -2489,17 +2607,37 @@ function SettingsTab() {
           <Ionicons
             name="calendar-outline"
             size={15}
-            color={settingsTab === 'daysoff' ? colors.white : colors.gray[500]}
+            color={settingsTab === 'daysoff' ? colors.white : palette.text.secondary}
           />
-          <Text style={[styles.subTabText, settingsTab === 'daysoff' && styles.subTabTextActive]}>Выходные</Text>
+          <Text
+            style={[
+              styles.subTabText,
+              { color: palette.text.secondary },
+              settingsTab === 'daysoff' && styles.subTabTextActive,
+            ]}
+          >
+            Выходные
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.subTabItem, settingsTab === 'modes' && styles.subTabActive]}
           onPress={() => setSettingsTab('modes')}
           activeOpacity={0.7}
         >
-          <Ionicons name="time-outline" size={15} color={settingsTab === 'modes' ? colors.white : colors.gray[500]} />
-          <Text style={[styles.subTabText, settingsTab === 'modes' && styles.subTabTextActive]}>Режимы</Text>
+          <Ionicons
+            name="time-outline"
+            size={15}
+            color={settingsTab === 'modes' ? colors.white : palette.text.secondary}
+          />
+          <Text
+            style={[
+              styles.subTabText,
+              { color: palette.text.secondary },
+              settingsTab === 'modes' && styles.subTabTextActive,
+            ]}
+          >
+            Режимы
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.subTabItem, settingsTab === 'shifts' && styles.subTabActive]}
@@ -2509,9 +2647,17 @@ function SettingsTab() {
           <Ionicons
             name="checkmark-circle-outline"
             size={15}
-            color={settingsTab === 'shifts' ? colors.white : colors.gray[500]}
+            color={settingsTab === 'shifts' ? colors.white : palette.text.secondary}
           />
-          <Text style={[styles.subTabText, settingsTab === 'shifts' && styles.subTabTextActive]}>Смены</Text>
+          <Text
+            style={[
+              styles.subTabText,
+              { color: palette.text.secondary },
+              settingsTab === 'shifts' && styles.subTabTextActive,
+            ]}
+          >
+            Смены
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -2601,7 +2747,7 @@ function SettingsTab() {
             const avatarColors = getAvatarColors(u.fullName);
             return (
               <AnimatedCard key={u.id} index={idx}>
-                <View style={styles.daysOffCard}>
+                <View style={[styles.daysOffCard, buildShadow(palette), { backgroundColor: palette.bg.card }]}>
                   <View style={styles.daysOffHeader}>
                     <LinearGradient
                       colors={avatarColors as [string, string]}
@@ -2612,8 +2758,8 @@ function SettingsTab() {
                       <Text style={styles.daysOffAvatarText}>{getInitials(u.fullName)}</Text>
                     </LinearGradient>
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.daysOffName}>{u.fullName}</Text>
-                      <Text style={styles.daysOffCount}>
+                      <Text style={[styles.daysOffName, { color: palette.text.primary }]}>{u.fullName}</Text>
+                      <Text style={[styles.daysOffCount, { color: palette.text.tertiary }]}>
                         {daysOff.length > 0 ? `${daysOff.length} выходн.` : 'Нет выходных'}
                       </Text>
                     </View>
@@ -2627,8 +2773,13 @@ function SettingsTab() {
                           key={dow}
                           style={[
                             styles.dayBtn,
+                            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                            !isOff &&
+                              isWeekend && {
+                                backgroundColor: dark ? 'rgba(239,68,68,0.10)' : colors.red[50] + '50',
+                                borderColor: dark ? 'rgba(239,68,68,0.30)' : colors.red[200],
+                              },
                             isOff && styles.dayBtnActive,
-                            !isOff && isWeekend && styles.dayBtnWeekend,
                           ]}
                           onPress={() => toggleDayOff(u.id, dow)}
                           activeOpacity={0.6}
@@ -2636,6 +2787,7 @@ function SettingsTab() {
                           <Text
                             style={[
                               styles.dayBtnText,
+                              { color: palette.text.secondary },
                               isOff && styles.dayBtnTextActive,
                               !isOff && isWeekend && { color: colors.red[400] },
                             ]}
@@ -2655,9 +2807,13 @@ function SettingsTab() {
         <View style={{ gap: spacing[3] }}>
           {toArray<any>(workModes).map((mode: any, idx: number) => (
             <AnimatedCard key={mode.id} index={idx}>
-              <View style={styles.modeCard}>
+              <View style={[styles.modeCard, buildShadow(palette), { backgroundColor: palette.bg.card }]}>
                 <LinearGradient
-                  colors={[colors.primary[50], colors.primary[100]] as [string, string]}
+                  colors={
+                    (dark
+                      ? [palette.accent.primarySoft, palette.accent.primarySoft]
+                      : [colors.primary[50], colors.primary[100]]) as [string, string]
+                  }
                   style={styles.modeIconWrap}
                   start={{ x: 0, y: 0 }}
                   end={{ x: 1, y: 1 }}
@@ -2665,17 +2821,20 @@ function SettingsTab() {
                   <Ionicons name="time-outline" size={20} color={colors.primary[600]} />
                 </LinearGradient>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.modeName}>{mode.name}</Text>
+                  <Text style={[styles.modeName, { color: palette.text.primary }]}>{mode.name}</Text>
                   <View style={styles.modeTimeRow}>
                     <Ionicons name="enter-outline" size={12} color={colors.green[600]} />
-                    <Text style={styles.modeTimeText}>{mode.shiftStart}</Text>
-                    <Ionicons name="remove-outline" size={10} color={colors.gray[300]} />
+                    <Text style={[styles.modeTimeText, { color: palette.text.secondary }]}>{mode.shiftStart}</Text>
+                    <Ionicons name="remove-outline" size={10} color={palette.text.tertiary} />
                     <Ionicons name="exit-outline" size={12} color={colors.orange[500]} />
-                    <Text style={styles.modeTimeText}>{mode.shiftEnd}</Text>
+                    <Text style={[styles.modeTimeText, { color: palette.text.secondary }]}>{mode.shiftEnd}</Text>
                   </View>
                 </View>
                 <TouchableOpacity
-                  style={styles.modeApplyBtn}
+                  style={[
+                    styles.modeApplyBtn,
+                    { backgroundColor: dark ? palette.accent.primarySoft : colors.primary[50] },
+                  ]}
                   onPress={() => {
                     setApplyModeId(mode.id);
                     setApplyUserId('');
@@ -2693,11 +2852,11 @@ function SettingsTab() {
           ))}
           {toArray<any>(workModes).length === 0 && (
             <View style={styles.emptyState}>
-              <View style={styles.emptyIcon}>
-                <Ionicons name="time-outline" size={36} color={colors.gray[300]} />
+              <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="time-outline" size={36} color={palette.text.tertiary} />
               </View>
-              <Text style={styles.emptyTitle}>Нет режимов работы</Text>
-              <Text style={styles.emptySubtitle}>Создайте режимы в веб-панели</Text>
+              <Text style={[styles.emptyTitle, { color: palette.text.secondary }]}>Нет режимов работы</Text>
+              <Text style={[styles.emptySubtitle, { color: palette.text.tertiary }]}>Создайте режимы в веб-панели</Text>
             </View>
           )}
         </View>
@@ -2705,27 +2864,61 @@ function SettingsTab() {
 
       <Modal visible={showApplyModal} onClose={() => setShowApplyModal(false)} title="Применить режим">
         <View style={styles.formField}>
-          <Text style={styles.formLabel}>Сотрудник</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Сотрудник</Text>
           <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={{ flexDirection: 'row', gap: spacing[2] }}>
               <TouchableOpacity
-                style={[styles.userChip, !applyUserId && styles.userChipActive]}
+                style={[
+                  styles.userChip,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                  !applyUserId && {
+                    backgroundColor: dark ? palette.accent.primarySoft : colors.primary[50],
+                    borderColor: colors.primary[400],
+                  },
+                ]}
                 onPress={() => setApplyUserId('')}
               >
                 <Ionicons
                   name="people-outline"
                   size={12}
-                  color={!applyUserId ? colors.primary[700] : colors.gray[500]}
+                  color={!applyUserId ? colors.primary[700] : palette.text.secondary}
                 />
-                <Text style={[styles.userChipText, !applyUserId && styles.userChipTextActive]}>Все</Text>
+                <Text
+                  style={[
+                    styles.userChipText,
+                    { color: palette.text.secondary },
+                    !applyUserId && {
+                      color: dark ? palette.accent.primaryText : colors.primary[700],
+                      fontWeight: fontWeight.semibold,
+                    },
+                  ]}
+                >
+                  Все
+                </Text>
               </TouchableOpacity>
               {activeUsers.map((u) => (
                 <TouchableOpacity
                   key={u.id}
-                  style={[styles.userChip, applyUserId === u.id && styles.userChipActive]}
+                  style={[
+                    styles.userChip,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    applyUserId === u.id && {
+                      backgroundColor: dark ? palette.accent.primarySoft : colors.primary[50],
+                      borderColor: colors.primary[400],
+                    },
+                  ]}
                   onPress={() => setApplyUserId(u.id)}
                 >
-                  <Text style={[styles.userChipText, applyUserId === u.id && styles.userChipTextActive]}>
+                  <Text
+                    style={[
+                      styles.userChipText,
+                      { color: palette.text.secondary },
+                      applyUserId === u.id && {
+                        color: dark ? palette.accent.primaryText : colors.primary[700],
+                        fontWeight: fontWeight.semibold,
+                      },
+                    ]}
+                  >
                     {u.fullName?.split(' ')[0]}
                   </Text>
                 </TouchableOpacity>
@@ -2735,19 +2928,37 @@ function SettingsTab() {
         </View>
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.formLabel}>С даты</Text>
-            <TouchableOpacity style={styles.formInput} onPress={() => setShowApplyFromPicker(true)}>
-              <Ionicons name="calendar-outline" size={14} color={colors.gray[400]} />
-              <Text style={{ fontSize: fontSize.sm, color: applyFrom ? colors.gray[900] : colors.gray[400], flex: 1 }}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>С даты</Text>
+            <TouchableOpacity
+              style={[styles.formInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              onPress={() => setShowApplyFromPicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={14} color={palette.text.tertiary} />
+              <Text
+                style={{
+                  fontSize: fontSize.sm,
+                  color: applyFrom ? palette.text.primary : palette.text.tertiary,
+                  flex: 1,
+                }}
+              >
                 {applyFrom ? formatPickerDate(applyFrom) : 'Выберите'}
               </Text>
             </TouchableOpacity>
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={styles.formLabel}>По дату</Text>
-            <TouchableOpacity style={styles.formInput} onPress={() => setShowApplyToPicker(true)}>
-              <Ionicons name="calendar-outline" size={14} color={colors.gray[400]} />
-              <Text style={{ fontSize: fontSize.sm, color: applyTo ? colors.gray[900] : colors.gray[400], flex: 1 }}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>По дату</Text>
+            <TouchableOpacity
+              style={[styles.formInput, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              onPress={() => setShowApplyToPicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={14} color={palette.text.tertiary} />
+              <Text
+                style={{
+                  fontSize: fontSize.sm,
+                  color: applyTo ? palette.text.primary : palette.text.tertiary,
+                  flex: 1,
+                }}
+              >
                 {applyTo ? formatPickerDate(applyTo) : 'Выберите'}
               </Text>
             </TouchableOpacity>
@@ -2773,9 +2984,12 @@ function SettingsTab() {
           }}
           onCancel={() => setShowApplyToPicker(false)}
         />
-        <View style={styles.formActions}>
-          <TouchableOpacity style={styles.cancelBtn} onPress={() => setShowApplyModal(false)}>
-            <Text style={styles.cancelBtnText}>Отмена</Text>
+        <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity
+            style={[styles.cancelBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            onPress={() => setShowApplyModal(false)}
+          >
+            <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={styles.applyBtnMain}
@@ -2859,7 +3073,7 @@ export default function ScheduleScreen() {
   // own in-tab month switcher, Settings has no time scope.
   const showMonthStepper = tab === 'grid' || tab === 'shifts';
   const trailingMonthStepper = showMonthStepper ? (
-    <View style={styles.headerMonthStepper}>
+    <View style={[styles.headerMonthStepper, { backgroundColor: palette.bg.muted }]}>
       <TouchableOpacity
         onPress={() => {
           haptic('select');
@@ -2868,7 +3082,7 @@ export default function ScheduleScreen() {
         hitSlop={6}
         style={styles.headerMonthBtn}
       >
-        <Ionicons name="chevron-back" size={16} color={colors.gray[700]} />
+        <Ionicons name="chevron-back" size={16} color={palette.text.secondary} />
       </TouchableOpacity>
       <TouchableOpacity
         onPress={() => {
@@ -2877,7 +3091,9 @@ export default function ScheduleScreen() {
         }}
         activeOpacity={0.7}
       >
-        <Text style={styles.headerMonthText}>{(MONTH_NAMES[monthIndex] ?? '').slice(0, 3)}</Text>
+        <Text style={[styles.headerMonthText, { color: palette.text.primary }]}>
+          {(MONTH_NAMES[monthIndex] ?? '').slice(0, 3)}
+        </Text>
       </TouchableOpacity>
       <TouchableOpacity
         onPress={() => {
@@ -2887,7 +3103,7 @@ export default function ScheduleScreen() {
         hitSlop={6}
         style={styles.headerMonthBtn}
       >
-        <Ionicons name="chevron-forward" size={16} color={colors.gray[700]} />
+        <Ionicons name="chevron-forward" size={16} color={palette.text.secondary} />
       </TouchableOpacity>
     </View>
   ) : undefined;
@@ -3583,11 +3799,6 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius['2xl'],
     padding: spacing[4],
     gap: spacing[3],
-    shadowColor: colors.black,
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
   },
   detailCardHeader: {
     flexDirection: 'row',
@@ -3708,11 +3919,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderRadius: borderRadius['2xl'],
     padding: spacing[3.5],
-    shadowColor: colors.black,
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
   },
   daysOffHeader: {
     flexDirection: 'row',
@@ -3785,11 +3991,6 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius['2xl'],
     padding: spacing[3.5],
     gap: spacing[3],
-    shadowColor: colors.black,
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
   },
   modeIconWrap: {
     width: 44,

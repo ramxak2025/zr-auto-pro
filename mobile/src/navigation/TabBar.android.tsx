@@ -157,13 +157,13 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // Material-3 look and keeps the BlurView at a low, safe intensity just
   // for a hint of depth — the surface still reads correctly even if the
   // blur degrades to a no-op on older GPUs.
-  const blurTint = palette.bg.canvas === '#0a0d14' ? 'dark' : 'light';
+  const blurTint = palette.mode === 'dark' ? 'dark' : 'light';
   const surfaceTint =
-    palette.bg.canvas === '#0a0d14'
+    palette.mode === 'dark'
       ? 'rgba(20, 26, 37, 0.94)' // dark mode — sit clearly above canvas
       : 'rgba(255, 255, 255, 0.92)';
-  const rim = palette.bg.canvas === '#0a0d14' ? 'rgba(255, 255, 255, 0.06)' : 'rgba(255, 255, 255, 0.95)';
-  const islandBorder = palette.bg.canvas === '#0a0d14' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(15, 23, 42, 0.08)';
+  const rim = palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.06)' : 'rgba(255, 255, 255, 0.95)';
+  const islandBorder = palette.mode === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(15, 23, 42, 0.08)';
 
   return (
     <View
@@ -182,7 +182,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
           style={[
             styles.capsule,
             capsuleStyle,
-            palette.bg.canvas === '#0a0d14'
+            palette.mode === 'dark'
               ? {
                   backgroundColor: 'rgba(96, 165, 250, 0.14)',
                   borderColor: 'rgba(96, 165, 250, 0.22)',

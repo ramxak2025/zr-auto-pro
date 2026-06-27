@@ -20,6 +20,8 @@ import { PressableScale } from '../platform/PressableScale';
 import { shadow } from '../platform/shadow';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
+import { useOptionalColors } from '../contexts/ThemeContext';
+import type { SemanticPalette } from '../theme/palette';
 
 export type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 export type ButtonSize = 'sm' | 'md' | 'lg';
@@ -65,7 +67,8 @@ export function Button({
   style,
   testID,
 }: ButtonProps) {
-  const palette = getPalette(variant, disabled);
+  const themePalette = useOptionalColors();
+  const palette = resolveVariantColors(variant, themePalette);
   const isInteractive = !disabled && !loading;
 
   const handlePress = () => {
@@ -116,18 +119,29 @@ export function Button({
   );
 }
 
-function getPalette(variant: ButtonVariant, disabled: boolean | undefined) {
+// Resolve the per-variant fill / text / border for the active theme. Light
+// mode keeps the exact tokens the button always shipped; dark mode swaps the
+// `secondary` tint and `ghost` text/border to palette tokens so they don't
+// read as a light chip / invisible dark-grey label on the dark canvas. The
+// solid `primary` / `danger` fills carry white text in both modes.
+function resolveVariantColors(variant: ButtonVariant, t: SemanticPalette) {
+  const dark = t.mode === 'dark';
   switch (variant) {
     case 'primary':
-      return { bg: colors.primary[600], fg: colors.white, border: 'transparent' };
+      // accent.primary === colors.primary[600] in light, [500] in dark.
+      return { bg: t.accent.primary, fg: colors.white, border: 'transparent' };
     case 'secondary':
-      return { bg: colors.primary[50], fg: colors.primary[700], border: 'transparent' };
+      return dark
+        ? { bg: t.accent.primarySoft, fg: t.accent.primaryText, border: 'transparent' }
+        : { bg: colors.primary[50], fg: colors.primary[700], border: 'transparent' };
     case 'ghost':
-      return { bg: 'transparent', fg: colors.gray[700], border: colors.gray[200] };
+      return dark
+        ? { bg: 'transparent', fg: t.text.secondary, border: t.border.strong }
+        : { bg: 'transparent', fg: colors.gray[700], border: colors.gray[200] };
     case 'danger':
       return { bg: colors.red[600], fg: colors.white, border: 'transparent' };
     default:
-      return { bg: colors.primary[600], fg: colors.white, border: 'transparent' };
+      return { bg: t.accent.primary, fg: colors.white, border: 'transparent' };
   }
 }
 

@@ -18,15 +18,11 @@ import React, { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
-import {
-  useAudioPlayer,
-  useAudioPlayerStatus,
-  setAudioModeAsync,
-} from 'expo-audio';
+import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-audio';
 import { Text } from '../platform/Typography';
 import { callsApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, spacing, borderRadius } from '../theme';
+import { colors, spacing, borderRadius, getBadgeColors } from '../theme';
 
 interface Call {
   id: string;
@@ -124,20 +120,22 @@ export default function ClientCallsSection({
             </Text>
           </View>
         ) : (
-          calls.slice(0, 15).map((call, i) => (
-            <CallRow
-              key={call.id || `${call.date}-${i}`}
-              call={call}
-              palette={palette}
-              isLast={i === Math.min(calls.length, 15) - 1}
-              playing={playingId === (call.id || `${call.date}-${i}`)}
-              onTogglePlay={() =>
-                setPlayingId((prev) =>
-                  prev === (call.id || `${call.date}-${i}`) ? null : call.id || `${call.date}-${i}`,
-                )
-              }
-            />
-          ))
+          calls
+            .slice(0, 15)
+            .map((call, i) => (
+              <CallRow
+                key={call.id || `${call.date}-${i}`}
+                call={call}
+                palette={palette}
+                isLast={i === Math.min(calls.length, 15) - 1}
+                playing={playingId === (call.id || `${call.date}-${i}`)}
+                onTogglePlay={() =>
+                  setPlayingId((prev) =>
+                    prev === (call.id || `${call.date}-${i}`) ? null : call.id || `${call.date}-${i}`,
+                  )
+                }
+              />
+            ))
         )}
       </View>
     </View>
@@ -160,22 +158,40 @@ function CallRow({
   const isMissed = call.direction === 'incoming' && (call.status === 'missed' || call.duration === 0);
   const isIncoming = call.direction === 'incoming';
 
-  const iconName = isMissed
-    ? 'close-circle-outline'
-    : isIncoming
-      ? 'arrow-down-outline'
-      : 'arrow-up-outline';
-  const iconColor = isMissed ? colors.red[500] : isIncoming ? colors.green[600] : colors.blue[600];
-  const iconBg = isMissed ? colors.red[50] : isIncoming ? colors.green[50] : colors.blue[50];
+  const iconName = isMissed ? 'close-circle-outline' : isIncoming ? 'arrow-down-outline' : 'arrow-up-outline';
+  // Direction tints behave like status badges: keep the exact light values,
+  // but in dark mode flip to the translucent badge fills so the pale [50]
+  // tints don't glare on the dark card.
+  const callKey = isMissed ? 'red' : isIncoming ? 'green' : 'blue';
+  const badge = getBadgeColors(palette.mode)[callKey];
+  const iconColor =
+    palette.mode === 'dark'
+      ? badge.text
+      : isMissed
+        ? colors.red[500]
+        : isIncoming
+          ? colors.green[600]
+          : colors.blue[600];
+  const iconBg =
+    palette.mode === 'dark' ? badge.bg : isMissed ? colors.red[50] : isIncoming ? colors.green[50] : colors.blue[50];
 
   return (
     <View>
-      <View style={[styles.row, !isLast && { borderBottomColor: palette.border.subtle, borderBottomWidth: StyleSheet.hairlineWidth }]}>
+      <View
+        style={[
+          styles.row,
+          !isLast && { borderBottomColor: palette.border.subtle, borderBottomWidth: StyleSheet.hairlineWidth },
+        ]}
+      >
         <View style={[styles.callIcon, { backgroundColor: iconBg }]}>
           <Ionicons name={iconName as any} size={16} color={iconColor} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <Text variant="body" color={isMissed ? colors.red[600] : palette.text.primary} style={styles.callTitle}>
+          <Text
+            variant="body"
+            color={isMissed ? (palette.mode === 'dark' ? colors.red[300] : colors.red[600]) : palette.text.primary}
+            style={styles.callTitle}
+          >
             {isIncoming ? 'Входящий' : 'Исходящий'}
             {isMissed ? ' · пропущен' : ''}
           </Text>

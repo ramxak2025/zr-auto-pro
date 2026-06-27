@@ -22,6 +22,9 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
+import { buildShadow } from '../platform/iosSurface';
+import type { SemanticPalette } from '../theme/palette';
 import { ListSkeleton } from './Skeleton';
 import QueryErrorState from './QueryErrorState';
 import { haptic } from '../platform/haptics';
@@ -123,6 +126,7 @@ interface PickerProductRowItemProps {
   /** #12: товар на гарантии у текущего клиента — рисуем бейдж. */
   underWarranty?: boolean;
   onPress: (product: Product) => void;
+  palette: SemanticPalette;
 }
 
 /**
@@ -142,6 +146,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
   showCostPrice,
   underWarranty,
   onPress,
+  palette,
 }: PickerProductRowItemProps) {
   const lowStock = product.stock <= product.minStock && product.minStock > 0;
   const photoUrl = getImageUrl((product as { photo?: string }).photo);
@@ -149,18 +154,22 @@ const PickerProductRow = React.memo(function PickerProductRow({
   return (
     <Pressable
       onPress={() => onPress(product)}
-      style={({ pressed }) => [styles.productCard, pressed && styles.productCardPressed]}
+      style={({ pressed }) => [
+        styles.productCard,
+        { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle },
+        pressed && { backgroundColor: palette.bg.muted },
+      ]}
     >
       <View style={styles.productRow}>
         {photoUrl ? (
           <CachedImage source={{ uri: photoUrl }} style={styles.productPhoto} resizeMode="cover" />
         ) : (
-          <View style={styles.productPhotoPlaceholder}>
-            <Ionicons name="cube-outline" size={24} color={colors.gray[300]} />
+          <View style={[styles.productPhotoPlaceholder, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="cube-outline" size={24} color={palette.text.tertiary} />
           </View>
         )}
         <View style={styles.productInfo}>
-          <Text style={styles.productName} numberOfLines={2}>
+          <Text style={[styles.productName, { color: palette.text.primary }]} numberOfLines={2}>
             {product.name}
           </Text>
           {underWarranty ? (
@@ -169,11 +178,15 @@ const PickerProductRow = React.memo(function PickerProductRow({
               <Text style={styles.warrantyBadgeText}>На гарантии</Text>
             </View>
           ) : null}
-          {categoryLeaf ? <Text style={styles.productCategory}>{categoryLeaf}</Text> : null}
+          {categoryLeaf ? (
+            <Text style={[styles.productCategory, { color: palette.text.tertiary }]}>{categoryLeaf}</Text>
+          ) : null}
           <View style={styles.productPrices}>
-            <Text style={styles.productSellPrice}>{formatMoney(product.sellPrice)}</Text>
+            <Text style={[styles.productSellPrice, { color: palette.accent.primaryText }]}>
+              {formatMoney(product.sellPrice)}
+            </Text>
             {showCostPrice ? (
-              <Text style={styles.productCostPrice}>
+              <Text style={[styles.productCostPrice, { color: palette.text.tertiary }]}>
                 {'Себест.'} {formatMoney(product.costPrice)}
               </Text>
             ) : null}
@@ -183,8 +196,10 @@ const PickerProductRow = React.memo(function PickerProductRow({
           {lowStock ? (
             <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />
           ) : null}
-          <Text style={[styles.productStock, lowStock && styles.productStockLow]}>{product.stock}</Text>
-          <Text style={styles.productStockLabel}>{'шт'}</Text>
+          <Text style={[styles.productStock, { color: palette.text.primary }, lowStock && styles.productStockLow]}>
+            {product.stock}
+          </Text>
+          <Text style={[styles.productStockLabel, { color: palette.text.tertiary }]}>{'шт'}</Text>
           {cartQty > 0 ? (
             <View style={styles.cartBadge}>
               <Text style={styles.cartBadgeText}>{cartQty}</Text>
@@ -200,6 +215,7 @@ interface FolderGridRowProps {
   entries: Array<[string, number]>;
   annotations?: Map<string, FolderAnnotation>;
   onSelect: (name: string) => void;
+  palette: SemanticPalette;
 }
 
 /**
@@ -208,20 +224,34 @@ interface FolderGridRowProps {
  * Lives as ONE FlashList row so it recycles cleanly with the product
  * cells below.
  */
-const FolderGridRow = React.memo(function FolderGridRow({ entries, annotations, onSelect }: FolderGridRowProps) {
+const FolderGridRow = React.memo(function FolderGridRow({
+  entries,
+  annotations,
+  onSelect,
+  palette,
+}: FolderGridRowProps) {
   return (
     <View style={styles.foldersGrid}>
       {entries.map(([name, count]) => {
         const annotation = annotations?.get(name);
         return (
-          <TouchableOpacity key={name} style={styles.folderCard} onPress={() => onSelect(name)} activeOpacity={0.6}>
-            <View style={styles.folderIconBox}>
+          <TouchableOpacity
+            key={name}
+            style={[
+              styles.folderCard,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              buildShadow(palette),
+            ]}
+            onPress={() => onSelect(name)}
+            activeOpacity={0.6}
+          >
+            <View style={[styles.folderIconBox, { backgroundColor: palette.accent.primarySoft }]}>
               <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
             </View>
-            <Text style={styles.folderName} numberOfLines={2}>
+            <Text style={[styles.folderName, { color: palette.text.primary }]} numberOfLines={2}>
               {name}
             </Text>
-            <Text style={styles.folderCount}>
+            <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
               {count} {'тов.'}
             </Text>
             {annotation ? (
@@ -248,6 +278,7 @@ export default function ProductPickerModal({
   warehouseSwitcher,
   warrantyNames,
 }: ProductPickerModalProps) {
+  const palette = useColors();
   const [productPath, setProductPath] = useState<string[]>([]);
   // Inline warehouse-switcher dropdown — local state. NOT a nested
   // RNModal: an RNModal-inside-an-RNModal froze the iOS app during the
@@ -519,7 +550,14 @@ export default function ProductPickerModal({
   const renderItem = useCallback(
     ({ item }: { item: Row }) => {
       if (item.type === 'folders') {
-        return <FolderGridRow entries={item.entries} annotations={item.annotations} onSelect={handleEnterFolder} />;
+        return (
+          <FolderGridRow
+            entries={item.entries}
+            annotations={item.annotations}
+            onSelect={handleEnterFolder}
+            palette={palette}
+          />
+        );
       }
       const qty = getCartQty ? getCartQty(item.product.id) : 0;
       const underWarranty = warrantyNames ? warrantyNames.has(item.product.name.trim().toLowerCase()) : false;
@@ -530,10 +568,11 @@ export default function ProductPickerModal({
           showCostPrice={showCostPrice}
           underWarranty={underWarranty}
           onPress={handleSelect}
+          palette={palette}
         />
       );
     },
-    [getCartQty, handleEnterFolder, handleSelect, showCostPrice, warrantyNames],
+    [getCartQty, handleEnterFolder, handleSelect, showCostPrice, warrantyNames, palette],
   );
 
   const keyExtractor = useCallback((item: Row, index: number) => {
@@ -570,12 +609,16 @@ export default function ProductPickerModal({
             drag the blur up too); swipe-back stays on `panResponder`. */}
         <ModalBlurBackdrop onPress={handleClose} />
         <Animated.View
-          style={[styles.container, { transform: [{ translateX: panX }, { translateY: cardTranslateY }] }]}
+          style={[
+            styles.container,
+            { backgroundColor: palette.bg.elevated },
+            { transform: [{ translateX: panX }, { translateY: cardTranslateY }] },
+          ]}
           {...panResponder.panHandlers}
         >
           {/* Handle bar */}
           <View style={styles.handle}>
-            <View style={styles.handleBar} />
+            <View style={[styles.handleBar, { backgroundColor: palette.border.strong }]} />
           </View>
 
           {/* Header — close button on the left, title centered, warehouse
@@ -584,25 +627,28 @@ export default function ProductPickerModal({
               склады! там конкретно должны переключаться не смешиваясь."
               The pill is presentational; tapping it opens the parent's
               bottom-sheet so this component stays dumb. */}
-          <View style={styles.header}>
-            <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
-              <Ionicons name="close" size={22} color={colors.gray[600]} />
+          <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
+            <TouchableOpacity onPress={handleClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="close" size={22} color={palette.text.secondary} />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>{title}</Text>
+            <Text style={[styles.headerTitle, { color: palette.text.primary }]}>{title}</Text>
             {warehouseSwitcher ? (
               <TouchableOpacity
                 onPress={() => setShowWarehouseDropdown((v) => !v)}
-                style={styles.headerWarehouseChip}
+                style={[
+                  styles.headerWarehouseChip,
+                  { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary },
+                ]}
                 activeOpacity={0.7}
                 accessibilityLabel="Выбрать склад"
               >
-                <Text style={styles.headerWarehouseChipText} numberOfLines={1}>
+                <Text style={[styles.headerWarehouseChipText, { color: palette.accent.primaryText }]} numberOfLines={1}>
                   {warehouseSwitcher.label}
                 </Text>
                 <Ionicons
                   name={showWarehouseDropdown ? 'chevron-up' : 'chevron-down'}
                   size={14}
-                  color={colors.primary[700]}
+                  color={palette.accent.primaryText}
                 />
               </TouchableOpacity>
             ) : (
@@ -615,7 +661,13 @@ export default function ProductPickerModal({
               still tap the chip again to dismiss. Lives INSIDE the
               picker's RNModal — no nested modal, no iOS freeze. */}
           {warehouseSwitcher && showWarehouseDropdown ? (
-            <View style={styles.warehouseDropdown}>
+            <View
+              style={[
+                styles.warehouseDropdown,
+                { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                buildShadow(palette, 'elevated'),
+              ]}
+            >
               {warehouseSwitcher.options.map((w) => {
                 const iconName =
                   w.kind === 'defect' ? 'warning-outline' : w.kind === 'used' ? 'cube-outline' : 'home-outline';
@@ -625,20 +677,20 @@ export default function ProductPickerModal({
                 return (
                   <TouchableOpacity
                     key={w.id}
-                    style={styles.warehouseDropdownRow}
+                    style={[styles.warehouseDropdownRow, { borderBottomColor: palette.border.subtle }]}
                     onPress={() => {
                       warehouseSwitcher.onChange(w.id);
                       setShowWarehouseDropdown(false);
                     }}
                     activeOpacity={0.7}
                   >
-                    <Ionicons name={iconName as never} size={18} color={colors.primary[600]} />
+                    <Ionicons name={iconName as never} size={18} color={palette.accent.primary} />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.warehouseDropdownName}>{w.name}</Text>
-                      <Text style={styles.warehouseDropdownSub}>{sub}</Text>
+                      <Text style={[styles.warehouseDropdownName, { color: palette.text.primary }]}>{w.name}</Text>
+                      <Text style={[styles.warehouseDropdownSub, { color: palette.text.secondary }]}>{sub}</Text>
                     </View>
                     {active ? (
-                      <Ionicons name="checkmark" size={20} color={colors.primary[600]} />
+                      <Ionicons name="checkmark" size={20} color={palette.accent.primary} />
                     ) : (
                       <View style={{ width: 20 }} />
                     )}
@@ -649,14 +701,14 @@ export default function ProductPickerModal({
           ) : null}
 
           {/* Search */}
-          <View style={styles.searchWrap}>
-            <Ionicons name="search-outline" size={16} color={colors.gray[400]} />
+          <View style={[styles.searchWrap, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="search-outline" size={16} color={palette.text.tertiary} />
             <TextInput
               value={localSearch}
               onChangeText={handleSearchChange}
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: palette.text.primary }]}
               placeholder={'Поиск товара...'}
-              placeholderTextColor={colors.gray[400]}
+              placeholderTextColor={palette.text.tertiary}
               autoCorrect={false}
               autoCapitalize="none"
             />
@@ -667,7 +719,7 @@ export default function ProductPickerModal({
                   setProductSearch('');
                 }}
               >
-                <Ionicons name="close-circle-outline" size={18} color={colors.gray[400]} />
+                <Ionicons name="close-circle-outline" size={18} color={palette.text.tertiary} />
               </TouchableOpacity>
             ) : (
               <TouchableOpacity onPress={openScanner} hitSlop={8} accessibilityLabel="Сканировать штрих-код">
@@ -708,7 +760,7 @@ export default function ProductPickerModal({
               </TouchableOpacity>
               {productPath.map((seg, i) => (
                 <React.Fragment key={`${seg}-${i}`}>
-                  <Ionicons name="chevron-forward" size={12} color={colors.gray[300]} />
+                  <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
                   <TouchableOpacity
                     onPress={() => setProductPath((prev) => prev.slice(0, i + 1))}
                     style={styles.breadcrumbItem}
@@ -717,7 +769,7 @@ export default function ProductPickerModal({
                       style={[
                         styles.breadcrumbText,
                         i === productPath.length - 1 && {
-                          color: colors.gray[900],
+                          color: palette.text.primary,
                           fontWeight: fontWeight.bold,
                         },
                       ]}
@@ -753,13 +805,13 @@ export default function ProductPickerModal({
               ListEmptyComponent={
                 queryResolvedEmpty ? (
                   <View style={styles.empty}>
-                    <Ionicons name="cube-outline" size={40} color={colors.gray[300]} />
-                    <Text style={styles.emptyText}>{'Нет товаров'}</Text>
+                    <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
+                    <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Нет товаров'}</Text>
                   </View>
                 ) : productSearch ? (
                   <View style={styles.empty}>
-                    <Ionicons name="search-outline" size={40} color={colors.gray[300]} />
-                    <Text style={styles.emptyText}>{'Ничего не найдено'}</Text>
+                    <Ionicons name="search-outline" size={40} color={palette.text.tertiary} />
+                    <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Ничего не найдено'}</Text>
                   </View>
                 ) : null
               }

@@ -1594,7 +1594,7 @@ function CashPositionCard() {
         <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>КАССА СЕГОДНЯ</Text>
         <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginLeft: 'auto' }} />
       </View>
-      <View style={styles.cashTotalBox}>
+      <View style={[styles.cashTotalBox, { borderBottomColor: palette.border.subtle }]}>
         <Text style={[styles.cashTotalLabel, { color: palette.text.tertiary }]}>Всего на руках</Text>
         {isLoading ? (
           <Skeleton width={180} height={32} radius={8} />
@@ -2612,7 +2612,16 @@ function PersonalRecordCard() {
         [
           styles.ownerCard,
           { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-          ...(closeToRecord ? [styles.recordHighlight] : []),
+          // Light: warm cream highlight (unchanged). Dark: a translucent amber
+          // tint over the dark card + amber border, so the light card text
+          // (text.primary) stays readable instead of vanishing on cream.
+          ...(closeToRecord
+            ? [
+                palette.mode === 'dark'
+                  ? { backgroundColor: 'rgba(245, 158, 11, 0.12)', borderColor: colors.amber[600] }
+                  : styles.recordHighlight,
+              ]
+            : []),
         ] as any
       }
     >

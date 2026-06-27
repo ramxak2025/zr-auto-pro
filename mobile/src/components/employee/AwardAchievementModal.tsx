@@ -130,7 +130,16 @@ export function AwardAchievementModal({ visible, onClose, employeeId }: AwardAch
             showsVerticalScrollIndicator={false}
           >
             {/* Preview */}
-            <View style={[styles.preview, { borderColor: color, shadowColor: color }]}>
+            <View
+              style={[
+                styles.preview,
+                {
+                  borderColor: color,
+                  shadowColor: color,
+                  backgroundColor: palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(255, 255, 255, 0.6)',
+                },
+              ]}
+            >
               <Text style={styles.previewIcon}>{icon}</Text>
               <Text style={[styles.previewName, { color: palette.text.primary }]} numberOfLines={1}>
                 {name || 'Название значка'}
@@ -215,7 +224,10 @@ export function AwardAchievementModal({ visible, onClose, employeeId }: AwardAch
                     }}
                     style={[
                       styles.colorBtn,
-                      { backgroundColor: c, borderColor: c === color ? '#0F172A' : 'transparent' },
+                      {
+                        backgroundColor: c,
+                        borderColor: c === color ? (palette.mode === 'dark' ? colors.white : '#0F172A') : 'transparent',
+                      },
                     ]}
                   />
                 ))}

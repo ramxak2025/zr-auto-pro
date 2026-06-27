@@ -21,6 +21,7 @@ import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
+import { buildShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import { AutexaGlassHeader } from 'autexa-liquid-glass';
 import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
@@ -206,6 +207,7 @@ const CheckRow = React.memo(function CheckRow({
       <TouchableOpacity
         style={[
           styles.checkCard,
+          buildShadow(palette),
           {
             backgroundColor: palette.bg.card,
             borderColor: check.isDeferred
@@ -352,6 +354,7 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, pa
     <TouchableOpacity
       style={[
         styles.warehouseCard,
+        buildShadow(palette),
         {
           backgroundColor: visual.cardBg || palette.bg.card,
           borderColor: palette.border.subtle,
@@ -807,6 +810,7 @@ export default function ChecksScreen() {
         <TouchableOpacity
           style={[
             styles.filterBtn,
+            buildShadow(palette),
             { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
             activeFilterCount > 0 && styles.filterBtnActive,
           ]}
@@ -832,7 +836,11 @@ export default function ChecksScreen() {
           <TouchableOpacity
             style={[
               styles.segmentBtn,
-              activeTab === 'checks' && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }],
+              activeTab === 'checks' && [
+                styles.segmentBtnActive,
+                buildShadow(palette),
+                { backgroundColor: palette.bg.card },
+              ],
             ]}
             onPress={() => setActiveTab('checks')}
             activeOpacity={0.7}
@@ -855,7 +863,11 @@ export default function ChecksScreen() {
           <TouchableOpacity
             style={[
               styles.segmentBtn,
-              activeTab === 'warehouse' && [styles.segmentBtnActive, { backgroundColor: palette.bg.card }],
+              activeTab === 'warehouse' && [
+                styles.segmentBtnActive,
+                buildShadow(palette),
+                { backgroundColor: palette.bg.card },
+              ],
             ]}
             onPress={() => setActiveTab('warehouse')}
             activeOpacity={0.7}
@@ -1447,10 +1459,6 @@ const styles = StyleSheet.create({
     borderColor: colors.gray[200],
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.black,
-    shadowOpacity: 0.04,
-    shadowRadius: 3,
-    elevation: 1,
   },
   filterBtnActive: {
     backgroundColor: colors.primary[50],
@@ -1601,11 +1609,6 @@ const styles = StyleSheet.create({
   },
   segmentBtnActive: {
     backgroundColor: colors.white,
-    shadowColor: colors.black,
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
   },
   segmentBtnText: {
     fontSize: fontSize.sm,
@@ -1689,11 +1692,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     borderRadius: borderRadius.xl,
     overflow: 'hidden',
-    shadowColor: colors.black,
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
     borderWidth: 1,
   },
   checkCardDeferred: {},
@@ -1766,11 +1764,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     borderRadius: borderRadius.xl,
     overflow: 'hidden',
-    shadowColor: colors.black,
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 1 },
-    elevation: 2,
     borderWidth: 1,
     borderColor: colors.gray[100],
   },

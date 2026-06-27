@@ -48,7 +48,8 @@ import DateTimePickerModal from '../components/DateTimePickerModal';
 import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
 import PaymentMethodModal, { paymentMethodLabel, paymentMethodVisual } from '../components/PaymentMethodModal';
 import SbpPaymentModal from '../components/SbpPaymentModal';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
+import { buildShadow } from '../platform/iosSurface';
 import { normalizePlateForSearch, splitPlate, formatMain, isRussianInput } from '../utils/plateMask';
 import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
@@ -1512,7 +1513,11 @@ export default function CheckCreateScreen() {
       {isStackScreen && (
         <TouchableOpacity
           onPress={() => navigation.goBack()}
-          style={[styles.floatingBack, { backgroundColor: palette.bg.card, top: insetsTop + spacing[1] }]}
+          style={[
+            styles.floatingBack,
+            buildShadow(palette, 'elevated'),
+            { backgroundColor: palette.bg.card, top: insetsTop + spacing[1] },
+          ]}
           hitSlop={10}
         >
           <Ionicons name="chevron-back" size={22} color={palette.text.primary} />
@@ -1616,6 +1621,7 @@ export default function CheckCreateScreen() {
               <View
                 style={[
                   styles.selectedCard,
+                  buildShadow(palette),
                   { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
                 ]}
               >
@@ -1941,7 +1947,13 @@ export default function CheckCreateScreen() {
           </View>
 
           {/* ═══ SECTION 2: SERVICES & PRODUCTS — white ═══ */}
-          <View style={[styles.sectionItems, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View
+            style={[
+              styles.sectionItems,
+              buildShadow(palette),
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            ]}
+          >
             <View style={[styles.sectionHeader, { justifyContent: 'space-between' }]}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
                 <Ionicons name="receipt-outline" size={18} color={colors.orange[600]} />
@@ -2388,17 +2400,28 @@ export default function CheckCreateScreen() {
                 нал/карта/смешанная/отложенный — без изменений. */}
             {!isDeferred && total > 0 && (serviceLines.length > 0 || productLines.length > 0) && (
               <TouchableOpacity
-                style={[styles.sbpButton, { backgroundColor: colors.purple[50], borderColor: colors.purple[600] }]}
+                style={[
+                  styles.sbpButton,
+                  { backgroundColor: getBadgeColors(palette.mode).purple.bg, borderColor: colors.purple[600] },
+                ]}
                 onPress={openSbpPayment}
                 activeOpacity={0.85}
                 accessibilityRole="button"
                 accessibilityLabel="Оплата по СБП или QR-коду"
               >
-                <View style={[styles.sbpButtonIcon, { backgroundColor: '#FFFFFF' }]}>
+                <View
+                  style={[
+                    styles.sbpButtonIcon,
+                    { backgroundColor: palette.mode === 'dark' ? palette.bg.card : '#FFFFFF' },
+                  ]}
+                >
                   <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
                 </View>
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.sbpButtonTitle, { color: colors.purple[700] }]} numberOfLines={1}>
+                  <Text
+                    style={[styles.sbpButtonTitle, { color: getBadgeColors(palette.mode).purple.text }]}
+                    numberOfLines={1}
+                  >
                     Оплата по СБП / QR
                   </Text>
                   <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
@@ -2749,11 +2772,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: colors.black,
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 4,
     zIndex: 10,
   },
   header: {
@@ -2795,10 +2813,6 @@ const styles = StyleSheet.create({
     gap: spacing[2.5],
     borderWidth: 1,
     borderColor: colors.gray[100],
-    shadowColor: colors.black,
-    shadowOpacity: 0.03,
-    shadowRadius: 4,
-    elevation: 1,
   },
   sectionComment: {
     backgroundColor: colors.purple[50],
@@ -2893,10 +2907,6 @@ const styles = StyleSheet.create({
     paddingTop: spacing[3.5],
     paddingBottom: spacing[4],
     marginTop: spacing[1],
-    shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 10,
-    shadowOffset: { width: 0, height: 4 },
     gap: spacing[3],
   },
   selectedCardTop: {
