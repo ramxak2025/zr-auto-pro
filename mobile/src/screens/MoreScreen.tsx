@@ -9,8 +9,11 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
+  Linking,
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
+import DeleteAccountModal from '../components/DeleteAccountModal';
+import type { DeleteAccountResponse } from '../../../shared/api/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
@@ -52,6 +55,11 @@ const roleBadgeHue: Record<string, string> = {
   admin: 'blue',
   master: 'green',
 };
+
+// Legal documents — required for App Store / Google Play review. Hosted by the
+// owner at autexa.pw; opened in the system browser via Linking.openURL.
+const PRIVACY_URL = 'https://autexa.pw/privacy';
+const TERMS_URL = 'https://autexa.pw/terms';
 
 interface MenuItem {
   label: string;
@@ -500,6 +508,11 @@ export default function MoreScreen() {
   const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
   const [uploading, setUploading] = useState(false);
+  const [deleteVisible, setDeleteVisible] = useState(false);
+  // Account holder = director (the tenant owner). Deleting their account closes
+  // the whole company after the grace window; an employee only removes their
+  // own record. The backend is authoritative — this only picks the wording.
+  const isAccountHolder = user?.role === 'director';
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
   // Role badge — byte-identical pale chip in light, translucent accent glow in
@@ -585,6 +598,33 @@ export default function MoreScreen() {
     } finally {
       setUploading(false);
     }
+  };
+
+  // Open a legal document (privacy / terms) in the system browser. Failure is
+  // surfaced gently — the link just couldn't be opened.
+  const openLink = async (url: string) => {
+    try {
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Не удалось открыть ссылку', url);
+    }
+  };
+
+  // After a successful deletion: explain the outcome, then force logout through
+  // the single AuthContext path (same one «Выйти» / the 401 interceptor use) —
+  // no duplicated teardown logic. The director branch keeps the 30-day grace
+  // wording; an employee's record is gone immediately.
+  const handleDeleted = (res: DeleteAccountResponse) => {
+    setDeleteVisible(false);
+    const isTenant = res.status === 'tenant_deletion_requested';
+    Alert.alert(
+      isTenant ? 'Запрос на удаление принят' : 'Аккаунт удалён',
+      isTenant
+        ? 'Доступ закрыт. Все данные компании будут безвозвратно удалены через 30 дней. Если передумаете — свяжитесь с поддержкой до окончания этого срока.'
+        : 'Ваша учётная запись удалена. Сейчас вы выйдете из приложения.',
+      [{ text: 'OK', onPress: () => logout() }],
+      { cancelable: false },
+    );
   };
 
   // Entrance animation for user card
@@ -724,6 +764,44 @@ export default function MoreScreen() {
           );
         })}
 
+        {/* О приложении — legal documents (App Store / Google Play review). */}
+        <View style={styles.section}>
+          <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>О приложении</Text>
+          <View
+            style={[styles.menuCard, shadow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
+            <TouchableOpacity style={styles.legalRow} onPress={() => openLink(PRIVACY_URL)} activeOpacity={0.55}>
+              <View
+                style={[
+                  styles.menuIcon,
+                  {
+                    backgroundColor: palette.mode === 'dark' ? softTint(colors.slate[500], 'dark') : colors.slate[100],
+                  },
+                ]}
+              >
+                <Ionicons name="shield-checkmark-outline" size={20} color={colors.slate[600]} />
+              </View>
+              <Text style={[styles.legalText, { color: palette.text.primary }]}>Политика конфиденциальности</Text>
+              <Ionicons name="open-outline" size={16} color={palette.text.tertiary} />
+            </TouchableOpacity>
+            <View style={[styles.separator, { backgroundColor: palette.border.subtle }]} />
+            <TouchableOpacity style={styles.legalRow} onPress={() => openLink(TERMS_URL)} activeOpacity={0.55}>
+              <View
+                style={[
+                  styles.menuIcon,
+                  {
+                    backgroundColor: palette.mode === 'dark' ? softTint(colors.slate[500], 'dark') : colors.slate[100],
+                  },
+                ]}
+              >
+                <Ionicons name="document-text-outline" size={20} color={colors.slate[600]} />
+              </View>
+              <Text style={[styles.legalText, { color: palette.text.primary }]}>Условия использования</Text>
+              <Ionicons name="open-outline" size={16} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          </View>
+        </View>
+
         {/* Logout */}
         <TouchableOpacity
           style={[styles.logoutBtn, shadow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
@@ -738,7 +816,25 @@ export default function MoreScreen() {
           <Ionicons name="log-out-outline" size={18} color={colors.red[600]} />
           <Text style={styles.logoutText}>Выйти из аккаунта</Text>
         </TouchableOpacity>
+
+        {/* Удалить аккаунт — App Store 5.1.1(v) / Google Play in-app deletion.
+            Destructive, separated, opens a password-confirm sheet. */}
+        <TouchableOpacity
+          style={[styles.deleteAccountBtn, { borderColor: palette.border.subtle }]}
+          onPress={() => setDeleteVisible(true)}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="trash-outline" size={18} color={colors.red[600]} />
+          <Text style={styles.deleteAccountText}>Удалить аккаунт</Text>
+        </TouchableOpacity>
       </ScrollView>
+
+      <DeleteAccountModal
+        visible={deleteVisible}
+        onClose={() => setDeleteVisible(false)}
+        isAccountHolder={isAccountHolder}
+        onDeleted={handleDeleted}
+      />
     </View>
   );
 }
@@ -888,4 +984,29 @@ const styles = StyleSheet.create({
     ...(Platform.OS === 'android' ? { elevation: 1 } : null),
   },
   logoutText: { fontSize: 15, fontWeight: fontWeight.semibold, color: colors.red[600] },
+
+  // Legal rows (Политика конфиденциальности / Условия использования)
+  legalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3.5],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    minHeight: 56,
+  },
+  legalText: { flex: 1, fontSize: 16, fontWeight: '600', letterSpacing: -0.2 },
+
+  // Delete account — destructive, visually separated from logout.
+  deleteAccountBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: spacing[3.5],
+    minHeight: 52,
+    marginTop: spacing[1],
+  },
+  deleteAccountText: { fontSize: 15, fontWeight: fontWeight.semibold, color: colors.red[600] },
 });

@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Linking } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, RefreshControl, Linking, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -55,6 +55,15 @@ export default function SubscriptionScreen() {
   };
 
   const isExpired = sub?.subscriptionEnd ? new Date(sub.subscriptionEnd) < new Date() : false;
+
+  // App Store Guideline 3.1.1 — the iOS build must not present any call-to-
+  // action that directs users to purchase / upgrade a digital subscription
+  // outside Apple In-App Purchase. The «Связаться для оплаты» / «Подключить»
+  // WhatsApp CTAs do exactly that, so on iOS the screen is VIEW-ONLY: it shows
+  // the current plan + tariffs for information, but the purchasing path is
+  // replaced with a neutral «manage on the website» note. Android keeps the
+  // CTAs (Google Play permits it for this business-software category).
+  const isIos = Platform.OS === 'ios';
 
   const openWhatsApp = () => {
     const msg = encodeURIComponent('Здравствуйте! Хочу оплатить подписку.');
@@ -160,11 +169,22 @@ export default function SubscriptionScreen() {
               </View>
             )}
 
-            {/* WhatsApp button */}
-            <TouchableOpacity style={styles.whatsappBtn} onPress={openWhatsApp} activeOpacity={0.8}>
-              <Ionicons name="logo-whatsapp" size={20} color={colors.white} />
-              <Text style={styles.whatsappText}>Связаться для оплаты</Text>
-            </TouchableOpacity>
+            {/* Payment CTA (Android) / manage-on-website note (iOS, Guideline 3.1.1) */}
+            {isIos ? (
+              <View
+                style={[styles.manageBlock, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              >
+                <Ionicons name="information-circle-outline" size={18} color={palette.text.tertiary} />
+                <Text style={[styles.manageText, { color: palette.text.secondary }]}>
+                  Управление подпиской и оплата доступны в личном кабинете на сайте autexa.pw.
+                </Text>
+              </View>
+            ) : (
+              <TouchableOpacity style={styles.whatsappBtn} onPress={openWhatsApp} activeOpacity={0.8}>
+                <Ionicons name="logo-whatsapp" size={20} color={colors.white} />
+                <Text style={styles.whatsappText}>Связаться для оплаты</Text>
+              </TouchableOpacity>
+            )}
           </View>
         </AnimatedCard>
 
@@ -238,7 +258,9 @@ export default function SubscriptionScreen() {
                         })}
                       </View>
 
-                      {!isCurrent && (
+                      {/* Purchase CTA hidden on iOS (Guideline 3.1.1) — the plan
+                          card stays as read-only information there. */}
+                      {!isCurrent && !isIos && (
                         <TouchableOpacity style={styles.connectBtn} onPress={() => openWhatsAppForPlan(plan.name)}>
                           <Ionicons name="logo-whatsapp" size={16} color={colors.white} />
                           <Text style={styles.connectBtnText}>Подключить</Text>
@@ -324,6 +346,16 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
   },
   whatsappText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
+  // iOS manage-on-website note (Guideline 3.1.1 — view-only state)
+  manageBlock: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+    padding: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+  },
+  manageText: { flex: 1, fontSize: fontSize.sm, lineHeight: 20 },
   // Section
   sectionTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   // Plan cards
