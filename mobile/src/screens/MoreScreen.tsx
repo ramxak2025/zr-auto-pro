@@ -258,8 +258,13 @@ const menuSections: MenuSection[] = [
         iconColor: colors.orange[600],
       },
       {
+        // Заказы поставщикам встроены ВНУТРЬ раздела «Поставщики» (сегмент-
+        // переключатель «Поставщики | Заказы» в SuppliersScreen), поэтому
+        // отдельного пункта меню «Заказы поставщикам» больше нет — он только
+        // дублировал вход. Маршруты PurchaseOrders* остаются в MoreStack и
+        // открываются из SuppliersScreen / SupplierDetailScreen.
         label: 'Поставщики',
-        description: 'Поставки и расчёты',
+        description: 'Поставщики, закупки и расчёты',
         screen: 'Suppliers',
         itemKey: 'suppliers',
         permission: 'suppliers_access',
@@ -267,22 +272,6 @@ const menuSections: MenuSection[] = [
         icon: 'cube-outline',
         iconBg: colors.amber[50],
         iconColor: colors.amber[600],
-      },
-      {
-        // Заказы поставщикам + приёмка (backend purchase-orders/). Часть раздела
-        // «Поставщики» (закупки), поэтому переиспользуем те же гейты —
-        // item-key 'suppliers', право suppliers_access и feature suppliers_view
-        // (новый shared item-key сломал бы ITEM_KEYS drift-guard). Создание/
-        // оформление/приёмка role-gated внутри экранов И на сервере.
-        label: 'Заказы поставщикам',
-        description: 'Закупки, оформление и приёмка',
-        screen: 'PurchaseOrders',
-        itemKey: 'suppliers',
-        permission: 'suppliers_access',
-        featureKey: 'suppliers_view',
-        icon: 'clipboard-outline',
-        iconBg: colors.amber[50],
-        iconColor: colors.amber[700],
       },
       {
         label: 'Имущество',

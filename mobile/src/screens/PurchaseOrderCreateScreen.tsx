@@ -78,7 +78,10 @@ export default function PurchaseOrderCreateScreen() {
   const seedPo: PurchaseOrder | undefined = route.params?.po;
   const isEdit = !!editId;
 
-  const [supplierId, setSupplierId] = useState<string>(seedPo?.supplierId ?? '');
+  // `supplierId` route-param — set when «Новый заказ» is opened from a
+  // supplier's detail screen, so the supplier is preselected. Falls back to
+  // the seed draft's supplier (edit mode), then empty (manual pick).
+  const [supplierId, setSupplierId] = useState<string>(route.params?.supplierId ?? seedPo?.supplierId ?? '');
   const [showSupplierPicker, setShowSupplierPicker] = useState(false);
   const [lines, setLines] = useState<DraftLine[]>(() =>
     (seedPo?.items ?? []).map((it) => ({

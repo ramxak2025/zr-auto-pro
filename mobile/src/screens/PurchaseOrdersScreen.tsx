@@ -108,7 +108,15 @@ const PurchaseOrderRow = React.memo(function PurchaseOrderRow({
   );
 });
 
-export default function PurchaseOrdersScreen() {
+/**
+ * `embedded` — rendered INSIDE the «Поставщики» section (SuppliersScreen's
+ * «Заказы» segment) instead of as a standalone route. In that mode the screen
+ * drops its own IosScreenHeader (the host screen owns the title + the «+»
+ * create action) and just renders the filter chips + list. When NOT embedded
+ * it's the self-contained route still registered in MoreStack (reachable from
+ * SuppliersScreen / SupplierDetailScreen).
+ */
+export default function PurchaseOrdersScreen({ embedded = false }: { embedded?: boolean } = {}) {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
@@ -204,30 +212,32 @@ export default function PurchaseOrdersScreen() {
   const list = orders ?? [];
 
   return (
-    <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader
-        title="Заказы поставщикам"
-        onBack={() => navigation.goBack()}
-        trailing={
-          canWrite ? (
-            <TouchableOpacity
-              style={styles.addBtn}
-              onPress={openCreate}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="Новый заказ поставщику"
-            >
-              <Ionicons name="add" size={18} color={colors.white} />
-            </TouchableOpacity>
-          ) : undefined
-        }
-      />
+    <View style={[styles.safe, embedded ? null : { backgroundColor: palette.bg.canvas }]}>
+      {embedded ? null : (
+        <IosScreenHeader
+          title="Заказы поставщикам"
+          onBack={() => navigation.goBack()}
+          trailing={
+            canWrite ? (
+              <TouchableOpacity
+                style={styles.addBtn}
+                onPress={openCreate}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Новый заказ поставщику"
+              >
+                <Ionicons name="add" size={18} color={colors.white} />
+              </TouchableOpacity>
+            ) : undefined
+          }
+        />
+      )}
 
       {/* ── Status filter chips ── */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
-        contentContainerStyle={styles.chipsRow}
+        contentContainerStyle={[styles.chipsRow, embedded && styles.chipsRowEmbedded]}
         keyboardShouldPersistTaps="handled"
       >
         {(['all', ...PO_STATUS_ORDER] as StatusFilter[]).map((s) => {
@@ -241,13 +251,12 @@ export default function PurchaseOrdersScreen() {
                 haptic('select');
                 setStatusFilter(s);
               }}
-              activeOpacity={0.8}
+              activeOpacity={0.7}
               style={[
                 styles.chip,
-                {
-                  backgroundColor: active ? colors.primary[600] : palette.bg.muted,
-                  borderColor: active ? colors.primary[600] : palette.border.subtle,
-                },
+                active
+                  ? { backgroundColor: colors.primary[600], borderColor: colors.primary[600] }
+                  : { backgroundColor: 'transparent', borderColor: palette.border.strong },
               ]}
             >
               <Text style={[styles.chipText, { color: active ? colors.white : palette.text.secondary }]}>{label}</Text>
@@ -402,28 +411,41 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Status chips
-  chipsRow: { paddingHorizontal: spacing[4], paddingBottom: spacing[2], gap: spacing[2] },
+  // Status chips — compact, refined pills (iOS-style). Inactive pills are
+  // transparent with a hairline outline (not heavy grey blocks); the active
+  // pill is a solid primary fill. Tight height + 12.5px label keep the row
+  // from reading as a stack of buttons.
+  chipsRow: {
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[1],
+    paddingBottom: spacing[2],
+    gap: spacing[1.5],
+    alignItems: 'center',
+  },
+  // Inside the «Поставщики» section the segmented control already provides the
+  // top breathing room, so trim the chip-row's top padding there.
+  chipsRowEmbedded: { paddingTop: spacing[2] },
   chip: {
-    paddingHorizontal: spacing[3.5],
-    paddingVertical: spacing[2],
+    paddingHorizontal: spacing[3],
+    height: 30,
+    justifyContent: 'center',
     borderRadius: borderRadius.full,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  chipText: { fontSize: 13, fontWeight: '600', letterSpacing: -0.1 },
+  chipText: { fontSize: 12.5, fontWeight: '600', letterSpacing: -0.1 },
 
-  // Supplier filter
+  // Supplier filter — slimmed to match the compact chip rhythm above.
   supplierFilterWrap: { paddingHorizontal: spacing[4], paddingBottom: spacing[2], zIndex: 10 },
   supplierFilterBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
-    paddingHorizontal: spacing[3.5],
-    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
     borderRadius: borderRadius.lg,
     borderWidth: StyleSheet.hairlineWidth,
   },
-  supplierFilterText: { flex: 1, fontSize: 14, fontWeight: '600' },
+  supplierFilterText: { flex: 1, fontSize: 13, fontWeight: '600' },
   dropdown: {
     marginTop: spacing[1.5],
     borderRadius: borderRadius.lg,

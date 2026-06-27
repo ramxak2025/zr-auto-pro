@@ -27,10 +27,17 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import FreshnessBadge from '../components/FreshnessBadge';
+import PurchaseOrdersScreen from './PurchaseOrdersScreen';
+import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Supplier } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
+
+// Top-level segment: the «Поставщики» section now hosts BOTH the supplier
+// list and «Заказы поставщикам» (purchase orders) under one segmented control,
+// so there's no separate «Заказы» menu entry duplicating the entry point.
+type SuppliersView = 'suppliers' | 'orders';
 
 function formatMoney(v: number) {
   return (
@@ -254,10 +261,19 @@ export default function SuppliersScreen() {
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
 
+  // Segmented switch between the supplier list and «Заказы поставщикам».
+  // Orders live INSIDE this section now (owner: «лучше встроить заказы в
+  // действующий раздел Поставщики»), so the embedded PurchaseOrdersScreen
+  // renders here instead of behind a standalone menu entry.
+  const [view, setView] = useState<SuppliersView>('suppliers');
+
   // Permission gate for the destructive swipe-delete. Owner-class roles
   // see it unconditionally; otherwise we require `suppliers_access`
   // (the only suppliers-related permission key in UserPermissions).
   const canDelete = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('suppliers_access');
+  // Write gate for placing purchase orders — matches PurchaseOrdersScreen
+  // (director / admin / superadmin); the server re-checks on every mutation.
+  const canWriteOrders = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
   // Confirm dialog state — driven by row swipe.
   const [pendingDelete, setPendingDelete] = useState<Supplier | null>(null);
@@ -518,87 +534,150 @@ export default function SuppliersScreen() {
         title="Поставщики"
         onBack={() => navigation.goBack()}
         trailing={
-          /* Trailing slot now hosts TWO actions:
-             1) «Возврат брака» — secondary, opens a supplier picker
-                sheet that forwards to SupplierDetail with the
-                auto-open flag.
-             2) «+ Новый» — primary, opens the create-supplier modal.
-             Both stay inside the standard 36pt IosScreenHeader
-             trailing zone via a small flex row. */
-          <View style={styles.headerTrailing}>
-            <TouchableOpacity
-              onPress={() => setDefectPickerOpen(true)}
-              style={[
-                styles.headerSecondaryBtn,
-                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-              ]}
-              hitSlop={8}
-              accessibilityRole="button"
-              accessibilityLabel="Возврат брака"
-            >
-              <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
-              <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
-                Возврат брака
-              </Text>
-            </TouchableOpacity>
+          view === 'suppliers' ? (
+            /* Suppliers segment — TWO actions:
+               1) «Возврат брака» — secondary, opens a supplier picker
+                  sheet that forwards to SupplierDetail with the
+                  auto-open flag.
+               2) «+ Новый» — primary, opens the create-supplier modal. */
+            <View style={styles.headerTrailing}>
+              <TouchableOpacity
+                onPress={() => setDefectPickerOpen(true)}
+                style={[
+                  styles.headerSecondaryBtn,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                ]}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Возврат брака"
+              >
+                <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
+                <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
+                  Возврат брака
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.addBtn}
+                onPress={openCreate}
+                hitSlop={8}
+                accessibilityLabel="Новый поставщик"
+              >
+                <Ionicons name="add" size={18} color={colors.white} />
+              </TouchableOpacity>
+            </View>
+          ) : canWriteOrders ? (
+            /* Orders segment — single «+» that opens order creation. The
+               embedded PurchaseOrdersScreen drops its own header, so this
+               is the create entry-point (mirrors the standalone screen). */
             <TouchableOpacity
               style={styles.addBtn}
-              onPress={openCreate}
+              onPress={() => {
+                haptic('tap');
+                navigation.navigate('PurchaseOrderCreate');
+              }}
               hitSlop={8}
-              accessibilityLabel="Новый поставщик"
+              accessibilityRole="button"
+              accessibilityLabel="Новый заказ поставщику"
             >
               <Ionicons name="add" size={18} color={colors.white} />
             </TouchableOpacity>
-          </View>
+          ) : undefined
         }
       />
-      {/* FreshnessBadge — HYBRID-perf plan. Tiny pulsing label that
-          reassures the owner this list rendered from cache and is being
-          revalidated, not "stuck". */}
-      <View style={styles.freshnessRow}>
-        <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
-      </View>
 
-      <View style={styles.searchWrap}>
-        <SearchInput value={search} onChange={setSearch} placeholder="Поиск поставщика..." />
-      </View>
-
-      {suppliers === undefined ? (
-        // Cold-start guard — show skeleton, never EmptyState while
-        // data is genuinely unknown. Once any response (even cached)
-        // lands, EmptyState becomes legitimate again.
-        <ListSkeleton count={6} />
-      ) : !suppliers.length && !isLoading ? (
-        <EmptyState
-          title="Нет поставщиков"
-          description="Добавьте первого поставщика"
-          action={{ label: 'Добавить', onPress: openCreate }}
-        />
-      ) : (
-        <FlashList
-          data={regularSuppliers}
-          keyExtractor={(i) => i.id}
-          renderItem={renderSupplier}
-          ListHeaderComponent={listHeader}
-          ListEmptyComponent={
-            // When ONLY the system supplier exists (no contractors yet)
-            // we still want to render a friendly nudge below it.
-            systemSupplier && regularSuppliers.length === 0 ? (
-              <View style={styles.listEmptyHint}>
-                <Text style={[styles.listEmptyHintText, { color: palette.text.tertiary }]}>
-                  Контрагентов пока нет. Добавьте первого поставщика.
+      {/* Segmented control — «Поставщики | Заказы». Compact iOS-style track
+          with a sliding active pill; switches the section body below. */}
+      <View style={styles.segmentWrap}>
+        <View style={[styles.segment, { backgroundColor: palette.bg.muted }]}>
+          {(['suppliers', 'orders'] as SuppliersView[]).map((key) => {
+            const active = view === key;
+            return (
+              <TouchableOpacity
+                key={key}
+                style={[styles.segmentItem, active && [styles.segmentItemActive, { backgroundColor: palette.bg.card }]]}
+                onPress={() => {
+                  if (active) return;
+                  haptic('select');
+                  setView(key);
+                }}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityState={{ selected: active }}
+              >
+                <Ionicons
+                  name={key === 'suppliers' ? 'business-outline' : 'clipboard-outline'}
+                  size={15}
+                  color={active ? palette.text.primary : palette.text.tertiary}
+                />
+                <Text
+                  style={[styles.segmentText, { color: active ? palette.text.primary : palette.text.secondary }]}
+                  numberOfLines={1}
+                >
+                  {key === 'suppliers' ? 'Поставщики' : 'Заказы'}
                 </Text>
-              </View>
-            ) : null
-          }
-          contentContainerStyle={styles.list}
-          contentInset={{ bottom: tabBarHeight }}
-          scrollIndicatorInsets={{ bottom: tabBarHeight }}
-          removeClippedSubviews
-          refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
-          }
-        />
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </View>
+
+      {view === 'orders' ? (
+        // «Заказы поставщикам» rendered inline (embedded). Same navigator
+        // context (MoreStack), so PurchaseOrderCreate / Detail still resolve.
+        <View style={{ flex: 1 }}>
+          <PurchaseOrdersScreen embedded />
+        </View>
+      ) : (
+        <>
+          {/* FreshnessBadge — HYBRID-perf plan. Tiny pulsing label that
+              reassures the owner this list rendered from cache and is being
+              revalidated, not "stuck". */}
+          <View style={styles.freshnessRow}>
+            <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+          </View>
+
+          <View style={styles.searchWrap}>
+            <SearchInput value={search} onChange={setSearch} placeholder="Поиск поставщика..." />
+          </View>
+
+          {suppliers === undefined ? (
+            // Cold-start guard — show skeleton, never EmptyState while
+            // data is genuinely unknown. Once any response (even cached)
+            // lands, EmptyState becomes legitimate again.
+            <ListSkeleton count={6} />
+          ) : !suppliers.length && !isLoading ? (
+            <EmptyState
+              title="Нет поставщиков"
+              description="Добавьте первого поставщика"
+              action={{ label: 'Добавить', onPress: openCreate }}
+            />
+          ) : (
+            <FlashList
+              data={regularSuppliers}
+              keyExtractor={(i) => i.id}
+              renderItem={renderSupplier}
+              ListHeaderComponent={listHeader}
+              ListEmptyComponent={
+                // When ONLY the system supplier exists (no contractors yet)
+                // we still want to render a friendly nudge below it.
+                systemSupplier && regularSuppliers.length === 0 ? (
+                  <View style={styles.listEmptyHint}>
+                    <Text style={[styles.listEmptyHintText, { color: palette.text.tertiary }]}>
+                      Контрагентов пока нет. Добавьте первого поставщика.
+                    </Text>
+                  </View>
+                ) : null
+              }
+              contentContainerStyle={styles.list}
+              contentInset={{ bottom: tabBarHeight }}
+              scrollIndicatorInsets={{ bottom: tabBarHeight }}
+              removeClippedSubviews
+              refreshControl={
+                <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+              }
+            />
+          )}
+        </>
       )}
 
       {/* Возврат брака picker — appears when the owner taps the header
@@ -810,6 +889,30 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   addBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  // Segmented control «Поставщики | Заказы» — compact iOS track.
+  segmentWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[1], paddingBottom: spacing[2] },
+  segment: {
+    flexDirection: 'row',
+    borderRadius: borderRadius.lg,
+    padding: 3,
+  },
+  segmentItem: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.md,
+  },
+  segmentItemActive: {
+    shadowColor: colors.black,
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
+  },
+  segmentText: { fontSize: 14, fontWeight: '600', letterSpacing: -0.2 },
   searchWrap: { paddingHorizontal: spacing[4] },
   // FreshnessBadge slot — sits below the header, right-aligned.
   freshnessRow: {

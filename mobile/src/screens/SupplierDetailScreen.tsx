@@ -13,23 +13,37 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
-import { suppliersApi, warehousesApi, productsApi, stockMovementsApi, warehouseCategoriesApi } from '../api/services';
+import {
+  suppliersApi,
+  warehousesApi,
+  productsApi,
+  stockMovementsApi,
+  warehouseCategoriesApi,
+  purchaseOrdersApi,
+} from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import ProductPickerModal from '../components/ProductPickerModal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
+import { PO_STATUS_META, formatPoDate } from './purchaseOrders/purchaseOrderHelpers';
+import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
+import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import type {
-  Supplier,
-  Delivery,
-  SupplierPayment,
-  Product,
-  Warehouse,
-  StockMovement,
-  PaginatedResponse,
+import {
+  UserRole,
+  type Supplier,
+  type Delivery,
+  type SupplierPayment,
+  type Product,
+  type Warehouse,
+  type StockMovement,
+  type PaginatedResponse,
+  type PurchaseOrder,
+  type PurchaseOrderSuggestionGroup,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -56,6 +70,10 @@ export default function SupplierDetailScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
+  const { isRole } = useAuth();
+  // Write gate for placing purchase orders — director / admin / superadmin
+  // (matches PurchaseOrdersScreen); the server re-checks on every mutation.
+  const canWriteOrders = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
   // Theme-aware fragments spread over the static (light-default) modal-form
   // styles so the sheets read correctly in dark mode. Values match the
   // already-converted form inputs across the app (UsersScreen/Suppliers).
@@ -109,6 +127,12 @@ export default function SupplierDetailScreen() {
   const [defectQty, setDefectQty] = useState('');
   const [defectPurchasePrice, setDefectPurchasePrice] = useState('');
   const [defectNote, setDefectNote] = useState('');
+
+  // «Сформировать запрос» sheet at the supplier level — seeded from the
+  // reorder suggestions for THIS supplier (low-stock items grouped by
+  // preferred supplier). Opened on demand; the suggestions query stays
+  // disabled until then so we don't fetch on every detail open.
+  const [requestOpen, setRequestOpen] = useState(false);
 
   // Used-purchase form. Owner types product name + qty + price + an
   // optional folder; backend auto-creates the SKU on the Б/У warehouse
@@ -227,6 +251,39 @@ export default function SupplierDetailScreen() {
     },
     staleTime: 30_000,
   });
+
+  // Purchase orders placed against THIS supplier — powers the «Заказы»
+  // block. Skipped for the system used-purchase channel (you never place a
+  // purchase order against it). Prefix ['purchase-orders', …] so the create
+  // / detail screens' invalidateQueries(['purchase-orders']) refresh it too.
+  const { data: supplierOrders } = useQuery<PurchaseOrder[]>({
+    queryKey: ['purchase-orders', { supplierId: id }],
+    queryFn: async () => {
+      const res = await purchaseOrdersApi.list({ supplierId: id, limit: 50 });
+      const body = res.data as unknown;
+      return Array.isArray(body)
+        ? (body as PurchaseOrder[])
+        : Array.isArray((body as { data?: unknown })?.data)
+          ? (body as { data: PurchaseOrder[] }).data
+          : [];
+    },
+    enabled: !!id && !isUsedPurchaseSupplier,
+    staleTime: 30_000,
+  });
+
+  // Reorder suggestions — fetched lazily when «Сформировать запрос» opens.
+  // We pick the group matching THIS supplier and turn its low-stock items
+  // into a price-request (name + qty), no prices/totals.
+  const { data: suggestionGroups } = useQuery<PurchaseOrderSuggestionGroup[]>({
+    queryKey: ['purchase-order-suggestions'],
+    queryFn: async () => (await purchaseOrdersApi.suggestions()).data,
+    enabled: requestOpen && !isUsedPurchaseSupplier,
+    staleTime: 60_000,
+  });
+  const requestLines = React.useMemo(() => {
+    const group = (suggestionGroups || []).find((g) => g.supplierId === id);
+    return (group?.items || []).map((it) => ({ name: it.name, quantity: Math.max(1, it.suggestedQuantity) }));
+  }, [suggestionGroups, id]);
 
   // Tab fallback — if the supplier turns out to be the system
   // used-purchase row and the active tab is the (now hidden)
@@ -676,6 +733,89 @@ export default function SupplierDetailScreen() {
               <View style={styles.infoRow}>
                 <Ionicons name="call-outline" size={16} color={palette.text.tertiary} />
                 <Text style={[styles.infoText, { color: palette.text.primary }]}>{formatPhone(supplier.phone)}</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {/* ── Заказы поставщику ─────────────────────────────────────────
+            Per-supplier purchase orders, integrated into the «Поставщики»
+            section. Hidden for the system used-purchase channel (you never
+            place a purchase order against it). «Новый заказ» prefills this
+            supplier; «Сформировать запрос» opens a price-request seeded
+            from this supplier's low-stock reorder suggestions. */}
+        {!isUsedPurchaseSupplier && (
+          <View style={[styles.ordersCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            <View style={styles.ordersHeader}>
+              <Ionicons name="clipboard-outline" size={16} color={colors.primary[600]} />
+              <Text style={[styles.ordersTitle, { color: palette.text.primary }]}>Заказы</Text>
+              {(supplierOrders?.length ?? 0) > 0 && (
+                <View style={[styles.ordersCountBadge, { backgroundColor: palette.bg.muted }]}>
+                  <Text style={[styles.ordersCountText, { color: palette.text.secondary }]}>
+                    {supplierOrders!.length}
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            <View style={styles.ordersActions}>
+              {canWriteOrders && (
+                <TouchableOpacity
+                  style={styles.ordersPrimaryBtn}
+                  onPress={() => {
+                    haptic('tap');
+                    navigation.navigate('PurchaseOrderCreate', { supplierId: id });
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="add" size={18} color={colors.white} />
+                  <Text style={styles.ordersPrimaryBtnText}>Новый заказ</Text>
+                </TouchableOpacity>
+              )}
+              <TouchableOpacity
+                style={[styles.ordersSecondaryBtn, { borderColor: palette.border.strong }]}
+                onPress={() => {
+                  haptic('tap');
+                  setRequestOpen(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="chatbubbles-outline" size={16} color={colors.primary[600]} />
+                <Text style={[styles.ordersSecondaryBtnText, { color: palette.text.primary }]}>
+                  Сформировать запрос
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {supplierOrders === undefined ? null : supplierOrders.length === 0 ? (
+              <Text style={[styles.ordersEmpty, { color: palette.text.tertiary }]}>Заказов поставщику пока нет</Text>
+            ) : (
+              <View>
+                {supplierOrders.slice(0, 6).map((po) => {
+                  const meta = PO_STATUS_META[po.status];
+                  return (
+                    <TouchableOpacity
+                      key={po.id}
+                      style={[styles.orderRow, { borderTopColor: palette.border.subtle }]}
+                      onPress={() => navigation.navigate('PurchaseOrderDetail', { id: po.id, po })}
+                      activeOpacity={0.6}
+                    >
+                      <View style={[styles.orderStatusChip, { backgroundColor: meta.bg }]}>
+                        <Text style={[styles.orderStatusText, { color: meta.text }]}>{meta.label}</Text>
+                      </View>
+                      <Text style={[styles.orderMeta, { color: palette.text.secondary }]} numberOfLines={1}>
+                        {po.itemCount ?? 0} поз. · {formatPoDate(po.createdAt)}
+                      </Text>
+                      <Text style={[styles.orderTotal, { color: palette.text.primary }]}>{formatMoney(po.total)}</Text>
+                      <Ionicons name="chevron-forward" size={15} color={palette.text.tertiary} />
+                    </TouchableOpacity>
+                  );
+                })}
+                {supplierOrders.length > 6 && (
+                  <Text style={[styles.ordersMore, { color: palette.text.tertiary }]}>
+                    и ещё {supplierOrders.length - 6}
+                  </Text>
+                )}
               </View>
             )}
           </View>
@@ -1448,6 +1588,16 @@ export default function SupplierDetailScreen() {
         onSelect={onPickDefectProduct}
         palette={palette}
       />
+
+      {/* «Сформировать запрос» — price-request text (no prices) for THIS
+          supplier, seeded from its low-stock reorder suggestions. */}
+      <SupplierRequestSheet
+        visible={requestOpen}
+        onClose={() => setRequestOpen(false)}
+        supplierName={supplier.name}
+        supplierPhone={supplier.phone}
+        lines={requestLines}
+      />
     </View>
   );
 }
@@ -1592,6 +1742,61 @@ const styles = StyleSheet.create({
   },
   infoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], paddingVertical: spacing[1.5] },
   infoText: { fontSize: fontSize.sm, color: colors.gray[700] },
+  // ── Per-supplier «Заказы» block ─────────────────────────────────────
+  ordersCard: {
+    backgroundColor: colors.white,
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    borderColor: colors.gray[100],
+    padding: spacing[4],
+    gap: spacing[3],
+  },
+  ordersHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  ordersTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.2 },
+  ordersCountBadge: {
+    paddingHorizontal: spacing[2],
+    paddingVertical: 1,
+    borderRadius: borderRadius.full,
+    minWidth: 22,
+    alignItems: 'center',
+  },
+  ordersCountText: { fontSize: 12, fontWeight: '700' },
+  ordersActions: { flexDirection: 'row', gap: spacing[2] },
+  ordersPrimaryBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.primary[600],
+  },
+  ordersPrimaryBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
+  ordersSecondaryBtn: {
+    flex: 1.2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+  },
+  ordersSecondaryBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  ordersEmpty: { fontSize: 13, textAlign: 'center', paddingVertical: spacing[2] },
+  orderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[2.5],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  orderStatusChip: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
+  orderStatusText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.1 },
+  orderMeta: { flex: 1, minWidth: 0, fontSize: 12 },
+  orderTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+  ordersMore: { fontSize: 12, textAlign: 'center', paddingTop: spacing[2] },
   // Tabs
   tabRow: { flexDirection: 'row', backgroundColor: colors.gray[100], borderRadius: borderRadius.xl, padding: 3 },
   tabBtn: {
