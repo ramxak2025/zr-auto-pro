@@ -46,6 +46,7 @@ import { PurchaseOrdersModule } from './purchase-orders/purchase-orders.module';
 import { PaymentsModule } from './payments/payments.module';
 import { FiscalModule } from './fiscal/fiscal.module';
 import { TelephonyModule } from './telephony/telephony.module';
+import { WalletModule } from './wallet/wallet.module';
 
 @Module({
   imports: [
@@ -95,6 +96,7 @@ import { TelephonyModule } from './telephony/telephony.module';
     PaymentsModule,
     FiscalModule,
     TelephonyModule,
+    WalletModule,
   ],
   providers: [MigrationRunner],
 })

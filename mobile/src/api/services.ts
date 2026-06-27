@@ -46,6 +46,7 @@ import {
   createPaymentsApi,
   createFiscalApi,
   createTelephonyApi,
+  createWalletApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -136,6 +137,15 @@ export const fiscalApi = createFiscalApi(api);
 // webhook → они персистятся в таблицу calls и появляются в обычном списке звонков
 // (CallsScreen). Consumed by IntegrationsScreen → секция «Телефония и звонки».
 export const telephonyApi = createTelephonyApi(api);
+// Apple Wallet — карта лояльности (.pkpass) — backend wallet/ (migration 089).
+// getSettings/updateSettings owner-class gated server-side; сертификат Pass Type ID,
+// приватный ключ, пароль ключа и WWDR — WRITE-ONLY: getSettings возвращает только
+// булевы флаги hasCert/hasCertKey/hasWwdr (+ configured), никогда сырой PEM. INERT,
+// пока владелец не загрузит реальный сертификат + ключ + WWDR И не включит enabled —
+// getPass(clientId) до этого возвращает 422. getPass отдаёт подписанный .pkpass
+// blob'ом (application/vnd.apple.pkpass): экран отдаёт байты в Apple Wallet. Кнопка
+// «Добавить в Apple Wallet» на карточке клиента / в разделе лояльности.
+export const walletApi = createWalletApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {

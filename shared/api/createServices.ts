@@ -133,6 +133,7 @@ import type {
   FiscalVat,
   TelephonySettings,
   TelephonyProviderName,
+  WalletSettings,
 } from '../types';
 import type {
   LoginRequest,
@@ -1195,8 +1196,7 @@ export function createPermissionTemplatesApi(api: HttpClient) {
     update: (id: string, data: { name?: string; permissions?: Record<string, boolean> }) =>
       api.patch<PermissionTemplate>(`/permission-templates/${id}`, data),
     remove: (id: string) => api.delete<{ success: true }>(`/permission-templates/${id}`),
-    apply: (id: string, userId: string) =>
-      api.post<UserPermissions>(`/permission-templates/${id}/apply/${userId}`),
+    apply: (id: string, userId: string) => api.post<UserPermissions>(`/permission-templates/${id}/apply/${userId}`),
   };
 }
 
@@ -1210,8 +1210,7 @@ export function createPermissionTemplatesApi(api: HttpClient) {
 export function createCashShiftsApi(api: HttpClient) {
   return {
     /** Open a shift. 409 if one is already open for the tenant. */
-    open: (data: { openingAmount: number; note?: string }) =>
-      api.post<CashShiftReport>('/cash-shifts/open', data),
+    open: (data: { openingAmount: number; note?: string }) => api.post<CashShiftReport>('/cash-shifts/open', data),
     /** Close the shift; returns the final Z-report with computed difference. */
     close: (id: string, data: { closingAmount: number; note?: string }) =>
       api.post<CashShiftReport>(`/cash-shifts/${id}/close`, data),
@@ -1374,8 +1373,13 @@ export function createPaymentsApi(api: HttpClient) {
      * SBP → response carries `qr` (the СБП-QR payload); card → `confirmationUrl`
      * (redirect). Poll `get(id)` until status leaves 'pending'.
      */
-    create: (data: { amount: number; description?: string; method?: AcquiringMethod; checkId?: string; returnUrl?: string }) =>
-      api.post<Payment>('/payments/create', data),
+    create: (data: {
+      amount: number;
+      description?: string;
+      method?: AcquiringMethod;
+      checkId?: string;
+      returnUrl?: string;
+    }) => api.post<Payment>('/payments/create', data),
     /** Poll one payment's status (tenant-scoped). Re-syncs pending from provider. */
     get: (id: string) => api.get<Payment>(`/payments/${id}`),
   };
@@ -1461,7 +1465,66 @@ export function createTelephonyApi(api: HttpClient) {
      * value — an omitted/empty field leaves the stored secret untouched (the form
      * shows a mask, not the real value).
      */
-    updateSettings: (data: { provider?: TelephonyProviderName; enabled?: boolean; apiKey?: string; apiSalt?: string }) =>
-      api.patch<TelephonySettings>('/telephony/settings', data),
+    updateSettings: (data: {
+      provider?: TelephonyProviderName;
+      enabled?: boolean;
+      apiKey?: string;
+      apiSalt?: string;
+    }) => api.patch<TelephonySettings>('/telephony/settings', data),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Apple Wallet — карта лояльности (.pkpass). Backend: wallet/ (migration 089).
+//  A storeCard pass with the client's bonus balance (read from loyalty/) and a QR
+//  encoding the clientId. Built + PKCS#7-signed SERVER-SIDE (passkit-generator) with
+//  the tenant's Apple Pass Type ID certificate.
+//
+//  getSettings/updateSettings are owner-class (director/admin/superadmin) gated
+//  server-side. The signing material (certPem / certKeyPem / certKeyPassword /
+//  wwdrPem) is WRITE-ONLY — getSettings returns ONLY boolean "stored" flags, NEVER
+//  any PEM. Send a cert field only when (re)uploading it; an omitted/empty field
+//  leaves the stored value untouched.
+//
+//  INERT until configured: getPass returns 422 until the owner uploads a real Pass
+//  Type ID cert + key + Apple WWDR cert AND flips `enabled` on. Use
+//  WalletSettings.configured to decide whether to show the «Добавить в Apple Wallet»
+//  button.
+//
+//  The pass download is BINARY (application/vnd.apple.pkpass): `getPass(clientId)`
+//  returns it as a blob (responseType:'blob') — the mobile app hands the bytes to
+//  Wallet, the web can offer it as a download. `passPath(clientId)` exposes the raw
+//  authenticated path for callers that prefer to fetch it themselves.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createWalletApi(api: HttpClient) {
+  return {
+    /** Masked per-tenant Apple Wallet config. Owner-class. Never returns raw PEM. */
+    getSettings: () => api.get<WalletSettings>('/wallet/settings'),
+    /**
+     * Owner-class partial update. Send certPem / certKeyPem / certKeyPassword /
+     * wwdrPem ONLY when (re)uploading — an omitted/empty field leaves the stored
+     * secret untouched (the form shows a flag, not the real PEM).
+     */
+    updateSettings: (data: {
+      enabled?: boolean;
+      passTypeId?: string;
+      teamId?: string;
+      organizationName?: string;
+      logoUrl?: string;
+      bgColor?: string;
+      certPem?: string;
+      certKeyPem?: string;
+      certKeyPassword?: string;
+      wwdrPem?: string;
+    }) => api.patch<WalletSettings>('/wallet/settings', data),
+    /**
+     * Download the signed .pkpass for a client (tenant-scoped, JWT-authenticated).
+     * Resolves to a binary blob (application/vnd.apple.pkpass). 422 when Wallet is
+     * disabled/unconfigured, 404 when the client is not in this tenant.
+     */
+    getPass: (clientId: string) => api.get(`/wallet/pass/${clientId}`, { responseType: 'blob' }),
+    /** Raw authenticated path of the .pkpass endpoint (for custom fetch / download flows). */
+    passPath: (clientId: string) => `/wallet/pass/${clientId}`,
   };
 }

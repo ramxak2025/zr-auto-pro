@@ -2231,3 +2231,54 @@ export interface TelephonySettings {
   hasApiSalt: boolean;
   updatedAt: string | null;
 }
+
+// ───────────────────────────────────────────────────────────────────────
+//  Apple Wallet — карта лояльности (.pkpass). Backend: wallet/ (migration 089).
+//  A storeCard pass showing the client's bonus balance (read from loyalty/) plus a
+//  QR encoding the clientId, so staff can scan the card to accrue/redeem. The pass
+//  is built and PKCS#7-signed SERVER-SIDE (passkit-generator) with the tenant's own
+//  Apple Pass Type ID certificate.
+//
+//  Settings get/update are owner-class (director/admin/superadmin) gated
+//  server-side. The signing material (cert + key + key password + Apple WWDR cert)
+//  is WRITE-ONLY — getSettings returns ONLY boolean "stored" flags, NEVER any PEM
+//  (a private key has no meaningful last-4 mask). The .pkpass download itself is a
+//  separate binary endpoint (GET /wallet/pass/:clientId) — see createWalletApi.
+//
+//  INERT until configured: GET /wallet/pass/:clientId returns 422 until the owner
+//  uploads a real Pass Type ID cert + key + WWDR cert AND flips `enabled` on.
+//  Nothing produces a usable pass before that.
+// ───────────────────────────────────────────────────────────────────────
+
+/**
+ * Masked per-tenant Apple Wallet config (GET /wallet/settings). Owner-class only.
+ * The raw cert / key / password / WWDR are NEVER sent to a client — only flags.
+ */
+export interface WalletSettings {
+  enabled: boolean;
+  /** Apple Pass Type ID (e.g. 'pass.com.autexa.loyalty'); semi-public, shown in full. */
+  passTypeId: string | null;
+  /** Apple Developer Team ID (10-char); semi-public, shown in full. */
+  teamId: string | null;
+  /** Organization name printed on the pass (falls back server-side to the tenant name). */
+  organizationName: string | null;
+  /** Optional branding logo URL. */
+  logoUrl: string | null;
+  /** Optional background color hex (e.g. '#1E88E5'). */
+  bgColor: string | null;
+  /** True when the Pass Type ID signing certificate (PEM) is stored. NEVER the PEM. */
+  hasCert: boolean;
+  /** True when the signing private key (PEM) is stored. NEVER the PEM. */
+  hasCertKey: boolean;
+  /** True when a private-key passphrase is stored. NEVER the value. */
+  hasCertKeyPassword: boolean;
+  /** True when the Apple WWDR intermediate certificate (PEM) is stored. NEVER the PEM. */
+  hasWwdr: boolean;
+  /**
+   * True when enabled AND cert + key + WWDR + passTypeId + teamId are all present —
+   * i.e. GET /wallet/pass/:clientId will produce a pass instead of a 422. The UI can
+   * use this to decide whether to show the «Добавить в Apple Wallet» button.
+   */
+  configured: boolean;
+  updatedAt: string | null;
+}
