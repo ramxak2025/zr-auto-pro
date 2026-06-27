@@ -10,6 +10,7 @@ import LoginScreen from '../screens/LoginScreen';
 import DashboardScreen from '../screens/DashboardScreen';
 import ProductsScreen from '../screens/ProductsScreen';
 import ProductDetailScreen from '../screens/ProductDetailScreen';
+import InventoryScreen from '../screens/InventoryScreen';
 import ChecksScreen from '../screens/ChecksScreen';
 import CheckCreateScreen from '../screens/CheckCreateScreen';
 import CheckDetailScreen from '../screens/CheckDetailScreen';
@@ -229,6 +230,10 @@ export type ProductsStackParamList = {
   // Dedicated product drill-down. Pushed on row tap; the passed `product`
   // seeds instant paint while the screen revalidates the full shape.
   ProductDetail: { product: Product };
+  // Инвентаризация (scan-driven recount). Pushed from the warehouse ops sheet;
+  // lives in THIS stack so the floating tab bar stays visible and edge-swipe
+  // pops back to the warehouse list.
+  Inventory: undefined;
 };
 
 // EquipmentStackParamList — два экрана, корневой grid и detail на сотрудника.
@@ -413,6 +418,9 @@ function ProductsStackNavigator() {
           Checks → CheckDetail) so the floating tab bar stays visible and
           iOS edge-swipe pops back to the warehouse list. */}
       <ProductsStack.Screen name="ProductDetail" component={ProductDetailScreen} />
+      {/* Инвентаризация — scan-driven recount; reuses productsApi.updateStock
+          (type 'inventory'). In-stack so the tab bar stays visible. */}
+      <ProductsStack.Screen name="Inventory" component={InventoryScreen} />
     </ProductsStack.Navigator>
   );
 }

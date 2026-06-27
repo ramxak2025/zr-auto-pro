@@ -40,6 +40,7 @@ import ProductMovementHistoryModal from '../components/ProductMovementHistoryMod
 import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
 import FreshnessBadge from '../components/FreshnessBadge';
+import BarcodeScanner from '../components/BarcodeScanner';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -311,6 +312,12 @@ export default function ProductsScreen() {
 
   // Fullscreen photo view
   const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
+
+  // Barcode scan → product lookup. Tapping «Сканировать» in the header opens
+  // the camera; a decoded code is matched against the loaded list's `barcode`
+  // field (PRODUCT_LIST_FIELDS includes it) and opens that product, or offers
+  // to create one when nothing matches.
+  const [showScanner, setShowScanner] = useState(false);
 
   // Inventory modal state
   const [showInventoryModal, setShowInventoryModal] = useState(false);
@@ -967,6 +974,34 @@ export default function ProductsScreen() {
     [navigation],
   );
 
+  // Barcode scan → find the matching product (by `barcode`) in the loaded list
+  // and open it; offer to create one when nothing matches. We match against
+  // the already-loaded warehouse list (no barcode lookup endpoint exists), so
+  // a code from a product on ANOTHER warehouse won't resolve here.
+  const handleBarcodeScanned = useCallback(
+    (code: string) => {
+      setShowScanner(false);
+      const needle = code.trim();
+      const match = allProducts.find((p) => String(p.barcode || '').trim() === needle);
+      if (match) {
+        haptic('success');
+        navigation.navigate('ProductDetail', { product: match });
+        return;
+      }
+      haptic('warning');
+      Alert.alert('Товар не найден', `Штрих-код ${needle} не привязан ни к одному товару этого склада.`, [
+        { text: 'Отмена', style: 'cancel' },
+        ...(hasPermission('warehouse_access') && activeWarehouse?.kind === 'main'
+          ? [{ text: 'Создать товар', onPress: openCreate }]
+          : []),
+      ]);
+    },
+    // `openCreate` is a stable screen-scope function; allProducts/activeWarehouse
+    // change with data — intentionally included so the latest list is matched.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allProducts, navigation, activeWarehouse, hasPermission],
+  );
+
   // ProductDetailScreen's «Изменить» reuses THIS screen's edit modal: it sets
   // `editProduct` on our route and pops back. Consume it once, open the modal,
   // then clear the param so a re-focus/re-render doesn't re-open it.
@@ -1559,6 +1594,19 @@ export default function ProductsScreen() {
         }
         trailing={
           <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+            {/* Сканировать — barcode → найти и открыть товар. Read-only action,
+                shown to everyone who can see the warehouse. The scanner itself
+                degrades gracefully if the camera native module isn't linked. */}
+            <TouchableOpacity
+              style={styles.opsBtn}
+              onPress={() => {
+                haptic('tap');
+                setShowScanner(true);
+              }}
+              accessibilityLabel="Сканировать штрих-код"
+            >
+              <Ionicons name="barcode-outline" size={18} color={colors.primary[600]} />
+            </TouchableOpacity>
             {hasPermission('warehouse_access') && (
               <TouchableOpacity style={styles.opsBtn} onPress={() => setShowOpsModal(true)}>
                 <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
@@ -1940,7 +1988,13 @@ export default function ProductsScreen() {
       >
         <TouchableOpacity
           style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
-          onPress={openInventory}
+          onPress={() => {
+            // Open the full-screen scan-driven Инвентаризация (ProductsStack).
+            // The legacy inline-modal flow (openInventory) is retained in code
+            // as a fallback but is no longer the active entry point.
+            setShowOpsModal(false);
+            navigation.navigate('Inventory');
+          }}
         >
           <View style={[styles.opsIcon, { backgroundColor: colors.blue[50] }]}>
             <Ionicons name="clipboard-outline" size={22} color={colors.blue[600]} />
@@ -2018,6 +2072,9 @@ export default function ProductsScreen() {
       <RNModal visible={showTrashModal} animationType="slide" onRequestClose={() => setShowTrashModal(false)}>
         <TrashScreen onClose={() => setShowTrashModal(false)} />
       </RNModal>
+
+      {/* Barcode scanner — header «Сканировать» → найти товар по штрих-коду. */}
+      <BarcodeScanner visible={showScanner} onClose={() => setShowScanner(false)} onScanned={handleBarcodeScanned} />
 
       {/* Inventory modal — pageSheet on iOS so the sheet drops in from
           the top of the screen leaving the previous content visible
