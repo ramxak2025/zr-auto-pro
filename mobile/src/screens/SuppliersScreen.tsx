@@ -27,7 +27,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import FreshnessBadge from '../components/FreshnessBadge';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Supplier } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -74,6 +74,9 @@ interface SupplierRowProps {
   textTertiary: string;
   iconCircleCleanBg: string;
   iconCircleCleanColor: string;
+  /** Debt icon-circle fill — resolved in the parent (where the theme
+   *  palette lives) so the memoised row stays subscription-free. */
+  iconCircleDebtBg: string;
 }
 const SupplierRow = React.memo(function SupplierRow({
   item,
@@ -89,6 +92,7 @@ const SupplierRow = React.memo(function SupplierRow({
   textTertiary,
   iconCircleCleanBg,
   iconCircleCleanColor,
+  iconCircleDebtBg,
 }: SupplierRowProps) {
   const hasDebt = item.currentDebt > 0;
 
@@ -103,7 +107,9 @@ const SupplierRow = React.memo(function SupplierRow({
         <View
           style={[
             styles.iconCircle,
-            hasDebt ? styles.iconCircleDebt : [styles.iconCircleClean, { backgroundColor: iconCircleCleanBg }],
+            hasDebt
+              ? [styles.iconCircleDebt, { backgroundColor: iconCircleDebtBg }]
+              : [styles.iconCircleClean, { backgroundColor: iconCircleCleanBg }],
           ]}
         >
           <Ionicons
@@ -190,7 +196,12 @@ interface SystemSupplierCardProps {
   onPress: (id: string) => void;
   onPressIn: (id: string) => void;
 }
-const SystemSupplierCard = React.memo(function SystemSupplierCard({ item, onPress, onPressIn }: SystemSupplierCardProps) {
+const SystemSupplierCard = React.memo(function SystemSupplierCard({
+  item,
+  onPress,
+  onPressIn,
+}: SystemSupplierCardProps) {
+  const palette = useColors();
   return (
     <TouchableOpacity
       activeOpacity={0.85}
@@ -215,7 +226,12 @@ const SystemSupplierCard = React.memo(function SystemSupplierCard({ item, onPres
             <Text style={styles.systemName} numberOfLines={1}>
               {item.name}
             </Text>
-            <View style={styles.systemChip}>
+            <View
+              style={[
+                styles.systemChip,
+                palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
+              ]}
+            >
               <Text style={styles.systemChipText}>СИСТЕМНЫЙ</Text>
             </View>
           </View>
@@ -461,6 +477,7 @@ export default function SuppliersScreen() {
         textTertiary={palette.text.tertiary}
         iconCircleCleanBg={palette.bg.muted}
         iconCircleCleanColor={palette.text.tertiary}
+        iconCircleDebtBg={palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50]}
       />
     ),
     [
@@ -469,6 +486,7 @@ export default function SuppliersScreen() {
       handlePressInSupplier,
       openEdit,
       handleDeleteSupplier,
+      palette.mode,
       palette.bg.card,
       palette.bg.muted,
       palette.border.subtle,
@@ -483,11 +501,7 @@ export default function SuppliersScreen() {
   // tenants pre-migration).
   const listHeader = systemSupplier ? (
     <View>
-      <SystemSupplierCard
-        item={systemSupplier}
-        onPress={handlePressSupplier}
-        onPressIn={handlePressInSupplier}
-      />
+      <SystemSupplierCard item={systemSupplier} onPress={handlePressSupplier} onPressIn={handlePressInSupplier} />
       {/* Section separator — small label + hairline divider so the
           regular contractor list visually starts as its own block. */}
       <View style={styles.sectionSeparator}>
@@ -527,7 +541,12 @@ export default function SuppliersScreen() {
                 Возврат брака
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.addBtn} onPress={openCreate} hitSlop={8} accessibilityLabel="Новый поставщик">
+            <TouchableOpacity
+              style={styles.addBtn}
+              onPress={openCreate}
+              hitSlop={8}
+              accessibilityLabel="Новый поставщик"
+            >
               <Ionicons name="add" size={18} color={colors.white} />
             </TouchableOpacity>
           </View>
@@ -609,7 +628,15 @@ export default function SuppliersScreen() {
                   <View
                     style={[
                       styles.iconCircle,
-                      hasDebt ? styles.iconCircleDebt : [styles.iconCircleClean, { backgroundColor: palette.bg.muted }],
+                      hasDebt
+                        ? [
+                            styles.iconCircleDebt,
+                            {
+                              backgroundColor:
+                                palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                            },
+                          ]
+                        : [styles.iconCircleClean, { backgroundColor: palette.bg.muted }],
                     ]}
                   >
                     <Ionicons

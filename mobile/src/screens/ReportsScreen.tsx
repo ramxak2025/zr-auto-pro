@@ -59,7 +59,7 @@ import {
   STORIES_EXPORT_HEIGHT,
   type StoriesShareCardData,
 } from '../components/StoriesShareCard';
-import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
@@ -1002,7 +1002,15 @@ export default function ReportsScreen() {
                 style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               >
                 <View style={styles.cardHeaderRow}>
-                  <View style={[styles.cardIcon, { backgroundColor: colors.green[50] }]}>
+                  <View
+                    style={[
+                      styles.cardIcon,
+                      {
+                        backgroundColor:
+                          palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
+                      },
+                    ]}
+                  >
                     <Ionicons name="stats-chart-outline" size={16} color={colors.green[600]} />
                   </View>
                   <Text style={[styles.cardTitleInline, { color: palette.text.tertiary }]}>МАРЖИНАЛЬНОСТЬ</Text>
@@ -1205,12 +1213,12 @@ export default function ReportsScreen() {
                       style={[
                         styles.insightCard,
                         {
-                          backgroundColor: insightBg(ins.tone, palette.bg.card),
+                          backgroundColor: insightBg(ins.tone, palette.bg.card, palette.mode),
                           borderColor: insightBorder(ins.tone, palette.border.subtle),
                         },
                       ]}
                     >
-                      <View style={[styles.insightIcon, { backgroundColor: insightIconBg(ins.tone) }]}>
+                      <View style={[styles.insightIcon, { backgroundColor: insightIconBg(ins.tone, palette.mode) }]}>
                         <Ionicons name={ins.icon} size={16} color={insightIconColor(ins.tone)} />
                       </View>
                       <Text style={[styles.insightText, { color: palette.text.primary }]}>{ins.text}</Text>
@@ -1226,7 +1234,15 @@ export default function ReportsScreen() {
                   style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
                 >
                   <View style={styles.cardHeaderRow}>
-                    <View style={[styles.cardIcon, { backgroundColor: colors.primary[50] }]}>
+                    <View
+                      style={[
+                        styles.cardIcon,
+                        {
+                          backgroundColor:
+                            palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+                        },
+                      ]}
+                    >
                       <Ionicons name="trending-up-outline" size={16} color={colors.primary[600]} />
                     </View>
                     <Text style={[styles.cardTitleInline, { color: palette.text.tertiary }]}>ПРОГНОЗ</Text>
@@ -1428,9 +1444,10 @@ function FunnelRow({
   palette: ReturnType<typeof useColors>;
 }) {
   const accentBg = (() => {
-    if (tone === 'positive') return colors.green[50];
-    if (tone === 'negative') return colors.red[50];
-    if (tone === 'final') return colors.primary[50];
+    const dark = palette.mode === 'dark';
+    if (tone === 'positive') return dark ? softTint(colors.green[600], 'dark') : colors.green[50];
+    if (tone === 'negative') return dark ? softTint(colors.red[500], 'dark') : colors.red[50];
+    if (tone === 'final') return dark ? softTint(colors.primary[600], 'dark') : colors.primary[50];
     return palette.bg.muted;
   })();
   const accentFg = (() => {
@@ -1560,7 +1577,12 @@ function PersonalRecordCard({
       style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.cardHeaderRow}>
-        <View style={[styles.cardIcon, { backgroundColor: colors.amber[50] }]}>
+        <View
+          style={[
+            styles.cardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+          ]}
+        >
           <Ionicons name="trophy-outline" size={16} color={colors.amber[600]} />
         </View>
         <Text style={[styles.cardTitleInline, { color: palette.text.tertiary }]}>ЛИЧНЫЙ РЕКОРД</Text>
@@ -1584,7 +1606,12 @@ function PersonalRecordCard({
         </View>
       )}
       {approaching && bestMonth && (
-        <View style={[styles.recordHint, { backgroundColor: colors.amber[50] }]}>
+        <View
+          style={[
+            styles.recordHint,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+          ]}
+        >
           <Ionicons name="flame-outline" size={14} color={colors.amber[600]} />
           <Text style={[styles.recordHintText, { color: colors.amber[700] }]}>
             До рекорда осталось {formatMoney(remaining)}
@@ -1847,10 +1874,11 @@ function buildAlerts({
 //  Insight palette helpers
 // ─────────────────────────────────────────────────────────────────────────────
 
-function insightBg(tone: InsightTone, fallback: string): string {
-  if (tone === 'green') return colors.green[50];
-  if (tone === 'amber') return colors.amber[50];
-  if (tone === 'red') return colors.red[50];
+function insightBg(tone: InsightTone, fallback: string, mode: 'light' | 'dark'): string {
+  const dark = mode === 'dark';
+  if (tone === 'green') return dark ? softTint(colors.green[700], 'dark') : colors.green[50];
+  if (tone === 'amber') return dark ? softTint(colors.amber[700], 'dark') : colors.amber[50];
+  if (tone === 'red') return dark ? softTint(colors.red[700], 'dark') : colors.red[50];
   return fallback;
 }
 function insightBorder(tone: InsightTone, fallback: string): string {
@@ -1859,10 +1887,11 @@ function insightBorder(tone: InsightTone, fallback: string): string {
   if (tone === 'red') return colors.red[200];
   return fallback;
 }
-function insightIconBg(tone: InsightTone): string {
-  if (tone === 'green') return colors.green[100];
-  if (tone === 'amber') return colors.amber[100];
-  return colors.red[100];
+function insightIconBg(tone: InsightTone, mode: 'light' | 'dark'): string {
+  const dark = mode === 'dark';
+  if (tone === 'green') return dark ? softTint(colors.green[700], 'dark') : colors.green[100];
+  if (tone === 'amber') return dark ? softTint(colors.amber[700], 'dark') : colors.amber[100];
+  return dark ? softTint(colors.red[700], 'dark') : colors.red[100];
 }
 function insightIconColor(tone: InsightTone): string {
   if (tone === 'green') return colors.green[700];

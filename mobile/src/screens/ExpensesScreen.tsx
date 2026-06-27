@@ -68,7 +68,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DateTimePickerModal from '../components/DateTimePickerModal';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
@@ -335,19 +335,40 @@ const ExpenseRow = React.memo(function ExpenseRow({
             <Text style={[styles.cardAmount, { color: palette.text.primary }]}>{formatMoney(item.amount)}</Text>
             <View style={styles.cardBadgesRow}>
               {pending && (
-                <View style={[styles.pendingBadge, { backgroundColor: colors.amber[50] }]}>
+                <View
+                  style={[
+                    styles.pendingBadge,
+                    {
+                      backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
+                    },
+                  ]}
+                >
                   <Ionicons name="time-outline" size={11} color={colors.amber[600]} />
                   <Text style={[styles.pendingText, { color: colors.amber[600] }]}>Ожидает</Text>
                 </View>
               )}
               {rejected && (
-                <View style={[styles.pendingBadge, { backgroundColor: colors.rose[50] }]}>
+                <View
+                  style={[
+                    styles.pendingBadge,
+                    {
+                      backgroundColor: palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50],
+                    },
+                  ]}
+                >
                   <Ionicons name="close-circle-outline" size={11} color={colors.rose[600]} />
                   <Text style={[styles.pendingText, { color: colors.rose[600] }]}>Отклонён</Text>
                 </View>
               )}
               {item.categoryName && (
-                <View style={[styles.catBadge, { backgroundColor: catColor.light }]}>
+                <View
+                  style={[
+                    styles.catBadge,
+                    {
+                      backgroundColor: palette.mode === 'dark' ? softTint(catColor.bg, 'dark') : catColor.light,
+                    },
+                  ]}
+                >
                   <Text style={[styles.catBadgeText, { color: catColor.text }]}>{item.categoryName}</Text>
                 </View>
               )}
@@ -402,7 +423,13 @@ const ExpenseRow = React.memo(function ExpenseRow({
                 <Text style={styles.approveBtnText}>Одобрить</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.rejectBtn, { borderColor: colors.rose[500], backgroundColor: colors.rose[50] }]}
+                style={[
+                  styles.rejectBtn,
+                  {
+                    borderColor: colors.rose[500],
+                    backgroundColor: palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50],
+                  },
+                ]}
                 onPress={() => onReject(item.id)}
                 activeOpacity={0.85}
               >
@@ -1219,7 +1246,12 @@ export default function ExpensesScreen() {
                   },
                 ]}
               >
-                <View style={[styles.topRank, { backgroundColor: catColor.light }]}>
+                <View
+                  style={[
+                    styles.topRank,
+                    { backgroundColor: palette.mode === 'dark' ? softTint(catColor.bg, 'dark') : catColor.light },
+                  ]}
+                >
                   <Text style={[styles.topRankText, { color: catColor.text }]}>{i + 1}</Text>
                 </View>
                 <View style={styles.topMiddle}>
@@ -1289,7 +1321,11 @@ export default function ExpensesScreen() {
             style={[
               styles.filterChip,
               {
-                backgroundColor: filterEmployeeId ? colors.primary[50] : palette.bg.muted,
+                backgroundColor: filterEmployeeId
+                  ? palette.mode === 'dark'
+                    ? softTint(colors.primary[700], 'dark')
+                    : colors.primary[50]
+                  : palette.bg.muted,
                 borderColor: filterEmployeeId ? colors.primary[300] : palette.border.subtle,
               },
             ]}
@@ -1317,7 +1353,13 @@ export default function ExpensesScreen() {
               <TouchableOpacity
                 onPress={() => setFilterEmployeeId('')}
                 hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-                style={[styles.clearXBadge, { backgroundColor: colors.primary[100] }]}
+                style={[
+                  styles.clearXBadge,
+                  {
+                    backgroundColor:
+                      palette.mode === 'dark' ? softTint(colors.primary[700], 'dark') : colors.primary[100],
+                  },
+                ]}
               >
                 {/* `close` → lucide `X` (stroke-only) — avoids the filled-circle artifact */}
                 <Ionicons name="close" size={10} color={colors.primary[700]} />
@@ -1328,7 +1370,11 @@ export default function ExpensesScreen() {
             style={[
               styles.filterChip,
               {
-                backgroundColor: pendingOnly ? colors.amber[50] : palette.bg.muted,
+                backgroundColor: pendingOnly
+                  ? palette.mode === 'dark'
+                    ? softTint(colors.amber[600], 'dark')
+                    : colors.amber[50]
+                  : palette.bg.muted,
                 borderColor: pendingOnly ? colors.amber[600] : palette.border.subtle,
               },
             ]}
@@ -1357,7 +1403,12 @@ export default function ExpensesScreen() {
       {/* Active filter banner — клик по плитке/доли подсвечивает её
           здесь и даёт быстрый "сбросить" */}
       {filterCategory && (
-        <View style={[styles.activeFilterBanner, { backgroundColor: colors.primary[50] }]}>
+        <View
+          style={[
+            styles.activeFilterBanner,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50] },
+          ]}
+        >
           <Ionicons name="funnel" size={13} color={colors.primary[600]} />
           <Text style={[styles.activeFilterText, { color: colors.primary[700] }]} numberOfLines={1}>
             Фильтр: {filterCategory}
@@ -1365,7 +1416,12 @@ export default function ExpensesScreen() {
           <TouchableOpacity
             onPress={() => handleCategoryFilter(null)}
             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            style={[styles.clearXBadge, { backgroundColor: colors.primary[100] }]}
+            style={[
+              styles.clearXBadge,
+              {
+                backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[700], 'dark') : colors.primary[100],
+              },
+            ]}
           >
             {/* `close` → lucide `X` (stroke-only) — avoids the filled-circle artifact */}
             <Ionicons name="close" size={11} color={colors.primary[700]} />
@@ -1592,7 +1648,12 @@ export default function ExpensesScreen() {
           </TouchableOpacity>
         </View>
         {/* Owner explainer — как работает одобрение */}
-        <View style={[styles.approvalInfo, { backgroundColor: colors.amber[50] }]}>
+        <View
+          style={[
+            styles.approvalInfo,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[700], 'dark') : colors.amber[50] },
+          ]}
+        >
           <Ionicons name="shield-checkmark-outline" size={15} color={colors.amber[700]} />
           <Text style={[styles.approvalInfoText, { color: colors.amber[700] }]}>
             Если категория требует одобрения, расход сотрудника в ней попадёт «На одобрении» — пока вы не подтвердите,

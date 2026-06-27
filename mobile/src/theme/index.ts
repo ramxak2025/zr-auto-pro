@@ -242,3 +242,69 @@ export const paymentMethodBadgeColor: Record<string, keyof typeof badgeColors> =
   warranty: 'yellow',
   cash_card: 'gray',
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// softTint — theme-aware accent fill for icon tiles, badges, chips & callouts.
+//
+// The LIGHT theme paints pale tailwind `[50]`/`[100]` fills behind a vivid
+// accent icon/text. On the near-black DARK canvas those pale pastels read
+// washed and dirty (the owner's «Ещё» screenshot). softTint flips the formula
+// in dark: a TRANSLUCENT tint of the *accent* hue (~15 % alpha) so the tile
+// reads as a subtle coloured glow ON the dark card, with the icon/text staying
+// vivid in the accent.
+//
+// To keep LIGHT mode pixel-identical, callers keep their explicit `[50]` fill
+// for light and only reach for softTint() in the dark branch:
+//
+//   backgroundColor: palette.mode === 'dark'
+//     ? softTint(colors.blue[600], 'dark')   // translucent accent glow
+//     : colors.blue[50]                       // untouched legacy light fill
+//
+// The LIGHT branch (a near-white tint of the accent) exists as a drop-in for
+// brand-new callers that have no legacy `[50]` to preserve.
+//
+// Robust to hex with/without '#', 3- or 6-digit. Inputs that aren't hex
+// (already `rgba()` / named colours) are returned unchanged, so it never
+// throws on a colour string.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** ~15 % opacity expressed as the trailing two hex digits of an #RRGGBBAA. */
+const DARK_TINT_ALPHA = '26';
+
+/** Normalise to a lowercase 6-digit hex (no '#'), or `null` if not hex. */
+function normalizeHex(input: string): string | null {
+  if (typeof input !== 'string') return null;
+  let h = input.trim().replace(/^#/, '');
+  if (h.length === 3) {
+    h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+  }
+  return /^[0-9a-fA-F]{6}$/.test(h) ? h.toLowerCase() : null;
+}
+
+/** Mix a 6-digit hex toward white by `whiteRatio` (0..1). */
+function mixTowardWhite(hex6: string, whiteRatio: number): string {
+  const channel = (i: number) => {
+    const c = parseInt(hex6.slice(i, i + 2), 16);
+    const mixed = Math.round(c + (255 - c) * whiteRatio);
+    return mixed.toString(16).padStart(2, '0');
+  };
+  return `#${channel(0)}${channel(2)}${channel(4)}`;
+}
+
+/**
+ * Theme-aware accent fill. See the block comment above for the rationale and
+ * the byte-identical-light calling convention.
+ *
+ * `mode` is the local `'light' | 'dark'` union (matches `palette.mode`) — kept
+ * a primitive union, not the `ThemeMode` from `palette.ts`, so this file stays
+ * free of a circular import.
+ */
+export function softTint(accentHex: string, mode: 'light' | 'dark'): string {
+  const hex = normalizeHex(accentHex);
+  if (mode === 'dark') {
+    // Translucent accent glow. RN's colour parser accepts #RRGGBBAA.
+    return hex ? `#${hex}${DARK_TINT_ALPHA}` : accentHex;
+  }
+  // Light: pale near-white tint approximating the tailwind `[50]` look.
+  return hex ? mixTowardWhite(hex, 0.92) : accentHex;
+}

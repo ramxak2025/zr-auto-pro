@@ -24,14 +24,7 @@ import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import type { Tenant, PlatformStats } from '../../../../shared/types';
-import {
-  formatMoney,
-  formatDate,
-  daysLeft,
-  tenantStatus,
-  StatusChip,
-  InitialAvatar,
-} from './adminShared';
+import { formatMoney, formatDate, daysLeft, tenantStatus, StatusChip, InitialAvatar } from './adminShared';
 
 export default function AdminOverviewScreen() {
   const navigation = useNavigation<any>();
@@ -90,10 +83,7 @@ export default function AdminOverviewScreen() {
   }, [tenants]);
 
   const recent = React.useMemo(
-    () =>
-      [...tenants]
-        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-        .slice(0, 5),
+    () => [...tenants].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5),
     [tenants],
   );
 
@@ -260,7 +250,7 @@ export default function AdminOverviewScreen() {
                   </Text>
                   <Text style={[styles.expMeta, { color: palette.text.tertiary }]}>{formatDate(t.createdAt)}</Text>
                 </View>
-                <StatusChip status={tenantStatus(t)} />
+                <StatusChip status={tenantStatus(t, palette.mode)} />
               </Pressable>
             ))
           )}

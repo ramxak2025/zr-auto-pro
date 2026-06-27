@@ -20,7 +20,16 @@ import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import FreshnessBadge from '../components/FreshnessBadge';
-import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
+import {
+  colors,
+  fontSize,
+  fontWeight,
+  borderRadius,
+  spacing,
+  getBadgeColors,
+  paymentMethodBadgeColor,
+  softTint,
+} from '../theme';
 import { buildShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import { AutexaGlassHeader } from 'autexa-liquid-glass';
@@ -291,7 +300,19 @@ const CheckRow = React.memo(function CheckRow({
                 <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
                   {check.car.makeModel}
                 </Text>
-                {check.car.plateNumber && <Text style={styles.plateTag}>{check.car.plateNumber}</Text>}
+                {check.car.plateNumber && (
+                  <Text
+                    style={[
+                      styles.plateTag,
+                      palette.mode === 'dark' && {
+                        backgroundColor: softTint(colors.primary[600], 'dark'),
+                        color: colors.primary[300],
+                      },
+                    ]}
+                  >
+                    {check.car.plateNumber}
+                  </Text>
+                )}
               </View>
             )}
           </View>
@@ -356,7 +377,14 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, pa
         styles.warehouseCard,
         buildShadow(palette),
         {
-          backgroundColor: visual.cardBg || palette.bg.card,
+          // Card tint (teal/purple) is a near-white pastel in light; on the
+          // dark canvas it washes out, so dark uses a translucent glow of the
+          // SAME accent. Kinds without a cardBg keep the neutral card surface.
+          backgroundColor: visual.cardBg
+            ? palette.mode === 'dark'
+              ? softTint(visual.accentColor, 'dark')
+              : visual.cardBg
+            : palette.bg.card,
           borderColor: palette.border.subtle,
         },
       ]}
@@ -813,6 +841,9 @@ export default function ChecksScreen() {
             buildShadow(palette),
             { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
             activeFilterCount > 0 && styles.filterBtnActive,
+            activeFilterCount > 0 && {
+              backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+            },
           ]}
           onPress={() => setShowFilters(!showFilters)}
           activeOpacity={0.7}
@@ -820,7 +851,13 @@ export default function ChecksScreen() {
           <Ionicons
             name={activeFilterCount > 0 ? 'funnel' : 'funnel-outline'}
             size={18}
-            color={activeFilterCount > 0 ? colors.primary[600] : palette.text.secondary}
+            color={
+              activeFilterCount > 0
+                ? palette.mode === 'dark'
+                  ? colors.primary[300]
+                  : colors.primary[600]
+                : palette.text.secondary
+            }
           />
           {activeFilterCount > 0 && (
             <View style={[styles.filterCountDot, { borderColor: palette.bg.canvas }]}>
@@ -958,6 +995,10 @@ export default function ChecksScreen() {
                   styles.empChip,
                   { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
                   !filterMasterId && styles.empChipActive,
+                  !filterMasterId && {
+                    backgroundColor:
+                      palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+                  },
                 ]}
                 onPress={() => {
                   setFilterMasterId('');
@@ -969,6 +1010,7 @@ export default function ChecksScreen() {
                     styles.empChipText,
                     { color: palette.text.secondary },
                     !filterMasterId && styles.empChipTextActive,
+                    !filterMasterId && palette.mode === 'dark' && { color: colors.primary[300] },
                   ]}
                 >
                   Все
@@ -981,6 +1023,10 @@ export default function ChecksScreen() {
                     styles.empChip,
                     { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
                     filterMasterId === u.id && styles.empChipActive,
+                    filterMasterId === u.id && {
+                      backgroundColor:
+                        palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+                    },
                   ]}
                   onPress={() => {
                     setFilterMasterId(filterMasterId === u.id ? '' : u.id);
@@ -992,6 +1038,7 @@ export default function ChecksScreen() {
                       styles.empChipText,
                       { color: palette.text.secondary },
                       filterMasterId === u.id && styles.empChipTextActive,
+                      filterMasterId === u.id && palette.mode === 'dark' && { color: colors.primary[300] },
                     ]}
                   >
                     {u.fullName?.split(' ')[0]}
@@ -1461,7 +1508,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   filterBtnActive: {
-    backgroundColor: colors.primary[50],
+    // backgroundColor moved inline at render so dark mode can swap the
+    // washed primary[50] pastel for a translucent accent glow (light keeps
+    // primary[50]). Border stays the saturated accent in both themes.
     borderColor: colors.primary[300],
   },
   filterCountDot: {
@@ -1644,7 +1693,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.gray[200],
   },
-  empChipActive: { backgroundColor: colors.primary[50], borderColor: colors.primary[500] },
+  // backgroundColor moved inline at render (dark → accent glow, light → primary[50]).
+  empChipActive: { borderColor: colors.primary[500] },
   empChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[600] },
   empChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
   clearFiltersBtn: {

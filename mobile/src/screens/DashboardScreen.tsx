@@ -42,7 +42,7 @@ import {
   myCompanyApi,
 } from '../api/services';
 import { getImageUrl } from '../api/axios';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useThemeMode, useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
@@ -602,8 +602,12 @@ const KpiTile = React.memo(function KpiTile({
         style={[
           styles.kpiDeltaPill,
           { backgroundColor: palette.bg.muted },
-          delta.tone === 'up' && { backgroundColor: colors.green[50] },
-          delta.tone === 'down' && { backgroundColor: colors.red[50] },
+          delta.tone === 'up' && {
+            backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
+          },
+          delta.tone === 'down' && {
+            backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50],
+          },
         ]}
       >
         <Ionicons
@@ -1222,7 +1226,12 @@ function OnShiftSnapshot() {
       onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule' } })}
     >
       <View style={styles.snapshotHeaderRow}>
-        <View style={[styles.snapshotIconBox, { backgroundColor: colors.green[50] }]}>
+        <View
+          style={[
+            styles.snapshotIconBox,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+          ]}
+        >
           <Ionicons name="people-outline" size={14} color={colors.green[600]} />
         </View>
         <Text style={[styles.snapshotLabel, { color: palette.text.secondary }]}>На смене</Text>
@@ -1239,7 +1248,7 @@ function OnShiftSnapshot() {
             style={[
               styles.miniAvatar,
               {
-                backgroundColor: colors.primary[100],
+                backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[100],
                 borderColor: palette.bg.card,
                 marginLeft: idx === 0 ? 0 : -6,
                 zIndex: 10 - idx,
@@ -1312,7 +1321,12 @@ function CallsSnapshot() {
       onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Calls' } })}
     >
       <View style={styles.snapshotHeaderRow}>
-        <View style={[styles.snapshotIconBox, { backgroundColor: colors.purple[50] }]}>
+        <View
+          style={[
+            styles.snapshotIconBox,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.purple[600], 'dark') : colors.purple[50] },
+          ]}
+        >
           <Ionicons name="call-outline" size={14} color={colors.purple[600]} />
         </View>
         <Text style={[styles.snapshotLabel, { color: palette.text.secondary }]}>Звонки сегодня</Text>
@@ -1565,16 +1579,23 @@ function CashPositionCard() {
       value: cash,
       icon: 'cash-outline',
       color: colors.green[600],
-      bg: colors.green[50],
+      bg: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
     },
-    { key: 'card', label: 'На карте', value: card, icon: 'card-outline', color: colors.blue[600], bg: colors.blue[50] },
+    {
+      key: 'card',
+      label: 'На карте',
+      value: card,
+      icon: 'card-outline',
+      color: colors.blue[600],
+      bg: palette.mode === 'dark' ? softTint(colors.blue[600], 'dark') : colors.blue[50],
+    },
     {
       key: 'warranty',
       label: 'Гарантия',
       value: warranty,
       icon: 'shield-checkmark-outline',
       color: colors.amber[600],
-      bg: colors.amber[50],
+      bg: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
     },
   ];
 
@@ -1588,7 +1609,12 @@ function CashPositionCard() {
       }}
     >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.primary[50] }]}>
+        <View
+          style={[
+            styles.ownerCardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50] },
+          ]}
+        >
           <Ionicons name="wallet-outline" size={16} color={colors.primary[600]} />
         </View>
         <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>КАССА СЕГОДНЯ</Text>
@@ -1640,7 +1666,16 @@ function MarginCard() {
 
   const tone: 'up' | 'down' | 'flat' = change > 0.5 ? 'up' : change < -0.5 ? 'down' : 'flat';
   const chipColor = tone === 'up' ? colors.green[600] : tone === 'down' ? colors.red[600] : palette.text.tertiary;
-  const chipBg = tone === 'up' ? colors.green[50] : tone === 'down' ? colors.red[50] : palette.bg.muted;
+  const chipBg =
+    tone === 'up'
+      ? palette.mode === 'dark'
+        ? softTint(colors.green[600], 'dark')
+        : colors.green[50]
+      : tone === 'down'
+        ? palette.mode === 'dark'
+          ? softTint(colors.red[600], 'dark')
+          : colors.red[50]
+        : palette.bg.muted;
 
   return (
     <AnimatedCard
@@ -1648,7 +1683,12 @@ function MarginCard() {
       style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.green[50] }]}>
+        <View
+          style={[
+            styles.ownerCardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+          ]}
+        >
           <Ionicons name="stats-chart-outline" size={16} color={colors.green[600]} />
         </View>
         <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>МАРЖИНАЛЬНОСТЬ</Text>
@@ -1725,7 +1765,13 @@ function DeferredCard() {
 
   const isWarning = sum > 50000;
   const accentColor = isWarning ? colors.amber[600] : colors.primary[600];
-  const accentBg = isWarning ? colors.amber[50] : colors.primary[50];
+  const accentBg = isWarning
+    ? palette.mode === 'dark'
+      ? softTint(colors.amber[600], 'dark')
+      : colors.amber[50]
+    : palette.mode === 'dark'
+      ? softTint(colors.primary[600], 'dark')
+      : colors.primary[50];
 
   return (
     <AnimatedCard
@@ -1816,7 +1862,16 @@ function WarehouseAnalyticsWidget() {
   // Owner's POV: «Капитал в товаре» — рост ≠ всегда хорошо, но визуально
   // green/red остаётся читаемым.
   const deltaColor = tone === 'up' ? colors.green[600] : tone === 'down' ? colors.red[600] : palette.text.tertiary;
-  const deltaBg = tone === 'up' ? colors.green[50] : tone === 'down' ? colors.red[50] : palette.bg.muted;
+  const deltaBg =
+    tone === 'up'
+      ? palette.mode === 'dark'
+        ? softTint(colors.green[600], 'dark')
+        : colors.green[50]
+      : tone === 'down'
+        ? palette.mode === 'dark'
+          ? softTint(colors.red[600], 'dark')
+          : colors.red[50]
+        : palette.bg.muted;
 
   // Dead-stock 90d красный, если он съедает >5% капитала склада. Иначе —
   // нейтральный текст, чтобы виджет не «кричал» без повода.
@@ -1845,7 +1900,12 @@ function WarehouseAnalyticsWidget() {
       activeOpacity={0.85}
     >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.amber[50] }]}>
+        <View
+          style={[
+            styles.ownerCardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+          ]}
+        >
           <Text style={styles.warehouseHeaderEmoji}>📦</Text>
         </View>
         <View style={{ flex: 1 }}>
@@ -1993,13 +2053,23 @@ function LowStockCard() {
       }}
     >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.red[50] }]}>
+        <View
+          style={[
+            styles.ownerCardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[500], 'dark') : colors.red[50] },
+          ]}
+        >
           <Ionicons name="alert-circle" size={16} color={colors.red[500]} />
         </View>
         <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ЗАКАНЧИВАЮТСЯ ТОВАРЫ</Text>
         <View style={styles.lowStockHeaderRight}>
           {rest > 0 && (
-            <View style={[styles.lowStockBadge, { backgroundColor: colors.red[50] }]}>
+            <View
+              style={[
+                styles.lowStockBadge,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
+              ]}
+            >
               <Text style={styles.lowStockBadgeText}>ещё {rest}</Text>
             </View>
           )}
@@ -2194,7 +2264,14 @@ function ClientsNewVsReturningCard() {
               </Text>
             </View>
             {total > 0 && (
-              <View style={[styles.clientsRatioChip, { backgroundColor: colors.purple[50] }]}>
+              <View
+                style={[
+                  styles.clientsRatioChip,
+                  {
+                    backgroundColor: palette.mode === 'dark' ? softTint(colors.purple[600], 'dark') : colors.purple[50],
+                  },
+                ]}
+              >
                 <Ionicons name="sparkles" size={11} color={colors.purple[600]} />
                 <Text style={[styles.clientsRatioChipText, { color: colors.purple[700] }]}>
                   {`${Math.round(ratioNew * 100)}% новых`}
@@ -2316,7 +2393,12 @@ function RetentionCard() {
       style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.teal[50] }]}>
+        <View
+          style={[
+            styles.ownerCardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.teal[600], 'dark') : colors.teal[50] },
+          ]}
+        >
           <Ionicons name="repeat-outline" size={16} color={colors.teal[600]} />
         </View>
         <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>RETENTION КЛИЕНТОВ</Text>
@@ -2389,7 +2471,12 @@ function BestDayOfWeekCard() {
       style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.indigo[50] }]}>
+        <View
+          style={[
+            styles.ownerCardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.indigo[600], 'dark') : colors.indigo[50] },
+          ]}
+        >
           <Ionicons name="calendar-outline" size={16} color={colors.indigo[600]} />
         </View>
         <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ЛУЧШИЙ ДЕНЬ НЕДЕЛИ</Text>
@@ -2484,7 +2571,12 @@ function RecentReviewsCard() {
       }}
     >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.amber[50] }]}>
+        <View
+          style={[
+            styles.ownerCardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+          ]}
+        >
           <Ionicons name="star-outline" size={16} color={colors.amber[600]} />
         </View>
         <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ПОСЛЕДНИЕ ОТЗЫВЫ</Text>
@@ -2526,7 +2618,20 @@ const ReviewRow = React.memo(function ReviewRow({
         isLow && { borderLeftWidth: 3, borderLeftColor: colors.red[500] },
       ]}
     >
-      <View style={[styles.reviewAvatar, { backgroundColor: isLow ? colors.red[100] : colors.primary[100] }]}>
+      <View
+        style={[
+          styles.reviewAvatar,
+          {
+            backgroundColor: isLow
+              ? palette.mode === 'dark'
+                ? softTint(colors.red[600], 'dark')
+                : colors.red[100]
+              : palette.mode === 'dark'
+                ? softTint(colors.primary[600], 'dark')
+                : colors.primary[100],
+          },
+        ]}
+      >
         <Text style={[styles.reviewAvatarText, { color: isLow ? colors.red[700] : colors.primary[700] }]}>
           {firstLetter}
         </Text>
@@ -2626,7 +2731,12 @@ function PersonalRecordCard() {
       }
     >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.amber[50] }]}>
+        <View
+          style={[
+            styles.ownerCardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+          ]}
+        >
           <Ionicons name="trophy-outline" size={16} color={colors.amber[600]} />
         </View>
         <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ЛИЧНЫЙ РЕКОРД</Text>
@@ -2651,7 +2761,12 @@ function PersonalRecordCard() {
         </View>
       )}
       {closeToRecord && (
-        <View style={[styles.recordCloseBox, { backgroundColor: colors.amber[50] }]}>
+        <View
+          style={[
+            styles.recordCloseBox,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+          ]}
+        >
           <Ionicons name="flame" size={14} color={colors.amber[700]} />
           <Text style={[styles.recordCloseText, { color: colors.amber[800] }]}>
             До рекорда осталось {formatMoney(distance)}
@@ -2691,7 +2806,12 @@ function MonthForecastCard() {
       style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.ownerCardHeader}>
-        <View style={[styles.ownerCardIcon, { backgroundColor: colors.primary[50] }]}>
+        <View
+          style={[
+            styles.ownerCardIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50] },
+          ]}
+        >
           <Ionicons name="trending-up-outline" size={16} color={colors.primary[600]} />
         </View>
         <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ПРОГНОЗ КОНЦА МЕСЯЦА</Text>
@@ -2705,7 +2825,15 @@ function MonthForecastCard() {
             styles.forecastChip,
             {
               backgroundColor:
-                delta.tone === 'up' ? colors.green[50] : delta.tone === 'down' ? colors.red[50] : palette.bg.muted,
+                delta.tone === 'up'
+                  ? palette.mode === 'dark'
+                    ? softTint(colors.green[600], 'dark')
+                    : colors.green[50]
+                  : delta.tone === 'down'
+                    ? palette.mode === 'dark'
+                      ? softTint(colors.red[600], 'dark')
+                      : colors.red[50]
+                    : palette.bg.muted,
             },
           ]}
         >
@@ -2908,7 +3036,14 @@ function ShiftControl() {
     >
       <View style={styles.shiftRow}>
         <View style={styles.shiftLeft}>
-          <View style={[styles.shiftIcon, currentShift ? styles.shiftIconOpen : { backgroundColor: palette.bg.muted }]}>
+          <View
+            style={[
+              styles.shiftIcon,
+              currentShift
+                ? { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[100] }
+                : { backgroundColor: palette.bg.muted },
+            ]}
+          >
             <Ionicons
               name={currentShift ? 'time' : 'time-outline'}
               size={20}
@@ -2928,7 +3063,10 @@ function ShiftControl() {
         </View>
         {currentShift ? (
           <TouchableOpacity
-            style={styles.shiftCloseBtn}
+            style={[
+              styles.shiftCloseBtn,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
+            ]}
             onPress={() => closeShift.mutate(currentShift.id)}
             disabled={isLoading}
           >
@@ -2939,7 +3077,14 @@ function ShiftControl() {
             )}
           </TouchableOpacity>
         ) : (
-          <TouchableOpacity style={styles.shiftOpenBtn} onPress={() => openShift.mutate()} disabled={isLoading}>
+          <TouchableOpacity
+            style={[
+              styles.shiftOpenBtn,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+            ]}
+            onPress={() => openShift.mutate()}
+            disabled={isLoading}
+          >
             {isLoading ? (
               <ActivityIndicator size="small" color={colors.green[600]} />
             ) : (
@@ -2991,7 +3136,12 @@ function MasterRatingCard({ userId }: { userId?: string }) {
             width: 44,
             height: 44,
             borderRadius: 22,
-            backgroundColor: rank <= 3 ? colors.amber[50] : palette.bg.muted,
+            backgroundColor:
+              rank <= 3
+                ? palette.mode === 'dark'
+                  ? softTint(colors.amber[600], 'dark')
+                  : colors.amber[50]
+                : palette.bg.muted,
             alignItems: 'center',
             justifyContent: 'center',
           }}
@@ -3112,7 +3262,13 @@ function MasterRecentChecks() {
                 width: 32,
                 height: 32,
                 borderRadius: 16,
-                backgroundColor: check.isDeferred ? colors.amber[50] : colors.green[50],
+                backgroundColor: check.isDeferred
+                  ? palette.mode === 'dark'
+                    ? softTint(colors.amber[600], 'dark')
+                    : colors.amber[50]
+                  : palette.mode === 'dark'
+                    ? softTint(colors.green[600], 'dark')
+                    : colors.green[50],
                 alignItems: 'center',
                 justifyContent: 'center',
                 marginRight: spacing[3],
@@ -3383,21 +3539,21 @@ function MasterDashboard() {
             {
               icon: 'cash-outline' as const,
               color: colors.green[600],
-              bg: colors.green[50],
+              bg: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
               amount: data.todayCash ?? 0,
               type: 'Наличные',
             },
             {
               icon: 'card-outline' as const,
               color: colors.blue[600],
-              bg: colors.blue[50],
+              bg: palette.mode === 'dark' ? softTint(colors.blue[600], 'dark') : colors.blue[50],
               amount: data.todayCard ?? 0,
               type: 'Карта',
             },
             {
               icon: 'shield-checkmark-outline' as const,
               color: colors.amber[600],
-              bg: colors.amber[50],
+              bg: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
               amount: data.todayWarranty ?? 0,
               type: 'Гарантия',
             },
@@ -3420,14 +3576,24 @@ function MasterDashboard() {
         >
           <Text style={[styles.cashTitle, { color: palette.text.secondary }]}>СТРУКТУРА ЗАРАБОТКА СЕГОДНЯ</Text>
           <View style={styles.earningsRow}>
-            <View style={[styles.earningBox, { backgroundColor: colors.blue[50] }]}>
+            <View
+              style={[
+                styles.earningBox,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
+              ]}
+            >
               <Ionicons name="build-outline" size={16} color={colors.blue[600]} />
               <Text style={[styles.earningLabel, { color: colors.blue[600] }]}>С услуг</Text>
               <Text style={[styles.earningValue, { color: palette.text.primary }]}>
                 {formatMoney(data.todayService ?? 0)}
               </Text>
             </View>
-            <View style={[styles.earningBox, { backgroundColor: colors.green[50] }]}>
+            <View
+              style={[
+                styles.earningBox,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+              ]}
+            >
               <Ionicons name="cube-outline" size={16} color={colors.green[600]} />
               <Text style={[styles.earningLabel, { color: colors.green[600] }]}>С товаров</Text>
               <Text style={[styles.earningValue, { color: palette.text.primary }]}>
@@ -3444,9 +3610,22 @@ function MasterDashboard() {
       {data.productPromotions &&
         data.productPromotions.length > 0 &&
         data.productPromotions.some((p) => p.percent > 0) && (
-          <AnimatedCard index={5} style={styles.promoCard}>
+          <AnimatedCard
+            index={5}
+            style={[
+              styles.promoCard,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.emerald[50] },
+            ]}
+          >
             <View style={styles.promoHeader}>
-              <View style={styles.promoIconBox}>
+              <View
+                style={[
+                  styles.promoIconBox,
+                  {
+                    backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[100],
+                  },
+                ]}
+              >
                 <Ionicons name="gift-outline" size={22} color={colors.green[600]} />
               </View>
               <View style={{ flex: 1 }}>
@@ -4609,21 +4788,18 @@ const styles = StyleSheet.create({
   shiftRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   shiftLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   shiftIcon: { width: 40, height: 40, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
-  shiftIconOpen: { backgroundColor: colors.green[100] },
   shiftIconClosed: { backgroundColor: colors.gray[100] },
   shiftTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.gray[900] },
   shiftSince: { fontSize: fontSize.xs, color: colors.gray[400] },
   shiftCloseBtn: {
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2.5],
-    backgroundColor: colors.red[50],
     borderRadius: borderRadius.xl,
   },
   shiftCloseBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.red[600] },
   shiftOpenBtn: {
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[2.5],
-    backgroundColor: colors.green[50],
     borderRadius: borderRadius.xl,
   },
   shiftOpenBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.green[600] },
@@ -4699,7 +4875,6 @@ const styles = StyleSheet.create({
   earningLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
   earningValue: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900], marginTop: 4 },
   promoCard: {
-    backgroundColor: colors.emerald[50],
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
     borderColor: colors.green[200],
@@ -4716,7 +4891,6 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: borderRadius.xl,
-    backgroundColor: colors.green[100],
     alignItems: 'center',
     justifyContent: 'center',
   },

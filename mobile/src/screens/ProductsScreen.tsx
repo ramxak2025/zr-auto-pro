@@ -41,7 +41,7 @@ import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
 import FreshnessBadge from '../components/FreshnessBadge';
 import BarcodeScanner from '../components/BarcodeScanner';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
@@ -171,6 +171,10 @@ interface ProductRowProps {
   textPrimary: string;
   textTertiary: string;
   photoPlaceholderBg: string;
+  /** Theme-aware fill for the «Установить цену» CTA — pale amber in light,
+   *  a translucent amber glow in dark (washed amber[50] reads dirty on the
+   *  dark canvas). Computed by the parent so the row stays prop-driven. */
+  pricelessCtaBg: string;
 }
 const ProductRow = React.memo(function ProductRow({
   item,
@@ -186,6 +190,7 @@ const ProductRow = React.memo(function ProductRow({
   textPrimary,
   textTertiary,
   photoPlaceholderBg,
+  pricelessCtaBg,
 }: ProductRowProps) {
   const lowStock = item.stock <= item.minStock && item.minStock > 0;
   const pUri = getImageUrl(item.photo);
@@ -224,7 +229,7 @@ const ProductRow = React.memo(function ProductRow({
             {missingSellPrice ? (
               <TouchableOpacity
                 onPress={() => onSetSellPrice!(item)}
-                style={styles.pricelessCta}
+                style={[styles.pricelessCta, { backgroundColor: pricelessCtaBg }]}
                 hitSlop={6}
                 accessibilityLabel="Установить розничную цену"
               >
@@ -1545,6 +1550,7 @@ export default function ProductsScreen() {
         textPrimary={palette.text.primary}
         textTertiary={palette.text.tertiary}
         photoPlaceholderBg={palette.bg.muted}
+        pricelessCtaBg={palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50]}
       />
     ),
     // openEdit is recreated each render (uses local state), and search
@@ -1564,6 +1570,7 @@ export default function ProductsScreen() {
       palette.border.subtle,
       palette.text.primary,
       palette.text.tertiary,
+      palette.mode,
     ],
   );
 
@@ -1598,7 +1605,10 @@ export default function ProductsScreen() {
                 shown to everyone who can see the warehouse. The scanner itself
                 degrades gracefully if the camera native module isn't linked. */}
             <TouchableOpacity
-              style={styles.opsBtn}
+              style={[
+                styles.opsBtn,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50] },
+              ]}
               onPress={() => {
                 haptic('tap');
                 setShowScanner(true);
@@ -1608,7 +1618,15 @@ export default function ProductsScreen() {
               <Ionicons name="barcode-outline" size={18} color={colors.primary[600]} />
             </TouchableOpacity>
             {hasPermission('warehouse_access') && (
-              <TouchableOpacity style={styles.opsBtn} onPress={() => setShowOpsModal(true)}>
+              <TouchableOpacity
+                style={[
+                  styles.opsBtn,
+                  {
+                    backgroundColor: palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                  },
+                ]}
+                onPress={() => setShowOpsModal(true)}
+              >
                 <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
               </TouchableOpacity>
             )}
@@ -1952,7 +1970,10 @@ export default function ProductsScreen() {
           </TouchableOpacity>
           {editingProduct && (
             <TouchableOpacity
-              style={styles.deleteFormBtn}
+              style={[
+                styles.deleteFormBtn,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
+              ]}
               onPress={() => {
                 setDeleteId(editingProduct.id);
                 closeModal();
@@ -1996,7 +2017,12 @@ export default function ProductsScreen() {
             navigation.navigate('Inventory');
           }}
         >
-          <View style={[styles.opsIcon, { backgroundColor: colors.blue[50] }]}>
+          <View
+            style={[
+              styles.opsIcon,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
+            ]}
+          >
             <Ionicons name="clipboard-outline" size={22} color={colors.blue[600]} />
           </View>
           <View style={{ flex: 1 }}>
@@ -2012,7 +2038,12 @@ export default function ProductsScreen() {
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
         <TouchableOpacity style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]} onPress={openWriteoff}>
-          <View style={[styles.opsIcon, { backgroundColor: colors.red[50] }]}>
+          <View
+            style={[
+              styles.opsIcon,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
+            ]}
+          >
             <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
           </View>
           <View style={{ flex: 1 }}>
@@ -2031,7 +2062,12 @@ export default function ProductsScreen() {
           style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
           onPress={openCorrection}
         >
-          <View style={[styles.opsIcon, { backgroundColor: colors.purple[50] }]}>
+          <View
+            style={[
+              styles.opsIcon,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.purple[600], 'dark') : colors.purple[50] },
+            ]}
+          >
             <Ionicons name="create-outline" size={22} color={colors.purple[600]} />
           </View>
           <View style={{ flex: 1 }}>
@@ -2053,7 +2089,12 @@ export default function ProductsScreen() {
               setShowTrashModal(true);
             }}
           >
-            <View style={[styles.opsIcon, { backgroundColor: colors.rose[50] }]}>
+            <View
+              style={[
+                styles.opsIcon,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50] },
+              ]}
+            >
               <Ionicons name="trash-bin-outline" size={22} color={colors.rose[600]} />
             </View>
             <View style={{ flex: 1 }}>
@@ -2331,6 +2372,14 @@ export default function ProductsScreen() {
                         color: palette.text.primary,
                       },
                       diff !== 0 && (diff > 0 ? styles.invInputPlus : styles.invInputMinus),
+                      diff !== 0 && {
+                        backgroundColor:
+                          palette.mode === 'dark'
+                            ? softTint(diff > 0 ? colors.green[400] : colors.red[400], 'dark')
+                            : diff > 0
+                              ? colors.green[50]
+                              : colors.red[50],
+                      },
                     ]}
                     keyboardType="numeric"
                     placeholder={String(item.stock)}
@@ -2340,7 +2389,14 @@ export default function ProductsScreen() {
                     <View
                       style={[
                         styles.invFullDiffBadge,
-                        diff > 0 ? styles.invFullDiffBadgePlus : styles.invFullDiffBadgeMinus,
+                        {
+                          backgroundColor:
+                            palette.mode === 'dark'
+                              ? softTint(diff > 0 ? colors.green[600] : colors.red[600], 'dark')
+                              : diff > 0
+                                ? colors.green[50]
+                                : colors.red[50],
+                        },
                       ]}
                     >
                       <Text
@@ -2980,7 +3036,6 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: borderRadius.xl,
-    backgroundColor: colors.orange[50],
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -3258,7 +3313,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[2.5],
     borderRadius: borderRadius.lg,
-    backgroundColor: colors.red[50],
   },
   submitBtn: {
     paddingHorizontal: spacing[4],
@@ -3309,8 +3363,8 @@ const styles = StyleSheet.create({
     color: colors.gray[900],
     textAlign: 'center',
   },
-  invInputPlus: { borderColor: colors.green[400], backgroundColor: colors.green[50] },
-  invInputMinus: { borderColor: colors.red[400], backgroundColor: colors.red[50] },
+  invInputPlus: { borderColor: colors.green[400] },
+  invInputMinus: { borderColor: colors.red[400] },
   // Writeoff
   writeoffItem: {
     flexDirection: 'row',
@@ -3505,8 +3559,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  invFullDiffBadgePlus: { backgroundColor: colors.green[50] },
-  invFullDiffBadgeMinus: { backgroundColor: colors.red[50] },
   invFullDiffBadgeText: { fontSize: 11, fontWeight: fontWeight.bold },
   invFullEmpty: { alignItems: 'center', paddingVertical: spacing[8], gap: spacing[2] },
   invFullEmptyText: { fontSize: fontSize.sm, color: colors.gray[400] },
@@ -3539,7 +3591,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[2],
     paddingVertical: 4,
     borderRadius: borderRadius.md,
-    backgroundColor: colors.amber[50],
     borderWidth: 1,
     borderColor: colors.amber[200],
     alignSelf: 'flex-start',

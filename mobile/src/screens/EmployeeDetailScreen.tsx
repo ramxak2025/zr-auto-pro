@@ -75,7 +75,7 @@ import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
@@ -1194,6 +1194,15 @@ function TopServiceRow({
   palette: Palette;
 }) {
   const tier = SERVICE_TIER_META[service.tier];
+  // Dark: colored tiers (bronze/gold/platinum) become a translucent glow of
+  // their own accent instead of a washed pale-[50] sticker; the silver tier is
+  // a NEUTRAL gray[100] → fall back to palette.bg.muted. Light stays byte-identical.
+  const tierBg =
+    palette.mode === 'dark'
+      ? tier.bg === colors.gray[100]
+        ? palette.bg.muted
+        : softTint(tier.color, 'dark')
+      : tier.bg;
   return (
     <View style={[styles.topRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
       <View style={[styles.topPhoto, styles.topPhotoPlaceholder, { backgroundColor: palette.bg.card }]}>
@@ -1203,7 +1212,7 @@ function TopServiceRow({
         <Text style={[styles.topName, { color: palette.text.primary }]} numberOfLines={1}>
           {service.name}
         </Text>
-        <View style={[styles.tierBadge, { backgroundColor: tier.bg }]}>
+        <View style={[styles.tierBadge, { backgroundColor: tierBg }]}>
           <Text style={[styles.tierBadgeText, { color: tier.color }]}>{tier.label}</Text>
         </View>
       </View>

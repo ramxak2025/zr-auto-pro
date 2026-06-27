@@ -32,7 +32,16 @@ import ClientCallsSection from '../components/ClientCallsSection';
 import LoyaltyBadge from '../components/LoyaltyBadge';
 import SectionHeader from '../components/SectionHeader';
 import { UserRole } from '../../../shared/types';
-import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
+import {
+  colors,
+  fontSize,
+  fontWeight,
+  borderRadius,
+  spacing,
+  getBadgeColors,
+  paymentMethodBadgeColor,
+  softTint,
+} from '../theme';
 import type {
   Client,
   Car,
@@ -1117,12 +1126,21 @@ export default function ClientDetailScreen() {
                   style={[
                     styles.riskBadge,
                     {
+                      // Light keeps the pale [50] sticker; dark swaps it for a
+                      // translucent glow of the same hue so it doesn't read as a
+                      // washed near-white chip on the dark card.
                       backgroundColor:
                         stats.risk === 'lost'
-                          ? colors.red[50]
+                          ? palette.mode === 'dark'
+                            ? softTint(colors.red[600], 'dark')
+                            : colors.red[50]
                           : stats.risk === 'fade'
-                            ? colors.amber[50]
-                            : colors.green[50],
+                            ? palette.mode === 'dark'
+                              ? softTint(colors.amber[600], 'dark')
+                              : colors.amber[50]
+                            : palette.mode === 'dark'
+                              ? softTint(colors.green[600], 'dark')
+                              : colors.green[50],
                     },
                   ]}
                 >
@@ -1131,23 +1149,38 @@ export default function ClientDetailScreen() {
                     name={stats.risk === 'ok' ? 'checkmark-circle' : 'alert-circle'}
                     size={13}
                     color={
-                      stats.risk === 'lost'
-                        ? colors.red[600]
-                        : stats.risk === 'fade'
-                          ? colors.amber[600]
-                          : colors.green[600]
+                      palette.mode === 'dark'
+                        ? stats.risk === 'lost'
+                          ? colors.red[300]
+                          : stats.risk === 'fade'
+                            ? colors.yellow[300]
+                            : colors.green[300]
+                        : stats.risk === 'lost'
+                          ? colors.red[600]
+                          : stats.risk === 'fade'
+                            ? colors.amber[600]
+                            : colors.green[600]
                     }
                   />
                   <Text
                     style={[
                       styles.riskBadgeText,
                       {
+                        // Dark glow needs a light accent ([300]) for legible text;
+                        // amber has no [300] token, so use yellow[300]. Light text
+                        // unchanged.
                         color:
-                          stats.risk === 'lost'
-                            ? colors.red[700]
-                            : stats.risk === 'fade'
-                              ? colors.amber[700]
-                              : colors.green[700],
+                          palette.mode === 'dark'
+                            ? stats.risk === 'lost'
+                              ? colors.red[300]
+                              : stats.risk === 'fade'
+                                ? colors.yellow[300]
+                                : colors.green[300]
+                            : stats.risk === 'lost'
+                              ? colors.red[700]
+                              : stats.risk === 'fade'
+                                ? colors.amber[700]
+                                : colors.green[700],
                       },
                     ]}
                   >
@@ -1239,6 +1272,10 @@ export default function ClientDetailScreen() {
                   styles.carChip,
                   { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
                   !selectedCarId && styles.carChipActive,
+                  !selectedCarId && {
+                    backgroundColor:
+                      palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+                  },
                 ]}
                 onPress={() => setSelectedCarId(null)}
               >
@@ -1247,6 +1284,7 @@ export default function ClientDetailScreen() {
                     styles.carChipText,
                     { color: palette.text.secondary },
                     !selectedCarId && styles.carChipTextActive,
+                    !selectedCarId && palette.mode === 'dark' && { color: colors.primary[300] },
                   ]}
                 >
                   Все авто
@@ -1259,6 +1297,10 @@ export default function ClientDetailScreen() {
                     styles.carChip,
                     { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
                     selectedCarId === car.id && styles.carChipActive,
+                    selectedCarId === car.id && {
+                      backgroundColor:
+                        palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+                    },
                   ]}
                   onPress={() => setSelectedCarId(selectedCarId === car.id ? null : car.id)}
                 >
@@ -1267,6 +1309,7 @@ export default function ClientDetailScreen() {
                       styles.carChipText,
                       { color: palette.text.secondary },
                       selectedCarId === car.id && styles.carChipTextActive,
+                      selectedCarId === car.id && palette.mode === 'dark' && { color: colors.primary[300] },
                     ]}
                     numberOfLines={1}
                   >
@@ -1586,7 +1629,9 @@ const CheckRow = React.memo(function CheckRow({ check, palette, canViewProfit, o
           <View style={styles.checkHeaderLeft}>
             <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
             {check.isDeferred && (
-              <View style={styles.deferredBadge}>
+              <View
+                style={[styles.deferredBadge, palette.mode === 'dark' && { backgroundColor: 'rgba(239,68,68,0.18)' }]}
+              >
                 <Text style={styles.deferredText}>Отложен</Text>
               </View>
             )}
@@ -1605,7 +1650,19 @@ const CheckRow = React.memo(function CheckRow({ check, palette, canViewProfit, o
               <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
                 {check.car.makeModel}
               </Text>
-              {check.car.plateNumber ? <Text style={styles.plateTag}>{check.car.plateNumber}</Text> : null}
+              {check.car.plateNumber ? (
+                <Text
+                  style={[
+                    styles.plateTag,
+                    palette.mode === 'dark' && {
+                      backgroundColor: softTint(colors.primary[600], 'dark'),
+                      color: colors.primary[300],
+                    },
+                  ]}
+                >
+                  {check.car.plateNumber}
+                </Text>
+              ) : null}
             </View>
           </View>
         )}
@@ -1931,10 +1988,37 @@ function ClientDebtSection({ clientId, canManage, palette, onOpenCheck }: Client
           <View
             style={[
               debtStyles.balanceIcon,
-              { backgroundColor: owes ? colors.red[50] : credit ? colors.green[50] : palette.bg.muted },
+              {
+                // Colored debt/credit tiles: light keeps the [50] pastel; dark
+                // swaps to a translucent accent glow (neutral «no debt» stays
+                // palette.bg.muted in both themes).
+                backgroundColor: owes
+                  ? palette.mode === 'dark'
+                    ? softTint(colors.red[600], 'dark')
+                    : colors.red[50]
+                  : credit
+                    ? palette.mode === 'dark'
+                      ? softTint(colors.green[600], 'dark')
+                      : colors.green[50]
+                    : palette.bg.muted,
+              },
             ]}
           >
-            <Ionicons name={owes ? 'arrow-up' : credit ? 'arrow-down' : 'checkmark'} size={18} color={balanceColor} />
+            <Ionicons
+              name={owes ? 'arrow-up' : credit ? 'arrow-down' : 'checkmark'}
+              size={18}
+              // On the dark glow the saturated [600] arrow loses contrast — use
+              // a light accent ([300]) in dark; light keeps balanceColor.
+              color={
+                palette.mode === 'dark'
+                  ? owes
+                    ? colors.red[300]
+                    : credit
+                      ? colors.green[300]
+                      : palette.text.secondary
+                  : balanceColor
+              }
+            />
           </View>
           <View style={{ flex: 1, minWidth: 0 }}>
             <Text style={[debtStyles.balanceLabel, { color: palette.text.tertiary }]}>{balanceLabel}</Text>
@@ -1949,20 +2033,48 @@ function ClientDebtSection({ clientId, canManage, palette, onOpenCheck }: Client
         {canManage ? (
           <View style={debtStyles.actionsRow}>
             <TouchableOpacity
-              style={[debtStyles.actionBtn, { backgroundColor: colors.red[50] }]}
+              style={[
+                debtStyles.actionBtn,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
+              ]}
               onPress={() => openPrompt('charge')}
               activeOpacity={0.7}
             >
-              <Ionicons name="add-circle-outline" size={16} color={colors.red[600]} />
-              <Text style={[debtStyles.actionBtnText, { color: colors.red[600] }]}>Добавить долг</Text>
+              <Ionicons
+                name="add-circle-outline"
+                size={16}
+                color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+              />
+              <Text
+                style={[
+                  debtStyles.actionBtnText,
+                  { color: palette.mode === 'dark' ? colors.red[300] : colors.red[600] },
+                ]}
+              >
+                Добавить долг
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[debtStyles.actionBtn, { backgroundColor: colors.green[50] }]}
+              style={[
+                debtStyles.actionBtn,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+              ]}
               onPress={() => openPrompt('payment')}
               activeOpacity={0.7}
             >
-              <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
-              <Text style={[debtStyles.actionBtnText, { color: colors.green[600] }]}>Принять оплату</Text>
+              <Ionicons
+                name="cash-outline"
+                size={16}
+                color={palette.mode === 'dark' ? colors.green[300] : colors.green[600]}
+              />
+              <Text
+                style={[
+                  debtStyles.actionBtnText,
+                  { color: palette.mode === 'dark' ? colors.green[300] : colors.green[600] },
+                ]}
+              >
+                Принять оплату
+              </Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -2320,21 +2432,51 @@ function ClientBonusSection({ clientId, canManage, palette }: ClientBonusSection
         {canManage ? (
           <View style={debtStyles.actionsRow}>
             <TouchableOpacity
-              style={[debtStyles.actionBtn, { backgroundColor: colors.green[50] }]}
+              style={[
+                debtStyles.actionBtn,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+              ]}
               onPress={() => openPrompt('accrual')}
               activeOpacity={0.7}
             >
-              <Ionicons name="add-circle-outline" size={16} color={colors.green[600]} />
-              <Text style={[debtStyles.actionBtnText, { color: colors.green[600] }]}>Начислить</Text>
+              <Ionicons
+                name="add-circle-outline"
+                size={16}
+                color={palette.mode === 'dark' ? colors.green[300] : colors.green[600]}
+              />
+              <Text
+                style={[
+                  debtStyles.actionBtnText,
+                  { color: palette.mode === 'dark' ? colors.green[300] : colors.green[600] },
+                ]}
+              >
+                Начислить
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[debtStyles.actionBtn, { backgroundColor: colors.orange[50] }, balance <= 0 && { opacity: 0.5 }]}
+              style={[
+                debtStyles.actionBtn,
+                // orange has no [300] token — use orange[400] as the light accent in dark.
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50] },
+                balance <= 0 && { opacity: 0.5 },
+              ]}
               onPress={() => openPrompt('redemption')}
               activeOpacity={0.7}
               disabled={balance <= 0}
             >
-              <Ionicons name="remove-circle-outline" size={16} color={colors.orange[600]} />
-              <Text style={[debtStyles.actionBtnText, { color: colors.orange[600] }]}>Списать</Text>
+              <Ionicons
+                name="remove-circle-outline"
+                size={16}
+                color={palette.mode === 'dark' ? colors.orange[400] : colors.orange[600]}
+              />
+              <Text
+                style={[
+                  debtStyles.actionBtnText,
+                  { color: palette.mode === 'dark' ? colors.orange[400] : colors.orange[600] },
+                ]}
+              >
+                Списать
+              </Text>
             </TouchableOpacity>
           </View>
         ) : null}
@@ -2858,7 +3000,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.gray[200],
   },
-  carChipActive: { backgroundColor: colors.primary[50], borderColor: colors.primary[500] },
+  // backgroundColor moved inline at render (dark → accent glow, light → primary[50]).
+  carChipActive: { borderColor: colors.primary[500] },
   carChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[600], maxWidth: 160 },
   carChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
 

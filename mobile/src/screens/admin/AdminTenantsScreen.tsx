@@ -362,7 +362,7 @@ export default function AdminTenantsScreen() {
                 {item.userCount ?? item.users?.length ?? 0} польз.
               </Text>
             </View>
-            <StatusChip status={tenantStatus(item)} />
+            <StatusChip status={tenantStatus(item, palette.mode)} />
             <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
           </Pressable>
         )}

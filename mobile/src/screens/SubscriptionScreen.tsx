@@ -9,7 +9,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { SubscriptionInfo, Plan } from '../../../shared/types';
 
@@ -82,7 +82,12 @@ export default function SubscriptionScreen() {
         <AnimatedCard index={0}>
           <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.planHeader}>
-              <View style={styles.planIconWrap}>
+              <View
+                style={[
+                  styles.planIconWrap,
+                  palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
+                ]}
+              >
                 <Ionicons name="card-outline" size={24} color={colors.primary[600]} />
               </View>
               <View style={{ flex: 1 }}>
@@ -144,7 +149,12 @@ export default function SubscriptionScreen() {
 
             {/* Note */}
             {sub?.subscriptionNote && (
-              <View style={styles.noteBlock}>
+              <View
+                style={[
+                  styles.noteBlock,
+                  palette.mode === 'dark' && { backgroundColor: softTint(colors.blue[600], 'dark') },
+                ]}
+              >
                 <Ionicons name="information-circle-outline" size={18} color={colors.blue[500]} />
                 <Text style={styles.noteText}>{sub.subscriptionNote}</Text>
               </View>
@@ -193,7 +203,12 @@ export default function SubscriptionScreen() {
                         <Text style={[styles.priceSuffix, { color: palette.text.secondary }]}> ₽/мес</Text>
                       </View>
 
-                      <View style={styles.maxUsersRow}>
+                      <View
+                        style={[
+                          styles.maxUsersRow,
+                          palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
+                        ]}
+                      >
                         <Ionicons name="people" size={16} color={colors.primary[600]} />
                         <Text style={styles.maxUsersText}>До {plan.maxUsers} сотрудников</Text>
                       </View>

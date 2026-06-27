@@ -32,7 +32,7 @@ import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
-import { colors, spacing, borderRadius } from '../../theme';
+import { colors, spacing, borderRadius, softTint } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { ALL_FEATURES } from '../../../../shared/constants/features';
 import type { Plan, Tenant } from '../../../../shared/types';
@@ -199,17 +199,23 @@ export default function AdminPlansScreen() {
                   <View
                     style={[
                       styles.activePill,
-                      { backgroundColor: plan.isActive ? colors.green[50] : palette.bg.muted },
+                      {
+                        backgroundColor: plan.isActive
+                          ? palette.mode === 'dark'
+                            ? softTint(colors.green[600], 'dark')
+                            : colors.green[50]
+                          : palette.bg.muted,
+                      },
                     ]}
                   >
                     <View
-                      style={[styles.activeDot, { backgroundColor: plan.isActive ? colors.green[500] : palette.text.tertiary }]}
+                      style={[
+                        styles.activeDot,
+                        { backgroundColor: plan.isActive ? colors.green[500] : palette.text.tertiary },
+                      ]}
                     />
                     <Text
-                      style={[
-                        styles.activeText,
-                        { color: plan.isActive ? colors.green[700] : palette.text.tertiary },
-                      ]}
+                      style={[styles.activeText, { color: plan.isActive ? colors.green[700] : palette.text.tertiary }]}
                     >
                       {plan.isActive ? 'Активен' : 'Архив'}
                     </Text>
@@ -228,7 +234,13 @@ export default function AdminPlansScreen() {
       </ScrollView>
 
       {/* Edit / create sheet */}
-      <Modal visible={!!editing} transparent statusBarTranslucent animationType="slide" onRequestClose={() => setEditing(null)}>
+      <Modal
+        visible={!!editing}
+        transparent
+        statusBarTranslucent
+        animationType="slide"
+        onRequestClose={() => setEditing(null)}
+      >
         <View style={styles.sheetBackdrop}>
           <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
             <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>

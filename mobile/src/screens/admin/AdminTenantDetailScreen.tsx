@@ -426,7 +426,7 @@ export default function AdminTenantDetailScreen() {
         <View style={[styles.card, surface.card]}>
           <View style={styles.summaryHead}>
             <Text style={[styles.summaryTitle, { color: palette.text.primary }]}>Подписка</Text>
-            <StatusChip status={tenantStatus(tenant)} />
+            <StatusChip status={tenantStatus(tenant, palette.mode)} />
           </View>
           <InfoRow label="Тариф" value={planName} palette={palette} />
           <InfoRow label="Стоимость" value={`${formatMoney(tenant.monthlyPrice)}/мес`} palette={palette} />

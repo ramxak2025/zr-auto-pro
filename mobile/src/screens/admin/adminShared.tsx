@@ -7,7 +7,7 @@
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { Text } from '../../platform/Typography';
-import { colors, spacing, borderRadius } from '../../theme';
+import { colors, spacing, borderRadius, getBadgeColors, softTint } from '../../theme';
 import type { SemanticPalette } from '../../theme/palette';
 import type { Tenant } from '../../../../shared/types';
 
@@ -53,14 +53,39 @@ export interface StatusInfo {
   label: string;
 }
 
-/** Resolve a tenant's subscription status into a coloured chip descriptor. */
-export function tenantStatus(tenant: Tenant): StatusInfo {
-  if (!tenant.isActive) return { bg: colors.red[50], text: colors.red[700], label: 'Отключён' };
-  if (!tenant.subscriptionEnd) return { bg: colors.gray[100], text: colors.gray[600], label: 'Без подписки' };
-  if (isExpired(tenant.subscriptionEnd)) return { bg: colors.red[50], text: colors.red[700], label: 'Истёк' };
+/**
+ * Resolve a tenant's subscription status into a coloured chip descriptor.
+ *
+ * `mode` is threaded in from the caller's `palette.mode` (this is a pure
+ * helper, not a component, so it can't call a hook). LIGHT branches are the
+ * untouched legacy pale-[50]/[100] objects — byte-identical. DARK branches
+ * swap the washed pastel for a translucent accent glow (`getBadgeColors('dark')`
+ * for red/gray/green whose light objects already match the badge map; amber has
+ * no badge entry so it's built by hand) carrying a light [300] text.
+ */
+export function tenantStatus(tenant: Tenant, mode: 'light' | 'dark' = 'light'): StatusInfo {
+  const dark = mode === 'dark';
+  const badgesDark = getBadgeColors('dark');
+  if (!tenant.isActive)
+    return dark
+      ? { bg: badgesDark.red.bg, text: badgesDark.red.text, label: 'Отключён' }
+      : { bg: colors.red[50], text: colors.red[700], label: 'Отключён' };
+  if (!tenant.subscriptionEnd)
+    return dark
+      ? { bg: badgesDark.gray.bg, text: badgesDark.gray.text, label: 'Без подписки' }
+      : { bg: colors.gray[100], text: colors.gray[600], label: 'Без подписки' };
+  if (isExpired(tenant.subscriptionEnd))
+    return dark
+      ? { bg: badgesDark.red.bg, text: badgesDark.red.text, label: 'Истёк' }
+      : { bg: colors.red[50], text: colors.red[700], label: 'Истёк' };
   const left = daysLeft(tenant.subscriptionEnd);
-  if (left !== null && left <= 7) return { bg: colors.amber[50], text: colors.amber[700], label: `${left} дн.` };
-  return { bg: colors.green[50], text: colors.green[700], label: 'Активен' };
+  if (left !== null && left <= 7)
+    return dark
+      ? { bg: softTint(colors.amber[600], 'dark'), text: '#fcd34d', label: `${left} дн.` }
+      : { bg: colors.amber[50], text: colors.amber[700], label: `${left} дн.` };
+  return dark
+    ? { bg: badgesDark.green.bg, text: badgesDark.green.text, label: 'Активен' }
+    : { bg: colors.green[50], text: colors.green[700], label: 'Активен' };
 }
 
 /** Coloured status chip. */
@@ -73,7 +98,15 @@ export function StatusChip({ status }: { status: StatusInfo }) {
 }
 
 /** Round avatar with the entity's first letter. */
-export function InitialAvatar({ name, palette, size = 40 }: { name?: string; palette: SemanticPalette; size?: number }) {
+export function InitialAvatar({
+  name,
+  palette,
+  size = 40,
+}: {
+  name?: string;
+  palette: SemanticPalette;
+  size?: number;
+}) {
   return (
     <View
       style={[

@@ -22,7 +22,7 @@ import { uploadsApi, authApi, subscriptionApi, knowledgeApi, bookingsApi } from 
 import { countUpcoming } from './bookings/bookingHelpers';
 import type { Booking } from '../../../shared/types';
 import { getImageUrl } from '../api/axios';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { UserPermissions, SubscriptionInfo, SectionVisibility } from '../../../shared/types';
@@ -35,11 +35,22 @@ const roleLabels: Record<string, string> = {
   master: 'Мастер',
 };
 
+// LIGHT-mode role badge — pale `[50]` fill + saturated text (unchanged look).
 const roleBadgeColors: Record<string, { bg: string; text: string }> = {
   superadmin: { bg: colors.red[50], text: colors.red[700] },
   director: { bg: colors.purple[50], text: colors.purple[700] },
   admin: { bg: colors.blue[50], text: colors.blue[600] },
   master: { bg: colors.green[50], text: colors.green[700] },
+};
+
+// Role → named badge hue. In DARK mode we resolve the badge through
+// `getBadgeColors('dark')` (translucent glow + light-300 text) so the role
+// chip reads cleanly on the dark card instead of as a washed pastel sticker.
+const roleBadgeHue: Record<string, string> = {
+  superadmin: 'red',
+  director: 'purple',
+  admin: 'blue',
+  master: 'green',
 };
 
 interface MenuItem {
@@ -431,6 +442,9 @@ interface MenuRowProps {
   onPress: () => void;
   locked: boolean;
   showDivider: boolean;
+  /** Theme-resolved icon-tile background — pale `[50]` in light, translucent
+   * accent glow in dark. Keeps the icon itself vivid (`item.iconColor`). */
+  tileBg: string;
   labelColor: string;
   descColor: string;
   separatorColor: string;
@@ -448,6 +462,7 @@ const MenuRow = React.memo(function MenuRow({
   onPress,
   locked,
   showDivider,
+  tileBg,
   labelColor,
   descColor,
   separatorColor,
@@ -458,7 +473,7 @@ const MenuRow = React.memo(function MenuRow({
   return (
     <>
       <TouchableOpacity style={styles.menuItem} onPress={onPress} activeOpacity={0.55}>
-        <View style={[styles.menuIcon, { backgroundColor: item.iconBg }]}>
+        <View style={[styles.menuIcon, { backgroundColor: tileBg }]}>
           <Ionicons name={item.icon} size={20} color={locked ? iconMutedColor : item.iconColor} />
           {badgeCount > 0 && (
             <View style={[styles.menuBadge, { borderColor: badgeRingColor }]}>
@@ -495,7 +510,13 @@ export default function MoreScreen() {
   const [uploading, setUploading] = useState(false);
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
-  const badgeColor = user?.role ? roleBadgeColors[user.role] || roleBadgeColors.master : roleBadgeColors.master;
+  // Role badge — byte-identical pale chip in light, translucent accent glow in
+  // dark (resolved via the shared dark badge map).
+  const roleKey = user?.role && roleBadgeColors[user.role] ? user.role : 'master';
+  const badgeColor =
+    palette.mode === 'dark'
+      ? (getBadgeColors('dark')[roleBadgeHue[roleKey] ?? 'green'] ?? roleBadgeColors.master)
+      : roleBadgeColors[roleKey];
   const avatarUrl = getImageUrl(user?.avatar);
 
   // Fetch subscription for feature gating
@@ -691,6 +712,7 @@ export default function MoreScreen() {
                     locked={isFeatureLocked(item.featureKey)}
                     showDivider={idx < visibleItems.length - 1}
                     onPress={() => navigation.navigate(item.screen)}
+                    tileBg={palette.mode === 'dark' ? softTint(item.iconColor, 'dark') : item.iconBg}
                     labelColor={palette.text.primary}
                     descColor={palette.text.secondary}
                     separatorColor={palette.border.subtle}

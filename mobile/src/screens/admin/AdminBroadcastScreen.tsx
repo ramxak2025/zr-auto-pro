@@ -23,7 +23,7 @@ import { haptic } from '../../platform/haptics';
 import { useAuth } from '../../contexts/AuthContext';
 import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
-import { colors, spacing, borderRadius } from '../../theme';
+import { colors, spacing, borderRadius, softTint } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import type { Broadcast, BroadcastButton, BroadcastHistoryItem } from '../../../../shared/types';
 import { formatDateTime } from './adminShared';
@@ -484,7 +484,18 @@ export default function AdminBroadcastScreen() {
                   <Text style={[styles.historyTitle, { color: palette.text.primary }]} numberOfLines={1}>
                     {item.title}
                   </Text>
-                  <View style={[styles.badge, { backgroundColor: cancelled ? colors.gray[100] : colors.green[50] }]}>
+                  <View
+                    style={[
+                      styles.badge,
+                      {
+                        backgroundColor: cancelled
+                          ? colors.gray[100]
+                          : palette.mode === 'dark'
+                            ? softTint(colors.green[600], 'dark')
+                            : colors.green[50],
+                      },
+                    ]}
+                  >
                     <Text style={[styles.badgeText, { color: cancelled ? colors.gray[600] : colors.green[700] }]}>
                       {cancelled ? 'Отменена' : 'Активна'}
                     </Text>
