@@ -10,6 +10,8 @@ import {
   Animated,
   Modal as RNModal,
   ActivityIndicator,
+  Platform,
+  Linking,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -18,7 +20,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { checksApi, myCompanyApi, checkPhotosApi, returnsApi, knowledgeApi } from '../api/services';
+import { checksApi, myCompanyApi, checkPhotosApi, returnsApi, knowledgeApi, fiscalApi } from '../api/services';
 import { shareOrderPdf } from '../utils/orderPdf';
 import { resolveCheckDetailState } from './checkDetailViewState';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
@@ -33,7 +35,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
 import { WORK_STATUS_ORDER, WORK_STATUS_META } from '../constants/workStatus';
-import type { Check, Tenant, CheckWorkStatus } from '../../../shared/types';
+import type { Check, Tenant, CheckWorkStatus, FiscalReceipt } from '../../../shared/types';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -318,6 +320,93 @@ export default function CheckDetailScreen() {
     workStatusMutation.mutate(target);
   };
 
+  // ── Фискализация чека (онлайн-касса 54-ФЗ, АТОЛ) ──────────────────────
+  // ADDITIVE, не блокирует экран. Никак НЕ касается оплаты/итогов/возврата
+  // — это отдельное пост-фактум действие (передача закрытого чека в ОФД).
+  // getReceipt 404-ит, пока чек ни разу не фискализировали, и 422-ит, когда
+  // онлайн-касса выключена/не настроена — оба случая мягко мапим в null
+  // (нет чека), а НЕ в краш экрана. Когда статус 'pending', опрашиваем
+  // оператора каждые ~2с в пределах 30-секундного окна (АТОЛ poll-based).
+  const fiscalPollUntilRef = useRef(0);
+  const { data: fiscalReceipt } = useQuery<FiscalReceipt | null>({
+    queryKey: ['fiscal', 'receipt', id],
+    queryFn: async () => {
+      try {
+        const res = await fiscalApi.getReceipt(id);
+        return res.data;
+      } catch (err: any) {
+        const status = err?.response?.status;
+        if (status === 404 || status === 422) return null;
+        throw err;
+      }
+    },
+    enabled: !!check,
+    retry: false,
+    staleTime: 10_000,
+    refetchInterval: (query) => {
+      const data = query.state.data as FiscalReceipt | null | undefined;
+      if (data?.status === 'pending' && Date.now() < fiscalPollUntilRef.current) return 2000;
+      return false;
+    },
+  });
+
+  const fiscalizeMutation = useMutation({
+    mutationFn: (body: { checkId: string; email?: string; phone?: string }) => fiscalApi.fiscalize(body),
+    onSuccess: (res: any) => {
+      haptic('success');
+      // Открываем окно опроса: refetchInterval подхватит 'pending' и будет
+      // опрашивать ОФД до 'done'/'failed' или истечения 30с.
+      fiscalPollUntilRef.current = Date.now() + 30_000;
+      queryClient.setQueryData(['fiscal', 'receipt', id], res?.data ?? null);
+      queryClient.invalidateQueries({ queryKey: ['fiscal', 'receipt', id] });
+    },
+    onError: (err: any) => {
+      haptic('error');
+      const status = err?.response?.status;
+      if (status === 422) {
+        // Онлайн-касса выключена / не настроена — это не сбой, а штатное
+        // INERT-состояние. Подсказываем владельцу, где её включить.
+        Alert.alert(
+          'Онлайн-касса не настроена',
+          'Фискализация недоступна: подключите ОФД/АТОЛ в настройках «Онлайн-касса 54-ФЗ».',
+        );
+      } else {
+        Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось фискализировать чек');
+      }
+    },
+  });
+
+  const handleFiscalize = () => {
+    if (!check) return;
+    haptic('select');
+    const phone = check.client?.phone || undefined;
+    const run = (email?: string) => {
+      fiscalizeMutation.mutate({ checkId: id, email: email?.trim() || undefined, phone });
+    };
+    // ≥1 контакт нужен по 54-ФЗ для электронного чека; телефон клиента —
+    // дефолт, e-mail можно дописать (необязательно).
+    if (Platform.OS === 'ios') {
+      Alert.prompt(
+        'Фискализировать чек',
+        phone
+          ? `Электронный чек уйдёт на ${phone}. При желании укажите e-mail (необязательно).`
+          : 'Укажите e-mail для электронного чека (необязательно).',
+        [
+          { text: 'Отмена', style: 'cancel' },
+          { text: 'Фискализировать', onPress: (email?: string) => run(email) },
+        ],
+        'plain-text',
+        '',
+        'email-address',
+      );
+    } else {
+      Alert.alert('Фискализировать чек?', phone ? `Электронный чек уйдёт на ${phone}.` : 'Чек будет отправлен в ОФД.', [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Фискализировать', onPress: () => run() },
+      ]);
+    }
+  };
+
   // ── «Продолжить» по отложенному чеку ──────────────────────────────
   // Открываем кассу в режиме редактирования этого черновика (route.params
   // id). CheckCreateScreen уже умеет гидрировать форму из ['check', id] и
@@ -546,6 +635,10 @@ export default function CheckDetailScreen() {
   const canEdit = hasPermission('checks_edit') && !isReturned;
   const canDelete = hasPermission('checks_delete') && !isReturned;
   const canViewProfit = hasPermission('profit_view');
+  // Фискализация — кассовые роли (те же, что работают кассу/закрывают чеки).
+  // Сервер всё равно гейтит endpoint; UI отрезает остальных сразу.
+  const canFiscalize =
+    user?.role === 'director' || user?.role === 'admin' || user?.role === 'master' || user?.role === 'superadmin';
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   const badge = badgeColors[badgeKey];
   const isDeferred = !!check.isDeferred;
@@ -1170,6 +1263,122 @@ export default function CheckDetailScreen() {
             </View>
           )}
         </View>
+
+        {/* ── Онлайн-касса 54-ФЗ (фискализация) ──────────────────────────
+            Опциональная секция, отделённая от бейджей оплаты/доски. Если
+            чек уже фискализировали — показываем статус (ФД/ФПД + ссылка
+            ОФД). Действие «Фискализировать чек» доступно кассовым ролям
+            на закрытом (не отложенном, не возвращённом) чеке. Пока
+            владелец не подключил ОФД, fiscalize вернёт 422 → мягкий
+            алерт, без краша. Карта не рисуется на отложенном чеке без
+            ранее созданного фискального чека. */}
+        {canFiscalize && (!!fiscalReceipt || (!isDeferred && !isReturned)) && (
+          <View style={[styles.fiscalCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            <View style={styles.fiscalHeader}>
+              <View style={[styles.fiscalIconWrap, { backgroundColor: colors.violet[50] }]}>
+                <Ionicons name="receipt-outline" size={15} color={colors.violet[600]} />
+              </View>
+              <Text style={[styles.fiscalTitle, { color: palette.text.primary }]}>Онлайн-касса 54-ФЗ</Text>
+              {fiscalReceipt?.status === 'done' && (
+                <View style={[styles.fiscalStatusPill, { backgroundColor: colors.green[50] }]}>
+                  <Ionicons name="checkmark-circle" size={12} color={colors.green[600]} />
+                  <Text style={[styles.fiscalStatusPillText, { color: colors.green[700] }]}>Фискализирован</Text>
+                </View>
+              )}
+              {fiscalReceipt?.status === 'pending' && (
+                <View style={[styles.fiscalStatusPill, { backgroundColor: colors.amber[50] }]}>
+                  <ActivityIndicator size="small" color={colors.amber[600]} />
+                  <Text style={[styles.fiscalStatusPillText, { color: colors.amber[700] }]}>Отправка…</Text>
+                </View>
+              )}
+              {fiscalReceipt?.status === 'failed' && (
+                <View style={[styles.fiscalStatusPill, { backgroundColor: colors.red[50] }]}>
+                  <Ionicons name="alert-circle" size={12} color={colors.red[600]} />
+                  <Text style={[styles.fiscalStatusPillText, { color: colors.red[700] }]}>Ошибка</Text>
+                </View>
+              )}
+            </View>
+
+            {fiscalReceipt?.status === 'done' && (
+              <View style={styles.fiscalBody}>
+                {fiscalReceipt.fiscalDocNumber && (
+                  <View style={styles.fiscalRow}>
+                    <Text style={[styles.fiscalRowLabel, { color: palette.text.tertiary }]}>ФД №</Text>
+                    <Text style={[styles.fiscalRowValue, { color: palette.text.primary }]}>
+                      {fiscalReceipt.fiscalDocNumber}
+                    </Text>
+                  </View>
+                )}
+                {fiscalReceipt.fiscalSign && (
+                  <View style={styles.fiscalRow}>
+                    <Text style={[styles.fiscalRowLabel, { color: palette.text.tertiary }]}>ФПД</Text>
+                    <Text style={[styles.fiscalRowValue, { color: palette.text.primary }]}>
+                      {fiscalReceipt.fiscalSign}
+                    </Text>
+                  </View>
+                )}
+                {fiscalReceipt.ofdReceiptUrl && (
+                  <TouchableOpacity
+                    style={styles.fiscalLinkRow}
+                    onPress={() => {
+                      haptic('select');
+                      Linking.openURL(fiscalReceipt.ofdReceiptUrl!).catch(() =>
+                        Alert.alert('Ошибка', 'Не удалось открыть ссылку ОФД'),
+                      );
+                    }}
+                    activeOpacity={0.7}
+                    accessibilityRole="link"
+                    accessibilityLabel="Открыть чек в ОФД"
+                  >
+                    <Ionicons name="open-outline" size={14} color={colors.primary[600]} />
+                    <Text style={[styles.fiscalLinkText, { color: colors.primary[600] }]} numberOfLines={1}>
+                      Чек в ОФД
+                    </Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            )}
+
+            {fiscalReceipt?.status === 'failed' && fiscalReceipt.error && (
+              <Text style={[styles.fiscalErrorText, { color: colors.red[600] }]} numberOfLines={3}>
+                {fiscalReceipt.error}
+              </Text>
+            )}
+
+            {/* Действие: фискализировать / повторить. Скрыто во время активной
+                отправки (pending) и после успеха (done). На отложенном/
+                возвращённом чеке секция-действие не показывается вовсе. */}
+            {!isDeferred && !isReturned && fiscalReceipt?.status !== 'done' && fiscalReceipt?.status !== 'pending' && (
+              <TouchableOpacity
+                style={[
+                  styles.fiscalActionBtn,
+                  { borderColor: colors.purple[200], backgroundColor: colors.violet[50] },
+                ]}
+                onPress={handleFiscalize}
+                disabled={fiscalizeMutation.isPending}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Фискализировать чек"
+                accessibilityState={{ disabled: fiscalizeMutation.isPending }}
+              >
+                {fiscalizeMutation.isPending ? (
+                  <ActivityIndicator size="small" color={colors.violet[600]} />
+                ) : (
+                  <>
+                    <Ionicons
+                      name={fiscalReceipt?.status === 'failed' ? 'refresh' : 'receipt'}
+                      size={16}
+                      color={colors.violet[600]}
+                    />
+                    <Text style={[styles.fiscalActionBtnText, { color: colors.violet[600] }]}>
+                      {fiscalReceipt?.status === 'failed' ? 'Повторить фискализацию' : 'Фискализировать чек'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
 
         {/* Триггер возврата перенесён в trailing-иконку шапки (см. header).
             Уже возвращённый чек дополнительно помечен бейджем «ВОЗВРАЩЁН»
@@ -2056,4 +2265,48 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   returnSubmitBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.white },
+
+  // ── Онлайн-касса 54-ФЗ (фискализация) ──────────────────────────────
+  fiscalCard: {
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    padding: spacing[4],
+    gap: spacing[3],
+  },
+  fiscalHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  fiscalIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fiscalTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  fiscalStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    marginLeft: 'auto',
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1],
+    borderRadius: borderRadius.full,
+  },
+  fiscalStatusPillText: { fontSize: 11, fontWeight: fontWeight.semibold },
+  fiscalBody: { gap: spacing[1.5] },
+  fiscalRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  fiscalRowLabel: { fontSize: 12 },
+  fiscalRowValue: { fontSize: 13, fontWeight: fontWeight.semibold, flexShrink: 1, textAlign: 'right' },
+  fiscalLinkRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], paddingVertical: spacing[1] },
+  fiscalLinkText: { fontSize: 13, fontWeight: fontWeight.semibold, textDecorationLine: 'underline' },
+  fiscalErrorText: { fontSize: 12, lineHeight: 17 },
+  fiscalActionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    height: 44,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  fiscalActionBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 });

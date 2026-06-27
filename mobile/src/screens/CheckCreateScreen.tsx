@@ -36,6 +36,7 @@ import {
   subscriptionApi,
   warrantyApi,
   bookingsApi,
+  loyaltyApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -1095,6 +1096,28 @@ export default function CheckCreateScreen() {
       // BEFORE resetting the form / navigating away.
       const uris = pendingPhotos;
       const savedCheckId: string | undefined = editId || res?.data?.id;
+
+      // ── Лояльность: автоначисление кешбэка на продажу ────────────────────
+      // ADDITIVE side-effect, НЕ влияет на оплату/итоги/создание чека. Только
+      // для НОВОГО чека (не редактирование — иначе двойное начисление) с
+      // НЕ-розничным клиентом. Сумму кешбэка считает СЕРВЕР (итог чека ×
+      // accrualPercent) — клиент лишь триггерит начисление. Fire-and-forget:
+      // не ждём ответ перед навигацией и глушим любые ошибки, в т.ч. 422,
+      // когда лояльность выключена/не настроена в тарифе тенанта.
+      if (!editId && savedCheckId && clientId && !selectedClient?.isRetail) {
+        const accrueClientId = clientId;
+        const accrueCheckId = savedCheckId;
+        loyaltyApi
+          .accrue({ clientId: accrueClientId, checkId: accrueCheckId })
+          .then(() => {
+            // Обновляем баланс бонусов клиента, если карточка уже открыта.
+            queryClient.invalidateQueries({ queryKey: ['loyalty', 'client', accrueClientId] });
+          })
+          .catch(() => {
+            /* лояльность выключена/не настроена — тихо, продажа уже сохранена */
+          });
+      }
+
       if (!editId && savedCheckId && uris.length > 0) {
         try {
           const failed = await uploadPendingForCheck(savedCheckId, uris);
