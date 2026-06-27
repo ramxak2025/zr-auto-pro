@@ -229,8 +229,10 @@ export type ProductsStackParamList = {
   // reusing the form instead of duplicating it.
   ProductsHome: { activePath?: string[]; editProduct?: Product } | undefined;
   // Dedicated product drill-down. Pushed on row tap; the passed `product`
-  // seeds instant paint while the screen revalidates the full shape.
-  ProductDetail: { product: Product };
+  // seeds instant paint while the screen revalidates the full shape. `edit:
+  // true` lands straight in the on-detail edit mode (from the row long-press
+  // action sheet «Редактировать»).
+  ProductDetail: { product: Product; edit?: boolean };
   // Инвентаризация (scan-driven recount). Pushed from the warehouse ops sheet;
   // lives in THIS stack so the floating tab bar stays visible and edge-swipe
   // pops back to the warehouse list.

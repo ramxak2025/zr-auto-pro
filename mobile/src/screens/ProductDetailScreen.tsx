@@ -15,10 +15,12 @@
  *   • a recent slice of stock movements with «Вся история» →
  *     the existing ProductMovementHistoryModal (shared cache key, instant).
  *
- * Edit: the «Изменить» affordance does NOT duplicate the edit form. It sets
- * `editProduct` on the underlying ProductsScreen route and pops back — the
- * warehouse screen owns the create/edit modal and opens it for that product,
- * preserving the folder the user was in.
+ * Edit: the «Изменить» affordance flips THIS screen into an inline edit mode
+ * (NOT the old in-list modal) with every field — name, category, cost/sell
+ * price, stock, min stock, unit, barcode, warranty, photo — saved through the
+ * existing productsApi.update. «Перенести» reuses FolderPickerModal to drop the
+ * product into another folder of the SAME warehouse (existing categories only,
+ * no manual typing).
  *
  * Data: ONLY existing endpoints. `productsApi.getById` (full shape incl.
  * supplier), `productsApi.priceHistory` (typed ledger), and the same
@@ -29,34 +31,42 @@
  * Android-safe: shared RN only; haptics via the platform helper; glass
  * preview degrades through expo-blur on Android.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   View,
   ScrollView,
   StyleSheet,
   RefreshControl,
   TouchableOpacity,
+  TextInput,
   Pressable,
   Modal as RNModal,
   Platform,
   Dimensions,
+  ActivityIndicator,
+  Alert,
+  KeyboardAvoidingView,
+  type StyleProp,
+  type ViewStyle,
 } from 'react-native';
 import Svg, { Defs, LinearGradient as SvgGrad, Path, Stop } from 'react-native-svg';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { useNavigation, useRoute, CommonActions } from '@react-navigation/native';
+import * as ImagePicker from 'expo-image-picker';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useNavigation, useRoute } from '@react-navigation/native';
 
 import CachedImage from '../components/CachedImage';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
+import FolderPickerModal from '../components/FolderPickerModal';
 import ProductMovementHistoryModal, {
   visualFor,
   formatMovementDateTime,
   formatQty,
 } from '../components/ProductMovementHistoryModal';
 import { Text } from '../platform/Typography';
-import { productsApi, stockMovementsApi } from '../api/services';
+import { productsApi, stockMovementsApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -64,6 +74,23 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { colors, borderRadius, spacing } from '../theme';
 import type { Product, StockMovement, ProductPriceHistoryEntry } from '../../../shared/types';
+
+// Edit payload sent to productsApi.update. Structurally a superset of the
+// shared UpdateProductRequest (adds `barcode`, which the backend PATCH DTO
+// accepts but the shared contract type doesn't yet expose) — a value with the
+// extra prop is still assignable to the update param, so no contract change.
+interface ProductEditPayload {
+  name?: string;
+  category?: string;
+  photo?: string;
+  costPrice?: number;
+  sellPrice?: number;
+  stock?: number;
+  minStock?: number;
+  unit?: string;
+  warrantyDays?: number | null;
+  barcode?: string;
+}
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const RECENT_COUNT = 4;
@@ -133,7 +160,7 @@ function buildSparkArea(values: number[], w: number, h: number, minV: number, ma
   return `${line} L ${w} ${h} L 0 ${h} Z`;
 }
 
-type ProductDetailParams = { product: Product };
+type ProductDetailParams = { product: Product; edit?: boolean };
 
 export default function ProductDetailScreen() {
   const route = useRoute<any>();
@@ -156,6 +183,32 @@ export default function ProductDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
   const [historyOpen, setHistoryOpen] = useState(false);
+
+  // ── Edit-on-detail state ────────────────────────────────────────────────
+  // The «Изменить» affordance flips THIS screen into an inline edit mode with
+  // every field (name, category, prices, stock, unit, barcode, warranty,
+  // photo) — replacing the old in-list modal entirely. «Перенести» reuses the
+  // FolderPickerModal to drop the product into another folder of the SAME
+  // warehouse without manual category typing.
+  const [editing, setEditing] = useState(false);
+  const [moveOpen, setMoveOpen] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [name, setName] = useState('');
+  const [category, setCategory] = useState('');
+  const [costPrice, setCostPrice] = useState('');
+  const [sellPrice, setSellPrice] = useState('');
+  const [stock, setStock] = useState('');
+  const [minStock, setMinStock] = useState('');
+  const [unit, setUnit] = useState('');
+  const [barcode, setBarcode] = useState('');
+  const [warranty, setWarranty] = useState('');
+  const [photoUri, setPhotoUri] = useState<string | null>(null);
+
+  // Theme-aware fill/border/text for the edit inputs (correct in dark mode).
+  const inputThemed = useMemo(
+    () => ({ backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary }),
+    [palette],
+  );
 
   // Full product shape (supplier object, barcode, unit, warranty). The slim
   // list projection that seeded `passedProduct` omits the nested supplier, so
@@ -193,21 +246,146 @@ export default function ProductDetailScreen() {
     setRefreshing(false);
   }, [queryClient, productId]);
 
-  // Open the warehouse screen's existing edit modal for this product WITHOUT
-  // duplicating the form: set `editProduct` on the route directly beneath us
-  // (the folder/list instance we were pushed from) and pop back. ProductsScreen
-  // consumes the param via useEffect.
-  const onEdit = useCallback(() => {
-    haptic('tap');
-    const state = navigation.getState();
-    const prev = state.routes[state.index - 1];
-    if (prev) {
-      navigation.dispatch({ ...CommonActions.setParams({ editProduct: product }), source: prev.key });
-    }
-    navigation.goBack();
-  }, [navigation, product]);
+  // Seed the edit fields from a product snapshot.
+  const seedFromProduct = useCallback((p: Product) => {
+    setName(p.name);
+    setCategory(p.category || '');
+    setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
+    setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
+    setStock(p.stock != null ? String(p.stock) : '');
+    setMinStock(p.minStock != null ? String(p.minStock) : '');
+    setUnit(p.unit || '');
+    setBarcode(p.barcode || '');
+    setWarranty(p.warrantyDays != null ? String(p.warrantyDays) : '');
+    setPhotoUri(p.photo || null);
+  }, []);
 
-  const photoUri = getImageUrl(product.photo);
+  // «Изменить» → enter inline edit mode (NOT the old modal).
+  const enterEdit = useCallback(() => {
+    haptic('tap');
+    seedFromProduct(product);
+    setEditing(true);
+  }, [product, seedFromProduct]);
+
+  const cancelEdit = useCallback(() => {
+    haptic('tap');
+    setEditing(false);
+    setUploadingPhoto(false);
+  }, []);
+
+  // Deep-link: long-press → action sheet «Редактировать» pushes ProductDetail
+  // with `edit: true` so we land straight in edit mode. Consume the param once.
+  const editParam = (route.params as ProductDetailParams).edit;
+  useEffect(() => {
+    if (editParam && canManageWarehouse) {
+      seedFromProduct(product);
+      setEditing(true);
+      navigation.setParams({ edit: undefined });
+    }
+    // Only react to the param flipping on — product/seed are stable enough.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editParam]);
+
+  const saveMutation = useMutation({
+    mutationFn: (data: ProductEditPayload) => productsApi.update(productId, data),
+    onSuccess: (res) => {
+      haptic('success');
+      // Update the detail card in place + invalidate every warehouse/picker
+      // slot so the list, the cash picker and the folder tree all refresh.
+      queryClient.setQueryData(['product', productId], res.data);
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['product-price-history', productId] });
+      setEditing(false);
+      setMoveOpen(false);
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось сохранить изменения');
+    },
+  });
+
+  const pickImage = useCallback(async () => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]) setPhotoUri(result.assets[0].uri);
+  }, []);
+
+  const getDisplayPhotoUri = useCallback((photo: string | null): string | undefined => {
+    if (!photo) return undefined;
+    if (photo.startsWith('file://')) return photo;
+    return getImageUrl(photo);
+  }, []);
+
+  const handleSave = useCallback(async () => {
+    if (!name.trim()) {
+      Alert.alert('Ошибка', 'Укажите название товара');
+      return;
+    }
+    let uploadedPhotoPath: string | undefined = product.photo || undefined;
+    if (photoUri && photoUri.startsWith('file://')) {
+      try {
+        setUploadingPhoto(true);
+        const filename = photoUri.split('/').pop() || 'photo.jpg';
+        const res = await uploadsApi.upload(photoUri, filename);
+        uploadedPhotoPath = res.data.url;
+      } catch {
+        setUploadingPhoto(false);
+        Alert.alert('Ошибка', 'Не удалось загрузить фото');
+        return;
+      }
+      setUploadingPhoto(false);
+    }
+    const payload: ProductEditPayload = {
+      name: name.trim(),
+      category,
+      sellPrice: Number(sellPrice) || 0,
+      stock: Number(stock) || 0,
+      minStock: Number(minStock) || 0,
+      unit: unit.trim() || undefined,
+      warrantyDays: warranty.trim() === '' ? null : Math.max(0, Number(warranty) || 0),
+      barcode: barcode.trim(),
+      photo: uploadedPhotoPath,
+    };
+    // Masters never see cost — don't let a hidden field zero it out.
+    if (canSeeCostPrice) payload.costPrice = Number(costPrice) || 0;
+    saveMutation.mutate(payload);
+  }, [
+    name,
+    category,
+    sellPrice,
+    stock,
+    minStock,
+    unit,
+    warranty,
+    barcode,
+    costPrice,
+    canSeeCostPrice,
+    photoUri,
+    product.photo,
+    saveMutation,
+  ]);
+
+  // Folder move. In edit mode the picker only updates the category field (saved
+  // with the rest of the form); from read-only it commits immediately.
+  const handleMoveConfirm = useCallback(
+    (categoryPath: string) => {
+      if (editing) {
+        setCategory(categoryPath);
+        setMoveOpen(false);
+        return;
+      }
+      saveMutation.mutate({ category: categoryPath });
+    },
+    [editing, saveMutation],
+  );
+
+  const displayPhotoUri = getImageUrl(product.photo);
   const lowStock = product.stock <= product.minStock && product.minStock > 0;
   const margin = product.costPrice > 0 ? ((product.sellPrice - product.costPrice) / product.costPrice) * 100 : null;
   const categoryLabel = product.category ? product.category.split('/').pop() : undefined;
@@ -243,269 +421,515 @@ export default function ProductDetailScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader
-        title={product.name}
-        subtitle={categoryLabel}
-        onBack={() => navigation.goBack()}
+        title={editing ? 'Редактирование' : product.name}
+        subtitle={editing ? undefined : categoryLabel}
+        onBack={editing ? cancelEdit : () => navigation.goBack()}
         trailing={
           canManageWarehouse ? (
-            <TouchableOpacity
-              onPress={onEdit}
-              style={[styles.editBtn, { backgroundColor: palette.bg.muted }]}
-              accessibilityRole="button"
-              accessibilityLabel="Изменить товар"
-              hitSlop={8}
-            >
-              <Ionicons name="create-outline" size={18} color={palette.accent.primary} />
-            </TouchableOpacity>
+            editing ? (
+              <TouchableOpacity
+                onPress={handleSave}
+                style={[styles.saveBtn, { backgroundColor: palette.accent.primary }]}
+                accessibilityRole="button"
+                accessibilityLabel="Сохранить изменения"
+                disabled={saveMutation.isPending || uploadingPhoto}
+                hitSlop={8}
+              >
+                {saveMutation.isPending || uploadingPhoto ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text variant="bodyEmph" color={colors.white}>
+                    Сохранить
+                  </Text>
+                )}
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                onPress={enterEdit}
+                style={[styles.editBtn, { backgroundColor: palette.bg.muted }]}
+                accessibilityRole="button"
+                accessibilityLabel="Изменить товар"
+                hitSlop={8}
+              >
+                <Ionicons name="create-outline" size={18} color={palette.accent.primary} />
+              </TouchableOpacity>
+            )
           ) : undefined
         }
       />
 
-      <ScrollView
-        style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
-        }
-      >
-        {/* PHOTO — tap to open fullscreen preview. */}
-        <TouchableOpacity
-          activeOpacity={photoUri ? 0.9 : 1}
-          disabled={!photoUri}
-          onPress={() => {
-            if (photoUri) {
-              haptic('tap');
-              setFullscreenPhoto(photoUri);
-            }
-          }}
-          style={[styles.photoWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+      {editing ? (
+        <KeyboardAvoidingView
+          style={{ flex: 1 }}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
         >
-          {photoUri ? (
-            <CachedImage source={{ uri: photoUri }} style={styles.photo} resizeMode="cover" />
-          ) : (
-            <View style={styles.photoPlaceholder}>
-              <Ionicons name="cube-outline" size={56} color={palette.text.tertiary} />
-            </View>
-          )}
-          {photoUri ? (
-            <View style={styles.expandBadge}>
-              <Ionicons name="expand-outline" size={15} color={colors.white} />
-            </View>
-          ) : null}
-        </TouchableOpacity>
-
-        {/* NAME + category + low-stock pill */}
-        <View style={styles.titleBlock}>
-          <Text variant="title1" color={palette.text.primary} style={styles.name}>
-            {product.name}
-          </Text>
-          <View style={styles.titleMetaRow}>
-            {categoryLabel ? (
-              <View style={[styles.chip, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="folder-outline" size={12} color={palette.text.tertiary} />
-                <Text variant="caption" color={palette.text.secondary}>
-                  {categoryLabel}
-                </Text>
+          <ScrollView
+            style={styles.scroll}
+            contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[10] }]}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            {/* PHOTO picker */}
+            <TouchableOpacity
+              style={[styles.photoWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              onPress={pickImage}
+              activeOpacity={0.85}
+            >
+              {photoUri ? (
+                <CachedImage source={{ uri: getDisplayPhotoUri(photoUri) }} style={styles.photo} resizeMode="cover" />
+              ) : (
+                <View style={styles.photoPlaceholder}>
+                  <Ionicons name="camera-outline" size={40} color={palette.text.tertiary} />
+                  <Text variant="footnote" color={palette.text.tertiary} style={{ marginTop: spacing[2] }}>
+                    Добавить фото
+                  </Text>
+                </View>
+              )}
+            </TouchableOpacity>
+            {photoUri ? (
+              <View style={styles.photoActions}>
+                <TouchableOpacity style={styles.photoActionBtn} onPress={pickImage}>
+                  <Ionicons name="swap-horizontal" size={16} color={palette.accent.primary} />
+                  <Text variant="footnote" color={palette.accent.primary}>
+                    Заменить
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.photoActionBtn} onPress={() => setPhotoUri(null)}>
+                  <Ionicons name="trash-outline" size={16} color={colors.red[500]} />
+                  <Text variant="footnote" color={colors.red[500]}>
+                    Удалить
+                  </Text>
+                </TouchableOpacity>
               </View>
             ) : null}
-            {lowStock ? (
-              <View style={[styles.chip, { backgroundColor: colors.red[500] + '18' }]}>
-                <Ionicons name="alert-circle" size={12} color={colors.red[500]} />
-                <Text variant="caption" color={colors.red[600]}>
-                  Мало на складе
+
+            {/* Name */}
+            <EditField label="Название" palette={palette}>
+              <TextInput
+                value={name}
+                onChangeText={setName}
+                style={[styles.input, inputThemed]}
+                placeholder="Например: Масло моторное 5W-30"
+                placeholderTextColor={palette.text.tertiary}
+              />
+            </EditField>
+
+            {/* Category → folder picker (no manual typing) */}
+            <EditField label="Папка (категория)" palette={palette}>
+              <TouchableOpacity
+                style={[styles.input, styles.inputAsButton, inputThemed]}
+                onPress={() => {
+                  haptic('tap');
+                  setMoveOpen(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text variant="body" color={category ? palette.text.primary : palette.text.tertiary} numberOfLines={1}>
+                  {category || 'Без папки — выбрать…'}
                 </Text>
+                <Ionicons name="folder-open-outline" size={18} color={palette.accent.primary} />
+              </TouchableOpacity>
+            </EditField>
+
+            {/* Prices */}
+            <View style={styles.fieldRow}>
+              {canSeeCostPrice ? (
+                <EditField label="Себестоимость" palette={palette} style={{ flex: 1 }}>
+                  <TextInput
+                    value={costPrice}
+                    onChangeText={setCostPrice}
+                    style={[styles.input, inputThemed]}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    placeholderTextColor={palette.text.tertiary}
+                  />
+                </EditField>
+              ) : null}
+              <EditField label="Цена продажи" palette={palette} style={{ flex: 1 }}>
+                <TextInput
+                  value={sellPrice}
+                  onChangeText={setSellPrice}
+                  style={[styles.input, inputThemed]}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={palette.text.tertiary}
+                />
+              </EditField>
+            </View>
+
+            {/* Stock */}
+            <View style={styles.fieldRow}>
+              <EditField label="Остаток" palette={palette} style={{ flex: 1 }}>
+                <TextInput
+                  value={stock}
+                  onChangeText={setStock}
+                  style={[styles.input, inputThemed]}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={palette.text.tertiary}
+                />
+              </EditField>
+              <EditField label="Мин. остаток" palette={palette} style={{ flex: 1 }}>
+                <TextInput
+                  value={minStock}
+                  onChangeText={setMinStock}
+                  style={[styles.input, inputThemed]}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={palette.text.tertiary}
+                />
+              </EditField>
+            </View>
+
+            {/* Unit + warranty */}
+            <View style={styles.fieldRow}>
+              <EditField label="Единица (шт, л, кг…)" palette={palette} style={{ flex: 1 }}>
+                <TextInput
+                  value={unit}
+                  onChangeText={setUnit}
+                  style={[styles.input, inputThemed]}
+                  placeholder="шт"
+                  placeholderTextColor={palette.text.tertiary}
+                  autoCapitalize="none"
+                />
+              </EditField>
+              <EditField label="Гарантия (дней)" palette={palette} style={{ flex: 1 }}>
+                <TextInput
+                  value={warranty}
+                  onChangeText={setWarranty}
+                  style={[styles.input, inputThemed]}
+                  keyboardType="numeric"
+                  placeholder="0"
+                  placeholderTextColor={palette.text.tertiary}
+                />
+              </EditField>
+            </View>
+
+            {/* Barcode */}
+            <EditField label="Штрихкод" palette={palette}>
+              <TextInput
+                value={barcode}
+                onChangeText={setBarcode}
+                style={[styles.input, inputThemed]}
+                placeholder="EAN-13 / QR / свой код"
+                placeholderTextColor={palette.text.tertiary}
+                autoCapitalize="none"
+              />
+            </EditField>
+
+            {/* Save / cancel */}
+            <View style={styles.editActions}>
+              <TouchableOpacity
+                style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+                onPress={cancelEdit}
+                activeOpacity={0.8}
+              >
+                <Text variant="bodyEmph" color={palette.text.secondary}>
+                  Отмена
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
+                onPress={handleSave}
+                disabled={saveMutation.isPending || uploadingPhoto}
+                activeOpacity={0.85}
+              >
+                {saveMutation.isPending || uploadingPhoto ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text variant="bodyEmph" color={colors.white}>
+                    Сохранить
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </KeyboardAvoidingView>
+      ) : (
+        <ScrollView
+          style={styles.scroll}
+          contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
+          showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
+          }
+        >
+          {/* PHOTO — tap to open fullscreen preview. */}
+          <TouchableOpacity
+            activeOpacity={displayPhotoUri ? 0.9 : 1}
+            disabled={!displayPhotoUri}
+            onPress={() => {
+              if (displayPhotoUri) {
+                haptic('tap');
+                setFullscreenPhoto(displayPhotoUri);
+              }
+            }}
+            style={[styles.photoWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          >
+            {displayPhotoUri ? (
+              <CachedImage source={{ uri: displayPhotoUri }} style={styles.photo} resizeMode="cover" />
+            ) : (
+              <View style={styles.photoPlaceholder}>
+                <Ionicons name="cube-outline" size={56} color={palette.text.tertiary} />
               </View>
+            )}
+            {displayPhotoUri ? (
+              <View style={styles.expandBadge}>
+                <Ionicons name="expand-outline" size={15} color={colors.white} />
+              </View>
+            ) : null}
+          </TouchableOpacity>
+
+          {/* NAME + category + low-stock pill */}
+          <View style={styles.titleBlock}>
+            <Text variant="title1" color={palette.text.primary} style={styles.name}>
+              {product.name}
+            </Text>
+            <View style={styles.titleMetaRow}>
+              {categoryLabel ? (
+                <View style={[styles.chip, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="folder-outline" size={12} color={palette.text.tertiary} />
+                  <Text variant="caption" color={palette.text.secondary}>
+                    {categoryLabel}
+                  </Text>
+                </View>
+              ) : null}
+              {lowStock ? (
+                <View style={[styles.chip, { backgroundColor: colors.red[500] + '18' }]}>
+                  <Ionicons name="alert-circle" size={12} color={colors.red[500]} />
+                  <Text variant="caption" color={colors.red[600]}>
+                    Мало на складе
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          </View>
+
+          {/* PRICE / STOCK summary tiles */}
+          <View style={styles.statsGrid}>
+            <StatTile
+              icon="pricetag-outline"
+              label="Цена продажи"
+              value={formatMoney(product.sellPrice)}
+              accent={colors.green[600]}
+              palette={palette}
+            />
+            <StatTile
+              icon="cube-outline"
+              label="Остаток"
+              value={`${formatQty(product.stock)} ${unitLabel(product.unit)}`}
+              accent={lowStock ? colors.red[500] : palette.accent.primary}
+              palette={palette}
+              danger={lowStock}
+            />
+            {canSeeCostPrice ? (
+              <>
+                <StatTile
+                  icon="wallet-outline"
+                  label="Себестоимость"
+                  value={formatMoney(product.costPrice)}
+                  accent={colors.orange[500]}
+                  palette={palette}
+                />
+                <StatTile
+                  icon="trending-up-outline"
+                  label="Маржа"
+                  value={margin != null ? `${margin.toFixed(0)}%` : '—'}
+                  accent={margin != null && margin < 0 ? colors.red[500] : colors.purple[600]}
+                  palette={palette}
+                />
+              </>
             ) : null}
           </View>
-        </View>
 
-        {/* PRICE / STOCK summary tiles */}
-        <View style={styles.statsGrid}>
-          <StatTile
-            icon="pricetag-outline"
-            label="Цена продажи"
-            value={formatMoney(product.sellPrice)}
-            accent={colors.green[600]}
-            palette={palette}
-          />
-          <StatTile
-            icon="cube-outline"
-            label="Остаток"
-            value={`${formatQty(product.stock)} ${unitLabel(product.unit)}`}
-            accent={lowStock ? colors.red[500] : palette.accent.primary}
-            palette={palette}
-            danger={lowStock}
-          />
-          {canSeeCostPrice ? (
-            <>
-              <StatTile
-                icon="wallet-outline"
-                label="Себестоимость"
-                value={formatMoney(product.costPrice)}
-                accent={colors.orange[500]}
-                palette={palette}
-              />
-              <StatTile
-                icon="trending-up-outline"
-                label="Маржа"
-                value={margin != null ? `${margin.toFixed(0)}%` : '—'}
-                accent={margin != null && margin < 0 ? colors.red[500] : colors.purple[600]}
-                palette={palette}
-              />
-            </>
-          ) : null}
-        </View>
-
-        {/* INFO card — supplier / barcode / unit / warranty */}
-        <SectionHeader title="Информация" />
-        <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-          <InfoRow
-            icon="business-outline"
-            label="Поставщик"
-            value={product.supplier?.name ?? (product.supplierId ? '—' : 'Не указан')}
-            palette={palette}
-          />
-          <InfoRow
-            icon="barcode-outline"
-            label="Штрихкод"
-            value={product.barcode || 'Не указан'}
-            palette={palette}
-            mono={!!product.barcode}
-          />
-          <InfoRow icon="scale-outline" label="Единица измерения" value={unitLabel(product.unit)} palette={palette} />
-          <InfoRow
-            icon="shield-checkmark-outline"
-            label="Гарантия"
-            value={warrantyLabel(product.warrantyDays)}
-            palette={palette}
-            last
-          />
-        </View>
-
-        {/* PRICE HISTORY chart */}
-        <SectionHeader title="Динамика цены" />
-        <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-          {hasChart ? (
-            <>
-              <View style={styles.chartHeader}>
-                <View>
-                  <Text variant="caption" color={palette.text.tertiary}>
-                    Текущая цена
-                  </Text>
-                  <Text variant="title3" color={palette.text.primary}>
-                    {formatMoney(lastSell)}
-                  </Text>
-                </View>
-                <View
-                  style={[
-                    styles.trendPill,
-                    { backgroundColor: (priceTrend >= 0 ? colors.green[500] : colors.red[500]) + '18' },
-                  ]}
-                >
-                  <Ionicons
-                    name={priceTrend >= 0 ? 'arrow-up' : 'arrow-down'}
-                    size={12}
-                    color={priceTrend >= 0 ? colors.green[600] : colors.red[600]}
-                  />
-                  <Text variant="caption" color={priceTrend >= 0 ? colors.green[600] : colors.red[600]}>
-                    {priceTrend >= 0 ? '+' : ''}
-                    {formatMoney(priceTrend)}
-                  </Text>
-                </View>
-              </View>
-
-              <Svg width={chartW} height={chartH}>
-                <Defs>
-                  <SvgGrad id="priceSparkGrad" x1="0" y1="0" x2="0" y2="1">
-                    <Stop offset="0" stopColor={palette.accent.primary} stopOpacity={0.22} />
-                    <Stop offset="1" stopColor={palette.accent.primary} stopOpacity={0} />
-                  </SvgGrad>
-                </Defs>
-                <Path d={buildSparkArea(sellSeries, chartW, chartH, minV, maxV)} fill="url(#priceSparkGrad)" />
-                {canSeeCostPrice && costSeries.length >= 2 ? (
-                  <Path
-                    d={buildSparkPath(costSeries, chartW, chartH, minV, maxV)}
-                    stroke={colors.orange[500]}
-                    strokeWidth={1.5}
-                    strokeDasharray="3 3"
-                    fill="none"
-                    strokeLinecap="round"
-                  />
-                ) : null}
-                <Path
-                  d={buildSparkPath(sellSeries, chartW, chartH, minV, maxV)}
-                  stroke={palette.accent.primary}
-                  strokeWidth={2.5}
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                />
-              </Svg>
-
-              <View style={styles.chartFooter}>
-                <Text variant="caption" color={palette.text.tertiary}>
-                  Мин {formatMoney(Math.min(...sellSeries))}
-                </Text>
-                {canSeeCostPrice ? (
-                  <View style={styles.legendItem}>
-                    <View style={[styles.legendDash, { backgroundColor: colors.orange[500] }]} />
-                    <Text variant="caption" color={palette.text.tertiary}>
-                      Себест.
-                    </Text>
-                  </View>
-                ) : null}
-                <Text variant="caption" color={palette.text.tertiary}>
-                  Макс {formatMoney(Math.max(...sellSeries))}
-                </Text>
-              </View>
-            </>
-          ) : (
-            <View style={styles.emptyInline}>
-              <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="analytics-outline" size={22} color={palette.text.tertiary} />
-              </View>
-              <Text variant="footnote" color={palette.text.secondary} style={styles.emptyText}>
-                {priceLoading ? 'Загрузка…' : 'История цен появится после первого изменения цены товара.'}
-              </Text>
-            </View>
-          )}
-        </View>
-
-        {/* RECENT MOVEMENTS — slice; «Вся история» opens the full modal. */}
-        <SectionHeader title="Движение товара" />
-        <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-          {recentMovements.length === 0 ? (
-            <View style={styles.emptyInline}>
-              <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="swap-horizontal-outline" size={22} color={palette.text.tertiary} />
-              </View>
-              <Text variant="footnote" color={palette.text.secondary} style={styles.emptyText}>
-                Поступления, расход, списания и переносы появятся здесь.
-              </Text>
-            </View>
-          ) : (
-            recentMovements.map((m, i) => (
-              <MovementLine key={m.id} movement={m} palette={palette} last={i === recentMovements.length - 1} />
-            ))
-          )}
-          {recentMovements.length > 0 ? (
+          {/* «Перенести» — drop the product into another folder of THIS warehouse
+            via the folder picker (no manual category typing). */}
+          {canManageWarehouse ? (
             <TouchableOpacity
-              style={[styles.allHistoryBtn, { borderTopColor: palette.border.subtle }]}
+              style={[styles.moveRowBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               onPress={() => {
                 haptic('tap');
-                setHistoryOpen(true);
+                setMoveOpen(true);
               }}
               activeOpacity={0.7}
             >
-              <Text variant="bodyEmph" color={palette.accent.primary}>
-                Вся история
-              </Text>
-              <Ionicons name="chevron-forward" size={16} color={palette.accent.primary} />
+              <View style={[styles.moveRowIcon, { backgroundColor: palette.accent.primarySoft }]}>
+                <Ionicons name="arrow-redo-outline" size={17} color={palette.accent.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text variant="bodyEmph" color={palette.text.primary}>
+                  Перенести в другую папку
+                </Text>
+                <Text variant="caption" color={palette.text.tertiary}>
+                  {categoryLabel ? `Сейчас: ${categoryLabel}` : 'Сейчас: без папки'}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
             </TouchableOpacity>
           ) : null}
-        </View>
-      </ScrollView>
+
+          {/* INFO card — supplier / barcode / unit / warranty */}
+          <SectionHeader title="Информация" />
+          <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            <InfoRow
+              icon="business-outline"
+              label="Поставщик"
+              value={product.supplier?.name ?? (product.supplierId ? '—' : 'Не указан')}
+              palette={palette}
+            />
+            <InfoRow
+              icon="barcode-outline"
+              label="Штрихкод"
+              value={product.barcode || 'Не указан'}
+              palette={palette}
+              mono={!!product.barcode}
+            />
+            <InfoRow icon="scale-outline" label="Единица измерения" value={unitLabel(product.unit)} palette={palette} />
+            <InfoRow
+              icon="shield-checkmark-outline"
+              label="Гарантия"
+              value={warrantyLabel(product.warrantyDays)}
+              palette={palette}
+              last
+            />
+          </View>
+
+          {/* PRICE HISTORY chart */}
+          <SectionHeader title="Динамика цены" />
+          <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            {hasChart ? (
+              <>
+                <View style={styles.chartHeader}>
+                  <View>
+                    <Text variant="caption" color={palette.text.tertiary}>
+                      Текущая цена
+                    </Text>
+                    <Text variant="title3" color={palette.text.primary}>
+                      {formatMoney(lastSell)}
+                    </Text>
+                  </View>
+                  <View
+                    style={[
+                      styles.trendPill,
+                      { backgroundColor: (priceTrend >= 0 ? colors.green[500] : colors.red[500]) + '18' },
+                    ]}
+                  >
+                    <Ionicons
+                      name={priceTrend >= 0 ? 'arrow-up' : 'arrow-down'}
+                      size={12}
+                      color={priceTrend >= 0 ? colors.green[600] : colors.red[600]}
+                    />
+                    <Text variant="caption" color={priceTrend >= 0 ? colors.green[600] : colors.red[600]}>
+                      {priceTrend >= 0 ? '+' : ''}
+                      {formatMoney(priceTrend)}
+                    </Text>
+                  </View>
+                </View>
+
+                <Svg width={chartW} height={chartH}>
+                  <Defs>
+                    <SvgGrad id="priceSparkGrad" x1="0" y1="0" x2="0" y2="1">
+                      <Stop offset="0" stopColor={palette.accent.primary} stopOpacity={0.22} />
+                      <Stop offset="1" stopColor={palette.accent.primary} stopOpacity={0} />
+                    </SvgGrad>
+                  </Defs>
+                  <Path d={buildSparkArea(sellSeries, chartW, chartH, minV, maxV)} fill="url(#priceSparkGrad)" />
+                  {canSeeCostPrice && costSeries.length >= 2 ? (
+                    <Path
+                      d={buildSparkPath(costSeries, chartW, chartH, minV, maxV)}
+                      stroke={colors.orange[500]}
+                      strokeWidth={1.5}
+                      strokeDasharray="3 3"
+                      fill="none"
+                      strokeLinecap="round"
+                    />
+                  ) : null}
+                  <Path
+                    d={buildSparkPath(sellSeries, chartW, chartH, minV, maxV)}
+                    stroke={palette.accent.primary}
+                    strokeWidth={2.5}
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  />
+                </Svg>
+
+                <View style={styles.chartFooter}>
+                  <Text variant="caption" color={palette.text.tertiary}>
+                    Мин {formatMoney(Math.min(...sellSeries))}
+                  </Text>
+                  {canSeeCostPrice ? (
+                    <View style={styles.legendItem}>
+                      <View style={[styles.legendDash, { backgroundColor: colors.orange[500] }]} />
+                      <Text variant="caption" color={palette.text.tertiary}>
+                        Себест.
+                      </Text>
+                    </View>
+                  ) : null}
+                  <Text variant="caption" color={palette.text.tertiary}>
+                    Макс {formatMoney(Math.max(...sellSeries))}
+                  </Text>
+                </View>
+              </>
+            ) : (
+              <View style={styles.emptyInline}>
+                <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="analytics-outline" size={22} color={palette.text.tertiary} />
+                </View>
+                <Text variant="footnote" color={palette.text.secondary} style={styles.emptyText}>
+                  {priceLoading ? 'Загрузка…' : 'История цен появится после первого изменения цены товара.'}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* RECENT MOVEMENTS — slice; «Вся история» opens the full modal. */}
+          <SectionHeader title="Движение товара" />
+          <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+            {recentMovements.length === 0 ? (
+              <View style={styles.emptyInline}>
+                <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="swap-horizontal-outline" size={22} color={palette.text.tertiary} />
+                </View>
+                <Text variant="footnote" color={palette.text.secondary} style={styles.emptyText}>
+                  Поступления, расход, списания и переносы появятся здесь.
+                </Text>
+              </View>
+            ) : (
+              recentMovements.map((m, i) => (
+                <MovementLine key={m.id} movement={m} palette={palette} last={i === recentMovements.length - 1} />
+              ))
+            )}
+            {recentMovements.length > 0 ? (
+              <TouchableOpacity
+                style={[styles.allHistoryBtn, { borderTopColor: palette.border.subtle }]}
+                onPress={() => {
+                  haptic('tap');
+                  setHistoryOpen(true);
+                }}
+                activeOpacity={0.7}
+              >
+                <Text variant="bodyEmph" color={palette.accent.primary}>
+                  Вся история
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color={palette.accent.primary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </ScrollView>
+      )}
+
+      {/* Folder picker — «Перенести» / category field. Scoped to the product's
+          own warehouse so it never moves between warehouses. */}
+      <FolderPickerModal
+        visible={moveOpen}
+        onClose={() => setMoveOpen(false)}
+        warehouseId={product.warehouseId}
+        currentCategory={editing ? category : product.category}
+        onConfirm={handleMoveConfirm}
+        busy={!editing && saveMutation.isPending}
+      />
 
       {/* Full movement journal — shares the cache key, so it opens instantly. */}
       <ProductMovementHistoryModal
@@ -544,6 +968,23 @@ export default function ProductDetailScreen() {
 }
 
 // ─── sub-components ─────────────────────────────────────────────────────────
+interface EditFieldProps {
+  label: string;
+  palette: ReturnType<typeof useColors>;
+  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode;
+}
+function EditField({ label, palette, style, children }: EditFieldProps) {
+  return (
+    <View style={[styles.field, style]}>
+      <Text variant="caption" color={palette.text.secondary} style={styles.fieldLabel}>
+        {label}
+      </Text>
+      {children}
+    </View>
+  );
+}
+
 interface StatTileProps {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
@@ -657,6 +1098,57 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  saveBtn: {
+    height: 36,
+    paddingHorizontal: spacing[3.5],
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+
+  // «Перенести» row (view mode)
+  moveRowBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing[2],
+  },
+  moveRowIcon: { width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+
+  // Edit form
+  field: { marginTop: spacing[3], gap: spacing[1.5] },
+  fieldLabel: { textTransform: 'uppercase', letterSpacing: 0.3 },
+  fieldRow: { flexDirection: 'row', gap: spacing[3] },
+  input: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+    fontSize: 15,
+  },
+  inputAsButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[2] },
+  photoActions: { flexDirection: 'row', justifyContent: 'center', gap: spacing[5], marginTop: spacing[3] },
+  photoActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
+  editActions: { flexDirection: 'row', gap: spacing[3], marginTop: spacing[6] },
+  cancelBtn: {
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  submitBtn: {
+    flex: 1,
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
     alignItems: 'center',
     justifyContent: 'center',
   },

@@ -39,6 +39,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import ProductPickerModal from '../components/ProductPickerModal';
+import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
 import { useColors } from '../contexts/ThemeContext';
 import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { haptic } from '../platform/haptics';
@@ -90,6 +91,7 @@ export default function PurchaseOrderCreateScreen() {
   const [note, setNote] = useState(seedPo?.note ?? '');
   const [showPicker, setShowPicker] = useState(false);
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [showRequest, setShowRequest] = useState(false);
 
   // ── Suppliers ──────────────────────────────────────────────────────────
   const { data: suppliersRaw } = useQuery<Supplier[]>({
@@ -426,6 +428,22 @@ export default function PurchaseOrderCreateScreen() {
             </View>
           )}
 
+          {/* «Сформировать запрос» — текстовый запрос поставщику по позициям
+              (без цен) для отправки в WhatsApp / копирования. */}
+          {lines.length > 0 ? (
+            <TouchableOpacity
+              style={[styles.requestBtn, { borderColor: palette.border.strong, backgroundColor: palette.bg.card }]}
+              onPress={() => {
+                haptic('tap');
+                setShowRequest(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="chatbubbles-outline" size={18} color={colors.primary[600]} />
+              <Text style={[styles.requestBtnText, { color: palette.text.primary }]}>Сформировать запрос</Text>
+            </TouchableOpacity>
+          ) : null}
+
           {/* ═══ КОММЕНТАРИЙ ═══ */}
           <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>КОММЕНТАРИЙ</Text>
           <TextInput
@@ -480,6 +498,15 @@ export default function PurchaseOrderCreateScreen() {
         getCartQty={getCartQty}
         title="Товары в заказ"
         showCostPrice
+      />
+
+      {/* ── Запрос поставщику (текст без цен → копировать / WhatsApp) ── */}
+      <SupplierRequestSheet
+        visible={showRequest}
+        onClose={() => setShowRequest(false)}
+        supplierName={selectedSupplierName || undefined}
+        supplierPhone={selectedSupplier?.phone}
+        lines={lines.map((l) => ({ name: l.name, quantity: l.quantity }))}
       />
     </View>
   );
@@ -566,6 +593,17 @@ const styles = StyleSheet.create({
     borderStyle: 'dashed',
   },
   emptyLinesText: { fontSize: 13, fontWeight: '500' },
+  requestBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    marginTop: spacing[3],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  requestBtnText: { fontSize: 15, fontWeight: '700', letterSpacing: -0.2 },
   linesCard: { borderRadius: borderRadius.xl, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },
   lineRow: { paddingHorizontal: spacing[3.5], paddingVertical: spacing[3], gap: spacing[2] },
   lineTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2] },

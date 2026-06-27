@@ -55,3 +55,45 @@ export function formatPoDate(iso?: string | null): string {
 export function outstandingQty(quantity: number, receivedQuantity: number): number {
   return Math.max(0, (quantity || 0) - (receivedQuantity || 0));
 }
+
+// ── Supplier request («Сформировать запрос») ─────────────────────────────────
+// Plain-text message a manager sends to a supplier asking for current prices.
+// Deliberately price-LESS and total-LESS: each line is «• <name> — <qty> шт»
+// with a friendly header + footer. Works without any messaging API — the text
+// is copied (share sheet) or handed to WhatsApp via a `whatsapp://send` deep
+// link. Pure + RN-free so it unit-tests under the node jest env.
+
+export interface SupplierRequestLine {
+  /** Product name exactly as stored in the warehouse (snapshot is fine). */
+  name: string;
+  quantity: number;
+}
+
+/**
+ * Build the supplier price-request text.
+ *
+ * @param lines        order positions (name + qty). Empty/blank names skipped.
+ * @param supplierName optional — greets the supplier by name when present.
+ */
+export function buildSupplierRequestText(lines: SupplierRequestLine[], supplierName?: string | null): string {
+  const greeting = supplierName && supplierName.trim() ? `Здравствуйте, ${supplierName.trim()}!` : 'Здравствуйте!';
+  const header = `${greeting}\nПодскажите, пожалуйста, наличие и актуальные цены на позиции:`;
+  const body = lines
+    .filter((l) => l.name && l.name.trim())
+    .map((l) => `• ${l.name.trim()} — ${Math.max(1, Math.round(l.quantity || 0))} шт`)
+    .join('\n');
+  const footer = 'Будем благодарны за счёт с ценами. Заранее спасибо!';
+  return `${header}\n\n${body}\n\n${footer}`;
+}
+
+/**
+ * Best-effort `whatsapp://send` deep link. Strips every non-digit from the
+ * phone (so `+7 (900) 123-45-67` → `79001234567`); when no usable phone is
+ * present the link carries only the prefilled text and WhatsApp opens the
+ * contact picker. Works WITHOUT the WhatsApp Business API.
+ */
+export function buildWhatsappLink(text: string, phone?: string | null): string {
+  const digits = (phone || '').replace(/\D/g, '');
+  const encoded = encodeURIComponent(text);
+  return digits ? `whatsapp://send?phone=${digits}&text=${encoded}` : `whatsapp://send?text=${encoded}`;
+}

@@ -36,6 +36,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import AnimatedCard from '../components/AnimatedCard';
 import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
+import FolderPickerModal from '../components/FolderPickerModal';
 import ProductMovementHistoryModal from '../components/ProductMovementHistoryModal';
 import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
@@ -363,6 +364,11 @@ export default function ProductsScreen() {
   // defect / move to used. Opened by long-press on a product row.
   const [actionsForProduct, setActionsForProduct] = useState<Product | null>(null);
 
+  // «Перенести в папку» — folder picker target. Opened from the long-press
+  // action sheet; commits a category change via productsApi.update (same
+  // warehouse only — the picker is scoped to the product's warehouseId).
+  const [moveProduct, setMoveProduct] = useState<Product | null>(null);
+
   // «История движения товара» — read-only журнал stock-movements по одному
   // товару. Открывается из action-sheet (long-press) и из окна
   // редактирования товара. null → модалка закрыта.
@@ -562,6 +568,23 @@ export default function ProductsScreen() {
         '\u041E\u0448\u0438\u0431\u043A\u0430',
         '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438',
       );
+    },
+  });
+
+  // Перенос товара в другую папку (только смена category). Picker scoped to
+  // the product's own warehouse, поэтому склад не меняется.
+  const moveMutation = useMutation({
+    mutationFn: ({ id, category }: { id: string; category: string }) => productsApi.update(id, { category }),
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      setMoveProduct(null);
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось перенести товар');
     },
   });
 
@@ -2817,7 +2840,9 @@ export default function ProductsScreen() {
           onPress={() => {
             const p = actionsForProduct;
             setActionsForProduct(null);
-            if (p) openEdit(p);
+            // Редактирование теперь живёт на детальном экране (а не в старом
+            // модальном окне): открываем ProductDetail сразу в режиме правки.
+            if (p) navigation.navigate('ProductDetail', { product: p, edit: true });
           }}
         >
           <View style={[styles.opsIcon, { backgroundColor: palette.accent.primarySoft }]}>
@@ -2826,6 +2851,25 @@ export default function ProductsScreen() {
           <View style={{ flex: 1 }}>
             <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Редактировать'}</Text>
             <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>{'Изменить параметры товара'}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={() => {
+            const p = actionsForProduct;
+            setActionsForProduct(null);
+            if (p) setMoveProduct(p);
+          }}
+        >
+          <View style={[styles.opsIcon, { backgroundColor: palette.accent.primarySoft }]}>
+            <Ionicons name="folder-open-outline" size={22} color={palette.accent.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Перенести в папку'}</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+              {'Выбрать папку из существующих'}
+            </Text>
           </View>
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
@@ -2869,6 +2913,19 @@ export default function ProductsScreen() {
         onClose={() => setHistoryProduct(null)}
         productId={historyProduct?.id ?? null}
         productName={historyProduct?.name}
+      />
+
+      {/* «Перенести в папку» — folder picker scoped to the product's warehouse.
+          Existing categories only; one tap → productsApi.update({ category }). */}
+      <FolderPickerModal
+        visible={!!moveProduct}
+        onClose={() => setMoveProduct(null)}
+        warehouseId={moveProduct?.warehouseId ?? activeWarehouseId ?? null}
+        currentCategory={moveProduct?.category}
+        busy={moveMutation.isPending}
+        onConfirm={(category) => {
+          if (moveProduct) moveMutation.mutate({ id: moveProduct.id, category });
+        }}
       />
 
       {/* Transfer qty dialog — same shape for defect_transfer and

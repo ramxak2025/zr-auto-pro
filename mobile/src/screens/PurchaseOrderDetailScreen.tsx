@@ -36,14 +36,15 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { ListSkeleton } from '../components/Skeleton';
 import QueryErrorState from '../components/QueryErrorState';
+import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { purchaseOrdersApi } from '../api/services';
+import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { UserRole, type PurchaseOrder } from '../../../shared/types';
+import { UserRole, type PurchaseOrder, type Supplier } from '../../../shared/types';
 import { PO_STATUS_META, formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purchaseOrderHelpers';
 
 export default function PurchaseOrderDetailScreen() {
@@ -62,6 +63,7 @@ export default function PurchaseOrderDetailScreen() {
   // itemId → текст «принять сейчас» (дельта).
   const [receiptInputs, setReceiptInputs] = useState<Record<string, string>>({});
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [showRequest, setShowRequest] = useState(false);
 
   const {
     data: po,
@@ -77,6 +79,20 @@ export default function PurchaseOrderDetailScreen() {
 
   const meta = po ? PO_STATUS_META[po.status] : null;
   const items = useMemo(() => po?.items ?? [], [po]);
+
+  // Supplier phone for the WhatsApp deep link — cache-first ['suppliers'] list
+  // (already persisted/warmed). Fetched lazily when the request sheet opens; a
+  // late arrival is fine (the link is built at button-press time).
+  const { data: suppliers } = useQuery<Supplier[]>({
+    queryKey: ['suppliers'],
+    queryFn: async () => (await suppliersApi.getAll()).data.data,
+    staleTime: 5 * 60 * 1000,
+    enabled: showRequest,
+  });
+  const supplierPhone = useMemo(
+    () => (po?.supplierId ? suppliers?.find((s) => s.id === po.supplierId)?.phone : undefined),
+    [suppliers, po?.supplierId],
+  );
 
   // ── Stock-touching invalidation (приёмка меняет остатки) ──────────────────
   const invalidateAfterStockChange = useCallback(() => {
@@ -313,6 +329,22 @@ export default function PurchaseOrderDetailScreen() {
           ) : null}
         </View>
 
+        {/* «Сформировать запрос» — на черновике: текстовый запрос поставщику по
+            позициям (без цен) для копирования / отправки в WhatsApp. */}
+        {isDraft && items.length > 0 ? (
+          <TouchableOpacity
+            style={[styles.requestBtn, { borderColor: palette.border.strong, backgroundColor: palette.bg.card }]}
+            onPress={() => {
+              haptic('tap');
+              setShowRequest(true);
+            }}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="chatbubbles-outline" size={18} color={colors.primary[600]} />
+            <Text style={[styles.requestBtnText, { color: palette.text.primary }]}>Сформировать запрос</Text>
+          </TouchableOpacity>
+        ) : null}
+
         {/* ── Read-only hint for terminal states ── */}
         {isTerminal ? (
           <View style={styles.terminalHint}>
@@ -435,6 +467,15 @@ export default function PurchaseOrderDetailScreen() {
         confirmText="Отменить заказ"
         variant="danger"
       />
+
+      {/* ── Запрос поставщику (текст без цен → копировать / WhatsApp) ── */}
+      <SupplierRequestSheet
+        visible={showRequest}
+        onClose={() => setShowRequest(false)}
+        supplierName={po.supplierName}
+        supplierPhone={supplierPhone}
+        lines={items.map((it) => ({ name: it.name, quantity: it.quantity }))}
+      />
     </View>
   );
 }
@@ -506,6 +547,19 @@ const styles = StyleSheet.create({
   qtyBadge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.sm },
   qtyBadgeText: { fontSize: 11, fontWeight: '600' },
   itemsEmpty: { fontSize: 13, padding: spacing[4], textAlign: 'center' },
+
+  // «Сформировать запрос»
+  requestBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    marginTop: spacing[4],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  requestBtnText: { fontSize: 15, fontWeight: '700', letterSpacing: -0.2 },
 
   // Receive inline
   receiveRow: {
