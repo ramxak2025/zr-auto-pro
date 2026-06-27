@@ -40,7 +40,9 @@ import {
   warehouseAnalyticsApi,
   productsApi,
   myCompanyApi,
+  installmentsApi,
 } from '../api/services';
+import { formatInstallmentMoney, dueLabel } from '../components/installments/installmentUi';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -62,6 +64,7 @@ import type {
   ReorderItem,
   Product,
   Tenant,
+  InstallmentWidget,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { usePreference, prefKey } from '../hooks/usePreference';
@@ -2092,6 +2095,99 @@ function LowStockCard() {
   );
 }
 
+// ── Рассрочка (installments) ───────────────────────────────────────────────
+// Owner/admin compact widget: предстоящие и просроченные платежи по рассрочке
+// (GET /installments/widget). Hero — общий остаток к получению; ниже — счётчики
+// «просрочено» / «скоро» и до трёх ближайших строк. Пустой ответ (нет планов в
+// окне) → null. Рендерится только в AdminDashboard (owner+admin). Тап → раздел
+// «Рассрочка».
+function InstallmentsWidget() {
+  const palette = useColors();
+  const navigation = useNavigation<any>();
+  const { data } = useQuery<InstallmentWidget>({
+    queryKey: ['installments', 'widget'],
+    queryFn: async () => (await installmentsApi.widget()).data,
+    staleTime: 60_000,
+  });
+
+  const items = data?.items ?? [];
+  // Hide when there's nothing upcoming or overdue.
+  if (items.length === 0) return null;
+
+  const overdueCount = data?.overdueCount ?? 0;
+  const dueSoonCount = data?.dueSoonCount ?? 0;
+  const totalRemaining = data?.totalRemaining ?? 0;
+  const top = items.slice(0, 3);
+  const accent = overdueCount > 0 ? colors.red[500] : colors.amber[600];
+
+  return (
+    <AnimatedCard
+      index={10}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      onPress={() => {
+        haptic('tap');
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Installments' } });
+      }}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: softTint(accent, palette.mode) }]}>
+          <Ionicons name="card" size={15} color={accent} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>РАССРОЧКА</Text>
+        <View style={styles.installmentHeaderRight}>
+          <Text style={[styles.installmentTotal, { color: palette.text.primary }]} numberOfLines={1}>
+            {formatInstallmentMoney(totalRemaining)}
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </View>
+      </View>
+
+      {/* Counters */}
+      <View style={styles.installmentCounters}>
+        {overdueCount > 0 ? (
+          <View style={[styles.installmentPill, { backgroundColor: softTint(colors.red[500], palette.mode) }]}>
+            <Ionicons name="alert-circle" size={13} color={colors.red[500]} />
+            <Text style={[styles.installmentPillText, { color: colors.red[500] }]}>Просрочено: {overdueCount}</Text>
+          </View>
+        ) : null}
+        {dueSoonCount > 0 ? (
+          <View style={[styles.installmentPill, { backgroundColor: softTint(colors.amber[600], palette.mode) }]}>
+            <Ionicons name="time-outline" size={13} color={colors.amber[600]} />
+            <Text style={[styles.installmentPillText, { color: colors.amber[600] }]}>Скоро: {dueSoonCount}</Text>
+          </View>
+        ) : null}
+      </View>
+
+      {/* Top-3 nearest rows */}
+      <View style={{ gap: spacing[1.5], marginTop: spacing[2.5] }}>
+        {top.map((it) => {
+          const due = dueLabel({ status: 'open', nextPaymentDate: it.nextPaymentDate, dueInDays: it.dueInDays });
+          return (
+            <View key={it.planId} style={styles.installmentRow}>
+              <Text style={[styles.installmentName, { color: palette.text.primary }]} numberOfLines={1}>
+                {it.clientName || 'Клиент'}
+              </Text>
+              <View style={styles.installmentRowRight}>
+                {due ? (
+                  <Text
+                    style={[styles.installmentDue, { color: it.overdue ? colors.red[500] : palette.text.tertiary }]}
+                    numberOfLines={1}
+                  >
+                    {due}
+                  </Text>
+                ) : null}
+                <Text style={[styles.installmentAmount, { color: it.overdue ? colors.red[500] : colors.amber[600] }]}>
+                  {formatInstallmentMoney(it.remaining)}
+                </Text>
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </AnimatedCard>
+  );
+}
+
 // ── 5. Clients New vs Returning ─────────────────────────────────────────────
 // Premium analytics-style widget: matches OwnerAnalyticsChart visual language
 // — segmented period control, hero total with two-tone delta, animated split
@@ -2901,6 +2997,7 @@ function OwnerFreshnessBadge() {
 const DASHBOARD_WIDGETS: DashboardWidgetDef[] = [
   { id: 'cash-position', label: 'Касса сегодня', Component: CashPositionCard },
   { id: 'margin', label: 'Маржинальность', Component: MarginCard },
+  { id: 'installments', label: 'Рассрочка', Component: InstallmentsWidget },
   { id: 'deferred', label: 'Зависшие отложенные', Component: DeferredCard },
   { id: 'warehouse-analytics', label: 'Склад', Component: WarehouseAnalyticsWidget },
   { id: 'low-stock', label: 'Заканчиваются товары', Component: LowStockCard },
@@ -3732,6 +3829,7 @@ export default function DashboardScreen() {
       ['dashboard-v2'],
       ['schedule-today'],
       ['calls-summary'],
+      ['installments', 'widget'],
       // owner-alerts → replaced by WarehouseAnalyticsWidget; pull-to-refresh
       // invalidates both warehouse-analytics sub-queries.
       ['warehouse-analytics'],
@@ -4357,6 +4455,25 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
+
+  // ── Рассрочка widget ──────────────────────────────────────────────────────
+  installmentHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginLeft: 'auto' },
+  installmentTotal: { fontSize: 15, fontWeight: fontWeight.bold, letterSpacing: -0.3 },
+  installmentCounters: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  installmentPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+  },
+  installmentPillText: { fontSize: 11.5, fontWeight: fontWeight.bold },
+  installmentRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[2] },
+  installmentRowRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flexShrink: 1 },
+  installmentName: { flex: 1, fontSize: 13.5, fontWeight: fontWeight.medium, letterSpacing: -0.1 },
+  installmentDue: { fontSize: 12, fontWeight: fontWeight.medium, flexShrink: 1 },
+  installmentAmount: { fontSize: 13.5, fontWeight: fontWeight.bold, letterSpacing: -0.2 },
 
   // ── Заканчиваются товары (M10) ────────────────────────────────────────────
   lowStockHeaderRight: {

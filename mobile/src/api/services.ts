@@ -41,6 +41,7 @@ import {
   createPermissionTemplatesApi,
   createCashShiftsApi,
   createDebtsApi,
+  createInstallmentsApi,
   createLoyaltyApi,
   createPurchaseOrdersApi,
   createPaymentsApi,
@@ -103,6 +104,15 @@ export const cashShiftsApi = createCashShiftsApi(api);
 // tenant user. Every mutation returns the refreshed per-client summary so the
 // UI updates instantly (DebtorsScreen + ClientDetailScreen debt section).
 export const debtsApi = createDebtsApi(api);
+// Рассрочка — backend installments/ (migration 093). REPLACES the manual
+// «Дебиторка» as the primary sell-on-credit flow: a plan is created server-side
+// when a check is sold with paymentMethod 'installment' (gated by the
+// `sell_installment` permission). list/clientLedger are open to any tenant user;
+// pay/payoff/reschedule, the dashboard widget and reminder settings are
+// owner-class gated server-side (director/admin/superadmin). Consumed by
+// InstallmentsScreen + InstallmentDetailScreen + the ClientDetail «Рассрочка»
+// section + the Главная widget + InstallmentReminderSettingsScreen.
+export const installmentsApi = createInstallmentsApi(api);
 // Программа лояльности / бонусы / кешбэк — backend loyalty/ (migration 083).
 // settings PATCH + adjust owner-class gated server-side; accrue/redeem gated to
 // cashier roles; reads open to any tenant user. Every mutation returns the

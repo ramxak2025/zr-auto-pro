@@ -29,6 +29,7 @@ import SourcePickerSheet from '../components/SourcePickerSheet';
 import CarPlateField from '../components/CarPlateField';
 import type { PlateMode } from '../components/RussianPlateInput';
 import ClientCallsSection from '../components/ClientCallsSection';
+import ClientInstallmentSection from '../components/installments/ClientInstallmentSection';
 import LoyaltyBadge from '../components/LoyaltyBadge';
 import SectionHeader from '../components/SectionHeader';
 import { UserRole } from '../../../shared/types';
@@ -979,11 +980,17 @@ export default function ClientDetailScreen() {
           />
         </View>
 
-        {/* ДОЛГИ — per-client receivables ledger (дебиторка). Balance header,
-            charge/payment buttons (role-gated), the movements ledger, and a
-            read-only «Незакрытые заказ-наряды» list. Self-contained: owns its
-            own query + mutations + amount-prompt modal. */}
-        <ClientDebtSection clientId={id} canManage={canManageDebt} palette={palette} onOpenCheck={openCheck} />
+        {/* РАССРОЧКА — продажи в кредит и платежи (backend installments/).
+            Общий остаток, список планов и быстрый «Внести платёж» (owner-class).
+            Self-hide: пока у клиента нет рассрочек, секция не рендерится. */}
+        <ClientInstallmentSection clientId={id} canManage={canManageDebt} palette={palette} />
+
+        {/* ДОЛГИ — read-only история дебиторки (backend debts/). Ручное
+            добавление долга убрано: продажа в рассрочку теперь идёт через кассу
+            (способ оплаты «Рассрочка»). Здесь остаётся баланс, леджер движений и
+            «Незакрытые заказ-наряды» — только для просмотра. Секция сама
+            скрывается, когда истории нет. */}
+        <ClientDebtSection clientId={id} palette={palette} onOpenCheck={openCheck} />
 
         {/* БОНУСЫ — программа лояльности. Баланс (крупно), всего начислено /
             списано, и леджер движений (accrual зелёным +, redemption оранжевым
@@ -1900,99 +1907,25 @@ function NotesEditorModal({ visible, initialValue, palette, saving, onClose, onS
   );
 }
 
-// ── ClientDebtSection (Дебиторка) ──────────────────────────────────────
+// ── ClientDebtSection (Дебиторка — read-only история) ──────────────────────
 // Per-client receivables ledger. Reads GET /debts/client/:id (balance +
-// newest-first ledger + read-only deferred-check context). «Добавить долг»
-// (charge) and «Принять оплату» (payment) are role-gated to director / admin /
-// superadmin (and enforced server-side). Both mutations return the refreshed
-// summary, which we write straight into the cache so the balance + ledger
-// update instantly, then invalidate the per-client + debtors-overview keys.
+// newest-first ledger + read-only deferred-check context). Manual debt entry
+// («Добавить долг» / «Принять оплату») was REMOVED — продажа в кредит теперь
+// идёт через кассу (способ оплаты «Рассрочка», backend installments/). Эта
+// секция остаётся ТОЛЬКО для просмотра ранее накопленной истории долгов и сама
+// скрывается, когда показывать нечего.
 interface ClientDebtSectionProps {
   clientId: string;
-  canManage: boolean;
   palette: ReturnType<typeof useColors>;
   /** Stable opener — a tap on a deferred check opens its CheckDetail. */
   onOpenCheck: (checkId: string) => void;
 }
 
-function ClientDebtSection({ clientId, canManage, palette, onOpenCheck }: ClientDebtSectionProps) {
-  const queryClient = useQueryClient();
-  const [promptMode, setPromptMode] = useState<'charge' | 'payment' | null>(null);
-  const [amountText, setAmountText] = useState('');
-  const [reasonText, setReasonText] = useState('');
-
-  const { data: summary, isLoading } = useQuery<ClientDebtSummary>({
+function ClientDebtSection({ clientId, palette, onOpenCheck }: ClientDebtSectionProps) {
+  const { data: summary } = useQuery<ClientDebtSummary>({
     queryKey: ['debts', 'client', clientId],
     queryFn: async () => (await debtsApi.clientLedger(clientId)).data,
   });
-
-  // Instant cache write from the mutation's returned summary, then a
-  // background revalidation of THIS client + the debtors overview.
-  const applySummary = useCallback(
-    (data: ClientDebtSummary) => {
-      queryClient.setQueryData(['debts', 'client', clientId], data);
-      queryClient.invalidateQueries({ queryKey: ['debts', 'client', clientId] });
-      queryClient.invalidateQueries({ queryKey: ['debts', 'debtors'] });
-    },
-    [queryClient, clientId],
-  );
-
-  const closePrompt = useCallback(() => {
-    setPromptMode(null);
-    setAmountText('');
-    setReasonText('');
-  }, []);
-
-  const chargeMutation = useMutation({
-    mutationFn: (data: { amount: number; reason?: string }) =>
-      debtsApi.charge({ clientId, amount: data.amount, reason: data.reason }),
-    onSuccess: (res) => {
-      applySummary(res.data);
-      haptic('success');
-      closePrompt();
-    },
-    onError: () => {
-      haptic('error');
-      Alert.alert('Ошибка', 'Не удалось добавить долг');
-    },
-  });
-
-  const paymentMutation = useMutation({
-    mutationFn: (data: { amount: number; reason?: string }) =>
-      debtsApi.payment({ clientId, amount: data.amount, reason: data.reason }),
-    onSuccess: (res) => {
-      applySummary(res.data);
-      haptic('success');
-      closePrompt();
-    },
-    onError: () => {
-      haptic('error');
-      Alert.alert('Ошибка', 'Не удалось принять оплату');
-    },
-  });
-
-  const openPrompt = (mode: 'charge' | 'payment') => {
-    haptic('tap');
-    setAmountText('');
-    setReasonText('');
-    setPromptMode(mode);
-  };
-
-  // Parse "1 200,50" / "1200.5" → number. NaN / ≤0 disables submit.
-  const parsedAmount = useMemo(() => {
-    const normalized = amountText.replace(/\s/g, '').replace(',', '.');
-    const n = Number(normalized);
-    return Number.isFinite(n) ? n : NaN;
-  }, [amountText]);
-  const amountValid = Number.isFinite(parsedAmount) && parsedAmount > 0;
-  const submitting = chargeMutation.isPending || paymentMutation.isPending;
-
-  const handleSubmit = () => {
-    if (!amountValid || submitting) return;
-    const reason = reasonText.trim() ? reasonText.trim() : undefined;
-    if (promptMode === 'charge') chargeMutation.mutate({ amount: parsedAmount, reason });
-    else if (promptMode === 'payment') paymentMutation.mutate({ amount: parsedAmount, reason });
-  };
 
   const balance = summary?.balance ?? 0;
   const owes = balance > 0;
@@ -2001,6 +1934,11 @@ function ClientDebtSection({ clientId, canManage, palette, onOpenCheck }: Client
   const balanceLabel = owes ? 'Долг клиента' : credit ? 'Переплата / кредит' : 'Задолженности нет';
   const ledger = summary?.ledger ?? [];
   const deferred = summary?.deferredChecks ?? [];
+
+  // Read-only: render only when there's actual history to show — otherwise the
+  // whole (now non-interactive) section would just be dead chrome.
+  const hasContent = !!summary && (balance !== 0 || ledger.length > 0 || deferred.length > 0);
+  if (!hasContent) return null;
 
   return (
     <>
@@ -2052,58 +1990,7 @@ function ClientDebtSection({ clientId, canManage, palette, onOpenCheck }: Client
               {formatMoney(Math.abs(balance))}
             </Text>
           </View>
-          {isLoading && !summary ? <ActivityIndicator size="small" color={palette.text.tertiary} /> : null}
         </View>
-
-        {/* Action buttons — role-gated to director/admin/superadmin. */}
-        {canManage ? (
-          <View style={debtStyles.actionsRow}>
-            <TouchableOpacity
-              style={[
-                debtStyles.actionBtn,
-                { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
-              ]}
-              onPress={() => openPrompt('charge')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="add-circle-outline"
-                size={16}
-                color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
-              />
-              <Text
-                style={[
-                  debtStyles.actionBtnText,
-                  { color: palette.mode === 'dark' ? colors.red[300] : colors.red[600] },
-                ]}
-              >
-                Добавить долг
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                debtStyles.actionBtn,
-                { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
-              ]}
-              onPress={() => openPrompt('payment')}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name="cash-outline"
-                size={16}
-                color={palette.mode === 'dark' ? colors.green[300] : colors.green[600]}
-              />
-              <Text
-                style={[
-                  debtStyles.actionBtnText,
-                  { color: palette.mode === 'dark' ? colors.green[300] : colors.green[600] },
-                ]}
-              >
-                Принять оплату
-              </Text>
-            </TouchableOpacity>
-          </View>
-        ) : null}
 
         {/* Ledger — newest first. Charge red (+), payment green (−). */}
         {ledger.length > 0 ? (
@@ -2138,9 +2025,9 @@ function ClientDebtSection({ clientId, canManage, palette, onOpenCheck }: Client
               );
             })}
           </View>
-        ) : !isLoading ? (
+        ) : (
           <Text style={[debtStyles.emptyLedger, { color: palette.text.tertiary }]}>Движений по долгу пока нет</Text>
-        ) : null}
+        )}
       </AnimatedCard>
 
       {/* Read-only «Незакрытые заказ-наряды» — outstanding deferred checks,
@@ -2187,58 +2074,6 @@ function ClientDebtSection({ clientId, canManage, palette, onOpenCheck }: Client
           </AnimatedCard>
         </>
       ) : null}
-
-      {/* Amount prompt — Modal + TextInput (Android-safe; never Alert.prompt). */}
-      <Modal
-        visible={promptMode !== null}
-        onClose={closePrompt}
-        title={promptMode === 'charge' ? 'Добавить долг' : 'Принять оплату'}
-      >
-        <Text style={[debtStyles.fieldLabel, { color: palette.text.secondary }]}>Сумма, ₽</Text>
-        <TextInput
-          style={[
-            debtStyles.input,
-            { backgroundColor: palette.bg.muted, color: palette.text.primary, borderColor: palette.border.subtle },
-          ]}
-          value={amountText}
-          onChangeText={setAmountText}
-          placeholder="0"
-          placeholderTextColor={palette.text.tertiary}
-          keyboardType="decimal-pad"
-          autoFocus
-          returnKeyType="done"
-        />
-        <Text style={[debtStyles.fieldLabel, { color: palette.text.secondary, marginTop: spacing[3] }]}>
-          Комментарий (необязательно)
-        </Text>
-        <TextInput
-          style={[
-            debtStyles.input,
-            { backgroundColor: palette.bg.muted, color: palette.text.primary, borderColor: palette.border.subtle },
-          ]}
-          value={reasonText}
-          onChangeText={setReasonText}
-          placeholder={promptMode === 'charge' ? 'За что долг' : 'Комментарий к оплате'}
-          placeholderTextColor={palette.text.tertiary}
-          returnKeyType="done"
-        />
-        <TouchableOpacity
-          style={[
-            debtStyles.submitBtn,
-            { backgroundColor: promptMode === 'charge' ? colors.red[600] : colors.green[600] },
-            (!amountValid || submitting) && debtStyles.submitBtnDisabled,
-          ]}
-          onPress={handleSubmit}
-          disabled={!amountValid || submitting}
-          activeOpacity={0.85}
-        >
-          {submitting ? (
-            <ActivityIndicator size="small" color={colors.white} />
-          ) : (
-            <Text style={debtStyles.submitBtnText}>{promptMode === 'charge' ? 'Добавить долг' : 'Принять оплату'}</Text>
-          )}
-        </TouchableOpacity>
-      </Modal>
     </>
   );
 }

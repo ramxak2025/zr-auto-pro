@@ -29,7 +29,9 @@ import SalaryScreen from '../screens/SalaryScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import CashFlowScreen from '../screens/CashFlowScreen';
 import CashShiftScreen from '../screens/CashShiftScreen';
-import DebtorsScreen from '../screens/DebtorsScreen';
+import InstallmentsScreen from '../screens/InstallmentsScreen';
+import InstallmentDetailScreen from '../screens/InstallmentDetailScreen';
+import InstallmentReminderSettingsScreen from '../screens/InstallmentReminderSettingsScreen';
 import ExpensesScreen from '../screens/ExpensesScreen';
 import UsersScreen from '../screens/UsersScreen';
 import ScheduleScreen from '../screens/ScheduleScreen';
@@ -350,12 +352,15 @@ function MoreStackNavigator() {
           inside the screen AND enforced server-side. Lives in MoreStack so the
           floating tab bar stays visible (back goes detail → Ещё). */}
       <MoreStack.Screen name="CashShift" component={CashShiftScreen} />
-      {/* Долги клиентов / дебиторка — backend debts/ (migration 081). Lives in
-          MoreStack so the floating tab bar stays visible and a tap on a debtor
-          row pushes ClientDetail onto THIS stack (back goes client → list → Ещё).
-          Viewing is open to any tenant user; charge/payment inside ClientDetail
-          are role-gated AND enforced server-side. */}
-      <MoreStack.Screen name="Debtors" component={DebtorsScreen} />
+      {/* Рассрочка — backend installments/ (migration 093). REPLACES the old
+          «Должники / дебиторка» route. Lives in MoreStack so the floating tab
+          bar stays visible (back goes detail → list → Ещё). list/clientLedger
+          are open to any tenant user; pay/payoff/reschedule + reminder settings
+          are owner-class AND enforced server-side. Plans are created when a
+          check is sold with paymentMethod 'installment'. */}
+      <MoreStack.Screen name="Installments" component={InstallmentsScreen} />
+      <MoreStack.Screen name="InstallmentDetail" component={InstallmentDetailScreen} />
+      <MoreStack.Screen name="InstallmentReminderSettings" component={InstallmentReminderSettingsScreen} />
       <MoreStack.Screen name="Salary" component={GatedSalary} />
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
       <MoreStack.Screen name="Reports" component={GatedReports} />

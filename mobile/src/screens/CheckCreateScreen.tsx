@@ -48,7 +48,9 @@ import DateTimePickerModal from '../components/DateTimePickerModal';
 import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
 import PaymentMethodModal, { paymentMethodLabel, paymentMethodVisual } from '../components/PaymentMethodModal';
 import SbpPaymentModal from '../components/SbpPaymentModal';
-import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
+import InstallmentSaleFields from '../components/installments/InstallmentSaleFields';
+import { toYmd, formatYmdHuman } from '../components/installments/installmentUi';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { buildShadow } from '../platform/iosSurface';
 import { normalizePlateForSearch, splitPlate, formatMain, isRussianInput } from '../utils/plateMask';
 import { haptic } from '../platform/haptics';
@@ -400,6 +402,14 @@ export default function CheckCreateScreen() {
   const [cashAmount, setCashAmount] = useState('');
   const [cashGiven, setCashGiven] = useState('');
   const [isDeferred, setIsDeferred] = useState(false);
+
+  // ── Рассрочка (installment sale) ──────────────────────────────────────────
+  // Активна, когда paymentMethod === 'installment'. Первый платёж уходит в чек
+  // как cashAmount (down_payment), остаток (total − первый платёж) становится
+  // долгом по рассрочке — сам план создаётся на сервере внутри транзакции чека.
+  const [installmentFirst, setInstallmentFirst] = useState('');
+  const [installmentNextDate, setInstallmentNextDate] = useState<Date>(() => new Date(Date.now() + 30 * 86400000));
+  const [showInstallmentDatePicker, setShowInstallmentDatePicker] = useState(false);
 
   // Line items
   const [serviceLines, setServiceLines] = useState<(CheckServiceLine & { lineMasterId?: string })[]>([]);
@@ -834,7 +844,13 @@ export default function CheckCreateScreen() {
   // the photo strip when the tenant's plan includes "check_photos" OR
   // when the user is superadmin. Subscription query is already cached
   // app-wide via the same query key, so this is essentially free.
-  const { user: authUser } = useAuth();
+  const { user: authUser, hasPermission } = useAuth();
+  // «Продажа в рассрочку» — способ оплаты «Рассрочка» доступен только при праве
+  // sell_installment (owner-class — implicit, см. AuthContext.hasPermission) и
+  // только для НОВОГО чека: план создаётся в момент продажи, не при правке.
+  const canSellInstallment = hasPermission('sell_installment');
+  const isInstallment = paymentMethod === ('installment' as PaymentMethod);
+  const showInstallmentToggle = canSellInstallment && !editId;
   const { data: subInfo } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
     queryFn: async () => (await subscriptionApi.get()).data,
@@ -1043,6 +1059,8 @@ export default function CheckCreateScreen() {
     setPaymentMethod('cash' as PaymentMethod);
     setCashAmount('');
     setIsDeferred(false);
+    setInstallmentFirst('');
+    setInstallmentNextDate(new Date(Date.now() + 30 * 86400000));
     setServiceLines([]);
     setProductLines([]);
     setCheckDate(new Date());
@@ -1404,14 +1422,23 @@ export default function CheckCreateScreen() {
     // in-flight, regardless of whether isPending has propagated yet.
     if (submittingRef.current || createMutation.isPending) return;
 
-    const shouldDefer = deferred !== undefined ? deferred : isDeferred;
     // СБП-успех проводит чек как электронную (карточную) оплату через
     // `paymentOverride='card'`. Без override поведение байт-в-байт прежнее —
     // используется выбранный в UI `paymentMethod`.
     const effectiveMethod = paymentOverride ?? paymentMethod;
+    // Рассрочку нельзя откладывать — продажа реальна (остаток = долг по ней).
+    const shouldDefer =
+      effectiveMethod === ('installment' as PaymentMethod) ? false : deferred !== undefined ? deferred : isDeferred;
     if (!shouldDefer && serviceLines.length === 0 && productLines.length === 0) {
       haptic('warning');
       Alert.alert('Ошибка', 'Добавьте хотя бы одну услугу или товар');
+      return;
+    }
+
+    // Рассрочка требует клиента (кого «должать») — ловим до сервера ради UX.
+    if (effectiveMethod === ('installment' as PaymentMethod) && !clientId) {
+      haptic('warning');
+      Alert.alert('Рассрочка', 'Для рассрочки выберите клиента.');
       return;
     }
 
@@ -1451,6 +1478,11 @@ export default function CheckCreateScreen() {
         // «наличные» can never push the ledger above «К оплате».
         finalCash = Math.min(parseMoneyInput(cashAmount), total);
         finalCard = Math.max(total - finalCash, 0);
+      } else if (effectiveMethod === ('installment' as PaymentMethod)) {
+        // Рассрочка: первый платёж (может быть 0) идёт как наличные —
+        // сервер суммирует cash+card в down_payment, остаток = долг по плану.
+        finalCash = Math.min(parseMoneyInput(installmentFirst), total);
+        finalCard = 0;
       }
 
       const payload = {
@@ -1464,6 +1496,11 @@ export default function CheckCreateScreen() {
         paymentMethod: effectiveMethod,
         cashAmount: finalCash || undefined,
         cardAmount: finalCard || undefined,
+        // Рассрочка: дата следующего платежа уходит в план (бэк создаёт его в
+        // той же транзакции). Для остальных способов поле отсутствует.
+        ...(effectiveMethod === ('installment' as PaymentMethod)
+          ? { installment: { nextPaymentDate: toYmd(installmentNextDate) } }
+          : {}),
         isDeferred: shouldDefer,
         services: serviceLines.map((l) => ({
           serviceId: l.serviceId,
@@ -2380,186 +2417,278 @@ export default function CheckCreateScreen() {
                 <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Оплата</Text>
               </View>
 
-              {/* Одна кнопка «Оплата» открывает центральную модалку выбора.
+              {/* «Продажа в рассрочку» — переключатель (только при праве
+                  sell_installment и для нового чека). Включает способ оплаты
+                  «Рассрочка»: вместо нал/карта/СБП показываем поля первого
+                  платежа и даты. Остальные способы — без изменений. */}
+              {showInstallmentToggle && (
+                <TouchableOpacity
+                  style={[
+                    styles.installmentToggle,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    isInstallment && {
+                      borderColor: colors.amber[600],
+                      backgroundColor: softTint(colors.amber[600], palette.mode),
+                    },
+                  ]}
+                  onPress={() => {
+                    haptic('tap');
+                    if (isInstallment) {
+                      setPaymentMethod('cash' as PaymentMethod);
+                    } else {
+                      setPaymentMethod('installment' as PaymentMethod);
+                      setIsDeferred(false);
+                    }
+                  }}
+                  activeOpacity={0.8}
+                  accessibilityRole="switch"
+                  accessibilityState={{ checked: isInstallment }}
+                  accessibilityLabel="Продажа в рассрочку"
+                >
+                  <View
+                    style={[
+                      styles.installmentToggleIcon,
+                      { backgroundColor: isInstallment ? colors.amber[600] : palette.bg.card },
+                    ]}
+                  >
+                    <Ionicons name="card-outline" size={18} color={isInstallment ? colors.white : colors.amber[600]} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text
+                      style={[
+                        styles.installmentToggleLabel,
+                        { color: isInstallment ? colors.amber[700] : palette.text.primary },
+                      ]}
+                    >
+                      Продажа в рассрочку
+                    </Text>
+                    <Text style={[styles.installmentToggleHint, { color: palette.text.tertiary }]} numberOfLines={1}>
+                      Часть сейчас, остаток — частями
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={isInstallment ? 'checkmark-circle' : 'ellipse-outline'}
+                    size={22}
+                    color={isInstallment ? colors.amber[600] : palette.text.tertiary}
+                  />
+                </TouchableOpacity>
+              )}
+
+              {isInstallment ? (
+                <InstallmentSaleFields
+                  palette={palette}
+                  total={total}
+                  firstPayment={installmentFirst}
+                  onFirstPaymentChange={setInstallmentFirst}
+                  remaining={Math.max(total - parseMoneyInput(installmentFirst), 0)}
+                  nextDateLabel={formatYmdHuman(toYmd(installmentNextDate))}
+                  onOpenDatePicker={() => {
+                    haptic('tap');
+                    setShowInstallmentDatePicker(true);
+                  }}
+                  readOnly={!showInstallmentToggle}
+                />
+              ) : (
+                <>
+                  {/* Одна кнопка «Оплата» открывает центральную модалку выбора.
                 Текущий способ показан компактно: цветной тайл-иконка + подпись.
                 Inline-ряд из четырёх кнопок заменён на этот аккуратный селектор. */}
-              {(() => {
-                const visual = paymentMethodVisual(paymentMethod);
-                return (
-                  <TouchableOpacity
-                    style={[styles.paymentSelector, { backgroundColor: palette.bg.muted, borderColor: visual.color }]}
-                    onPress={() => {
-                      haptic('tap');
-                      setShowPaymentPicker(true);
-                    }}
-                    activeOpacity={0.8}
-                    accessibilityRole="button"
-                    accessibilityLabel={`Способ оплаты: ${paymentMethodLabel(paymentMethod)}`}
-                  >
-                    <View style={[styles.paymentSelectorIcon, { backgroundColor: visual.tint }]}>
-                      <Ionicons name={visual.icon} size={20} color={visual.color} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.paymentSelectorHint, { color: palette.text.tertiary }]}>Способ оплаты</Text>
-                      <Text style={[styles.paymentSelectorValue, { color: palette.text.primary }]} numberOfLines={1}>
-                        {paymentMethodLabel(paymentMethod)}
-                      </Text>
-                    </View>
-                    <Ionicons name="chevron-down" size={18} color={palette.text.tertiary} />
-                  </TouchableOpacity>
-                );
-              })()}
+                  {(() => {
+                    const visual = paymentMethodVisual(paymentMethod);
+                    return (
+                      <TouchableOpacity
+                        style={[
+                          styles.paymentSelector,
+                          { backgroundColor: palette.bg.muted, borderColor: visual.color },
+                        ]}
+                        onPress={() => {
+                          haptic('tap');
+                          setShowPaymentPicker(true);
+                        }}
+                        activeOpacity={0.8}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Способ оплаты: ${paymentMethodLabel(paymentMethod)}`}
+                      >
+                        <View style={[styles.paymentSelectorIcon, { backgroundColor: visual.tint }]}>
+                          <Ionicons name={visual.icon} size={20} color={visual.color} />
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.paymentSelectorHint, { color: palette.text.tertiary }]}>
+                            Способ оплаты
+                          </Text>
+                          <Text
+                            style={[styles.paymentSelectorValue, { color: palette.text.primary }]}
+                            numberOfLines={1}
+                          >
+                            {paymentMethodLabel(paymentMethod)}
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-down" size={18} color={palette.text.tertiary} />
+                      </TouchableOpacity>
+                    );
+                  })()}
 
-              {paymentMethod === ('cash' as PaymentMethod) && (
-                <View
-                  style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-                >
-                  <View style={styles.splitRow}>
-                    <View style={styles.splitIconRow}>
-                      <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
-                      <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Клиент дал</Text>
-                    </View>
-                    <TextInput
-                      value={cashGiven}
-                      onChangeText={setCashGiven}
+                  {paymentMethod === ('cash' as PaymentMethod) && (
+                    <View
                       style={[
-                        styles.splitInput,
-                        {
-                          backgroundColor: palette.bg.card,
-                          borderColor: palette.border.subtle,
-                          color: palette.text.primary,
-                        },
+                        styles.splitWrap,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
                       ]}
-                      keyboardType="numeric"
-                      placeholder="0"
-                      placeholderTextColor={palette.text.tertiary}
-                    />
-                  </View>
-                  {parseMoneyInput(cashGiven) > total && (
-                    <>
+                    >
+                      <View style={styles.splitRow}>
+                        <View style={styles.splitIconRow}>
+                          <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
+                          <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Клиент дал</Text>
+                        </View>
+                        <TextInput
+                          value={cashGiven}
+                          onChangeText={setCashGiven}
+                          style={[
+                            styles.splitInput,
+                            {
+                              backgroundColor: palette.bg.card,
+                              borderColor: palette.border.subtle,
+                              color: palette.text.primary,
+                            },
+                          ]}
+                          keyboardType="numeric"
+                          placeholder="0"
+                          placeholderTextColor={palette.text.tertiary}
+                        />
+                      </View>
+                      {parseMoneyInput(cashGiven) > total && (
+                        <>
+                          <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
+                          <View style={styles.splitRow}>
+                            <View style={styles.splitIconRow}>
+                              <Ionicons name="arrow-undo-outline" size={16} color={colors.green[700]} />
+                              <Text
+                                style={[
+                                  styles.splitLabel,
+                                  { color: palette.text.secondary, fontWeight: fontWeight.bold },
+                                ]}
+                              >
+                                Сдача
+                              </Text>
+                            </View>
+                            <Text
+                              style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.green[700] }}
+                            >
+                              {formatMoney(parseMoneyInput(cashGiven) - total)}
+                            </Text>
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  )}
+
+                  {paymentMethod === ('cash_card' as PaymentMethod) && (
+                    <View
+                      style={[
+                        styles.splitWrap,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      ]}
+                    >
+                      <View style={styles.splitRow}>
+                        <View style={styles.splitIconRow}>
+                          <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
+                          <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Наличные</Text>
+                        </View>
+                        <TextInput
+                          value={cashAmount}
+                          onChangeText={setCashAmount}
+                          style={[
+                            styles.splitInput,
+                            {
+                              backgroundColor: palette.bg.card,
+                              borderColor: palette.border.subtle,
+                              color: palette.text.primary,
+                            },
+                          ]}
+                          keyboardType="numeric"
+                          placeholder="0"
+                          placeholderTextColor={palette.text.tertiary}
+                        />
+                      </View>
                       <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
                       <View style={styles.splitRow}>
                         <View style={styles.splitIconRow}>
-                          <Ionicons name="arrow-undo-outline" size={16} color={colors.green[700]} />
-                          <Text
-                            style={[styles.splitLabel, { color: palette.text.secondary, fontWeight: fontWeight.bold }]}
-                          >
-                            Сдача
-                          </Text>
+                          <Ionicons name="card-outline" size={16} color={colors.blue[600]} />
+                          <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Карта</Text>
                         </View>
-                        <Text
-                          style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.green[700] }}
-                        >
-                          {formatMoney(parseMoneyInput(cashGiven) - total)}
-                        </Text>
+                        <Text style={styles.splitCardAmount}>{formatMoney(cardAmountCalc)}</Text>
                       </View>
-                    </>
+                    </View>
                   )}
-                </View>
-              )}
 
-              {paymentMethod === ('cash_card' as PaymentMethod) && (
-                <View
-                  style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-                >
-                  <View style={styles.splitRow}>
-                    <View style={styles.splitIconRow}>
-                      <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
-                      <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Наличные</Text>
-                    </View>
-                    <TextInput
-                      value={cashAmount}
-                      onChangeText={setCashAmount}
-                      style={[
-                        styles.splitInput,
-                        {
-                          backgroundColor: palette.bg.card,
-                          borderColor: palette.border.subtle,
-                          color: palette.text.primary,
-                        },
-                      ]}
-                      keyboardType="numeric"
-                      placeholder="0"
-                      placeholderTextColor={palette.text.tertiary}
-                    />
-                  </View>
-                  <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
-                  <View style={styles.splitRow}>
-                    <View style={styles.splitIconRow}>
-                      <Ionicons name="card-outline" size={16} color={colors.blue[600]} />
-                      <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Карта</Text>
-                    </View>
-                    <Text style={styles.splitCardAmount}>{formatMoney(cardAmountCalc)}</Text>
-                  </View>
-                </View>
-              )}
-
-              {/* Оплата по СБП / QR — ДОБАВОЧНЫЙ эквайринг. Виден, когда есть что
+                  {/* Оплата по СБП / QR — ДОБАВОЧНЫЙ эквайринг. Виден, когда есть что
                 проводить и чек не откладывается. Открывает модалку: создаёт
                 онлайн-платёж, показывает ссылку СБП, опрашивает статус; при
                 успехе проводит чек по карточному (электронному) тендеру.
                 нал/карта/смешанная/отложенный — без изменений. */}
-              {!isDeferred && total > 0 && (serviceLines.length > 0 || productLines.length > 0) && (
-                <TouchableOpacity
-                  style={[
-                    styles.sbpButton,
-                    { backgroundColor: getBadgeColors(palette.mode).purple.bg, borderColor: colors.purple[600] },
-                  ]}
-                  onPress={openSbpPayment}
-                  activeOpacity={0.85}
-                  accessibilityRole="button"
-                  accessibilityLabel="Оплата по СБП или QR-коду"
-                >
-                  <View
-                    style={[
-                      styles.sbpButtonIcon,
-                      { backgroundColor: palette.mode === 'dark' ? palette.bg.card : '#FFFFFF' },
-                    ]}
-                  >
-                    <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text
-                      style={[styles.sbpButtonTitle, { color: getBadgeColors(palette.mode).purple.text }]}
-                      numberOfLines={1}
+                  {!isDeferred && total > 0 && (serviceLines.length > 0 || productLines.length > 0) && (
+                    <TouchableOpacity
+                      style={[
+                        styles.sbpButton,
+                        { backgroundColor: getBadgeColors(palette.mode).purple.bg, borderColor: colors.purple[600] },
+                      ]}
+                      onPress={openSbpPayment}
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel="Оплата по СБП или QR-коду"
                     >
-                      Оплата по СБП / QR
-                    </Text>
-                    <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
-                      Система быстрых платежей — оплата по QR
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-forward" size={18} color={colors.purple[600]} />
-                </TouchableOpacity>
-              )}
+                      <View
+                        style={[
+                          styles.sbpButtonIcon,
+                          { backgroundColor: palette.mode === 'dark' ? palette.bg.card : '#FFFFFF' },
+                        ]}
+                      >
+                        <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[styles.sbpButtonTitle, { color: getBadgeColors(palette.mode).purple.text }]}
+                          numberOfLines={1}
+                        >
+                          Оплата по СБП / QR
+                        </Text>
+                        <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
+                          Система быстрых платежей — оплата по QR
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={18} color={colors.purple[600]} />
+                    </TouchableOpacity>
+                  )}
 
-              {/* Deferred toggle */}
-              <TouchableOpacity
-                style={[
-                  styles.deferToggle,
-                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                  isDeferred && styles.deferToggleActive,
-                ]}
-                onPress={() => setIsDeferred(!isDeferred)}
-              >
-                <Ionicons
-                  name={isDeferred ? 'checkbox' : 'square-outline'}
-                  size={20}
-                  color={isDeferred ? colors.amber[600] : palette.text.tertiary}
-                />
-                <View style={{ flex: 1 }}>
-                  <Text
+                  {/* Deferred toggle */}
+                  <TouchableOpacity
                     style={[
-                      styles.deferLabel,
-                      { color: palette.text.secondary },
-                      isDeferred && { color: colors.amber[600] },
+                      styles.deferToggle,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      isDeferred && styles.deferToggleActive,
                     ]}
+                    onPress={() => setIsDeferred(!isDeferred)}
                   >
-                    Отложить чек
-                  </Text>
-                  <Text style={[styles.deferHint, { color: palette.text.tertiary }]}>Сохранить как черновик</Text>
-                </View>
-              </TouchableOpacity>
+                    <Ionicons
+                      name={isDeferred ? 'checkbox' : 'square-outline'}
+                      size={20}
+                      color={isDeferred ? colors.amber[600] : palette.text.tertiary}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={[
+                          styles.deferLabel,
+                          { color: palette.text.secondary },
+                          isDeferred && { color: colors.amber[600] },
+                        ]}
+                      >
+                        Отложить чек
+                      </Text>
+                      <Text style={[styles.deferHint, { color: palette.text.tertiary }]}>Сохранить как черновик</Text>
+                    </View>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
           )}
 
@@ -2822,6 +2951,18 @@ export default function CheckCreateScreen() {
           setShowPaymentPicker(false);
         }}
         onClose={() => setShowPaymentPicker(false)}
+      />
+
+      {/* Дата следующего платежа по рассрочке. */}
+      <DateTimePickerModal
+        visible={showInstallmentDatePicker}
+        value={installmentNextDate}
+        mode="date"
+        onConfirm={(d) => {
+          setInstallmentNextDate(d);
+          setShowInstallmentDatePicker(false);
+        }}
+        onCancel={() => setShowInstallmentDatePicker(false)}
       />
 
       {/* Приём оплаты по СБП / QR (эквайринг). Сумма = «К оплате».
@@ -3460,6 +3601,26 @@ const styles = StyleSheet.create({
     padding: spacing[2.5],
   },
   deferToggleActive: { borderColor: colors.amber[200], backgroundColor: colors.amber[50] },
+  // Рассрочка toggle
+  installmentToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1.5,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginBottom: spacing[2.5],
+  },
+  installmentToggleIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  installmentToggleLabel: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.2 },
+  installmentToggleHint: { fontSize: 12, marginTop: 2 },
   deferredEditHint: {
     flexDirection: 'row',
     alignItems: 'center',

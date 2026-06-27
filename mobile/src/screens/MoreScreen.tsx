@@ -173,19 +173,19 @@ const menuSections: MenuSection[] = [
         iconColor: colors.teal[600],
       },
       {
-        // Дебиторка — клиенты с непогашенным балансом. Просмотр списка
-        // долгов открыт любому сотруднику (backend debts/), а начисление/
-        // приём оплаты внутри карточки клиента role-gated (director/admin/
-        // superadmin) и закрыто на сервере. Переиспользуем item-key
-        // 'cashflow' — той же финансовой видимостью владелец управляет
-        // и «Движением денег» (новый ключ сломал бы ITEM_KEYS drift-guard).
-        label: 'Долги клиентов',
-        description: 'Дебиторка: кто и сколько должен',
-        screen: 'Debtors',
+        // Рассрочка — продажи в кредит и платежи по ним (backend installments/,
+        // 093). Заменяет прежний пункт «Должники / дебиторка». Просмотр списка
+        // открыт любому сотруднику; приём платежей / погашение / напоминания —
+        // owner-class и закрыты на сервере. Переиспользуем item-key 'cashflow'
+        // — той же финансовой видимостью владелец управляет и «Движением денег»
+        // (новый ключ сломал бы ITEM_KEYS drift-guard).
+        label: 'Рассрочка',
+        description: 'Продажи в рассрочку и платежи',
+        screen: 'Installments',
         itemKey: 'cashflow',
-        icon: 'cash-outline',
-        iconBg: colors.red[50],
-        iconColor: colors.red[600],
+        icon: 'card-outline',
+        iconBg: colors.amber[50],
+        iconColor: colors.amber[600],
       },
       {
         // Кассовая смена / Z-отчёт / Инкассация. Owner-class tool (open/close/
