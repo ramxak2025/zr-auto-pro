@@ -32,6 +32,7 @@ import type {
   Check,
   ChecksBoard,
   WorkBoardColumn,
+  PosSettings,
   Supplier,
   Delivery,
   SupplierPayment,
@@ -440,6 +441,15 @@ export function createChecksApi(api: HttpClient) {
         carPlate: string | null;
         carMakeModel: string | null;
       } | null>('/checks/last-visit', { params }),
+    /**
+     * 092 — POS «Кассовая смена + роли» settings. GET is readable by any role
+     * (a master reads it to learn the mode + whether they're a cashier, for the
+     * tab-bar swap + order-create flow). PATCH is owner-gated (director/admin/
+     * superadmin); body carries only `shiftModeEnabled`.
+     */
+    getPosSettings: () => api.get<PosSettings>('/checks/pos-settings'),
+    updatePosSettings: (data: { shiftModeEnabled: boolean }) =>
+      api.patch<{ shiftModeEnabled: boolean }>('/checks/pos-settings', data),
     getById: (id: string) => api.get<Check>(`/checks/${id}`),
     create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),
     update: (id: string, data: UpdateCheckRequest) => api.patch<Check>(`/checks/${id}`, data),

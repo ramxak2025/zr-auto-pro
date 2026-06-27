@@ -358,6 +358,8 @@ export interface UpdateTenantRequest {
   subscriptionNote?: string;
   /** 070 — flip the «Смены» (shifts) subsystem on/off for the tenant. */
   shiftsEnabled?: boolean;
+  /** 092 — flip POS «Кассовая смена + роли» mode on/off for the tenant. */
+  shiftModeEnabled?: boolean;
 }
 
 /** POST /tenants/:id/extend — extend the tenant's subscription by N days. */

@@ -101,6 +101,31 @@ export class ChecksController {
     return this.checksService.deleteBoardColumn(user.tenantID, id);
   }
 
+  // ── POS shift-mode settings (092) ───────────────────────────────────────
+  // Declared BEFORE `:id` so the literal `pos-settings` path isn't swallowed by
+  // the param route.
+
+  /**
+   * Read the tenant's POS «Кассовая смена + роли» mode + whether the CALLER is a
+   * cashier. Open to any authenticated role: a master needs the flag to swap its
+   * tab bar / order-create flow. `isCashier` is derived server-side (owner-class
+   * role OR the `accept_payment` permission).
+   */
+  @Get('pos-settings')
+  getPosSettings(@CurrentUser() user: JwtPayload) {
+    return this.checksService.getPosSettings(user.tenantID, user);
+  }
+
+  /**
+   * Flip POS shift-mode on/off. Owner-class only (the same set that configures
+   * the rest of company settings). Body carries only `shiftModeEnabled`.
+   */
+  @Roles('director', 'admin', 'superadmin')
+  @Patch('pos-settings')
+  updatePosSettings(@CurrentUser() user: JwtPayload, @Body() dto: { shiftModeEnabled?: boolean }) {
+    return this.checksService.updatePosSettings(user.tenantID, dto);
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.checksService.getById(id, user.tenantID);
@@ -119,12 +144,14 @@ export class ChecksController {
 
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.checksService.create(user.tenantID, user.userID, user.role, dto);
+    // `user` is forwarded as the actor so the service can resolve the cashier
+    // role-gate (role + permissions) when POS shift-mode is ON. OFF → ignored.
+    return this.checksService.create(user.tenantID, user.userID, user.role, dto, user);
   }
 
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.checksService.update(id, user.tenantID, user.role, dto, user.userID);
+    return this.checksService.update(id, user.tenantID, user.role, dto, user.userID, user);
   }
 
   @Roles('director', 'admin', 'superadmin')

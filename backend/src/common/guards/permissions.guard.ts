@@ -44,6 +44,9 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   checks_change_datetime: false,
   checks_view_all: false,
   payment_edit: false,
+  // Кассир смены — off by default; the owner grants it explicitly. Only
+  // consulted when the tenant's POS shift-mode is ON (092).
+  accept_payment: false,
   // Финансы — none by default.
   profit_view: false,
   financial_reports: false,

@@ -81,6 +81,7 @@ const PERMISSION_LABELS: Record<PermissionKey, string> = {
   checks_change_datetime: 'Меняет дату и время чека',
   checks_view_all: 'Видит чеки всех мастеров',
   payment_edit: 'Меняет оплату чека',
+  accept_payment: 'Кассир смены (принимает оплату)',
   // Финансы
   profit_view: 'Видит прибыль',
   financial_reports: 'Финансовые отчёты',

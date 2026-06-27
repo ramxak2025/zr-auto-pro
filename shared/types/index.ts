@@ -41,10 +41,32 @@ export interface Tenant {
    * PATCH /my-company update (Partial<Tenant>) — no dedicated endpoint.
    */
   shiftsEnabled?: boolean;
+  /**
+   * 092 — «Кассовая смена + роли» POS shift-mode master toggle. Absent on legacy
+   * payloads → treat as `false`. When ON, a non-cashier master can only create
+   * deferred work-orders and cannot close / take payment (server-enforced). When
+   * OFF (default) the check/payment flow is unchanged. Mutable through PATCH
+   * /my-company (Partial<Tenant>, director/superadmin) or PATCH /checks/pos-settings
+   * (director/admin/superadmin) — see {@link PosSettings}.
+   */
+  shiftModeEnabled?: boolean;
   users?: User[];
   userCount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * 092 — POS shift-mode settings surface (GET/PATCH /checks/pos-settings).
+ * `isCashier` is the CALLER's resolved capability (owner-class role OR the
+ * `accept_payment` permission) — clients use it to decide the master order-create
+ * flow + tab-bar swap without re-deriving the rule. PATCH accepts only
+ * `shiftModeEnabled` and is owner-gated; GET is readable by any authenticated
+ * user so a master can learn the mode.
+ */
+export interface PosSettings {
+  shiftModeEnabled: boolean;
+  isCashier: boolean;
 }
 
 export interface SubscriptionInfo {
@@ -320,6 +342,14 @@ export interface UserPermissions {
   /** See ALL masters' checks in the journal. A master without this sees
    *  only their own (master_id = self); owner-class always sees all. */
   checks_view_all?: boolean;
+  /**
+   * «Кассир смены» — may accept payment / close a check when the tenant's POS
+   * shift-mode is ON (Tenant.shiftModeEnabled). A master WITHOUT this can only
+   * create deferred work-orders in shift-mode (server-enforced in ChecksService).
+   * Owner-class roles (director/admin/superadmin) are implicit cashiers. When
+   * shift-mode is OFF this flag has no effect (current behaviour preserved).
+   */
+  accept_payment?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -341,6 +371,7 @@ export type PermissionKey =
   | 'checks_change_datetime'
   | 'checks_view_all'
   | 'payment_edit'
+  | 'accept_payment'
   | 'profit_view'
   | 'financial_reports'
   | 'export_data'
@@ -371,6 +402,7 @@ export const PERMISSION_GROUPS = {
     'checks_change_datetime',
     'checks_view_all',
     'payment_edit',
+    'accept_payment',
   ],
   Финансы: ['profit_view', 'financial_reports', 'export_data', 'can_add_expenses', 'salary_view'],
   Склад: ['warehouse_access', 'suppliers_access'],
@@ -416,6 +448,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     checks_change_datetime: false,
     checks_view_all: false, // sees only their own checks by default
     payment_edit: false,
+    accept_payment: false, // not a cashier by default — owner grants it explicitly
     // Финансы — NONE by default.
     profit_view: false,
     financial_reports: false,

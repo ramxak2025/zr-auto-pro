@@ -288,6 +288,109 @@ export class ChecksService {
     });
   }
 
+  // ── POS «Кассовая смена + роли» (092) ─────────────────────────────────────
+  // Strictly additive + mode-gated. Every enforcement below is a no-op when the
+  // tenant's shift_mode_enabled is false (the default), so the OFF path is
+  // byte-for-byte the current check/payment flow.
+
+  /**
+   * Is the tenant's POS shift-mode ON? Single PK lookup. FAIL-OPEN to `false`
+   * (current behaviour) on any error — the shift-mode gate must never be the
+   * reason a check write fails when the column/row can't be read.
+   */
+  private async isShiftModeEnabled(tenantID: string): Promise<boolean> {
+    try {
+      const { rows } = await this.pool.query(`SELECT shift_mode_enabled FROM tenants WHERE id = $1`, [tenantID]);
+      return rows[0]?.shift_mode_enabled === true;
+    } catch (err) {
+      this.logger.error(`isShiftModeEnabled read failed for tenant=${tenantID}: ${err}`);
+      return false;
+    }
+  }
+
+  /**
+   * Is the actor a cashier (may accept payment / close a check)? Owner-class
+   * roles (director/admin/superadmin) are implicit cashiers; a master is a
+   * cashier only with the explicit `accept_payment` permission. Reuses the same
+   * pure resolver the PermissionsGuard uses, so the rule is identical everywhere.
+   */
+  private isCashier(actor?: { role?: string; permissions?: Record<string, boolean> }): boolean {
+    return userHasPermission(actor, 'accept_payment');
+  }
+
+  /**
+   * Guard the "take payment" actions (close a draft / record cash/card / mark
+   * paid). No-op when shift-mode is OFF. When ON, only a cashier may proceed.
+   */
+  private async assertCashierForPayment(
+    tenantID: string,
+    actor?: { role?: string; permissions?: Record<string, boolean> },
+  ): Promise<void> {
+    if (!(await this.isShiftModeEnabled(tenantID))) return;
+    if (this.isCashier(actor)) return;
+    throw new ForbiddenException({ message: 'Принять оплату и закрыть заказ-наряд может только кассир смены' });
+  }
+
+  /**
+   * GET /checks/pos-settings — mode flag + the caller's resolved cashier
+   * capability (so a client can pick the master order-create flow / tab bar
+   * without re-deriving the rule).
+   */
+  async getPosSettings(
+    tenantID: string,
+    actor?: { role?: string; permissions?: Record<string, boolean> },
+  ): Promise<{ shiftModeEnabled: boolean; isCashier: boolean }> {
+    const shiftModeEnabled = await this.isShiftModeEnabled(tenantID);
+    return { shiftModeEnabled, isCashier: this.isCashier(actor) };
+  }
+
+  /** PATCH /checks/pos-settings — owner-gated flip of the per-tenant flag. */
+  async updatePosSettings(
+    tenantID: string,
+    dto: { shiftModeEnabled?: boolean },
+  ): Promise<{ shiftModeEnabled: boolean }> {
+    if (dto?.shiftModeEnabled !== undefined) {
+      await this.pool.query(`UPDATE tenants SET shift_mode_enabled = $1, updated_at = now() WHERE id = $2`, [
+        dto.shiftModeEnabled === true,
+        tenantID,
+      ]);
+    }
+    return { shiftModeEnabled: await this.isShiftModeEnabled(tenantID) };
+  }
+
+  /**
+   * PRODUCT PRICE LOCK (092 — correctness rule, applies in EVERY mode, both
+   * shift-mode ON and OFF). Load the CURRENT warehouse `sell_price` for the
+   * referenced products so a check's product-line price is authoritative from
+   * the warehouse and never trusted from the client («цена товара = склад,
+   * менять нельзя — только скидка»). Services keep their master-set prices; the
+   * `discount` field stays the only lever that reduces the product total.
+   *
+   * Returns a map productId → sell_price ONLY for products with a POSITIVE
+   * warehouse price. A product with no / zero warehouse price is OMITTED so the
+   * caller falls back to the client-sent price — a legitimate sale is never
+   * silently zeroed out. In the normal flow the cash screen already picks the
+   * product at its warehouse price, so the override is a pure no-op; only a
+   * stale / manipulated client price is corrected.
+   */
+  private async loadWarehouseSellPrices(
+    client: PoolClient,
+    tenantID: string,
+    productIds: string[],
+  ): Promise<Record<string, number>> {
+    const map: Record<string, number> = {};
+    if (productIds.length === 0) return map;
+    const { rows } = await client.query(`SELECT id, sell_price FROM products WHERE id = ANY($1) AND tenant_id = $2`, [
+      productIds,
+      tenantID,
+    ]);
+    for (const r of rows) {
+      const price = parseFloat(r.sell_price);
+      if (Number.isFinite(price) && price > 0) map[r.id] = price;
+    }
+    return map;
+  }
+
   private mapCheck(row: any) {
     return {
       id: row.id,
@@ -927,13 +1030,25 @@ export class ChecksService {
     return { success: true };
   }
 
-  async create(tenantID: string, userID: string, userRole: string, dto: any) {
+  async create(tenantID: string, userID: string, userRole: string, dto: any, actor?: ChecksActor) {
     if (!dto.masterId) throw new BadRequestException({ message: 'Мастер обязателен' });
 
     const services = dto.services || [];
     const products = dto.products || [];
 
-    if (!dto.isDeferred && services.length === 0 && products.length === 0) {
+    // ── POS shift-mode role-gate (092) ───────────────────────────────────
+    // When the tenant's shift-mode is ON, a NON-cashier actor (a master without
+    // `accept_payment`) cannot record payment: their check is forced to a
+    // DEFERRED work-order (no cash/card, no stock decrement, no warranty start)
+    // for a cashier to close later. When mode is OFF, or the actor is a cashier
+    // (owner-class / accept_payment), `forceDeferred` is false and EVERYTHING
+    // below is byte-for-byte the current flow.
+    const forceDeferred = (await this.isShiftModeEnabled(tenantID)) && !this.isCashier(actor);
+    const effectiveIsDeferred: boolean = forceDeferred ? true : dto.isDeferred || false;
+    const effectiveCashAmount: number = forceDeferred ? 0 : dto.cashAmount || 0;
+    const effectiveCardAmount: number = forceDeferred ? 0 : dto.cardAmount || 0;
+
+    if (!effectiveIsDeferred && services.length === 0 && products.length === 0) {
       throw new BadRequestException({ message: 'Добавьте хотя бы одну услугу или товар' });
     }
 
@@ -1054,8 +1169,17 @@ export class ChecksService {
         }
       }
 
+      // Product price lock: warehouse sell_price is authoritative (see helper).
+      const warehouseSellMap = await this.loadWarehouseSellPrices(client, tenantID, referencedProductIds);
+
       for (const prod of products) {
-        const totalSell = (prod.sellPrice || 0) * (prod.quantity || 1);
+        // Lock the SELL price to the current warehouse value when the product is
+        // a warehouse item with a positive price; otherwise keep the client price
+        // (ad-hoc line / product with no warehouse price). The cost price is left
+        // exactly as today — only the sell price is locked.
+        const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
+        const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
+        const totalSell = effectiveSellPrice * (prod.quantity || 1);
         const totalCost = (prod.costPrice || 0) * (prod.quantity || 1);
         const productProfit = totalSell - totalCost;
         productTotal += totalSell;
@@ -1067,7 +1191,7 @@ export class ChecksService {
           productSalaryTotal += (productProfit * pct) / 100;
         }
 
-        productLines.push({ ...prod, totalSell, totalCost });
+        productLines.push({ ...prod, sellPrice: effectiveSellPrice, totalSell, totalCost });
       }
 
       const discount = dto.discount || 0;
@@ -1105,10 +1229,10 @@ export class ChecksService {
           dto.mileage || null,
           dto.comment || null,
           discount,
-          dto.isDeferred || false,
+          effectiveIsDeferred,
           dto.paymentMethod || 'cash',
-          dto.cashAmount || 0,
-          dto.cardAmount || 0,
+          effectiveCashAmount,
+          effectiveCardAmount,
           serviceTotal,
           productTotal,
           totalRevenue,
@@ -1160,7 +1284,7 @@ export class ChecksService {
         // Decrease product stock — сток уходит в МИНУС («продажа в минус», по
         // требованию владельца): оверселл записывает дефицит, а не блокирует
         // продажу. Симметрично восстановлению стока при возврате/удалении чека.
-        if (prod.productId && !dto.isDeferred) {
+        if (prod.productId && !effectiveIsDeferred) {
           await client.query(`UPDATE products SET stock = stock - $1 WHERE id = $2 AND tenant_id = $3`, [
             prod.quantity || 1,
             prod.productId,
@@ -1173,7 +1297,7 @@ export class ChecksService {
       // whose master record has warranty_days set. Skip for deferred
       // (drafts) checks — warranty only starts when the work is actually
       // performed / sold.
-      if (!dto.isDeferred) {
+      if (!effectiveIsDeferred) {
         const warrantyLines: Array<{
           kind: 'product' | 'service';
           productId?: string | null;
@@ -1212,7 +1336,7 @@ export class ChecksService {
       // Live cross-device sync: a real (non-draft) sale moves the cash
       // position — nudge every OTHER device in the tenant to refetch. Deferred
       // drafts don't touch cash, so skip them to avoid silent-push noise.
-      if (!dto.isDeferred) {
+      if (!effectiveIsDeferred) {
         this.emitCashChanged(tenantID, userID);
       }
 
@@ -1246,10 +1370,17 @@ export class ChecksService {
     }
   }
 
-  async update(id: string, tenantID: string, userRole: string, dto: any, actorUserId: string | null = null) {
+  async update(
+    id: string,
+    tenantID: string,
+    userRole: string,
+    dto: any,
+    actorUserId: string | null = null,
+    actor?: ChecksActor,
+  ) {
     // If services or products are provided, do a full re-edit (only for deferred checks)
     if (dto.services !== undefined || dto.products !== undefined) {
-      return this.fullUpdate(id, tenantID, userRole, dto, actorUserId);
+      return this.fullUpdate(id, tenantID, userRole, dto, actorUserId, actor);
     }
 
     // Closing a deferred draft WITHOUT re-sending lines (bare `isDeferred:false`
@@ -1258,7 +1389,16 @@ export class ChecksService {
     // Any other isDeferred value (or no flip at all) falls through to the plain
     // field-update below unchanged.
     if (dto.isDeferred === false) {
-      return this.activateDeferred(id, tenantID, userRole, dto, actorUserId);
+      return this.activateDeferred(id, tenantID, userRole, dto, actorUserId, actor);
+    }
+
+    // POS shift-mode (092): a NON-cashier may not record payment on the plain
+    // path either. No-op when shift-mode is OFF (current behaviour). Only fires
+    // when this edit actually touches a money field (cash/card/paymentStatus).
+    const touchesPayment =
+      dto.cashAmount !== undefined || dto.cardAmount !== undefined || dto.paymentStatus !== undefined;
+    if (touchesPayment) {
+      await this.assertCashierForPayment(tenantID, actor);
     }
 
     const sets: string[] = [];
@@ -1355,7 +1495,18 @@ export class ChecksService {
    * Permission: a master may close only THEIR OWN draft; director/admin/
    * superadmin may close any.
    */
-  private async activateDeferred(id: string, tenantID: string, userRole: string, dto: any, actorUserId: string | null) {
+  private async activateDeferred(
+    id: string,
+    tenantID: string,
+    userRole: string,
+    dto: any,
+    actorUserId: string | null,
+    actor?: ChecksActor,
+  ) {
+    // POS shift-mode (092): read once BEFORE the transaction so the cashier gate
+    // below adds no extra connection while a client is held. OFF → false → gate
+    // is a no-op and this close behaves exactly as today.
+    const shiftMode = await this.isShiftModeEnabled(tenantID);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -1383,6 +1534,14 @@ export class ChecksService {
           await client.query('ROLLBACK');
           throw new ForbiddenException({ message: 'Мастер может закрывать только свой отложенный заказ-наряд' });
         }
+      }
+
+      // POS shift-mode CASHIER gate (092): closing a draft IS taking payment.
+      // When shift-mode is ON, only a cashier (owner-class / accept_payment) may
+      // close. No-op when OFF — `shiftMode` is false and this branch is skipped.
+      if (isActivating && shiftMode && !this.isCashier(actor)) {
+        await client.query('ROLLBACK');
+        throw new ForbiddenException({ message: 'Принять оплату и закрыть заказ-наряд может только кассир смены' });
       }
 
       // Build the field update (the same fields the plain path supports for a
@@ -1463,7 +1622,11 @@ export class ChecksService {
     userRole: string,
     dto: any,
     actorUserId: string | null = null,
+    actor?: ChecksActor,
   ) {
+    // POS shift-mode (092): read once up front so the cashier close-gate below
+    // adds no nested connection. OFF → false → the gate is a no-op.
+    const shiftMode = await this.isShiftModeEnabled(tenantID);
     // Verify check exists and is deferred
     const { rows: checkRows } = await this.pool.query('SELECT * FROM checks WHERE id=$1 AND tenant_id=$2', [
       id,
@@ -1504,6 +1667,14 @@ export class ChecksService {
       );
       if (lockedRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
       const lockedIsActivating = lockedRows[0].is_deferred === true && dto.isDeferred === false;
+
+      // POS shift-mode CASHIER gate (092): closing this draft IS taking payment;
+      // only a cashier may. No-op when OFF. A throw here rolls back via the catch.
+      // A non-closing re-edit of a still-deferred draft (lockedIsActivating=false)
+      // is unaffected — masters keep building their order.
+      if (lockedIsActivating && shiftMode && !this.isCashier(actor)) {
+        throw new ForbiddenException({ message: 'Принять оплату и закрыть заказ-наряд может только кассир смены' });
+      }
 
       const services = dto.services || [];
       const products = dto.products || [];
@@ -1616,8 +1787,13 @@ export class ChecksService {
         }
       }
 
+      // Product price lock (same rule as create): warehouse sell_price wins.
+      const warehouseSellMap = await this.loadWarehouseSellPrices(client, tenantID, referencedProductIds);
+
       for (const prod of products) {
-        const totalSell = (prod.sellPrice || 0) * (prod.quantity || 1);
+        const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
+        const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
+        const totalSell = effectiveSellPrice * (prod.quantity || 1);
         const totalCost = (prod.costPrice || 0) * (prod.quantity || 1);
         const productProfit = totalSell - totalCost;
         productTotal += totalSell;
@@ -1628,7 +1804,7 @@ export class ChecksService {
           productSalaryTotal += (productProfit * pct) / 100;
         }
 
-        productLines.push({ ...prod, totalSell, totalCost });
+        productLines.push({ ...prod, sellPrice: effectiveSellPrice, totalSell, totalCost });
       }
 
       const discount = dto.discount ?? (parseFloat(checkRows[0].discount) || 0);
@@ -1772,6 +1948,33 @@ export class ChecksService {
       // Re-editing a check's lines (and/or closing a deferred draft) moves the
       // cash position — nudge other devices to refetch (silent, data-only).
       this.emitCashChanged(tenantID, actorUserId);
+
+      // ASSIGNMENT NOTIFY (092): an admin REASSIGNING a (deferred) order to a
+      // different master — mirror of the create() push that already fires when an
+      // order is first assigned to someone other than its creator. Fire-and-forget,
+      // best-effort, opt-out via the 'check_assigned' notification category. Only
+      // when the master actually changed AND the new master isn't the actor.
+      const prevMasterId = checkRows[0].master_id;
+      const newMasterId = dto.masterId;
+      if (
+        this.pushService &&
+        newMasterId &&
+        String(newMasterId) !== String(prevMasterId ?? '') &&
+        String(newMasterId) !== String(actorUserId ?? '')
+      ) {
+        const checkNumber = checkRows[0].number;
+        this.pushService
+          .sendToUserCategory(
+            newMasterId,
+            'check_assigned',
+            'Новый заказ-наряд',
+            `Назначен заказ-наряд #${checkNumber}`,
+          )
+          .catch(() => {
+            /* non-fatal */
+          });
+      }
+
       return this.getById(id, tenantID);
     } catch (err) {
       await client.query('ROLLBACK');
