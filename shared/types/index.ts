@@ -2195,3 +2195,39 @@ export interface FiscalReceipt {
   createdAt: string;
   doneAt: string | null;
 }
+
+// ───────────────────────────────────────────────────────────────────────
+//  Телефония (Mango Office). Backend: telephony/ (migration 088).
+//  Provider-agnostic VPBX call-event ingestion. Mango PUSHES callbacks to a
+//  PUBLIC, signature-verified webhook (server-only — NOT part of this client API).
+//  Incoming/missed calls are matched to a client, PERSISTED in the `calls` table,
+//  and surfaced through the existing calls list; the staff get a push the moment
+//  the phone rings (RN has no CallKit here, so the push approximates a screen-pop).
+//
+//  Settings get/update are owner-class (director/admin/superadmin) gated
+//  server-side. The Mango api_key / api_salt are WRITE-ONLY — getSettings returns
+//  only masks + "configured" flags, NEVER the raw secrets.
+//
+//  INERT until configured: nothing is matched, persisted or pushed until the owner
+//  enters the real Mango vpbx api key + salt AND flips `enabled` on.
+// ───────────────────────────────────────────────────────────────────────
+
+export type TelephonyProviderName = 'mango';
+
+/**
+ * Masked per-tenant telephony config (GET /telephony/settings). Owner-class only.
+ * The raw api_key / api_salt are NEVER sent to a client — only masks + flags.
+ */
+export interface TelephonySettings {
+  provider: TelephonyProviderName;
+  enabled: boolean;
+  /** Masked API key like '••••1234', or null when none stored. NEVER the raw key. */
+  apiKeyMask: string | null;
+  /** True when an API key is stored, so the UI can show "configured". */
+  hasApiKey: boolean;
+  /** Masked sign salt like '••••1234', or null when none stored. NEVER the raw salt. */
+  apiSaltMask: string | null;
+  /** True when a sign salt is stored. */
+  hasApiSalt: boolean;
+  updatedAt: string | null;
+}

@@ -22,7 +22,24 @@ export class CallsService {
     };
   }
 
+  /** True when the Mango telephony integration (migration 088) is on for a tenant. */
+  private async isMangoEnabled(tenantId: string): Promise<boolean> {
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM telephony_integrations WHERE tenant_id=$1 AND provider='mango' AND enabled=true LIMIT 1`,
+      [tenantId],
+    );
+    return rows.length > 0;
+  }
+
   async getCalls(tenantId: string, query: { date?: string; dateFrom?: string; dateTo?: string }) {
+    // Mango (telephony module, migration 088) PUSHES call events to us and they are
+    // PERSISTED in the `calls` table — so a Mango tenant lists straight from the DB
+    // instead of the live МоиЗвонки proxy below, in the SAME response shape.
+    // МоиЗвонки tenants are completely unaffected by this branch.
+    if (await this.isMangoEnabled(tenantId)) {
+      return this.getStoredCalls(tenantId, query);
+    }
+
     const config = await this.getMoiZvonkiConfig(tenantId);
     if (!config) {
       throw new BadRequestException({ message: 'МоиЗвонки не настроен. Подключите интеграцию в разделе Маркетинг.' });
@@ -277,6 +294,109 @@ export class CallsService {
       this.logger.error(`Fetch calls error: ${err.message}`, err.stack);
       throw new BadRequestException({ message: `МоиЗвонки: сетевая ошибка — ${err.message}` });
     }
+  }
+
+  /**
+   * List PERSISTED calls (Mango / telephony module, migration 088) for a tenant,
+   * mapped to the EXACT same shape the МоиЗвонки live-proxy `getCalls` returns:
+   * `{ calls: [...], summary: {...} }`, direction 'incoming'|'outgoing', status
+   * 'answered'|'missed', plus the calledBack / notCalledBack follow-up flags. So
+   * the existing CallsController / CallsScreen render Mango calls with no change.
+   */
+  private async getStoredCalls(tenantId: string, query: { date?: string; dateFrom?: string; dateTo?: string }) {
+    const now = new Date();
+    const dateFrom = query.dateFrom || query.date || now.toISOString().split('T')[0];
+    const dateTo = query.dateTo || query.date || now.toISOString().split('T')[0];
+
+    const { rows } = await this.pool.query(
+      `SELECT c.id, c.provider_call_id, c.direction, c.from_number, c.to_number,
+              c.client_phone, c.client_id, c.status, c.duration, c.recording_url,
+              c.started_at, cl.full_name AS client_full_name
+         FROM calls c
+         LEFT JOIN clients cl ON cl.id = c.client_id AND cl.tenant_id = c.tenant_id
+        WHERE c.tenant_id = $1
+          AND c.started_at >= $2::date
+          AND c.started_at < ($3::date + INTERVAL '1 day')
+        ORDER BY c.started_at DESC`,
+      [tenantId, dateFrom, dateTo],
+    );
+
+    // Cars for matched clients (same enrichment МоиЗвонки does), tenant-scoped.
+    const clientIds = [...new Set(rows.map((r) => r.client_id).filter(Boolean))] as string[];
+    const carsByClient = new Map<string, Array<{ plateNumber: string; makeModel: string }>>();
+    if (clientIds.length > 0) {
+      const { rows: cars } = await this.pool.query(
+        `SELECT plate_number, make_model, client_id FROM cars WHERE client_id = ANY($1) AND tenant_id=$2`,
+        [clientIds, tenantId],
+      );
+      for (const car of cars) {
+        const list = carsByClient.get(car.client_id) || [];
+        list.push({ plateNumber: car.plate_number, makeModel: car.make_model });
+        carsByClient.set(car.client_id, list);
+      }
+    }
+
+    const mappedCalls = rows.map((r) => {
+      const direction: 'incoming' | 'outgoing' = r.direction === 'outbound' ? 'outgoing' : 'incoming';
+      const duration = parseInt(r.duration ?? '0', 10) || 0;
+      return {
+        id: r.id,
+        date: r.started_at ? new Date(r.started_at).toISOString() : '',
+        direction,
+        from: r.from_number || '',
+        to: r.to_number || '',
+        duration,
+        status: r.status === 'answered' ? 'answered' : 'missed',
+        recordingUrl: r.recording_url || null,
+        clientPhone: r.client_phone || '',
+        calledBack: false, // computed below
+        client: r.client_id
+          ? {
+              id: r.client_id,
+              fullName: r.client_full_name || '',
+              cars: carsByClient.get(r.client_id) || [],
+            }
+          : null,
+      };
+    });
+
+    const incoming = mappedCalls.filter((c) => c.direction === 'incoming');
+    const outgoing = mappedCalls.filter((c) => c.direction === 'outgoing');
+    const missed = mappedCalls.filter((c) => c.direction === 'incoming' && c.status === 'missed');
+
+    // "Called back": an outgoing answered call OR a later answered incoming from the
+    // same number clears a missed call — identical logic to the МоиЗвонки path.
+    const calledBackPhones = new Set<string>();
+    const short = (phone: string) => {
+      const p = (phone || '').replace(/[\s\-\+\(\)]/g, '');
+      return p.length >= 10 ? p.slice(-10) : p;
+    };
+    for (const c of outgoing) {
+      if (c.duration > 0) calledBackPhones.add(short(c.to));
+    }
+    for (const c of incoming) {
+      if (c.status === 'answered') calledBackPhones.add(short(c.from));
+    }
+
+    const notCalledBack: typeof missed = [];
+    for (const c of missed) {
+      if (calledBackPhones.has(short(c.from))) {
+        c.calledBack = true;
+      } else {
+        notCalledBack.push(c);
+      }
+    }
+
+    return {
+      calls: mappedCalls,
+      summary: {
+        total: mappedCalls.length,
+        incoming: incoming.length,
+        outgoing: outgoing.length,
+        missed: missed.length,
+        notCalledBack: notCalledBack.length,
+      },
+    };
   }
 
   async getRecordingUrl(tenantId: string, recordUrl: string) {

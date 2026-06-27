@@ -131,6 +131,8 @@ import type {
   FiscalProviderName,
   FiscalSno,
   FiscalVat,
+  TelephonySettings,
+  TelephonyProviderName,
 } from '../types';
 import type {
   LoginRequest,
@@ -1431,5 +1433,35 @@ export function createFiscalApi(api: HttpClient) {
      * has been fiscalized at least once.
      */
     getReceipt: (checkId: string) => api.get<FiscalReceipt>(`/fiscal/receipt/${checkId}`),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Телефония (Mango Office). Backend: telephony/ (migration 088).
+//  Provider-agnostic VPBX call-event ingestion.
+//
+//  getSettings/updateSettings are owner-class (director/admin/superadmin) gated
+//  server-side. The Mango api_key / api_salt are WRITE-ONLY — getSettings returns
+//  only masks + "configured" flags. The callback webhook is server-only (Mango
+//  POSTs to a PUBLIC, signature-verified route) and is intentionally NOT part of
+//  this client API.
+//
+//  INERT until configured: nothing is matched/persisted/pushed until the owner
+//  enters the real Mango vpbx api key + salt AND flips `enabled` on. Incoming and
+//  missed calls then show up in the existing calls list (callsApi.getCalls) and a
+//  push is sent to staff the moment the phone rings.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createTelephonyApi(api: HttpClient) {
+  return {
+    /** Masked per-tenant telephony config. Owner-class. Never returns the raw secrets. */
+    getSettings: () => api.get<TelephonySettings>('/telephony/settings'),
+    /**
+     * Owner-class partial update. Send `apiKey` / `apiSalt` only when (re)entering a
+     * value — an omitted/empty field leaves the stored secret untouched (the form
+     * shows a mask, not the real value).
+     */
+    updateSettings: (data: { provider?: TelephonyProviderName; enabled?: boolean; apiKey?: string; apiSalt?: string }) =>
+      api.patch<TelephonySettings>('/telephony/settings', data),
   };
 }
