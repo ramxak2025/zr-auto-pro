@@ -61,6 +61,21 @@ export interface SemanticPalette {
     primarySoft: string;
     primaryText: string;
   };
+  /**
+   * Drop-shadow calibration. iOS draws `shadowColor` at `shadowOpacity`;
+   * dark mode needs a pure-black shadow at a HIGHER opacity to read as
+   * depth against the near-black canvas (a 4 % shadow vanishes on dark),
+   * while light mode keeps the barely-there 4 % cool-slate shadow.
+   * Consume via `buildShadow(palette)` / `useShadow()` in iosSurface.ts.
+   */
+  shadow: {
+    /** shadowColor */
+    color: string;
+    /** shadowOpacity for a standard resting card. */
+    opacity: number;
+    /** shadowOpacity for an elevated / floating surface. */
+    elevatedOpacity: number;
+  };
   /** Hero gradient stops — heavily used on the dashboard. */
   heroGradient: readonly [string, string, string];
 }
@@ -88,6 +103,12 @@ const PALETTES: Record<ThemeMode, SemanticPalette> = {
       primary: light.primary[600],
       primarySoft: light.primary[100],
       primaryText: light.primary[700],
+    },
+    // Cool near-slate shadow, whisper-soft — the established light look.
+    shadow: {
+      color: '#0f172a',
+      opacity: 0.04,
+      elevatedOpacity: 0.08,
     },
     heroGradient: [light.primary[700], light.primary[800], light.primary[900]] as const,
   },
@@ -123,6 +144,13 @@ const PALETTES: Record<ThemeMode, SemanticPalette> = {
       // the brand colour without making the surface garish.
       primarySoft: 'rgba(59, 130, 246, 0.16)',
       primaryText: light.primary[300],
+    },
+    // Pure-black shadow at a higher opacity so cards still cast depth on
+    // the near-black canvas (a light-mode 4 % shadow is invisible here).
+    shadow: {
+      color: '#000000',
+      opacity: 0.18,
+      elevatedOpacity: 0.28,
     },
     // Hero gradient — deep indigo → near-black with a violet hint at
     // the corner. Reads premium and lets white text stay legible.

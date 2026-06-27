@@ -187,8 +187,14 @@ export const borderRadius = {
   full: 9999,
 } as const;
 
-// Badge color map matching web app's tailwind badge classes
-export const badgeColors: Record<string, { bg: string; text: string }> = {
+export interface BadgeColor {
+  bg: string;
+  text: string;
+}
+
+// Badge color map matching web app's tailwind badge classes (LIGHT mode).
+// Pale tinted background + saturated 700-level text — the web look.
+export const badgeColors: Record<string, BadgeColor> = {
   blue: { bg: colors.blue[50], text: colors.blue[700] },
   green: { bg: colors.green[50], text: colors.green[700] },
   red: { bg: colors.red[50], text: colors.red[700] },
@@ -198,6 +204,36 @@ export const badgeColors: Record<string, { bg: string; text: string }> = {
   orange: { bg: colors.orange[50], text: colors.orange[600] },
   indigo: { bg: colors.indigo[50], text: colors.indigo[600] },
 };
+
+// DARK-mode badge map. The light pale-50 fills go invisible / muddy on the
+// dark canvas, so we flip the formula: a translucent saturated fill (the
+// 500-level hue at low alpha so the dark surface shows through) carrying a
+// light 300-level text. Reads as a glowing chip rather than a flat sticker.
+export const badgeColorsDark: Record<string, BadgeColor> = {
+  blue: { bg: 'rgba(59, 130, 246, 0.18)', text: colors.blue[300] },
+  green: { bg: 'rgba(34, 197, 94, 0.18)', text: colors.green[300] },
+  red: { bg: 'rgba(239, 68, 68, 0.20)', text: colors.red[300] },
+  yellow: { bg: 'rgba(234, 179, 8, 0.20)', text: colors.yellow[300] },
+  gray: { bg: 'rgba(148, 163, 184, 0.16)', text: colors.gray[300] },
+  purple: { bg: 'rgba(147, 51, 234, 0.20)', text: colors.purple[300] },
+  orange: { bg: 'rgba(249, 115, 22, 0.20)', text: colors.orange[400] },
+  // No indigo[300] token in the scale — hardcode tailwind indigo-300.
+  indigo: { bg: 'rgba(99, 102, 241, 0.22)', text: '#a5b4fc' },
+};
+
+/**
+ * Theme-aware badge palette accessor.
+ *
+ * `mode` typed as a local string union (not the `ThemeMode` from
+ * `palette.ts`) to keep this file free of a circular import — `palette.ts`
+ * already imports `colors` from here.
+ *
+ * Prefer `useBadgeColors()` (ThemeContext) in components that don't already
+ * hold a palette; pass `palette.mode` here in rows that already receive one.
+ */
+export function getBadgeColors(mode: 'light' | 'dark'): Record<string, BadgeColor> {
+  return mode === 'dark' ? badgeColorsDark : badgeColors;
+}
 
 // Payment method badge colors
 export const paymentMethodBadgeColor: Record<string, keyof typeof badgeColors> = {

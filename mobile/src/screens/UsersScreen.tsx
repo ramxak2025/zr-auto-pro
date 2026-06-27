@@ -26,7 +26,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type {
@@ -1016,7 +1016,8 @@ export default function UsersScreen() {
 
   const getRoleBadge = (role: string) => {
     const key = roleBadgeMap[role] || 'gray';
-    const badge = badgeColors[key] || badgeColors.gray;
+    const map = getBadgeColors(palette.mode);
+    const badge = map[key] || map.gray;
     return badge;
   };
 

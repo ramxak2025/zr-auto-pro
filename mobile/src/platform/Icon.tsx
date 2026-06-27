@@ -11,6 +11,7 @@ import { SymbolView } from 'expo-symbols';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import React from 'react';
 import { Platform, View } from 'react-native';
+import { useOptionalColors } from '../contexts/ThemeContext';
 
 export type IconName =
   | 'home'
@@ -117,8 +118,16 @@ export interface IconProps {
   weight?: 'ultraLight' | 'thin' | 'light' | 'regular' | 'medium' | 'semibold' | 'bold';
 }
 
-export function Icon({ name, size = 22, color = '#111827', weight = 'regular' }: IconProps) {
+export function Icon({ name, size = 22, color, weight = 'regular' }: IconProps) {
   const m = GLYPH_MAP[name];
+  // Theme-aware default: when no explicit `color` is passed, resolve the
+  // current mode's primary text colour. In light mode this is gray-900
+  // (`#111827`) — byte-identical to the previous hardcoded default, so
+  // explicit-colour callers and existing light screens are unaffected;
+  // in dark mode it flips to the light text colour so default icons stay
+  // visible. `useOptionalColors` never throws outside a ThemeProvider.
+  const palette = useOptionalColors();
+  const resolvedColor = color ?? palette.text.primary;
 
   if (Platform.OS === 'ios') {
     return (
@@ -126,7 +135,7 @@ export function Icon({ name, size = 22, color = '#111827', weight = 'regular' }:
         name={m.ios as never}
         weight={weight as never}
         size={size}
-        tintColor={color}
+        tintColor={resolvedColor}
         resizeMode="scaleAspectFit"
         style={{ width: size, height: size }}
         // `fallback` silently swaps in the SF name without crashing
@@ -139,7 +148,7 @@ export function Icon({ name, size = 22, color = '#111827', weight = 'regular' }:
   // Android — Material Community Icons
   return (
     <View style={{ width: size, height: size, alignItems: 'center', justifyContent: 'center' }}>
-      <MaterialCommunityIcons name={m.android} size={size} color={color} />
+      <MaterialCommunityIcons name={m.android} size={size} color={resolvedColor} />
     </View>
   );
 }

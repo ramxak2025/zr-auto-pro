@@ -33,7 +33,7 @@ import Modal from '../components/Modal';
 import { haptic } from '../platform/haptics';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
 import { WORK_STATUS_ORDER, WORK_STATUS_META } from '../constants/workStatus';
 import type { Check, Tenant, CheckWorkStatus, FiscalReceipt } from '../../../shared/types';
 
@@ -640,7 +640,7 @@ export default function CheckDetailScreen() {
   const canFiscalize =
     user?.role === 'director' || user?.role === 'admin' || user?.role === 'master' || user?.role === 'superadmin';
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
-  const badge = badgeColors[badgeKey];
+  const badge = getBadgeColors(palette.mode)[badgeKey];
   const isDeferred = !!check.isDeferred;
   // Work-status (board) — отдельный флаг. Менять может тот, кто
   // редактирует чеки (то же право, что и кнопка «Изменить»).

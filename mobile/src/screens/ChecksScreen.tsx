@@ -20,7 +20,7 @@ import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import FreshnessBadge from '../components/FreshnessBadge';
-import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
 import { haptic } from '../platform/haptics';
 import { AutexaGlassHeader } from 'autexa-liquid-glass';
 import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
@@ -188,7 +188,7 @@ const CheckRow = React.memo(function CheckRow({
   palette,
 }: CheckRowProps) {
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
-  const badge = badgeColors[badgeKey];
+  const badge = getBadgeColors(palette.mode)[badgeKey];
   // Time string — computed once per row mount; row is memoised, so the
   // `new Date(...).toLocaleTimeString(...)` no longer runs on every
   // parent re-render of the screen.

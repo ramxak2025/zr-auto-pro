@@ -32,7 +32,7 @@ import ClientCallsSection from '../components/ClientCallsSection';
 import LoyaltyBadge from '../components/LoyaltyBadge';
 import SectionHeader from '../components/SectionHeader';
 import { UserRole } from '../../../shared/types';
-import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
 import type {
   Client,
   Car,
@@ -1561,7 +1561,7 @@ interface CheckRowProps {
 // objects keep identity inside the React-Query cache between renders).
 const CheckRow = React.memo(function CheckRow({ check, palette, canViewProfit, onOpen }: CheckRowProps) {
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
-  const badge = badgeColors[badgeKey];
+  const badge = getBadgeColors(palette.mode)[badgeKey];
   return (
     <TouchableOpacity
       style={[

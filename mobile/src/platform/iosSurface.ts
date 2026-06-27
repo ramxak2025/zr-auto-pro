@@ -94,12 +94,47 @@ export const PILL_RADIUS = 999;
 // stay frozen at the light values so older screens keep working
 // untouched while dark-mode rollout is iterative.
 
+/**
+ * Theme-aware drop shadow.
+ *
+ * Single source of truth for the ~25 hardcoded `shadowColor: '#000'`
+ * blocks scattered across screens. The screen-sweep pass should replace
+ * those inline shadow props with a spread of `buildShadow(palette)` (or
+ * `useShadow()` inside a component body), so dark mode gets a deeper,
+ * pure-black shadow while light mode keeps its whisper-soft slate shadow.
+ *
+ *   const shadow = useShadow();              // resting card depth
+ *   const float = useShadow('elevated');     // floating / popover depth
+ *   <View style={[styles.card, shadow]} />
+ *
+ * Android draws shadows from `elevation`; `shadowColor` is API-gated and
+ * flaky there, so we only emit `elevation` on Android.
+ */
+export type ShadowElevation = 'card' | 'elevated';
+
+export function buildShadow(palette: SemanticPalette, level: ShadowElevation = 'card'): ViewStyle {
+  const elevated = level === 'elevated';
+  if (Platform.OS === 'android') {
+    return { elevation: elevated ? 6 : 1 };
+  }
+  return {
+    shadowColor: palette.shadow.color,
+    shadowOpacity: elevated ? palette.shadow.elevatedOpacity : palette.shadow.opacity,
+    shadowRadius: elevated ? 16 : 6,
+    shadowOffset: { width: 0, height: elevated ? 6 : 1 },
+  };
+}
+
 export interface IosSurface {
   card: ViewStyle;
   cardAccent: ViewStyle;
   cardCompact: ViewStyle;
   pill: ViewStyle;
   sectionLabel: import('react-native').TextStyle;
+  /** Ready-to-spread resting-card shadow for the current mode. */
+  shadow: ViewStyle;
+  /** Ready-to-spread elevated/floating shadow for the current mode. */
+  shadowElevated: ViewStyle;
   canvas: string;
   textPrimary: string;
   textSecondary: string;
@@ -111,6 +146,7 @@ export interface IosSurface {
 }
 
 export function buildIosSurface(palette: SemanticPalette): IosSurface {
+  const cardShadow = buildShadow(palette, 'card');
   const cardBase: ViewStyle = {
     backgroundColor: palette.bg.card,
     borderRadius: borderRadius.xl,
@@ -118,19 +154,20 @@ export function buildIosSurface(palette: SemanticPalette): IosSurface {
     borderColor: palette.border.subtle,
     paddingHorizontal: spacing[4],
     paddingVertical: spacing[3.5],
-    shadowColor: '#000',
-    shadowOpacity: palette.bg.canvas === '#0a0d14' ? 0.18 : 0.04,
-    shadowRadius: 6,
-    shadowOffset: { width: 0, height: 1 },
-    ...(Platform.OS === 'android' ? { elevation: 1 } : null),
+    ...cardShadow,
   };
   return {
     card: cardBase,
     cardAccent: {
       ...cardBase,
       borderColor: palette.accent.primary,
-      shadowColor: palette.accent.primary,
-      shadowOpacity: palette.bg.canvas === '#0a0d14' ? 0.25 : 0.05,
+      // Accent-tinted shadow on iOS; Android keeps neutral elevation.
+      ...(Platform.OS === 'ios'
+        ? {
+            shadowColor: palette.accent.primary,
+            shadowOpacity: palette.mode === 'dark' ? 0.25 : 0.05,
+          }
+        : null),
     },
     cardCompact: {
       backgroundColor: palette.bg.card,
@@ -157,6 +194,8 @@ export function buildIosSurface(palette: SemanticPalette): IosSurface {
       textTransform: 'uppercase',
       marginBottom: spacing[1.5],
     },
+    shadow: cardShadow,
+    shadowElevated: buildShadow(palette, 'elevated'),
     canvas: palette.bg.canvas,
     textPrimary: palette.text.primary,
     textSecondary: palette.text.secondary,
@@ -177,4 +216,18 @@ export function buildIosSurface(palette: SemanticPalette): IosSurface {
 export function useIosSurface(): IosSurface {
   const palette = useColors();
   return React.useMemo(() => buildIosSurface(palette), [palette]);
+}
+
+/**
+ * Hook returning a single theme-aware drop-shadow style for the current
+ * mode. The thin entry point for the screen-sweep pass that just needs a
+ * shadow without the whole surface bundle:
+ *
+ *   const shadow = useShadow();             // resting card
+ *   const float = useShadow('elevated');    // floating element
+ *   <View style={[styles.card, shadow]} />
+ */
+export function useShadow(level: ShadowElevation = 'card'): ViewStyle {
+  const palette = useColors();
+  return React.useMemo(() => buildShadow(palette, level), [palette, level]);
 }

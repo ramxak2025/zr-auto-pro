@@ -24,6 +24,7 @@ import React from 'react';
 import { Appearance, Platform } from 'react-native';
 import { setIosAppearance } from 'autexa-liquid-glass';
 import { getPalette, type SemanticPalette, type ThemeMode } from '../theme/palette';
+import { getBadgeColors, type BadgeColor } from '../theme';
 
 interface ThemeContextValue {
   mode: ThemeMode;
@@ -112,4 +113,27 @@ export function useThemeMode(): ThemeContextValue {
 
 export function useColors(): SemanticPalette {
   return useThemeMode().palette;
+}
+
+/**
+ * Non-throwing palette accessor. Returns the light palette when used
+ * outside a `<ThemeProvider>` instead of crashing — for low-level shared
+ * primitives (e.g. `<Icon>`) that may render in contexts not yet wrapped
+ * by the provider (storybook-style previews, isolated tests, the splash
+ * tree before the app mounts). Inside the app it behaves like
+ * `useColors()`. The light fallback keeps legacy callers byte-identical.
+ */
+export function useOptionalColors(): SemanticPalette {
+  const ctx = React.useContext(ThemeContext);
+  return ctx ? ctx.palette : getPalette('light');
+}
+
+/**
+ * Theme-aware badge palette map for the current mode. Use in components
+ * that render status/payment chips and don't already hold a `palette`.
+ * Rows that already receive a `palette` prop can call
+ * `getBadgeColors(palette.mode)` directly instead of this hook.
+ */
+export function useBadgeColors(): Record<string, BadgeColor> {
+  return getBadgeColors(useThemeMode().mode);
 }

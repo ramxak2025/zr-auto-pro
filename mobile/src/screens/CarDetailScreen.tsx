@@ -31,7 +31,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type { Check } from '../../../shared/types';
@@ -338,7 +338,7 @@ interface CarCheckRowProps {
 }
 const CarCheckRow = React.memo(function CarCheckRow({ check, palette, canViewProfit, onOpen }: CarCheckRowProps) {
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
-  const badge = badgeColors[badgeKey];
+  const badge = getBadgeColors(palette.mode)[badgeKey];
   return (
     <TouchableOpacity
       style={[styles.checkCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
