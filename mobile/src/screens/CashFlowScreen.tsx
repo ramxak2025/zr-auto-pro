@@ -25,7 +25,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
@@ -243,8 +243,10 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
       ]}
       onPress={() => onPick(id, fullName)}
     >
-      <View style={styles.employeeAvatar}>
-        <Text style={styles.employeeAvatarText}>{fullName?.charAt(0) || '?'}</Text>
+      <View style={[styles.employeeAvatar, palette.mode === 'dark' && { backgroundColor: palette.accent.primarySoft }]}>
+        <Text style={[styles.employeeAvatarText, palette.mode === 'dark' && { color: palette.accent.primaryText }]}>
+          {fullName?.charAt(0) || '?'}
+        </Text>
       </View>
       <Text
         style={[
@@ -1036,7 +1038,12 @@ function ChannelRow({
   const pct = total > 0 ? ((amount / total) * 100).toFixed(0) : '0';
   return (
     <View style={styles.channelRow}>
-      <View style={[styles.channelIcon, { backgroundColor: iconBg }]}>
+      <View
+        style={[
+          styles.channelIcon,
+          { backgroundColor: palette.mode === 'dark' ? softTint(iconColor, 'dark') : iconBg },
+        ]}
+      >
         <Ionicons name={iconName} size={16} color={iconColor} />
       </View>
       <View style={{ flex: 1 }}>
@@ -1103,7 +1110,12 @@ function ExpenseRow({ expense, palette }: { expense: any; palette: ReturnType<ty
   const sub: string | undefined = expense?.description && expense?.categoryName ? expense.categoryName : undefined;
   return (
     <View style={styles.checkRow}>
-      <View style={[styles.checkIcon, { backgroundColor: colors.rose[50] }]}>
+      <View
+        style={[
+          styles.checkIcon,
+          { backgroundColor: palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50] },
+        ]}
+      >
         <Ionicons name="arrow-down" size={14} color={colors.rose[600]} />
       </View>
       <View style={{ flex: 1 }}>

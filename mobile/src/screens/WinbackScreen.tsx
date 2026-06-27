@@ -43,7 +43,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { marketingApi } from '../api/services';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
@@ -408,11 +408,28 @@ export default function WinbackScreen() {
         {/* Result */}
         {sendResult ? (
           providerHint ? (
-            <View style={[styles.hintCard, { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }]}>
-              <Ionicons name="information-circle-outline" size={18} color={colors.amber[700]} />
+            <View
+              style={[
+                styles.hintCard,
+                palette.mode === 'dark'
+                  ? { backgroundColor: softTint(colors.amber[600], 'dark'), borderColor: palette.border.subtle }
+                  : { backgroundColor: colors.amber[50], borderColor: colors.amber[200] },
+              ]}
+            >
+              <Ionicons
+                name="information-circle-outline"
+                size={18}
+                color={palette.mode === 'dark' ? colors.amber[200] : colors.amber[700]}
+              />
               <View style={{ flex: 1 }}>
-                <Text style={[styles.hintTitle, { color: colors.amber[800] }]}>Сообщения не отправлены</Text>
-                <Text style={[styles.hintText, { color: colors.amber[800] }]}>
+                <Text
+                  style={[styles.hintTitle, { color: palette.mode === 'dark' ? colors.amber[200] : colors.amber[800] }]}
+                >
+                  Сообщения не отправлены
+                </Text>
+                <Text
+                  style={[styles.hintText, { color: palette.mode === 'dark' ? colors.amber[200] : colors.amber[800] }]}
+                >
                   Подключите провайдера рассылок в разделе «Интеграции», чтобы отправлять сообщения клиентам.
                 </Text>
               </View>

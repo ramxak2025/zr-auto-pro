@@ -50,7 +50,7 @@ import FreshnessBadge from '../components/FreshnessBadge';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { columnVisual } from '../constants/workStatus';
 import type { Check, ChecksBoard } from '../../../shared/types';
 
@@ -104,8 +104,18 @@ const BoardCard = React.memo(function BoardCard({ check, palette, onPress }: Boa
             {check.car.makeModel}
           </Text>
           {check.car.plateNumber ? (
-            <View style={styles.plateTag}>
-              <Text style={styles.plateTagText}>{check.car.plateNumber}</Text>
+            <View
+              style={[
+                styles.plateTag,
+                palette.mode === 'dark' && {
+                  backgroundColor: softTint(colors.primary[600], 'dark'),
+                  borderColor: palette.border.strong,
+                },
+              ]}
+            >
+              <Text style={[styles.plateTagText, palette.mode === 'dark' && { color: palette.accent.primaryText }]}>
+                {check.car.plateNumber}
+              </Text>
             </View>
           ) : null}
         </View>

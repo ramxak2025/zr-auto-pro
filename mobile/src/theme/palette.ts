@@ -11,21 +11,24 @@
  *   • Surfaces that opt-in to dark mode read from these tokens via
  *     the `useColors()` hook (theme/ThemeContext.tsx).
  *
- * Dark palette is designed to match the project's primary[600]
- * indigo accent:
- *   • Canvas: deep slate-zinc (cool neutral so the blue accent stays
- *     vibrant). Not pure black — pure black absorbs depth on OLED.
- *   • Card: a half-step lighter than canvas with a hint of warmth,
- *     keeping the visual hierarchy that gray-50 / white provided in
- *     light mode.
- *   • Borders: 6 % white-on-canvas hairlines.
- *   • Primary stays the brand indigo but shifted up one step
- *     (primary[500] instead of [600]) so it reads as confidently
- *     bright on the dark canvas.
+ * Dark palette is tuned for a cohesive, EASY-ON-THE-EYES, native feel
+ * (owner: «приятно для глаз, читалось легко, ощущалось как нативная»):
+ *   • Canvas: a soft deep neutral (#101317) — NOT pure black, with a
+ *     faint cool tint so the blue accent stays harmonious. Comfortable
+ *     in the dark; OLED still shows depth.
+ *   • Card / elevated / muted: GENTLE elevation steps that read as
+ *     subtle layers rather than harsh jumps.
+ *   • Text: a slightly muted off-white (#e6e8ee) so it never glares;
+ *     secondary / tertiary softer but still legible.
+ *   • Borders: ~7 % white-on-canvas hairlines.
+ *   • Accent: a calmer, harmonious brand blue (#4f83e8) — softened
+ *     from the electric primary[500] toward indigo so it never reads
+ *     as neon, with a low-alpha primarySoft tint.
  *
- * Owner asked for "professional designer palette that matches our
- * theme colors". The choices below come from the Material 3 Dark
- * theme calibration combined with our existing brand blue scale.
+ * The companion `softTint()` helper (theme/index.ts) keeps arbitrary
+ * accent icon-tiles / chips muted in dark so no bright pastel patches
+ * remain. Light palette below is intentionally byte-identical to the
+ * established web-matched look — DO NOT change it.
  */
 import { colors as light } from './index';
 
@@ -115,46 +118,55 @@ const PALETTES: Record<ThemeMode, SemanticPalette> = {
   dark: {
     mode: 'dark',
     bg: {
-      // Deep slate / near-black — Apple-grade dark surface, not pure
-      // black so OLED still shows depth between cards.
-      canvas: '#0a0d14',
-      // One step lighter than canvas, with a hint of warmth so cards
-      // visually lift off the canvas in the same way white lifts off
-      // gray-50 in light mode.
-      card: '#141a25',
-      // Two steps up — used for the floating tab bar and modal sheets.
-      elevated: '#1a212d',
-      // Subtle fills (chip backgrounds, hovered rows, dividers).
-      muted: '#1f2733',
+      // Soft deep neutral — NOT pure black. A near-black with a faint cool
+      // tint so the blue accent stays harmonious and OLED still shows depth.
+      // Calibrated up from the old near-black #0a0d14 to a comfortable,
+      // easy-on-the-eyes base (owner: «приятно для глаз, не слишком темно»).
+      canvas: '#101317',
+      // Gentle first elevation — cards lift off the canvas as a SUBTLE layer,
+      // not a harsh jump (the old #0a0d14→#141a25 step was too abrupt).
+      card: '#181b22',
+      // Second step — floating tab bar, modal sheets, popovers.
+      elevated: '#1f232c',
+      // Faintest fill — chip/badge backgrounds, hovered rows, dividers.
+      muted: '#262b35',
     },
     text: {
-      primary: '#f4f6fb',
-      secondary: '#9ba6b8',
-      tertiary: '#6b7588',
-      inverse: '#0a0d14',
+      // Slightly muted off-white, NOT pure #ffffff, so it never glares.
+      primary: '#e6e8ee',
+      // Calm slate — clearly legible, never harsh.
+      secondary: '#9aa1af',
+      // Softer still for chevrons / captions, but readable.
+      tertiary: '#6c7384',
+      // Inverse text reads on `accent` surfaces; mirrors the canvas tone.
+      inverse: '#101317',
     },
     border: {
-      subtle: 'rgba(255, 255, 255, 0.06)',
-      strong: 'rgba(255, 255, 255, 0.12)',
+      // Gentle hairlines — just enough to delineate the subtle layers.
+      subtle: 'rgba(255, 255, 255, 0.07)',
+      strong: 'rgba(255, 255, 255, 0.13)',
     },
     accent: {
-      // Slightly brighter primary so it pops against the dark canvas.
-      primary: light.primary[500],
-      // Very low-alpha primary tint for selection backgrounds — keeps
-      // the brand colour without making the surface garish.
-      primarySoft: 'rgba(59, 130, 246, 0.16)',
-      primaryText: light.primary[300],
+      // Calmer, harmonious brand blue — slightly softened from the electric
+      // primary[500] (#3b82f6) toward indigo so it never reads as neon, while
+      // keeping enough depth for white button text (~3.4:1).
+      primary: '#4f83e8',
+      // Low-alpha primary tint for selection backgrounds — a whisper of brand
+      // colour, never a bright patch.
+      primarySoft: 'rgba(79, 131, 232, 0.14)',
+      // Soft light-blue accent text — legible on dark, not harsh.
+      primaryText: '#a3c4f5',
     },
-    // Pure-black shadow at a higher opacity so cards still cast depth on
-    // the near-black canvas (a light-mode 4 % shadow is invisible here).
+    // Pure-black shadow; opacity tuned so cards still cast depth on the
+    // (now slightly lighter) canvas without looking heavy.
     shadow: {
       color: '#000000',
-      opacity: 0.18,
-      elevatedOpacity: 0.28,
+      opacity: 0.2,
+      elevatedOpacity: 0.3,
     },
-    // Hero gradient — deep indigo → near-black with a violet hint at
-    // the corner. Reads premium and lets white text stay legible.
-    heroGradient: ['#1d2a52', '#16213a', '#0c1326'] as const,
+    // Hero gradient — deep harmonious indigo → soft near-black with a violet
+    // hint. Reads premium and keeps white text legible.
+    heroGradient: ['#24305a', '#1a2342', '#121826'] as const,
   },
 };
 

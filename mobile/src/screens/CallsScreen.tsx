@@ -17,7 +17,7 @@ import DateTimePickerModal from '../components/DateTimePickerModal';
 import { useQuery } from '@tanstack/react-query';
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
+import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
 import { callsApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -145,7 +145,9 @@ const CallRow = React.memo(function CallRow({
   return (
     <View style={[styles.callItemWrap, { backgroundColor: palette.bg.card }]}>
       <View style={[styles.callRow, { borderBottomColor: palette.border.subtle }]}>
-        <View style={[styles.callIcon, { backgroundColor: iconBg }]}>
+        <View
+          style={[styles.callIcon, { backgroundColor: palette.mode === 'dark' ? softTint(iconColor, 'dark') : iconBg }]}
+        >
           <Ionicons name={iconName as any} size={18} color={iconColor} />
         </View>
 
@@ -186,7 +188,11 @@ const CallRow = React.memo(function CallRow({
 
         {call.recordingUrl && (
           <TouchableOpacity
-            style={[styles.playBtn, isThisPlaying && { backgroundColor: colors.primary[600] }]}
+            style={[
+              styles.playBtn,
+              palette.mode === 'dark' && { backgroundColor: palette.accent.primarySoft },
+              isThisPlaying && { backgroundColor: colors.primary[600] },
+            ]}
             onPress={() => setPlayingId(isThisPlaying ? null : call.id)}
             hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
           >
@@ -582,7 +588,13 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
       {/* Summary strip */}
       <View style={styles.summaryRow}>
         {summaryItems.map((s) => (
-          <View key={s.label} style={[styles.summaryCard, { backgroundColor: s.bg }]}>
+          <View
+            key={s.label}
+            style={[
+              styles.summaryCard,
+              { backgroundColor: palette.mode === 'dark' ? softTint(s.color, 'dark') : s.bg },
+            ]}
+          >
             <Text style={[styles.summaryValue, { color: s.color }]}>{isLoading ? '-' : s.value}</Text>
             <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>{s.label}</Text>
           </View>
@@ -591,9 +603,23 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
 
       {/* Warning */}
       {summary && summary.notCalledBack > 0 && (
-        <View style={styles.warning}>
-          <Ionicons name="alert-circle" size={16} color={colors.orange[500]} />
-          <Text style={styles.warningText}>{summary.notCalledBack} без перезвона</Text>
+        <View
+          style={[
+            styles.warning,
+            palette.mode === 'dark' && {
+              backgroundColor: softTint(colors.orange[600], 'dark'),
+              borderColor: palette.border.subtle,
+            },
+          ]}
+        >
+          <Ionicons
+            name="alert-circle"
+            size={16}
+            color={palette.mode === 'dark' ? colors.orange[400] : colors.orange[500]}
+          />
+          <Text style={[styles.warningText, palette.mode === 'dark' && { color: colors.orange[400] }]}>
+            {summary.notCalledBack} без перезвона
+          </Text>
         </View>
       )}
 
@@ -612,10 +638,27 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
           return (
             <TouchableOpacity
               key={tab.key}
-              style={[styles.tab, { backgroundColor: palette.bg.muted }, active && styles.tabActive]}
+              style={[
+                styles.tab,
+                { backgroundColor: palette.bg.muted },
+                active &&
+                  (palette.mode === 'dark'
+                    ? {
+                        backgroundColor: palette.accent.primarySoft,
+                        borderWidth: 1,
+                        borderColor: palette.border.strong,
+                      }
+                    : styles.tabActive),
+              ]}
               onPress={() => setActiveTab(tab.key)}
             >
-              <Text style={[styles.tabText, { color: palette.text.tertiary }, active && styles.tabTextActive]}>
+              <Text
+                style={[
+                  styles.tabText,
+                  { color: palette.text.tertiary },
+                  active && (palette.mode === 'dark' ? { color: palette.accent.primaryText } : styles.tabTextActive),
+                ]}
+              >
                 {tab.label} {count !== undefined ? count : ''}
               </Text>
             </TouchableOpacity>

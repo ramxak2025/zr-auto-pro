@@ -43,7 +43,7 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { normalizePlateForSearch } from '../utils/plateMask';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
-import { colors, borderRadius, spacing } from '../theme';
+import { colors, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Client, type Car, type User } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -277,8 +277,17 @@ export default function BookingCreateScreen() {
               style={[styles.selectedCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
             >
               <View style={styles.selectedTop}>
-                <View style={styles.selectedAvatar}>
-                  <Ionicons name="person" size={20} color={colors.primary[700]} />
+                <View
+                  style={[
+                    styles.selectedAvatar,
+                    palette.mode === 'dark' && { backgroundColor: palette.accent.primarySoft },
+                  ]}
+                >
+                  <Ionicons
+                    name="person"
+                    size={20}
+                    color={palette.mode === 'dark' ? palette.accent.primaryText : colors.primary[700]}
+                  />
                 </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={[styles.selectedName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -380,7 +389,9 @@ export default function BookingCreateScreen() {
                     <TouchableOpacity
                       style={[
                         styles.createClientBtn,
-                        { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+                        palette.mode === 'dark'
+                          ? { backgroundColor: palette.accent.primarySoft, borderColor: palette.border.strong }
+                          : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
                       ]}
                       onPress={() => setShowQuickCreate(true)}
                       activeOpacity={0.85}
@@ -434,8 +445,13 @@ export default function BookingCreateScreen() {
                 color={palette.text.tertiary}
               />
             ) : (
-              <View style={styles.selfBadge}>
-                <Text style={styles.selfBadgeText}>ВЫ</Text>
+              <View
+                style={[
+                  styles.selfBadge,
+                  palette.mode === 'dark' && { backgroundColor: softTint(colors.green[600], 'dark') },
+                ]}
+              >
+                <Text style={[styles.selfBadgeText, palette.mode === 'dark' && { color: colors.green[300] }]}>ВЫ</Text>
               </View>
             )}
           </TouchableOpacity>
@@ -521,9 +537,22 @@ export default function BookingCreateScreen() {
           />
 
           {conflictNote ? (
-            <View style={[styles.conflictNote, { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }]}>
-              <Ionicons name="warning-outline" size={16} color={colors.amber[700]} />
-              <Text style={styles.conflictNoteText}>{conflictNote}</Text>
+            <View
+              style={[
+                styles.conflictNote,
+                palette.mode === 'dark'
+                  ? { backgroundColor: softTint(colors.amber[600], 'dark'), borderColor: palette.border.subtle }
+                  : { backgroundColor: colors.amber[50], borderColor: colors.amber[200] },
+              ]}
+            >
+              <Ionicons
+                name="warning-outline"
+                size={16}
+                color={palette.mode === 'dark' ? colors.amber[200] : colors.amber[700]}
+              />
+              <Text style={[styles.conflictNoteText, palette.mode === 'dark' && { color: colors.amber[200] }]}>
+                {conflictNote}
+              </Text>
             </View>
           ) : null}
         </ScrollView>

@@ -61,7 +61,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import type { SemanticPalette } from '../theme/palette';
 import { UserRole } from '../../../shared/types';
 import type { MasterSalary, SalaryPayment, SalaryPremium } from '../../../shared/types';
@@ -1098,7 +1098,19 @@ function PremiumRow({ premium, palette }: PremiumRowProps) {
   const value = isCash ? formatMoney(premium.amount || 0) : `+${premium.bonusPercent || 0}% к ставке`;
   return (
     <View style={[styles.premiumRow, { borderBottomColor: palette.border.subtle }]}>
-      <View style={[styles.premiumIcon, { backgroundColor: isCash ? colors.rose[50] : colors.violet[50] }]}>
+      <View
+        style={[
+          styles.premiumIcon,
+          {
+            backgroundColor:
+              palette.mode === 'dark'
+                ? softTint(isCash ? colors.rose[600] : colors.violet[600], 'dark')
+                : isCash
+                  ? colors.rose[50]
+                  : colors.violet[50],
+          },
+        ]}
+      >
         <Ionicons
           name={isCash ? 'gift-outline' : 'trending-up-outline'}
           size={14}

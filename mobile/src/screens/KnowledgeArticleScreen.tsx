@@ -38,7 +38,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
-import { spacing, borderRadius, colors } from '../theme';
+import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { formatDateShort } from '../../../shared/utils/formatters';
 import { UserRole } from '../../../shared/types';
@@ -266,17 +266,41 @@ export default function KnowledgeArticleScreen() {
 
           <View style={styles.metaRow}>
             {isRegulation ? (
-              <View style={[styles.typeChip, { backgroundColor: colors.amber[50] }]}>
-                <Ionicons name="shield-checkmark" size={12} color={colors.amber[600]} />
-                <Text variant="caption" style={{ color: colors.amber[700], fontWeight: '700' }}>
+              <View
+                style={[
+                  styles.typeChip,
+                  { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+                ]}
+              >
+                <Ionicons
+                  name="shield-checkmark"
+                  size={12}
+                  color={palette.mode === 'dark' ? colors.amber[200] : colors.amber[600]}
+                />
+                <Text
+                  variant="caption"
+                  style={{ color: palette.mode === 'dark' ? colors.amber[200] : colors.amber[700], fontWeight: '700' }}
+                >
                   Регламент
                 </Text>
               </View>
             ) : null}
             {article.mandatory ? (
-              <View style={[styles.typeChip, { backgroundColor: colors.red[50] }]}>
-                <Ionicons name="alert-circle" size={12} color={colors.red[600]} />
-                <Text variant="caption" style={{ color: colors.red[700], fontWeight: '700' }}>
+              <View
+                style={[
+                  styles.typeChip,
+                  { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
+                ]}
+              >
+                <Ionicons
+                  name="alert-circle"
+                  size={12}
+                  color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+                />
+                <Text
+                  variant="caption"
+                  style={{ color: palette.mode === 'dark' ? colors.red[300] : colors.red[700], fontWeight: '700' }}
+                >
                   Обязательно
                 </Text>
               </View>
@@ -309,9 +333,27 @@ export default function KnowledgeArticleScreen() {
 
           {/* Regulation updated — re-acknowledge */}
           {regulationUpdated ? (
-            <View style={[styles.updatedBanner, { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }]}>
-              <Ionicons name="refresh-circle" size={18} color={colors.amber[600]} />
-              <Text variant="footnote" style={{ flex: 1, color: colors.amber[800], fontWeight: '600' }}>
+            <View
+              style={[
+                styles.updatedBanner,
+                palette.mode === 'dark'
+                  ? { backgroundColor: softTint(colors.amber[600], 'dark'), borderColor: palette.border.subtle }
+                  : { backgroundColor: colors.amber[50], borderColor: colors.amber[200] },
+              ]}
+            >
+              <Ionicons
+                name="refresh-circle"
+                size={18}
+                color={palette.mode === 'dark' ? colors.amber[200] : colors.amber[600]}
+              />
+              <Text
+                variant="footnote"
+                style={{
+                  flex: 1,
+                  color: palette.mode === 'dark' ? colors.amber[200] : colors.amber[800],
+                  fontWeight: '600',
+                }}
+              >
                 Регламент обновлён — ознакомьтесь заново.
               </Text>
             </View>
@@ -319,9 +361,23 @@ export default function KnowledgeArticleScreen() {
 
           {/* Already-acknowledged confirmation (regulation) */}
           {isRegulation && article.acknowledged ? (
-            <View style={[styles.ackDone, { backgroundColor: colors.green[50], borderColor: colors.green[200] }]}>
-              <Ionicons name="checkmark-circle" size={18} color={colors.green[600]} />
-              <Text variant="bodyEmph" style={{ color: colors.green[700] }}>
+            <View
+              style={[
+                styles.ackDone,
+                palette.mode === 'dark'
+                  ? { backgroundColor: softTint(colors.green[600], 'dark'), borderColor: palette.border.subtle }
+                  : { backgroundColor: colors.green[50], borderColor: colors.green[200] },
+              ]}
+            >
+              <Ionicons
+                name="checkmark-circle"
+                size={18}
+                color={palette.mode === 'dark' ? colors.green[300] : colors.green[600]}
+              />
+              <Text
+                variant="bodyEmph"
+                style={{ color: palette.mode === 'dark' ? colors.green[300] : colors.green[700] }}
+              >
                 Вы ознакомились
               </Text>
             </View>
@@ -362,7 +418,12 @@ export default function KnowledgeArticleScreen() {
                 style={[
                   styles.feedbackBtn,
                   {
-                    backgroundColor: feedback?.myFeedback === true ? colors.green[50] : palette.bg.muted,
+                    backgroundColor:
+                      feedback?.myFeedback === true
+                        ? palette.mode === 'dark'
+                          ? softTint(colors.green[600], 'dark')
+                          : colors.green[50]
+                        : palette.bg.muted,
                     borderColor: feedback?.myFeedback === true ? colors.green[300] : 'transparent',
                   },
                 ]}
@@ -370,12 +431,23 @@ export default function KnowledgeArticleScreen() {
                 <Ionicons
                   name={feedback?.myFeedback === true ? 'thumbs-up' : 'thumbs-up-outline'}
                   size={18}
-                  color={feedback?.myFeedback === true ? colors.green[600] : palette.text.secondary}
+                  color={
+                    feedback?.myFeedback === true
+                      ? palette.mode === 'dark'
+                        ? colors.green[300]
+                        : colors.green[600]
+                      : palette.text.secondary
+                  }
                 />
                 <Text
                   variant="footnote"
                   style={{
-                    color: feedback?.myFeedback === true ? colors.green[700] : palette.text.secondary,
+                    color:
+                      feedback?.myFeedback === true
+                        ? palette.mode === 'dark'
+                          ? colors.green[300]
+                          : colors.green[700]
+                        : palette.text.secondary,
                     fontWeight: '600',
                   }}
                 >
@@ -388,7 +460,12 @@ export default function KnowledgeArticleScreen() {
                 style={[
                   styles.feedbackBtn,
                   {
-                    backgroundColor: feedback?.myFeedback === false ? colors.red[50] : palette.bg.muted,
+                    backgroundColor:
+                      feedback?.myFeedback === false
+                        ? palette.mode === 'dark'
+                          ? softTint(colors.red[600], 'dark')
+                          : colors.red[50]
+                        : palette.bg.muted,
                     borderColor: feedback?.myFeedback === false ? colors.red[200] : 'transparent',
                   },
                 ]}
@@ -396,12 +473,23 @@ export default function KnowledgeArticleScreen() {
                 <Ionicons
                   name={feedback?.myFeedback === false ? 'thumbs-down' : 'thumbs-down-outline'}
                   size={18}
-                  color={feedback?.myFeedback === false ? colors.red[600] : palette.text.secondary}
+                  color={
+                    feedback?.myFeedback === false
+                      ? palette.mode === 'dark'
+                        ? colors.red[300]
+                        : colors.red[600]
+                      : palette.text.secondary
+                  }
                 />
                 <Text
                   variant="footnote"
                   style={{
-                    color: feedback?.myFeedback === false ? colors.red[700] : palette.text.secondary,
+                    color:
+                      feedback?.myFeedback === false
+                        ? palette.mode === 'dark'
+                          ? colors.red[300]
+                          : colors.red[700]
+                        : palette.text.secondary,
                     fontWeight: '600',
                   }}
                 >

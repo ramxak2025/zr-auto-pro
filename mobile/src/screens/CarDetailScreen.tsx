@@ -354,8 +354,20 @@ const CarCheckRow = React.memo(function CarCheckRow({ check, palette, canViewPro
           <View style={styles.checkHeaderLeft}>
             <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
             {check.isReturned ? (
-              <View style={[styles.returnBadge, { backgroundColor: colors.red[100] }]}>
-                <Text style={[styles.returnText, { color: colors.red[700] }]}>Возврат</Text>
+              <View
+                style={[
+                  styles.returnBadge,
+                  { backgroundColor: palette.mode === 'dark' ? getBadgeColors('dark').red.bg : colors.red[100] },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.returnText,
+                    { color: palette.mode === 'dark' ? getBadgeColors('dark').red.text : colors.red[700] },
+                  ]}
+                >
+                  Возврат
+                </Text>
               </View>
             ) : null}
             <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>

@@ -207,18 +207,21 @@ export const badgeColors: Record<string, BadgeColor> = {
 
 // DARK-mode badge map. The light pale-50 fills go invisible / muddy on the
 // dark canvas, so we flip the formula: a translucent saturated fill (the
-// 500-level hue at low alpha so the dark surface shows through) carrying a
-// light 300-level text. Reads as a glowing chip rather than a flat sticker.
+// 500-level hue at LOW alpha so the dark surface shows through) carrying a
+// light 300-level text. Reads as a soft, muted chip rather than a bright
+// sticker. Fills calibrated DOWN (owner: «не слишком светлые/контрастные
+// бейджи») so the colour is a whisper of tint; the light-300 text stays the
+// legible element (its contrast is vs the dark card showing through).
 export const badgeColorsDark: Record<string, BadgeColor> = {
-  blue: { bg: 'rgba(59, 130, 246, 0.18)', text: colors.blue[300] },
-  green: { bg: 'rgba(34, 197, 94, 0.18)', text: colors.green[300] },
-  red: { bg: 'rgba(239, 68, 68, 0.20)', text: colors.red[300] },
-  yellow: { bg: 'rgba(234, 179, 8, 0.20)', text: colors.yellow[300] },
-  gray: { bg: 'rgba(148, 163, 184, 0.16)', text: colors.gray[300] },
-  purple: { bg: 'rgba(147, 51, 234, 0.20)', text: colors.purple[300] },
-  orange: { bg: 'rgba(249, 115, 22, 0.20)', text: colors.orange[400] },
+  blue: { bg: 'rgba(59, 130, 246, 0.15)', text: colors.blue[300] },
+  green: { bg: 'rgba(34, 197, 94, 0.15)', text: colors.green[300] },
+  red: { bg: 'rgba(239, 68, 68, 0.16)', text: colors.red[300] },
+  yellow: { bg: 'rgba(234, 179, 8, 0.15)', text: colors.yellow[300] },
+  gray: { bg: 'rgba(148, 163, 184, 0.13)', text: colors.gray[300] },
+  purple: { bg: 'rgba(147, 51, 234, 0.16)', text: colors.purple[300] },
+  orange: { bg: 'rgba(249, 115, 22, 0.16)', text: colors.orange[400] },
   // No indigo[300] token in the scale — hardcode tailwind indigo-300.
-  indigo: { bg: 'rgba(99, 102, 241, 0.22)', text: '#a5b4fc' },
+  indigo: { bg: 'rgba(99, 102, 241, 0.17)', text: '#a5b4fc' },
 };
 
 /**
@@ -268,8 +271,14 @@ export const paymentMethodBadgeColor: Record<string, keyof typeof badgeColors> =
 // throws on a colour string.
 // ─────────────────────────────────────────────────────────────────────────────
 
-/** ~15 % opacity expressed as the trailing two hex digits of an #RRGGBBAA. */
-const DARK_TINT_ALPHA = '26';
+// Dark icon-tile / chip fills must read as a SUBTLE coloured glass on the
+// card — never a bright patch (owner: «местами слишком светлые/контрастные
+// бейджи и иконки»). Two levers: (1) pull the accent partway toward a neutral
+// grey so garish hues calm down, then (2) lay it at a LOW alpha so the dark
+// card shows through. The caller's icon/text (full accent) stays vivid on top,
+// so legibility is preserved while the tile itself stops glaring.
+const DARK_TINT_ALPHA = 0.12; // was ~0.15 — lower so the tile barely lifts off the card
+const DARK_TINT_DESAT = 0.34; // 0 = full hue, 1 = fully neutral grey
 
 /** Normalise to a lowercase 6-digit hex (no '#'), or `null` if not hex. */
 function normalizeHex(input: string): string | null {
@@ -279,6 +288,17 @@ function normalizeHex(input: string): string | null {
     h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
   }
   return /^[0-9a-fA-F]{6}$/.test(h) ? h.toLowerCase() : null;
+}
+
+/** Pull a 6-digit hex partway toward its own luma (perceptual grey) by `ratio`. */
+function desaturateToward(hex6: string, ratio: number): [number, number, number] {
+  const ch = (i: number) => parseInt(hex6.slice(i, i + 2), 16);
+  const r = ch(0);
+  const g = ch(2);
+  const b = ch(4);
+  const luma = 0.299 * r + 0.587 * g + 0.114 * b;
+  const mix = (c: number) => Math.round(c + (luma - c) * ratio);
+  return [mix(r), mix(g), mix(b)];
 }
 
 /** Mix a 6-digit hex toward white by `whiteRatio` (0..1). */
@@ -302,8 +322,10 @@ function mixTowardWhite(hex6: string, whiteRatio: number): string {
 export function softTint(accentHex: string, mode: 'light' | 'dark'): string {
   const hex = normalizeHex(accentHex);
   if (mode === 'dark') {
-    // Translucent accent glow. RN's colour parser accepts #RRGGBBAA.
-    return hex ? `#${hex}${DARK_TINT_ALPHA}` : accentHex;
+    // Muted, desaturated translucent fill — a whisper of accent, not a glow.
+    if (!hex) return accentHex;
+    const [r, g, b] = desaturateToward(hex, DARK_TINT_DESAT);
+    return `rgba(${r}, ${g}, ${b}, ${DARK_TINT_ALPHA})`;
   }
   // Light: pale near-white tint approximating the tailwind `[50]` look.
   return hex ? mixTowardWhite(hex, 0.92) : accentHex;

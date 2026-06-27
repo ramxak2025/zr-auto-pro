@@ -32,7 +32,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { bookingsApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
-import { colors, borderRadius, spacing } from '../theme';
+import { colors, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Booking } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -224,8 +224,12 @@ export default function BookingDetailScreen() {
         <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>КЛИЕНТ</Text>
         <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.cardRow}>
-            <View style={styles.avatar}>
-              <Ionicons name="person" size={18} color={colors.primary[700]} />
+            <View style={[styles.avatar, palette.mode === 'dark' && { backgroundColor: palette.accent.primarySoft }]}>
+              <Ionicons
+                name="person"
+                size={18}
+                color={palette.mode === 'dark' ? palette.accent.primaryText : colors.primary[700]}
+              />
             </View>
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[styles.cardTitle, { color: palette.text.primary }]} numberOfLines={1}>
@@ -280,18 +284,33 @@ export default function BookingDetailScreen() {
         {/* ── Linked check (converted) ── */}
         {booking.checkId ? (
           <TouchableOpacity
-            style={[styles.checkCard, { backgroundColor: colors.primary[50], borderColor: colors.primary[100] }]}
+            style={[
+              styles.checkCard,
+              palette.mode === 'dark'
+                ? { backgroundColor: palette.accent.primarySoft, borderColor: palette.border.strong }
+                : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+            ]}
             onPress={() => navigation.navigate('CheckDetail', { id: booking.checkId })}
             activeOpacity={0.8}
           >
-            <Ionicons name="receipt-outline" size={20} color={colors.primary[700]} />
+            <Ionicons
+              name="receipt-outline"
+              size={20}
+              color={palette.mode === 'dark' ? palette.accent.primaryText : colors.primary[700]}
+            />
             <View style={{ flex: 1 }}>
-              <Text style={styles.checkCardTitle}>
+              <Text style={[styles.checkCardTitle, palette.mode === 'dark' && { color: palette.accent.primaryText }]}>
                 {booking.checkNumber != null ? `Чек №${booking.checkNumber}` : 'Связанный чек'}
               </Text>
-              <Text style={styles.checkCardSub}>Запись проведена в кассе</Text>
+              <Text style={[styles.checkCardSub, palette.mode === 'dark' && { color: palette.accent.primaryText }]}>
+                Запись проведена в кассе
+              </Text>
             </View>
-            <Ionicons name="chevron-forward" size={18} color={colors.primary[600]} />
+            <Ionicons
+              name="chevron-forward"
+              size={18}
+              color={palette.mode === 'dark' ? palette.accent.primaryText : colors.primary[600]}
+            />
           </TouchableOpacity>
         ) : null}
 

@@ -41,7 +41,7 @@ import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi } from '../api/services';
-import { spacing, borderRadius, colors } from '../theme';
+import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { rootCategories } from '../utils/knowledgeTree';
 import { UserRole } from '../../../shared/types';
@@ -341,7 +341,15 @@ export default function KnowledgeBaseScreen() {
                     },
                   ]}
                 >
-                  <View style={[styles.featureIcon, { backgroundColor: colors.amber[50] }]}>
+                  <View
+                    style={[
+                      styles.featureIcon,
+                      {
+                        backgroundColor:
+                          palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
+                      },
+                    ]}
+                  >
                     <Ionicons name="construct" size={22} color={colors.amber[600]} />
                   </View>
                   <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
@@ -363,7 +371,9 @@ export default function KnowledgeBaseScreen() {
                 style={({ pressed }) => [
                   styles.regBanner,
                   pendingCount > 0
-                    ? { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }
+                    ? palette.mode === 'dark'
+                      ? { backgroundColor: softTint(colors.amber[600], 'dark'), borderColor: palette.border.subtle }
+                      : { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }
                     : { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
                   { opacity: pressed ? 0.85 : 1 },
                 ]}
@@ -371,7 +381,14 @@ export default function KnowledgeBaseScreen() {
                 <View
                   style={[
                     styles.regIcon,
-                    { backgroundColor: pendingCount > 0 ? colors.amber[100] : palette.accent.primarySoft },
+                    {
+                      backgroundColor:
+                        pendingCount > 0
+                          ? palette.mode === 'dark'
+                            ? softTint(colors.amber[600], 'dark')
+                            : colors.amber[100]
+                          : palette.accent.primarySoft,
+                    },
                   ]}
                 >
                   <Ionicons

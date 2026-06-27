@@ -39,7 +39,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { marketingApi, clientsApi, clientSourcesApi } from '../api/services';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -185,7 +185,12 @@ function MotivationCard() {
     >
       <View style={styles.sectionHeaderRow}>
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-          <View style={[styles.giftBadge, { backgroundColor: colors.amber[50] }]}>
+          <View
+            style={[
+              styles.giftBadge,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+            ]}
+          >
             <Ionicons name="gift-outline" size={16} color={colors.amber[700]} />
           </View>
           <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: 0 }]}>Подарок за отзыв</Text>
@@ -581,7 +586,12 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
             },
           ]}
         >
-          <View style={[styles.ctaIcon, { backgroundColor: colors.teal[50] }]}>
+          <View
+            style={[
+              styles.ctaIcon,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.teal[600], 'dark') : colors.teal[50] },
+            ]}
+          >
             <Ionicons name="repeat-outline" size={18} color={colors.teal[600]} />
           </View>
           <View style={{ flex: 1 }}>
@@ -600,15 +610,30 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
 
       {/* Negative alerts highlight */}
       {unreadNegative > 0 && (
-        <AnimatedCard index={0} style={[styles.alertCard]}>
-          <View style={[styles.alertIcon, { backgroundColor: colors.red[100] }]}>
-            <Ionicons name="warning" size={18} color={colors.red[600]} />
+        <AnimatedCard
+          index={0}
+          style={
+            palette.mode === 'dark'
+              ? [
+                  styles.alertCard,
+                  { backgroundColor: softTint(colors.red[600], 'dark'), borderColor: palette.border.subtle },
+                ]
+              : styles.alertCard
+          }
+        >
+          <View
+            style={[
+              styles.alertIcon,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[100] },
+            ]}
+          >
+            <Ionicons name="warning" size={18} color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.alertTitle, { color: colors.red[700] }]}>
+            <Text style={[styles.alertTitle, { color: palette.mode === 'dark' ? colors.red[300] : colors.red[700] }]}>
               {unreadNegative} новых негативных отзыва
             </Text>
-            <Text style={[styles.alertSub, { color: colors.red[700] }]}>
+            <Text style={[styles.alertSub, { color: palette.mode === 'dark' ? colors.red[300] : colors.red[700] }]}>
               Откройте вкладку «Отзывы» — клиенты ждут реакции
             </Text>
           </View>
@@ -623,7 +648,12 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
             index={idx + 1}
             style={[styles.statCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           >
-            <View style={[styles.statIconBox, { backgroundColor: stat.bg }]}>
+            <View
+              style={[
+                styles.statIconBox,
+                { backgroundColor: palette.mode === 'dark' ? softTint(stat.color, 'dark') : stat.bg },
+              ]}
+            >
               <Ionicons name={stat.icon} size={18} color={stat.color} />
             </View>
             <Text style={[styles.statValue, { color: palette.text.primary }]}>{stat.value}</Text>
@@ -668,7 +698,11 @@ function DashboardTab({ onRequestReview }: { onRequestReview: () => void }) {
               <View
                 style={[
                   styles.statusPill,
-                  p.isActive ? styles.statusPillActive : { backgroundColor: palette.bg.muted },
+                  p.isActive
+                    ? palette.mode === 'dark'
+                      ? { backgroundColor: softTint(colors.green[600], 'dark') }
+                      : styles.statusPillActive
+                    : { backgroundColor: palette.bg.muted },
                 ]}
               >
                 <Text
@@ -933,13 +967,39 @@ function RequestReviewModal({ visible, onClose }: { visible: boolean; onClose: (
     <Modal visible={visible} onClose={onClose} title="Запросить отзыв">
       {/* Motivation preview — what the client will actually see */}
       {motivation ? (
-        <View style={[styles.motivationPreview, { borderColor: colors.amber[200], backgroundColor: colors.amber[50] }]}>
-          <View style={[styles.giftBadge, { backgroundColor: colors.amber[100] }]}>
+        <View
+          style={[
+            styles.motivationPreview,
+            palette.mode === 'dark'
+              ? { borderColor: palette.border.subtle, backgroundColor: softTint(colors.amber[600], 'dark') }
+              : { borderColor: colors.amber[200], backgroundColor: colors.amber[50] },
+          ]}
+        >
+          <View
+            style={[
+              styles.giftBadge,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[100] },
+            ]}
+          >
             <Ionicons name="gift-outline" size={14} color={colors.amber[700]} />
           </View>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.motivationPreviewLabel, { color: colors.amber[800] }]}>Клиент увидит</Text>
-            <Text style={[styles.motivationPreviewText, { color: colors.amber[800] }]}>{motivation}</Text>
+            <Text
+              style={[
+                styles.motivationPreviewLabel,
+                { color: palette.mode === 'dark' ? colors.amber[200] : colors.amber[800] },
+              ]}
+            >
+              Клиент увидит
+            </Text>
+            <Text
+              style={[
+                styles.motivationPreviewText,
+                { color: palette.mode === 'dark' ? colors.amber[200] : colors.amber[800] },
+              ]}
+            >
+              {motivation}
+            </Text>
           </View>
         </View>
       ) : null}

@@ -33,7 +33,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { bookingsApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
-import { colors, borderRadius, spacing } from '../theme';
+import { colors, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { BookingSettings } from '../../../shared/types';
 import type { UpdateBookingSettingsRequest } from '../../../shared/api/types';
@@ -120,7 +120,12 @@ export default function BookingSettingsScreen() {
         </Text>
         <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.row}>
-            <View style={[styles.rowIcon, { backgroundColor: colors.blue[50] }]}>
+            <View
+              style={[
+                styles.rowIcon,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
+              ]}
+            >
               <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.blue[600]} />
             </View>
             <View style={styles.rowText}>
@@ -146,7 +151,12 @@ export default function BookingSettingsScreen() {
         <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>НАПОМИНАНИЕ</Text>
         <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.row}>
-            <View style={[styles.rowIcon, { backgroundColor: colors.amber[50] }]}>
+            <View
+              style={[
+                styles.rowIcon,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+              ]}
+            >
               <Ionicons name="alarm-outline" size={20} color={colors.amber[600]} />
             </View>
             <View style={styles.rowText}>

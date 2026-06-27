@@ -35,7 +35,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../contexts/ThemeContext';
 import { marketingApi, clientsApi } from '../api/services';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
@@ -692,9 +692,33 @@ function HistoryTab({ history }: { history: ManualHistoryEntry[] }) {
               </Text>
             </View>
             <View
-              style={[styles.statusPill, h.failed === 0 ? styles.statusPillOk : { backgroundColor: colors.orange[50] }]}
+              style={[
+                styles.statusPill,
+                h.failed === 0
+                  ? palette.mode === 'dark'
+                    ? { backgroundColor: softTint(colors.green[600], 'dark') }
+                    : styles.statusPillOk
+                  : {
+                      backgroundColor:
+                        palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                    },
+              ]}
             >
-              <Text style={[styles.statusPillText, { color: h.failed === 0 ? colors.green[700] : colors.orange[700] }]}>
+              <Text
+                style={[
+                  styles.statusPillText,
+                  {
+                    color:
+                      h.failed === 0
+                        ? palette.mode === 'dark'
+                          ? colors.green[300]
+                          : colors.green[700]
+                        : palette.mode === 'dark'
+                          ? colors.orange[400]
+                          : colors.orange[700],
+                  },
+                ]}
+              >
                 {h.failed === 0 ? 'Доставлено' : 'Частично'}
               </Text>
             </View>

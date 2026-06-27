@@ -44,7 +44,7 @@ import QueryErrorState from '../components/QueryErrorState';
 import EmptyState from '../components/EmptyState';
 import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
-import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { TodayEmployeeStatus, ScheduleEntry, ScheduleSettings, User } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
@@ -1176,9 +1176,25 @@ function GridTab() {
           keep showing it, since intermittent connectivity shouldn't break
           the UX. */}
       {isError && !entries && (
-        <TouchableOpacity onPress={() => refetch()} style={styles.errorBanner} activeOpacity={0.7}>
-          <Ionicons name="cloud-offline-outline" size={16} color={colors.red[600]} />
-          <Text style={styles.errorBannerText}>Не удалось загрузить расписание. Нажмите чтобы повторить.</Text>
+        <TouchableOpacity
+          onPress={() => refetch()}
+          style={[
+            styles.errorBanner,
+            palette.mode === 'dark' && {
+              backgroundColor: softTint(colors.red[600], 'dark'),
+              borderColor: palette.border.subtle,
+            },
+          ]}
+          activeOpacity={0.7}
+        >
+          <Ionicons
+            name="cloud-offline-outline"
+            size={16}
+            color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+          />
+          <Text style={[styles.errorBannerText, palette.mode === 'dark' && { color: colors.red[300] }]}>
+            Не удалось загрузить расписание. Нажмите чтобы повторить.
+          </Text>
         </TouchableOpacity>
       )}
 
@@ -1191,10 +1207,21 @@ function GridTab() {
           <TouchableOpacity
             onPress={() => setQuickError(null)}
             activeOpacity={0.8}
-            style={[styles.errorBanner, { borderColor: colors.red[200] }]}
+            style={[
+              styles.errorBanner,
+              palette.mode === 'dark'
+                ? { backgroundColor: softTint(colors.red[600], 'dark'), borderColor: palette.border.subtle }
+                : { borderColor: colors.red[200] },
+            ]}
           >
-            <Ionicons name="alert-circle-outline" size={16} color={colors.red[600]} />
-            <Text style={styles.errorBannerText}>{quickError}</Text>
+            <Ionicons
+              name="alert-circle-outline"
+              size={16}
+              color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+            />
+            <Text style={[styles.errorBannerText, palette.mode === 'dark' && { color: colors.red[300] }]}>
+              {quickError}
+            </Text>
           </TouchableOpacity>
         </Reanimated.View>
       )}
@@ -2226,7 +2253,12 @@ function RatingTab() {
                     width: 32,
                     height: 32,
                     borderRadius: 16,
-                    backgroundColor: idx < 3 ? colors.amber[100] : palette.bg.muted,
+                    backgroundColor:
+                      idx < 3
+                        ? palette.mode === 'dark'
+                          ? softTint(colors.amber[600], 'dark')
+                          : colors.amber[100]
+                        : palette.bg.muted,
                     alignItems: 'center',
                     justifyContent: 'center',
                   }}

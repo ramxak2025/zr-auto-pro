@@ -31,7 +31,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
-import { spacing, borderRadius, colors } from '../theme';
+import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { UserRole } from '../../../shared/types';
 import type { KnowledgeCourse, KnowledgeLesson } from '../../../shared/types';
@@ -143,15 +143,39 @@ export default function KnowledgeCourseDetailScreen() {
 
           {/* Progress / completed state */}
           {course.completed ? (
-            <View style={[styles.certCard, { backgroundColor: colors.green[50], borderColor: colors.green[200] }]}>
-              <View style={[styles.certBadge, { backgroundColor: colors.green[100] }]}>
-                <Ionicons name="ribbon" size={26} color={colors.green[600]} />
+            <View
+              style={[
+                styles.certCard,
+                palette.mode === 'dark'
+                  ? { backgroundColor: softTint(colors.green[600], 'dark'), borderColor: palette.border.subtle }
+                  : { backgroundColor: colors.green[50], borderColor: colors.green[200] },
+              ]}
+            >
+              <View
+                style={[
+                  styles.certBadge,
+                  {
+                    backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[100],
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="ribbon"
+                  size={26}
+                  color={palette.mode === 'dark' ? colors.green[300] : colors.green[600]}
+                />
               </View>
               <View style={{ flex: 1 }}>
-                <Text variant="bodyEmph" style={{ color: colors.green[700] }}>
+                <Text
+                  variant="bodyEmph"
+                  style={{ color: palette.mode === 'dark' ? colors.green[300] : colors.green[700] }}
+                >
                   Курс пройден
                 </Text>
-                <Text variant="footnote" style={{ color: colors.green[600] }}>
+                <Text
+                  variant="footnote"
+                  style={{ color: palette.mode === 'dark' ? colors.green[300] : colors.green[600] }}
+                >
                   Вы прошли все {course.lessonCount} уроков. Сертификат начислен.
                 </Text>
               </View>

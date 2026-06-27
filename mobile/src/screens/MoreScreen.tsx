@@ -198,7 +198,10 @@ const menuSections: MenuSection[] = [
         screen: 'CashShift',
         itemKey: 'cashflow',
         roles: ['director', 'admin', 'superadmin'],
-        icon: 'file-tray-full-outline',
+        // Z-отчёт / сверка кассы → calculator (cash-register feel). Was
+        // `file-tray-full-outline`, which had no Lucide twin and rendered a
+        // meaningless Circle placeholder.
+        icon: 'calculator-outline',
         iconBg: colors.green[50],
         iconColor: colors.green[600],
       },

@@ -48,6 +48,17 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // ── filters / misc (were falling back to a meaningless Circle) ─────────
   apps: { lucide: 'LayoutGrid', solid: true },
   'apps-outline': { lucide: 'LayoutGrid' },
+  // «Доска заказ-нарядов» (kanban). Ionicons `albums*` has no Lucide twin
+  // (Lucide ships `Album`, not `Albums`) so it was rendering a meaningless
+  // Circle everywhere it's used (ChecksScreen «Доска» button, WorkBoard /
+  // WorkBoardSettings / Users kanban toggle). Every usage in this codebase
+  // means the order-narjad board → map to Lucide `Kanban` (columns of cards).
+  albums: { lucide: 'Kanban', solid: true },
+  'albums-outline': { lucide: 'Kanban' },
+  // Кассовая смена / Z-отчёт / сверка кассы. `file-tray-full*` has no Lucide
+  // twin → was a Circle. Calculator reads as a cash-register / reconciliation.
+  calculator: { lucide: 'Calculator', solid: true },
+  'calculator-outline': { lucide: 'Calculator' },
   sparkles: { lucide: 'Sparkles', solid: true },
   'sparkles-outline': { lucide: 'Sparkles' },
   ellipse: { lucide: 'Circle', fill: true },

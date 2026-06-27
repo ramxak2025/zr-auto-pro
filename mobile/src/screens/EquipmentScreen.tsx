@@ -61,7 +61,7 @@ import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
 import { equipmentApi, uploadsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
+import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { PressableScale } from '../platform/PressableScale';
 import { haptic } from '../platform/haptics';
@@ -208,6 +208,16 @@ function CenteredDialog({
     </RNModal>
   );
 }
+
+// Dark-mode overrides for the «expired service-life» status look. The static
+// styles below keep their light red[50]/red[100] wash byte-identical; in dark
+// we swap to a muted red softTint so the row/pill reads as attention without a
+// bright pastel patch. Applied conditionally at the call sites.
+const darkEquipExpired = {
+  backgroundColor: softTint(colors.red[600], 'dark'),
+  borderColor: 'rgba(239, 68, 68, 0.22)',
+};
+const darkExpiredPill = { backgroundColor: softTint(colors.red[600], 'dark') };
 
 const dialogStyles = StyleSheet.create({
   kavRoot: {
@@ -535,7 +545,7 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
               style={[
                 styles.equipItem,
                 { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                expired && styles.equipItemExpired,
+                expired && (palette.mode === 'dark' ? darkEquipExpired : styles.equipItemExpired),
               ]}
             >
               {item.photo ? (
@@ -563,9 +573,15 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
                   </Text>
                 )}
                 {expired && (
-                  <View style={styles.expiredPill}>
-                    <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
-                    <Text style={styles.expiredPillText}>Срок истёк</Text>
+                  <View style={[styles.expiredPill, palette.mode === 'dark' && darkExpiredPill]}>
+                    <Ionicons
+                      name="alert-circle"
+                      size={11}
+                      color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+                    />
+                    <Text style={[styles.expiredPillText, palette.mode === 'dark' && { color: colors.red[300] }]}>
+                      Срок истёк
+                    </Text>
                   </View>
                 )}
               </View>
@@ -622,10 +638,20 @@ function EmployeeDetail({ emp, canEdit }: { emp: any; canEdit: boolean }) {
           <View
             style={[
               styles.empAvatar,
-              { backgroundColor: colors.primary[100], alignItems: 'center', justifyContent: 'center' },
+              {
+                backgroundColor: palette.mode === 'dark' ? palette.accent.primarySoft : colors.primary[100],
+                alignItems: 'center',
+                justifyContent: 'center',
+              },
             ]}
           >
-            <Text style={{ fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.primary[700] }}>
+            <Text
+              style={{
+                fontSize: fontSize.xl,
+                fontWeight: fontWeight.bold,
+                color: palette.mode === 'dark' ? palette.accent.primaryText : colors.primary[700],
+              }}
+            >
               {getInitials(emp.fullName)}
             </Text>
           </View>
@@ -851,13 +877,22 @@ function IssueModal({
               haptic('select');
               setCategoryType(ct.k);
             }}
-            style={[styles.catBtn, { backgroundColor: palette.bg.muted }, categoryType === ct.k && styles.catBtnActive]}
+            style={[
+              styles.catBtn,
+              { backgroundColor: palette.bg.muted },
+              categoryType === ct.k &&
+                (palette.mode === 'dark'
+                  ? { backgroundColor: palette.accent.primarySoft, borderColor: palette.border.strong }
+                  : styles.catBtnActive),
+            ]}
           >
             <Text
               style={[
                 styles.catBtnText,
                 { color: palette.text.secondary },
-                categoryType === ct.k && { color: colors.primary[700] },
+                categoryType === ct.k && {
+                  color: palette.mode === 'dark' ? palette.accent.primaryText : colors.primary[700],
+                },
               ]}
             >
               {ct.l}
@@ -1212,7 +1247,12 @@ function DeleteStorageItemDialog({
         <ModalBlurBackdrop onPress={onClose} />
         <View style={dialogStyles.scrim} pointerEvents="box-none">
           <View style={[deleteStyles.card, { backgroundColor: palette.bg.elevated }]}>
-            <View style={[deleteStyles.iconBadge, { backgroundColor: colors.red[50] }]}>
+            <View
+              style={[
+                deleteStyles.iconBadge,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
+              ]}
+            >
               <Ionicons name="trash-outline" size={24} color={colors.red[600]} />
             </View>
             <Text style={[deleteStyles.title, { color: palette.text.primary }]} numberOfLines={2}>
@@ -1243,7 +1283,13 @@ function DeleteStorageItemDialog({
               onPress={() => onChoose(true)}
               disabled={pending}
               activeOpacity={0.85}
-              style={[deleteStyles.choiceBtn, deleteStyles.choiceBtnPrimary, pending && { opacity: 0.5 }]}
+              style={[
+                deleteStyles.choiceBtn,
+                palette.mode === 'dark'
+                  ? { backgroundColor: palette.accent.primarySoft, borderWidth: 1, borderColor: palette.border.strong }
+                  : deleteStyles.choiceBtnPrimary,
+                pending && { opacity: 0.5 },
+              ]}
             >
               <Ionicons name="arrow-undo-outline" size={18} color={colors.primary[700]} />
               <View style={{ flex: 1 }}>
@@ -1426,7 +1472,12 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
                 }}
                 style={[styles.folderCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               >
-                <View style={styles.folderIcon}>
+                <View
+                  style={[
+                    styles.folderIcon,
+                    palette.mode === 'dark' && { backgroundColor: softTint(colors.amber[600], 'dark') },
+                  ]}
+                >
                   <Ionicons name="folder" size={20} color={colors.amber[600]} />
                 </View>
                 <View style={{ flex: 1 }}>
@@ -1497,7 +1548,7 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
                 style={[
                   styles.equipItem,
                   { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                  expired && styles.equipItemExpired,
+                  expired && (palette.mode === 'dark' ? darkEquipExpired : styles.equipItemExpired),
                 ]}
               >
                 {item.photo ? (
@@ -1521,9 +1572,15 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
                     В наличии: {item.quantity} {item.unit}
                   </Text>
                   {expired && (
-                    <View style={styles.expiredPill}>
-                      <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
-                      <Text style={styles.expiredPillText}>Срок истёк</Text>
+                    <View style={[styles.expiredPill, palette.mode === 'dark' && darkExpiredPill]}>
+                      <Ionicons
+                        name="alert-circle"
+                        size={11}
+                        color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+                      />
+                      <Text style={[styles.expiredPillText, palette.mode === 'dark' && { color: colors.red[300] }]}>
+                        Срок истёк
+                      </Text>
                     </View>
                   )}
                 </View>
@@ -1657,7 +1714,7 @@ export default function EquipmentScreen() {
                 style={[
                   styles.equipItem,
                   { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                  expired && styles.equipItemExpired,
+                  expired && (palette.mode === 'dark' ? darkEquipExpired : styles.equipItemExpired),
                 ]}
               >
                 {item.photo ? (
@@ -1676,9 +1733,15 @@ export default function EquipmentScreen() {
                   <Text style={[styles.equipName, { color: palette.text.primary }]}>{item.name}</Text>
                   <Text style={styles.equipCost}>{formatMoney(item.cost)}</Text>
                   {expired && (
-                    <View style={styles.expiredPill}>
-                      <Ionicons name="alert-circle" size={11} color={colors.red[600]} />
-                      <Text style={styles.expiredPillText}>Срок истёк</Text>
+                    <View style={[styles.expiredPill, palette.mode === 'dark' && darkExpiredPill]}>
+                      <Ionicons
+                        name="alert-circle"
+                        size={11}
+                        color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+                      />
+                      <Text style={[styles.expiredPillText, palette.mode === 'dark' && { color: colors.red[300] }]}>
+                        Срок истёк
+                      </Text>
                     </View>
                   )}
                 </View>

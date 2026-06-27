@@ -31,7 +31,7 @@ import { iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useColors } from '../contexts/ThemeContext';
 import { knowledgeApi } from '../api/services';
-import { spacing, borderRadius, colors } from '../theme';
+import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { KnowledgeCourse, KnowledgeLesson, LessonProgress } from '../../../shared/types';
 
@@ -198,9 +198,23 @@ export default function KnowledgeLessonScreen() {
           </Text>
 
           {alreadyDone ? (
-            <View style={[styles.doneBanner, { backgroundColor: colors.green[50], borderColor: colors.green[200] }]}>
-              <Ionicons name="checkmark-circle" size={18} color={colors.green[600]} />
-              <Text variant="bodyEmph" style={{ color: colors.green[700] }}>
+            <View
+              style={[
+                styles.doneBanner,
+                palette.mode === 'dark'
+                  ? { backgroundColor: softTint(colors.green[600], 'dark'), borderColor: palette.border.subtle }
+                  : { backgroundColor: colors.green[50], borderColor: colors.green[200] },
+              ]}
+            >
+              <Ionicons
+                name="checkmark-circle"
+                size={18}
+                color={palette.mode === 'dark' ? colors.green[300] : colors.green[600]}
+              />
+              <Text
+                variant="bodyEmph"
+                style={{ color: palette.mode === 'dark' ? colors.green[300] : colors.green[700] }}
+              >
                 Урок пройден
               </Text>
             </View>
@@ -267,9 +281,23 @@ export default function KnowledgeLessonScreen() {
               ))}
 
               {quizError ? (
-                <View style={[styles.errorBanner, { backgroundColor: colors.red[50], borderColor: colors.red[200] }]}>
-                  <Ionicons name="alert-circle" size={18} color={colors.red[600]} />
-                  <Text variant="footnote" style={{ flex: 1, color: colors.red[700] }}>
+                <View
+                  style={[
+                    styles.errorBanner,
+                    palette.mode === 'dark'
+                      ? { backgroundColor: softTint(colors.red[600], 'dark'), borderColor: palette.border.subtle }
+                      : { backgroundColor: colors.red[50], borderColor: colors.red[200] },
+                  ]}
+                >
+                  <Ionicons
+                    name="alert-circle"
+                    size={18}
+                    color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+                  />
+                  <Text
+                    variant="footnote"
+                    style={{ flex: 1, color: palette.mode === 'dark' ? colors.red[300] : colors.red[700] }}
+                  >
                     Есть ошибки, попробуйте снова. Правильно {quizError.correct} из {quizError.total}.
                   </Text>
                 </View>
