@@ -124,14 +124,54 @@ const roleBadgeColors: Record<string, string> = {
   master: 'bg-green-50 text-green-700',
 };
 
+// Russian labels for the desktop breadcrumb bar. Keyed by the first URL
+// segment so we never surface raw English route names ("Products", "Clients",
+// "Dashboard"…) to the user.
+const routeTitles: Record<string, string> = {
+  dashboard: 'Главная',
+  checks: 'Касса',
+  'work-board': 'Доска работ',
+  clients: 'Клиенты',
+  cars: 'Автомобили',
+  products: 'Склад',
+  services: 'Услуги',
+  suppliers: 'Поставщики',
+  'purchase-orders': 'Заказы поставщикам',
+  salary: 'Зарплата',
+  reports: 'Отчёты',
+  cashflow: 'Движение денег',
+  'cash-shift': 'Кассовая смена',
+  debtors: 'Дебиторка',
+  expenses: 'Расходы',
+  users: 'Пользователи',
+  employees: 'Сотрудники',
+  schedule: 'Расписание',
+  more: 'Ещё',
+  notifications: 'Уведомления',
+  tariff: 'Тариф',
+  marketing: 'Маркетинг',
+  calls: 'Звонки',
+  equipment: 'Имущество',
+  knowledge: 'База знаний',
+  'company-settings': 'Настройки компании',
+  integrations: 'Интеграции',
+};
+
+const subRouteTitles: Record<string, string> = {
+  new: 'Создание',
+  edit: 'Редактирование',
+  retail: 'Розница',
+  import: 'Импорт',
+};
+
 function getPageTitle(pathname: string): string[] {
   const segments = pathname.split('/').filter(Boolean);
-  if (segments.length === 0) return ['Dashboard'];
+  if (segments.length === 0) return ['Главная'];
   const titles: string[] = [];
-  const first = segments[0].charAt(0).toUpperCase() + segments[0].slice(1);
-  titles.push(first);
+  titles.push(routeTitles[segments[0]] ?? segments[0].charAt(0).toUpperCase() + segments[0].slice(1));
   if (segments.length > 1) {
-    titles.push(segments[1] === 'new' ? 'Создание' : 'Детали');
+    const last = segments[segments.length - 1];
+    titles.push(subRouteTitles[last] ?? 'Детали');
   }
   return titles;
 }
@@ -153,7 +193,6 @@ interface SidebarProps {
   userName: string;
   userAvatar?: string;
   userInitial: string;
-  tenantName: string;
   roleLabel: string;
   hasPermission: (perm: keyof UserPermissions) => boolean;
   isFeatureLocked: (featureKey?: string) => boolean;
@@ -164,7 +203,6 @@ const DesktopSidebar = memo(function DesktopSidebar({
   userName,
   userAvatar,
   userInitial,
-  tenantName,
   roleLabel,
   hasPermission,
   isFeatureLocked,
@@ -174,13 +212,8 @@ const DesktopSidebar = memo(function DesktopSidebar({
 
   return (
     <aside className="hidden md:flex fixed inset-y-0 left-0 z-30 w-[260px] flex-col border-r border-gray-200 bg-white">
-      <div className="flex h-16 items-center gap-3 border-b border-gray-200 px-6">
-        <img src="/logo.png" alt="Logo" className="h-9 w-auto object-contain" />
-        {tenantName && (
-          <div className="min-w-0">
-            <span className="text-sm font-semibold text-gray-900 truncate block">{tenantName}</span>
-          </div>
-        )}
+      <div className="flex h-16 items-center border-b border-gray-200 px-6">
+        <img src="/logo.png" alt="Autexa" className="h-8 w-auto object-contain" />
       </div>
 
       <nav className="flex-1 overflow-y-auto px-3 py-4">
@@ -355,7 +388,6 @@ export default function Layout() {
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userName = user?.fullName || 'User';
   const userInitial = user?.fullName?.charAt(0) || 'U';
-  const tenantName = user?.tenant?.name || '';
 
   // Memoize to prevent unnecessary re-renders of child components
   const sidebarProps = useMemo(
@@ -363,13 +395,12 @@ export default function Layout() {
       userName,
       userAvatar: user?.avatar,
       userInitial,
-      tenantName,
       roleLabel,
       hasPermission,
       isFeatureLocked,
       onLogout: logout,
     }),
-    [userName, user?.avatar, userInitial, tenantName, roleLabel, hasPermission, isFeatureLocked, logout],
+    [userName, user?.avatar, userInitial, roleLabel, hasPermission, isFeatureLocked, logout],
   );
 
   return (
@@ -413,9 +444,13 @@ export default function Layout() {
         {/* Mobile top bar (memoized) */}
         <MobileHeader userAvatar={user?.avatar} userInitial={userInitial} />
 
-        {/* Page content — fades + slight rise on route change */}
+        {/* Page content — fades + slight rise on route change.
+            The inner wrapper is a centered desktop content container: it caps
+            the reading width on wide monitors (max-w-screen-2xl) so pages and
+            widgets stop sprawling edge-to-edge, while staying full-width on
+            phones/tablets. */}
         <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 pb-24 md:p-6 md:pb-6 w-full min-w-0">
-          <div className="w-full min-w-0">
+          <div className="mx-auto w-full min-w-0 max-w-screen-2xl">
             <AnimatePresence mode="wait">
               <PageTransition key={location.pathname}>
                 <Outlet />

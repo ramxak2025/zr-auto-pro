@@ -21,7 +21,20 @@ import {
   Gift,
   Package,
 } from 'lucide-react';
-import { format, subDays, addDays, startOfWeek, addWeeks, subWeeks, startOfMonth, addMonths, subMonths, startOfYear, addYears, subYears } from 'date-fns';
+import {
+  format,
+  subDays,
+  addDays,
+  startOfWeek,
+  addWeeks,
+  subWeeks,
+  startOfMonth,
+  addMonths,
+  subMonths,
+  startOfYear,
+  addYears,
+  subYears,
+} from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -90,9 +103,7 @@ function QuickActions() {
     },
   ];
 
-  const visible = actions.filter(
-    (a) => !a.permissionKey || hasPermission(a.permissionKey as any),
-  );
+  const visible = actions.filter((a) => !a.permissionKey || hasPermission(a.permissionKey as any));
 
   if (visible.length === 0) return null;
 
@@ -137,7 +148,10 @@ function StaffStatusCircles() {
   const navigate = useNavigate();
   const { data: todayData } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
-    queryFn: async () => { const res = await scheduleApi.getToday(); return res.data; },
+    queryFn: async () => {
+      const res = await scheduleApi.getToday();
+      return res.data;
+    },
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -186,12 +200,20 @@ function StaffStatusCircles() {
     return rank(a) - rank(b);
   };
   const onShiftAll = statuses
-    .filter(s => (isOnShift(s) || s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') && !s.isDayOff && !isSick(s) && !isAbsent(s))
+    .filter(
+      (s) =>
+        (isOnShift(s) || s.lateStatus === 'late_minor' || s.lateStatus === 'late_major') &&
+        !s.isDayOff &&
+        !isSick(s) &&
+        !isAbsent(s),
+    )
     .sort(sortByLateness);
-  const notArrived = statuses.filter(s => !isOnShift(s) && !s.isDayOff && s.hasSchedule && !isSick(s) && !isAbsent(s) && !s.lateStatus);
-  const absent = statuses.filter(s => isAbsent(s));
-  const dayOff = statuses.filter(s => s.isDayOff && !isSick(s));
-  const sick = statuses.filter(s => isSick(s));
+  const notArrived = statuses.filter(
+    (s) => !isOnShift(s) && !s.isDayOff && s.hasSchedule && !isSick(s) && !isAbsent(s) && !s.lateStatus,
+  );
+  const absent = statuses.filter((s) => isAbsent(s));
+  const dayOff = statuses.filter((s) => s.isDayOff && !isSick(s));
+  const sick = statuses.filter((s) => isSick(s));
 
   const renderGroup = (title: string, icon: string, items: TodayEmployeeStatus[]) => {
     if (items.length === 0) return null;
@@ -200,24 +222,35 @@ function StaffStatusCircles() {
         <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
           <span>{icon}</span> {title} <span className="text-gray-300">({items.length})</span>
         </p>
-        <div className="grid grid-cols-5 gap-3">
+        {/* Fixed-width, left-packed avatars (flex-wrap) instead of a 1fr grid —
+            on a wide desktop card the old grid-cols-5 stretched 4 people across
+            the whole width ("расплывшийся сотрудник"). Now they pack tightly. */}
+        <div className="flex flex-wrap gap-2.5 sm:gap-3">
           {items.map((s) => (
             <button
               type="button"
               key={s.userId}
               onClick={() => navigate(`/employees/${s.userId}`)}
-              className="flex flex-col items-center gap-1 min-w-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2 rounded-lg p-1 -m-1 transition-transform active:scale-95"
+              className="flex w-[62px] flex-col items-center gap-1 min-w-0 group focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-400 focus-visible:ring-offset-2 rounded-lg p-1 transition-transform active:scale-95"
               title={getStatusLabel(s)}
             >
               <div className="relative">
-                <div className={`w-11 h-11 rounded-full ring-2 flex items-center justify-center text-xs font-bold text-white transition-all group-hover:ring-4 group-hover:scale-105 ${getCircleColor(s)}`}>
-                  {s.fullName.split(' ').map(w => w[0]).join('').slice(0, 2)}
+                <div
+                  className={`w-11 h-11 rounded-full ring-2 flex items-center justify-center text-xs font-bold text-white transition-all group-hover:ring-4 group-hover:scale-105 ${getCircleColor(s)}`}
+                >
+                  {s.fullName
+                    .split(' ')
+                    .map((w) => w[0])
+                    .join('')
+                    .slice(0, 2)}
                 </div>
                 {getStatusEmoji(s) && (
                   <span className="absolute -bottom-0.5 -right-0.5 text-xs">{getStatusEmoji(s)}</span>
                 )}
               </div>
-              <span className="text-[10px] text-gray-500 w-full truncate text-center group-hover:text-gray-900 transition-colors">{s.fullName.split(' ')[0]}</span>
+              <span className="text-[10px] text-gray-500 w-full truncate text-center group-hover:text-gray-900 transition-colors">
+                {s.fullName.split(' ')[0]}
+              </span>
               <span className="text-[9px] text-gray-400 w-full truncate text-center">{getStatusLabel(s)}</span>
             </button>
           ))}
@@ -231,11 +264,31 @@ function StaffStatusCircles() {
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-900">Сотрудники сегодня</h3>
         <div className="flex items-center gap-2 text-[11px] text-gray-400 flex-wrap">
-          {onShiftAll.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" /> {onShiftAll.length}</span>}
-          {notArrived.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-300" /> {notArrived.length}</span>}
-          {absent.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> {absent.length}</span>}
-          {dayOff.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-gray-400" /> {dayOff.length}</span>}
-          {sick.length > 0 && <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-rose-400" /> {sick.length}</span>}
+          {onShiftAll.length > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-green-500" /> {onShiftAll.length}
+            </span>
+          )}
+          {notArrived.length > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-gray-300" /> {notArrived.length}
+            </span>
+          )}
+          {absent.length > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-red-500" /> {absent.length}
+            </span>
+          )}
+          {dayOff.length > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-gray-400" /> {dayOff.length}
+            </span>
+          )}
+          {sick.length > 0 && (
+            <span className="flex items-center gap-1">
+              <span className="w-2 h-2 rounded-full bg-rose-400" /> {sick.length}
+            </span>
+          )}
         </div>
       </div>
 
@@ -252,7 +305,10 @@ function ShiftControl() {
   const queryClient = useQueryClient();
   const { data: myShifts } = useQuery<Shift[]>({
     queryKey: ['shifts', 'my'],
-    queryFn: async () => { const res = await shiftsApi.getMy(); return res.data; },
+    queryFn: async () => {
+      const res = await shiftsApi.getMy();
+      return res.data;
+    },
     staleTime: 10_000,
   });
 
@@ -277,20 +333,24 @@ function ShiftControl() {
     onError: (err: any) => toast.error(err?.response?.data?.message || 'Ошибка'),
   });
 
-  const currentShift = myShifts?.find(s => !s.closedAt);
+  const currentShift = myShifts?.find((s) => !s.closedAt);
   const isLoading = openShift.isPending || closeShift.isPending;
 
   return (
     <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${currentShift ? 'bg-green-100' : 'bg-gray-100'}`}>
+          <div
+            className={`flex h-10 w-10 items-center justify-center rounded-xl ${currentShift ? 'bg-green-100' : 'bg-gray-100'}`}
+          >
             <Clock className={`h-5 w-5 ${currentShift ? 'text-green-600' : 'text-gray-400'}`} />
           </div>
           <div>
             <p className="text-sm font-semibold text-gray-900">{currentShift ? 'Смена открыта' : 'Смена закрыта'}</p>
             {currentShift && (
-              <p className="text-xs text-gray-400">с {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}</p>
+              <p className="text-xs text-gray-400">
+                с {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
+              </p>
             )}
           </div>
         </div>
@@ -467,7 +527,8 @@ function RevenueChart() {
         </div>
         {data && revChange !== 0 && (
           <p className={`text-xs font-medium text-center ${revChange > 0 ? 'text-cyan-400' : 'text-red-400'}`}>
-            {revChange > 0 ? '+' : ''}{revChange}% к пред. периоду
+            {revChange > 0 ? '+' : ''}
+            {revChange}% к пред. периоду
           </p>
         )}
 
@@ -475,17 +536,15 @@ function RevenueChart() {
         <div className="flex items-center justify-between">
           <button
             type="button"
-            onClick={() => setOffset(o => o - 1)}
+            onClick={() => setOffset((o) => o - 1)}
             className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
           >
             <ChevronLeft className="w-4 h-4" />
           </button>
-          <span className="text-sm font-medium text-slate-300 capitalize">
-            {getOffsetLabel(period, offset)}
-          </span>
+          <span className="text-sm font-medium text-slate-300 capitalize">{getOffsetLabel(period, offset)}</span>
           <button
             type="button"
-            onClick={() => setOffset(o => o < 0 ? o + 1 : 0)}
+            onClick={() => setOffset((o) => (o < 0 ? o + 1 : 0))}
             disabled={offset >= 0}
             className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-20"
           >
@@ -524,14 +583,34 @@ function RevenueChart() {
                 </defs>
                 {/* Subtle grid */}
                 {[0.25, 0.5, 0.75].map((pct) => (
-                  <line key={pct} x1="16" y1={chartHeight * (1 - pct)} x2={chartWidth - 16} y2={chartHeight * (1 - pct)} stroke="rgba(255,255,255,0.06)" strokeWidth="1" />
+                  <line
+                    key={pct}
+                    x1="16"
+                    y1={chartHeight * (1 - pct)}
+                    x2={chartWidth - 16}
+                    y2={chartHeight * (1 - pct)}
+                    stroke="rgba(255,255,255,0.06)"
+                    strokeWidth="1"
+                  />
                 ))}
                 {/* Revenue area + line */}
                 <path d={buildAreaPath(revenueValues, chartHeight, chartWidth, maxValue)} fill="url(#revGrad)" />
-                <path d={buildWavePath(revenueValues, chartHeight, chartWidth, maxValue)} fill="none" stroke="rgb(37,99,235)" strokeWidth="2.5" strokeLinecap="round" />
+                <path
+                  d={buildWavePath(revenueValues, chartHeight, chartWidth, maxValue)}
+                  fill="none"
+                  stroke="rgb(37,99,235)"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                />
                 {/* Profit area + line */}
                 <path d={buildAreaPath(profitValues, chartHeight, chartWidth, maxProfit)} fill="url(#profGrad)" />
-                <path d={buildWavePath(profitValues, chartHeight, chartWidth, maxProfit)} fill="none" stroke="rgb(6,182,212)" strokeWidth="2" strokeLinecap="round" />
+                <path
+                  d={buildWavePath(profitValues, chartHeight, chartWidth, maxProfit)}
+                  fill="none"
+                  stroke="rgb(6,182,212)"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                />
               </svg>
               {/* X-axis labels — absolutely positioned to line up exactly with the
                   SVG point x-coordinates (which are padding + i * step), so the
@@ -589,13 +668,17 @@ function RevenueChart() {
       {(data?.points?.length ?? 0) > 0 && data && (
         <div className="px-4 py-3">
           <div className="flex overflow-x-auto gap-2 pb-1 scrollbar-hide">
-            {data.points.map((point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => (
-              <div key={idx} className="flex-shrink-0 text-center px-3 py-2 rounded-xl bg-white/5 min-w-[64px]">
-                <p className="text-[9px] text-slate-500 font-medium">{formatLabel(point.date, idx, data.points.length)}</p>
-                <p className="text-[11px] font-bold text-blue-300">{formatMoney(point.revenue)}</p>
-                <p className="text-[9px] text-cyan-400">{formatMoney(point.profit)}</p>
-              </div>
-            ))}
+            {data.points.map(
+              (point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => (
+                <div key={idx} className="flex-shrink-0 text-center px-3 py-2 rounded-xl bg-white/5 min-w-[64px]">
+                  <p className="text-[9px] text-slate-500 font-medium">
+                    {formatLabel(point.date, idx, data.points.length)}
+                  </p>
+                  <p className="text-[11px] font-bold text-blue-300">{formatMoney(point.revenue)}</p>
+                  <p className="text-[9px] text-cyan-400">{formatMoney(point.profit)}</p>
+                </div>
+              ),
+            )}
           </div>
         </div>
       )}
@@ -609,20 +692,34 @@ function RevenueChart() {
 
 function AdminDashboard() {
   const { user } = useAuth();
-  const isOwner = user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
+  const isOwner =
+    user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
 
+  // Admin (non-owner): only the staff roster — cap its width so a handful of
+  // people don't sprawl across an ultra-wide monitor.
+  if (!isOwner) {
+    return (
+      <div className="max-w-3xl">
+        <StaffStatusCircles />
+      </div>
+    );
+  }
+
+  // Owner/director: real SaaS dashboard grid. On desktop (xl) the analytics +
+  // staff roster occupy the main 2/3 column, while telephony KPIs sit in a
+  // compact 1/3 side column — previously "Звонки" spanned the whole screen.
   return (
-    <div className="space-y-5">
-      {/* Analytics chart on top */}
-      {isOwner && <RevenueChart />}
-
-      {/* Staff status circles */}
-      <StaffStatusCircles />
-
-      {/* Calls today (replaces the old employee ranking widget — owner asked
-          to surface telephony on the dashboard instead, since the employees
-          section already exposes per-master ranking inside each profile). */}
-      {isOwner && <CallsWidget />}
+    <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
+      <div className="space-y-5 xl:col-span-2">
+        <RevenueChart />
+        <StaffStatusCircles />
+      </div>
+      <div className="space-y-5">
+        {/* Calls today (replaces the old employee ranking widget — owner asked
+            to surface telephony on the dashboard instead, since the employees
+            section already exposes per-master ranking inside each profile). */}
+        <CallsWidget />
+      </div>
     </div>
   );
 }
@@ -657,7 +754,12 @@ function MasterDashboard() {
     return <ErrorBanner message="Не удалось загрузить данные по зарплате" />;
   }
 
-  const initials = user?.fullName?.split(' ').map((w) => w[0]).join('').slice(0, 2) || 'М';
+  const initials =
+    user?.fullName
+      ?.split(' ')
+      .map((w) => w[0])
+      .join('')
+      .slice(0, 2) || 'М';
   const greeting = getGreeting();
 
   return (
@@ -672,8 +774,7 @@ function MasterDashboard() {
             <p className="text-xs text-white/60">{greeting}</p>
             <p className="text-lg font-bold truncate">{user?.fullName || 'Мастер'}</p>
             <p className="text-sm text-white/70">
-              Услуги {data.salaryPercent}%
-              {data.productSalaryPercent ? ` · Товары ${data.productSalaryPercent}%` : ''}
+              Услуги {data.salaryPercent}%{data.productSalaryPercent ? ` · Товары ${data.productSalaryPercent}%` : ''}
             </p>
           </div>
         </div>
@@ -726,72 +827,80 @@ function MasterDashboard() {
       </div>
 
       {/* ── Product earning breakdown (if any) ── */}
-      {(data.todayService !== undefined || data.todayProduct !== undefined) && (data.todayService || 0) + (data.todayProduct || 0) > 0 && (
-        <div className="rounded-xl bg-white border border-gray-100 shadow-sm p-4">
-          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Структура заработка сегодня</p>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg bg-blue-50 p-3">
-              <p className="text-xs text-blue-600 font-medium">С услуг</p>
-              <p className="text-lg font-bold text-gray-900">{formatMoney(data.todayService ?? 0)}</p>
-            </div>
-            <div className="rounded-lg bg-green-50 p-3">
-              <p className="text-xs text-green-600 font-medium">С товаров</p>
-              <p className="text-lg font-bold text-gray-900">{formatMoney(data.todayProduct ?? 0)}</p>
+      {(data.todayService !== undefined || data.todayProduct !== undefined) &&
+        (data.todayService || 0) + (data.todayProduct || 0) > 0 && (
+          <div className="rounded-xl bg-white border border-gray-100 shadow-sm p-4">
+            <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+              Структура заработка сегодня
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-lg bg-blue-50 p-3">
+                <p className="text-xs text-blue-600 font-medium">С услуг</p>
+                <p className="text-lg font-bold text-gray-900">{formatMoney(data.todayService ?? 0)}</p>
+              </div>
+              <div className="rounded-lg bg-green-50 p-3">
+                <p className="text-xs text-green-600 font-medium">С товаров</p>
+                <p className="text-lg font-bold text-gray-900">{formatMoney(data.todayProduct ?? 0)}</p>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* ── Product promotions for master ── */}
-      {data.productPromotions && data.productPromotions.length > 0 && data.productPromotions.some((p) => p.percent > 0) && (
-        <div className="rounded-2xl bg-gradient-to-br from-emerald-50 to-green-50 border border-green-200 shadow-sm overflow-hidden">
-          <div className="px-4 pt-4 pb-2 flex items-center gap-2.5">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-100">
-              <Gift className="h-5 w-5 text-green-600" />
+      {data.productPromotions &&
+        data.productPromotions.length > 0 &&
+        data.productPromotions.some((p) => p.percent > 0) && (
+          <div className="rounded-2xl bg-gradient-to-br from-emerald-50 to-green-50 border border-green-200 shadow-sm overflow-hidden">
+            <div className="px-4 pt-4 pb-2 flex items-center gap-2.5">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-100">
+                <Gift className="h-5 w-5 text-green-600" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-gray-900">Бонус с товаров</p>
+                <p className="text-[11px] text-gray-500">Продавай эти товары и получай % с прибыли</p>
+              </div>
             </div>
-            <div>
-              <p className="text-sm font-bold text-gray-900">Бонус с товаров</p>
-              <p className="text-[11px] text-gray-500">Продавай эти товары и получай % с прибыли</p>
-            </div>
-          </div>
-          <div className="px-3 pb-3">
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {data.productPromotions.filter((p) => p.percent > 0).map((promo) => (
-                <div key={promo.productId} className="flex items-center gap-3 bg-white rounded-xl px-3 py-2.5 shadow-sm">
-                  {promo.photo ? (
-                    <img
-                      src={promo.photo}
-                      alt={promo.productName}
-                      className="w-10 h-10 rounded-lg object-cover flex-shrink-0"
-                    />
-                  ) : (
-                    <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
-                      <Package className="w-5 h-5 text-gray-300" />
+            <div className="px-3 pb-3">
+              <div className="space-y-2 max-h-64 overflow-y-auto">
+                {data.productPromotions
+                  .filter((p) => p.percent > 0)
+                  .map((promo) => (
+                    <div
+                      key={promo.productId}
+                      className="flex items-center gap-3 bg-white rounded-xl px-3 py-2.5 shadow-sm"
+                    >
+                      {promo.photo ? (
+                        <img
+                          src={promo.photo}
+                          alt={promo.productName}
+                          className="w-10 h-10 rounded-lg object-cover flex-shrink-0"
+                        />
+                      ) : (
+                        <div className="w-10 h-10 rounded-lg bg-gray-100 flex items-center justify-center flex-shrink-0">
+                          <Package className="w-5 h-5 text-gray-300" />
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{promo.productName}</p>
+                        <p className="text-[11px] text-gray-400">Цена: {formatMoney(promo.sellPrice)}</p>
+                      </div>
+                      <div className="text-right flex-shrink-0">
+                        <p className="text-sm font-bold text-green-600">+{formatMoney(promo.estimatedBonus)}</p>
+                        <p className="text-[10px] text-gray-400">{promo.percent}% с прибыли</p>
+                      </div>
                     </div>
-                  )}
-                  <div className="flex-1 min-w-0">
-                    <p className="text-sm font-medium text-gray-900 truncate">{promo.productName}</p>
-                    <p className="text-[11px] text-gray-400">
-                      Цена: {formatMoney(promo.sellPrice)}
-                    </p>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-sm font-bold text-green-600">+{formatMoney(promo.estimatedBonus)}</p>
-                    <p className="text-[10px] text-gray-400">{promo.percent}% с прибыли</p>
-                  </div>
-                </div>
-              ))}
+                  ))}
+              </div>
             </div>
+            {data.productSalaryPercent && data.productSalaryPercent > 0 && (
+              <div className="border-t border-green-200 px-4 py-2.5 bg-green-50/50">
+                <p className="text-xs text-green-700">
+                  Также <span className="font-bold">{data.productSalaryPercent}%</span> со всех остальных товаров
+                </p>
+              </div>
+            )}
           </div>
-          {data.productSalaryPercent && data.productSalaryPercent > 0 && (
-            <div className="border-t border-green-200 px-4 py-2.5 bg-green-50/50">
-              <p className="text-xs text-green-700">
-                Также <span className="font-bold">{data.productSalaryPercent}%</span> со всех остальных товаров
-              </p>
-            </div>
-          )}
-        </div>
-      )}
+        )}
 
       <MasterRankWidget userId={user?.id} />
     </div>
@@ -811,23 +920,31 @@ function MasterRankWidget({ userId }: { userId?: string }) {
 
   const { data: monthEntries = [] } = useQuery({
     queryKey: ['schedule', monthStart, monthEnd],
-    queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd }); return res.data as any[]; },
+    queryFn: async () => {
+      const res = await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd });
+      return res.data as any[];
+    },
     enabled: !!userId,
   });
 
   const { data: usersData = [] } = useQuery({
     queryKey: ['users'],
-    queryFn: async () => { const res = await usersApi.getAll(); return res.data as any[]; },
+    queryFn: async () => {
+      const res = await usersApi.getAll();
+      return res.data as any[];
+    },
   });
 
   const masters = (usersData as any[]).filter((u: any) => u.isActive && u.role === 'master');
 
   // Use SHARED attendance utility — identical logic to RatingTab on schedule.
   const stats = calculateAttendanceStats((monthEntries as any[]) || []);
-  const ranked = masters.map((u: any) => {
-    const s = stats[u.id] || emptyBreakdown();
-    return { id: u.id, score: attendanceScore(s), full: s.full, total: s.total };
-  }).sort((a: any, b: any) => b.score - a.score || b.full - a.full);
+  const ranked = masters
+    .map((u: any) => {
+      const s = stats[u.id] || emptyBreakdown();
+      return { id: u.id, score: attendanceScore(s), full: s.full, total: s.total };
+    })
+    .sort((a: any, b: any) => b.score - a.score || b.full - a.full);
 
   if (!userId || ranked.length === 0) return null;
   const myRank = ranked.findIndex((r: any) => r.id === userId) + 1;
@@ -836,12 +953,20 @@ function MasterRankWidget({ userId }: { userId?: string }) {
 
   const medal = myRank === 1 ? '🥇' : myRank === 2 ? '🥈' : myRank === 3 ? '🥉' : null;
   const scoreColor = me.score >= 90 ? 'text-green-600' : me.score >= 70 ? 'text-yellow-600' : 'text-red-500';
-  const monthName = new Date(parseInt(selectedMonth.split('-')[0]), parseInt(selectedMonth.split('-')[1]) - 1).toLocaleDateString('ru-RU', { month: 'long' });
+  const monthName = new Date(
+    parseInt(selectedMonth.split('-')[0]),
+    parseInt(selectedMonth.split('-')[1]) - 1,
+  ).toLocaleDateString('ru-RU', { month: 'long' });
 
   return (
-    <Link to="/schedule" className="block rounded-2xl border border-gray-100 bg-white shadow-sm p-4 hover:shadow-md transition-shadow">
+    <Link
+      to="/schedule"
+      className="block rounded-2xl border border-gray-100 bg-white shadow-sm p-4 hover:shadow-md transition-shadow"
+    >
       <div className="flex items-center gap-4">
-        <div className={`flex items-center justify-center w-14 h-14 rounded-full border-2 ${myRank <= 3 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+        <div
+          className={`flex items-center justify-center w-14 h-14 rounded-full border-2 ${myRank <= 3 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}
+        >
           <span className="text-2xl">{medal || `#${myRank}`}</span>
         </div>
         <div className="flex-1 min-w-0">
@@ -864,7 +989,8 @@ function MasterRankWidget({ userId }: { userId?: string }) {
 export default function DashboardPage() {
   const { user } = useAuth();
   const isMaster = user?.role === (UserRoleEnum.MASTER as UserRole);
-  const isOwner = user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
+  const isOwner =
+    user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
 
   const greeting = getGreeting();
   const displayName = user?.fullName?.split(' ')[0] || user?.username || '';
@@ -877,9 +1003,7 @@ export default function DashboardPage() {
           <h1 className="text-xl font-bold text-gray-900">
             {greeting}, {displayName}!
           </h1>
-          <p className="text-xs text-gray-400 mt-0.5">
-            Обзор показателей автосервиса
-          </p>
+          <p className="text-xs text-gray-400 mt-0.5">Обзор показателей автосервиса</p>
         </div>
       )}
 
