@@ -422,6 +422,58 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // Logo-google — Lucide has no brand mark; render as a globe so the
   // status card still has a visible affordance.
   'logo-google': { lucide: 'Globe', solid: true, fill: false },
+
+  // ── Round-3 owner audit (2026-06): «кружок» вместо иконки ───────────────
+  // Имена, которые проваливались в Circle-заглушку на НОВОЙ функциональности.
+  // Подобраны Lucide-двойники, олицетворяющие смысл раздела (не точки).
+  // CheckDetailScreen: «Печать / PDF» в шапке + «Чек в ОФД» (внешняя ссылка).
+  'print-outline': { lucide: 'Printer' },
+  print: { lucide: 'Printer', solid: true },
+  // «Открыть в …» / внешняя ссылка: чек ОФД, видео, СБП-ссылка, статьи базы
+  // знаний. ExternalLink — стрелка из рамки, однозначный «open external».
+  'open-outline': { lucide: 'ExternalLink' },
+  open: { lucide: 'ExternalLink', solid: true },
+  // «Доска заказ-нарядов» — пустая колонка («Нет заказ-нарядов»). Лоток
+  // входящих читается как пустой список. (Сама доска/«Доска» = albums→Kanban,
+  // кассовая смена = calculator→Calculator — оба уже реальные глифы.)
+  'file-tray-outline': { lucide: 'Inbox' },
+  'file-tray': { lucide: 'Inbox', solid: true },
+  // «Перенести в папку» (склад, FolderPickerModal / ProductDetailScreen).
+  // В этом коде arrow-redo используется ТОЛЬКО как «переместить в папку» →
+  // FolderInput (стрелка внутрь папки) точно олицетворяет действие.
+  'arrow-redo-outline': { lucide: 'FolderInput' },
+  'arrow-redo': { lucide: 'FolderInput', solid: true },
+  // История движения товара: исходящее (в брак / б-у) ↔ возврат / приход.
+  // Стрелка-в-круге внутри контура — fill НЕ ставим (превратится в блоб).
+  'arrow-forward-circle': { lucide: 'CircleArrowRight', solid: true },
+  'arrow-forward-circle-outline': { lucide: 'CircleArrowRight' },
+  'arrow-undo-circle': { lucide: 'CircleArrowLeft', solid: true },
+  'arrow-undo-circle-outline': { lucide: 'CircleArrowLeft' },
+  // Перемещение / обмен (журнал движений склада).
+  'arrow-swap': { lucide: 'ArrowLeftRight', solid: true },
+  // «Ещё» в круге (admin tab bar).
+  'ellipsis-horizontal-circle': { lucide: 'CircleEllipsis', solid: true },
+  'ellipsis-horizontal-circle-outline': { lucide: 'CircleEllipsis' },
+  // Добавить клиента / сотрудника (касса, бронь, быстрый клиент).
+  'person-add-outline': { lucide: 'UserPlus' },
+  'person-add': { lucide: 'UserPlus', solid: true },
+  // Уволить / убрать сотрудника.
+  'person-remove-outline': { lucide: 'UserMinus' },
+  'person-remove': { lucide: 'UserMinus', solid: true },
+  // Прикрепить документ (база знаний). Скрепка — универсальный «attach».
+  'document-attach-outline': { lucide: 'Paperclip' },
+  'document-attach': { lucide: 'Paperclip', solid: true },
+  // Видео-вставки в базе знаний.
+  'videocam-outline': { lucide: 'Video' },
+  videocam: { lucide: 'Video', solid: true },
+  // logo-youtube / logo-vk — у Lucide нет бренд-марок YouTube/VK. YouTube
+  // рендерим как Video, VK — как Globe (тот же приём, что logo-google).
+  'logo-youtube': { lucide: 'Video', solid: true, fill: false },
+  'logo-vk': { lucide: 'Globe', solid: true, fill: false },
+  // Звонок (карточки клиента / сотрудника). `call-outline` уже → Phone.
+  call: { lucide: 'Phone', solid: true },
+  // Тренд вверх (аналитика склада) — алиас trending-up без «-ing».
+  'trend-up': { lucide: 'TrendingUp', solid: true },
 };
 
 // ── Fill-аудит 2026-06 ───────────────────────────────────────────────────────

@@ -417,6 +417,27 @@ export default function CheckDetailScreen() {
     }
   };
 
+  // ── Связь с клиентом из компактной карточки (звонок / WhatsApp) ────
+  // Телефон берём из полного payload'а чека. Кнопки видны только когда
+  // телефон есть. `tel:` чистим до цифр/«+»; для wa.me нужен только digit-
+  // стрим (РФ-номер хранится как +7…). Ошибку открытия мягко алертим.
+  const handleCallClient = () => {
+    const phone = check?.client?.phone?.trim();
+    if (!phone) return;
+    haptic('select');
+    Linking.openURL(`tel:${phone.replace(/[^\d+]/g, '')}`).catch(() =>
+      Alert.alert('Ошибка', 'Не удалось открыть набор номера'),
+    );
+  };
+  const handleWhatsAppClient = () => {
+    const phone = check?.client?.phone?.trim();
+    if (!phone) return;
+    haptic('select');
+    Linking.openURL(`https://wa.me/${phone.replace(/\D/g, '')}`).catch(() =>
+      Alert.alert('Ошибка', 'Не удалось открыть WhatsApp'),
+    );
+  };
+
   // ── «Продолжить» по отложенному чеку ──────────────────────────────
   // Открываем кассу в режиме редактирования этого черновика (route.params
   // id). CheckCreateScreen уже умеет гидрировать форму из ['check', id] и
@@ -659,6 +680,9 @@ export default function CheckDetailScreen() {
   // если колонку деактивировали. Пикер показывает только активные колонки.
   const workMeta = workStatusVisual(check.workStatus, boardColumns);
   const activeColumns = (boardColumns ?? []).filter((c) => c.isActive).sort((a, b) => a.sortOrder - b.sortOrder);
+  // Телефон клиента — управляет видимостью кнопок звонок / WhatsApp в
+  // компактной карточке клиента.
+  const clientPhone = check.client?.phone?.trim() ?? '';
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
@@ -906,7 +930,12 @@ export default function CheckDetailScreen() {
           </View>
         )}
 
-        {/* Client & info — modern glassmorphism style card */}
+        {/* Клиент / Авто / Мастер — единая КОМПАКТНАЯ карточка (round-3).
+            Раньше это были 4 раздутых строки по 40pt с широкими отступами;
+            теперь плотная группа: клиент с телефоном и быстрыми действиями
+            (звонок / WhatsApp), авто с госномером и пробегом, мастер —
+            компактной строкой с подписью. Высота секции снижена ~вдвое,
+            данные/переходы и dark-theme сохранены. */}
         <View
           style={[
             styles.infoCard,
@@ -914,85 +943,125 @@ export default function CheckDetailScreen() {
             { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
           ]}
         >
-          <TouchableOpacity
-            style={styles.infoRow}
-            activeOpacity={check.clientId ? 0.6 : 1}
-            disabled={!check.clientId}
-            onPress={() => openClient(navigation, check.clientId)}
-          >
-            <View style={[styles.infoIconCircle, { backgroundColor: colors.blue[50] }]}>
-              <Ionicons name="person" size={16} color={colors.blue[600]} />
-            </View>
-            <View style={styles.infoContent}>
-              <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Клиент</Text>
-              <Text style={[styles.infoValue, { color: palette.text.primary }]}>
-                {check.client?.fullName ?? 'Розничный покупатель'}
-              </Text>
-            </View>
-            {check.clientId ? <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} /> : null}
-          </TouchableOpacity>
+          {/* Клиент: имя + телефон + быстрые действия */}
+          <View style={styles.infoRowWrap}>
+            <TouchableOpacity
+              style={styles.infoMainTap}
+              activeOpacity={check.clientId ? 0.6 : 1}
+              disabled={!check.clientId}
+              onPress={() => openClient(navigation, check.clientId)}
+              accessibilityRole={check.clientId ? 'button' : undefined}
+            >
+              <View style={[styles.infoIcon, { backgroundColor: colors.blue[50] }]}>
+                <Ionicons name="person" size={15} color={colors.blue[600]} />
+              </View>
+              <View style={styles.infoBody}>
+                <Text style={[styles.infoName, { color: palette.text.primary }]} numberOfLines={1}>
+                  {check.client?.fullName ?? 'Розничный покупатель'}
+                </Text>
+                <Text style={[styles.infoSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  {clientPhone || 'Клиент'}
+                </Text>
+              </View>
+            </TouchableOpacity>
+            {clientPhone ? (
+              <View style={styles.infoActions}>
+                <TouchableOpacity
+                  onPress={handleCallClient}
+                  style={[styles.infoActionBtn, { backgroundColor: colors.green[50] }]}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel="Позвонить клиенту"
+                >
+                  <Ionicons name="call" size={15} color={colors.green[600]} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleWhatsAppClient}
+                  style={[styles.infoActionBtn, { backgroundColor: colors.teal[50] }]}
+                  hitSlop={6}
+                  accessibilityRole="button"
+                  accessibilityLabel="Написать в WhatsApp"
+                >
+                  <Ionicons name="logo-whatsapp" size={15} color={colors.teal[600]} />
+                </TouchableOpacity>
+              </View>
+            ) : check.clientId ? (
+              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+            ) : null}
+          </View>
 
+          {/* Авто: марка/модель + пробег + госномер */}
           {check.car && (
             <>
               <View style={[styles.infoDivider, { backgroundColor: palette.border.subtle }]} />
               <TouchableOpacity
-                style={styles.infoRow}
+                style={styles.infoRowWrap}
                 activeOpacity={check.clientId ? 0.6 : 1}
                 disabled={!check.clientId}
                 onPress={() => openCarOwner(navigation, check.clientId)}
+                accessibilityRole={check.clientId ? 'button' : undefined}
               >
-                <View style={[styles.infoIconCircle, { backgroundColor: colors.indigo[50] }]}>
-                  <Ionicons name="car-sport" size={16} color={colors.indigo[600]} />
+                <View style={[styles.infoIcon, { backgroundColor: colors.indigo[50] }]}>
+                  <Ionicons name="car-sport" size={15} color={colors.indigo[600]} />
                 </View>
-                <View style={styles.infoContent}>
-                  <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Автомобиль</Text>
-                  <View style={styles.carRow}>
-                    <Text style={[styles.infoValue, { color: palette.text.primary }]}>{check.car.makeModel}</Text>
-                    {check.car.plateNumber && (
-                      <View style={styles.plateTag}>
-                        <Text style={styles.plateTagText}>{check.car.plateNumber}</Text>
-                      </View>
-                    )}
+                <View style={styles.infoBody}>
+                  <Text style={[styles.infoName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {check.car.makeModel}
+                  </Text>
+                  <Text style={[styles.infoSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                    {check.mileage ? `Пробег ${check.mileage.toLocaleString('ru-RU')} км` : 'Автомобиль'}
+                  </Text>
+                </View>
+                {check.car.plateNumber ? (
+                  <View style={styles.plateTag}>
+                    <Text style={styles.plateTagText}>{check.car.plateNumber}</Text>
                   </View>
-                </View>
-                {check.clientId ? <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} /> : null}
+                ) : check.clientId ? (
+                  <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                ) : null}
               </TouchableOpacity>
             </>
           )}
 
+          {/* Мастер: компактная строка с подписью */}
           {check.master && (
             <>
               <View style={[styles.infoDivider, { backgroundColor: palette.border.subtle }]} />
               <TouchableOpacity
-                style={styles.infoRow}
+                style={styles.infoRowWrap}
                 activeOpacity={check.masterId ? 0.6 : 1}
                 disabled={!check.masterId}
                 onPress={() => openEmployee(navigation, check.masterId)}
+                accessibilityRole={check.masterId ? 'button' : undefined}
               >
-                <View style={[styles.infoIconCircle, { backgroundColor: colors.orange[50] }]}>
-                  <Ionicons name="build" size={16} color={colors.orange[500]} />
+                <View style={[styles.infoIcon, { backgroundColor: colors.orange[50] }]}>
+                  <Ionicons name="build" size={15} color={colors.orange[500]} />
                 </View>
-                <View style={styles.infoContent}>
-                  <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Мастер</Text>
-                  <Text style={[styles.infoValue, { color: palette.text.primary }]}>{check.master.fullName}</Text>
+                <View style={styles.infoBody}>
+                  <Text style={[styles.infoName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {check.master.fullName}
+                  </Text>
+                  <Text style={[styles.infoSub, { color: palette.text.tertiary }]}>Мастер</Text>
                 </View>
                 {check.masterId ? <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} /> : null}
               </TouchableOpacity>
             </>
           )}
 
-          {check.mileage ? (
+          {/* Пробег без привязанного авто — fallback-строка, чтобы значение
+              не потерялось, когда машина к чеку не привязана. */}
+          {check.mileage && !check.car ? (
             <>
               <View style={[styles.infoDivider, { backgroundColor: palette.border.subtle }]} />
-              <View style={styles.infoRow}>
-                <View style={[styles.infoIconCircle, { backgroundColor: colors.teal[50] }]}>
-                  <Ionicons name="speedometer" size={16} color={colors.teal[600]} />
+              <View style={styles.infoRowWrap}>
+                <View style={[styles.infoIcon, { backgroundColor: colors.teal[50] }]}>
+                  <Ionicons name="speedometer" size={15} color={colors.teal[600]} />
                 </View>
-                <View style={styles.infoContent}>
-                  <Text style={[styles.infoLabel, { color: palette.text.tertiary }]}>Пробег</Text>
-                  <Text style={[styles.infoValue, { color: palette.text.primary }]}>
-                    {check.mileage.toLocaleString()} км
+                <View style={styles.infoBody}>
+                  <Text style={[styles.infoName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {check.mileage.toLocaleString('ru-RU')} км
                   </Text>
+                  <Text style={[styles.infoSub, { color: palette.text.tertiary }]}>Пробег</Text>
                 </View>
               </View>
             </>
@@ -1948,25 +2017,26 @@ const styles = StyleSheet.create({
   },
   draftDeleteBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.red[600] },
 
-  // Info card
+  // Info card — компактная объединённая карточка Клиент / Авто / Мастер.
   infoCard: {
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
-    padding: spacing[4],
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[1],
   },
-  infoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
-  infoIconCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  infoContent: { flex: 1 },
-  infoLabel: { fontSize: 11, marginBottom: 2, textTransform: 'uppercase', letterSpacing: 0.5 },
-  infoValue: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  infoDivider: { height: 1, marginVertical: spacing[3], marginLeft: spacing[4] + 40 },
-  carRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flexWrap: 'wrap' },
+  // Контейнер строки (View или TouchableOpacity) — НЕ flex:1, иначе строка
+  // растянулась бы по вертикали внутри колонки карточки.
+  infoRowWrap: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], paddingVertical: spacing[2.5] },
+  // Тап-зона (имя/иконка) — flex:1, чтобы трейлинг (действия / номер / шеврон)
+  // прижимался вправо.
+  infoMainTap: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], minWidth: 0 },
+  infoIcon: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+  infoBody: { flex: 1, minWidth: 0 },
+  infoName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  infoSub: { fontSize: 12, marginTop: 1 },
+  infoActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
+  infoActionBtn: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  infoDivider: { height: StyleSheet.hairlineWidth, marginLeft: 34 + spacing[2.5] },
   plateTag: {
     backgroundColor: colors.primary[50],
     borderRadius: borderRadius.md,
