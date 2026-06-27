@@ -14,6 +14,7 @@ import { PG_POOL } from '../database.module';
 import { WarrantyService } from '../warranty/warranty.service';
 import { PushService } from '../push/push.service';
 import { MarketingService } from '../marketing/marketing.service';
+import { InstallmentsService } from '../installments/installments.service';
 import { parseFields, filterShape } from '../common/field-filter';
 import { ttlCache } from '../common/ttl-cache';
 import { invalidateReportsForTenant } from '../common/reports-cache';
@@ -131,6 +132,11 @@ export class ChecksService {
     // setWorkStatus). @Optional so a missing provider can never break check
     // writes; the module wires it in, so in practice it's always present.
     @Optional() private marketing?: MarketingService,
+    // Рассрочка: when a check is sold with paymentMethod 'installment', the plan
+    // is created INSIDE the create() transaction via createPlanForCheckTx — so
+    // the sale and the debt obligation are atomic. @Optional mirrors the other
+    // injected services; ChecksModule wires it in, so it's present in practice.
+    @Optional() private installments?: InstallmentsService,
   ) {}
 
   /**
@@ -1052,6 +1058,28 @@ export class ChecksService {
       throw new BadRequestException({ message: 'Добавьте хотя бы одну услугу или товар' });
     }
 
+    // ── Рассрочка: продажа в рассрочку (installment) ──────────────────────
+    // Gate: только пользователь с правом `sell_installment` (owner-class —
+    // implicit) может оформить чек в рассрочку, иначе — отказ. Плану нужен
+    // клиент (кого «должать») и РЕАЛЬНЫЙ (не отложенный) чек: остаток — это долг
+    // по уже совершённой продаже. Сам план создаётся ниже, внутри транзакции.
+    const isInstallment = dto.paymentMethod === 'installment';
+    if (isInstallment) {
+      if (!userHasPermission(actor, 'sell_installment')) {
+        throw new ForbiddenException({ message: 'Нет права продавать в рассрочку' });
+      }
+      if (!dto.clientId) {
+        throw new BadRequestException({ message: 'Для рассрочки выберите клиента' });
+      }
+      if (effectiveIsDeferred) {
+        throw new BadRequestException({ message: 'Рассрочку нельзя оформить на отложенный заказ-наряд' });
+      }
+      // Loud failure instead of a silently-untracked debt if DI ever misfires.
+      if (!this.installments) {
+        throw new InternalServerErrorException({ message: 'Сервис рассрочки недоступен' });
+      }
+    }
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -1325,6 +1353,24 @@ export class ChecksService {
             warrantyLines,
           );
         }
+      }
+
+      // ── Рассрочка: create the installment plan inside this transaction ────
+      // The check is a REAL sale — revenue already counted above. down_payment =
+      // всё внесённое сейчас (наличные + карта); remaining = total − down_payment
+      // is what the client owes. Atomic with the check: if the plan insert fails
+      // the whole sale rolls back, never leaving an installment check without its
+      // debt record. Gating (permission / client / not-deferred / service
+      // presence) was enforced before the transaction opened.
+      if (isInstallment && this.installments) {
+        await this.installments.createPlanForCheckTx(client, tenantID, userID, {
+          checkId,
+          clientId: dto.clientId,
+          total: totalRevenue,
+          downPayment: (effectiveCashAmount || 0) + (effectiveCardAmount || 0),
+          nextPaymentDate: dto.installment?.nextPaymentDate ?? dto.installmentNextPaymentDate,
+          comment: dto.installment?.comment ?? dto.installmentComment,
+        });
       }
 
       await client.query('COMMIT');

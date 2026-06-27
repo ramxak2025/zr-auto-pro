@@ -47,6 +47,7 @@ import { PaymentsModule } from './payments/payments.module';
 import { FiscalModule } from './fiscal/fiscal.module';
 import { TelephonyModule } from './telephony/telephony.module';
 import { WalletModule } from './wallet/wallet.module';
+import { InstallmentsModule } from './installments/installments.module';
 
 @Module({
   imports: [
@@ -97,6 +98,7 @@ import { WalletModule } from './wallet/wallet.module';
     FiscalModule,
     TelephonyModule,
     WalletModule,
+    InstallmentsModule,
   ],
   providers: [MigrationRunner],
 })

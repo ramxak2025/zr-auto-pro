@@ -117,6 +117,11 @@ import type {
   CashShiftReport,
   ClientDebtSummary,
   Debtor,
+  InstallmentPlan,
+  InstallmentClientLedger,
+  InstallmentWidget,
+  InstallmentReminderSettings,
+  InstallmentReminderSendResult,
   LoyaltySettings,
   ClientBonusSummary,
   BonusType,
@@ -1277,6 +1282,46 @@ export function createDebtsApi(api: HttpClient) {
     debtors: () => api.get<Debtor[]>('/debts/debtors'),
     /** Delete one ledger entry (admin correction). Returns the refreshed summary. */
     remove: (id: string) => api.delete<ClientDebtSummary>(`/debts/${id}`),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Рассрочка (installments). Backend: installments/ (migration 093). REPLACES
+//  the manual «Дебиторка» (debts/) as the primary sell-on-credit flow in the UI.
+//
+//  There is NO create endpoint: the plan is created server-side by ChecksService
+//  when a check is sold with paymentMethod 'installment' (gated by the
+//  `sell_installment` permission). This API covers the lifecycle AFTER that —
+//  list / pay / payoff / reschedule / client ledger / widget / reminder settings.
+//
+//  Reads (list / client ledger) are open to any tenant user; pay / payoff /
+//  reschedule, the widget, and reminder settings are owner-class gated server-side.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createInstallmentsApi(api: HttpClient) {
+  return {
+    /** «Рассрочка» list. status: open | closed | overdue | all (default open). */
+    list: (params?: { status?: 'open' | 'closed' | 'overdue' | 'all' }) =>
+      api.get<InstallmentPlan[]>('/installments', { params }),
+    /** A client's plans + payment ledger — for the client card section. */
+    clientLedger: (clientId: string) => api.get<InstallmentClientLedger>(`/installments/client/${clientId}`),
+    /** Главная widget: due-soon (next `days`) + overdue. Owner/admin only. */
+    widget: (days?: number) => api.get<InstallmentWidget>('/installments/widget', { params: { days } }),
+    /** Record a partial payment; reduces remaining, optionally moves the next date. Returns the updated plan. */
+    pay: (planId: string, data: { amount: number; comment?: string; nextPaymentDate?: string }) =>
+      api.post<InstallmentPlan>(`/installments/${planId}/pay`, data),
+    /** Pay off the whole remaining at once (close the plan). Returns the updated plan. */
+    payoff: (planId: string) => api.post<InstallmentPlan>(`/installments/${planId}/payoff`),
+    /** Reschedule the next payment date and/or edit the comment. Returns the updated plan. */
+    update: (planId: string, data: { nextPaymentDate?: string; comment?: string }) =>
+      api.patch<InstallmentPlan>(`/installments/${planId}`, data),
+    /** Per-tenant reminder settings (default row auto-created on first read). Owner-class. */
+    getReminderSettings: () => api.get<InstallmentReminderSettings>('/installments/reminder-settings'),
+    /** Owner-class partial update of the reminder settings. */
+    updateReminderSettings: (data: Partial<InstallmentReminderSettings>) =>
+      api.patch<InstallmentReminderSettings>('/installments/reminder-settings', data),
+    /** Manual «отправить напоминания сейчас» (owner-class). */
+    sendReminders: () => api.post<InstallmentReminderSendResult>('/installments/reminders/send'),
   };
 }
 

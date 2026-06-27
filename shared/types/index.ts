@@ -350,6 +350,12 @@ export interface UserPermissions {
    * shift-mode is OFF this flag has no effect (current behaviour preserved).
    */
   accept_payment?: boolean;
+  /**
+   * «Продажа в рассрочку» (093) — may create a check with paymentMethod
+   * 'installment'. Owner-class roles (director/admin/superadmin) are implicit.
+   * Server-enforced in ChecksService.create; rejected otherwise.
+   */
+  sell_installment?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -372,6 +378,7 @@ export type PermissionKey =
   | 'checks_view_all'
   | 'payment_edit'
   | 'accept_payment'
+  | 'sell_installment'
   | 'profit_view'
   | 'financial_reports'
   | 'export_data'
@@ -403,6 +410,7 @@ export const PERMISSION_GROUPS = {
     'checks_view_all',
     'payment_edit',
     'accept_payment',
+    'sell_installment',
   ],
   Финансы: ['profit_view', 'financial_reports', 'export_data', 'can_add_expenses', 'salary_view'],
   Склад: ['warehouse_access', 'suppliers_access'],
@@ -449,6 +457,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     checks_view_all: false, // sees only their own checks by default
     payment_edit: false,
     accept_payment: false, // not a cashier by default — owner grants it explicitly
+    sell_installment: false, // продажа в рассрочку — owner grants it explicitly
     // Финансы — NONE by default.
     profit_view: false,
     financial_reports: false,
@@ -630,6 +639,13 @@ export enum PaymentMethod {
   CARD = 'card',
   WARRANTY = 'warranty',
   CASH_CARD = 'cash_card',
+  /**
+   * Рассрочка (093). The check is a real sale (revenue counts in full); the
+   * cash/card amounts are the FIRST instalment (первый взнос), and the rest is
+   * owed via an `InstallmentPlan` created server-side from the check. Creating a
+   * check with this method requires the `sell_installment` permission.
+   */
+  INSTALLMENT = 'installment',
 }
 
 /**
@@ -925,6 +941,131 @@ export interface Debtor {
   phone?: string | null;
   /** Positive outstanding balance (Σcharge − Σpayment). */
   balance: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Рассрочка (installments). Backend: installments/ (migration 093). REPLACES
+//  the manual «Дебиторка» (debts/, 081) as the primary sell-on-credit flow.
+//
+//  A plan is created server-side when a check is sold with paymentMethod
+//  'installment' (gated by the `sell_installment` permission): the check is a
+//  real sale (revenue counts), down_payment = первый взнос (cash+card paid now),
+//  and `remaining` (= total − paid) is owed. Partial payments live in a per-plan
+//  ledger; when remaining hits 0 the plan closes.
+// ───────────────────────────────────────────────────────────────────────
+
+export type InstallmentStatus = 'open' | 'closed';
+
+/** One installment plan (one per check). */
+export interface InstallmentPlan {
+  id: string;
+  tenantId: string;
+  /** Originating check (nulled if that check is deleted — the debt record stays). */
+  checkId?: string | null;
+  /** Denormalised order-наряд number from the checks join, when checkId is set. */
+  checkNumber?: number | null;
+  clientId: string;
+  /** Denormalised from the clients join. */
+  clientName?: string | null;
+  clientPhone?: string | null;
+  /** Full sale amount (= the check's totalRevenue at sale time). */
+  total: number;
+  /** Первый взнос (cash + card paid at sale time). */
+  downPayment: number;
+  /** Everything collected so far INCLUDING the down payment (downPayment + Σ payments). */
+  paid: number;
+  /** Outstanding debt = total − paid (never negative). */
+  remaining: number;
+  /** Date of the next expected payment (YYYY-MM-DD). Null = not scheduled. */
+  nextPaymentDate?: string | null;
+  status: InstallmentStatus;
+  /** True when open AND nextPaymentDate is in the past (computed server-side). */
+  overdue: boolean;
+  /** Whole days until nextPaymentDate (negative = overdue by N). Null when unscheduled. */
+  dueInDays?: number | null;
+  comment?: string | null;
+  createdBy?: string | null;
+  /** Denormalised from the users join. */
+  createdByName?: string | null;
+  createdAt: string;
+  closedAt?: string | null;
+}
+
+/** One movement in a plan's payment ledger. */
+export interface InstallmentPayment {
+  id: string;
+  tenantId: string;
+  planId: string;
+  /** Positive money amount of this payment. */
+  amount: number;
+  comment?: string | null;
+  createdBy?: string | null;
+  createdByName?: string | null;
+  paidAt: string;
+}
+
+/**
+ * A client's installment summary — for the client card section. Returned by
+ * GET /installments/client/:clientId.
+ */
+export interface InstallmentClientLedger {
+  clientId: string;
+  clientName?: string | null;
+  clientPhone?: string | null;
+  /** Σ remaining over the client's OPEN plans. */
+  totalRemaining: number;
+  plans: InstallmentPlan[];
+  payments: InstallmentPayment[];
+}
+
+/** One row in the Главная installment widget (due-soon / overdue). */
+export interface InstallmentWidgetItem {
+  planId: string;
+  clientId: string;
+  clientName?: string | null;
+  clientPhone?: string | null;
+  total: number;
+  remaining: number;
+  nextPaymentDate?: string | null;
+  overdue: boolean;
+  /** Whole days until nextPaymentDate (negative = overdue by N). */
+  dueInDays?: number | null;
+}
+
+/**
+ * GET /installments/widget response (owner/admin): open plans due within the
+ * next N days plus all overdue ones, with summary counts for the dashboard card.
+ */
+export interface InstallmentWidget {
+  items: InstallmentWidgetItem[];
+  overdueCount: number;
+  dueSoonCount: number;
+  totalRemaining: number;
+}
+
+/**
+ * Per-tenant installment-reminder settings (093). Mirrors car_ready_settings:
+ * disabled (mode 'off') by default. 'auto' = a daily cron sends; 'manual' = the
+ * owner fires reminders from the UI. Template placeholders: {clientName},
+ * {amount}, {date}.
+ */
+export interface InstallmentReminderSettings {
+  mode: 'off' | 'auto' | 'manual';
+  /** Days before nextPaymentDate to send a pre-reminder. */
+  daysBefore: number;
+  /** Also remind on the due date itself. */
+  onDue: boolean;
+  /** Also remind on overdue plans. */
+  onOverdue: boolean;
+  template: string;
+  lastRunAt?: string | null;
+}
+
+/** Result of a reminder send (manual trigger / cron summary). */
+export interface InstallmentReminderSendResult {
+  sent: number;
+  failed: number;
+  total: number;
 }
 
 // ───────────────────────────────────────────────────────────────────────

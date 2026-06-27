@@ -47,6 +47,9 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   // Кассир смены — off by default; the owner grants it explicitly. Only
   // consulted when the tenant's POS shift-mode is ON (092).
   accept_payment: false,
+  // Право продавать в рассрочку (093) — off by default; owner grants explicitly.
+  // Gates creating a check with paymentMethod 'installment'.
+  sell_installment: false,
   // Финансы — none by default.
   profit_view: false,
   financial_reports: false,
