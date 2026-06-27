@@ -61,17 +61,11 @@ export default function LoginPage() {
         <div className="w-full max-w-sm">
           {/* Logo */}
           <div className="flex justify-center mb-3">
-            <img
-              src="/logo.png"
-              alt="Autexa"
-              className="h-16 w-auto object-contain"
-            />
+            <img src="/logo.png" alt="Autexa" className="h-16 w-auto object-contain" />
           </div>
 
           {/* Subtitle */}
-          <p className="text-center text-sm text-gray-400 mb-10 tracking-wide">
-            Система управления сервисом
-          </p>
+          <p className="text-center text-sm text-gray-400 mb-10 tracking-wide">Система управления сервисом</p>
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -97,14 +91,15 @@ export default function LoginPage() {
                   }`}
                 />
               </div>
-              {phoneError && (
-                <p className="mt-1.5 text-xs text-red-500">{phoneError}</p>
-              )}
+              {phoneError && <p className="mt-1.5 text-xs text-red-500">{phoneError}</p>}
             </div>
 
             {/* Password */}
             <div>
-              <label htmlFor="password" className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2">
+              <label
+                htmlFor="password"
+                className="block text-xs font-medium text-gray-500 uppercase tracking-wider mb-2"
+              >
                 Пароль
               </label>
               <div className="relative">
@@ -131,16 +126,10 @@ export default function LoginPage() {
                   onClick={() => setShowPassword(!showPassword)}
                   className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
                 >
-                  {showPassword ? (
-                    <EyeOff className="h-[18px] w-[18px]" />
-                  ) : (
-                    <Eye className="h-[18px] w-[18px]" />
-                  )}
+                  {showPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
                 </button>
               </div>
-              {passwordError && (
-                <p className="mt-1.5 text-xs text-red-500">{passwordError}</p>
-              )}
+              {passwordError && <p className="mt-1.5 text-xs text-red-500">{passwordError}</p>}
             </div>
 
             {/* Submit */}
@@ -221,10 +210,27 @@ export default function LoginPage() {
       </div>
 
       {/* Copyright footer */}
-      <div className="pb-8 pt-4">
-        <p className="text-center text-xs text-gray-300">
-          Autexa v2.1 &copy; 2026
-        </p>
+      <div className="pb-8 pt-4 space-y-2">
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-gray-400">
+          <a
+            href="https://autexa.pw/privacy"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-gray-600 transition-colors"
+          >
+            Политика конфиденциальности
+          </a>
+          <span className="text-gray-300">·</span>
+          <a
+            href="https://autexa.pw/terms"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-gray-600 transition-colors"
+          >
+            Условия использования
+          </a>
+        </div>
+        <p className="text-center text-xs text-gray-300">Autexa v2.1 &copy; 2026</p>
       </div>
     </div>
   );

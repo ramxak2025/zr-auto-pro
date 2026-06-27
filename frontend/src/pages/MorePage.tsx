@@ -33,6 +33,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { authApi, uploadsApi, subscriptionApi } from '../api/services';
 import type { UserPermissions, SubscriptionInfo } from '../types';
 import { roleLabels } from '../../../shared/utils/formatters';
+import DeleteAccountSection from '../components/DeleteAccountSection';
+
+const PRIVACY_URL = 'https://autexa.pw/privacy';
+const TERMS_URL = 'https://autexa.pw/terms';
 
 interface MenuItem {
   label: string;
@@ -366,6 +370,25 @@ export default function MorePage() {
         <LogOut className="h-5 w-5" />
         Выйти из аккаунта
       </button>
+
+      {/* Danger zone — in-app account deletion (Apple 5.1.1(v) / Google Play) */}
+      <DeleteAccountSection />
+
+      {/* Legal links */}
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-1 text-xs text-gray-400">
+        <a
+          href={PRIVACY_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="hover:text-gray-600 transition-colors"
+        >
+          Политика конфиденциальности
+        </a>
+        <span className="text-gray-300">·</span>
+        <a href={TERMS_URL} target="_blank" rel="noopener noreferrer" className="hover:text-gray-600 transition-colors">
+          Условия использования
+        </a>
+      </div>
     </div>
   );
 }
