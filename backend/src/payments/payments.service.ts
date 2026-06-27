@@ -282,28 +282,40 @@ export class PaymentsService {
 
     let status: PaymentStatus | undefined;
     let providerAmount: number | undefined;
+    // Did we get an AUTHORITATIVE, authenticated read from the provider? Only such a
+    // read may ever flip a payment to 'succeeded' — the webhook body is NEVER trusted
+    // to credit money on its own.
+    let providerRead = false;
 
     if (provider.getPayment) {
       try {
         const fresh = await provider.getPayment(providerCfg, row.provider_payment_id);
         status = fresh.status;
         providerAmount = fresh.amount;
+        providerRead = true;
       } catch {
-        status = webhookStatus; // provider re-read failed → fall back to webhook
+        // Authoritative re-read failed → do NOT fall back to the untrusted webhook
+        // status to mark money received. Leave the row 'pending'; the next poll
+        // (GET /payments/:id) reconciles once the provider is reachable again.
+        return null;
       }
     } else {
+      // Provider exposes no authoritative read API. The webhook may still move the
+      // row to a non-crediting terminal state (canceled) below, but never to
+      // 'succeeded' — that path requires providerRead.
       status = webhookStatus;
     }
 
     if (!status || status === 'pending') return null;
 
     if (status === 'succeeded') {
-      // Amount reconciliation: refuse to mark paid if the provider-reported
-      // amount disagrees with what we charged (defends against tampering / a
-      // mismatched provider id). When we couldn't re-read an amount, fall through
-      // to the stored amount — the provider getPayment is itself authenticated.
+      // Credit money ONLY on a successful, authenticated provider read whose amount
+      // reconciles with what we charged. No provider read (or no provider amount) ⇒
+      // never marked paid — defends against a forged webhook and against marking
+      // succeeded on an unverifiable amount.
+      if (!providerRead || providerAmount === undefined) return null;
       const stored = num(row.amount);
-      if (providerAmount !== undefined && Math.abs(providerAmount - stored) >= 0.01) {
+      if (Math.abs(providerAmount - stored) >= 0.01) {
         this.logger.warn(
           `Amount mismatch for payment ${row.id}: stored ${stored} vs provider ${providerAmount} — not marking paid`,
         );

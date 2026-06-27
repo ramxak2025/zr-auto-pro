@@ -5,7 +5,7 @@ import {
   BadRequestException,
   UnprocessableEntityException,
 } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { UpdateLoyaltySettingsDto } from './dto/update-loyalty-settings.dto';
@@ -101,14 +101,62 @@ export class LoyaltyService {
     return num(rows[0].total_revenue);
   }
 
-  /** Σaccrual − Σredemption for one client (never below 0 by construction). */
-  private async balanceOf(tenantID: string, clientId: string): Promise<number> {
-    const { rows } = await this.pool.query(
+  /**
+   * Σaccrual − Σredemption for one client (never below 0 by construction). Runs on
+   * the supplied executor — pass a transaction connection (PoolClient) so the read
+   * sits inside the same transaction + row lock as the debit it guards.
+   */
+  private async balanceOf(executor: Pool | PoolClient, tenantID: string, clientId: string): Promise<number> {
+    const { rows } = await executor.query(
       `SELECT COALESCE(SUM(CASE WHEN type = 'accrual' THEN amount ELSE -amount END), 0) AS balance
          FROM client_bonuses WHERE tenant_id = $1 AND client_id = $2`,
       [tenantID, clientId],
     );
     return round2(num(rows[0].balance));
+  }
+
+  /**
+   * Overdraw-safe debit. Locks the client's row (FOR UPDATE), re-reads the balance
+   * ON THE SAME connection — so it reflects every committed redemption a concurrent
+   * debit we waited on already wrote — rejects if it would push the balance below
+   * zero, then inserts the redemption. All in ONE transaction, so two concurrent
+   * debits serialize on the client row instead of racing read-then-write to a
+   * negative balance. Tenant-scoped throughout.
+   */
+  private async redeemGuarded(
+    tenantID: string,
+    clientId: string,
+    amount: number,
+    reason: string | null,
+    checkId: string | null,
+    createdBy: string,
+  ): Promise<void> {
+    const conn = await this.pool.connect();
+    try {
+      await conn.query('BEGIN');
+      const locked = await conn.query('SELECT id FROM clients WHERE id = $1 AND tenant_id = $2 FOR UPDATE', [
+        clientId,
+        tenantID,
+      ]);
+      if (locked.rows.length === 0) {
+        throw new NotFoundException({ message: 'Клиент не найден' });
+      }
+      const balance = await this.balanceOf(conn, tenantID, clientId);
+      if (amount > balance) {
+        throw new BadRequestException({ message: 'Недостаточно бонусов для списания' });
+      }
+      await conn.query(
+        `INSERT INTO client_bonuses (tenant_id, client_id, amount, type, reason, check_id, created_by)
+         VALUES ($1, $2, $3, 'redemption', $4, $5, $6)`,
+        [tenantID, clientId, amount, reason, checkId, createdBy],
+      );
+      await conn.query('COMMIT');
+    } catch (err) {
+      await conn.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      conn.release();
+    }
   }
 
   // ─── Settings ──────────────────────────────────────────────────────────
@@ -214,6 +262,20 @@ export class LoyaltyService {
     if (dto.checkId) {
       checkTotal = await this.requireCheckTotal(user.tenantID, dto.checkId);
       checkId = dto.checkId;
+
+      // Idempotency: at most ONE cashback accrual per заказ-наряд. A repeated call
+      // (UI retry, double-tap, re-close of the same check) is a no-op that returns
+      // the unchanged summary — never a second credit. The partial UNIQUE index from
+      // migration 090 enforces this even under a race; the INSERT below also carries
+      // ON CONFLICT DO NOTHING so a duplicate is a no-op, not a 500.
+      const existing = await this.pool.query(
+        `SELECT 1 FROM client_bonuses
+          WHERE tenant_id = $1 AND check_id = $2 AND type = 'accrual' LIMIT 1`,
+        [user.tenantID, checkId],
+      );
+      if (existing.rows.length > 0) {
+        return this.clientSummary(user.tenantID, dto.clientId);
+      }
     }
 
     let amount: number;
@@ -234,9 +296,13 @@ export class LoyaltyService {
       return this.clientSummary(user.tenantID, dto.clientId);
     }
 
+    // ON CONFLICT closes the last race window: if a concurrent accrual for the same
+    // check committed between the pre-check above and here, the partial UNIQUE index
+    // (migration 090) makes this a silent no-op instead of a duplicate credit / 500.
     await this.pool.query(
       `INSERT INTO client_bonuses (tenant_id, client_id, amount, type, reason, check_id, created_by)
-       VALUES ($1, $2, $3, 'accrual', $4, $5, $6)`,
+       VALUES ($1, $2, $3, 'accrual', $4, $5, $6)
+       ON CONFLICT (tenant_id, check_id) WHERE type = 'accrual' AND check_id IS NOT NULL DO NOTHING`,
       [user.tenantID, dto.clientId, amount, reason, checkId, user.userID],
     );
 
@@ -255,11 +321,7 @@ export class LoyaltyService {
 
     const amount = round2(dto.amount);
 
-    const balance = await this.balanceOf(user.tenantID, dto.clientId);
-    if (amount > balance) {
-      throw new BadRequestException({ message: 'Недостаточно бонусов для списания' });
-    }
-
+    // Per-check redeem cap is a read-only pre-check (does not touch the balance).
     let checkId: string | null = null;
     let reason: string | null = null;
     if (dto.checkId) {
@@ -274,11 +336,9 @@ export class LoyaltyService {
       reason = 'Оплата бонусами';
     }
 
-    await this.pool.query(
-      `INSERT INTO client_bonuses (tenant_id, client_id, amount, type, reason, check_id, created_by)
-       VALUES ($1, $2, $3, 'redemption', $4, $5, $6)`,
-      [user.tenantID, dto.clientId, amount, reason, checkId, user.userID],
-    );
+    // Balance-check + insert run atomically under the client row lock so two
+    // concurrent redemptions can't both pass the check and overdraw to negative.
+    await this.redeemGuarded(user.tenantID, dto.clientId, amount, reason, checkId, user.userID);
 
     return this.clientSummary(user.tenantID, dto.clientId);
   }
@@ -293,17 +353,16 @@ export class LoyaltyService {
     const amount = round2(dto.amount);
 
     if (dto.type === 'redemption') {
-      const balance = await this.balanceOf(user.tenantID, dto.clientId);
-      if (amount > balance) {
-        throw new BadRequestException({ message: 'Недостаточно бонусов для списания' });
-      }
+      // Same overdraw-safe path as redeem: lock the client, re-check the balance,
+      // insert — atomically — so a manual debit can never drive the balance negative.
+      await this.redeemGuarded(user.tenantID, dto.clientId, amount, dto.reason, null, user.userID);
+    } else {
+      await this.pool.query(
+        `INSERT INTO client_bonuses (tenant_id, client_id, amount, type, reason, created_by)
+         VALUES ($1, $2, $3, 'accrual', $4, $5)`,
+        [user.tenantID, dto.clientId, amount, dto.reason, user.userID],
+      );
     }
-
-    await this.pool.query(
-      `INSERT INTO client_bonuses (tenant_id, client_id, amount, type, reason, created_by)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [user.tenantID, dto.clientId, amount, dto.type, dto.reason, user.userID],
-    );
 
     return this.clientSummary(user.tenantID, dto.clientId);
   }

@@ -1,6 +1,5 @@
 import { Inject, Injectable, Logger, NotFoundException, UnprocessableEntityException } from '@nestjs/common';
 import { Pool } from 'pg';
-import { randomUUID } from 'crypto';
 import { PG_POOL } from '../database.module';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { UpdateFiscalSettingsDto } from './dto/update-fiscal-settings.dto';
@@ -317,7 +316,10 @@ export class FiscalService {
     }
 
     return {
-      externalId: randomUUID(),
+      // Placeholder — fiscalize() overwrites this with the ledger row's own id once
+      // the attempt is persisted, so external_id is a stable, deterministic
+      // idempotence key for that attempt (АТОЛ dedups a retried /sell on it).
+      externalId: '',
       email,
       phone,
       items,
@@ -346,30 +348,85 @@ export class FiscalService {
   async fiscalize(user: JwtPayload, dto: FiscalizeDto) {
     const cfg = await this.loadConfig(user.tenantID);
 
-    // Inert until configured: a clear 422 instead of a silent no-op.
-    if (!cfg.enabled) {
-      throw new UnprocessableEntityException({
-        message: 'Фискализация отключена. Включите онлайн-кассу в настройках.',
-      });
-    }
-    if (!cfg.login || !cfg.password || !cfg.groupCode) {
-      throw new UnprocessableEntityException({
-        message: 'Касса не настроена: укажите login, пароль и group_code АТОЛ в настройках.',
-      });
+    // ── Idempotency: ONE 54-ФЗ receipt per заказ-наряд ─────────────────────────
+    // АТОЛ registers a legal fiscal document on every accepted /sell, so a check
+    // must NEVER be sent twice. We serialize the look-up-and-create per check with a
+    // tenant-scoped advisory lock (xact-scoped — auto-released on COMMIT/ROLLBACK)
+    // so a double-tap / concurrent retry can't slip two attempts past the guard. The
+    // slow operator call is made AFTER the lock is released (we never hold a DB lock
+    // across the network round-trip).
+    let receiptRow!: any;
+    let receipt!: FiscalReceiptInput;
+    const lockClient = await this.pool.connect();
+    try {
+      await lockClient.query('BEGIN');
+      await lockClient.query('SELECT pg_advisory_xact_lock(hashtext($1))', [`fiscal:${user.tenantID}:${dto.checkId}`]);
+
+      const { rows: priorRows } = await lockClient.query(
+        `SELECT * FROM fiscal_receipts
+          WHERE tenant_id = $1 AND check_id = $2
+          ORDER BY created_at DESC LIMIT 1`,
+        [user.tenantID, dto.checkId],
+      );
+      const last = priorRows[0];
+
+      // Already fiscalized → return the existing receipt, NEVER re-send to АТОЛ.
+      if (last && last.status === 'done') {
+        await lockClient.query('COMMIT');
+        return this.mapReceipt(last);
+      }
+      // In flight → re-sync from the operator (poll-based, no webhook) instead of
+      // creating a duplicate attempt.
+      if (last && last.status === 'pending') {
+        await lockClient.query('COMMIT');
+        const refreshed = last.provider_uuid ? await this.reconcile(user.tenantID, last) : null;
+        return this.mapReceipt(refreshed ?? last);
+      }
+
+      // No attempt yet, or the latest one FAILED → create a fresh attempt. The
+      // config + receipt validation runs INSIDE the lock so the insert below is
+      // atomic with the look-up (the row is what a concurrent caller then sees as
+      // 'pending'). buildReceipt validates the check exists before we insert, so a
+      // bad request never leaves a dangling ledger row / FK violation.
+      if (!cfg.enabled) {
+        throw new UnprocessableEntityException({
+          message: 'Фискализация отключена. Включите онлайн-кассу в настройках.',
+        });
+      }
+      if (!cfg.login || !cfg.password || !cfg.groupCode) {
+        throw new UnprocessableEntityException({
+          message: 'Касса не настроена: укажите login, пароль и group_code АТОЛ в настройках.',
+        });
+      }
+
+      receipt = await this.buildReceipt(user.tenantID, dto);
+
+      // Record the attempt in the ledger BEFORE the operator call so a failed
+      // fiscalization is durably auditable (status='failed' + error), not lost.
+      const { rows: insertRows } = await lockClient.query(
+        `INSERT INTO fiscal_receipts (tenant_id, provider, check_id, external_id, status)
+         VALUES ($1, $2, $3, gen_random_uuid()::text, 'pending') RETURNING *`,
+        [user.tenantID, cfg.provider, dto.checkId],
+      );
+      // external_id = the ledger row's own id → a retried /sell of THIS attempt
+      // dedups at АТОЛ, while a fresh attempt after a failure gets a new id and is
+      // therefore never blocked by АТОЛ's idempotence on a previous failed one.
+      const { rows: idRows } = await lockClient.query(
+        `UPDATE fiscal_receipts SET external_id = id::text WHERE id = $1 RETURNING *`,
+        [insertRows[0].id],
+      );
+      receiptRow = idRows[0];
+      receipt.externalId = receiptRow.external_id;
+      await lockClient.query('COMMIT');
+    } catch (err) {
+      await lockClient.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      lockClient.release();
     }
 
-    const receipt = await this.buildReceipt(user.tenantID, dto);
     const provider = getFiscalProvider(cfg.provider);
     const providerCfg = this.toProviderConfig(cfg);
-
-    // Record the attempt in the ledger BEFORE the operator call so a failed
-    // fiscalization is durably auditable (status='failed' + error), not lost.
-    const { rows: insertRows } = await this.pool.query(
-      `INSERT INTO fiscal_receipts (tenant_id, provider, check_id, external_id, status)
-       VALUES ($1, $2, $3, $4, 'pending') RETURNING *`,
-      [user.tenantID, cfg.provider, dto.checkId, receipt.externalId],
-    );
-    const receiptRow = insertRows[0];
 
     try {
       const result = await provider.fiscalize(providerCfg, receipt);
@@ -383,14 +440,13 @@ export class FiscalService {
       // Operator/network failure: mark the ledger row failed (audit) and surface
       // the clean message. Never log credentials.
       const message = err instanceof Error ? err.message : 'Ошибка фискализации';
-      const { rows } = await this.pool.query(
+      await this.pool.query(
         `UPDATE fiscal_receipts SET status = 'failed', error = $1, done_at = now()
-           WHERE id = $2 RETURNING *`,
+           WHERE id = $2`,
         [message.slice(0, 500), receiptRow.id],
       );
       this.logger.warn(`Fiscalize failed for tenant ${user.tenantID}, check ${dto.checkId}: ${message}`);
       // Re-throw the original (a BadGateway/422) so the client gets the right code.
-      void rows;
       throw err;
     }
   }
