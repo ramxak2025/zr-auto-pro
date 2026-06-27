@@ -138,13 +138,11 @@ function telHref(phone: string): string {
   const digits = rawPhoneDigits(phone);
   return `tel:${digits.length > 0 ? '+' + digits : ''}`;
 }
-function smsHref(phone: string): string {
-  const digits = rawPhoneDigits(phone);
-  return `sms:${digits.length > 0 ? '+' + digits : ''}`;
-}
 function whatsappHref(phone: string): string {
   const digits = rawPhoneDigits(phone);
-  return `https://wa.me/${digits}`;
+  // Native deep link — opens the WhatsApp chat for this number directly
+  // (falls back to an «не установлен» alert if the app isn't present).
+  return `whatsapp://send?phone=${digits}`;
 }
 
 /** Compact sparkline drawn with overlapping bars — no SVG dep needed. */
@@ -712,6 +710,22 @@ export default function ClientDetailScreen() {
     [navigation],
   );
 
+  // «История» quick action — expand the full history and smooth-scroll the
+  // user down to the «История чеков» section. historyY is populated by the
+  // section's onLayout; if it hasn't measured yet we still expand (the
+  // scroll-into-view auto-trigger then takes over).
+  const scrollToHistory = useCallback(() => {
+    haptic('tap');
+    setSelectedCarId(null);
+    setHistoryExpanded(true);
+    requestAnimationFrame(() => {
+      const y = historyY.current;
+      if (Number.isFinite(y) && scrollRef.current) {
+        scrollRef.current.scrollTo({ y: Math.max(0, y - 12), animated: true });
+      }
+    });
+  }, []);
+
   // Switching the car filter collapses the history back to the first
   // page — the freshly filtered list shouldn't inherit a deep expansion.
   useEffect(() => {
@@ -929,23 +943,15 @@ export default function ClientDetailScreen() {
             when the client has never been rated. */}
         <LoyaltyBadge rating={client.lastRating} ratedAt={client.lastRatingAt} />
 
-        {/* QUICK ACTIONS — call / WhatsApp / SMS / history */}
-        <View style={styles.quickActionsRow}>
-          <QuickAction
-            icon="call-outline"
-            label="Позвонить"
-            color={colors.green[600]}
-            disabled={!client.phone}
-            onPress={() => {
-              haptic('tap');
-              Linking.openURL(telHref(client.phone)).catch(() => Alert.alert('Не удалось открыть телефон'));
-            }}
-            palette={palette}
-          />
-          <QuickAction
+        {/* QUICK ACTIONS — WhatsApp (brand) is the hero; Позвонить + История
+            sit beside it as compact pills. Clear, minimal, one tap each. */}
+        <View style={qaStyles.row}>
+          <QuickActionPill
             icon="logo-whatsapp"
             label="WhatsApp"
-            color="#25D366"
+            tint={WHATSAPP_GREEN}
+            solid
+            flex={1.25}
             disabled={!client.phone}
             onPress={() => {
               haptic('tap');
@@ -953,25 +959,22 @@ export default function ClientDetailScreen() {
             }}
             palette={palette}
           />
-          <QuickAction
-            icon="chatbox-outline"
-            label="SMS"
-            color={colors.blue[600]}
+          <QuickActionPill
+            icon="call"
+            label="Позвонить"
+            tint={colors.green[600]}
             disabled={!client.phone}
             onPress={() => {
               haptic('tap');
-              Linking.openURL(smsHref(client.phone)).catch(() => Alert.alert('Не удалось открыть SMS'));
+              Linking.openURL(telHref(client.phone)).catch(() => Alert.alert('Не удалось открыть телефон'));
             }}
             palette={palette}
           />
-          <QuickAction
+          <QuickActionPill
             icon="time-outline"
             label="История"
-            color={colors.purple[700]}
-            onPress={() => {
-              haptic('tap');
-              setSelectedCarId(null);
-            }}
+            tint={palette.accent.primary}
+            onPress={scrollToHistory}
             palette={palette}
           />
         </View>
@@ -1461,31 +1464,54 @@ function StatTile({ label, value, palette }: StatTileProps) {
   );
 }
 
-interface QuickActionProps {
+// WhatsApp brand green — the real logo colour, used for the brand action's
+// solid fill + icon so it reads as «это WhatsApp», not a generic green button.
+const WHATSAPP_GREEN = '#25D366';
+
+interface QuickActionPillProps {
   icon: keyof typeof Ionicons.glyphMap;
   label: string;
-  color: string;
+  /** Accent colour for the icon + label (and the solid fill when `solid`). */
+  tint: string;
+  /** Filled hero treatment (WhatsApp) vs the default tinted pill. */
+  solid?: boolean;
+  /** Flex weight — the hero pill gets a touch more width. */
+  flex?: number;
   disabled?: boolean;
   onPress: () => void;
   palette: ReturnType<typeof useColors>;
 }
-function QuickAction({ icon, label, color, disabled, onPress, palette }: QuickActionProps) {
+function QuickActionPill({ icon, label, tint, solid, flex = 1, disabled, onPress, palette }: QuickActionPillProps) {
+  const bg = disabled ? palette.bg.muted : solid ? tint : tint + '18';
+  const fg = disabled ? palette.text.tertiary : solid ? colors.white : tint;
   return (
     <TouchableOpacity
-      style={[styles.quickAction, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      style={[qaStyles.pill, { backgroundColor: bg, flexGrow: flex, flexBasis: 0 }]}
       onPress={onPress}
-      activeOpacity={0.7}
+      activeOpacity={0.8}
       disabled={disabled}
     >
-      <View style={[styles.quickActionIcon, { backgroundColor: disabled ? palette.bg.muted : color + '18' }]}>
-        <Ionicons name={icon} size={18} color={disabled ? palette.text.tertiary : color} />
-      </View>
-      <Text style={[styles.quickActionLabel, { color: disabled ? palette.text.tertiary : palette.text.primary }]}>
+      <Ionicons name={icon} size={18} color={fg} />
+      <Text style={[qaStyles.pillLabel, { color: fg }]} numberOfLines={1}>
         {label}
       </Text>
     </TouchableOpacity>
   );
 }
+
+const qaStyles = StyleSheet.create({
+  row: { flexDirection: 'row', gap: spacing[2] },
+  pill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    minHeight: 46,
+    paddingHorizontal: spacing[2.5],
+    borderRadius: borderRadius.xl,
+  },
+  pillLabel: { fontSize: 13, fontWeight: '700', letterSpacing: -0.2 },
+});
 
 interface CarCardProps {
   car: Car;
@@ -2808,33 +2834,6 @@ const styles = StyleSheet.create({
   statTileDivider: { width: StyleSheet.hairlineWidth, alignSelf: 'stretch', marginVertical: spacing[0.5] },
   statTileValue: { fontSize: 15, fontWeight: '700', letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
   statTileLabel: { fontSize: 11, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.4 },
-
-  // Quick action row
-  quickActionsRow: {
-    flexDirection: 'row',
-    gap: spacing[2],
-  },
-  quickAction: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: spacing[3],
-    paddingHorizontal: spacing[1],
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    gap: 6,
-    ...Platform.select({
-      ios: { shadowColor: colors.black, shadowOpacity: 0.04, shadowRadius: 4, shadowOffset: { width: 0, height: 1 } },
-      android: { elevation: 1 },
-    }),
-  },
-  quickActionIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  quickActionLabel: { fontSize: 11, fontWeight: '600' },
 
   // Meta (staff-only info — note / source / comment)
   metaCard: {

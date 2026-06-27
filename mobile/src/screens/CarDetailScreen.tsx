@@ -29,6 +29,7 @@ import { useRoute, useNavigation } from '@react-navigation/native';
 import { carsApi } from '../api/services';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
+import GostPlateBadge from '../components/GostPlateBadge';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
@@ -188,7 +189,9 @@ export default function CarDetailScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
       >
-        {/* HERO — car identity: icon + модель + ГОСТ-плашка + владелец. */}
+        {/* HERO — car identity: icon + модель + ГОСТ-плашка госномера + владелец.
+            The plate is the real ГОСТ replica (region + flag), so the hero reads
+            like an actual номерной знак, not a plain text chip. */}
         <View style={[styles.hero, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={[styles.heroIcon, { backgroundColor: carColor + '18' }]}>
             <Ionicons name="car-sport" size={30} color={carColor} />
@@ -197,8 +200,8 @@ export default function CarDetailScreen() {
             {makeModel || 'Без модели'}
           </Text>
           {plate ? (
-            <View style={styles.heroPlateBadge}>
-              <Text style={styles.heroPlateText}>{plate}</Text>
+            <View style={styles.heroPlateWrap}>
+              <GostPlateBadge plate={plate} height={46} />
             </View>
           ) : (
             <View style={[styles.heroNoPlate, { backgroundColor: palette.bg.muted }]}>
@@ -417,19 +420,9 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: spacing[3],
   },
-  // ГОСТ-style plate — physical plates are white with black glyphs in BOTH
-  // themes, so this badge is intentionally theme-independent (mirrors the
-  // carPlateBadge on ClientDetailScreen).
-  heroPlateBadge: {
-    marginTop: spacing[2],
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 7,
-    borderWidth: 1.5,
-    borderColor: '#0A0A0A',
-    backgroundColor: '#FFFFFF',
-  },
-  heroPlateText: { fontSize: 15, fontWeight: '800', letterSpacing: 1.5, color: '#0A0A0A' },
+  // ГОСТ plate — rendered via the shared <GostPlateBadge/> (region + flag),
+  // theme-independent (physical plates are white/black in both modes).
+  heroPlateWrap: { marginTop: spacing[3] },
   heroNoPlate: {
     marginTop: spacing[2],
     paddingHorizontal: 10,

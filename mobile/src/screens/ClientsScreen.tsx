@@ -9,8 +9,8 @@ import {
   Alert,
   ActivityIndicator,
   ScrollView,
+  FlatList,
 } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
 import { LinearGradient } from 'expo-linear-gradient';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,9 +33,9 @@ import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import FreshnessBadge from '../components/FreshnessBadge';
 import SourcePickerSheet from '../components/SourcePickerSheet';
 import SourcePickerInline from '../components/SourcePickerInline';
-import ClientListRow from '../components/ClientListRow';
+import ClientListRow, { CLIENT_ROW_HEIGHT } from '../components/ClientListRow';
 import CarPlateField from '../components/CarPlateField';
-import PlateResultCard from '../components/PlateResultCard';
+import PlateResultCard, { PLATE_ROW_HEIGHT } from '../components/PlateResultCard';
 import RussianPlateInput, { type PlateMode } from '../components/RussianPlateInput';
 import PlateModeSwitcher from '../components/PlateModeSwitcher';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -559,14 +559,14 @@ export default function ClientsScreen() {
   const plateKeyExtractor = useCallback((item: { client: Client; car: Car }) => `${item.client.id}-${item.car.id}`, []);
 
   // ── Row renderer (client mode) ──────────────────────────────────────
-  // The row is a module-scope React.memo component (ClientListRow) whose
-  // swipe wrapper is RNGH's ReanimatedSwipeable (UI-thread shared values,
-  // setState-free reset on recycle). History of the «дёргаются/пропадают»
-  // bug: v1 keyed a legacy Swipeable by `item.id` (full remount per
-  // recycle → blank cells); v2 dropped the key and reset via ref — but
-  // the legacy class Swipeable still setState'd on every reset/onLayout
-  // and drove translateX through RN Animated, which desyncs on Fabric
-  // cell reuse. See the rationale block at the top of ClientListRow.tsx.
+  // The row is a module-scope React.memo component (ClientListRow) with a
+  // FIXED height, rendered inside a plain RN FlatList (no recycling). The
+  // «дёргаются/пропадают» saga: v1 keyed a legacy Swipeable by id (full
+  // remount per FlashList recycle → blank cells); v2 reset via ref but the
+  // class Swipeable still setState'd on Fabric cell reuse; v3 hardened
+  // FlashList and STILL flickered for the owner. v4 (this) drops recycling
+  // entirely — FlatList mounts one durable row per client — so a cell can
+  // never be reused into a stale/blank frame. See ClientListRow.tsx.
   const renderClient = useCallback(
     ({ item, index }: { item: Client; index: number }) => (
       <ClientListRow
@@ -593,16 +593,42 @@ export default function ClientsScreen() {
   // its right — the same hierarchy the owner sees in the Касса. Tapping
   // opens the owning client's card (no per-car expansion).
   const renderPlateResult = useCallback(
-    ({ item }: { item: { client: Client; car: Car } }) => (
+    ({ item, index }: { item: { client: Client; car: Car }; index: number }) => (
       <PlateResultCard
         plate={item.car.plateNumber}
         makeModel={item.car.makeModel}
         clientName={item.client.fullName}
-        onPress={() => navigation.navigate('ClientDetail', { id: item.client.id })}
+        // First / last row of the inset group → rounded top / bottom corners,
+        // exactly like the people-list rows so both search modes look identical.
+        isFirst={index === 0}
+        isLast={index === plateResults.length - 1}
+        onPress={() => openClientDetail(item.client.id)}
         onPressIn={() => prefetchClientDetail(item.client.id)}
       />
     ),
-    [navigation, prefetchClientDetail],
+    [plateResults.length, openClientDetail, prefetchClientDetail],
+  );
+
+  // getItemLayout for BOTH lists — every row is a known fixed height, so the
+  // plain RN FlatList never measures a cell. No measurement pass means no
+  // re-anchoring and no blank/jumping rows mid-scroll (the owner's bug). The
+  // header (retail hero) is measured separately by VirtualizedList and its
+  // height is added to these offsets automatically.
+  const getClientItemLayout = useCallback(
+    (_: ArrayLike<Client> | null | undefined, index: number) => ({
+      length: CLIENT_ROW_HEIGHT,
+      offset: CLIENT_ROW_HEIGHT * index,
+      index,
+    }),
+    [],
+  );
+  const getPlateItemLayout = useCallback(
+    (_: ArrayLike<{ client: Client; car: Car }> | null | undefined, index: number) => ({
+      length: PLATE_ROW_HEIGHT,
+      offset: PLATE_ROW_HEIGHT * index,
+      index,
+    }),
+    [],
   );
 
   // Retail-pin header — memoised ELEMENT around the module-scope
@@ -631,7 +657,11 @@ export default function ClientsScreen() {
   // in the middle of a fling. Memoised on the only real input
   // (tabBarHeight) they stay referentially constant across scrolling.
   const plateListContentStyle = useMemo(
-    () => ({ paddingHorizontal: spacing[4], paddingBottom: tabBarHeight + spacing[4] }),
+    // No horizontal padding here — each PlateResultCard supplies its own inset
+    // group margin (spacing[4]), exactly like the people-list rows, so both
+    // search modes line up at the same 16pt gutter. paddingTop adds a little
+    // air below the plate input.
+    () => ({ paddingTop: spacing[2], paddingBottom: tabBarHeight + spacing[4] }),
     [tabBarHeight],
   );
   const clientListContentStyle = useMemo(
@@ -704,10 +734,11 @@ export default function ClientsScreen() {
             <RussianPlateInput value={plateSearch} onChangeText={setPlateSearch} mode={plateMode} autoFocus={false} />
           </View>
 
-          <FlashList
+          <FlatList
             data={plateResults}
             keyExtractor={plateKeyExtractor}
             renderItem={renderPlateResult}
+            getItemLayout={getPlateItemLayout}
             ListHeaderComponent={retailHeader}
             ListEmptyComponent={
               normalizedPlate.length >= 2 && !plateQuery.isFetching ? (
@@ -722,10 +753,15 @@ export default function ClientsScreen() {
             }
             contentContainerStyle={plateListContentStyle}
             keyboardShouldPersistTaps="handled"
-            // Same reasoning as the people-list below: disable FlashList v2's
-            // default top-anchoring (it's a chat feature, not what a search
-            // result list wants) and drop the v2-ignored removeClippedSubviews.
-            maintainVisibleContentPosition={{ disabled: true }}
+            // Plain RN FlatList (NOT FlashList): no cell recycling means a row
+            // can never paint a stale/blank frame on Fabric — the exact
+            // «дёргаются и пропадают» the owner saw. removeClippedSubviews is
+            // OFF so an off-screen row is never detached/re-attached (another
+            // blank-frame source); getItemLayout keeps scrolling exact + cheap.
+            removeClippedSubviews={false}
+            initialNumToRender={12}
+            windowSize={11}
+            maxToRenderPerBatch={12}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
             }
@@ -832,10 +868,11 @@ export default function ClientsScreen() {
           ) : data === undefined ? (
             <ListSkeleton count={8} />
           ) : (
-            <FlashList
+            <FlatList
               data={displayClients}
               keyExtractor={clientKeyExtractor}
               renderItem={renderClient}
+              getItemLayout={getClientItemLayout}
               ListHeaderComponent={showRetailPin ? retailHeader : null}
               ListEmptyComponent={
                 !isLoading ? (
@@ -864,16 +901,20 @@ export default function ClientsScreen() {
                 ) : null
               }
               contentContainerStyle={clientListContentStyle}
-              // FlashList v2 enables `maintainVisibleContentPosition` BY
-              // DEFAULT (it's built for chat UIs that grow at the top). On a
-              // contacts-style list with variable-height rows that re-anchors
-              // the top on every recycle/measure pass, which is exactly the
-              // "rows disappear from the top as I scroll down" artifact the
-              // owner reported. A clients list only ever appends pages at the
-              // BOTTOM, so we explicitly disable MVCP for normal list scroll.
-              // (`removeClippedSubviews` is a no-op in FlashList v2 — the
-              // recycler does its own offscreen culling — so it's dropped.)
-              maintainVisibleContentPosition={{ disabled: true }}
+              // Plain RN FlatList — the whole point of the redesign. FlashList
+              // RECYCLES cells; on Fabric a recycled cell could paint a stale or
+              // blank frame for a beat, which is exactly the «строки исчезают при
+              // скролле» the owner kept hitting. FlatList mounts one row per
+              // client and never reuses it, so a row physically cannot blank.
+              // Fixed-height rows + getItemLayout mean zero measurement passes
+              // (no re-anchoring), and removeClippedSubviews OFF guarantees an
+              // off-screen-then-back row is never detached/re-attached blank.
+              // This list only ever appends pages at the BOTTOM, so nothing
+              // re-anchors the top.
+              removeClippedSubviews={false}
+              initialNumToRender={12}
+              windowSize={11}
+              maxToRenderPerBatch={12}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }

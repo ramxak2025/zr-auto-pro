@@ -1,9 +1,18 @@
 /**
  * ClientListRow — one row of the «Клиенты» people-list (client-search mode).
  *
- * Lives at module scope behind React.memo because FlashList v2 RECYCLES
- * cells: when a row scrolls off and a different client scrolls in, the SAME
- * mounted subtree receives the new item as props — a cheap re-render.
+ * ── Why a FIXED row height ──────────────────────────────────────────────────
+ * The owner kept seeing rows flicker / disappear on scroll even after the
+ * FlashList hardening. FlashList RECYCLES cells, and on Fabric a recycled cell
+ * can paint a stale/blank frame for a beat. We removed that whole failure mode
+ * by rendering the people-list with a plain RN `FlatList` (no recycling — each
+ * client keeps its own mounted row) plus `getItemLayout`, which needs every row
+ * to be exactly `CLIENT_ROW_HEIGHT` tall. So the row container is a fixed
+ * height, the avatar centres, and the inset hairline divider sits flush at the
+ * bottom edge — a calm, fixed-rhythm Apple Contacts list that can never blank.
+ *
+ * Lives at module scope behind React.memo so a parent re-render is a cheap
+ * props compare, not a remount.
  *
  * ── Why ReanimatedSwipeable and not the legacy RNGH Swipeable ──────────────
  * The first flicker fix removed `key={item.id}` from the legacy Swipeable
@@ -56,6 +65,12 @@ const DESTRUCTIVE = colors.red[500];
 // app's squircle language). Applied to the first row's top + last row's
 // bottom so the whole group reads as one rounded card.
 const GROUP_RADIUS = 16;
+
+// Fixed row height — the single source of truth FlatList.getItemLayout reads on
+// ClientsScreen, so the virtualiser never measures a row (measurement passes are
+// what re-anchor the list and make rows appear to jump / vanish). Every row is
+// exactly this tall; first/last only change corner radius, never height.
+export const CLIENT_ROW_HEIGHT = 64;
 
 // ─── Avatar helpers (mirror ClientDetailScreen so initials/colour match) ───
 export function getInitials(name: string): string {
@@ -279,21 +294,25 @@ const styles = StyleSheet.create({
     borderBottomRightRadius: GROUP_RADIUS,
     overflow: 'hidden',
   },
-  // The whole row is the tap surface. Padding sits on the row (leading +
-  // vertical), the hairline divider sits on `body` so it stays inset past
+  // The whole row is the tap surface, locked to CLIENT_ROW_HEIGHT so
+  // getItemLayout stays exact. `alignItems: stretch` lets `body` fill the full
+  // height, putting its bottom hairline flush at the row's bottom edge (the
+  // avatar centres itself). The divider sits on `body` so it stays inset past
   // the avatar — the Apple Mail / Settings separator convention.
   row: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'stretch',
+    height: CLIENT_ROW_HEIGHT,
     gap: spacing[3],
     paddingLeft: spacing[4],
   },
   // Squircle avatar — continuous-corner, app-icon feel. Integrated into the
-  // card rather than a free-floating circle.
+  // card rather than a free-floating circle. Self-centres in the fixed row.
   avatar: {
     width: 42,
     height: 42,
     borderRadius: SQUIRCLE_RADIUS,
+    alignSelf: 'center',
     alignItems: 'center',
     justifyContent: 'center',
   },
@@ -303,7 +322,10 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.2,
   },
-  // Text + trailing accessories, plus the inset hairline divider.
+  // Text + trailing accessories, plus the inset hairline divider. Stretches to
+  // the full fixed row height (row uses alignItems: stretch) so the bottom
+  // hairline lands flush at the row edge; inner content stays vertically
+  // centred via alignItems: center.
   body: {
     flex: 1,
     minWidth: 0,
@@ -311,7 +333,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing[2],
     paddingRight: spacing[4],
-    paddingVertical: spacing[3],
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   // Last cell of the group: the rounded bottom edge terminates the list, so
