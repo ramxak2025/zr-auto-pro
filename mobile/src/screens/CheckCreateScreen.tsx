@@ -1355,7 +1355,7 @@ export default function CheckCreateScreen() {
     );
   };
 
-  const handleSubmit = (deferred?: boolean, paymentOverride?: PaymentMethod) => {
+  const handleSubmit = (deferred?: boolean, paymentOverride?: PaymentMethod, opts?: { preValidated?: boolean }) => {
     // Double-fire guard: bail out immediately if a submission is already
     // in-flight, regardless of whether isPending has propagated yet.
     if (submittingRef.current || createMutation.isPending) return;
@@ -1444,7 +1444,10 @@ export default function CheckCreateScreen() {
     // Confirm (never hard-block — cached stock can be stale) when any
     // product line exceeds the cached stock. Deferred checks skip the
     // confirm entirely: the backend only decrements stock on a live save.
-    if (!shouldDefer && oversoldByProductId.size > 0) {
+    // СБП-поток уже подтвердил овершелл ДО приёма оплаты (openSbpPayment),
+    // поэтому при preValidated повтор не показываем — деньги уже приняты на
+    // сервере, блокировать запись чека нельзя (BUG #1).
+    if (!shouldDefer && !opts?.preValidated && oversoldByProductId.size > 0) {
       const lines = [...oversoldByProductId.values()]
         .map((e) => `• ${e.name}: в чеке ${e.qty}, на складе ${Math.max(e.stock, 0)}`)
         .join('\n');
@@ -1469,20 +1472,65 @@ export default function CheckCreateScreen() {
   const handleSbpSucceeded = () => {
     setShowSbp(false);
     setPaymentMethod('card' as PaymentMethod);
-    handleSubmit(false, 'card' as PaymentMethod);
+    // Все блокирующие условия (позиции, сумма>0, мастер, овершелл) уже
+    // проверены в openSbpPayment ДО открытия СБП-модалки — поэтому проводим
+    // чек с preValidated=true: handleSubmit не покажет ни одного блокирующего
+    // подтверждения/алерта и ГАРАНТИРОВАННО запишет заказ-наряд (деньги по СБП
+    // уже приняты на сервере, см. BUG #1).
+    handleSubmit(false, 'card' as PaymentMethod, { preValidated: true });
   };
 
-  // Открыть приём оплаты по СБП. Доступно только когда есть что проводить и
-  // сумма > 0, и чек НЕ откладывается (отложенный = ещё не оплачен).
+  // Открыть приём оплаты по СБП.
+  //
+  // BUG #1 FIX — ПОРЯДОК «pre-validate → pay → commit»: ВСЕ блокирующие
+  // условия, которые иначе сделали бы early-return в handleSubmit ПОСЛЕ приёма
+  // денег (нет позиций, нулевая сумма, не определён мастер, овершелл склада),
+  // проверяем ЗДЕСЬ — ДО открытия СБП-модалки. К моменту, когда оплата
+  // подтвердится, заблокировать запись чека уже ничто не может. СБП-чек
+  // никогда не откладывается (отложенный = ещё не оплачен).
   const openSbpPayment = () => {
+    if (submittingRef.current || createMutation.isPending) return;
+    // 1) Есть что проводить.
     if (serviceLines.length === 0 && productLines.length === 0) {
       haptic('warning');
       Alert.alert('Нечего оплачивать', 'Добавьте хотя бы одну услугу или товар.');
       return;
     }
+    // 2) Сумма к оплате > 0.
     if (total <= 0) {
       haptic('warning');
       Alert.alert('Сумма к оплате — 0', 'Оплата по СБП недоступна для нулевого чека.');
+      return;
+    }
+    // 3) Мастер назначаем (бэк требует masterId — то же правило, что в
+    //    handleSubmit). Если ни defaultMasterId, ни активного мастера нет —
+    //    останавливаемся ДО оплаты, иначе приняли бы деньги и не записали чек.
+    if (!defaultMasterId && !masters[0]?.id) {
+      haptic('warning');
+      Alert.alert(
+        'Не выбран мастер',
+        'Не удалось определить мастера для чека. Откройте экран «Сотрудники» и убедитесь, что есть хотя бы один активный мастер.',
+      );
+      return;
+    }
+    // 4) Овершелл склада — подтверждаем ДО оплаты (а не после), потому что
+    //    после успешного СБП этот confirm уже нельзя показывать: деньги
+    //    приняты, чек обязан записаться. На «Продолжить» открываем модалку.
+    if (oversoldByProductId.size > 0) {
+      const lines = [...oversoldByProductId.values()]
+        .map((e) => `• ${e.name}: в чеке ${e.qty}, на складе ${Math.max(e.stock, 0)}`)
+        .join('\n');
+      haptic('warning');
+      Alert.alert('Не хватает на складе', `${lines}\n\nДанные склада могли устареть. Продолжить?`, [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Продолжить',
+          onPress: () => {
+            haptic('tap');
+            setShowSbp(true);
+          },
+        },
+      ]);
       return;
     }
     haptic('tap');
@@ -2707,9 +2755,25 @@ export default function CheckCreateScreen() {
         onClose={() => setShowPaymentPicker(false)}
       />
 
-      {/* Приём оплаты по СБП / QR (эквайринг). Сумма = «К оплате»; checkId
-          передаётся только в режиме редактирования существующего чека. При
-          успехе родитель проводит чек по карточному (электронному) тендеру. */}
+      {/* Приём оплаты по СБП / QR (эквайринг). Сумма = «К оплате».
+          При успехе родитель проводит чек по карточному (электронному) тендеру.
+
+          BUG #6 — ЛИНКОВКА ПЛАТЕЖА К ЧЕКУ (reconciliation gap):
+          • Режим РЕДАКТИРОВАНИЯ: чек уже существует → передаём `editId`, и бэк
+            проставляет payment.check_id — связь есть.
+          • Режим СОЗДАНИЯ: по порядку «pre-validate → pay → commit» (BUG #1)
+            чек физически создаётся ТОЛЬКО ПОСЛЕ успешной оплаты, т.е. в момент
+            создания платежа checkId ещё не существует — связать нечего.
+            Ретроспективно проставить check_id нельзя: в контракте payments
+            (createPaymentsApi) есть лишь create/get — эндпоинта обновления /
+            линковки платежа нет, а бэкенд/API трогать запрещено. Поэтому для
+            НОВОГО чека payment.check_id остаётся null.
+            Хэндл для сверки (reconciliation) всё равно есть: платёж
+            tenant-scoped, со штампом времени и суммой; созданный следом чек
+            имеет ту же сумму, paymentMethod='card' и тот же момент времени —
+            пара сводится по (tenant, сумма, время). Полная линковка нового
+            чека потребовала бы backend-эндпоинта и здесь сознательно не
+            делается. */}
       <SbpPaymentModal
         visible={showSbp}
         amount={total}

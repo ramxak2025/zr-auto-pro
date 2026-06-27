@@ -88,7 +88,6 @@ export default function SbpPaymentModal({ visible, amount, checkId, onClose, onS
   const succeededFiredRef = useRef(false);
   const visibleRef = useRef(visible);
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const tickRef = useRef<() => void>(() => {});
   const onSucceededRef = useRef(onSucceeded);
   const amountRef = useRef(amount);
@@ -105,26 +104,24 @@ export default function SbpPaymentModal({ visible, amount, checkId, onClose, onS
     }
   }, []);
 
-  const clearSuccessTimer = useCallback(() => {
-    if (successTimerRef.current) {
-      clearTimeout(successTimerRef.current);
-      successTimerRef.current = null;
-    }
-  }, []);
-
-  // Успех: фиксируем один раз, гасим таймеры, лёгкая пауза для галочки, затем
-  // отдаём управление родителю (он проведёт чек по карточному тендеру).
+  // Успех: фиксируем РОВНО один раз (succeededFiredRef) и СИНХРОННО отдаём
+  // управление родителю — он немедленно проводит чек по карточному тендеру.
+  //
+  // BUG #1 FIX: раньше onSucceeded() вызывался из setTimeout(700мс), который
+  // (а) был завязан на visibleRef и (б) отменялся cleanup'ом эффекта при
+  // закрытии модалки. Если кассир закрывал окно «Оплата получена / Проводим
+  // чек…» (X / тап по фону) в эти 700мс — деньги списаны на сервере, а
+  // заказ-наряд НЕ записывался. Теперь, как только СБП подтвердил 'succeeded',
+  // коммит происходит немедленно и его уже ничем не отменить (экран успеха
+  // всё ещё может отрисоваться, но сам callback больше не cancellable).
   const handleSucceeded = useCallback(() => {
     if (succeededFiredRef.current) return;
     succeededFiredRef.current = true;
     stopPoll();
     setPhase('succeeded');
     haptic('success');
-    clearSuccessTimer();
-    successTimerRef.current = setTimeout(() => {
-      if (visibleRef.current) onSucceededRef.current();
-    }, 700);
-  }, [stopPoll, clearSuccessTimer]);
+    onSucceededRef.current();
+  }, [stopPoll]);
 
   // Один опрос статуса. `manual=true` — нажата кнопка «Проверить оплату».
   const pollOnce = useCallback(
@@ -177,7 +174,6 @@ export default function SbpPaymentModal({ visible, amount, checkId, onClose, onS
   // Создание платежа. Используется и при открытии, и кнопкой «Повторить».
   const createPayment = useCallback(() => {
     stopPoll();
-    clearSuccessTimer();
     succeededFiredRef.current = false;
     paymentIdRef.current = null;
     setPayment(null);
@@ -213,18 +209,19 @@ export default function SbpPaymentModal({ visible, amount, checkId, onClose, onS
         setErrorText(data?.message || data?.error || 'Не удалось создать платёж. Попробуйте ещё раз.');
         setPhase('error');
       });
-  }, [stopPoll, clearSuccessTimer, handleSucceeded, startPoll]);
+  }, [stopPoll, handleSucceeded, startPoll]);
 
-  // Жизненный цикл: создаём платёж при открытии, всё гасим при закрытии.
+  // Жизненный цикл: создаём платёж при открытии, гасим опрос при закрытии.
+  // Коммит чека (onSucceeded) НЕ зависит от этого cleanup — он уже выполнен
+  // синхронно в handleSucceeded к моменту любого закрытия модалки (BUG #1).
   useEffect(() => {
     if (visible) {
       createPayment();
     }
     return () => {
       stopPoll();
-      clearSuccessTimer();
     };
-  }, [visible, createPayment, stopPoll, clearSuccessTimer]);
+  }, [visible, createPayment, stopPoll]);
 
   const openLink = useCallback(async () => {
     const url = payment?.confirmationUrl || payment?.qr;
