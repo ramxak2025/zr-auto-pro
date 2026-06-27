@@ -53,7 +53,8 @@ import { useNavigation } from '@react-navigation/native';
 import Constants from 'expo-constants';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
-import { marketingApi } from '../api/services';
+import { marketingApi, telephonyApi } from '../api/services';
+import { SERVER_URL } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -61,7 +62,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import type { MessagingIntegration, ReviewPlatformLink } from '../../../shared/types';
+import type { MessagingIntegration, ReviewPlatformLink, TelephonySettings } from '../../../shared/types';
 
 // ─────────────────────────────────────────────────────────────────────
 //  Provider catalogue
@@ -238,6 +239,16 @@ function webhookUrlFor(providerKey: string, tenantId: string | undefined): strin
   // Strip trailing /api so the webhook lives at /api/webhooks/...
   const base = apiUrl.replace(/\/api\/?$/, '');
   return `${base}/api/webhooks/${providerKey}/${tenantId || 'tenant_id'}`;
+}
+
+// Mango pushes VPBX call events to a PUBLIC, signature-verified callback that the
+// owner must paste into Mango's VPBX settings. The route lives at
+// `<origin>/api/telephony/webhook/<tenantId>` (server-only, not part of the client
+// API). `SERVER_URL` is the axios baseURL with the trailing `/api` stripped — the
+// canonical origin we already derive for image URLs — so the webhook is always
+// pinned to the exact backend this build talks to.
+function mangoWebhookUrl(tenantId: string | undefined): string {
+  return `${SERVER_URL}/api/telephony/webhook/${tenantId || 'tenant_id'}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -1012,6 +1023,12 @@ export default function IntegrationsScreen() {
               ))}
             </View>
 
+            {/* Mango Office — виртуальная АТС (own backend: telephonyApi). Inline
+                config card, not a marketing ProviderCard, because its secrets +
+                callback URL differ from the messaging-integrations flow. */}
+            <View style={{ height: spacing[2.5] }} />
+            <MangoSection />
+
             {/* Messengers — WhatsApp Cloud API + Telegram */}
             <View style={{ height: spacing[5] }} />
             <SectionHeader title="Мессенджеры" hint="WhatsApp и Telegram" />
@@ -1190,6 +1207,263 @@ function CarReadySection() {
         style={[
           styles.primaryBtn,
           { backgroundColor: palette.accent.primary, marginTop: spacing[3] },
+          save.isPending && { opacity: 0.6 },
+        ]}
+        onPress={handleSave}
+        disabled={save.isPending || settingsQuery.isLoading}
+      >
+        {save.isPending ? (
+          <ActivityIndicator size="small" color={colors.white} />
+        ) : (
+          <>
+            <Ionicons name="checkmark" size={16} color={colors.white} />
+            <Text style={styles.primaryBtnText}>Сохранить</Text>
+          </>
+        )}
+      </TouchableOpacity>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  Mango Office (виртуальная АТС) — телефония config
+//
+//  Distinct from the marketing PHONE_PROVIDERS cards: Mango lives in its own
+//  backend (telephonyApi, migration 088) with a masked write-only api_key +
+//  api_salt and a server-only signature-verified callback the owner pastes into
+//  Mango's VPBX settings. Incoming/missed calls land in the existing calls list
+//  (CallsScreen) once the owner enters real keys AND flips the toggle on.
+// ─────────────────────────────────────────────────────────────────────
+
+const MANGO_TONE = { bg: '#fdecec', fg: '#e11d48' };
+
+function MangoSection() {
+  const palette = useColors();
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const tenantId = user?.tenantId;
+
+  const settingsQuery = useQuery({
+    queryKey: ['telephony-settings'],
+    queryFn: async () => (await telephonyApi.getSettings()).data,
+    staleTime: 60_000,
+  });
+  const settings: TelephonySettings | undefined = settingsQuery.data;
+
+  // Both secrets are WRITE-ONLY — the inputs always start blank and only carry a
+  // value when the owner re-types one. The masks live on the server response and
+  // are surfaced as placeholders, never as editable text.
+  const [enabled, setEnabled] = useState(false);
+  const [apiKey, setApiKey] = useState('');
+  const [apiSalt, setApiSalt] = useState('');
+  const [copied, setCopied] = useState(false);
+  // Hydrate the toggle once from the server, then let the owner edit freely so a
+  // background refetch never flips an unsaved switch.
+  const hydrated = React.useRef(false);
+
+  React.useEffect(() => {
+    if (settings && !hydrated.current) {
+      hydrated.current = true;
+      setEnabled(!!settings.enabled);
+    }
+  }, [settings]);
+
+  const webhookUrl = useMemo(() => mangoWebhookUrl(tenantId), [tenantId]);
+
+  const save = useMutation({
+    mutationFn: () => {
+      const key = apiKey.trim();
+      const salt = apiSalt.trim();
+      return telephonyApi.updateSettings({
+        provider: 'mango',
+        enabled,
+        // Send a secret ONLY when re-entered — an omitted field leaves the
+        // stored value untouched server-side.
+        ...(key ? { apiKey: key } : {}),
+        ...(salt ? { apiSalt: salt } : {}),
+      });
+    },
+    onSuccess: () => {
+      haptic('success');
+      // Drop the typed secrets so they don't linger in memory; the refetched
+      // masks now reflect the freshly stored values.
+      setApiKey('');
+      setApiSalt('');
+      queryClient.invalidateQueries({ queryKey: ['telephony-settings'] });
+      Alert.alert('Готово', 'Настройки телефонии сохранены');
+    },
+    onError: (e: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', e?.response?.data?.message || 'Не удалось сохранить');
+    },
+  });
+
+  const handleSave = () => {
+    const key = apiKey.trim();
+    const salt = apiSalt.trim();
+    // Enabling without any stored OR freshly entered secret would leave the
+    // integration inert — block it with a clear message rather than a silent no-op.
+    if (enabled && !key && !settings?.hasApiKey) {
+      Alert.alert('Ошибка', 'Введите API ключ Mango (vpbx)');
+      return;
+    }
+    if (enabled && !salt && !settings?.hasApiSalt) {
+      Alert.alert('Ошибка', 'Введите ключ подписи (Sign / salt)');
+      return;
+    }
+    save.mutate();
+  };
+
+  const handleCopyWebhook = async () => {
+    // No `expo-clipboard` in the project — surface the share sheet so the owner
+    // can drop the URL into Mango's VPBX settings via email / messenger.
+    try {
+      await Share.share({ message: webhookUrl, url: webhookUrl });
+      haptic('success');
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // User dismissed — not an error.
+    }
+  };
+
+  const configured = !!settings?.hasApiKey && !!settings?.hasApiSalt;
+  const status: 'ok' | 'warn' | 'off' = settings?.enabled && configured ? 'ok' : configured ? 'warn' : 'off';
+
+  return (
+    <View style={[styles.carReadyCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+      {/* Header */}
+      <View style={styles.modalHeaderBlock}>
+        <View style={[styles.modalLogo, { backgroundColor: MANGO_TONE.bg }]}>
+          <Ionicons name="call-outline" size={26} color={MANGO_TONE.fg} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.providerName, { color: palette.text.primary }]}>Mango Office</Text>
+          <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>
+            Виртуальная АТС — входящие и пропущенные звонки в списке звонков
+          </Text>
+          <View style={[styles.providerMeta, { marginTop: spacing[1.5] }]}>
+            <StatusPill kind={status} />
+          </View>
+        </View>
+      </View>
+
+      {/* Hint */}
+      <View
+        style={[
+          styles.notice,
+          { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted, marginBottom: spacing[3] },
+        ]}
+      >
+        <Ionicons name="information-circle-outline" size={16} color={palette.text.secondary} />
+        <Text style={[styles.noticeText, { color: palette.text.secondary }]}>
+          Ключи — в личном кабинете Mango. До ввода телефония неактивна.
+        </Text>
+      </View>
+
+      {/* Enabled toggle */}
+      <TouchableOpacity
+        style={[styles.activeRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+        onPress={() => {
+          haptic('select');
+          setEnabled((v) => !v);
+        }}
+        accessibilityRole="switch"
+        accessibilityState={{ checked: enabled }}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.activeLabel, { color: palette.text.primary }]}>Включить телефонию</Text>
+          <Text style={[styles.activeSub, { color: palette.text.tertiary }]}>
+            Звонки начнут попадать в список после ввода ключей
+          </Text>
+        </View>
+        <View
+          style={[styles.switchTrack, { backgroundColor: enabled ? palette.accent.primary : palette.border.strong }]}
+        >
+          <View style={[styles.switchThumb, { transform: [{ translateX: enabled ? 20 : 2 }] }]} />
+        </View>
+      </TouchableOpacity>
+
+      {/* API key (write-only — masked on edit, only sent when re-entered) */}
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>API ключ (vpbx)</Text>
+        <TextInput
+          value={apiKey}
+          onChangeText={setApiKey}
+          style={[
+            styles.formInput,
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+          ]}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder={
+            settings?.hasApiKey ? settings.apiKeyMask || '••••••••••• (оставьте пустым)' : 'Вставьте API ключ'
+          }
+          placeholderTextColor={palette.text.tertiary}
+        />
+        {settings?.hasApiKey ? (
+          <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+            Ключ сохранён. Оставьте пустым, чтобы не менять.
+          </Text>
+        ) : null}
+      </View>
+
+      {/* Sign salt (write-only — masked on edit, only sent when re-entered) */}
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Ключ подписи (Sign / salt)</Text>
+        <TextInput
+          value={apiSalt}
+          onChangeText={setApiSalt}
+          style={[
+            styles.formInput,
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+          ]}
+          secureTextEntry
+          autoCapitalize="none"
+          autoCorrect={false}
+          placeholder={
+            settings?.hasApiSalt ? settings.apiSaltMask || '••••••••••• (оставьте пустым)' : 'Вставьте ключ подписи'
+          }
+          placeholderTextColor={palette.text.tertiary}
+        />
+        {settings?.hasApiSalt ? (
+          <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+            Соль сохранена. Оставьте пустым, чтобы не менять.
+          </Text>
+        ) : null}
+      </View>
+
+      {/* Webhook callback URL — read-only, copy/share into Mango's VPBX settings */}
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>URL для webhook Mango</Text>
+        <View style={[styles.webhookRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Text style={[styles.webhookText, { color: palette.text.primary }]} numberOfLines={1} ellipsizeMode="middle">
+            {webhookUrl}
+          </Text>
+          <TouchableOpacity
+            onPress={handleCopyWebhook}
+            hitSlop={6}
+            style={[styles.webhookCopy, { backgroundColor: palette.bg.card }]}
+            accessibilityRole="button"
+            accessibilityLabel="Поделиться webhook URL"
+          >
+            <Ionicons
+              name={copied ? 'checkmark' : 'share-outline'}
+              size={16}
+              color={copied ? colors.green[600] : palette.text.secondary}
+            />
+          </TouchableOpacity>
+        </View>
+        <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+          Вставьте этот URL в настройки VPBX Mango
+        </Text>
+      </View>
+
+      <TouchableOpacity
+        style={[
+          styles.primaryBtn,
+          { backgroundColor: palette.accent.primary, marginTop: spacing[1] },
           save.isPending && { opacity: 0.6 },
         ]}
         onPress={handleSave}

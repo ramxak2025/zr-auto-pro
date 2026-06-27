@@ -45,6 +45,7 @@ import {
   createPurchaseOrdersApi,
   createPaymentsApi,
   createFiscalApi,
+  createTelephonyApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -127,6 +128,14 @@ export const paymentsApi = createPaymentsApi(api);
 // groupCode are entered AND enabled is on. Consumed by the same
 // PaymentIntegrations settings screen (section «Онлайн-касса 54-ФЗ»).
 export const fiscalApi = createFiscalApi(api);
+// Телефония / виртуальная АТС (Mango Office) — backend telephony/ (migration 088).
+// getSettings/updateSettings owner-class gated server-side; the Mango vpbx api_key
+// и api_salt — WRITE-ONLY: getSettings возвращает только маски + hasApiKey/hasApiSalt,
+// никогда сырые секреты. INERT, пока владелец не введёт ключ+соль И не включит
+// enabled. Входящие/пропущенные звонки Mango пушит на публичный server-only
+// webhook → они персистятся в таблицу calls и появляются в обычном списке звонков
+// (CallsScreen). Consumed by IntegrationsScreen → секция «Телефония и звонки».
+export const telephonyApi = createTelephonyApi(api);
 
 // Platform-specific upload for React Native
 export const uploadsApi = {

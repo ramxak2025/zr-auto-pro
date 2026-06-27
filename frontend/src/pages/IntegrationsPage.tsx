@@ -1,12 +1,31 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Navigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, CreditCard, Receipt, Save, Loader2, KeyRound, Info } from 'lucide-react';
+import {
+  ArrowLeft,
+  CreditCard,
+  Receipt,
+  Save,
+  Loader2,
+  KeyRound,
+  Info,
+  PhoneCall,
+  Copy,
+  Check,
+  Link2,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
-import { paymentsApi, fiscalApi } from '../api/services';
+import { paymentsApi, fiscalApi, telephonyApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../types';
-import type { PaymentIntegrationSettings, FiscalSettings, PaymentProviderName, FiscalSno, FiscalVat } from '../types';
+import type {
+  PaymentIntegrationSettings,
+  FiscalSettings,
+  PaymentProviderName,
+  FiscalSno,
+  FiscalVat,
+  TelephonySettings,
+} from '../types';
 
 // Shared field styles (match CompanySettingsPage rhythm)
 const inputCls =
@@ -473,6 +492,213 @@ function FiscalCard() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+//  Телефония (Mango Office)
+// ──────────────────────────────────────────────────────────────────────────
+
+const MANGO_HINT = 'Ключи — в ЛК Mango; до ввода телефония неактивна.';
+
+/**
+ * The public origin Mango must POST its call-event callbacks to. The webhook
+ * route itself is server-only (signature-verified) — here we only *display* the
+ * URL for the owner to paste into the Mango VPBX panel. Mirrors how axios
+ * resolves its baseURL: an absolute VITE_API_URL → its origin; a relative
+ * '/api' → the current page origin.
+ */
+function apiOrigin(): string {
+  const base = (import.meta.env.VITE_API_URL as string | undefined) || '/api';
+  try {
+    return new URL(base).origin;
+  } catch {
+    return window.location.origin;
+  }
+}
+
+function TelephonyCard() {
+  const queryClient = useQueryClient();
+  const { user } = useAuth();
+  const tenantId = user?.tenantId ?? '';
+
+  const { data: settings, isLoading } = useQuery<TelephonySettings>({
+    queryKey: ['telephony', 'settings'],
+    queryFn: async () => (await telephonyApi.getSettings()).data,
+  });
+
+  const [form, setForm] = useState<{ enabled: boolean; apiKey: string; apiSalt: string }>({
+    enabled: false,
+    apiKey: '',
+    apiSalt: '',
+  });
+  const [dirty, setDirty] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      // Secrets are write-only — the inputs always start empty and only show a mask.
+      setForm({ enabled: settings.enabled, apiKey: '', apiSalt: '' });
+      setDirty(false);
+    }
+  }, [settings]);
+
+  const mutation = useMutation({
+    mutationFn: (data: { provider?: 'mango'; enabled?: boolean; apiKey?: string; apiSalt?: string }) =>
+      telephonyApi.updateSettings(data),
+    onSuccess: (res) => {
+      queryClient.setQueryData(['telephony', 'settings'], res.data);
+      queryClient.invalidateQueries({ queryKey: ['telephony', 'settings'] });
+      toast.success('Телефония сохранена');
+      setDirty(false);
+    },
+    onError: () => toast.error('Ошибка сохранения'),
+  });
+
+  const update = (patch: Partial<typeof form>) => {
+    setForm((prev) => ({ ...prev, ...patch }));
+    setDirty(true);
+  };
+
+  const handleSave = () => {
+    const payload: { provider?: 'mango'; enabled?: boolean; apiKey?: string; apiSalt?: string } = {
+      provider: 'mango',
+      enabled: form.enabled,
+    };
+    // Send secrets only when re-entered — an empty field keeps the stored value.
+    const key = form.apiKey.trim();
+    if (key) payload.apiKey = key;
+    const salt = form.apiSalt.trim();
+    if (salt) payload.apiSalt = salt;
+    mutation.mutate(payload);
+  };
+
+  const keyPlaceholder =
+    settings?.hasApiKey && settings.apiKeyMask
+      ? `${settings.apiKeyMask} — введите, чтобы заменить`
+      : 'API key (vpbx) из ЛК Mango';
+  const saltPlaceholder =
+    settings?.hasApiSalt && settings.apiSaltMask
+      ? `${settings.apiSaltMask} — введите, чтобы заменить`
+      : 'Соль для подписи (sign salt)';
+
+  const webhookUrl = tenantId ? `${apiOrigin()}/api/telephony/webhook/${tenantId}` : '';
+
+  const copyWebhook = async () => {
+    if (!webhookUrl) return;
+    try {
+      await navigator.clipboard.writeText(webhookUrl);
+      setCopied(true);
+      toast.success('Ссылка скопирована');
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      toast.error('Не удалось скопировать');
+    }
+  };
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <PhoneCall className="h-4 w-4 text-gray-400" />
+          <h2 className="text-sm font-semibold text-gray-900">Телефония (Mango Office)</h2>
+        </div>
+        <Toggle
+          checked={form.enabled}
+          onChange={(v) => update({ enabled: v })}
+          disabled={isLoading || mutation.isPending}
+        />
+      </div>
+
+      <p className="flex items-start gap-1.5 text-xs text-gray-500 -mt-1">
+        <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-gray-400" />
+        <span>{MANGO_HINT}</span>
+      </p>
+
+      {isLoading ? (
+        <div className="flex justify-center py-4">
+          <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>
+                <KeyRound className="h-3 w-3 inline mr-1" />
+                API key (vpbx)
+              </label>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={form.apiKey}
+                onChange={(e) => update({ apiKey: e.target.value })}
+                className={inputCls}
+                placeholder={keyPlaceholder}
+              />
+            </div>
+            <div>
+              <label className={labelCls}>
+                <KeyRound className="h-3 w-3 inline mr-1" />
+                Соль для подписи
+              </label>
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={form.apiSalt}
+                onChange={(e) => update({ apiSalt: e.target.value })}
+                className={inputCls}
+                placeholder={saltPlaceholder}
+              />
+            </div>
+          </div>
+
+          <p className={hintCls}>
+            {settings?.hasApiKey && settings?.hasApiSalt
+              ? 'Ключи сохранены. Оставьте поля пустыми, чтобы не менять их.'
+              : 'Ключи ещё не заданы — телефония неактивна, пока они не введены.'}
+          </p>
+
+          <div>
+            <label className={labelCls}>
+              <Link2 className="h-3 w-3 inline mr-1" />
+              Webhook для Mango VPBX
+            </label>
+            <div className="flex items-stretch gap-2">
+              <input
+                readOnly
+                value={webhookUrl || 'Tenant не определён — обратитесь к администратору'}
+                onFocus={(e) => e.currentTarget.select()}
+                className={`${inputCls} font-mono text-xs bg-gray-50 cursor-text`}
+              />
+              <button
+                type="button"
+                onClick={copyWebhook}
+                disabled={!webhookUrl}
+                className="flex-shrink-0 inline-flex items-center justify-center gap-1.5 rounded-xl border border-gray-200 px-3 text-sm font-medium text-gray-600 hover:bg-gray-50 disabled:opacity-50 transition-colors"
+                title="Скопировать ссылку"
+              >
+                {copied ? <Check className="h-4 w-4 text-green-600" /> : <Copy className="h-4 w-4" />}
+              </button>
+            </div>
+            <p className={hintCls}>
+              Вставьте этот адрес в настройки событий Mango VPBX (входящий / пропущенный звонок), чтобы звонки попадали
+              в раздел «Звонки» и приходили уведомления.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {dirty && (
+        <button
+          onClick={handleSave}
+          disabled={mutation.isPending}
+          className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+        >
+          {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          Сохранить телефонию
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 //  Page
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -493,12 +719,13 @@ export default function IntegrationsPage() {
         </button>
         <div>
           <h1 className="text-xl font-bold text-gray-900">Интеграции</h1>
-          <p className="text-sm text-gray-500">Онлайн-оплаты и фискализация чеков</p>
+          <p className="text-sm text-gray-500">Онлайн-оплаты, фискализация чеков и телефония</p>
         </div>
       </div>
 
       <AcquiringCard />
       <FiscalCard />
+      <TelephonyCard />
     </div>
   );
 }
