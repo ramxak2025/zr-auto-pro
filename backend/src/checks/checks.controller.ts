@@ -53,6 +53,54 @@ export class ChecksController {
     return this.checksService.getBoard(user.tenantID, user);
   }
 
+  // ── Board columns (091): owner-configurable kanban columns ──────────────
+  // All declared BEFORE `:id` routes so the literal `board-columns` path (and
+  // `board-columns/:id`) is never swallowed by the param routes.
+
+  /**
+   * List the tenant's board columns (active + inactive), ordered by sort_order.
+   * Read is open to the same board-viewing roles as GET /checks/board.
+   */
+  @Roles('director', 'admin', 'master', 'superadmin')
+  @Get('board-columns')
+  listBoardColumns(@CurrentUser() user: JwtPayload) {
+    return this.checksService.listBoardColumns(user.tenantID);
+  }
+
+  /**
+   * Create a board column. Owner-class only — masters move checks along the
+   * board but cannot reshape it. `key` is auto-derived server-side.
+   */
+  @Roles('director', 'admin', 'superadmin')
+  @Post('board-columns')
+  createBoardColumn(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { label?: string; color?: string; notifyClient?: boolean },
+  ) {
+    return this.checksService.createBoardColumn(user.tenantID, dto);
+  }
+
+  /** Edit / reorder / hide a board column. Owner-class only. */
+  @Roles('director', 'admin', 'superadmin')
+  @Patch('board-columns/:id')
+  updateBoardColumn(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { label?: string; color?: string; sortOrder?: number; isActive?: boolean; notifyClient?: boolean },
+  ) {
+    return this.checksService.updateBoardColumn(user.tenantID, id, dto);
+  }
+
+  /**
+   * Delete a board column. Owner-class only. Any checks parked in it are taken
+   * off the board (work_status → NULL), tenant-scoped & transactional.
+   */
+  @Roles('director', 'admin', 'superadmin')
+  @Delete('board-columns/:id')
+  removeBoardColumn(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.checksService.deleteBoardColumn(user.tenantID, id);
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.checksService.getById(id, user.tenantID);

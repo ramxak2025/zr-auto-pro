@@ -1,19 +1,23 @@
 /**
- * WorkBoardScreen — «Доска заказ-нарядов» (kanban board 082).
+ * WorkBoardScreen — «Доска заказ-нарядов» (kanban board 082 + 091).
  *
- * Четыре колонки: Приёмка → В работе → Готов → Выдан. Данные из
- * `checksApi.board()` (ChecksBoard, каждая колонка newest-first, ≤100,
- * учитывает право checks_view_all на бэке). Тап по карточке → action sheet
- * (cross-platform Modal) с выбором целевого статуса → `setWorkStatus` с
- * оптимистичным апдейтом кеша ['checks','board'] + инвалидация. Haptic на
- * успех. Pull-to-refresh на любой колонке обновляет всю доску.
+ * Колонки ДИНАМИЧЕСКИЕ (owner-configurable, миграция 091): рендерятся из
+ * `checksApi.board().columns` (активные, по sortOrder), каждая колонка
+ * наполняется из `board().groups[column.key]` (newest-first, ≤100 на бэке,
+ * учитывает право checks_view_all). Тап по карточке → action sheet
+ * (cross-platform Modal) со списком активных колонок → `setWorkStatus(id,
+ * column.key)` с оптимистичным апдейтом кеша ['checks','board'] + инвалидация.
+ * Haptic на успех. Pull-to-refresh на любой колонке обновляет всю доску.
+ *
+ * Шестерёнка в шапке (owner-class: director/admin/superadmin) открывает
+ * «Настройку колонок» (WorkBoardSettings) внутри того же стека.
  *
  * work-status ОРТОГОНАЛЕН оплате/отложенности — это отдельный board-флаг,
  * он не смешивается с бейджами «оплачено / отложен».
  *
  * Перемещение гейтится правом `checks_edit` (director/admin/master/
- * superadmin — те же роли, что и редактирование чека). Без права доска
- * только для чтения: карточку можно открыть, но не переместить.
+ * superadmin). Без права доска только для чтения: карточку можно открыть, но
+ * не переместить.
  *
  * Android-совместимо: только кросс-платформенные RN-примитивы (ScrollView,
  * RefreshControl, общий Modal) — никаких iOS-only API.
@@ -46,8 +50,8 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
-import { WORK_STATUS_ORDER, WORK_STATUS_META } from '../constants/workStatus';
-import type { Check, ChecksBoard, CheckWorkStatus } from '../../../shared/types';
+import { columnVisual } from '../constants/workStatus';
+import type { Check, ChecksBoard } from '../../../shared/types';
 
 const BOARD_KEY = ['checks', 'board'] as const;
 
@@ -115,10 +119,13 @@ export default function WorkBoardScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const { width } = useWindowDimensions();
-  const { hasPermission } = useAuth();
+  const { user, hasPermission } = useAuth();
   // Перемещение разрешено тем, кто редактирует чеки (director/admin/master/
   // superadmin — director/superadmin всегда true, остальным по матрице прав).
   const canMove = hasPermission('checks_edit');
+  // Настраивать колонки может только owner-class (director/admin/superadmin) —
+  // бэкенд гейтит create/update/remove, UI прячет шестерёнку для остальных.
+  const canConfigure = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
 
   // Колонка занимает ~84% ширины, чтобы соседняя «выглядывала» справа —
   // явный сигнал, что доску можно листать вбок. Кап 360pt на планшетах.
@@ -150,32 +157,28 @@ export default function WorkBoardScreen() {
   }, [queryClient]);
 
   // ── Перемещение по доске (оптимистично) ──────────────────────────────
-  // Снимаем карточку из текущей колонки, добавляем в целевую В НАЧАЛО
+  // Снимаем карточку из текущей группы, добавляем в целевую В НАЧАЛО
   // (newest-first), обновляем workStatus. Откат — восстановление снимка.
   const moveMutation = useMutation({
-    mutationFn: ({ id, target }: { id: string; target: CheckWorkStatus }) => checksApi.setWorkStatus(id, target),
+    mutationFn: ({ id, target }: { id: string; target: string }) => checksApi.setWorkStatus(id, target),
     onMutate: async ({ id, target }) => {
       await queryClient.cancelQueries({ queryKey: BOARD_KEY });
       const prev = queryClient.getQueryData<ChecksBoard>(BOARD_KEY);
       if (prev) {
-        const next: ChecksBoard = {
-          accepted: [...prev.accepted],
-          in_progress: [...prev.in_progress],
-          ready: [...prev.ready],
-          delivered: [...prev.delivered],
-        };
+        const groups: Record<string, Check[]> = {};
+        for (const k of Object.keys(prev.groups)) groups[k] = [...prev.groups[k]];
         let moved: Check | undefined;
-        for (const col of WORK_STATUS_ORDER) {
-          const idx = next[col].findIndex((c) => c.id === id);
+        for (const k of Object.keys(groups)) {
+          const idx = groups[k].findIndex((c) => c.id === id);
           if (idx >= 0) {
-            moved = next[col][idx];
-            next[col].splice(idx, 1);
+            moved = groups[k][idx];
+            groups[k].splice(idx, 1);
             break;
           }
         }
         if (moved) {
-          next[target] = [{ ...moved, workStatus: target }, ...next[target]];
-          queryClient.setQueryData<ChecksBoard>(BOARD_KEY, next);
+          groups[target] = [{ ...moved, workStatus: target }, ...(groups[target] ?? [])];
+          queryClient.setQueryData<ChecksBoard>(BOARD_KEY, { columns: prev.columns, groups });
         }
       }
       return { prev };
@@ -196,7 +199,7 @@ export default function WorkBoardScreen() {
   });
 
   const handlePickStatus = useCallback(
-    (target: CheckWorkStatus) => {
+    (target: string) => {
       const current = picker;
       setPicker(null);
       if (!current || current.workStatus === target) return;
@@ -211,9 +214,8 @@ export default function WorkBoardScreen() {
     if (current) navigation.navigate('CheckDetail', { id: current.id });
   }, [picker, navigation]);
 
-  const totalActive = board
-    ? board.accepted.length + board.in_progress.length + board.ready.length + board.delivered.length
-    : 0;
+  const columns = board?.columns ?? [];
+  const totalActive = board ? columns.reduce((sum, col) => sum + (board.groups[col.key]?.length ?? 0), 0) : 0;
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
@@ -221,7 +223,25 @@ export default function WorkBoardScreen() {
         title="Доска заказ-нарядов"
         subtitle={board ? `${totalActive} активных` : undefined}
         onBack={() => navigation.goBack()}
-        trailing={<FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />}
+        trailing={
+          <View style={styles.headerTrailing}>
+            <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+            {canConfigure ? (
+              <TouchableOpacity
+                style={[styles.gearBtn, { backgroundColor: palette.bg.muted }]}
+                onPress={() => {
+                  haptic('select');
+                  navigation.navigate('WorkBoardSettings');
+                }}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Настройка колонок доски"
+              >
+                <Ionicons name="settings-outline" size={18} color={palette.text.primary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        }
       />
 
       {board === undefined && isLoading ? (
@@ -231,6 +251,27 @@ export default function WorkBoardScreen() {
       ) : isError && board === undefined ? (
         <View style={styles.centerFill}>
           <QueryErrorState description="Не удалось загрузить доску. Проверьте соединение." onRetry={() => refetch()} />
+        </View>
+      ) : board && columns.length === 0 ? (
+        <View style={styles.centerFill}>
+          <View style={styles.emptyBoard}>
+            <Ionicons name="albums-outline" size={40} color={palette.text.tertiary} />
+            <Text style={[styles.emptyBoardTitle, { color: palette.text.secondary }]}>Нет колонок</Text>
+            {canConfigure ? (
+              <TouchableOpacity
+                style={[styles.emptyBoardCta, { borderColor: palette.border.subtle }]}
+                activeOpacity={0.7}
+                onPress={() => navigation.navigate('WorkBoardSettings')}
+              >
+                <Ionicons name="add-circle-outline" size={17} color={colors.primary[600]} />
+                <Text style={styles.emptyBoardCtaText}>Настроить колонки</Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={[styles.emptyBoardHint, { color: palette.text.tertiary }]}>
+                Колонки доски ещё не настроены
+              </Text>
+            )}
+          </View>
         </View>
       ) : board ? (
         <ScrollView
@@ -242,15 +283,17 @@ export default function WorkBoardScreen() {
           decelerationRate="fast"
           snapToAlignment="start"
         >
-          {WORK_STATUS_ORDER.map((status) => {
-            const meta = WORK_STATUS_META[status];
-            const items = board[status];
+          {columns.map((column) => {
+            const vis = columnVisual(column);
+            const items = board.groups[column.key] ?? [];
             return (
-              <View key={status} style={[styles.column, { width: COLUMN_WIDTH }]}>
-                <View style={[styles.columnHeader, { backgroundColor: meta.bg }]}>
-                  <Ionicons name={meta.icon} size={15} color={meta.color} />
-                  <Text style={[styles.columnTitle, { color: meta.color }]}>{meta.label}</Text>
-                  <View style={[styles.columnCount, { backgroundColor: meta.color }]}>
+              <View key={column.id} style={[styles.column, { width: COLUMN_WIDTH }]}>
+                <View style={[styles.columnHeader, { backgroundColor: vis.bg }]}>
+                  <View style={[styles.columnDot, { backgroundColor: vis.color }]} />
+                  <Text style={[styles.columnTitle, { color: vis.color }]} numberOfLines={1}>
+                    {vis.label}
+                  </Text>
+                  <View style={[styles.columnCount, { backgroundColor: vis.color }]}>
                     <Text style={styles.columnCountText}>{items.length}</Text>
                   </View>
                 </View>
@@ -264,7 +307,7 @@ export default function WorkBoardScreen() {
                 >
                   {items.length === 0 ? (
                     <View style={styles.columnEmpty}>
-                      <Ionicons name={meta.icon} size={26} color={palette.text.tertiary} />
+                      <Ionicons name="file-tray-outline" size={26} color={palette.text.tertiary} />
                       <Text style={[styles.columnEmptyText, { color: palette.text.tertiary }]}>Нет заказ-нарядов</Text>
                     </View>
                   ) : (
@@ -279,35 +322,38 @@ export default function WorkBoardScreen() {
 
       {/* Action sheet выбора целевого статуса. Cross-platform Modal —
           одинаково на iOS / Android. Текущий статус помечен и не нажимается;
-          без права checks_edit статусы только для чтения. */}
+          без права checks_edit статусы только для чтения. Список — активные
+          колонки доски (board.columns). */}
       <Modal visible={!!picker} onClose={() => setPicker(null)} title={picker ? `Заказ-наряд #${picker.number}` : ''}>
         {picker ? (
           <View style={{ gap: spacing[2] }}>
             <Text style={[styles.sheetHint, { color: palette.text.tertiary }]}>
-              {canMove ? 'Переместить в статус' : 'Текущий статус'}
+              {canMove ? 'Переместить в колонку' : 'Текущая колонка'}
             </Text>
-            {WORK_STATUS_ORDER.map((status) => {
-              const meta = WORK_STATUS_META[status];
-              const isCurrent = picker.workStatus === status;
+            {columns.map((column) => {
+              const vis = columnVisual(column);
+              const isCurrent = picker.workStatus === column.key;
               const disabled = isCurrent || !canMove;
               return (
                 <TouchableOpacity
-                  key={status}
+                  key={column.id}
                   style={[
                     styles.sheetRow,
                     { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                    isCurrent && { borderColor: meta.color, backgroundColor: meta.bg },
+                    isCurrent && { borderColor: vis.color, backgroundColor: vis.bg },
                   ]}
                   activeOpacity={disabled ? 1 : 0.7}
                   disabled={disabled}
-                  onPress={() => handlePickStatus(status)}
+                  onPress={() => handlePickStatus(column.key)}
                 >
-                  <View style={[styles.sheetIconWrap, { backgroundColor: meta.bg }]}>
-                    <Ionicons name={meta.icon} size={18} color={meta.color} />
+                  <View style={[styles.sheetIconWrap, { backgroundColor: vis.bg }]}>
+                    <View style={[styles.sheetDot, { backgroundColor: vis.color }]} />
                   </View>
-                  <Text style={[styles.sheetRowLabel, { color: palette.text.primary }]}>{meta.label}</Text>
+                  <Text style={[styles.sheetRowLabel, { color: palette.text.primary }]} numberOfLines={1}>
+                    {vis.label}
+                  </Text>
                   {isCurrent ? (
-                    <View style={[styles.sheetCurrentTag, { backgroundColor: meta.color }]}>
+                    <View style={[styles.sheetCurrentTag, { backgroundColor: vis.color }]}>
                       <Text style={styles.sheetCurrentTagText}>Текущий</Text>
                     </View>
                   ) : canMove ? (
@@ -336,6 +382,25 @@ const styles = StyleSheet.create({
   safe: { flex: 1 },
   centerFill: { flex: 1, justifyContent: 'center' },
 
+  // ── Header trailing ────────────────────────────────────────────────
+  headerTrailing: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  gearBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+
+  // ── Empty board (нет колонок) ──────────────────────────────────────
+  emptyBoard: { alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[6] },
+  emptyBoardTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  emptyBoardHint: { fontSize: fontSize.sm, textAlign: 'center' },
+  emptyBoardCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+  },
+  emptyBoardCtaText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.primary[600] },
+
   // ── Board ──────────────────────────────────────────────────────────
   boardScroll: { flex: 1 },
   boardContent: {
@@ -353,6 +418,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
     marginBottom: spacing[2.5],
   },
+  columnDot: { width: 10, height: 10, borderRadius: 5 },
   columnTitle: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   columnCount: {
     minWidth: 22,
@@ -408,6 +474,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   sheetIconWrap: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  sheetDot: { width: 14, height: 14, borderRadius: 7 },
   sheetRowLabel: { flex: 1, fontSize: fontSize.base, fontWeight: fontWeight.semibold },
   sheetCurrentTag: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
   sheetCurrentTagText: { color: colors.white, fontSize: 10, fontWeight: fontWeight.bold },

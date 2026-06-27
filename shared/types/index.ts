@@ -600,11 +600,36 @@ export enum PaymentMethod {
 }
 
 /**
- * Канбан-статус заказ-наряда (board 082): приёмка → в работе → готов → выдан.
- * ORTHOGONAL to payment state — purely a board-tracking flag. NULL/undefined =
- * not tracked on the board (e.g. all historical checks).
+ * Канбан-статус заказ-наряда. Historically (board 082) a fixed enum
+ * приёмка → в работе → готов → выдан; since 091 the columns are
+ * OWNER-CONFIGURABLE, so the work-status is now an arbitrary column KEY (slug).
+ * These four are kept as the LEGACY DEFAULT keys (seeded for every tenant) so
+ * existing consumers that reference them still compile. ORTHOGONAL to payment
+ * state — purely a board-tracking flag. NULL/undefined = not on the board.
+ *
+ * @deprecated The board is no longer limited to these four; treat work-status as
+ * an open `string`. Kept only for back-compat with code that hard-codes them.
  */
 export type CheckWorkStatus = 'accepted' | 'in_progress' | 'ready' | 'delivered';
+
+/**
+ * Owner-configurable kanban board column (091). `key` is the slug stored in a
+ * check's workStatus; the rest is presentation + behaviour. `notifyClient`
+ * marks the column whose entry fires the «машина готова» client notification.
+ */
+export interface WorkBoardColumn {
+  id: string;
+  key: string;
+  label: string;
+  /** Hex accent color (e.g. '#22C55E'); null → UI falls back to a neutral. */
+  color: string | null;
+  /** Left-to-right board order. */
+  sortOrder: number;
+  /** Hidden columns drop off the board until re-enabled. */
+  isActive: boolean;
+  /** Entry into this column fires the «машина готова» client notification. */
+  notifyClient: boolean;
+}
 
 export interface Check {
   id: string;
@@ -641,22 +666,31 @@ export interface Check {
   returnDestination?: 'warehouse' | 'defect' | null;
   returnScope?: 'full' | 'partial' | null;
   /**
-   * Канбан work-status (082). NULL = не на доске. Additive & orthogonal to
-   * payment — existing consumers safely ignore it.
+   * Канбан work-status (082 + 091). The KEY of an owner-configured board column
+   * (or one of the legacy CheckWorkStatus keys). NULL = не на доске. Additive &
+   * orthogonal to payment — existing consumers safely ignore it. Loosened from
+   * the fixed CheckWorkStatus union to `string` now that columns are
+   * owner-configurable.
    */
-  workStatus?: CheckWorkStatus | null;
+  workStatus?: string | null;
   createdAt: string;
 }
 
 /**
- * Kanban board response from GET /checks/board (082). Each column is a list of
- * checks with that work_status, newest-first, capped server-side (≈100/column).
+ * Kanban board response from GET /checks/board (091). BREAKING SHAPE CHANGE vs
+ * the old fixed {accepted,in_progress,ready,delivered} object:
+ *
+ *   - `columns`: the tenant's ACTIVE board columns, ordered by sortOrder.
+ *   - `groups`: a map keyed by column key → that column's checks, newest-first,
+ *     capped server-side (≈100/column). Every active column key is present
+ *     (empty array when the column holds no checks).
+ *
+ * Consumers iterate `columns` to render headers and read `groups[column.key]`
+ * for each column's cards.
  */
 export interface ChecksBoard {
-  accepted: Check[];
-  in_progress: Check[];
-  ready: Check[];
-  delivered: Check[];
+  columns: WorkBoardColumn[];
+  groups: Record<string, Check[]>;
 }
 
 // ───────────────────────────────────────────────────────────────────────

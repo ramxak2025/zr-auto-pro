@@ -15,6 +15,7 @@ import ChecksScreen from '../screens/ChecksScreen';
 import CheckCreateScreen from '../screens/CheckCreateScreen';
 import CheckDetailScreen from '../screens/CheckDetailScreen';
 import WorkBoardScreen from '../screens/WorkBoardScreen';
+import WorkBoardSettingsScreen from '../screens/WorkBoardSettingsScreen';
 import ClientsScreen from '../screens/ClientsScreen';
 import ClientDetailScreen from '../screens/ClientDetailScreen';
 import CarDetailScreen from '../screens/CarDetailScreen';
@@ -396,6 +397,9 @@ function ChecksStackNavigator() {
           a card's «Открыть заказ-наряд» pushes CheckDetail onto THIS stack.
           Entry point is the «Доска» button in the Журнал (ChecksScreen) header. */}
       <ChecksStack.Screen name="WorkBoard" component={WorkBoardScreen} />
+      {/* «Настройка колонок» (091) — owner-class экран, открывается шестерёнкой
+          из WorkBoard. Внутри ChecksStack → floating tab bar остаётся виден. */}
+      <ChecksStack.Screen name="WorkBoardSettings" component={WorkBoardSettingsScreen} />
     </ChecksStack.Navigator>
   );
 }

@@ -31,8 +31,8 @@ import { checksApi, myCompanyApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ConfirmDialog from '../components/ConfirmDialog';
-import { WorkStatusBadge, WorkStatusPicker } from '../components/WorkStatusPicker';
-import type { Check, CheckWorkStatus, Tenant } from '../types';
+import { WorkStatusBadge, WorkStatusPicker, resolveColumn } from '../components/WorkStatusPicker';
+import type { Check, Tenant, WorkBoardColumn } from '../types';
 import { generateReceiptPdf } from '../utils/generateReceiptPdf';
 import { generateOrderPdf } from '../utils/generateOrderPdf';
 import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
@@ -76,6 +76,14 @@ export default function CheckDetailPage() {
     staleTime: 5 * 60_000,
   });
 
+  // Owner-configurable board columns (091) — drives the work-status chip + picker.
+  const { data: boardColumns } = useQuery<WorkBoardColumn[]>({
+    queryKey: ['checks', 'board-columns'],
+    queryFn: async () => (await checksApi.boardColumns.list()).data,
+    staleTime: 60_000,
+  });
+  const activeColumns = (boardColumns ?? []).filter((c) => c.isActive).sort((a, b) => a.sortOrder - b.sortOrder);
+
   const finalizeMutation = useMutation({
     mutationFn: () => checksApi.update(id!, { isDeferred: false }),
     onSuccess: () => {
@@ -90,7 +98,7 @@ export default function CheckDetailPage() {
   });
 
   const workStatusMutation = useMutation({
-    mutationFn: (workStatus: CheckWorkStatus) => checksApi.setWorkStatus(id!, workStatus),
+    mutationFn: (workStatus: string) => checksApi.setWorkStatus(id!, workStatus),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['check', id] });
       queryClient.invalidateQueries({ queryKey: ['checks'] });
@@ -229,7 +237,7 @@ export default function CheckDetailPage() {
             <div className="min-w-0">
               <div className="flex items-center gap-2 flex-wrap">
                 <h2 className="text-base font-semibold text-gray-900">{'Статус работы'}</h2>
-                <WorkStatusBadge status={check.workStatus} />
+                <WorkStatusBadge column={resolveColumn(check.workStatus, boardColumns)} workStatus={check.workStatus} />
               </div>
               <p className="text-xs text-gray-400 mt-0.5">{'Доска приёмки. Не влияет на оплату.'}</p>
             </div>
@@ -239,15 +247,17 @@ export default function CheckDetailPage() {
               {check.workStatus ? (
                 <WorkStatusPicker
                   value={check.workStatus}
+                  columns={activeColumns}
                   disabled={workStatusMutation.isPending}
-                  onChange={(status) => workStatusMutation.mutate(status)}
+                  onChange={(key) => workStatusMutation.mutate(key)}
                 />
               ) : (
                 <button
                   type="button"
-                  onClick={() => workStatusMutation.mutate('accepted')}
-                  disabled={workStatusMutation.isPending}
-                  className="flex items-center gap-2 rounded-xl bg-primary-50 px-4 py-2.5 text-sm font-semibold text-primary-600 hover:bg-primary-100 transition-colors disabled:opacity-50"
+                  onClick={() => activeColumns[0] && workStatusMutation.mutate(activeColumns[0].key)}
+                  disabled={workStatusMutation.isPending || activeColumns.length === 0}
+                  title={activeColumns.length === 0 ? 'Сначала настройте колонки доски' : undefined}
+                  className="flex items-center gap-2 rounded-xl bg-primary-50 px-4 py-2.5 text-sm font-semibold text-primary-600 hover:bg-primary-100 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <LayoutGrid className="w-4 h-4" />
                   {'Поставить на доску'}

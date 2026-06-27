@@ -8,6 +8,7 @@ import {
   Logger,
   Optional,
 } from '@nestjs/common';
+import { randomUUID } from 'crypto';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { WarrantyService } from '../warranty/warranty.service';
@@ -32,11 +33,60 @@ interface ChecksActor {
 const TENANT_OWNED_TABLES = new Set(['users', 'clients', 'cars', 'services', 'products']);
 
 /**
- * Allowed kanban work-statuses for a заказ-наряд (migration 082). Orthogonal to
- * payment state — purely a board-tracking flag. Order is the board column order.
+ * Owner-configurable kanban board column (migration 091). `key` is the slug
+ * stored in `checks.work_status`; the rest is presentation + behaviour. Purely a
+ * board-tracking concept — orthogonal to payment / cash / stock / salary.
  */
-const WORK_STATUSES = ['accepted', 'in_progress', 'ready', 'delivered'] as const;
-type WorkStatus = (typeof WORK_STATUSES)[number];
+export interface WorkBoardColumn {
+  id: string;
+  key: string;
+  label: string;
+  color: string | null;
+  sortOrder: number;
+  isActive: boolean;
+  notifyClient: boolean;
+}
+
+/**
+ * Legacy default board columns (migration 082 hard-coded these four). Seeded
+ * per-tenant on first board/columns read so existing checks keep mapping:
+ * accepted→«Приёмка», in_progress→«В работе», ready→«Готов» (fires «машина
+ * готова»), delivered→«Выдан». Order here is the seeded sort_order (0..3).
+ */
+const DEFAULT_BOARD_COLUMNS: ReadonlyArray<{
+  key: string;
+  label: string;
+  color: string;
+  notifyClient: boolean;
+}> = [
+  { key: 'accepted', label: 'Приёмка', color: '#6366F1', notifyClient: false },
+  { key: 'in_progress', label: 'В работе', color: '#F59E0B', notifyClient: false },
+  { key: 'ready', label: 'Готов', color: '#22C55E', notifyClient: true },
+  { key: 'delivered', label: 'Выдан', color: '#64748B', notifyClient: false },
+];
+
+/**
+ * Derive a stable slug key from an owner-supplied column label. Lowercase ASCII
+ * + digits, runs of anything else collapse to '-'. Russian (and any non-ASCII)
+ * labels strip to empty — the caller then falls back to a random key. Capped so
+ * the slug stays a sane length. Uniqueness within a tenant is enforced by the
+ * caller (suffix on conflict against the UNIQUE (tenant_id, key) index).
+ */
+function slugifyColumnKey(label: unknown): string {
+  return String(label ?? '')
+    .toLowerCase()
+    .trim()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40);
+}
+
+/** Normalize an optional hex color; null when not a usable string. */
+function normalizeColor(color: unknown): string | null {
+  if (typeof color !== 'string') return null;
+  const trimmed = color.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, 32) : null;
+}
 
 /**
  * Opaque keyset cursor for the checks journal: base64url of `<date>|<id>`.
@@ -504,18 +554,33 @@ export class ChecksService {
   }
 
   /**
-   * Set the kanban work-status of a check (082). PURELY a tracking flag —
+   * Set the kanban work-status of a check (082 + 091). PURELY a tracking flag —
    * touches NOTHING financial: no revenue, payment, stock, salary, warranty or
-   * return state is read or written here. Just validates the value is one of the
-   * four allowed and writes the single `work_status` column, tenant-scoped.
+   * return state is read or written here. Validates the value is the key of one
+   * of the tenant's ACTIVE board columns (091, owner-configurable) and writes
+   * the single `work_status` column, tenant-scoped.
    *
    * Returns the full updated check (same shape as getById) so the FE can update
    * its detail/board cache in place.
    */
   async setWorkStatus(id: string, tenantID: string, workStatus: unknown): Promise<any> {
-    if (typeof workStatus !== 'string' || !WORK_STATUSES.includes(workStatus as WorkStatus)) {
+    if (typeof workStatus !== 'string' || workStatus.length === 0) {
+      throw new BadRequestException({ message: 'Не указан статус доски' });
+    }
+    // Validate against the tenant's ACTIVE board columns (091) instead of a
+    // hard-coded enum. ensureBoardColumnsDefaults guarantees the legacy four
+    // exist for tenants that never customised the board. The matched column also
+    // carries notify_client, which now drives the «машина готова» hook below.
+    await this.ensureBoardColumnsDefaults(tenantID);
+    const { rows: colRows } = await this.pool.query(
+      `SELECT key, notify_client FROM work_board_columns WHERE tenant_id=$1 AND is_active=true`,
+      [tenantID],
+    );
+    const targetColumn = colRows.find((c) => c.key === workStatus);
+    if (!targetColumn) {
+      const valid = colRows.map((c) => c.key).join(', ');
       throw new BadRequestException({
-        message: `Недопустимый статус. Ожидается одно из: ${WORK_STATUSES.join(', ')}`,
+        message: valid ? `Недопустимый статус. Ожидается одна из колонок: ${valid}` : 'Недопустимый статус доски',
       });
     }
     // Tenant-scoped single-column update. The `before` CTE captures the prior
@@ -539,11 +604,13 @@ export class ChecksService {
     // No report-cache invalidation / cash-changed push: the board flag does not
     // move money, so the financial caches stay valid.
 
-    // «Машина готова» auto-notification — ONLY on the transition INTO 'ready'
-    // (skip if it was already 'ready'). FIRE-AND-FORGET: deliberately NOT
-    // awaited and fully guarded, so it can never block, delay, or fail the
+    // «Машина готова» auto-notification — fire on the transition INTO any column
+    // whose notify_client=true (skip if the check was already in that column).
+    // The notify column is looked up by key from the tenant's board config
+    // above (no longer the hard-coded 'ready'). FIRE-AND-FORGET: deliberately
+    // NOT awaited and fully guarded, so it can never block, delay, or fail the
     // status change above. Nothing about the returned check is altered by it.
-    if (workStatus === 'ready' && previousStatus !== 'ready') {
+    if (targetColumn.notify_client === true && previousStatus !== workStatus) {
       this.fireCarReadyNotification(id, tenantID);
     }
 
@@ -565,20 +632,48 @@ export class ChecksService {
   }
 
   /**
-   * Kanban board of заказ-наряды that carry a work_status (082). Only rows where
-   * work_status IS NOT NULL appear (historical untracked checks are excluded).
-   * Tenant-scoped; respects the SAME checks_view_all visibility rule as the
-   * journal (a master without it sees only their own checks). Each column is
-   * newest-first and capped at `perColumn` (default 100) via a window function
-   * so one busy column can't return an unbounded set.
+   * Owner-configurable kanban board (082 + 091). Returns the tenant's ACTIVE
+   * columns (ordered by sort_order) plus `groups`: a map keyed by column key →
+   * that column's checks, newest-first, capped at `perColumn` (default 100) via
+   * a window function so one busy column can't return an unbounded set. Checks
+   * whose work_status points at a deleted / inactive / unknown column simply do
+   * not appear (off the board). Historical checks with work_status = NULL are
+   * also excluded. Tenant-scoped; respects the SAME checks_view_all rule as the
+   * journal (a master without it sees only their own checks).
    *
-   * Returns { accepted, in_progress, ready, delivered } — each a Check[] carrying
-   * the same client/car/master denormalised fields as the journal list rows.
+   * Response shape (NEW in 091 — breaking vs the old fixed
+   * {accepted,in_progress,ready,delivered} object):
+   *
+   *   { columns: WorkBoardColumn[], groups: Record<columnKey, Check[]> }
+   *
+   * Every active column key is present in `groups` (empty array when no checks),
+   * so the FE can render the column even when it holds nothing.
    */
-  async getBoard(tenantID: string, actor?: ChecksActor, perColumn = 100): Promise<Record<WorkStatus, any[]>> {
-    let where = 'ch.tenant_id = $1 AND ch.work_status IS NOT NULL';
-    const params: any[] = [tenantID];
-    let idx = 2;
+  async getBoard(
+    tenantID: string,
+    actor?: ChecksActor,
+    perColumn = 100,
+  ): Promise<{ columns: WorkBoardColumn[]; groups: Record<string, any[]> }> {
+    await this.ensureBoardColumnsDefaults(tenantID);
+    const { rows: colRows } = await this.pool.query(
+      `SELECT * FROM work_board_columns
+        WHERE tenant_id=$1 AND is_active=true
+        ORDER BY sort_order ASC, created_at ASC`,
+      [tenantID],
+    );
+    const columns = colRows.map((r) => this.mapBoardColumn(r));
+    const activeKeys = columns.map((c) => c.key);
+
+    // Pre-seed every active column so the FE always gets an entry (even empty).
+    const groups: Record<string, any[]> = {};
+    for (const key of activeKeys) groups[key] = [];
+
+    // No active columns → nothing to group; return the (possibly empty) columns.
+    if (activeKeys.length === 0) return { columns, groups };
+
+    let where = 'ch.tenant_id = $1 AND ch.work_status = ANY($2)';
+    const params: any[] = [tenantID, activeKeys];
+    let idx = 3;
 
     // Same narrowing as getAll: a master without checks_view_all sees only their
     // own checks. Never widens visibility, never touches tenant scope.
@@ -606,12 +701,6 @@ export class ChecksService {
       params,
     );
 
-    const board: Record<WorkStatus, any[]> = {
-      accepted: [],
-      in_progress: [],
-      ready: [],
-      delivered: [],
-    };
     for (const row of rows) {
       const ch: any = this.mapCheck(row);
       if (row.master_id) {
@@ -623,10 +712,201 @@ export class ChecksService {
       if (row.car_id) {
         ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
       }
-      const col = ch.workStatus as WorkStatus;
-      if (col in board) board[col].push(ch);
+      const key = ch.workStatus as string;
+      if (key && groups[key]) groups[key].push(ch);
     }
-    return board;
+    return { columns, groups };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Board columns (091) — owner-configurable kanban columns per tenant.
+  //  Purely board-tracking; NOTHING here reads or writes money / stock /
+  //  salary / warranty. `key` is the slug persisted in checks.work_status.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private mapBoardColumn(row: any): WorkBoardColumn {
+    return {
+      id: row.id,
+      key: row.key,
+      label: row.label,
+      color: row.color ?? null,
+      sortOrder: typeof row.sort_order === 'number' ? row.sort_order : parseInt(row.sort_order, 10) || 0,
+      isActive: !!row.is_active,
+      notifyClient: !!row.notify_client,
+    };
+  }
+
+  /**
+   * Idempotently seed the 4 legacy board columns for a tenant that has none yet
+   * (first board / columns read). Bulk INSERT … ON CONFLICT (tenant_id, key) DO
+   * NOTHING — so a re-run, or a tenant that already added / renamed / removed
+   * columns, is left completely untouched. Cheap single round-trip; safe to call
+   * on every board read and on setWorkStatus.
+   */
+  private async ensureBoardColumnsDefaults(tenantID: string): Promise<void> {
+    const keys = DEFAULT_BOARD_COLUMNS.map((c) => c.key);
+    const labels = DEFAULT_BOARD_COLUMNS.map((c) => c.label);
+    const colors = DEFAULT_BOARD_COLUMNS.map((c) => c.color);
+    const sorts = DEFAULT_BOARD_COLUMNS.map((_, i) => i);
+    const notify = DEFAULT_BOARD_COLUMNS.map((c) => c.notifyClient);
+    await this.pool.query(
+      `INSERT INTO work_board_columns (tenant_id, key, label, color, sort_order, notify_client)
+       SELECT $1, d.k, d.l, d.c, d.s, d.n
+         FROM unnest($2::text[], $3::text[], $4::text[], $5::int[], $6::boolean[]) AS d(k, l, c, s, n)
+       ON CONFLICT (tenant_id, key) DO NOTHING`,
+      [tenantID, keys, labels, colors, sorts, notify],
+    );
+  }
+
+  /** All board columns for a tenant (active + inactive), ordered by sort_order. */
+  async listBoardColumns(tenantID: string): Promise<WorkBoardColumn[]> {
+    await this.ensureBoardColumnsDefaults(tenantID);
+    const { rows } = await this.pool.query(
+      `SELECT * FROM work_board_columns WHERE tenant_id=$1 ORDER BY sort_order ASC, created_at ASC`,
+      [tenantID],
+    );
+    return rows.map((r) => this.mapBoardColumn(r));
+  }
+
+  /**
+   * Create a board column. `key` is auto-derived (slug of label, or a random
+   * `col-xxxxxxxx` when the label has no ASCII slug), made unique within the
+   * tenant via suffix-on-conflict against the UNIQUE (tenant_id, key) index.
+   * sort_order appends to the end. is_active defaults true.
+   */
+  async createBoardColumn(
+    tenantID: string,
+    body: { label?: unknown; color?: unknown; notifyClient?: unknown },
+  ): Promise<WorkBoardColumn> {
+    const label = typeof body?.label === 'string' ? body.label.trim() : '';
+    if (!label) throw new BadRequestException({ message: 'Название колонки обязательно' });
+    await this.ensureBoardColumnsDefaults(tenantID);
+
+    const color = normalizeColor(body?.color) ?? '#64748B';
+    const notifyClient = body?.notifyClient === true;
+    const base = slugifyColumnKey(label) || `col-${randomUUID().slice(0, 8)}`;
+
+    const insert = async (key: string, onConflict: boolean) => {
+      const { rows } = await this.pool.query(
+        `INSERT INTO work_board_columns (tenant_id, key, label, color, sort_order, is_active, notify_client)
+         VALUES ($1, $2, $3, $4,
+                 (SELECT COALESCE(MAX(sort_order), -1) + 1 FROM work_board_columns WHERE tenant_id=$1),
+                 true, $5)
+         ${onConflict ? 'ON CONFLICT (tenant_id, key) DO NOTHING' : ''}
+         RETURNING *`,
+        [tenantID, key, label, color, notifyClient],
+      );
+      return rows[0];
+    };
+
+    // Try the bare slug, then slug-2, slug-3 … on key collision.
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const key = attempt === 0 ? base : `${base}-${attempt + 1}`;
+      const row = await insert(key, true);
+      if (row) return this.mapBoardColumn(row);
+    }
+    // Astronomically unlikely fallback: a guaranteed-unique random suffix.
+    const row = await insert(`${base}-${randomUUID().slice(0, 8)}`, false);
+    return this.mapBoardColumn(row);
+  }
+
+  /**
+   * Edit / reorder a board column. `key` is intentionally immutable (it's the
+   * slug persisted on checks — renaming it would orphan parked checks). label /
+   * color / sortOrder / isActive / notifyClient are all optional partial edits.
+   */
+  async updateBoardColumn(
+    tenantID: string,
+    id: string,
+    body: {
+      label?: unknown;
+      color?: unknown;
+      sortOrder?: unknown;
+      isActive?: unknown;
+      notifyClient?: unknown;
+    },
+  ): Promise<WorkBoardColumn> {
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+
+    if (body?.label !== undefined) {
+      const label = typeof body.label === 'string' ? body.label.trim() : '';
+      if (!label) throw new BadRequestException({ message: 'Название колонки не может быть пустым' });
+      sets.push(`label=$${idx++}`);
+      vals.push(label);
+    }
+    if (body?.color !== undefined) {
+      sets.push(`color=$${idx++}`);
+      vals.push(normalizeColor(body.color));
+    }
+    if (body?.sortOrder !== undefined) {
+      const n = Number(body.sortOrder);
+      if (!Number.isFinite(n)) throw new BadRequestException({ message: 'Некорректный порядок колонки' });
+      sets.push(`sort_order=$${idx++}`);
+      vals.push(Math.trunc(n));
+    }
+    if (body?.isActive !== undefined) {
+      sets.push(`is_active=$${idx++}`);
+      vals.push(body.isActive === true);
+    }
+    if (body?.notifyClient !== undefined) {
+      sets.push(`notify_client=$${idx++}`);
+      vals.push(body.notifyClient === true);
+    }
+
+    if (sets.length === 0) {
+      const { rows } = await this.pool.query(`SELECT * FROM work_board_columns WHERE id=$1 AND tenant_id=$2`, [
+        id,
+        tenantID,
+      ]);
+      if (rows.length === 0) throw new NotFoundException({ message: 'Колонка не найдена' });
+      return this.mapBoardColumn(rows[0]);
+    }
+
+    vals.push(id, tenantID);
+    const { rows } = await this.pool.query(
+      `UPDATE work_board_columns SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+      vals,
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Колонка не найдена' });
+    return this.mapBoardColumn(rows[0]);
+  }
+
+  /**
+   * Delete a board column. Transactional & tenant-scoped: any checks parked in
+   * the column have their work_status set to NULL (taken OFF the board) BEFORE
+   * the column row is deleted, so no check is left pointing at a missing column.
+   * Purely board state — no money / stock / salary touched.
+   */
+  async deleteBoardColumn(tenantID: string, id: string): Promise<{ success: true }> {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `SELECT key FROM work_board_columns WHERE id=$1 AND tenant_id=$2 FOR UPDATE`,
+        [id, tenantID],
+      );
+      if (rows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Колонка не найдена' });
+      }
+      const key: string = rows[0].key;
+      // Take any checks in this column off the board (purely the tracking flag).
+      await client.query(`UPDATE checks SET work_status=NULL WHERE tenant_id=$1 AND work_status=$2`, [tenantID, key]);
+      await client.query(`DELETE FROM work_board_columns WHERE id=$1 AND tenant_id=$2`, [id, tenantID]);
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+    return { success: true };
   }
 
   async create(tenantID: string, userID: string, userRole: string, dto: any) {

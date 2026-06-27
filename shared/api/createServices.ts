@@ -30,8 +30,8 @@ import type {
   ProductPriceHistoryEntry,
   Service,
   Check,
-  CheckWorkStatus,
   ChecksBoard,
+  WorkBoardColumn,
   Supplier,
   Delivery,
   SupplierPayment,
@@ -445,17 +445,35 @@ export function createChecksApi(api: HttpClient) {
     update: (id: string, data: UpdateCheckRequest) => api.patch<Check>(`/checks/${id}`, data),
     remove: (id: string) => api.delete(`/checks/${id}`),
     /**
-     * Kanban board (082): active заказ-наряды grouped by work_status, tenant
-     * scoped, newest-first per column. Additive — does not affect any other
-     * checks call.
+     * Kanban board (091): owner-configurable columns + checks grouped by column
+     * key, tenant-scoped, newest-first per column. Shape is now
+     * { columns, groups } (see ChecksBoard) — a breaking change vs the old fixed
+     * {accepted,in_progress,ready,delivered} object.
      */
     board: () => api.get<ChecksBoard>('/checks/board'),
     /**
-     * Move a check along the kanban board (082). Orthogonal to payment — sets
-     * only the work_status flag; returns the full updated check. Additive.
+     * Move a check along the kanban board (082 + 091). `workStatus` is a column
+     * KEY — must be the key of one of the tenant's active board columns (server
+     * validates; 400 otherwise). Orthogonal to payment — sets only the
+     * work_status flag; returns the full updated check.
      */
-    setWorkStatus: (id: string, workStatus: CheckWorkStatus) =>
+    setWorkStatus: (id: string, workStatus: string) =>
       api.patch<Check>(`/checks/${id}/work-status`, { workStatus }),
+    /**
+     * Owner-configurable board columns (091). Read is open to board-viewing
+     * roles; create/update/remove are owner-class only (server-enforced).
+     * Deleting a column takes any checks parked in it off the board.
+     */
+    boardColumns: {
+      list: () => api.get<WorkBoardColumn[]>('/checks/board-columns'),
+      create: (data: { label: string; color?: string; notifyClient?: boolean }) =>
+        api.post<WorkBoardColumn>('/checks/board-columns', data),
+      update: (
+        id: string,
+        data: { label?: string; color?: string; sortOrder?: number; isActive?: boolean; notifyClient?: boolean },
+      ) => api.patch<WorkBoardColumn>(`/checks/board-columns/${id}`, data),
+      remove: (id: string) => api.delete(`/checks/board-columns/${id}`),
+    },
   };
 }
 

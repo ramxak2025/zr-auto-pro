@@ -1,59 +1,94 @@
 /**
- * Канбан work-status (доска заказ-нарядов, board 082).
+ * Канбан work-status — визуальный хелпер для доски заказ-нарядов.
  *
- * Единый источник правды для метаданных work-status — порядок колонок,
- * подписи, цвета и иконки. Используется и `WorkBoardScreen` (4 колонки),
- * и `CheckDetailScreen` (чип + пикер). Держим отдельно от экранов, чтобы
- * чип на детали чека и колонка на доске читались как ОДНО состояние
- * (одинаковый цвет / иконка / подпись).
+ * Раньше (board 082) колонки были захардкожены (приёмка → в работе → готов →
+ * выдан) в `WORK_STATUS_META`. С миграции 091 колонки стали ДАННЫМИ
+ * (owner-configurable, `WorkBoardColumn`): владелец сам задаёт подпись, цвет,
+ * порядок, видимость и флаг «уведомлять клиента». Поэтому здесь больше нет
+ * фиксированного словаря — есть только хелперы, выводящие подпись/цвет/мягкую
+ * подложку из переданного списка колонок.
  *
- * ВАЖНО: статус ОРТОГОНАЛЕН оплате/отложенности — это чистый board-флаг.
- * `workStatus === null` → заказ-наряд не на доске («не отслеживается»).
- * `checksApi.setWorkStatus` принимает ТОЛЬКО непустой union, поэтому снять
- * чек с доски через этот контракт нельзя — пикер не предлагает «снять».
+ * `check.workStatus` хранит KEY колонки (slug). NULL = заказ-наряд не на доске.
+ * Для неизвестного / удалённого ключа — нейтральный fallback-цвет, чтобы чип не
+ * становился пустым (бэкенд обнуляет ключ удалённой колонки, так что это
+ * переходное состояние).
+ *
+ * Статус ОРТОГОНАЛЕН оплате/отложенности — это чистый board-флаг, он не
+ * смешивается с бейджами «оплачено / отложен».
  */
-import { Ionicons } from '@expo/vector-icons';
-import type { CheckWorkStatus } from '../../../shared/types';
+import type { WorkBoardColumn } from '../../../shared/types';
 import { colors } from '../theme';
 
-/** Порядок прохождения по доске: приёмка → в работе → готов → выдан. */
-export const WORK_STATUS_ORDER: CheckWorkStatus[] = ['accepted', 'in_progress', 'ready', 'delivered'];
+/** Нейтральный акцент для колонок без цвета и для неизвестных ключей. */
+export const NEUTRAL_WORK_COLOR = colors.slate[500];
 
-export interface WorkStatusMeta {
-  key: CheckWorkStatus;
+/**
+ * ~8 пресет-цветов для «Настройки колонок». Hex — формат, который ждёт бэкенд
+ * (`work_board_columns.color`). Держим список здесь, чтобы и доска, и настройки
+ * читали цвета из одного места.
+ */
+export const WORK_COLUMN_PRESETS: string[] = [
+  colors.blue[600], // #2563eb
+  colors.amber[600], // #d97706
+  colors.green[600], // #16a34a
+  colors.violet[600], // #7c3aed
+  colors.rose[600], // #e11d48
+  colors.cyan[600], // #0891b2
+  colors.orange[600], // #ea580c
+  colors.slate[600], // #475569
+];
+
+export interface WorkColumnVisual {
+  key: string;
   /** Подпись колонки / чипа. */
   label: string;
-  icon: keyof typeof Ionicons.glyphMap;
-  /** Акцентный цвет (точка, иконка, текст активного чипа). */
+  /** Сплошной акцент (точка, текст активного чипа, рамка). */
   color: string;
-  /** Мягкая подложка (фон чипа / колонки-хедера). */
+  /** Мягкая полупрозрачная подложка, выведенная из акцента (фон чипа). */
   bg: string;
 }
 
-export const WORK_STATUS_META: Record<CheckWorkStatus, WorkStatusMeta> = {
-  accepted: { key: 'accepted', label: 'Приёмка', icon: 'enter-outline', color: colors.blue[600], bg: colors.blue[50] },
-  in_progress: {
-    key: 'in_progress',
-    label: 'В работе',
-    icon: 'construct-outline',
-    color: colors.amber[600],
-    bg: colors.amber[50],
-  },
-  ready: {
-    key: 'ready',
-    label: 'Готов',
-    icon: 'checkmark-done-outline',
-    color: colors.green[600],
-    bg: colors.green[50],
-  },
-  delivered: {
-    key: 'delivered',
-    label: 'Выдан',
-    icon: 'flag-outline',
-    color: colors.violet[600],
-    bg: colors.violet[50],
-  },
-};
+/**
+ * hex (#RGB / #RRGGBB) → `rgba(r,g,b,alpha)`. Для не-hex значений возвращает
+ * исходную строку без изменений (на случай готовых rgba-токенов). Подложка
+ * с alpha читается одинаково на светлой и тёмной теме.
+ */
+export function colorWithAlpha(color: string, alpha: number): string {
+  if (typeof color !== 'string' || color[0] !== '#') return color;
+  let hex = color.slice(1);
+  if (hex.length === 3) {
+    hex = hex
+      .split('')
+      .map((c) => c + c)
+      .join('');
+  }
+  if (hex.length !== 6) return color;
+  const r = parseInt(hex.slice(0, 2), 16);
+  const g = parseInt(hex.slice(2, 4), 16);
+  const b = parseInt(hex.slice(4, 6), 16);
+  if (Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b)) return color;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
-/** Первая колонка — куда падает заказ-наряд при «Поставить на доску». */
-export const DEFAULT_WORK_STATUS: CheckWorkStatus = 'accepted';
+/** Визуал одной колонки: подпись + акцент (с fallback) + мягкая подложка. */
+export function columnVisual(col: WorkBoardColumn): WorkColumnVisual {
+  const color = col.color || NEUTRAL_WORK_COLOR;
+  return { key: col.key, label: col.label, color, bg: colorWithAlpha(color, 0.15) };
+}
+
+/**
+ * Визуал по ключу work-status внутри списка колонок.
+ *  - `key == null` → `null` (заказ-наряд не на доске).
+ *  - ключ найден → визуал колонки.
+ *  - ключ есть, но колонки нет (удалена / список ещё не загружен) → нейтральный
+ *    fallback с подписью = сам ключ, чтобы чип не оставался пустым.
+ */
+export function workStatusVisual(
+  key: string | null | undefined,
+  columns: WorkBoardColumn[] | undefined,
+): WorkColumnVisual | null {
+  if (!key) return null;
+  const col = columns?.find((c) => c.key === key);
+  if (col) return columnVisual(col);
+  return { key, label: key, color: NEUTRAL_WORK_COLOR, bg: colorWithAlpha(NEUTRAL_WORK_COLOR, 0.15) };
+}

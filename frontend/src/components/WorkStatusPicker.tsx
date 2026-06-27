@@ -1,62 +1,63 @@
-import type { CheckWorkStatus } from '../types';
+import type { WorkBoardColumn } from '../types';
 
-// ─── Kanban work-status visual system (board 082) ────────────────────────────
-// Orthogonal to payment state. NULL = not on the board. Shared by WorkBoardPage
-// (columns + card footers) and CheckDetailPage (chip + picker) so the colours
-// and labels never drift apart.
+// ─── Owner-configurable kanban work-status visual system (board 091) ─────────
+// Columns are now tenant-defined (label + hex color), so colours/labels live on
+// the WorkBoardColumn rows instead of a hard-coded enum. Orthogonal to payment.
+// NULL workStatus = «не на доске». Shared by WorkBoardPage (columns + cards) and
+// CheckDetailPage (chip + picker) so the visuals never drift apart.
 
-export const WORK_STATUS_ORDER: CheckWorkStatus[] = ['accepted', 'in_progress', 'ready', 'delivered'];
+/** gray-500 — fallback accent when a column has no (valid) color. */
+const NEUTRAL = '#6B7280';
 
-interface WorkStatusMeta {
-  label: string;
-  /** Pill classes for the badge. */
-  badge: string;
-  /** Solid accent dot (column header / badge dot). */
-  dot: string;
-  /** Soft column header tint. */
-  columnHeader: string;
+/** Resolve the column a check currently sits in (matched by key), or null. */
+export function resolveColumn(
+  workStatus: string | null | undefined,
+  columns: WorkBoardColumn[] | undefined,
+): WorkBoardColumn | null {
+  if (!workStatus || !columns) return null;
+  return columns.find((c) => c.key === workStatus) ?? null;
 }
 
-export const WORK_STATUS_META: Record<CheckWorkStatus, WorkStatusMeta> = {
-  accepted: {
-    label: 'Приёмка',
-    badge: 'bg-blue-50 text-blue-700',
-    dot: 'bg-blue-500',
-    columnHeader: 'bg-blue-50/70 text-blue-700',
-  },
-  in_progress: {
-    label: 'В работе',
-    badge: 'bg-amber-50 text-amber-700',
-    dot: 'bg-amber-500',
-    columnHeader: 'bg-amber-50/70 text-amber-700',
-  },
-  ready: {
-    label: 'Готов',
-    badge: 'bg-emerald-50 text-emerald-700',
-    dot: 'bg-emerald-500',
-    columnHeader: 'bg-emerald-50/70 text-emerald-700',
-  },
-  delivered: {
-    label: 'Выдан',
-    badge: 'bg-violet-50 text-violet-700',
-    dot: 'bg-violet-500',
-    columnHeader: 'bg-violet-50/70 text-violet-700',
-  },
-};
-
-export function workStatusLabel(status: CheckWorkStatus | null | undefined): string {
-  return status ? WORK_STATUS_META[status].label : 'Не на доске';
+/** #RRGGBB (or #RGB) → rgba() with the given alpha. Falls back to neutral. */
+function hexToRgba(hex: string | null | undefined, alpha: number): string {
+  let h = (hex ?? NEUTRAL).trim().replace('#', '');
+  if (h.length === 3)
+    h = h
+      .split('')
+      .map((c) => c + c)
+      .join('');
+  if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) h = NEUTRAL.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
-/** Coloured pill reflecting the current work status (or «Не на доске» when null). */
+/** Soft pill styles in a column's accent color (badge / column header). */
+export function columnBadgeStyle(color: string | null | undefined) {
+  return { backgroundColor: hexToRgba(color, 0.12), color: color ?? NEUTRAL };
+}
+
+/** Solid accent dot in a column's color. */
+export function columnDotStyle(color: string | null | undefined) {
+  return { backgroundColor: color ?? NEUTRAL };
+}
+
+/**
+ * Coloured pill reflecting a check's current board column. Shows «Не на доске»
+ * when off-board, and a neutral pill with the raw key when the column is unknown
+ * (deleted / de-activated / columns not yet loaded).
+ */
 export function WorkStatusBadge({
-  status,
+  column,
+  workStatus,
   className = '',
 }: {
-  status: CheckWorkStatus | null | undefined;
+  column: WorkBoardColumn | null | undefined;
+  workStatus: string | null | undefined;
   className?: string;
 }) {
-  if (!status) {
+  if (!workStatus) {
     return (
       <span className={`badge bg-gray-100 text-gray-500 gap-1.5 ${className}`}>
         <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
@@ -64,39 +65,52 @@ export function WorkStatusBadge({
       </span>
     );
   }
-  const meta = WORK_STATUS_META[status];
+  if (!column) {
+    return (
+      <span className={`badge bg-gray-100 text-gray-600 gap-1.5 ${className}`}>
+        <span className="h-1.5 w-1.5 rounded-full bg-gray-400" />
+        {workStatus}
+      </span>
+    );
+  }
   return (
-    <span className={`badge ${meta.badge} gap-1.5 ${className}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
-      {meta.label}
+    <span className={`badge gap-1.5 ${className}`} style={columnBadgeStyle(column.color)}>
+      <span className="h-1.5 w-1.5 rounded-full" style={columnDotStyle(column.color)} />
+      {column.label}
     </span>
   );
 }
 
 /**
- * Native-select work-status picker. A `<select>` is deliberate: it never gets
- * clipped by scroll containers / z-index, is keyboard + screen-reader friendly,
- * and renders the OS picker on mobile. `onChange` only fires for real statuses.
+ * Native-select work-status picker driven by the tenant's active board columns.
+ * A `<select>` is deliberate: it never gets clipped by scroll containers /
+ * z-index, is keyboard + screen-reader friendly, and renders the OS picker on
+ * mobile. `onChange` only fires for a real column key different from the current
+ * one. A current value pointing at a now-inactive column is kept selectable as a
+ * read-only option so the picker is never silently blanked.
  */
 export function WorkStatusPicker({
   value,
+  columns,
   onChange,
   disabled = false,
   className = '',
   placeholder = 'Поставить на доску…',
 }: {
-  value: CheckWorkStatus | null | undefined;
-  onChange: (status: CheckWorkStatus) => void;
+  value: string | null | undefined;
+  columns: WorkBoardColumn[];
+  onChange: (key: string) => void;
   disabled?: boolean;
   className?: string;
   placeholder?: string;
 }) {
+  const known = value ? columns.some((c) => c.key === value) : true;
   return (
     <select
       value={value ?? ''}
       disabled={disabled}
       onChange={(e) => {
-        const next = e.target.value as CheckWorkStatus;
+        const next = e.target.value;
         if (next && next !== value) onChange(next);
       }}
       className={`input py-1.5 text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed ${className}`}
@@ -107,9 +121,14 @@ export function WorkStatusPicker({
           {placeholder}
         </option>
       )}
-      {WORK_STATUS_ORDER.map((s) => (
-        <option key={s} value={s}>
-          {WORK_STATUS_META[s].label}
+      {value && !known && (
+        <option value={value} disabled>
+          {value}
+        </option>
+      )}
+      {columns.map((c) => (
+        <option key={c.id} value={c.key}>
+          {c.label}
         </option>
       ))}
     </select>

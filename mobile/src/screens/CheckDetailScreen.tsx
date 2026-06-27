@@ -35,8 +35,8 @@ import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
 import { buildShadow } from '../platform/iosSurface';
-import { WORK_STATUS_ORDER, WORK_STATUS_META } from '../constants/workStatus';
-import type { Check, Tenant, CheckWorkStatus, FiscalReceipt } from '../../../shared/types';
+import { columnVisual, workStatusVisual } from '../constants/workStatus';
+import type { Check, Tenant, FiscalReceipt } from '../../../shared/types';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -297,12 +297,21 @@ export default function CheckDetailScreen() {
     ]);
   };
 
-  // ── Изменение work-status (доска заказ-нарядов, 082) ──────────────
-  // PATCH /checks/:id/work-status. Перерисовываем деталь по свежему
-  // payload'у и инвалидируем доску + журнал, чтобы статус был согласован
-  // во всех ракурсах. Орто-флаг — оплату/возврат не трогаем.
+  // ── Колонки доски (owner-configurable, 091) ──────────────────────
+  // Список колонок (active + inactive) — источник подписи/цвета для чипа и
+  // строк пикера. Кешируем отдельным ключом, общий для детали и доски.
+  const { data: boardColumns } = useQuery({
+    queryKey: ['checks', 'board-columns'],
+    queryFn: async () => (await checksApi.boardColumns.list()).data,
+    staleTime: 5 * 60_000,
+  });
+
+  // ── Изменение work-status (доска заказ-нарядов, 082 + 091) ────────
+  // PATCH /checks/:id/work-status. `target` — KEY колонки. Перерисовываем
+  // деталь по свежему payload'у и инвалидируем доску + журнал, чтобы статус
+  // был согласован во всех ракурсах. Орто-флаг — оплату/возврат не трогаем.
   const workStatusMutation = useMutation({
-    mutationFn: (target: CheckWorkStatus) => checksApi.setWorkStatus(id, target),
+    mutationFn: (target: string) => checksApi.setWorkStatus(id, target),
     onSuccess: async () => {
       haptic('success');
       await queryClient.refetchQueries({ queryKey: ['check', id] });
@@ -315,7 +324,7 @@ export default function CheckDetailScreen() {
     },
   });
 
-  const handlePickWorkStatus = (target: CheckWorkStatus) => {
+  const handlePickWorkStatus = (target: string) => {
     setWorkStatusPickerOpen(false);
     if (check?.workStatus === target) return;
     workStatusMutation.mutate(target);
@@ -646,7 +655,10 @@ export default function CheckDetailScreen() {
   // Work-status (board) — отдельный флаг. Менять может тот, кто
   // редактирует чеки (то же право, что и кнопка «Изменить»).
   const canSetWorkStatus = hasPermission('checks_edit');
-  const workMeta = check.workStatus ? WORK_STATUS_META[check.workStatus] : null;
+  // Визуал текущей колонки (label/color) из полного списка — корректен даже
+  // если колонку деактивировали. Пикер показывает только активные колонки.
+  const workMeta = workStatusVisual(check.workStatus, boardColumns);
+  const activeColumns = (boardColumns ?? []).filter((c) => c.isActive).sort((a, b) => a.sortOrder - b.sortOrder);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
@@ -801,8 +813,10 @@ export default function CheckDetailScreen() {
                 accessibilityRole="button"
                 accessibilityLabel={`Статус на доске: ${workMeta.label}`}
               >
-                <Ionicons name={workMeta.icon} size={13} color={workMeta.color} />
-                <Text style={[styles.workChipText, { color: workMeta.color }]}>{workMeta.label}</Text>
+                <View style={[styles.workChipDot, { backgroundColor: workMeta.color }]} />
+                <Text style={[styles.workChipText, { color: workMeta.color }]} numberOfLines={1}>
+                  {workMeta.label}
+                </Text>
                 {canSetWorkStatus && <Ionicons name="chevron-down" size={11} color={workMeta.color} />}
               </TouchableOpacity>
             ) : (
@@ -1726,36 +1740,42 @@ export default function CheckDetailScreen() {
         title={`Статус · Чек #${check.number}`}
       >
         <View style={{ gap: spacing[2] }}>
-          <Text style={[styles.wsSheetHint, { color: palette.text.tertiary }]}>Статус на доске заказ-нарядов</Text>
-          {WORK_STATUS_ORDER.map((status) => {
-            const meta = WORK_STATUS_META[status];
-            const isCurrent = check.workStatus === status;
-            return (
-              <TouchableOpacity
-                key={status}
-                style={[
-                  styles.wsSheetRow,
-                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                  isCurrent && { borderColor: meta.color, backgroundColor: meta.bg },
-                ]}
-                activeOpacity={isCurrent ? 1 : 0.7}
-                disabled={isCurrent || workStatusMutation.isPending}
-                onPress={() => handlePickWorkStatus(status)}
-              >
-                <View style={[styles.wsSheetIconWrap, { backgroundColor: meta.bg }]}>
-                  <Ionicons name={meta.icon} size={18} color={meta.color} />
-                </View>
-                <Text style={[styles.wsSheetRowLabel, { color: palette.text.primary }]}>{meta.label}</Text>
-                {isCurrent ? (
-                  <View style={[styles.wsCurrentTag, { backgroundColor: meta.color }]}>
-                    <Text style={styles.wsCurrentTagText}>Текущий</Text>
+          <Text style={[styles.wsSheetHint, { color: palette.text.tertiary }]}>Колонка на доске заказ-нарядов</Text>
+          {activeColumns.length === 0 ? (
+            <Text style={[styles.wsSheetEmpty, { color: palette.text.tertiary }]}>Колонки доски ещё не настроены</Text>
+          ) : (
+            activeColumns.map((column) => {
+              const vis = columnVisual(column);
+              const isCurrent = check.workStatus === column.key;
+              return (
+                <TouchableOpacity
+                  key={column.id}
+                  style={[
+                    styles.wsSheetRow,
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                    isCurrent && { borderColor: vis.color, backgroundColor: vis.bg },
+                  ]}
+                  activeOpacity={isCurrent ? 1 : 0.7}
+                  disabled={isCurrent || workStatusMutation.isPending}
+                  onPress={() => handlePickWorkStatus(column.key)}
+                >
+                  <View style={[styles.wsSheetIconWrap, { backgroundColor: vis.bg }]}>
+                    <View style={[styles.wsSheetDot, { backgroundColor: vis.color }]} />
                   </View>
-                ) : (
-                  <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-                )}
-              </TouchableOpacity>
-            );
-          })}
+                  <Text style={[styles.wsSheetRowLabel, { color: palette.text.primary }]} numberOfLines={1}>
+                    {vis.label}
+                  </Text>
+                  {isCurrent ? (
+                    <View style={[styles.wsCurrentTag, { backgroundColor: vis.color }]}>
+                      <Text style={styles.wsCurrentTagText}>Текущий</Text>
+                    </View>
+                  ) : (
+                    <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+                  )}
+                </TouchableOpacity>
+              );
+            })
+          )}
         </View>
       </Modal>
     </SafeAreaView>
@@ -1845,7 +1865,8 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
     borderWidth: 1,
   },
-  workChipText: { fontSize: 12, fontWeight: fontWeight.semibold },
+  workChipDot: { width: 8, height: 8, borderRadius: 4 },
+  workChipText: { fontSize: 12, fontWeight: fontWeight.semibold, maxWidth: 180 },
   workChipGhost: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1876,6 +1897,8 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   wsSheetIconWrap: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  wsSheetDot: { width: 14, height: 14, borderRadius: 7 },
+  wsSheetEmpty: { fontSize: fontSize.sm, textAlign: 'center', paddingVertical: spacing[4] },
   wsSheetRowLabel: { flex: 1, fontSize: fontSize.base, fontWeight: fontWeight.semibold },
   wsCurrentTag: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
   wsCurrentTagText: { color: colors.white, fontSize: 10, fontWeight: fontWeight.bold },

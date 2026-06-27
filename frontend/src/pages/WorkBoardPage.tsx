@@ -1,13 +1,15 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { LayoutGrid, User as UserIcon, Car, RefreshCw } from 'lucide-react';
+import { LayoutGrid, User as UserIcon, Car, RefreshCw, Settings2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
-import { WORK_STATUS_ORDER, WORK_STATUS_META, WorkStatusPicker } from '../components/WorkStatusPicker';
-import type { Check, CheckWorkStatus, ChecksBoard } from '../types';
+import { WorkStatusPicker, columnBadgeStyle, columnDotStyle } from '../components/WorkStatusPicker';
+import WorkBoardColumnsModal from '../components/WorkBoardColumnsModal';
+import type { Check, ChecksBoard, WorkBoardColumn } from '../types';
+import { UserRole } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 
 // Stable query key — invalidated by setWorkStatus mutations everywhere.
@@ -15,14 +17,16 @@ const BOARD_KEY = ['checks', 'board'] as const;
 
 function CheckCard({
   check,
+  columns,
   canEdit,
   pending,
   onMove,
 }: {
   check: Check;
+  columns: WorkBoardColumn[];
   canEdit: boolean;
   pending: boolean;
-  onMove: (id: string, status: CheckWorkStatus) => void;
+  onMove: (id: string, key: string) => void;
 }) {
   const carLabel = check.car?.makeModel;
   const plate = check.car?.plateNumber;
@@ -63,8 +67,9 @@ function CheckCard({
       {canEdit && (
         <WorkStatusPicker
           value={check.workStatus}
+          columns={columns}
           disabled={pending}
-          onChange={(status) => onMove(check.id, status)}
+          onChange={(key) => onMove(check.id, key)}
           className="w-full mt-1"
         />
       )}
@@ -74,8 +79,10 @@ function CheckCard({
 
 export default function WorkBoardPage() {
   const queryClient = useQueryClient();
-  const { hasPermission } = useAuth();
+  const { hasPermission, isRole } = useAuth();
   const canEdit = hasPermission('checks_edit');
+  const canConfigure = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery<ChecksBoard>({
     queryKey: BOARD_KEY,
@@ -83,27 +90,29 @@ export default function WorkBoardPage() {
     staleTime: 30_000,
   });
 
+  const columns = useMemo(() => (data?.columns ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder), [data]);
+
   const moveMutation = useMutation({
-    mutationFn: ({ id, workStatus }: { id: string; workStatus: CheckWorkStatus }) =>
-      checksApi.setWorkStatus(id, workStatus),
-    onSuccess: (_res, { workStatus }) => {
+    mutationFn: ({ id, key }: { id: string; key: string }) => checksApi.setWorkStatus(id, key),
+    onSuccess: (_res, { key }) => {
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      toast.success(`Перемещено: ${WORK_STATUS_META[workStatus].label}`);
+      const label = columns.find((c) => c.key === key)?.label ?? key;
+      toast.success(`Перемещено: ${label}`);
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.message ?? 'Не удалось изменить статус');
     },
   });
 
-  const handleMove = (id: string, workStatus: CheckWorkStatus) => {
-    moveMutation.mutate({ id, workStatus });
+  const handleMove = (id: string, key: string) => {
+    moveMutation.mutate({ id, key });
   };
 
   const total = useMemo(() => {
     if (!data) return 0;
-    return WORK_STATUS_ORDER.reduce((sum, s) => sum + (data[s]?.length ?? 0), 0);
-  }, [data]);
+    return columns.reduce((sum, c) => sum + (data.groups[c.key]?.length ?? 0), 0);
+  }, [data, columns]);
 
   if (isLoading) return <LoadingSpinner />;
 
@@ -120,10 +129,18 @@ export default function WorkBoardPage() {
             <p className="text-sm text-gray-400 mt-0.5">Активные заказ-наряды по стадиям. Не влияет на оплату.</p>
           </div>
         </div>
-        <button onClick={() => refetch()} disabled={isFetching} className="btn-ghost btn-sm" title="Обновить">
-          <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
-          <span className="hidden sm:inline">Обновить</span>
-        </button>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {canConfigure && (
+            <button onClick={() => setSettingsOpen(true)} className="btn-ghost btn-sm" title="Настроить колонки">
+              <Settings2 className="h-4 w-4" />
+              <span className="hidden sm:inline">Настроить колонки</span>
+            </button>
+          )}
+          <button onClick={() => refetch()} disabled={isFetching} className="btn-ghost btn-sm" title="Обновить">
+            <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Обновить</span>
+          </button>
+        </div>
       </div>
 
       {isError ? (
@@ -132,6 +149,21 @@ export default function WorkBoardPage() {
           <button onClick={() => refetch()} className="btn-secondary mt-3 mx-auto">
             Повторить
           </button>
+        </div>
+      ) : columns.length === 0 ? (
+        <div className="card card-body text-center">
+          <p className="text-sm text-gray-500">
+            На доске нет колонок.
+            {canConfigure
+              ? ' Нажмите «Настроить колонки», чтобы добавить стадии.'
+              : ' Обратитесь к руководителю, чтобы настроить доску.'}
+          </p>
+          {canConfigure && (
+            <button onClick={() => setSettingsOpen(true)} className="btn-primary mt-3 mx-auto">
+              <Settings2 className="h-4 w-4" />
+              Настроить колонки
+            </button>
+          )}
         </div>
       ) : (
         <>
@@ -144,16 +176,18 @@ export default function WorkBoardPage() {
           )}
 
           {/* Columns */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
-            {WORK_STATUS_ORDER.map((status) => {
-              const meta = WORK_STATUS_META[status];
-              const items = data?.[status] ?? [];
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+            {columns.map((column) => {
+              const items = data?.groups[column.key] ?? [];
               return (
-                <div key={status} className="flex flex-col min-w-0">
+                <div key={column.id} className="flex flex-col min-w-0">
                   {/* Column header */}
-                  <div className={`flex items-center gap-2 rounded-xl px-3 py-2 mb-3 ${meta.columnHeader}`}>
-                    <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
-                    <span className="text-sm font-semibold">{meta.label}</span>
+                  <div
+                    className="flex items-center gap-2 rounded-xl px-3 py-2 mb-3"
+                    style={columnBadgeStyle(column.color)}
+                  >
+                    <span className="h-2 w-2 rounded-full" style={columnDotStyle(column.color)} />
+                    <span className="text-sm font-semibold">{column.label}</span>
                     <span className="ml-auto text-xs font-bold tabular-nums opacity-70">{items.length}</span>
                   </div>
 
@@ -168,6 +202,7 @@ export default function WorkBoardPage() {
                         <CheckCard
                           key={check.id}
                           check={check}
+                          columns={columns}
                           canEdit={canEdit}
                           pending={moveMutation.isPending && moveMutation.variables?.id === check.id}
                           onMove={handleMove}
@@ -181,6 +216,8 @@ export default function WorkBoardPage() {
           </div>
         </>
       )}
+
+      {canConfigure && <WorkBoardColumnsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} />}
     </div>
   );
 }
