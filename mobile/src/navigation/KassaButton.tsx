@@ -23,7 +23,7 @@
  *     island geometry, like iOS.
  */
 import { LinearGradient } from 'expo-linear-gradient';
-import { ShoppingBag } from 'lucide-react-native';
+import { ShoppingBag, LayoutGrid } from 'lucide-react-native';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { colors } from '../theme';
@@ -31,7 +31,14 @@ import { colors } from '../theme';
 const KASSA_SIZE = 48;
 const RADIUS = 16;
 
-export function KassaButton() {
+/**
+ * `board` (092, default false) — cash-shift-mode swap. When the tenant runs
+ * shift-mode AND the caller is a master без права «Приём оплаты», the central
+ * CTA opens «Доска» instead of «Касса». Only the glyph changes (ShoppingBag →
+ * LayoutGrid); the premium squircle surface stays identical. board=false →
+ * byte-for-byte the legacy Касса button.
+ */
+export function KassaButton({ board = false }: { board?: boolean }) {
   return (
     <View style={s.outer}>
       <View style={s.body}>
@@ -44,7 +51,11 @@ export function KassaButton() {
         {/* Hairline rim — same edge highlight the iOS native button
             draws (0.65 alpha white). */}
         <View style={s.rim} pointerEvents="none" />
-        <ShoppingBag size={22} color={colors.white} strokeWidth={2.2} />
+        {board ? (
+          <LayoutGrid size={22} color={colors.white} strokeWidth={2.2} />
+        ) : (
+          <ShoppingBag size={22} color={colors.white} strokeWidth={2.2} />
+        )}
       </View>
     </View>
   );

@@ -28,15 +28,7 @@ import {
 import { format } from 'date-fns';
 import { ru as ruLocale } from 'date-fns/locale';
 import toast from 'react-hot-toast';
-import {
-  checksApi,
-  clientsApi,
-  usersApi,
-  servicesApi,
-  productsApi,
-  warrantyApi,
-  warehousesApi,
-} from '../api/services';
+import { checksApi, clientsApi, usersApi, servicesApi, productsApi, warrantyApi, warehousesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import type {
   Client,
@@ -48,6 +40,7 @@ import type {
   CheckProductLine,
   WarrantyClaim,
   Warehouse,
+  PosSettings,
 } from '../types';
 import { UserRole } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -177,9 +170,7 @@ function ProductPickerModal({
 
   if (!isOpen) return null;
 
-  const breadcrumbLabel = activePath.length > 0
-    ? activePath[activePath.length - 1]
-    : 'Товары';
+  const breadcrumbLabel = activePath.length > 0 ? activePath[activePath.length - 1] : 'Товары';
 
   return createPortal(
     <div className="fixed inset-0 z-[9999] flex flex-col bg-white">
@@ -200,7 +191,11 @@ function ProductPickerModal({
                   <button
                     type="button"
                     onClick={() => setActivePath(activePath.slice(0, idx + 1))}
-                    className={idx === activePath.length - 1 ? 'text-gray-900 font-medium truncate' : 'hover:text-primary-600 truncate'}
+                    className={
+                      idx === activePath.length - 1
+                        ? 'text-gray-900 font-medium truncate'
+                        : 'hover:text-primary-600 truncate'
+                    }
                   >
                     {seg}
                   </button>
@@ -251,7 +246,11 @@ function ProductPickerModal({
             className="input pl-10 w-full"
           />
           {search && (
-            <button type="button" onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600">
+            <button
+              type="button"
+              onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+            >
               <X className="w-4 h-4" />
             </button>
           )}
@@ -361,12 +360,8 @@ function ProductCard({ product, onSelect }: ProductCardProps) {
         </div>
       </div>
       <div className="p-2.5 flex flex-col gap-1">
-        <span className="text-xs font-medium text-gray-900 line-clamp-2 leading-tight">
-          {product.name}
-        </span>
-        <span className="text-sm font-bold text-primary-600">
-          {formatCurrency(product.sellPrice)}
-        </span>
+        <span className="text-xs font-medium text-gray-900 line-clamp-2 leading-tight">{product.name}</span>
+        <span className="text-sm font-bold text-primary-600">{formatCurrency(product.sellPrice)}</span>
       </div>
     </button>
   );
@@ -487,6 +482,20 @@ export default function CheckCreatePage() {
     queryFn: async () => (await warehousesApi.list()).data,
     staleTime: 5 * 60_000,
   });
+  // POS «Кассовая смера + роли» (092). Mode OFF (default) → no change.
+  // When shift-mode is ON and the current user is NOT a cashier, the server
+  // forces this order to be deferred and rejects payment. We mirror that here:
+  // hide the payment UI and force the deferred flag (server is source of truth).
+  const { data: posSettings } = useQuery<PosSettings>({
+    queryKey: ['checks', 'pos-settings'],
+    queryFn: async () => (await checksApi.getPosSettings()).data,
+    staleTime: 60_000,
+  });
+  const cashierLocked = !!posSettings?.shiftModeEnabled && !posSettings?.isCashier;
+  useEffect(() => {
+    if (cashierLocked) setIsDeferred(true);
+  }, [cashierLocked]);
+
   // Default the picker to the main warehouse once the list arrives.
   useEffect(() => {
     if (!pickerWarehouseId && warehouses && warehouses.length > 0) {
@@ -550,23 +559,27 @@ export default function CheckCreatePage() {
     setIsDeferred(existingCheck.isDeferred || false);
 
     if (existingCheck.services?.length) {
-      setServiceLines(existingCheck.services.map((s: CheckServiceLine) => ({
-        serviceId: s.serviceId || '',
-        masterId: s.masterId || user?.id || '',
-        name: s.name,
-        price: s.price,
-        quantity: s.quantity,
-      })));
+      setServiceLines(
+        existingCheck.services.map((s: CheckServiceLine) => ({
+          serviceId: s.serviceId || '',
+          masterId: s.masterId || user?.id || '',
+          name: s.name,
+          price: s.price,
+          quantity: s.quantity,
+        })),
+      );
     }
     if (existingCheck.products?.length) {
-      setProductLines(existingCheck.products.map((p: CheckProductLine) => ({
-        productId: p.productId || '',
-        name: p.name,
-        sellPrice: p.sellPrice,
-        costPrice: p.costPrice,
-        quantity: p.quantity,
-        unit: 'pcs',
-      })));
+      setProductLines(
+        existingCheck.products.map((p: CheckProductLine) => ({
+          productId: p.productId || '',
+          name: p.name,
+          sellPrice: p.sellPrice,
+          costPrice: p.costPrice,
+          quantity: p.quantity,
+          unit: 'pcs',
+        })),
+      );
     }
   }, [existingCheck, editLoaded, user?.id]);
 
@@ -688,10 +701,7 @@ export default function CheckCreatePage() {
 
   // Service line handlers — default masterId = current user
   const addServiceLine = () => {
-    setServiceLines((prev) => [
-      ...prev,
-      { serviceId: '', masterId: user?.id || '', name: '', price: 0, quantity: 1 },
-    ]);
+    setServiceLines((prev) => [...prev, { serviceId: '', masterId: user?.id || '', name: '', price: 0, quantity: 1 }]);
   };
 
   const updateServiceLine = (index: number, field: keyof ServiceLineForm, value: any) => {
@@ -707,7 +717,7 @@ export default function CheckCreatePage() {
           }
         }
         return updated;
-      })
+      }),
     );
   };
 
@@ -716,62 +726,63 @@ export default function CheckCreatePage() {
   };
 
   // Product line handlers
-  const handleProductSelected = useCallback((product: Product) => {
-    // If it's a bundle, add each component product
-    if (product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
-      setProductLines((prev) => {
-        let updated = [...prev];
-        for (const bi of product.bundleItems!) {
-          const matchProduct = (allProducts ?? []).find((p) => p.id === bi.productId);
-          const existing = updated.findIndex((l) => l.productId === bi.productId);
-          if (existing !== -1) {
-            updated = updated.map((line, i) =>
-              i === existing ? { ...line, quantity: line.quantity + bi.quantity } : line,
-            );
-          } else {
-            updated.push({
-              productId: bi.productId,
-              name: bi.name,
-              sellPrice: matchProduct?.sellPrice ?? 0,
-              costPrice: matchProduct?.costPrice ?? 0,
-              quantity: bi.quantity,
-            });
+  const handleProductSelected = useCallback(
+    (product: Product) => {
+      // If it's a bundle, add each component product
+      if (product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
+        setProductLines((prev) => {
+          let updated = [...prev];
+          for (const bi of product.bundleItems!) {
+            const matchProduct = (allProducts ?? []).find((p) => p.id === bi.productId);
+            const existing = updated.findIndex((l) => l.productId === bi.productId);
+            if (existing !== -1) {
+              updated = updated.map((line, i) =>
+                i === existing ? { ...line, quantity: line.quantity + bi.quantity } : line,
+              );
+            } else {
+              updated.push({
+                productId: bi.productId,
+                name: bi.name,
+                sellPrice: matchProduct?.sellPrice ?? 0,
+                costPrice: matchProduct?.costPrice ?? 0,
+                quantity: bi.quantity,
+              });
+            }
           }
-        }
-        return updated;
-      });
-      toast.success(`Комплект "${product.name}" добавлен`);
-      return;
-    }
-
-    setProductLines((prev) => {
-      const step = (product.unit && product.unit !== 'pcs') ? 0.5 : 1;
-      const existing = prev.findIndex((l) => l.productId === product.id);
-      if (existing !== -1) {
-        return prev.map((line, i) =>
-          i === existing ? { ...line, quantity: line.quantity + step } : line,
-        );
+          return updated;
+        });
+        toast.success(`Комплект "${product.name}" добавлен`);
+        return;
       }
-      return [
-        ...prev,
-        {
-          productId: product.id,
-          name: product.name,
-          sellPrice: product.sellPrice,
-          costPrice: product.costPrice,
-          quantity: step,
-          unit: product.unit || 'pcs',
-        },
-      ];
-    });
-  }, [allProducts]);
+
+      setProductLines((prev) => {
+        const step = product.unit && product.unit !== 'pcs' ? 0.5 : 1;
+        const existing = prev.findIndex((l) => l.productId === product.id);
+        if (existing !== -1) {
+          return prev.map((line, i) => (i === existing ? { ...line, quantity: line.quantity + step } : line));
+        }
+        return [
+          ...prev,
+          {
+            productId: product.id,
+            name: product.name,
+            sellPrice: product.sellPrice,
+            costPrice: product.costPrice,
+            quantity: step,
+            unit: product.unit || 'pcs',
+          },
+        ];
+      });
+    },
+    [allProducts],
+  );
 
   const updateProductLine = (index: number, field: keyof ProductLineForm, value: any) => {
     setProductLines((prev) =>
       prev.map((line, i) => {
         if (i !== index) return line;
         return { ...line, [field]: value };
-      })
+      }),
     );
   };
 
@@ -858,11 +869,12 @@ export default function CheckCreatePage() {
       <form onSubmit={handleSubmit}>
         {/* ===== Receipt-style container ===== */}
         <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
-
           {/* Receipt header with editable date */}
           <div className="bg-gray-900 text-white px-5 py-4">
             <div className="text-center">
-              <h2 className="text-lg font-bold tracking-wider">{'\u0417\u0410\u041A\u0410\u0417-\u041D\u0410\u0420\u042F\u0414'}</h2>
+              <h2 className="text-lg font-bold tracking-wider">
+                {'\u0417\u0410\u041A\u0410\u0417-\u041D\u0410\u0420\u042F\u0414'}
+              </h2>
               <div className="flex items-center justify-center gap-2 mt-1">
                 {editingDate ? (
                   <input
@@ -876,9 +888,7 @@ export default function CheckCreatePage() {
                 ) : (
                   <>
                     <CalendarDays className="h-3.5 w-3.5 text-gray-400" />
-                    <span className="text-gray-400 text-xs">
-                      {format(new Date(date + 'T00:00:00'), 'dd.MM.yyyy')}
-                    </span>
+                    <span className="text-gray-400 text-xs">{format(new Date(date + 'T00:00:00'), 'dd.MM.yyyy')}</span>
                     {canEditDate && (
                       <button
                         type="button"
@@ -963,9 +973,17 @@ export default function CheckCreatePage() {
               <div className="mt-3 p-3 bg-blue-50 rounded-lg border border-blue-200">
                 <div className="flex items-center gap-2">
                   <UserIcon className="h-4 w-4 text-blue-500" />
-                  <span className="text-sm font-medium text-blue-700">{'\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'}</span>
+                  <span className="text-sm font-medium text-blue-700">
+                    {
+                      '\u0420\u043E\u0437\u043D\u0438\u0447\u043D\u044B\u0439 \u043F\u043E\u043A\u0443\u043F\u0430\u0442\u0435\u043B\u044C'
+                    }
+                  </span>
                 </div>
-                <p className="text-xs text-blue-500 mt-1">{'\u041D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 \u0433\u043E\u0441\u043D\u043E\u043C\u0435\u0440 \u0447\u0442\u043E\u0431\u044B \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u043A\u043B\u0438\u0435\u043D\u0442\u0430'}</p>
+                <p className="text-xs text-blue-500 mt-1">
+                  {
+                    '\u041D\u0430\u0431\u0435\u0440\u0438\u0442\u0435 \u0433\u043E\u0441\u043D\u043E\u043C\u0435\u0440 \u0447\u0442\u043E\u0431\u044B \u043F\u0440\u0438\u0432\u044F\u0437\u0430\u0442\u044C \u043A\u043B\u0438\u0435\u043D\u0442\u0430'
+                  }
+                </p>
               </div>
             )}
 
@@ -978,13 +996,13 @@ export default function CheckCreatePage() {
                     <div className="text-xs text-gray-500">{formatPhone(selectedClient.phone)}</div>
                   </div>
                   <div className="text-right">
-                    {selectedClient.cars?.find(c => c.id === selectedCarId) && (
+                    {selectedClient.cars?.find((c) => c.id === selectedCarId) && (
                       <>
                         <div className="font-mono font-bold text-sm">
-                          {selectedClient.cars.find(c => c.id === selectedCarId)?.plateNumber}
+                          {selectedClient.cars.find((c) => c.id === selectedCarId)?.plateNumber}
                         </div>
                         <div className="text-xs text-gray-500">
-                          {selectedClient.cars.find(c => c.id === selectedCarId)?.makeModel}
+                          {selectedClient.cars.find((c) => c.id === selectedCarId)?.makeModel}
                         </div>
                       </>
                     )}
@@ -1033,9 +1051,7 @@ export default function CheckCreatePage() {
                           <div className="flex items-center gap-1.5">
                             <span
                               className={`text-[9px] font-bold uppercase tracking-wider px-1.5 py-0.5 rounded-full ${
-                                w.kind === 'product'
-                                  ? 'bg-blue-100 text-blue-700'
-                                  : 'bg-emerald-100 text-emerald-700'
+                                w.kind === 'product' ? 'bg-blue-100 text-blue-700' : 'bg-emerald-100 text-emerald-700'
                               }`}
                             >
                               {w.kind === 'product' ? 'Товар' : 'Услуга'}
@@ -1070,7 +1086,9 @@ export default function CheckCreatePage() {
                     placeholder="0"
                     className="w-full text-sm h-9 px-2.5 pr-10 border border-gray-200 rounded-lg bg-white focus:outline-none focus:ring-1 focus:ring-primary-500 focus:border-primary-500"
                   />
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">км</span>
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 font-medium">
+                    км
+                  </span>
                 </div>
               </div>
             </div>
@@ -1082,7 +1100,11 @@ export default function CheckCreatePage() {
               <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider">
                 {'\u0423\u0441\u043B\u0443\u0433\u0438'}
               </h3>
-              <button type="button" onClick={addServiceLine} className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1">
+              <button
+                type="button"
+                onClick={addServiceLine}
+                className="text-primary-600 hover:text-primary-700 text-sm font-medium flex items-center gap-1"
+              >
                 <Plus className="w-3.5 h-3.5" />
                 {'\u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C'}
               </button>
@@ -1129,7 +1151,9 @@ export default function CheckCreatePage() {
                       >
                         <option value="">{'\u041C\u0430\u0441\u0442\u0435\u0440...'}</option>
                         {masters?.map((m) => (
-                          <option key={m.id} value={m.id}>{m.fullName}</option>
+                          <option key={m.id} value={m.id}>
+                            {m.fullName}
+                          </option>
                         ))}
                       </select>
                     </div>
@@ -1154,7 +1178,8 @@ export default function CheckCreatePage() {
 
             {serviceLines.length > 0 && (
               <div className="text-right text-sm font-semibold text-gray-600 mt-2 pr-1">
-                {'\u0418\u0442\u043E\u0433\u043E: '}{formatCurrency(serviceTotal)}
+                {'\u0418\u0442\u043E\u0433\u043E: '}
+                {formatCurrency(serviceTotal)}
               </div>
             )}
           </div>
@@ -1184,11 +1209,10 @@ export default function CheckCreatePage() {
                 {productLines.map((line, index) => (
                   <div key={index} className="flex items-center gap-2 bg-gray-50 rounded-lg px-3 py-2">
                     <div className="flex-1 min-w-0">
-                      <div className="text-sm font-medium text-gray-900 truncate">
-                        {line.name}
-                      </div>
+                      <div className="text-sm font-medium text-gray-900 truncate">{line.name}</div>
                       <div className="text-xs text-gray-500">
-                        {formatCurrency(line.sellPrice)} / {line.unit === 'm' ? 'м' : line.unit === 'l' ? 'л' : line.unit === 'kg' ? 'кг' : 'шт'}
+                        {formatCurrency(line.sellPrice)} /{' '}
+                        {line.unit === 'm' ? 'м' : line.unit === 'l' ? 'л' : line.unit === 'kg' ? 'кг' : 'шт'}
                       </div>
                     </div>
                     <div className="flex items-center gap-1 flex-shrink-0">
@@ -1196,7 +1220,9 @@ export default function CheckCreatePage() {
                         <input
                           type="number"
                           value={line.quantity}
-                          onChange={(e) => updateProductLine(index, 'quantity', Math.max(0.01, parseFloat(e.target.value) || 0))}
+                          onChange={(e) =>
+                            updateProductLine(index, 'quantity', Math.max(0.01, parseFloat(e.target.value) || 0))
+                          }
                           step="0.1"
                           min="0.01"
                           className="w-16 text-center text-sm font-medium rounded border border-gray-200 py-1 px-1"
@@ -1242,7 +1268,8 @@ export default function CheckCreatePage() {
 
             {productLines.length > 0 && (
               <div className="text-right text-sm font-semibold text-gray-600 mt-2 pr-1">
-                {'\u0418\u0442\u043E\u0433\u043E: '}{formatCurrency(productTotal)}
+                {'\u0418\u0442\u043E\u0433\u043E: '}
+                {formatCurrency(productTotal)}
               </div>
             )}
           </div>
@@ -1251,16 +1278,22 @@ export default function CheckCreatePage() {
           <div className="px-5 py-4 border-b border-dashed border-gray-300 bg-gray-50">
             <div className="space-y-1.5 font-mono text-sm">
               <div className="flex justify-between">
-                <span className="text-gray-500">{'\u0423\u0441\u043B\u0443\u0433\u0438'} ({serviceLines.length})</span>
+                <span className="text-gray-500">
+                  {'\u0423\u0441\u043B\u0443\u0433\u0438'} ({serviceLines.length})
+                </span>
                 <span>{formatCurrency(serviceTotal)}</span>
               </div>
               <div className="flex justify-between">
-                <span className="text-gray-500">{'\u0422\u043E\u0432\u0430\u0440\u044B'} ({productLines.length})</span>
+                <span className="text-gray-500">
+                  {'\u0422\u043E\u0432\u0430\u0440\u044B'} ({productLines.length})
+                </span>
                 <span>{formatCurrency(productTotal)}</span>
               </div>
               {discount > 0 && (
                 <div className="flex justify-between text-red-500">
-                  <span>{'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B'}</span>
+                  <span>
+                    {'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B'}
+                  </span>
                   <span>-{formatCurrency(discount)}</span>
                 </div>
               )}
@@ -1274,7 +1307,9 @@ export default function CheckCreatePage() {
 
             {/* Discount input */}
             <div className="mt-3 flex items-center gap-2">
-              <label className="text-xs text-gray-500 whitespace-nowrap">{'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B:'}</label>
+              <label className="text-xs text-gray-500 whitespace-nowrap">
+                {'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B:'}
+              </label>
               <input
                 type="number"
                 value={discount || ''}
@@ -1288,128 +1323,161 @@ export default function CheckCreatePage() {
           </div>
 
           {/* ===== PAYMENT SECTION ===== */}
-          <div className="px-5 py-4 border-b border-dashed border-gray-300">
-            <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
-              {'\u041E\u043F\u043B\u0430\u0442\u0430'}
-            </h3>
-
-            <div className="grid grid-cols-4 gap-2 mb-4">
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('cash')}
-                className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                  paymentMethod === 'cash'
-                    ? 'border-green-500 bg-green-50 text-green-700'
-                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                }`}
-              >
-                <Banknote className="w-5 h-5" />
-                <span className="text-[10px] font-semibold">{'\u041D\u0430\u043B'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('card')}
-                className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                  paymentMethod === 'card'
-                    ? 'border-blue-500 bg-blue-50 text-blue-700'
-                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                }`}
-              >
-                <CreditCard className="w-5 h-5" />
-                <span className="text-[10px] font-semibold">{'\u041A\u0430\u0440\u0442\u0430'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('cash_card')}
-                className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                  paymentMethod === 'cash_card'
-                    ? 'border-purple-500 bg-purple-50 text-purple-700'
-                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                }`}
-              >
-                <Calculator className="w-5 h-5" />
-                <span className="text-[10px] font-semibold">{'\u0421\u043F\u043B\u0438\u0442'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setPaymentMethod('warranty')}
-                className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                  paymentMethod === 'warranty'
-                    ? 'border-yellow-500 bg-yellow-50 text-yellow-700'
-                    : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                }`}
-              >
-                <Receipt className="w-5 h-5" />
-                <span className="text-[10px] font-semibold">{'\u0413\u0430\u0440.'}</span>
-              </button>
-            </div>
-
-            {paymentMethod === 'cash' && (
-              <div className="bg-green-50 rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <label className="text-sm font-medium text-gray-700">{'\u041A\u043B\u0438\u0435\u043D\u0442 \u0434\u0430\u043B:'}</label>
-                  <input
-                    type="number"
-                    value={cashGiven || ''}
-                    onChange={(e) => setCashGiven(Number(e.target.value))}
-                    className="input w-36 text-right text-lg font-bold"
-                    placeholder="0"
-                  />
+          {cashierLocked ? (
+            <div className="px-5 py-4 border-b border-dashed border-gray-300">
+              <div className="rounded-xl bg-amber-50 border border-amber-200 p-4 flex items-start gap-3">
+                <Banknote className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="text-sm font-semibold text-amber-800">
+                    \u0420\u0435\u0436\u0438\u043C \u043A\u0430\u0441\u0441\u043E\u0432\u043E\u0439
+                    \u0441\u043C\u0435\u043D\u044B
+                  </p>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    \u041E\u043F\u043B\u0430\u0442\u0443 \u043F\u0440\u043E\u0432\u043E\u0434\u0438\u0442
+                    \u043A\u0430\u0441\u0441\u0438\u0440. \u0417\u0430\u043A\u0430\u0437-\u043D\u0430\u0440\u044F\u0434
+                    \u0431\u0443\u0434\u0435\u0442 \u0441\u043E\u0437\u0434\u0430\u043D \u043A\u0430\u043A
+                    \u043E\u0442\u043B\u043E\u0436\u0435\u043D\u043D\u044B\u0439 \u2014
+                    \u043E\u043F\u043B\u0430\u0442\u0443 \u0437\u0430\u043A\u0440\u043E\u0435\u0442
+                    \u0441\u043E\u0442\u0440\u0443\u0434\u043D\u0438\u043A \u0441 \u043F\u0440\u0430\u0432\u043E\u043C
+                    \u00AB\u041F\u0440\u0438\u0451\u043C \u043E\u043F\u043B\u0430\u0442\u044B\u00BB.
+                  </p>
                 </div>
-                {cashGiven > 0 && (
-                  <div className="flex items-center justify-between border-t border-green-200 pt-2">
-                    <span className="text-sm font-medium text-gray-700">{'\u0421\u0434\u0430\u0447\u0430:'}</span>
-                    <span className={`text-xl font-bold ${changeAmount > 0 ? 'text-green-600' : 'text-gray-900'}`}>
-                      {formatCurrency(changeAmount)}
+              </div>
+            </div>
+          ) : (
+            <div className="px-5 py-4 border-b border-dashed border-gray-300">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+                {'\u041E\u043F\u043B\u0430\u0442\u0430'}
+              </h3>
+
+              <div className="grid grid-cols-4 gap-2 mb-4">
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('cash')}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                    paymentMethod === 'cash'
+                      ? 'border-green-500 bg-green-50 text-green-700'
+                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <Banknote className="w-5 h-5" />
+                  <span className="text-[10px] font-semibold">{'\u041D\u0430\u043B'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('card')}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                    paymentMethod === 'card'
+                      ? 'border-blue-500 bg-blue-50 text-blue-700'
+                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <CreditCard className="w-5 h-5" />
+                  <span className="text-[10px] font-semibold">{'\u041A\u0430\u0440\u0442\u0430'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('cash_card')}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                    paymentMethod === 'cash_card'
+                      ? 'border-purple-500 bg-purple-50 text-purple-700'
+                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <Calculator className="w-5 h-5" />
+                  <span className="text-[10px] font-semibold">{'\u0421\u043F\u043B\u0438\u0442'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPaymentMethod('warranty')}
+                  className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                    paymentMethod === 'warranty'
+                      ? 'border-yellow-500 bg-yellow-50 text-yellow-700'
+                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                  }`}
+                >
+                  <Receipt className="w-5 h-5" />
+                  <span className="text-[10px] font-semibold">{'\u0413\u0430\u0440.'}</span>
+                </button>
+              </div>
+
+              {paymentMethod === 'cash' && (
+                <div className="bg-green-50 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium text-gray-700">
+                      {'\u041A\u043B\u0438\u0435\u043D\u0442 \u0434\u0430\u043B:'}
+                    </label>
+                    <input
+                      type="number"
+                      value={cashGiven || ''}
+                      onChange={(e) => setCashGiven(Number(e.target.value))}
+                      className="input w-36 text-right text-lg font-bold"
+                      placeholder="0"
+                    />
+                  </div>
+                  {cashGiven > 0 && (
+                    <div className="flex items-center justify-between border-t border-green-200 pt-2">
+                      <span className="text-sm font-medium text-gray-700">{'\u0421\u0434\u0430\u0447\u0430:'}</span>
+                      <span className={`text-xl font-bold ${changeAmount > 0 ? 'text-green-600' : 'text-gray-900'}`}>
+                        {formatCurrency(changeAmount)}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {paymentMethod === 'cash_card' && (
+                <div className="bg-purple-50 rounded-xl p-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Banknote className="w-4 h-4 text-green-600" />
+                      <label className="text-sm font-medium text-gray-700">
+                        {'\u041D\u0430\u043B\u0438\u0447\u043D\u044B\u0435:'}
+                      </label>
+                    </div>
+                    <input
+                      type="number"
+                      value={cashAmount || ''}
+                      onChange={(e) => setCashAmount(Number(e.target.value))}
+                      className="input w-36 text-right text-lg font-bold"
+                      placeholder="0"
+                      max={totalRevenue}
+                    />
+                  </div>
+                  <div className="flex items-center justify-between border-t border-purple-200 pt-2">
+                    <div className="flex items-center gap-2">
+                      <CreditCard className="w-4 h-4 text-blue-600" />
+                      <label className="text-sm font-medium text-gray-700">{'\u041A\u0430\u0440\u0442\u0430:'}</label>
+                    </div>
+                    <span className="text-lg font-bold text-blue-600">
+                      {formatCurrency(Math.max(totalRevenue - cashAmount, 0))}
                     </span>
                   </div>
-                )}
-              </div>
-            )}
-
-            {paymentMethod === 'cash_card' && (
-              <div className="bg-purple-50 rounded-xl p-4 space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <Banknote className="w-4 h-4 text-green-600" />
-                    <label className="text-sm font-medium text-gray-700">{'\u041D\u0430\u043B\u0438\u0447\u043D\u044B\u0435:'}</label>
-                  </div>
-                  <input
-                    type="number"
-                    value={cashAmount || ''}
-                    onChange={(e) => setCashAmount(Number(e.target.value))}
-                    className="input w-36 text-right text-lg font-bold"
-                    placeholder="0"
-                    max={totalRevenue}
-                  />
                 </div>
-                <div className="flex items-center justify-between border-t border-purple-200 pt-2">
-                  <div className="flex items-center gap-2">
-                    <CreditCard className="w-4 h-4 text-blue-600" />
-                    <label className="text-sm font-medium text-gray-700">{'\u041A\u0430\u0440\u0442\u0430:'}</label>
-                  </div>
-                  <span className="text-lg font-bold text-blue-600">
-                    {formatCurrency(Math.max(totalRevenue - cashAmount, 0))}
+              )}
+
+              <label
+                className={`flex items-center gap-2 cursor-pointer mt-3 rounded-lg px-3 py-2.5 border transition-colors ${
+                  isDeferred ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'
+                }`}
+              >
+                <input
+                  type="checkbox"
+                  checked={isDeferred}
+                  onChange={(e) => setIsDeferred(e.target.checked)}
+                  className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
+                />
+                <div>
+                  <span className={`text-sm font-medium ${isDeferred ? 'text-red-700' : 'text-gray-700'}`}>
+                    Отложить чек
                   </span>
+                  <p className="text-[10px] text-gray-400 mt-0.5">
+                    Сохранить как черновик. Можно продолжить позже. Нельзя закрыть смену с отложенными чеками.
+                  </p>
                 </div>
-              </div>
-            )}
-
-            <label className={`flex items-center gap-2 cursor-pointer mt-3 rounded-lg px-3 py-2.5 border transition-colors ${
-              isDeferred ? 'bg-red-50 border-red-300' : 'bg-gray-50 border-gray-200'
-            }`}>
-              <input
-                type="checkbox"
-                checked={isDeferred}
-                onChange={(e) => setIsDeferred(e.target.checked)}
-                className="w-4 h-4 rounded border-gray-300 text-red-600 focus:ring-red-500"
-              />
-              <div>
-                <span className={`text-sm font-medium ${isDeferred ? 'text-red-700' : 'text-gray-700'}`}>Отложить чек</span>
-                <p className="text-[10px] text-gray-400 mt-0.5">Сохранить как черновик. Можно продолжить позже. Нельзя закрыть смену с отложенными чеками.</p>
-              </div>
-            </label>
-          </div>
+              </label>
+            </div>
+          )}
 
           {/* Comment */}
           <div className="px-5 py-4 border-b border-gray-200">
@@ -1417,7 +1485,9 @@ export default function CheckCreatePage() {
               value={comment}
               onChange={(e) => setComment(e.target.value)}
               rows={2}
-              placeholder={'\u041A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439 \u043A \u0447\u0435\u043A\u0443...'}
+              placeholder={
+                '\u041A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0439 \u043A \u0447\u0435\u043A\u0443...'
+              }
               className="input text-sm w-full"
             />
           </div>
@@ -1426,14 +1496,12 @@ export default function CheckCreatePage() {
           <div className="px-5 py-4 bg-gray-50">
             <button
               type="submit"
-              disabled={(createMutation.isPending || updateMutation.isPending) || (!isDeferred && itemCount === 0)}
+              disabled={createMutation.isPending || updateMutation.isPending || (!isDeferred && itemCount === 0)}
               className={`w-full py-3.5 text-base font-bold rounded-xl disabled:opacity-50 transition-colors ${
-                isDeferred
-                  ? 'bg-red-600 hover:bg-red-700 text-white'
-                  : 'btn-primary'
+                isDeferred ? 'bg-red-600 hover:bg-red-700 text-white' : 'btn-primary'
               }`}
             >
-              {(createMutation.isPending || updateMutation.isPending) ? (
+              {createMutation.isPending || updateMutation.isPending ? (
                 <span className="flex items-center justify-center gap-2">
                   <Loader2 className="w-5 h-5 animate-spin" />
                   {isEditMode ? 'Сохранение...' : 'Создание...'}

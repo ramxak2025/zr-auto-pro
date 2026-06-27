@@ -79,6 +79,7 @@ const permissionLabels: Partial<Record<keyof UserPermissions, string>> = {
   checks_edit: 'Редактирование заказ-нарядов',
   checks_delete: 'Удаление заказ-нарядов',
   checks_change_datetime: 'Изменение даты/времени заказ-нарядов',
+  accept_payment: 'Приём оплаты (кассир)',
   profit_view: 'Просмотр прибыли',
   clients_view: 'Просмотр клиентов',
   clients_edit: 'Редактирование клиентов',
@@ -108,6 +109,7 @@ const defaultPermissions: UserPermissions = {
   checks_edit: false,
   checks_delete: false,
   checks_change_datetime: false,
+  accept_payment: false, // not a cashier by default — owner grants it explicitly
   profit_view: false,
   clients_view: true,
   clients_edit: false,

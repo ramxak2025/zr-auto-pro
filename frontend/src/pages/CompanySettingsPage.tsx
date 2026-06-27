@@ -13,12 +13,13 @@ import {
   Receipt,
   Gift,
   Percent,
+  Wallet,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { myCompanyApi, loyaltyApi } from '../api/services';
+import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../types';
-import type { Tenant, LoyaltySettings } from '../types';
+import type { Tenant, LoyaltySettings, PosSettings } from '../types';
 
 interface CompanyForm {
   name: string;
@@ -31,6 +32,69 @@ interface CompanyForm {
   kpp: string;
   ogrn: string;
   receiptFooter: string;
+}
+
+// ---- POS «Кассовая смена + роли» (owner-class only) ----
+// Single owner-gated switch. GET /checks/pos-settings is readable by anyone,
+// PATCH is owner-class (director/admin/superadmin). One boolean → mutate on
+// toggle (no separate Save step). The server enforces the cashier rules; this
+// switch just turns the regime on/off tenant-wide.
+function ShiftModeSection() {
+  const queryClient = useQueryClient();
+  const { isRole } = useAuth();
+  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+
+  const { data: settings, isLoading } = useQuery<PosSettings>({
+    queryKey: ['checks', 'pos-settings'],
+    queryFn: async () => (await checksApi.getPosSettings()).data,
+    enabled: canManage,
+  });
+
+  const mutation = useMutation({
+    mutationFn: (shiftModeEnabled: boolean) => checksApi.updatePosSettings({ shiftModeEnabled }),
+    onSuccess: (_res, shiftModeEnabled) => {
+      queryClient.setQueryData<PosSettings>(['checks', 'pos-settings'], (prev) =>
+        prev ? { ...prev, shiftModeEnabled } : prev,
+      );
+      queryClient.invalidateQueries({ queryKey: ['checks', 'pos-settings'] });
+      toast.success(shiftModeEnabled ? 'Режим кассовой смены включён' : 'Режим кассовой смены выключен');
+    },
+    onError: () => toast.error('Ошибка сохранения'),
+  });
+
+  if (!canManage) return null;
+
+  const enabled = settings?.shiftModeEnabled ?? false;
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-3">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Wallet className="h-4 w-4 text-gray-400" />
+          <h2 className="text-sm font-semibold text-gray-900">Режим кассовой смены</h2>
+        </div>
+        <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
+          <input
+            type="checkbox"
+            className="sr-only peer"
+            checked={enabled}
+            onChange={(e) => mutation.mutate(e.target.checked)}
+            disabled={isLoading || mutation.isPending}
+          />
+          <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600 peer-disabled:opacity-60" />
+        </label>
+      </div>
+
+      <p className="text-xs text-gray-500">
+        {enabled
+          ? 'Оплату по заказ-наряду проводят только кассиры — сотрудники с правом «Приём оплаты». Мастер без этого права создаёт отложенный заказ-наряд без оплаты, а цена товара фиксируется по складу.'
+          : 'Выключено. Оплату по заказ-наряду может проводить любой сотрудник с доступом к кассе.'}
+      </p>
+      <p className="text-[11px] text-gray-400">
+        Право «Приём оплаты (кассир)» назначается сотруднику в разделе «Сотрудники».
+      </p>
+    </div>
+  );
 }
 
 // ---- Loyalty program settings (owner-class only) ----
@@ -405,6 +469,9 @@ export default function CompanySettingsPage() {
           <p className="text-xs text-gray-400 mt-1">Этот текст будет печататься внизу каждого чека</p>
         </div>
       </div>
+
+      {/* Cash-shift mode + cashier roles (owner-class) */}
+      <ShiftModeSection />
 
       {/* Loyalty program (owner-class) */}
       <LoyaltySettingsSection />

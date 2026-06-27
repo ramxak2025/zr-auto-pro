@@ -33,6 +33,7 @@ import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
+import { usePosSettings } from '../hooks/usePosSettings';
 import { KassaButton } from './KassaButton';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
@@ -61,6 +62,10 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const safeBottom = Math.max(insets.bottom, 8);
   const palette = useColors();
+  // Cash-shift-mode (092). orderMode = shift-mode ON && caller is a master
+  // без права «Приём оплаты». OFF/loading → false → центральная кнопка остаётся
+  // «Касса» байт-в-байт. В board-режиме она открывает «Доску».
+  const { orderMode } = usePosSettings();
 
   const focusedIndex = TAB_DEFINITIONS.findIndex(
     (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
@@ -211,13 +216,20 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
                     style={styles.kassaSlot}
                     onPress={() => {
                       haptic('impact');
-                      navigation.navigate(tab.routeName as never);
+                      if (orderMode) {
+                        // Master без права оплаты: центральная кнопка ведёт на
+                        // «Доску» (внутри Checks-стека), а не на кассу. Cast to any
+                        // for the nested 2-arg navigate overload.
+                        (navigation as any).navigate('Checks', { screen: 'WorkBoard' });
+                      } else {
+                        navigation.navigate(tab.routeName as never);
+                      }
                     }}
                     hitSlop={8}
                     accessibilityRole="button"
-                    accessibilityLabel={tab.label}
+                    accessibilityLabel={orderMode ? 'Доска заказ-нарядов' : tab.label}
                   >
-                    <KassaButton />
+                    <KassaButton board={orderMode} />
                   </Pressable>
                 );
               }

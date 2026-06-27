@@ -35,6 +35,7 @@ import { Icon } from '../platform/Icon';
 import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
 import { useColors } from '../contexts/ThemeContext';
+import { usePosSettings } from '../hooks/usePosSettings';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
 // Floating island geometry — owner explicitly wants the bar to read as
@@ -72,6 +73,18 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // (b) compute the focused state.
   const kassaTabIndex = TAB_DEFINITIONS.findIndex((t) => t.isKassa);
   const kassaFocused = safeIndex === kassaTabIndex;
+
+  // Cash-shift-mode (092). orderMode = shift-mode ON && caller is a master
+  // без права «Приём оплаты». OFF/loading → false → центральная кнопка остаётся
+  // «Касса» байт-в-байт (symbol bag.fill, ведёт на NewCheck). В board-режиме
+  // тот же premium-сквиркл меняет только символ + цель нажатия — открывает
+  // «Доску» внутри Checks-стека.
+  const { orderMode } = usePosSettings();
+  const openBoard = React.useCallback(() => {
+    // Nested navigate (tab → stack screen) — cast to any for the 2-arg overload,
+    // same convention as the screens' useNavigation<any>() callers.
+    (navigation as any).navigate('Checks', { screen: 'WorkBoard' });
+  }, [navigation]);
 
   const navigateToTab = React.useCallback(
     (index: number) => {
@@ -164,9 +177,9 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
             where its in-island slot was. */}
         <View style={styles.kassaSlot} pointerEvents="box-none">
           <AutexaKassaButton
-            symbolName="bag.fill"
-            focused={kassaFocused}
-            onPress={() => navigateToTab(kassaTabIndex)}
+            symbolName={orderMode ? 'square.grid.2x2.fill' : 'bag.fill'}
+            focused={orderMode ? false : kassaFocused}
+            onPress={orderMode ? openBoard : () => navigateToTab(kassaTabIndex)}
             style={styles.kassaButton}
           />
         </View>

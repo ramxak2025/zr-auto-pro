@@ -39,6 +39,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { usePosSettings } from '../hooks/usePosSettings';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -126,6 +127,11 @@ export default function WorkBoardScreen() {
   // Настраивать колонки может только owner-class (director/admin/superadmin) —
   // бэкенд гейтит create/update/remove, UI прячет шестерёнку для остальных.
   const canConfigure = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  // Cash-shift-mode (092): мастеру без права оплаты центральная кнопка таб-бара
+  // открывает эту доску, поэтому здесь же даём ему «+» для создания нового
+  // заказ-наряда (order-режим CheckCreate). orderMode=false → кнопки нет, доска
+  // байт-в-байт как сейчас для кассиров/владельцев.
+  const { orderMode } = usePosSettings();
 
   // Колонка занимает ~84% ширины, чтобы соседняя «выглядывала» справа —
   // явный сигнал, что доску можно листать вбок. Кап 360pt на планшетах.
@@ -226,6 +232,23 @@ export default function WorkBoardScreen() {
         trailing={
           <View style={styles.headerTrailing}>
             <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
+            {orderMode ? (
+              <TouchableOpacity
+                style={[styles.addBtn, { backgroundColor: colors.primary[600] }]}
+                onPress={() => {
+                  haptic('select');
+                  // Root-stack 'CheckCreate' (накрывает таб-бар, slide-up). Order-
+                  // режим определяется внутри CheckCreate по posSettings — параметры
+                  // не нужны. На сохранении заказ паркуется в первую колонку доски.
+                  navigation.navigate('CheckCreate');
+                }}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Создать заказ-наряд"
+              >
+                <Ionicons name="add" size={22} color={colors.white} />
+              </TouchableOpacity>
+            ) : null}
             {canConfigure ? (
               <TouchableOpacity
                 style={[styles.gearBtn, { backgroundColor: palette.bg.muted }]}
@@ -385,6 +408,7 @@ const styles = StyleSheet.create({
   // ── Header trailing ────────────────────────────────────────────────
   headerTrailing: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   gearBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
+  addBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
 
   // ── Empty board (нет колонок) ──────────────────────────────────────
   emptyBoard: { alignItems: 'center', gap: spacing[3], paddingHorizontal: spacing[6] },

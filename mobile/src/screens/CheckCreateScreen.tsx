@@ -55,6 +55,7 @@ import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
+import { usePosSettings } from '../hooks/usePosSettings';
 import type {
   Client,
   Car,
@@ -70,6 +71,7 @@ import type {
   CheckPhoto,
   SubscriptionInfo,
   ActiveWarranty,
+  ChecksBoard,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
@@ -352,13 +354,36 @@ export default function CheckCreateScreen() {
   const bookingIdRef = useRef<string | undefined>(route.params?.bookingId);
   const bookingId = bookingIdRef.current;
   const isFromBooking = !!bookingId;
-  // A check opened from a booking is a pushed (root-stack) screen that must
-  // pop back to the booking on save — treat it like a stack screen for nav,
-  // even though there's no editId.
-  const isStackScreen = !!editId || isFromBooking;
   // When opened from the bottom tab (route name 'NewCheck'), the floating
   // tab bar covers the bottom of the screen → reserve extra padding.
   const openedFromTab = route.name === 'NewCheck';
+  // A check opened from a booking is a pushed (root-stack) screen that must
+  // pop back to the booking on save — treat it like a stack screen for nav,
+  // even though there's no editId. The order-mode «+» on the доска also pushes
+  // the ROOT 'CheckCreate' route (no params): route.name === 'CheckCreate' (i.e.
+  // anything that isn't the NewCheck tab) is likewise a pushed screen, so it
+  // gets the back chevron and pops back to the доска on save. The NewCheck tab
+  // (openedFromTab) stays a tab — byte-for-byte unchanged.
+  const isStackScreen = !!editId || isFromBooking || !openedFromTab;
+
+  // ── Cash-shift-mode order-mode (092) ────────────────────────────────────
+  // orderMode = shift-mode ON && caller is a master без права «Приём оплаты».
+  // OFF/loading → false → FULL касса байт-в-байт (оплата видна, CTA «Пробить»).
+  // В order-режиме: прячем секцию оплаты, переименовываем CTA в «Создать
+  // заказ-наряд» и после создания паркуем заказ в ПЕРВУЮ колонку доски (бэк сам
+  // коэрсит чек в отложенный заказ-наряд без оплаты — мы лишь адаптируем UI и
+  // ставим work_status, иначе чек с work_status=NULL не попадёт на доску).
+  const { orderMode } = usePosSettings();
+  const { data: boardForOrder } = useQuery<ChecksBoard>({
+    queryKey: ['checks', 'board'],
+    queryFn: async () => (await checksApi.board()).data,
+    enabled: orderMode && !editId,
+    staleTime: 30_000,
+    placeholderData: (prev) => prev,
+  });
+  // Первая активная колонка (board.columns уже отсортированы по sortOrder и
+  // только активные). undefined, если колонок нет → setWorkStatus пропускаем.
+  const firstBoardColumnKey = boardForOrder?.columns?.[0]?.key;
 
   // Date with native picker
   const [checkDate, setCheckDate] = useState(new Date());
@@ -1103,6 +1128,25 @@ export default function CheckCreateScreen() {
       const uris = pendingPhotos;
       const savedCheckId: string | undefined = editId || res?.data?.id;
 
+      // ── Order-mode: припарковать новый заказ-наряд на доску ───────────────
+      // Только когда tenant в shift-mode И мастер без права оплаты (orderMode),
+      // и только для НОВОГО чека. Бэк уже коэрсит его в отложенный заказ-наряд;
+      // мы выставляем work_status = ключ ПЕРВОЙ колонки, иначе чек с
+      // work_status=NULL не появится на доске. Best-effort / fire-and-forget:
+      // заказ уже сохранён — если колонок нет или сеть упала, он просто
+      // останется отложенным в Журнале. Затем обновляем доску, на которую
+      // мастер вернётся по goBack().
+      if (orderMode && !editId && savedCheckId && firstBoardColumnKey) {
+        checksApi
+          .setWorkStatus(savedCheckId, firstBoardColumnKey)
+          .then(() => {
+            queryClient.invalidateQueries({ queryKey: ['checks', 'board'] });
+          })
+          .catch(() => {
+            /* колонок нет / сеть — заказ всё равно сохранён как отложенный */
+          });
+      }
+
       // ── Лояльность: автоначисление кешбэка на продажу ────────────────────
       // ADDITIVE side-effect, НЕ влияет на оплату/итоги/создание чека. Только
       // для НОВОГО чека (не редактирование — иначе двойное начисление) с
@@ -1444,10 +1488,12 @@ export default function CheckCreateScreen() {
     // Confirm (never hard-block — cached stock can be stale) when any
     // product line exceeds the cached stock. Deferred checks skip the
     // confirm entirely: the backend only decrements stock on a live save.
+    // order-режим (092) — это тоже отложенный заказ-наряд (бэк коэрсит без
+    // списания склада), поэтому овершелл-конфирм для него тоже пропускаем.
     // СБП-поток уже подтвердил овершелл ДО приёма оплаты (openSbpPayment),
     // поэтому при preValidated повтор не показываем — деньги уже приняты на
     // сервере, блокировать запись чека нельзя (BUG #1).
-    if (!shouldDefer && !opts?.preValidated && oversoldByProductId.size > 0) {
+    if (!shouldDefer && !orderMode && !opts?.preValidated && oversoldByProductId.size > 0) {
       const lines = [...oversoldByProductId.values()]
         .map((e) => `• ${e.name}: в чеке ${e.qty}, на складе ${Math.max(e.stock, 0)}`)
         .join('\n');
@@ -2320,194 +2366,202 @@ export default function CheckCreateScreen() {
             </View>
           )}
 
-          {/* ═══ SECTION 5: PAYMENT — green tint ═══ */}
-          <View
-            style={[styles.sectionPayment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-          >
-            <View style={styles.sectionHeader}>
-              <Ionicons name="wallet-outline" size={18} color={colors.green[600]} />
-              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Оплата</Text>
-            </View>
+          {/* ═══ SECTION 5: PAYMENT — green tint ═══
+              В order-режиме (092) оплату принимает кассир, а не мастер: секцию
+              оплаты целиком прячем (нал / карта / смешанная / СБП / отложить).
+              Бэк коэрсит заказ в отложенный без оплаты. orderMode=false →
+              секция видна и работает байт-в-байт как сейчас. */}
+          {!orderMode && (
+            <View
+              style={[styles.sectionPayment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              <View style={styles.sectionHeader}>
+                <Ionicons name="wallet-outline" size={18} color={colors.green[600]} />
+                <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Оплата</Text>
+              </View>
 
-            {/* Одна кнопка «Оплата» открывает центральную модалку выбора.
+              {/* Одна кнопка «Оплата» открывает центральную модалку выбора.
                 Текущий способ показан компактно: цветной тайл-иконка + подпись.
                 Inline-ряд из четырёх кнопок заменён на этот аккуратный селектор. */}
-            {(() => {
-              const visual = paymentMethodVisual(paymentMethod);
-              return (
-                <TouchableOpacity
-                  style={[styles.paymentSelector, { backgroundColor: palette.bg.muted, borderColor: visual.color }]}
-                  onPress={() => {
-                    haptic('tap');
-                    setShowPaymentPicker(true);
-                  }}
-                  activeOpacity={0.8}
-                  accessibilityRole="button"
-                  accessibilityLabel={`Способ оплаты: ${paymentMethodLabel(paymentMethod)}`}
-                >
-                  <View style={[styles.paymentSelectorIcon, { backgroundColor: visual.tint }]}>
-                    <Ionicons name={visual.icon} size={20} color={visual.color} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.paymentSelectorHint, { color: palette.text.tertiary }]}>Способ оплаты</Text>
-                    <Text style={[styles.paymentSelectorValue, { color: palette.text.primary }]} numberOfLines={1}>
-                      {paymentMethodLabel(paymentMethod)}
-                    </Text>
-                  </View>
-                  <Ionicons name="chevron-down" size={18} color={palette.text.tertiary} />
-                </TouchableOpacity>
-              );
-            })()}
-
-            {paymentMethod === ('cash' as PaymentMethod) && (
-              <View
-                style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-              >
-                <View style={styles.splitRow}>
-                  <View style={styles.splitIconRow}>
-                    <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
-                    <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Клиент дал</Text>
-                  </View>
-                  <TextInput
-                    value={cashGiven}
-                    onChangeText={setCashGiven}
-                    style={[
-                      styles.splitInput,
-                      {
-                        backgroundColor: palette.bg.card,
-                        borderColor: palette.border.subtle,
-                        color: palette.text.primary,
-                      },
-                    ]}
-                    keyboardType="numeric"
-                    placeholder="0"
-                    placeholderTextColor={palette.text.tertiary}
-                  />
-                </View>
-                {parseMoneyInput(cashGiven) > total && (
-                  <>
-                    <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
-                    <View style={styles.splitRow}>
-                      <View style={styles.splitIconRow}>
-                        <Ionicons name="arrow-undo-outline" size={16} color={colors.green[700]} />
-                        <Text
-                          style={[styles.splitLabel, { color: palette.text.secondary, fontWeight: fontWeight.bold }]}
-                        >
-                          Сдача
-                        </Text>
-                      </View>
-                      <Text style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.green[700] }}>
-                        {formatMoney(parseMoneyInput(cashGiven) - total)}
+              {(() => {
+                const visual = paymentMethodVisual(paymentMethod);
+                return (
+                  <TouchableOpacity
+                    style={[styles.paymentSelector, { backgroundColor: palette.bg.muted, borderColor: visual.color }]}
+                    onPress={() => {
+                      haptic('tap');
+                      setShowPaymentPicker(true);
+                    }}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Способ оплаты: ${paymentMethodLabel(paymentMethod)}`}
+                  >
+                    <View style={[styles.paymentSelectorIcon, { backgroundColor: visual.tint }]}>
+                      <Ionicons name={visual.icon} size={20} color={visual.color} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.paymentSelectorHint, { color: palette.text.tertiary }]}>Способ оплаты</Text>
+                      <Text style={[styles.paymentSelectorValue, { color: palette.text.primary }]} numberOfLines={1}>
+                        {paymentMethodLabel(paymentMethod)}
                       </Text>
                     </View>
-                  </>
-                )}
-              </View>
-            )}
+                    <Ionicons name="chevron-down" size={18} color={palette.text.tertiary} />
+                  </TouchableOpacity>
+                );
+              })()}
 
-            {paymentMethod === ('cash_card' as PaymentMethod) && (
-              <View
-                style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-              >
-                <View style={styles.splitRow}>
-                  <View style={styles.splitIconRow}>
-                    <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
-                    <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Наличные</Text>
+              {paymentMethod === ('cash' as PaymentMethod) && (
+                <View
+                  style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                >
+                  <View style={styles.splitRow}>
+                    <View style={styles.splitIconRow}>
+                      <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
+                      <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Клиент дал</Text>
+                    </View>
+                    <TextInput
+                      value={cashGiven}
+                      onChangeText={setCashGiven}
+                      style={[
+                        styles.splitInput,
+                        {
+                          backgroundColor: palette.bg.card,
+                          borderColor: palette.border.subtle,
+                          color: palette.text.primary,
+                        },
+                      ]}
+                      keyboardType="numeric"
+                      placeholder="0"
+                      placeholderTextColor={palette.text.tertiary}
+                    />
                   </View>
-                  <TextInput
-                    value={cashAmount}
-                    onChangeText={setCashAmount}
-                    style={[
-                      styles.splitInput,
-                      {
-                        backgroundColor: palette.bg.card,
-                        borderColor: palette.border.subtle,
-                        color: palette.text.primary,
-                      },
-                    ]}
-                    keyboardType="numeric"
-                    placeholder="0"
-                    placeholderTextColor={palette.text.tertiary}
-                  />
+                  {parseMoneyInput(cashGiven) > total && (
+                    <>
+                      <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
+                      <View style={styles.splitRow}>
+                        <View style={styles.splitIconRow}>
+                          <Ionicons name="arrow-undo-outline" size={16} color={colors.green[700]} />
+                          <Text
+                            style={[styles.splitLabel, { color: palette.text.secondary, fontWeight: fontWeight.bold }]}
+                          >
+                            Сдача
+                          </Text>
+                        </View>
+                        <Text
+                          style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.green[700] }}
+                        >
+                          {formatMoney(parseMoneyInput(cashGiven) - total)}
+                        </Text>
+                      </View>
+                    </>
+                  )}
                 </View>
-                <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
-                <View style={styles.splitRow}>
-                  <View style={styles.splitIconRow}>
-                    <Ionicons name="card-outline" size={16} color={colors.blue[600]} />
-                    <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Карта</Text>
-                  </View>
-                  <Text style={styles.splitCardAmount}>{formatMoney(cardAmountCalc)}</Text>
-                </View>
-              </View>
-            )}
+              )}
 
-            {/* Оплата по СБП / QR — ДОБАВОЧНЫЙ эквайринг. Виден, когда есть что
+              {paymentMethod === ('cash_card' as PaymentMethod) && (
+                <View
+                  style={[styles.splitWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                >
+                  <View style={styles.splitRow}>
+                    <View style={styles.splitIconRow}>
+                      <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
+                      <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Наличные</Text>
+                    </View>
+                    <TextInput
+                      value={cashAmount}
+                      onChangeText={setCashAmount}
+                      style={[
+                        styles.splitInput,
+                        {
+                          backgroundColor: palette.bg.card,
+                          borderColor: palette.border.subtle,
+                          color: palette.text.primary,
+                        },
+                      ]}
+                      keyboardType="numeric"
+                      placeholder="0"
+                      placeholderTextColor={palette.text.tertiary}
+                    />
+                  </View>
+                  <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
+                  <View style={styles.splitRow}>
+                    <View style={styles.splitIconRow}>
+                      <Ionicons name="card-outline" size={16} color={colors.blue[600]} />
+                      <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Карта</Text>
+                    </View>
+                    <Text style={styles.splitCardAmount}>{formatMoney(cardAmountCalc)}</Text>
+                  </View>
+                </View>
+              )}
+
+              {/* Оплата по СБП / QR — ДОБАВОЧНЫЙ эквайринг. Виден, когда есть что
                 проводить и чек не откладывается. Открывает модалку: создаёт
                 онлайн-платёж, показывает ссылку СБП, опрашивает статус; при
                 успехе проводит чек по карточному (электронному) тендеру.
                 нал/карта/смешанная/отложенный — без изменений. */}
-            {!isDeferred && total > 0 && (serviceLines.length > 0 || productLines.length > 0) && (
+              {!isDeferred && total > 0 && (serviceLines.length > 0 || productLines.length > 0) && (
+                <TouchableOpacity
+                  style={[
+                    styles.sbpButton,
+                    { backgroundColor: getBadgeColors(palette.mode).purple.bg, borderColor: colors.purple[600] },
+                  ]}
+                  onPress={openSbpPayment}
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel="Оплата по СБП или QR-коду"
+                >
+                  <View
+                    style={[
+                      styles.sbpButtonIcon,
+                      { backgroundColor: palette.mode === 'dark' ? palette.bg.card : '#FFFFFF' },
+                    ]}
+                  >
+                    <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text
+                      style={[styles.sbpButtonTitle, { color: getBadgeColors(palette.mode).purple.text }]}
+                      numberOfLines={1}
+                    >
+                      Оплата по СБП / QR
+                    </Text>
+                    <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
+                      Система быстрых платежей — оплата по QR
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={colors.purple[600]} />
+                </TouchableOpacity>
+              )}
+
+              {/* Deferred toggle */}
               <TouchableOpacity
                 style={[
-                  styles.sbpButton,
-                  { backgroundColor: getBadgeColors(palette.mode).purple.bg, borderColor: colors.purple[600] },
+                  styles.deferToggle,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                  isDeferred && styles.deferToggleActive,
                 ]}
-                onPress={openSbpPayment}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel="Оплата по СБП или QR-коду"
+                onPress={() => setIsDeferred(!isDeferred)}
               >
-                <View
-                  style={[
-                    styles.sbpButtonIcon,
-                    { backgroundColor: palette.mode === 'dark' ? palette.bg.card : '#FFFFFF' },
-                  ]}
-                >
-                  <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
-                </View>
+                <Ionicons
+                  name={isDeferred ? 'checkbox' : 'square-outline'}
+                  size={20}
+                  color={isDeferred ? colors.amber[600] : palette.text.tertiary}
+                />
                 <View style={{ flex: 1 }}>
                   <Text
-                    style={[styles.sbpButtonTitle, { color: getBadgeColors(palette.mode).purple.text }]}
-                    numberOfLines={1}
+                    style={[
+                      styles.deferLabel,
+                      { color: palette.text.secondary },
+                      isDeferred && { color: colors.amber[600] },
+                    ]}
                   >
-                    Оплата по СБП / QR
+                    Отложить чек
                   </Text>
-                  <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
-                    Система быстрых платежей — оплата по QR
-                  </Text>
+                  <Text style={[styles.deferHint, { color: palette.text.tertiary }]}>Сохранить как черновик</Text>
                 </View>
-                <Ionicons name="chevron-forward" size={18} color={colors.purple[600]} />
               </TouchableOpacity>
-            )}
-
-            {/* Deferred toggle */}
-            <TouchableOpacity
-              style={[
-                styles.deferToggle,
-                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                isDeferred && styles.deferToggleActive,
-              ]}
-              onPress={() => setIsDeferred(!isDeferred)}
-            >
-              <Ionicons
-                name={isDeferred ? 'checkbox' : 'square-outline'}
-                size={20}
-                color={isDeferred ? colors.amber[600] : palette.text.tertiary}
-              />
-              <View style={{ flex: 1 }}>
-                <Text
-                  style={[
-                    styles.deferLabel,
-                    { color: palette.text.secondary },
-                    isDeferred && { color: colors.amber[600] },
-                  ]}
-                >
-                  Отложить чек
-                </Text>
-                <Text style={[styles.deferHint, { color: palette.text.tertiary }]}>Сохранить как черновик</Text>
-              </View>
-            </TouchableOpacity>
-          </View>
+            </View>
+          )}
 
           {/* Submit — PressableScale gives the iOS scale-press (Android ripple),
               matching the app's CTA convention (see platform/PressableScale).
@@ -2525,18 +2579,33 @@ export default function CheckCreateScreen() {
               <ActivityIndicator color={colors.white} />
             ) : (
               <LinearGradient
-                colors={isDeferred ? [colors.amber[600], '#b45309'] : [colors.primary[600], colors.primary[700]]}
+                colors={
+                  isDeferred && !orderMode ? [colors.amber[600], '#b45309'] : [colors.primary[600], colors.primary[700]]
+                }
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 1 }}
                 style={styles.submitGradient}
               >
                 <Ionicons
-                  name={isDeferred ? 'pause-circle-outline' : 'checkmark-circle-outline'}
+                  name={
+                    orderMode ? 'clipboard-outline' : isDeferred ? 'pause-circle-outline' : 'checkmark-circle-outline'
+                  }
                   size={20}
                   color={colors.white}
                 />
+                {/* В order-режиме (092) мастер создаёт заказ-наряд — кассир
+                    пробьёт оплату позже. CTA и цвет переименованы; бэк коэрсит
+                    чек в отложенный. orderMode=false → текст байт-в-байт как был. */}
                 <Text style={styles.submitBtnText}>
-                  {isDeferred ? 'Отложить' : editId ? 'Сохранить' : `Пробить — ${formatMoney(total)}`}
+                  {orderMode
+                    ? editId
+                      ? 'Сохранить заказ-наряд'
+                      : 'Создать заказ-наряд'
+                    : isDeferred
+                      ? 'Отложить'
+                      : editId
+                        ? 'Сохранить'
+                        : `Пробить — ${formatMoney(total)}`}
                 </Text>
               </LinearGradient>
             )}

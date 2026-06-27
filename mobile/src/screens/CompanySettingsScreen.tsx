@@ -15,14 +15,15 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { myCompanyApi, loyaltyApi } from '../api/services';
+import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { Tenant, LoyaltySettings } from '../../../shared/types';
+import type { Tenant, LoyaltySettings, PosSettings } from '../../../shared/types';
+import { POS_SETTINGS_KEY } from '../hooks/usePosSettings';
 import { UserRole } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { haptic } from '../platform/haptics';
@@ -330,15 +331,21 @@ export default function CompanySettingsScreen() {
             </AnimatedCard>
           )}
 
+          {/* Режим кассовой смены (092) — owner-class. Self-contained card
+              (own query + save), decoupled from the company «Сохранить» flow so
+              flipping the mode is one tap and never entangles with tenant
+              fields. OFF by default → весь поток байт-в-байт как сейчас. */}
+          {canManageShifts && <PosShiftModeSection index={3} />}
+
           {/* Программа лояльности — owner-class. Self-contained card: owns its
               own query + form + save (decoupled from the company «Сохранить»
               flow above), so saving cashback config never touches tenant
               fields and vice-versa. */}
-          {canManageShifts && <LoyaltySettingsSection index={3} />}
+          {canManageShifts && <LoyaltySettingsSection index={4} />}
 
           {/* Save */}
           {dirty && (
-            <AnimatedCard index={4}>
+            <AnimatedCard index={5}>
               <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={mutation.isPending}>
                 {mutation.isPending ? (
                   <ActivityIndicator color={colors.white} size="small" />
@@ -354,6 +361,84 @@ export default function CompanySettingsScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
+  );
+}
+
+// ── Режим кассовой смены (POS shift-mode, 092) ─────────────────────────
+// Owner-class card. Reads GET /checks/pos-settings (the caller is owner-class
+// here, so `isCashier` is always true — we only surface the tenant-wide
+// `shiftModeEnabled` flag) and PATCHes it. Self-contained — own query + save —
+// so it never entangles with the tenant «Сохранить настройки» flow. Saving
+// straight on toggle (no separate save button) keeps the one-tap feel of a
+// feature switch. OFF by default → ничего в приложении не меняется.
+function PosShiftModeSection({ index }: { index: number }) {
+  const palette = useColors();
+  const queryClient = useQueryClient();
+
+  const { data: settings } = useQuery<PosSettings>({
+    queryKey: POS_SETTINGS_KEY,
+    queryFn: async () => (await checksApi.getPosSettings()).data,
+    staleTime: 60_000,
+  });
+
+  const enabled = settings?.shiftModeEnabled ?? false;
+
+  const mutation = useMutation({
+    mutationFn: (shiftModeEnabled: boolean) => checksApi.updatePosSettings({ shiftModeEnabled }),
+    // Optimistic: the switch flips instantly; the tab bar / CheckCreate that
+    // read the same key pick up the new mode without waiting on the round-trip.
+    onMutate: async (next) => {
+      await queryClient.cancelQueries({ queryKey: POS_SETTINGS_KEY });
+      const prev = queryClient.getQueryData<PosSettings>(POS_SETTINGS_KEY);
+      if (prev) queryClient.setQueryData<PosSettings>(POS_SETTINGS_KEY, { ...prev, shiftModeEnabled: next });
+      return { prev };
+    },
+    onError: (_err, _next, ctx) => {
+      if (ctx?.prev) queryClient.setQueryData(POS_SETTINGS_KEY, ctx.prev);
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось изменить режим');
+    },
+    onSuccess: () => {
+      haptic('success');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: POS_SETTINGS_KEY });
+    },
+  });
+
+  const cardStyle = StyleSheet.flatten([
+    styles.card,
+    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+  ]);
+  const cardTitleStyle = StyleSheet.flatten([styles.cardTitle, { color: palette.text.primary }]);
+
+  return (
+    <AnimatedCard index={index}>
+      <View style={cardStyle}>
+        <View style={styles.cardHeader}>
+          <Ionicons name="people-circle-outline" size={16} color={palette.text.tertiary} />
+          <Text style={cardTitleStyle}>Режим кассовой смены</Text>
+        </View>
+
+        <View style={styles.toggleRow}>
+          <View style={styles.toggleTextWrap}>
+            <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>Оплату принимает только кассир</Text>
+            <Text style={[styles.toggleSub, { color: palette.text.secondary }]}>
+              Вкл: оплату принимает только кассир (отмечается правом «Приём оплаты»), мастера создают заказ-наряды и
+              ведут доску. Выкл: каждый сам пробивает чек, как сейчас.
+            </Text>
+          </View>
+          <Switch
+            value={enabled}
+            onValueChange={(v) => mutation.mutate(v)}
+            disabled={mutation.isPending}
+            trackColor={{ false: palette.border.subtle, true: palette.accent.primary }}
+            thumbColor={Platform.OS === 'android' ? colors.white : undefined}
+            ios_backgroundColor={palette.border.subtle}
+          />
+        </View>
+      </View>
+    </AnimatedCard>
   );
 }
 
