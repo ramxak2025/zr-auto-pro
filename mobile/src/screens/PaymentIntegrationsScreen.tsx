@@ -41,7 +41,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { paymentsApi, fiscalApi } from '../api/services';
+import { paymentsApi, fiscalApi, walletApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
@@ -51,7 +51,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { UserRole } from '../../../shared/types';
-import type { PaymentProviderName, FiscalSno, FiscalVat } from '../../../shared/types';
+import type { PaymentProviderName, FiscalSno, FiscalVat, WalletSettings } from '../../../shared/types';
 
 // ── Option catalogues ─────────────────────────────────────────────────
 
@@ -79,6 +79,8 @@ const VAT_OPTIONS: { value: FiscalVat; label: string }[] = [
 ];
 
 const CONFIG_HINT = 'Ключи получите в личном кабинете провайдера. До ввода функция неактивна.';
+
+const WALLET_HINT = 'Сертификат Apple Pass Type ID — из Apple Developer. До загрузки карта недоступна.';
 
 // ── Screen ─────────────────────────────────────────────────────────────
 
@@ -115,6 +117,7 @@ export default function PaymentIntegrationsScreen() {
         >
           <AcquiringSection index={0} />
           <FiscalSection index={1} />
+          <WalletSection index={2} />
         </ScrollView>
       </KeyboardAvoidingView>
     </View>
@@ -494,6 +497,320 @@ function normalizeVat(v: FiscalVat | string | null | undefined): FiscalVat {
   return (known as string[]).includes(v as string) ? (v as FiscalVat) : 'none';
 }
 
+// ── Apple Wallet — карта лояльности (.pkpass) ──────────────────────────
+// Owner-class настройки серверной выдачи Apple Wallet pass'ов (backend wallet/).
+// Подписывающий материал (certPem / certKeyPem / certKeyPassword / wwdrPem) —
+// WRITE-ONLY: сервер возвращает только булевы флаги hasCert / hasCertKey /
+// hasCertKeyPassword / hasWwdr, НИКОГДА сам PEM. Поэтому PEM/пароль шлём ТОЛЬКО
+// когда владелец ввёл свежее значение (placeholder «загружен», когда флаг true)
+// — пересохранение не стирает уже загруженный сертификат. `configured` =
+// enabled + cert + key + WWDR + passTypeId + teamId на месте → карта выдаётся.
+
+const HEX_RE = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/;
+
+function CertStatusChip({ label, ok }: { label: string; ok: boolean }) {
+  const palette = useColors();
+  const s = sectionStyles(palette);
+  return (
+    <View
+      style={[
+        s.statusChip,
+        {
+          backgroundColor: ok ? colors.green[50] : palette.bg.muted,
+          borderColor: ok ? colors.green[200] : palette.border.subtle,
+        },
+      ]}
+    >
+      <Ionicons
+        name={ok ? 'checkmark-circle' : 'ellipse-outline'}
+        size={13}
+        color={ok ? colors.green[600] : palette.text.tertiary}
+      />
+      <Text style={[s.statusChipText, { color: ok ? colors.green[700] : palette.text.tertiary }]}>{label}</Text>
+    </View>
+  );
+}
+
+function WalletSection({ index }: { index: number }) {
+  const palette = useColors();
+  const queryClient = useQueryClient();
+
+  const { data: settings, isLoading } = useQuery<WalletSettings>({
+    queryKey: ['wallet', 'settings'],
+    queryFn: async () => (await walletApi.getSettings()).data,
+  });
+
+  const [enabled, setEnabled] = useState(false);
+  const [passTypeId, setPassTypeId] = useState('');
+  const [teamId, setTeamId] = useState('');
+  const [organizationName, setOrganizationName] = useState('');
+  const [logoUrl, setLogoUrl] = useState('');
+  const [bgColor, setBgColor] = useState('');
+  // PEM / пароль — write-only: форма всегда стартует пустой, сервер их не отдаёт.
+  const [certPem, setCertPem] = useState('');
+  const [certKeyPem, setCertKeyPem] = useState('');
+  const [certKeyPassword, setCertKeyPassword] = useState('');
+  const [wwdrPem, setWwdrPem] = useState('');
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      setEnabled(!!settings.enabled);
+      setPassTypeId(settings.passTypeId ?? '');
+      setTeamId(settings.teamId ?? '');
+      setOrganizationName(settings.organizationName ?? '');
+      setLogoUrl(settings.logoUrl ?? '');
+      setBgColor(settings.bgColor ?? '');
+      setCertPem('');
+      setCertKeyPem('');
+      setCertKeyPassword('');
+      setWwdrPem('');
+      setDirty(false);
+    }
+  }, [settings]);
+
+  const mutation = useMutation({
+    mutationFn: (data: {
+      enabled: boolean;
+      passTypeId?: string;
+      teamId?: string;
+      organizationName?: string;
+      logoUrl?: string;
+      bgColor?: string;
+      certPem?: string;
+      certKeyPem?: string;
+      certKeyPassword?: string;
+      wwdrPem?: string;
+    }) => walletApi.updateSettings(data),
+    onSuccess: (res) => {
+      queryClient.setQueryData(['wallet', 'settings'], res.data);
+      queryClient.invalidateQueries({ queryKey: ['wallet', 'settings'] });
+      haptic('success');
+      setCertPem('');
+      setCertKeyPem('');
+      setCertKeyPassword('');
+      setWwdrPem('');
+      setDirty(false);
+      Alert.alert('Готово', 'Настройки Apple Wallet сохранены');
+    },
+    onError: (e: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', e?.response?.data?.message || 'Не удалось сохранить');
+    },
+  });
+
+  const handleSave = () => {
+    if (mutation.isPending) return;
+    const cert = certPem.trim();
+    const key = certKeyPem.trim();
+    const keyPwd = certKeyPassword; // пароль может содержать пробелы — не trim'аем
+    const wwdr = wwdrPem.trim();
+    mutation.mutate({
+      enabled,
+      passTypeId: passTypeId.trim(),
+      teamId: teamId.trim(),
+      organizationName: organizationName.trim(),
+      logoUrl: logoUrl.trim(),
+      bgColor: bgColor.trim(),
+      // PEM / пароль уходят на сервер ТОЛЬКО когда поле заполнено — пустое поле
+      // оставляет уже загруженный секрет нетронутым (форма показывает флаг, не PEM).
+      ...(cert ? { certPem: cert } : null),
+      ...(key ? { certKeyPem: key } : null),
+      ...(keyPwd ? { certKeyPassword: keyPwd } : null),
+      ...(wwdr ? { wwdrPem: wwdr } : null),
+    });
+  };
+
+  const certPlaceholder = (has: boolean | undefined, begin: string) =>
+    has ? 'загружен — оставьте пустым, чтобы не менять' : begin;
+
+  const s = sectionStyles(palette);
+
+  return (
+    <AnimatedCard index={index}>
+      <View style={s.card}>
+        <View style={s.cardHeader}>
+          <View style={[s.iconBadge, { backgroundColor: colors.gray[100] }]}>
+            <Ionicons name="wallet" size={18} color={palette.text.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={s.cardTitle}>Apple Wallet</Text>
+            <Text style={s.cardSubtitle}>Карта лояльности клиента (.pkpass)</Text>
+          </View>
+        </View>
+
+        {isLoading && !settings ? (
+          <ActivityIndicator style={{ marginVertical: spacing[4] }} color={palette.accent.primary} />
+        ) : (
+          <>
+            {/* Готовность карты — configured == enabled + cert + key + WWDR + IDs. */}
+            <View
+              style={[
+                s.configuredBanner,
+                {
+                  backgroundColor: settings?.configured ? colors.green[50] : palette.bg.muted,
+                },
+              ]}
+            >
+              <Ionicons
+                name={settings?.configured ? 'checkmark-circle' : 'information-circle-outline'}
+                size={18}
+                color={settings?.configured ? colors.green[600] : palette.text.tertiary}
+              />
+              <Text
+                style={[
+                  s.configuredBannerText,
+                  { color: settings?.configured ? colors.green[700] : palette.text.secondary },
+                ]}
+              >
+                {settings?.configured
+                  ? 'Карта готова к выдаче — кнопка «Добавить в Apple Wallet» доступна в карточке клиента.'
+                  : 'Карта недоступна — загрузите сертификат и включите выдачу.'}
+              </Text>
+            </View>
+
+            <View style={s.statusRow}>
+              <CertStatusChip label="Сертификат" ok={!!settings?.hasCert} />
+              <CertStatusChip label="Ключ" ok={!!settings?.hasCertKey} />
+              <CertStatusChip label="Пароль" ok={!!settings?.hasCertKeyPassword} />
+              <CertStatusChip label="WWDR" ok={!!settings?.hasWwdr} />
+            </View>
+
+            <ToggleRow
+              label="Выдавать карту лояльности"
+              sub="Включите после загрузки сертификата Pass Type ID"
+              value={enabled}
+              onChange={(v) => {
+                setEnabled(v);
+                setDirty(true);
+              }}
+            />
+
+            <Field
+              label="Pass Type ID"
+              value={passTypeId}
+              onChangeText={(v) => {
+                setPassTypeId(v);
+                setDirty(true);
+              }}
+              placeholder="pass.com.autexa.loyalty"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <Field
+              label="Team ID"
+              value={teamId}
+              onChangeText={(v) => {
+                setTeamId(v);
+                setDirty(true);
+              }}
+              placeholder="ABCDE12345"
+              autoCapitalize="characters"
+              autoCorrect={false}
+            />
+
+            <Field
+              label="Название организации"
+              value={organizationName}
+              onChangeText={(v) => {
+                setOrganizationName(v);
+                setDirty(true);
+              }}
+              placeholder="Название на карте (по умолчанию — компания)"
+            />
+
+            <Field
+              label="Логотип (URL)"
+              value={logoUrl}
+              onChangeText={(v) => {
+                setLogoUrl(v);
+                setDirty(true);
+              }}
+              placeholder="https://…/logo.png"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+            />
+
+            <Field
+              label="Цвет фона (HEX)"
+              value={bgColor}
+              onChangeText={(v) => {
+                setBgColor(v);
+                setDirty(true);
+              }}
+              placeholder="#1E88E5"
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {HEX_RE.test(bgColor.trim()) ? (
+              <View style={[s.colorSwatch, { backgroundColor: bgColor.trim(), borderColor: palette.border.subtle }]} />
+            ) : null}
+
+            <Field
+              label="Сертификат Pass Type ID (PEM)"
+              value={certPem}
+              onChangeText={(v) => {
+                setCertPem(v);
+                setDirty(true);
+              }}
+              placeholder={certPlaceholder(settings?.hasCert, '-----BEGIN CERTIFICATE-----')}
+              autoCapitalize="none"
+              autoCorrect={false}
+              multiline
+            />
+
+            <Field
+              label="Приватный ключ (PEM)"
+              value={certKeyPem}
+              onChangeText={(v) => {
+                setCertKeyPem(v);
+                setDirty(true);
+              }}
+              placeholder={certPlaceholder(settings?.hasCertKey, '-----BEGIN PRIVATE KEY-----')}
+              autoCapitalize="none"
+              autoCorrect={false}
+              multiline
+            />
+
+            <Field
+              label="Пароль ключа"
+              value={certKeyPassword}
+              onChangeText={(v) => {
+                setCertKeyPassword(v);
+                setDirty(true);
+              }}
+              placeholder={settings?.hasCertKeyPassword ? 'загружен — оставьте пустым' : 'Если ключ зашифрован'}
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+
+            <Field
+              label="Apple WWDR (PEM)"
+              value={wwdrPem}
+              onChangeText={(v) => {
+                setWwdrPem(v);
+                setDirty(true);
+              }}
+              placeholder={certPlaceholder(settings?.hasWwdr, '-----BEGIN CERTIFICATE-----')}
+              autoCapitalize="none"
+              autoCorrect={false}
+              multiline
+              hint="Промежуточный сертификат Apple Worldwide Developer Relations."
+            />
+
+            <Text style={s.hint}>{WALLET_HINT}</Text>
+
+            {dirty && <SaveButton pending={mutation.isPending} onPress={handleSave} label="Сохранить Apple Wallet" />}
+          </>
+        )}
+      </View>
+    </AnimatedCard>
+  );
+}
+
 // ── Reusable bits ──────────────────────────────────────────────────────
 
 interface FieldProps {
@@ -505,15 +822,24 @@ interface FieldProps {
   autoCapitalize?: 'none' | 'sentences' | 'words' | 'characters';
   autoCorrect?: boolean;
   keyboardType?: React.ComponentProps<typeof TextInput>['keyboardType'];
+  // Многострочный ввод (PEM-сертификаты): высокое поле, текст сверху, без маски.
+  multiline?: boolean;
+  hint?: string;
 }
 
-function Field({ label, ...rest }: FieldProps) {
+function Field({ label, multiline, hint, ...rest }: FieldProps) {
   const palette = useColors();
   const s = sectionStyles(palette);
   return (
     <View style={s.field}>
       <Text style={s.label}>{label}</Text>
-      <TextInput {...rest} style={s.input} placeholderTextColor={palette.text.tertiary} />
+      <TextInput
+        {...rest}
+        multiline={multiline}
+        style={[s.input, multiline && s.inputMultiline]}
+        placeholderTextColor={palette.text.tertiary}
+      />
+      {hint ? <Text style={s.fieldHint}>{hint}</Text> : null}
     </View>
   );
 }
@@ -735,8 +1061,44 @@ function sectionStyles(palette: ReturnType<typeof useColors>) {
       fontSize: fontSize.sm,
       color: palette.text.primary,
     },
+    inputMultiline: {
+      minHeight: 92,
+      paddingTop: spacing[2.5],
+      textAlignVertical: 'top',
+      fontSize: 12,
+      fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    },
+    fieldHint: { fontSize: 11, lineHeight: 15, color: palette.text.tertiary },
     hint: { fontSize: 11, lineHeight: 16, color: palette.text.tertiary },
     rowFields: { flexDirection: 'row', gap: spacing[3] },
+
+    // Wallet — статус загруженных PEM-материалов + готовности карты.
+    statusRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+    statusChip: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[1],
+      borderWidth: StyleSheet.hairlineWidth,
+      borderRadius: borderRadius.full,
+      paddingHorizontal: spacing[2.5],
+      paddingVertical: spacing[1.5],
+    },
+    statusChipText: { fontSize: 12, fontWeight: fontWeight.semibold },
+    configuredBanner: {
+      flexDirection: 'row',
+      alignItems: 'center',
+      gap: spacing[2],
+      borderRadius: borderRadius.lg,
+      paddingHorizontal: spacing[3],
+      paddingVertical: spacing[2.5],
+    },
+    configuredBannerText: { flex: 1, fontSize: 12, fontWeight: fontWeight.medium, lineHeight: 16 },
+    colorSwatch: {
+      height: 10,
+      borderRadius: 5,
+      marginTop: spacing[1],
+      borderWidth: StyleSheet.hairlineWidth,
+    },
 
     toggleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
     toggleTextWrap: { flex: 1, minWidth: 0 },

@@ -25,11 +25,12 @@ import {
   Coins,
   AlertCircle,
   Gift,
+  Wallet,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
-import { clientsApi, carsApi, checksApi, debtsApi, loyaltyApi } from '../api/services';
+import { clientsApi, carsApi, checksApi, debtsApi, loyaltyApi, walletApi } from '../api/services';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
@@ -37,7 +38,16 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
 import { useAuth } from '../contexts/AuthContext';
-import { Client, Car as CarType, Check, ClientDebtSummary, ClientBonusSummary, BonusType, UserRole } from '../types';
+import {
+  Client,
+  Car as CarType,
+  Check,
+  ClientDebtSummary,
+  ClientBonusSummary,
+  BonusType,
+  UserRole,
+  WalletSettings,
+} from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
 
 const formatMoney = (amount: number) => amount.toLocaleString('ru-RU') + ' ₽';
@@ -561,6 +571,7 @@ function ClientLoyaltySection({ clientId, clientName }: { clientId: string; clie
   const [mode, setMode] = useState<BonusType>('accrual');
   const [amount, setAmount] = useState('');
   const [reason, setReason] = useState('');
+  const [downloadingPass, setDownloadingPass] = useState(false);
 
   const { data: summary, isLoading } = useQuery<ClientBonusSummary>({
     queryKey: ['loyalty', 'client', clientId],
@@ -570,6 +581,49 @@ function ClientLoyaltySection({ clientId, clientName }: { clientId: string; clie
     },
     enabled: !!clientId,
   });
+
+  // Apple Wallet config is owner-class gated server-side — only query it for
+  // owner-class roles, otherwise the request would 403. The «Скачать карту»
+  // button shows only once Wallet is fully configured.
+  const { data: walletSettings } = useQuery<WalletSettings>({
+    queryKey: ['wallet', 'settings'],
+    queryFn: async () => (await walletApi.getSettings()).data,
+    enabled: canManage,
+    staleTime: 5 * 60 * 1000,
+  });
+  const walletConfigured = !!walletSettings?.configured;
+
+  const handleDownloadPass = async () => {
+    if (!clientId) return;
+    setDownloadingPass(true);
+    try {
+      const res = await walletApi.getPass(clientId);
+      const blob = res.data as Blob;
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const safeName = (clientName || 'client').replace(/[^\p{L}\p{N}_-]+/gu, '_').slice(0, 60) || 'client';
+      link.download = `${safeName}.pkpass`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      // getPass is a blob request, so an error body arrives as a Blob too — we
+      // only need the HTTP status to give a sensible message. 422 = Wallet not
+      // configured / disabled; 404 = client not in this tenant.
+      const status = (err as { response?: { status?: number } })?.response?.status;
+      if (status === 422) {
+        toast.error('Apple Wallet не настроен — включите его в «Интеграциях»');
+      } else if (status === 404) {
+        toast.error('Клиент не найден');
+      } else {
+        toast.error('Не удалось скачать карту');
+      }
+    } finally {
+      setDownloadingPass(false);
+    }
+  };
 
   // Push the fresh summary into the cache (instant UI) + invalidate to refetch.
   const applySummary = (next: ClientBonusSummary) => {
@@ -667,6 +721,18 @@ function ClientLoyaltySection({ clientId, clientName }: { clientId: string; clie
               <Minus className="w-4 h-4" />
               Списать
             </button>
+            {walletConfigured && (
+              <button
+                type="button"
+                onClick={handleDownloadPass}
+                disabled={downloadingPass}
+                className="btn-ghost btn-sm disabled:opacity-50"
+                title="Скачать карту лояльности для Apple Wallet (.pkpass)"
+              >
+                {downloadingPass ? <Loader2 className="w-4 h-4 animate-spin" /> : <Wallet className="w-4 h-4" />}
+                Скачать карту
+              </button>
+            )}
           </div>
         )}
       </div>

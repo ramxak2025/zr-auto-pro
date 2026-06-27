@@ -16,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { LinearGradient } from 'expo-linear-gradient';
-import { clientsApi, carsApi, checksApi, debtsApi, loyaltyApi } from '../api/services';
+import { clientsApi, carsApi, checksApi, debtsApi, loyaltyApi, walletApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import Modal from '../components/Modal';
@@ -33,10 +33,19 @@ import LoyaltyBadge from '../components/LoyaltyBadge';
 import SectionHeader from '../components/SectionHeader';
 import { UserRole } from '../../../shared/types';
 import { colors, fontSize, fontWeight, borderRadius, spacing, badgeColors, paymentMethodBadgeColor } from '../theme';
-import type { Client, Car, Check, ClientDebtSummary, ClientBonusSummary, BonusType } from '../../../shared/types';
+import type {
+  Client,
+  Car,
+  Check,
+  ClientDebtSummary,
+  ClientBonusSummary,
+  BonusType,
+  WalletSettings,
+} from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { haptic } from '../platform/haptics';
 import { detectPlateMode } from '../utils/plateMask';
+import { pkpassBlobToBase64, presentPkpass } from '../utils/walletPass';
 
 const paymentLabels: Record<string, string> = {
   cash: 'Наличные',
@@ -2299,6 +2308,11 @@ function ClientBonusSection({ clientId, canManage, palette }: ClientBonusSection
           </Text>
         ) : null}
 
+        {/* APPLE WALLET — карта лояльности (.pkpass). Кнопка рендерится только на
+            iOS И только когда WalletSettings.configured (сертификат загружен на
+            бэкенде). Сама проверка/гейтинг — внутри AddToWalletButton. */}
+        <AddToWalletButton clientId={clientId} palette={palette} />
+
         {/* Action buttons — owner-class manual adjust. «Списать» disabled at 0. */}
         {canManage ? (
           <View style={debtStyles.actionsRow}>
@@ -2418,6 +2432,93 @@ function ClientBonusSection({ clientId, canManage, palette }: ClientBonusSection
     </>
   );
 }
+
+// ── AddToWalletButton (Apple Wallet — карта лояльности) ───────────────
+// «Добавить в Apple Wallet» внутри бонусной секции. iOS-only: на Android
+// возвращает null (Wallet — фича iPhone), а запрос конфигурации вообще не
+// шлётся (`enabled: Platform.OS === 'ios'`). Кнопка появляется ТОЛЬКО когда
+// WalletSettings.configured === true — т.е. на сервере загружен сертификат Pass
+// Type ID и программа включена; иначе GET /wallet/pass/:id вернёт 422.
+//
+// По тапу: GET /wallet/pass/:id (blob) → base64 → временный .pkpass →
+// expo-sharing с UTI com.apple.pkpass, где iOS предлагает добавить карту в
+// Wallet. Нативные модули поднимаются лениво (см. utils/walletPass.ts).
+function AddToWalletButton({ clientId, palette }: { clientId: string; palette: ReturnType<typeof useColors> }) {
+  const [busy, setBusy] = useState(false);
+
+  // Конфиг Wallet статичен на уровне тенанта — кешируем под ['wallet','settings']
+  // (общий ключ с настройками в «Приём оплат и касса») и держим долго свежим.
+  const { data: settings } = useQuery<WalletSettings>({
+    queryKey: ['wallet', 'settings'],
+    queryFn: async () => (await walletApi.getSettings()).data,
+    enabled: Platform.OS === 'ios',
+    staleTime: 5 * 60_000,
+  });
+
+  if (Platform.OS !== 'ios') return null;
+  if (!settings?.configured) return null;
+
+  const handlePress = async () => {
+    if (busy) return;
+    haptic('tap');
+    setBusy(true);
+    try {
+      const res = await walletApi.getPass(clientId);
+      const base64 = await pkpassBlobToBase64(res.data as Blob);
+      const ok = await presentPkpass(base64, `autexa-loyalty-${clientId}.pkpass`);
+      if (ok) haptic('success');
+    } catch (e: any) {
+      haptic('error');
+      // 422 — Wallet выключен/не настроен на сервере (сертификат не загружен).
+      if (e?.response?.status === 422) {
+        Alert.alert(
+          'Карта недоступна',
+          'Apple Wallet ещё не настроен. Загрузите сертификат Pass Type ID в разделе «Приём оплат и касса».',
+        );
+      } else {
+        Alert.alert('Ошибка', 'Не удалось создать карту лояльности.');
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <TouchableOpacity
+      style={[
+        walletBtnStyles.btn,
+        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+        busy && { opacity: 0.6 },
+      ]}
+      onPress={handlePress}
+      disabled={busy}
+      activeOpacity={0.85}
+    >
+      {busy ? (
+        <ActivityIndicator size="small" color={palette.text.primary} />
+      ) : (
+        <>
+          <Ionicons name="wallet" size={17} color={palette.text.primary} />
+          <Text style={[walletBtnStyles.text, { color: palette.text.primary }]}>Добавить в Apple Wallet</Text>
+        </>
+      )}
+    </TouchableOpacity>
+  );
+}
+
+const walletBtnStyles = StyleSheet.create({
+  btn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingVertical: spacing[3],
+    marginTop: spacing[3.5],
+  },
+  text: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
+});
 
 const bonusStyles = StyleSheet.create({
   totalsRow: {

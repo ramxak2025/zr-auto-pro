@@ -13,9 +13,10 @@ import {
   Copy,
   Check,
   Link2,
+  Wallet,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { paymentsApi, fiscalApi, telephonyApi } from '../api/services';
+import { paymentsApi, fiscalApi, telephonyApi, walletApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../types';
 import type {
@@ -25,13 +26,28 @@ import type {
   FiscalSno,
   FiscalVat,
   TelephonySettings,
+  WalletSettings,
 } from '../types';
 
 // Shared field styles (match CompanySettingsPage rhythm)
 const inputCls =
   'w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:border-primary-300 focus:ring-1 focus:ring-primary-200 outline-none transition-all disabled:bg-gray-50 disabled:text-gray-400';
+const textareaCls = `${inputCls} font-mono text-xs leading-relaxed min-h-[88px] resize-y`;
 const labelCls = 'text-xs font-medium text-gray-600 mb-1 block';
 const hintCls = 'text-[11px] text-gray-400 mt-1';
+
+function StoredBadge({ ok, label }: { ok: boolean; label: string }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ${
+        ok ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-400'
+      }`}
+    >
+      <span className={`h-1.5 w-1.5 rounded-full ${ok ? 'bg-green-500' : 'bg-gray-300'}`} />
+      {label}
+    </span>
+  );
+}
 
 function Toggle({
   checked,
@@ -699,6 +715,320 @@ function TelephonyCard() {
 }
 
 // ──────────────────────────────────────────────────────────────────────────
+//  Apple Wallet (карта лояльности)
+// ──────────────────────────────────────────────────────────────────────────
+
+const WALLET_HINT = 'Сертификат Apple Pass Type ID — из Apple Developer. До загрузки карта недоступна.';
+
+function WalletCard() {
+  const queryClient = useQueryClient();
+
+  const { data: settings, isLoading } = useQuery<WalletSettings>({
+    queryKey: ['wallet', 'settings'],
+    queryFn: async () => (await walletApi.getSettings()).data,
+  });
+
+  const [form, setForm] = useState<{
+    enabled: boolean;
+    passTypeId: string;
+    teamId: string;
+    organizationName: string;
+    logoUrl: string;
+    bgColor: string;
+    certPem: string;
+    certKeyPem: string;
+    certKeyPassword: string;
+    wwdrPem: string;
+  }>({
+    enabled: false,
+    passTypeId: '',
+    teamId: '',
+    organizationName: '',
+    logoUrl: '',
+    bgColor: '',
+    certPem: '',
+    certKeyPem: '',
+    certKeyPassword: '',
+    wwdrPem: '',
+  });
+  const [dirty, setDirty] = useState(false);
+
+  useEffect(() => {
+    if (settings) {
+      // Cert material is write-only — those fields always start empty and the
+      // form only ever shows a "stored" flag, never the real PEM/password.
+      setForm({
+        enabled: settings.enabled,
+        passTypeId: settings.passTypeId ?? '',
+        teamId: settings.teamId ?? '',
+        organizationName: settings.organizationName ?? '',
+        logoUrl: settings.logoUrl ?? '',
+        bgColor: settings.bgColor ?? '',
+        certPem: '',
+        certKeyPem: '',
+        certKeyPassword: '',
+        wwdrPem: '',
+      });
+      setDirty(false);
+    }
+  }, [settings]);
+
+  const mutation = useMutation({
+    mutationFn: (data: {
+      enabled?: boolean;
+      passTypeId?: string;
+      teamId?: string;
+      organizationName?: string;
+      logoUrl?: string;
+      bgColor?: string;
+      certPem?: string;
+      certKeyPem?: string;
+      certKeyPassword?: string;
+      wwdrPem?: string;
+    }) => walletApi.updateSettings(data),
+    onSuccess: (res) => {
+      queryClient.setQueryData(['wallet', 'settings'], res.data);
+      queryClient.invalidateQueries({ queryKey: ['wallet', 'settings'] });
+      toast.success('Apple Wallet сохранён');
+      setDirty(false);
+    },
+    onError: () => toast.error('Ошибка сохранения'),
+  });
+
+  const update = (patch: Partial<typeof form>) => {
+    setForm((prev) => ({ ...prev, ...patch }));
+    setDirty(true);
+  };
+
+  const handleSave = () => {
+    const payload: {
+      enabled?: boolean;
+      passTypeId?: string;
+      teamId?: string;
+      organizationName?: string;
+      logoUrl?: string;
+      bgColor?: string;
+      certPem?: string;
+      certKeyPem?: string;
+      certKeyPassword?: string;
+      wwdrPem?: string;
+    } = {
+      enabled: form.enabled,
+      passTypeId: form.passTypeId.trim(),
+      teamId: form.teamId.trim(),
+      organizationName: form.organizationName.trim(),
+      logoUrl: form.logoUrl.trim(),
+      bgColor: form.bgColor.trim(),
+    };
+    // Cert material is sent only when (re)entered — an empty field keeps the
+    // stored secret untouched (the form shows a flag, not the real value).
+    const cert = form.certPem.trim();
+    if (cert) payload.certPem = cert;
+    const certKey = form.certKeyPem.trim();
+    if (certKey) payload.certKeyPem = certKey;
+    const certPwd = form.certKeyPassword.trim();
+    if (certPwd) payload.certKeyPassword = certPwd;
+    const wwdr = form.wwdrPem.trim();
+    if (wwdr) payload.wwdrPem = wwdr;
+    mutation.mutate(payload);
+  };
+
+  const certPlaceholder = settings?.hasCert
+    ? 'Сертификат загружен — вставьте новый PEM, чтобы заменить'
+    : '-----BEGIN CERTIFICATE-----';
+  const certKeyPlaceholder = settings?.hasCertKey
+    ? 'Ключ загружен — вставьте новый PEM, чтобы заменить'
+    : '-----BEGIN PRIVATE KEY-----';
+  const certPwdPlaceholder = settings?.hasCertKeyPassword
+    ? '•••••• загружен — введите, чтобы заменить'
+    : 'Пароль приватного ключа (если задан)';
+  const wwdrPlaceholder = settings?.hasWwdr
+    ? 'Сертификат WWDR загружен — вставьте новый PEM, чтобы заменить'
+    : '-----BEGIN CERTIFICATE-----';
+
+  return (
+    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Wallet className="h-4 w-4 text-gray-400" />
+          <h2 className="text-sm font-semibold text-gray-900">Apple Wallet (карта лояльности)</h2>
+        </div>
+        <Toggle
+          checked={form.enabled}
+          onChange={(v) => update({ enabled: v })}
+          disabled={isLoading || mutation.isPending}
+        />
+      </div>
+
+      <p className="flex items-start gap-1.5 text-xs text-gray-500 -mt-1">
+        <Info className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 text-gray-400" />
+        <span>{WALLET_HINT}</span>
+      </p>
+
+      {isLoading ? (
+        <div className="flex justify-center py-4">
+          <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
+        </div>
+      ) : (
+        <div className="space-y-3">
+          <div className="flex flex-wrap gap-1.5">
+            <StoredBadge ok={!!settings?.hasCert} label="Сертификат" />
+            <StoredBadge ok={!!settings?.hasCertKey} label="Ключ" />
+            <StoredBadge ok={!!settings?.hasWwdr} label="WWDR" />
+            <StoredBadge
+              ok={!!settings?.configured}
+              label={settings?.configured ? 'Готово к выдаче' : 'Не настроено'}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Pass Type ID</label>
+              <input
+                value={form.passTypeId}
+                onChange={(e) => update({ passTypeId: e.target.value })}
+                className={inputCls}
+                placeholder="pass.com.autexa.loyalty"
+                autoComplete="off"
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Team ID</label>
+              <input
+                value={form.teamId}
+                onChange={(e) => update({ teamId: e.target.value })}
+                className={inputCls}
+                placeholder="98SHYK65HQ"
+                autoComplete="off"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className={labelCls}>Название организации</label>
+            <input
+              value={form.organizationName}
+              onChange={(e) => update({ organizationName: e.target.value })}
+              className={inputCls}
+              placeholder="Название автосервиса на карте"
+            />
+            <p className={hintCls}>Печатается на карте. Если оставить пустым — подставится название компании.</p>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className={labelCls}>Логотип (URL)</label>
+              <input
+                value={form.logoUrl}
+                onChange={(e) => update({ logoUrl: e.target.value })}
+                className={inputCls}
+                placeholder="https://…/logo.png"
+                inputMode="url"
+              />
+            </div>
+            <div>
+              <label className={labelCls}>Цвет фона</label>
+              <div className="flex items-stretch gap-2">
+                <input
+                  value={form.bgColor}
+                  onChange={(e) => update({ bgColor: e.target.value })}
+                  className={inputCls}
+                  placeholder="#1E88E5"
+                />
+                <input
+                  type="color"
+                  value={/^#[0-9a-fA-F]{6}$/.test(form.bgColor) ? form.bgColor : '#1E88E5'}
+                  onChange={(e) => update({ bgColor: e.target.value })}
+                  className="h-[42px] w-12 flex-shrink-0 cursor-pointer rounded-xl border border-gray-200 bg-white p-1"
+                  title="Выбрать цвет"
+                  aria-label="Выбрать цвет фона"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <label className={labelCls}>
+              <KeyRound className="h-3 w-3 inline mr-1" />
+              Certificate PEM
+            </label>
+            <textarea
+              value={form.certPem}
+              onChange={(e) => update({ certPem: e.target.value })}
+              className={textareaCls}
+              placeholder={certPlaceholder}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+
+          <div>
+            <label className={labelCls}>
+              <KeyRound className="h-3 w-3 inline mr-1" />
+              Certificate key PEM
+            </label>
+            <textarea
+              value={form.certKeyPem}
+              onChange={(e) => update({ certKeyPem: e.target.value })}
+              className={textareaCls}
+              placeholder={certKeyPlaceholder}
+              autoComplete="off"
+              spellCheck={false}
+            />
+          </div>
+
+          <div>
+            <label className={labelCls}>
+              <KeyRound className="h-3 w-3 inline mr-1" />
+              Пароль ключа
+            </label>
+            <input
+              type="password"
+              autoComplete="new-password"
+              value={form.certKeyPassword}
+              onChange={(e) => update({ certKeyPassword: e.target.value })}
+              className={inputCls}
+              placeholder={certPwdPlaceholder}
+            />
+          </div>
+
+          <div>
+            <label className={labelCls}>
+              <KeyRound className="h-3 w-3 inline mr-1" />
+              WWDR PEM
+            </label>
+            <textarea
+              value={form.wwdrPem}
+              onChange={(e) => update({ wwdrPem: e.target.value })}
+              className={textareaCls}
+              placeholder={wwdrPlaceholder}
+              autoComplete="off"
+              spellCheck={false}
+            />
+            <p className={hintCls}>
+              {settings?.hasCert && settings?.hasCertKey && settings?.hasWwdr
+                ? 'Сертификаты загружены. Оставьте поля пустыми, чтобы не менять их.'
+                : 'Apple WWDR (Worldwide Developer Relations) — промежуточный сертификат Apple для подписи карты.'}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {dirty && (
+        <button
+          onClick={handleSave}
+          disabled={mutation.isPending}
+          className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+        >
+          {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+          Сохранить Apple Wallet
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────────────────────────────────
 //  Page
 // ──────────────────────────────────────────────────────────────────────────
 
@@ -719,13 +1049,14 @@ export default function IntegrationsPage() {
         </button>
         <div>
           <h1 className="text-xl font-bold text-gray-900">Интеграции</h1>
-          <p className="text-sm text-gray-500">Онлайн-оплаты, фискализация чеков и телефония</p>
+          <p className="text-sm text-gray-500">Онлайн-оплаты, фискализация чеков, телефония и Apple Wallet</p>
         </div>
       </div>
 
       <AcquiringCard />
       <FiscalCard />
       <TelephonyCard />
+      <WalletCard />
     </div>
   );
 }
