@@ -47,6 +47,7 @@ import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitch
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
 import PaymentMethodModal, { paymentMethodLabel, paymentMethodVisual } from '../components/PaymentMethodModal';
+import SbpPaymentModal from '../components/SbpPaymentModal';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { normalizePlateForSearch, splitPlate, formatMain, isRussianInput } from '../utils/plateMask';
 import { haptic } from '../platform/haptics';
@@ -447,6 +448,10 @@ export default function CheckCreateScreen() {
   const [showQuickCreate, setShowQuickCreate] = useState(false);
   // Центральная модалка выбора способа оплаты (заменила инлайновый ряд кнопок).
   const [showPaymentPicker, setShowPaymentPicker] = useState(false);
+  // ДОБАВОЧНО: модалка приёма оплаты по СБП / QR (эквайринг). Полностью
+  // изолирована от нал/карта/смешанная/отложенный — при успехе проводит чек
+  // по существующему карточному (электронному) тендеру.
+  const [showSbp, setShowSbp] = useState(false);
 
   // Service search
   const [serviceSearch, setServiceSearch] = useState('');
@@ -1349,12 +1354,16 @@ export default function CheckCreateScreen() {
     );
   };
 
-  const handleSubmit = (deferred?: boolean) => {
+  const handleSubmit = (deferred?: boolean, paymentOverride?: PaymentMethod) => {
     // Double-fire guard: bail out immediately if a submission is already
     // in-flight, regardless of whether isPending has propagated yet.
     if (submittingRef.current || createMutation.isPending) return;
 
     const shouldDefer = deferred !== undefined ? deferred : isDeferred;
+    // СБП-успех проводит чек как электронную (карточную) оплату через
+    // `paymentOverride='card'`. Без override поведение байт-в-байт прежнее —
+    // используется выбранный в UI `paymentMethod`.
+    const effectiveMethod = paymentOverride ?? paymentMethod;
     if (!shouldDefer && serviceLines.length === 0 && productLines.length === 0) {
       haptic('warning');
       Alert.alert('Ошибка', 'Добавьте хотя бы одну услугу или товар');
@@ -1388,11 +1397,11 @@ export default function CheckCreateScreen() {
     const proceed = () => {
       let finalCash = 0;
       let finalCard = 0;
-      if (paymentMethod === ('cash' as PaymentMethod)) {
+      if (effectiveMethod === ('cash' as PaymentMethod)) {
         finalCash = total;
-      } else if (paymentMethod === ('card' as PaymentMethod)) {
+      } else if (effectiveMethod === ('card' as PaymentMethod)) {
         finalCard = total;
-      } else if (paymentMethod === ('cash_card' as PaymentMethod)) {
+      } else if (effectiveMethod === ('cash_card' as PaymentMethod)) {
         // Clamp the cash leg to the (floored) total so a fat-fingered
         // «наличные» can never push the ledger above «К оплате».
         finalCash = Math.min(parseMoneyInput(cashAmount), total);
@@ -1407,7 +1416,7 @@ export default function CheckCreateScreen() {
         mileage: mileage ? parseMoneyInput(mileage) || undefined : undefined,
         comment: comment || undefined,
         discount: discountNum || undefined,
-        paymentMethod,
+        paymentMethod: effectiveMethod,
         cashAmount: finalCash || undefined,
         cardAmount: finalCard || undefined,
         isDeferred: shouldDefer,
@@ -1447,6 +1456,36 @@ export default function CheckCreateScreen() {
     }
 
     proceed();
+  };
+
+  // ── СБП-оплата подтверждена ──────────────────────────────────────────────
+  // Эквайринг вернул status='succeeded'. СБП — электронные деньги, поэтому
+  // проводим чек по СУЩЕСТВУЮЩЕМУ карточному тендеру ('card') через
+  // `paymentOverride` (новых способов оплаты/колонок не вводим). Закрываем
+  // модалку и синхронизируем UI-метку (на случай, если кассир потом откроет
+  // тот же чек на редактирование). Сама запись чека идёт обычным путём
+  // createMutation — вся математика итогов/сдачи неизменна.
+  const handleSbpSucceeded = () => {
+    setShowSbp(false);
+    setPaymentMethod('card' as PaymentMethod);
+    handleSubmit(false, 'card' as PaymentMethod);
+  };
+
+  // Открыть приём оплаты по СБП. Доступно только когда есть что проводить и
+  // сумма > 0, и чек НЕ откладывается (отложенный = ещё не оплачен).
+  const openSbpPayment = () => {
+    if (serviceLines.length === 0 && productLines.length === 0) {
+      haptic('warning');
+      Alert.alert('Нечего оплачивать', 'Добавьте хотя бы одну услугу или товар.');
+      return;
+    }
+    if (total <= 0) {
+      haptic('warning');
+      Alert.alert('Сумма к оплате — 0', 'Оплата по СБП недоступна для нулевого чека.');
+      return;
+    }
+    haptic('tap');
+    setShowSbp(true);
   };
 
   // Date formatting
@@ -2342,6 +2381,34 @@ export default function CheckCreateScreen() {
               </View>
             )}
 
+            {/* Оплата по СБП / QR — ДОБАВОЧНЫЙ эквайринг. Виден, когда есть что
+                проводить и чек не откладывается. Открывает модалку: создаёт
+                онлайн-платёж, показывает ссылку СБП, опрашивает статус; при
+                успехе проводит чек по карточному (электронному) тендеру.
+                нал/карта/смешанная/отложенный — без изменений. */}
+            {!isDeferred && total > 0 && (serviceLines.length > 0 || productLines.length > 0) && (
+              <TouchableOpacity
+                style={[styles.sbpButton, { backgroundColor: colors.purple[50], borderColor: colors.purple[600] }]}
+                onPress={openSbpPayment}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Оплата по СБП или QR-коду"
+              >
+                <View style={[styles.sbpButtonIcon, { backgroundColor: '#FFFFFF' }]}>
+                  <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.sbpButtonTitle, { color: colors.purple[700] }]} numberOfLines={1}>
+                    Оплата по СБП / QR
+                  </Text>
+                  <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
+                    Система быстрых платежей — оплата по QR
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={colors.purple[600]} />
+              </TouchableOpacity>
+            )}
+
             {/* Deferred toggle */}
             <TouchableOpacity
               style={[
@@ -2615,6 +2682,17 @@ export default function CheckCreateScreen() {
           setShowPaymentPicker(false);
         }}
         onClose={() => setShowPaymentPicker(false)}
+      />
+
+      {/* Приём оплаты по СБП / QR (эквайринг). Сумма = «К оплате»; checkId
+          передаётся только в режиме редактирования существующего чека. При
+          успехе родитель проводит чек по карточному (электронному) тендеру. */}
+      <SbpPaymentModal
+        visible={showSbp}
+        amount={total}
+        checkId={editId || undefined}
+        onClose={() => setShowSbp(false)}
+        onSucceeded={handleSbpSucceeded}
       />
 
       {/* Legacy bottom-sheet kept dormant — replaced by the inline
@@ -3181,6 +3259,27 @@ const styles = StyleSheet.create({
   },
   paymentSelectorHint: { fontSize: 11, fontWeight: fontWeight.medium, letterSpacing: -0.1 },
   paymentSelectorValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.2, marginTop: 1 },
+  // Кнопка «Оплата по СБП / QR» — добавочный эквайринг, визуально отделён от
+  // зелёного селектора способа фиолетовым акцентом (бренд СБП).
+  sbpButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1.5,
+    marginTop: spacing[2.5],
+  },
+  sbpButtonIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  sbpButtonTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.2 },
+  sbpButtonHint: { fontSize: 11, fontWeight: fontWeight.medium, letterSpacing: -0.1, marginTop: 1 },
   splitWrap: {
     // Surface from the inline `palette.bg.muted` override — no hardcoded white.
     borderRadius: borderRadius.xl,
