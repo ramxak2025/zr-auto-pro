@@ -653,7 +653,14 @@ export class ChecksService {
     tenantID: string,
     actor?: ChecksActor,
     perColumn = 100,
-  ): Promise<{ columns: WorkBoardColumn[]; groups: Record<string, any[]> }> {
+  ): Promise<{
+    columns: WorkBoardColumn[];
+    groups: Record<string, any[]>;
+    accepted: any[];
+    in_progress: any[];
+    ready: any[];
+    delivered: any[];
+  }> {
     await this.ensureBoardColumnsDefaults(tenantID);
     const { rows: colRows } = await this.pool.query(
       `SELECT * FROM work_board_columns
@@ -669,7 +676,7 @@ export class ChecksService {
     for (const key of activeKeys) groups[key] = [];
 
     // No active columns → nothing to group; return the (possibly empty) columns.
-    if (activeKeys.length === 0) return { columns, groups };
+    if (activeKeys.length === 0) return { columns, groups, accepted: [], in_progress: [], ready: [], delivered: [] };
 
     let where = 'ch.tenant_id = $1 AND ch.work_status = ANY($2)';
     const params: any[] = [tenantID, activeKeys];
@@ -715,7 +722,18 @@ export class ChecksService {
       const key = ch.workStatus as string;
       if (key && groups[key]) groups[key].push(ch);
     }
-    return { columns, groups };
+    // Backward-compat: pre-OTA clients read the fixed 4 keys (accepted/in_progress/
+    // ready/delivered) directly off the board response. Always include them (empty
+    // if that column was renamed/removed) so an OLD JS bundle can't crash on
+    // board.<key>.length after the shape change to {columns, groups}.
+    return {
+      columns,
+      groups,
+      accepted: groups['accepted'] ?? [],
+      in_progress: groups['in_progress'] ?? [],
+      ready: groups['ready'] ?? [],
+      delivered: groups['delivered'] ?? [],
+    };
   }
 
   // ──────────────────────────────────────────────────────────────────────
