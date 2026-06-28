@@ -295,6 +295,9 @@ export default function ChecksPage() {
 
   const checks = checksData?.data ?? [];
   const total = checksData?.total ?? 0;
+  const pageRevenue = checks.reduce((sum, c) => sum + (c.totalRevenue || 0), 0);
+  const pageProfit = checks.reduce((sum, c) => sum + (c.profit || 0), 0);
+  const avgCheck = checks.length ? Math.round(pageRevenue / checks.length) : 0;
 
   return (
     <div className="space-y-4">
@@ -393,6 +396,30 @@ export default function ChecksPage() {
         </div>
       )}
 
+      {/* Summary strip — totals for the loaded page of checks */}
+      {!showWarehouseDocs && !isLoading && checks.length > 0 && (
+        <div className={`grid grid-cols-2 gap-2.5 ${canViewProfit ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
+          <div className="rounded-xl bg-gray-50 p-3">
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Всего чеков</p>
+            <p className="text-base sm:text-lg font-bold text-gray-900 mt-0.5">{total}</p>
+          </div>
+          <div className="rounded-xl bg-blue-50 p-3">
+            <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider">Выручка (стр.)</p>
+            <p className="text-base sm:text-lg font-bold text-blue-700 mt-0.5">{formatMoney(pageRevenue)}</p>
+          </div>
+          {canViewProfit && (
+            <div className="rounded-xl bg-green-50 p-3">
+              <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">Прибыль (стр.)</p>
+              <p className="text-base sm:text-lg font-bold text-green-700 mt-0.5">{formatMoney(pageProfit)}</p>
+            </div>
+          )}
+          <div className="rounded-xl bg-indigo-50 p-3">
+            <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Средний чек</p>
+            <p className="text-base sm:text-lg font-bold text-indigo-700 mt-0.5">{formatMoney(avgCheck)}</p>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       {showWarehouseDocs ? (
         recentMovements.length === 0 && (
@@ -440,6 +467,7 @@ export default function ChecksPage() {
                   <th>Выручка</th>
                   {canViewProfit && <th>Прибыль</th>}
                   <th>Оплата</th>
+                  <th>Статус</th>
                   {canDelete && <th className="w-10"></th>}
                 </tr>
               </thead>
@@ -498,7 +526,9 @@ export default function ChecksPage() {
                         )}
                       </td>
                     )}
-                    <td className="font-semibold">{formatMoney(check.totalRevenue)}</td>
+                    <td className={`font-semibold ${check.isReturned ? 'text-gray-400 line-through' : ''}`}>
+                      {formatMoney(check.totalRevenue)}
+                    </td>
                     {canViewProfit && (
                       <td>
                         <span className={`font-semibold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
@@ -511,6 +541,15 @@ export default function ChecksPage() {
                       <span className={paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}>
                         {paymentMethodLabel(check.paymentMethod)}
                       </span>
+                    </td>
+                    <td>
+                      {check.isReturned ? (
+                        <span className="badge-danger">Возврат</span>
+                      ) : check.isDeferred ? (
+                        <span className="badge-warning">Отложен</span>
+                      ) : (
+                        <span className="badge-success">Проведён</span>
+                      )}
                     </td>
                     {canDelete && (
                       <td>

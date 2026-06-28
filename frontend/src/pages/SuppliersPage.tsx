@@ -107,6 +107,8 @@ export default function SuppliersPage() {
 
   const suppliers = data?.data || [];
   const total = data?.total || 0;
+  const totalDebt = suppliers.reduce((sum, s) => sum + (s.currentDebt || 0), 0);
+  const totalPurchasesSum = suppliers.reduce((sum, s) => sum + (s.totalPurchases || 0), 0);
 
   return (
     <div>
@@ -130,6 +132,24 @@ export default function SuppliersPage() {
           placeholder="Поиск по названию, контакту..."
         />
       </div>
+
+      {/* KPI strip */}
+      {!isLoading && suppliers.length > 0 && (
+        <div className="grid grid-cols-3 gap-2.5 mb-4">
+          <div className="rounded-xl bg-primary-50 p-3">
+            <p className="text-[10px] font-semibold text-primary-500 uppercase tracking-wider">Поставщиков</p>
+            <p className="text-base sm:text-lg font-bold text-primary-700 mt-0.5">{total}</p>
+          </div>
+          <div className="rounded-xl bg-red-50 p-3">
+            <p className="text-[10px] font-semibold text-red-500 uppercase tracking-wider">Общий долг</p>
+            <p className="text-base sm:text-lg font-bold text-red-700 mt-0.5">{formatMoney(totalDebt)}</p>
+          </div>
+          <div className="rounded-xl bg-gray-50 p-3">
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Оборот закупок</p>
+            <p className="text-base sm:text-lg font-bold text-gray-700 mt-0.5">{formatMoney(totalPurchasesSum)}</p>
+          </div>
+        </div>
+      )}
 
       {/* Table */}
       {isLoading ? (
@@ -184,17 +204,18 @@ export default function SuppliersPage() {
             ))}
           </div>
 
-          {/* Desktop table */}
+          {/* Desktop table — dense, full-width */}
           <div className="hidden md:block table-container md:max-h-[70vh]">
             <table className="table [&_th]:sticky [&_th]:top-0 [&_th]:z-10">
               <thead>
                 <tr>
-                  <th>Название</th>
+                  <th>Поставщик</th>
                   <th>Контактное лицо</th>
                   <th>Телефон</th>
                   <th className="text-right">Закупки</th>
                   <th className="text-right">Оплачено</th>
                   <th className="text-right">Долг</th>
+                  <th className="text-center">Статус</th>
                 </tr>
               </thead>
               <tbody>
@@ -205,13 +226,22 @@ export default function SuppliersPage() {
                     onClick={() => navigate(`/suppliers/${supplier.id}`)}
                   >
                     <td className="font-medium text-gray-900">
-                      <div className="flex items-center gap-2">
-                        <span>{supplier.name}</span>
-                        {supplier.isSystem ? (
-                          <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-primary-100 text-primary-700">
-                            \u0421\u0438\u0441\u0442\u0435\u043c\u043d\u044b\u0439
-                          </span>
-                        ) : null}
+                      <div className="flex items-center gap-3">
+                        <div
+                          className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${
+                            supplier.isSystem ? 'bg-primary-100 text-primary-600' : 'bg-gray-100 text-gray-500'
+                          }`}
+                        >
+                          <Truck className="w-4 h-4" />
+                        </div>
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="truncate">{supplier.name}</span>
+                          {supplier.isSystem ? (
+                            <span className="text-[9px] font-bold tracking-wider uppercase px-1.5 py-0.5 rounded bg-primary-100 text-primary-700 flex-shrink-0">
+                              {'\u0421\u0438\u0441\u0442\u0435\u043c\u043d\u044b\u0439'}
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                     </td>
                     <td className="text-gray-600">
@@ -228,6 +258,13 @@ export default function SuppliersPage() {
                       }`}
                     >
                       {formatMoney(supplier.currentDebt)}
+                    </td>
+                    <td className="text-center">
+                      {supplier.currentDebt > 0 ? (
+                        <span className="badge-danger">Долг</span>
+                      ) : (
+                        <span className="badge-success">Оплачено</span>
+                      )}
                     </td>
                   </tr>
                 ))}

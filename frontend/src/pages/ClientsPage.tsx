@@ -1,7 +1,7 @@
 import { useState, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Users, Phone, Calendar, Trash2, Edit2, ShoppingBag, Download, Upload } from 'lucide-react';
+import { Plus, Users, Phone, Calendar, Trash2, Edit2, ShoppingBag, Download, Upload, Car } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { clientsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -15,6 +15,15 @@ import Pagination from '../components/Pagination';
 import PhoneInput from '../components/PhoneInput';
 import { Client, PaginatedResponse } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
+
+const clientInitials = (name: string) =>
+  name
+    .split(' ')
+    .map((w) => w[0])
+    .filter(Boolean)
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
 
 export default function ClientsPage() {
   const navigate = useNavigate();
@@ -169,6 +178,8 @@ export default function ClientsPage() {
 
   const clients = data?.data || [];
   const total = data?.total || 0;
+  const withCars = clients.filter((c) => (c.cars?.length ?? 0) > 0).length;
+  const totalCars = clients.reduce((sum, c) => sum + (c.cars?.length ?? 0), 0);
 
   const formatDate = (dateStr: string) => {
     return new Date(dateStr).toLocaleDateString('ru-RU', {
@@ -259,6 +270,24 @@ export default function ClientsPage() {
         </div>
       )}
 
+      {/* KPI strip */}
+      {!isLoading && clients.length > 0 && (
+        <div className="grid grid-cols-3 gap-2.5 mb-4">
+          <div className="rounded-xl bg-blue-50 p-3">
+            <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider">Всего клиентов</p>
+            <p className="text-base sm:text-lg font-bold text-blue-700 mt-0.5">{total}</p>
+          </div>
+          <div className="rounded-xl bg-emerald-50 p-3">
+            <p className="text-[10px] font-semibold text-emerald-500 uppercase tracking-wider">С автомобилями</p>
+            <p className="text-base sm:text-lg font-bold text-emerald-700 mt-0.5">{withCars}</p>
+          </div>
+          <div className="rounded-xl bg-gray-50 p-3">
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Автопарк</p>
+            <p className="text-base sm:text-lg font-bold text-gray-700 mt-0.5">{totalCars}</p>
+          </div>
+        </div>
+      )}
+
       {/* Content */}
       {isLoading ? (
         <LoadingSpinner />
@@ -307,66 +336,102 @@ export default function ClientsPage() {
             ))}
           </div>
 
-          {/* Desktop table */}
+          {/* Desktop table — dense, full-width */}
           <div className="hidden md:block table-container md:max-h-[70vh]">
             <table className="table [&_th]:sticky [&_th]:top-0 [&_th]:z-10">
               <thead>
                 <tr>
-                  <th>Имя</th>
+                  <th>Клиент</th>
                   <th>Телефон</th>
-                  <th>Кол-во авто</th>
-                  <th>Дата</th>
+                  <th>Автомобили</th>
+                  <th>Комментарий</th>
+                  <th>Добавлен</th>
                   <th className="w-24 text-right">Действия</th>
                 </tr>
               </thead>
               <tbody>
-                {clients.map((client) => (
-                  <tr
-                    key={client.id}
-                    onClick={() => navigate(`/clients/${client.id}`)}
-                    className="cursor-pointer hover:bg-gray-50"
-                  >
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <Users className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        <span className="font-medium text-gray-900">{client.fullName}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <div className="flex items-center gap-2">
-                        <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        <span className="text-gray-600">{formatPhone(client.phone)}</span>
-                      </div>
-                    </td>
-                    <td>
-                      <span className="badge-info">{client.cars?.length || 0}</span>
-                    </td>
-                    <td>
-                      <div className="flex items-center gap-2 text-gray-500">
-                        <Calendar className="w-4 h-4 flex-shrink-0" />
-                        {formatDate(client.createdAt)}
-                      </div>
-                    </td>
-                    <td>
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={(e) => openEditModal(client, e)}
-                          className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
-                          title="Редактировать"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={(e) => handleDelete(client.id, e)}
-                          className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                          title="Удалить"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {clients.map((client) => {
+                  const cars = client.cars ?? [];
+                  return (
+                    <tr
+                      key={client.id}
+                      onClick={() => navigate(`/clients/${client.id}`)}
+                      className="cursor-pointer hover:bg-gray-50"
+                    >
+                      <td>
+                        <div className="flex items-center gap-3">
+                          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-blue-50 text-xs font-bold text-blue-700">
+                            {clientInitials(client.fullName)}
+                          </div>
+                          <div className="min-w-0">
+                            <span className="block font-medium text-gray-900 truncate">{client.fullName}</span>
+                            {client.source && <span className="badge-default mt-0.5 text-[10px]">{client.source}</span>}
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <div className="flex items-center gap-2">
+                          <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                          <span className="whitespace-nowrap text-gray-600">{formatPhone(client.phone)}</span>
+                        </div>
+                      </td>
+                      <td>
+                        {cars.length === 0 ? (
+                          <span className="text-gray-300">—</span>
+                        ) : (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            {cars.slice(0, 2).map((car) => (
+                              <span
+                                key={car.id}
+                                className="inline-flex items-center gap-1 rounded-lg bg-gray-100 px-2 py-0.5 text-xs text-gray-700"
+                              >
+                                <Car className="w-3 h-3 text-gray-400" />
+                                <span className="font-medium">{car.makeModel}</span>
+                                {car.plateNumber && <span className="text-gray-400">{car.plateNumber}</span>}
+                              </span>
+                            ))}
+                            {cars.length > 2 && (
+                              <span className="text-xs font-medium text-gray-400">+{cars.length - 2}</span>
+                            )}
+                          </div>
+                        )}
+                      </td>
+                      <td className="max-w-[260px]">
+                        {client.comment ? (
+                          <span className="block truncate text-gray-500" title={client.comment}>
+                            {client.comment}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                      <td>
+                        <div className="flex items-center gap-2 whitespace-nowrap text-gray-500">
+                          <Calendar className="w-4 h-4 flex-shrink-0" />
+                          {formatDate(client.createdAt)}
+                        </div>
+                      </td>
+                      <td>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={(e) => openEditModal(client, e)}
+                            className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
+                            title="Редактировать"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => handleDelete(client.id, e)}
+                            className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                            title="Удалить"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

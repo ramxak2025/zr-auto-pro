@@ -99,6 +99,14 @@ export default function EmployeesPage() {
   // ── Derived ─────────────────────────────────────────────────────────
   const activeUsers = useMemo(() => (users ?? []).filter((u) => u.isActive), [users]);
 
+  // Role breakdown for the KPI strip — order keeps the most relevant roles first.
+  const roleBreakdown = useMemo(() => {
+    const order = ['master', 'admin', 'director', 'superadmin'];
+    const counts = new Map<string, number>();
+    for (const u of activeUsers) counts.set(u.role, (counts.get(u.role) ?? 0) + 1);
+    return order.filter((r) => (counts.get(r) ?? 0) > 0).map((r) => ({ role: r, count: counts.get(r) ?? 0 }));
+  }, [activeUsers]);
+
   const attendance = useMemo(() => aggregateAttendance(scheduleEntries ?? []), [scheduleEntries]);
 
   const salaryByUser = useMemo(() => {
@@ -181,6 +189,22 @@ export default function EmployeesPage() {
   return (
     <div className="space-y-4 pb-8">
       <Header period={period} onPeriodChange={setPeriod} totalActive={activeUsers.length} />
+
+      {/* KPI strip — roster headcount + role breakdown */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2.5">
+        <div className="rounded-xl bg-blue-50 p-3">
+          <p className="text-[10px] font-semibold text-blue-500 uppercase tracking-wider">Всего сотрудников</p>
+          <p className="text-base sm:text-lg font-bold text-blue-700 mt-0.5">{activeUsers.length}</p>
+        </div>
+        {roleBreakdown.map(({ role, count }) => (
+          <div key={role} className="rounded-xl bg-gray-50 p-3">
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider truncate">
+              {roleLabels[role] || role}
+            </p>
+            <p className="text-base sm:text-lg font-bold text-gray-900 mt-0.5">{count}</p>
+          </div>
+        ))}
+      </div>
 
       {groups.map(([groupKey, members]) => (
         <GroupSection
@@ -316,7 +340,7 @@ function GroupSection({
       </div>
 
       {/* Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 gap-3">
         {members.map((u, idx) => (
           <EmployeeCard
             key={u.id}

@@ -164,6 +164,10 @@ export default function ServicesPage() {
 
   const services = data?.data || [];
   const total = data?.total || 0;
+  const avgPrice = services.length
+    ? Math.round(services.reduce((sum, s) => sum + (s.defaultPrice || 0), 0) / services.length)
+    : 0;
+  const withWarranty = services.filter((s) => (s.warrantyDays ?? 0) > 0).length;
 
   const formatCurrency = (amount: number) => {
     return new Intl.NumberFormat('ru-RU').format(amount);
@@ -197,6 +201,24 @@ export default function ServicesPage() {
         // No preset categories — filters only shown if categories exist in data
         return null;
       })()}
+
+      {/* KPI strip */}
+      {!isLoading && services.length > 0 && (
+        <div className="grid grid-cols-3 gap-2.5 mb-4">
+          <div className="rounded-xl bg-indigo-50 p-3">
+            <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Всего услуг</p>
+            <p className="text-base sm:text-lg font-bold text-indigo-700 mt-0.5">{total}</p>
+          </div>
+          <div className="rounded-xl bg-green-50 p-3">
+            <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">Средняя цена</p>
+            <p className="text-base sm:text-lg font-bold text-green-700 mt-0.5">{formatCurrency(avgPrice)} ₽</p>
+          </div>
+          <div className="rounded-xl bg-orange-50 p-3">
+            <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-wider">С гарантией</p>
+            <p className="text-base sm:text-lg font-bold text-orange-700 mt-0.5">{withWarranty}</p>
+          </div>
+        </div>
+      )}
 
       {/* Content */}
       {isLoading ? (
@@ -243,14 +265,16 @@ export default function ServicesPage() {
             ))}
           </div>
 
-          {/* Desktop table */}
+          {/* Desktop table — dense, full-width */}
           <div className="hidden md:block table-container md:max-h-[70vh]">
             <table className="table [&_th]:sticky [&_th]:top-0 [&_th]:z-10">
               <thead>
                 <tr>
                   <th>Название</th>
                   <th>Категория</th>
-                  <th>Цена по умолчанию</th>
+                  <th className="text-right">Цена по умолчанию</th>
+                  <th className="text-right">% мастера</th>
+                  <th className="text-right">Гарантия</th>
                   <th className="w-24 text-right">Действия</th>
                 </tr>
               </thead>
@@ -270,7 +294,21 @@ export default function ServicesPage() {
                         <span className="text-gray-400">—</span>
                       )}
                     </td>
-                    <td className="font-medium text-gray-900">{formatCurrency(service.defaultPrice)}</td>
+                    <td className="text-right font-medium text-gray-900">{formatCurrency(service.defaultPrice)} ₽</td>
+                    <td className="text-right">
+                      {service.masterPercent != null ? (
+                        <span className="font-medium text-gray-700">{service.masterPercent}%</span>
+                      ) : (
+                        <span className="text-gray-400">стандарт</span>
+                      )}
+                    </td>
+                    <td className="text-right">
+                      {service.warrantyDays != null && service.warrantyDays > 0 ? (
+                        <span className="badge-default">{service.warrantyDays} дн.</span>
+                      ) : (
+                        <span className="text-gray-300">—</span>
+                      )}
+                    </td>
                     <td>
                       <div className="flex items-center justify-end gap-1">
                         <button

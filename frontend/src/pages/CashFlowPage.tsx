@@ -170,23 +170,28 @@ export default function CashFlowPage() {
             ))}
           </div>
 
-          {/* Desktop table */}
+          {/* Desktop table — dense, full-width with weekday + share-of-period */}
           <div className="hidden md:block table-container overflow-y-auto md:max-h-[calc(100vh-20rem)]">
             <table className="table">
               <thead className="sticky top-0 z-10">
                 <tr>
                   <th>Дата</th>
+                  <th>День недели</th>
                   <th className="text-right">Наличные</th>
                   <th className="text-right">Карта</th>
                   <th className="text-right">Гарантия</th>
                   <th className="text-right">Итого</th>
+                  <th className="w-[22%]">Доля периода</th>
                 </tr>
               </thead>
               <tbody>
                 {days.map((day) => (
                   <tr key={day.date}>
-                    <td className="font-medium text-gray-900">
+                    <td className="font-medium text-gray-900 whitespace-nowrap">
                       {format(new Date(day.date), 'dd MMM yyyy', { locale: ru })}
+                    </td>
+                    <td className="capitalize text-gray-500 whitespace-nowrap">
+                      {format(new Date(day.date), 'EEEE', { locale: ru })}
                     </td>
                     <td className="text-right text-green-600">{day.cash > 0 ? formatMoney(day.cash) : '\u2014'}</td>
                     <td className="text-right text-blue-600">{day.card > 0 ? formatMoney(day.card) : '\u2014'}</td>
@@ -194,16 +199,37 @@ export default function CashFlowPage() {
                       {day.warranty > 0 ? formatMoney(day.warranty) : '\u2014'}
                     </td>
                     <td className="text-right font-semibold text-gray-900">{formatMoney(day.total)}</td>
+                    <td>
+                      <div className="flex items-center gap-2">
+                        <div className="h-2 flex-1 rounded-full bg-gray-100 overflow-hidden">
+                          <div
+                            className="h-full rounded-full bg-primary-500"
+                            style={{
+                              width: `${
+                                totals.total > 0
+                                  ? Math.max(Math.round((day.total / totals.total) * 100), day.total > 0 ? 4 : 0)
+                                  : 0
+                              }%`,
+                            }}
+                          />
+                        </div>
+                        <span className="w-9 text-right text-xs font-medium tabular-nums text-gray-500">
+                          {totals.total > 0 ? Math.round((day.total / totals.total) * 100) : 0}%
+                        </span>
+                      </div>
+                    </td>
                   </tr>
                 ))}
               </tbody>
               <tfoot>
                 <tr className="border-t-2 border-gray-300 bg-gray-50 [&>td]:sticky [&>td]:bottom-0 [&>td]:z-10 [&>td]:bg-gray-50">
                   <td className="font-bold text-gray-900">Итого</td>
+                  <td className="text-gray-400">{days.length} дн.</td>
                   <td className="text-right font-bold text-green-600">{formatMoney(totals.cash)}</td>
                   <td className="text-right font-bold text-blue-600">{formatMoney(totals.card)}</td>
                   <td className="text-right font-bold text-orange-600">{formatMoney(totals.warranty)}</td>
                   <td className="text-right font-bold text-gray-900">{formatMoney(totals.total)}</td>
+                  <td className="text-right font-bold text-gray-900">100%</td>
                 </tr>
               </tfoot>
             </table>
