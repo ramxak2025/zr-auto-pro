@@ -14,6 +14,7 @@ import {
   createChecksApi,
   createSuppliersApi,
   createSalaryApi,
+  createMotivationApi,
   createReportsApi,
   createShiftsApi,
   createScheduleApi,
@@ -66,6 +67,12 @@ export const servicesApi = createServicesApi(api);
 export const checksApi = createChecksApi(api);
 export const suppliersApi = createSuppliersApi(api);
 export const salaryApi = createSalaryApi(api);
+// «Мотивация сотрудников» v1 — акционные товары (backend motivation/, миграция
+// 095). getPromos/setPromo/clearPromo — owner-class (director/admin/superadmin)
+// на сервере; getAccruals открыт любому сотруднику, но backend force-scope'ит
+// непривилегированного к ЕГО собственным начислениям. Consumed by MotivationScreen
+// (раздел «Ещё» → Финансы) + surfaced в SalaryScreen (MasterSalary.motivationAmount).
+export const motivationApi = createMotivationApi(api);
 export const reportsApi = createReportsApi(api);
 export const shiftsApi = createShiftsApi(api);
 export const scheduleApi = createScheduleApi(api);

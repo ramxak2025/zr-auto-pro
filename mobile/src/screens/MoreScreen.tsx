@@ -224,6 +224,22 @@ const menuSections: MenuSection[] = [
         iconColor: colors.green[600],
       },
       {
+        // «Мотивация сотрудников» v1 — акционные товары (backend motivation/, 095).
+        // Своя отдельная точка входа (НЕ внутри «Маркетинга»). Owner-class: roles
+        // ограничены владельцем/директором; setPromo/clearPromo закрыты на сервере.
+        // Переиспользуем item-key 'salary' — мотивация это компенсация, той же
+        // финансовой видимостью владелец управляет и «Зарплатой» (новый ключ
+        // сломал бы ITEM_KEYS drift-guard, как у «Рассрочки» с 'cashflow').
+        label: 'Мотивация сотрудников',
+        description: 'Акционные товары и бонусы за продажи',
+        screen: 'Motivation',
+        itemKey: 'salary',
+        roles: ['director', 'superadmin'],
+        icon: 'gift-outline',
+        iconBg: colors.emerald[50],
+        iconColor: colors.green[600],
+      },
+      {
         label: 'Расходы',
         description: 'Аренда, маркетинг и др.',
         screen: 'Expenses',

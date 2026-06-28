@@ -26,6 +26,7 @@ import PurchaseOrdersScreen from '../screens/PurchaseOrdersScreen';
 import PurchaseOrderCreateScreen from '../screens/PurchaseOrderCreateScreen';
 import PurchaseOrderDetailScreen from '../screens/PurchaseOrderDetailScreen';
 import SalaryScreen from '../screens/SalaryScreen';
+import MotivationScreen from '../screens/MotivationScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import CashFlowScreen from '../screens/CashFlowScreen';
 import CashShiftScreen from '../screens/CashShiftScreen';
@@ -363,6 +364,14 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="InstallmentDetail" component={InstallmentDetailScreen} />
       <MoreStack.Screen name="InstallmentReminderSettings" component={InstallmentReminderSettingsScreen} />
       <MoreStack.Screen name="Salary" component={GatedSalary} />
+      {/* «Мотивация сотрудников» v1 — акционные товары (backend motivation/, 095).
+          UNGATED by plan-feature: the menu row is roles-filtered to owner/director
+          (director/superadmin), and setPromo/clearPromo are owner-class enforced
+          server-side. Lives in MoreStack so the floating tab bar stays visible
+          (back goes Motivation → Ещё). Reuses the warehouse ProductPickerModal for
+          «Добавить акционный товар» and surfaces into SalaryScreen as «Мотивация
+          (акции)». */}
+      <MoreStack.Screen name="Motivation" component={MotivationScreen} />
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
       <MoreStack.Screen name="Reports" component={GatedReports} />
       {/* «Маркетинг» hub → four direction sub-screens. All live in MoreStack so

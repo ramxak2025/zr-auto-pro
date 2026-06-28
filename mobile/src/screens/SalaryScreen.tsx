@@ -64,7 +64,7 @@ import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import type { SemanticPalette } from '../theme/palette';
 import { UserRole } from '../../../shared/types';
-import type { MasterSalary, SalaryPayment, SalaryPremium } from '../../../shared/types';
+import type { MasterSalary, SalaryPayment, SalaryPremium, SalarySummary } from '../../../shared/types';
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -227,6 +227,7 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen }:
   const services = master.serviceEarnings || 0;
   const products = master.productEarnings || 0;
   const premiums = master.premiumsAmount || 0;
+  const motivation = master.motivationAmount || 0;
   const checks = master.checkCount || 0;
 
   return (
@@ -277,7 +278,7 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen }:
       </View>
 
       {/* Sub-line with chip stats — only render when there's content */}
-      {checks + services + products + premiums > 0 ? (
+      {checks + services + products + premiums + motivation > 0 ? (
         <View style={styles.rowChipsLine}>
           <Text style={[styles.rowChipsText, { color: palette.text.secondary }]} numberOfLines={1}>
             <Text style={{ color: palette.text.primary, fontWeight: fontWeight.semibold }}>{checks}</Text> чеков
@@ -308,6 +309,15 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen }:
                 премии
               </>
             ) : null}
+            {motivation ? (
+              <>
+                {'  ·  '}
+                <Text style={{ color: colors.green[600], fontWeight: fontWeight.semibold }}>
+                  {formatMoneyShort(motivation)}
+                </Text>{' '}
+                мотивация
+              </>
+            ) : null}
           </Text>
         </View>
       ) : null}
@@ -323,6 +333,7 @@ export default function SalaryScreen() {
   const { isRole } = useAuth();
   const palette = useColors();
   const canManagePayments = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
+  const isMaster = isRole(UserRole.MASTER);
   const tabBarHeight = useTabBarHeight();
 
   // Month navigation — single source of truth.
@@ -389,6 +400,22 @@ export default function SalaryScreen() {
     // SWR — keep previous month visible while user navigates between months.
     placeholderData: (prev) => prev,
   });
+
+  // Personal «моя мотивация» — when a master views their own salary, surface the
+  // promo-product (акции) bonus accrued today / this month / all-time. Reuses the
+  // SAME query key as the Dashboard master widget (['salary', 'my-summary']) so
+  // TanStack DEDUPES the observer — no extra request, instant from the warm
+  // persistent cache. Fires ONLY for masters; owners / admins never hit it.
+  const { data: mySummary } = useQuery<SalarySummary>({
+    queryKey: ['salary', 'my-summary'],
+    queryFn: async () => (await salaryApi.getMy()).data,
+    enabled: isMaster,
+    staleTime: 30_000,
+  });
+  const myMotivationToday = mySummary?.motivationToday ?? 0;
+  const myMotivationMonth = mySummary?.motivationMonth ?? 0;
+  const myMotivationTotal = mySummary?.motivationTotal ?? 0;
+  const showMyMotivation = isMaster && (myMotivationToday > 0 || myMotivationMonth > 0 || myMotivationTotal > 0);
 
   // Derive the open detail master from the freshest list snapshot.
   const detailMaster = useMemo<MasterSalary | null>(() => {
@@ -692,6 +719,73 @@ export default function SalaryScreen() {
     </View>
   );
 
+  // Personal «Моя мотивация» card — surfaced ABOVE the summary in the list
+  // header for a master who has accrued promo-product (акции) bonuses. Additive:
+  // when the viewer isn't a master OR has no motivation, this is null and the
+  // screen renders exactly as before.
+  const listHeader = (
+    <View>
+      {showMyMotivation ? (
+        <View
+          style={[styles.myMotivationCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <View style={styles.myMotivationHeader}>
+            <View
+              style={[
+                styles.myMotivationIcon,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.emerald[50] },
+              ]}
+            >
+              <Ionicons name="gift-outline" size={18} color={colors.green[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.myMotivationTitle, { color: palette.text.primary }]}>Моя мотивация</Text>
+              <Text style={[styles.myMotivationSub, { color: palette.text.tertiary }]}>Бонусы с акционных товаров</Text>
+            </View>
+          </View>
+          <View style={styles.summaryRow}>
+            <View style={styles.summaryCell}>
+              <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>Сегодня</Text>
+              <Text
+                style={[styles.summaryCellValue, { color: palette.text.primary }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {formatMoney(myMotivationToday)}
+              </Text>
+            </View>
+            <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
+            <View style={styles.summaryCell}>
+              <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>За месяц</Text>
+              <Text
+                style={[styles.summaryCellValue, { color: colors.green[600] }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {formatMoney(myMotivationMonth)}
+              </Text>
+            </View>
+            <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
+            <View style={styles.summaryCell}>
+              <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>Всего</Text>
+              <Text
+                style={[styles.summaryCellValue, { color: palette.text.secondary }]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.7}
+              >
+                {formatMoney(myMotivationTotal)}
+              </Text>
+            </View>
+          </View>
+        </View>
+      ) : null}
+      {summaryHeader}
+    </View>
+  );
+
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Зарплата" onBack={() => navigation.goBack()} trailing={trailingMonthChip} />
@@ -711,7 +805,7 @@ export default function SalaryScreen() {
           showsVerticalScrollIndicator={false}
           contentInset={Platform.OS === 'ios' ? { bottom: tabBarHeight } : undefined}
         >
-          {summaryHeader}
+          {listHeader}
           <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted, marginTop: spacing[8] }]}>
             <Ionicons name="wallet-outline" size={36} color={palette.text.tertiary} />
           </View>
@@ -728,7 +822,7 @@ export default function SalaryScreen() {
           // Summary card scrolls AWAY with content — owner explicitly
           // asked for non-sticky behaviour. The previous on-screen
           // sticky bar was obscuring rows when paging down on iPhone SE.
-          ListHeaderComponent={summaryHeader}
+          ListHeaderComponent={listHeader}
           contentContainerStyle={{
             paddingHorizontal: spacing[4],
             paddingTop: spacing[3],
@@ -856,6 +950,9 @@ function DetailContent({ master, palette, monthLabel, onPay, onPremium, canManag
   const services = master.serviceEarnings || 0;
   const products = master.productEarnings || 0;
   const premiumsAmount = master.premiumsAmount || 0;
+  // «Мотивация» — promo-product (акции) bonus. Already folded into totalEarnings
+  // server-side; shown here as its own breakdown line for transparency.
+  const motivationAmount = master.motivationAmount || 0;
   const premiumList: SalaryPremium[] = Array.isArray(master.premiums) ? master.premiums : [];
   const payments: SalaryPayment[] = Array.isArray(master.payments) ? master.payments : [];
   const status = rowStatus(master);
@@ -919,6 +1016,16 @@ function DetailContent({ master, palette, monthLabel, onPay, onPremium, canManag
           value={premiumsAmount}
           palette={palette}
         />
+        {motivationAmount > 0 ? (
+          <BreakdownRow
+            icon="trending-up-outline"
+            color={colors.green[600]}
+            label="Мотивация (акции)"
+            subLabel="% от маржи акционных товаров"
+            value={motivationAmount}
+            palette={palette}
+          />
+        ) : null}
       </CollapsibleSection>
 
       {/* Premiums list */}
@@ -1540,6 +1647,45 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.bold,
     letterSpacing: -0.3,
     includeFontPadding: false,
+  },
+
+  // Personal «Моя мотивация» card — master-only, sits above the summary in the
+  // list header. Reuses summaryRow / summaryCell / summaryDivider for the
+  // three-stat row so it reads as a sibling of the FOT card.
+  myMotivationCard: {
+    marginHorizontal: spacing[4],
+    marginTop: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    gap: spacing[3],
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 1 },
+    ...(Platform.OS === 'android' ? { elevation: 1 } : null),
+  },
+  myMotivationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+  },
+  myMotivationIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  myMotivationTitle: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.bold,
+    letterSpacing: -0.2,
+  },
+  myMotivationSub: {
+    fontSize: 11,
+    marginTop: 1,
   },
 
   // Empty state
