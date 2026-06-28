@@ -11,7 +11,7 @@ import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../../platform/Typography';
-import { spacing, borderRadius } from '../../theme';
+import { spacing, borderRadius, colors, softTint } from '../../theme';
 import { useColors } from '../../contexts/ThemeContext';
 import { haptic } from '../../platform/haptics';
 import type { KnowledgeCategory } from '../../../../shared/types';
@@ -25,6 +25,10 @@ interface CategoryRowProps {
 
 function CategoryRowInner({ category, subtitle, onPress }: CategoryRowProps) {
   const palette = useColors();
+  // Folders carry an amber "Files-app" identity so they read as containers,
+  // distinct from the accent-blue article rows. Light = pale amber fill;
+  // dark = translucent amber glow.
+  const folderTileBg = palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50];
 
   return (
     <Pressable
@@ -39,11 +43,11 @@ function CategoryRowInner({ category, subtitle, onPress }: CategoryRowProps) {
       accessibilityRole="button"
       accessibilityLabel={`Папка: ${category.name}`}
     >
-      <View style={[styles.icon, { backgroundColor: palette.accent.primarySoft }]}>
+      <View style={[styles.icon, { backgroundColor: folderTileBg }]}>
         <Ionicons
           name={(category.icon as keyof typeof Ionicons.glyphMap) || 'folder'}
           size={20}
-          color={palette.accent.primary}
+          color={colors.amber[600]}
         />
       </View>
       <View style={styles.body}>

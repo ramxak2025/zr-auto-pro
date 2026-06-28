@@ -222,7 +222,7 @@ function mapToSections(map: SectionVisibilityMap): SectionVisibility[] {
 const ITEM_LABELS: Record<string, string> = {
   schedule: 'Расписание',
   clients: 'Клиенты',
-  'knowledge-base': 'Обучение и база знаний',
+  'knowledge-base': 'База знаний',
   cashflow: 'Движение денег',
   salary: 'Зарплата',
   expenses: 'Расходы',

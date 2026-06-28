@@ -106,6 +106,14 @@ export default function KnowledgeCategoryScreen() {
     [navigation],
   );
 
+  // Breadcrumb «База знаний» root tap → back to the KB home. `navigate` to a
+  // route already in the MoreStack pops back to it (no duplicate push), so a
+  // deep folder collapses straight to the home in one tap.
+  const goHome = React.useCallback(() => {
+    haptic('tap');
+    navigation.navigate('KnowledgeBase');
+  }, [navigation]);
+
   // Manager: create an article that lands directly in this folder/collection.
   const openNewArticle = React.useCallback(() => {
     haptic('tap');
@@ -162,15 +170,36 @@ export default function KnowledgeCategoryScreen() {
           />
         }
       >
-        {/* Breadcrumb — orientation within the folder tree (Files-like). */}
-        {ancestors.length > 0 ? (
-          <View style={styles.breadcrumb}>
-            <Ionicons name="folder-outline" size={13} color={palette.text.tertiary} />
-            <Text variant="caption" numberOfLines={1} style={{ flex: 1, color: palette.text.tertiary }}>
-              {ancestors.map((a) => a.name).join('  ›  ')}
+        {/* Breadcrumb — a scrollable «База знаний › … › эта папка» trail. The
+            home crumb taps back to the KB home; the current folder is bold.
+            Always shown for orientation (Files-app style). */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          contentContainerStyle={styles.breadcrumb}
+        >
+          <Pressable onPress={goHome} hitSlop={6} style={styles.crumbBtn} accessibilityRole="button">
+            <Ionicons name="library-outline" size={13} color={palette.text.tertiary} />
+            <Text variant="caption" style={{ color: palette.text.tertiary }}>
+              База знаний
+            </Text>
+          </Pressable>
+          {ancestors.map((a) => (
+            <View key={a.id} style={styles.crumbItem}>
+              <Ionicons name="chevron-forward" size={11} color={palette.text.tertiary} style={styles.crumbSep} />
+              <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
+                {a.name}
+              </Text>
+            </View>
+          ))}
+          <View style={styles.crumbItem}>
+            <Ionicons name="chevron-forward" size={11} color={palette.text.tertiary} style={styles.crumbSep} />
+            <Text variant="caption" numberOfLines={1} style={{ color: palette.text.secondary, fontWeight: '700' }}>
+              {title}
             </Text>
           </View>
-        ) : null}
+        </ScrollView>
 
         {data === undefined && isFetching ? (
           <ListSkeleton count={6} />
@@ -280,10 +309,14 @@ const styles = StyleSheet.create({
   breadcrumb: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[1.5],
-    marginBottom: spacing[3],
+    gap: spacing[1],
+    marginBottom: spacing[3.5],
     paddingHorizontal: spacing[1],
+    paddingVertical: spacing[0.5],
   },
+  crumbBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  crumbItem: { flexDirection: 'row', alignItems: 'center', gap: 4, maxWidth: 180 },
+  crumbSep: { marginHorizontal: 1 },
   section: { marginBottom: spacing[5] },
   sectionLabel: { marginLeft: spacing[1], marginBottom: spacing[2] },
   sectionLabelFlush: { marginBottom: 0 },

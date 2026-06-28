@@ -44,9 +44,6 @@ import KnowledgeCourseListScreen from '../screens/KnowledgeCourseListScreen';
 import KnowledgeCourseDetailScreen from '../screens/KnowledgeCourseDetailScreen';
 import KnowledgeLessonScreen from '../screens/KnowledgeLessonScreen';
 import KnowledgeCourseEditorScreen from '../screens/KnowledgeCourseEditorScreen';
-import KnowledgeTroubleshootingScreen from '../screens/KnowledgeTroubleshootingScreen';
-import KnowledgeTroubleshootingDetailScreen from '../screens/KnowledgeTroubleshootingDetailScreen';
-import KnowledgeTroubleshootingEditorScreen from '../screens/KnowledgeTroubleshootingEditorScreen';
 import MarketingScreen from '../screens/MarketingScreen';
 import WinbackScreen from '../screens/WinbackScreen';
 import CarsScreen from '../screens/CarsScreen';
@@ -330,9 +327,11 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="KnowledgeCourseDetail" component={KnowledgeCourseDetailScreen} />
       <MoreStack.Screen name="KnowledgeLesson" component={KnowledgeLessonScreen} />
       <MoreStack.Screen name="KnowledgeCourseEditor" component={KnowledgeCourseEditorScreen} />
-      <MoreStack.Screen name="KnowledgeTroubleshooting" component={KnowledgeTroubleshootingScreen} />
-      <MoreStack.Screen name="KnowledgeTroubleshootingDetail" component={KnowledgeTroubleshootingDetailScreen} />
-      <MoreStack.Screen name="KnowledgeTroubleshootingEditor" component={KnowledgeTroubleshootingEditorScreen} />
+      {/* «Справочник неисправностей» (KnowledgeTroubleshooting*) удалён из
+          мобильного приложения по просьбе владельца — на главном экране базы
+          знаний остаются три направления: База знаний, Регламенты, Учебный
+          центр. Backend и экраны справочника не трогаем; здесь просто нет
+          точки входа. */}
       <MoreStack.Screen name="Cars" component={GatedCars} />
       <MoreStack.Screen name="Services" component={GatedServices} />
       <MoreStack.Screen name="Suppliers" component={GatedSuppliers} />

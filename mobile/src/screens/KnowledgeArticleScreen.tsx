@@ -260,76 +260,86 @@ export default function KnowledgeArticleScreen() {
             />
           ) : null}
 
+          {/* Kicker — the article kind, set above the headline like a magazine
+              section label. */}
+          <Text
+            variant="label"
+            numberOfLines={1}
+            style={[styles.kicker, { color: isRegulation ? colors.amber[600] : palette.accent.primary }]}
+          >
+            {isRegulation ? 'Регламент' : 'Статья'}
+          </Text>
+
           <Text variant="title1" color={palette.text.primary} style={styles.title}>
             {article.title}
           </Text>
 
-          <View style={styles.metaRow}>
-            {isRegulation ? (
-              <View
-                style={[
-                  styles.typeChip,
-                  { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
-                ]}
-              >
-                <Ionicons
-                  name="shield-checkmark"
-                  size={12}
-                  color={palette.mode === 'dark' ? colors.amber[200] : colors.amber[600]}
-                />
-                <Text
-                  variant="caption"
-                  style={{ color: palette.mode === 'dark' ? colors.amber[200] : colors.amber[700], fontWeight: '700' }}
+          {/* Status chips — only the actionable, attention-grade flags. */}
+          {article.mandatory || article.dueDate ? (
+            <View style={styles.chipsRow}>
+              {article.mandatory ? (
+                <View
+                  style={[
+                    styles.typeChip,
+                    { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
+                  ]}
                 >
-                  Регламент
-                </Text>
-              </View>
-            ) : null}
-            {article.mandatory ? (
-              <View
-                style={[
-                  styles.typeChip,
-                  { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
-                ]}
-              >
-                <Ionicons
-                  name="alert-circle"
-                  size={12}
-                  color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
-                />
-                <Text
-                  variant="caption"
-                  style={{ color: palette.mode === 'dark' ? colors.red[300] : colors.red[700], fontWeight: '700' }}
-                >
-                  Обязательно
-                </Text>
-              </View>
-            ) : null}
-            {article.dueDate ? (
-              <View style={[styles.typeChip, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="time-outline" size={12} color={palette.text.secondary} />
-                <Text variant="caption" style={{ color: palette.text.secondary, fontWeight: '700' }}>
-                  Срок: {formatDateShort(article.dueDate)}
-                </Text>
-              </View>
-            ) : null}
+                  <Ionicons
+                    name="alert-circle"
+                    size={12}
+                    color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+                  />
+                  <Text
+                    variant="caption"
+                    style={{ color: palette.mode === 'dark' ? colors.red[300] : colors.red[700], fontWeight: '700' }}
+                  >
+                    Обязательно
+                  </Text>
+                </View>
+              ) : null}
+              {article.dueDate ? (
+                <View style={[styles.typeChip, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="time-outline" size={12} color={palette.text.secondary} />
+                  <Text variant="caption" style={{ color: palette.text.secondary, fontWeight: '700' }}>
+                    Срок: {formatDateShort(article.dueDate)}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
+
+          {/* Byline — quiet, magazine-style: category · updated · views. */}
+          <View style={styles.bylineRow}>
             {article.categoryName ? (
-              <Text variant="footnote" style={{ color: palette.text.secondary }}>
-                {article.categoryName}
-              </Text>
+              <>
+                <Text variant="footnote" numberOfLines={1} style={{ color: palette.text.tertiary, flexShrink: 1 }}>
+                  {article.categoryName}
+                </Text>
+                <Text variant="footnote" style={{ color: palette.text.tertiary }}>
+                  ·
+                </Text>
+              </>
             ) : null}
             <Text variant="footnote" style={{ color: palette.text.tertiary }}>
               Обновлено {formatDateShort(article.updatedAt)}
             </Text>
             {typeof article.viewCount === 'number' && article.viewCount > 0 ? (
-              <View style={styles.viewCount}>
-                <Ionicons name="eye-outline" size={13} color={palette.text.tertiary} />
-                <Text variant="caption" style={{ color: palette.text.tertiary }}>
-                  {article.viewCount}
+              <>
+                <Text variant="footnote" style={{ color: palette.text.tertiary }}>
+                  ·
                 </Text>
-              </View>
+                <View style={styles.viewCount}>
+                  <Ionicons name="eye-outline" size={13} color={palette.text.tertiary} />
+                  <Text variant="footnote" style={{ color: palette.text.tertiary }}>
+                    {article.viewCount}
+                  </Text>
+                </View>
+              </>
             ) : null}
           </View>
+
+          {/* Hairline rule under the headline — the magazine "deck" separator. */}
+          <View style={[styles.headlineRule, { backgroundColor: palette.border.subtle }]} />
 
           {/* Regulation updated — re-acknowledge */}
           {regulationUpdated ? (
@@ -669,12 +679,21 @@ const styles = StyleSheet.create({
 
   cover: {
     width: '100%',
-    height: 200,
+    height: 224,
     borderRadius: borderRadius['2xl'],
     marginBottom: spacing[4],
   },
-  title: { marginBottom: spacing[2] },
-  metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing[2], marginBottom: spacing[3] },
+  kicker: { marginBottom: spacing[1.5] },
+  title: { marginBottom: spacing[2.5] },
+  chipsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: spacing[2],
+    marginBottom: spacing[2.5],
+  },
+  bylineRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing[1.5] },
+  headlineRule: { height: StyleSheet.hairlineWidth, marginTop: spacing[3.5], marginBottom: spacing[4] },
   typeChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -732,9 +751,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  bodyWrap: { marginTop: spacing[1] },
+  bodyWrap: { marginTop: 0 },
 
-  videoSection: { marginTop: spacing[2], marginBottom: spacing[2], gap: spacing[3] },
+  videoSection: { marginTop: spacing[1], marginBottom: spacing[4], gap: spacing[3] },
 
   attachments: { marginTop: spacing[5] },
   attachRow: {

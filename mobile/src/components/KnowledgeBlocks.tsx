@@ -2,15 +2,22 @@
  * KnowledgeBlocks — the block-based article renderer for the Knowledge Base
  * reader.
  *
- * Renders an ordered `KnowledgeBlock[]` (079 contract) so the reader screen
- * stays clean. Block kinds:
- *   • text    → styled body paragraph(s) (blank-line separated).
- *   • heading → section title (level 2 → title2, level 3 → title3, default 2).
- *   • image   → inline 16:9-ish image + optional caption; tap → fullscreen
- *               preview (same BlurView modal UX as ProductDetail/Warehouse).
- *   • video   → VK-only in-app player: a 16:9 WebView pointed at the VK
- *               `video_ext.php` embed URL converted from the stored share link.
- *               Caption below.
+ * Goal: reading an article must feel like a real magazine / website article
+ * rendered INSIDE the app — interleaved blocks in their authored order:
+ *   текст → фото (видно сразу, инлайн) → текст → видео (играет в приложении) → …
+ *
+ * Block kinds:
+ *   • text    → article-grade paragraphs: 17pt, 1.6 line-height, primary ink,
+ *               blank-line separated, comfortable paragraph rhythm.
+ *   • heading → section title (level 2 → 22pt, level 3 → 18pt) with generous
+ *               top breathing room, so long reads keep a clear hierarchy.
+ *   • image   → full-width, ROUNDED, shown at its NATURAL aspect ratio (no
+ *               fixed-height crop) the moment its size is known; tap →
+ *               fullscreen preview (same BlurView modal UX as Warehouse).
+ *               Optional centred caption.
+ *   • video   → VK in-app player: a 16:9 WebView pointed at the VK
+ *               `video_ext.php` embed URL. Plays inline — never jumps to an
+ *               external browser. Caption below.
  *
  * VK url → embed:
  *   The owner stores a share link (vk.com/video-123_456, vkvideo.ru/...,
@@ -19,11 +26,11 @@
  *     https://vk.com/video_ext.php?oid=<oid>&id=<vid>&hd=2
  *   If the link is unparseable, the block degrades to an «Открыть в VK» link.
  *
- * react-native-webview is linked only at the NEXT native prebuild/rebuild
- * (batched). Until then `require` may resolve the JS but the native view isn't
- * registered — so each player is wrapped in a tiny error boundary that falls
- * back to the «Открыть в VK» link instead of crashing the whole reader. This is
- * expected: VK video plays inline only after the native rebuild ships.
+ * react-native-webview is a project dependency; it renders the native view
+ * after a prebuild/rebuild. Until then `require` may resolve the JS but the
+ * native view isn't registered — so each player is wrapped in a tiny error
+ * boundary that falls back to the «Открыть в VK» link instead of crashing the
+ * whole reader.
  *
  * Android-safe: WebView works on both platforms; the fullscreen preview
  * degrades through expo-blur the same way the rest of the app does.
@@ -32,6 +39,7 @@ import React from 'react';
 import { Linking, Modal as RNModal, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
+import type { ImageLoadEventData } from 'expo-image';
 import CachedImage from './CachedImage';
 import { Text } from '../platform/Typography';
 import { spacing, borderRadius, colors } from '../theme';
@@ -81,7 +89,7 @@ export function vkEmbedUrl(rawUrl: string): string | null {
   return `https://vk.com/video_ext.php?oid=${oid}&id=${vid}&hd=2`;
 }
 
-// ── Lazy WebView (native linked only after the batched prebuild) ─────────────
+// ── Lazy WebView (native linked after the batched prebuild) ──────────────────
 let WebViewComponent: React.ComponentType<WebViewProps> | null = null;
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -104,6 +112,71 @@ class WebViewBoundary extends React.Component<
   }
 }
 
+// Default aspect before an image's natural size is known — a gentle landscape
+// so the placeholder reserves a believable amount of height (no jump-shrink).
+const DEFAULT_IMAGE_ASPECT = 16 / 10;
+// Clamp natural aspect so a panorama or a tall screenshot still reads well in a
+// phone-width column instead of dominating the whole viewport.
+const MIN_IMAGE_ASPECT = 0.66; // tall (portrait) cap
+const MAX_IMAGE_ASPECT = 1.9; // wide (landscape) cap
+
+/**
+ * ArticleImage — full-width inline photo shown at its NATURAL aspect ratio.
+ *
+ * We start at a believable landscape placeholder and, the moment expo-image
+ * reports the bitmap's real dimensions, switch to the true (clamped) ratio so
+ * nothing is cropped — a magazine-grade presentation. Tap → fullscreen.
+ */
+function ArticleImage({
+  uri,
+  caption,
+  onPreview,
+}: {
+  uri: string;
+  caption?: string;
+  onPreview: (uri: string) => void;
+}) {
+  const palette = useColors();
+  const [aspect, setAspect] = React.useState<number>(DEFAULT_IMAGE_ASPECT);
+
+  const onLoad = React.useCallback((e: ImageLoadEventData) => {
+    const w = e?.source?.width;
+    const h = e?.source?.height;
+    if (w && h && h > 0) {
+      const r = w / h;
+      setAspect(Math.max(MIN_IMAGE_ASPECT, Math.min(MAX_IMAGE_ASPECT, r)));
+    }
+  }, []);
+
+  return (
+    <View style={styles.mediaBlock}>
+      <Pressable
+        onPress={() => {
+          haptic('tap');
+          onPreview(uri);
+        }}
+        accessibilityRole="imagebutton"
+        accessibilityLabel={caption || 'Открыть изображение'}
+      >
+        <CachedImage
+          source={{ uri }}
+          style={[
+            styles.image,
+            { aspectRatio: aspect, backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+          ]}
+          resizeMode="cover"
+          onLoad={onLoad}
+        />
+      </Pressable>
+      {caption ? (
+        <Text variant="footnote" style={[styles.caption, { color: palette.text.tertiary }]}>
+          {caption}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
 // ── Component ────────────────────────────────────────────────────────────────
 interface KnowledgeBlocksProps {
   blocks: KnowledgeBlock[];
@@ -124,12 +197,17 @@ function KnowledgeBlocksInner({ blocks }: KnowledgeBlocksProps) {
         switch (block.type) {
           // ── Text ────────────────────────────────────────────────────────
           case 'text': {
-            const paragraphs = block.text.replace(/\r\n/g, '\n').split(/\n{2,}/);
+            const paragraphs = block.text
+              .replace(/\r\n/g, '\n')
+              .split(/\n{2,}/)
+              .map((p) => p.trim())
+              .filter(Boolean);
+            if (paragraphs.length === 0) return null;
             return (
               <View key={i} style={styles.textBlock}>
                 {paragraphs.map((para, p) => (
-                  <Text key={p} variant="body" style={[styles.paragraph, { color: palette.text.secondary }]}>
-                    {para.trim()}
+                  <Text key={p} variant="body" style={[styles.paragraph, { color: palette.text.primary }]}>
+                    {para}
                   </Text>
                 ))}
               </View>
@@ -155,29 +233,7 @@ function KnowledgeBlocksInner({ blocks }: KnowledgeBlocksProps) {
           case 'image': {
             const uri = getImageUrl(block.url);
             if (!uri) return null;
-            return (
-              <View key={i} style={styles.mediaBlock}>
-                <Pressable
-                  onPress={() => {
-                    haptic('tap');
-                    setPreview(uri);
-                  }}
-                  accessibilityRole="imagebutton"
-                  accessibilityLabel={block.caption || 'Открыть изображение'}
-                >
-                  <CachedImage
-                    source={{ uri }}
-                    style={[styles.image, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-                    resizeMode="cover"
-                  />
-                </Pressable>
-                {block.caption ? (
-                  <Text variant="footnote" style={[styles.caption, { color: palette.text.tertiary }]}>
-                    {block.caption}
-                  </Text>
-                ) : null}
-              </View>
-            );
+            return <ArticleImage key={i} uri={uri} caption={block.caption} onPreview={setPreview} />;
           }
 
           // ── Video (VK) ──────────────────────────────────────────────────
@@ -208,7 +264,7 @@ function KnowledgeBlocksInner({ blocks }: KnowledgeBlocksProps) {
                 {embed && WebViewComponent ? (
                   <WebViewBoundary fallback={fallback}>
                     <View
-                      style={[styles.player, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                      style={[styles.player, { backgroundColor: colors.black, borderColor: palette.border.subtle }]}
                     >
                       <WebViewComponent
                         source={{ uri: embed }}
@@ -218,8 +274,15 @@ function KnowledgeBlocksInner({ blocks }: KnowledgeBlocksProps) {
                         allowsFullscreenVideo
                         javaScriptEnabled
                         domStorageEnabled
-                        // Keep a static empty start to avoid a white flash on iOS.
-                        originWhitelist={['https://*']}
+                        // Keep the player INSIDE the app: allow any http(s)
+                        // navigation to load IN the WebView, but block custom
+                        // schemes (e.g. `vk://`) that would hand off to the
+                        // native VK app / external browser. Web navigations stay
+                        // in-place — Android-safe (http/https always allowed).
+                        originWhitelist={['https://*', 'http://*']}
+                        onShouldStartLoadWithRequest={(req) =>
+                          req.url.startsWith('https://') || req.url.startsWith('http://') || req.url === 'about:blank'
+                        }
                       />
                     </View>
                   </WebViewBoundary>
@@ -264,27 +327,33 @@ function KnowledgeBlocksInner({ blocks }: KnowledgeBlocksProps) {
 }
 
 const styles = StyleSheet.create({
-  root: { gap: spacing[3] },
+  // Vertical rhythm between blocks. Headings/media add their own top margin on
+  // top of this for a clear magazine cadence.
+  root: { gap: spacing[4] },
 
-  textBlock: { gap: spacing[2] },
-  paragraph: { lineHeight: 23 },
+  // Paragraph rhythm WITHIN a text block (slightly tighter than block gap).
+  textBlock: { gap: spacing[3] },
+  // Article-grade reading text: larger size + open line-height + primary ink.
+  paragraph: { fontSize: 17, lineHeight: 27, letterSpacing: -0.2 },
 
-  heading2: { marginTop: spacing[2] },
-  heading3: { marginTop: spacing[1] },
+  // Section headings — extra top breathing room separates them from the
+  // paragraph above (on top of the root gap).
+  heading2: { fontSize: 22, lineHeight: 28, letterSpacing: -0.3, marginTop: spacing[2] },
+  heading3: { fontSize: 18, lineHeight: 24, letterSpacing: -0.2, marginTop: spacing[1.5] },
 
-  mediaBlock: { gap: spacing[1.5] },
+  mediaBlock: { gap: spacing[2] },
   image: {
     width: '100%',
-    height: 220,
-    borderRadius: borderRadius.xl,
+    // height comes from aspectRatio (natural, clamped) — no fixed-height crop.
+    borderRadius: borderRadius['2xl'],
     borderWidth: StyleSheet.hairlineWidth,
   },
-  caption: { textAlign: 'center', paddingHorizontal: spacing[2] },
+  caption: { textAlign: 'center', paddingHorizontal: spacing[3], fontStyle: 'italic' },
 
   player: {
     width: '100%',
     aspectRatio: 16 / 9,
-    borderRadius: borderRadius.xl,
+    borderRadius: borderRadius['2xl'],
     borderWidth: StyleSheet.hairlineWidth,
     overflow: 'hidden',
   },

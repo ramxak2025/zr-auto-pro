@@ -1,22 +1,18 @@
 /**
- * KnowledgeBaseScreen — «Обучение и база знаний» home (#15 / #17).
+ * KnowledgeBaseScreen — «База знаний» home.
  *
- * Три понятные группы (имя экрана шире, чем внутренняя группа «База знаний», —
- * родительский пункт в «Ещё» назван «Обучение и база знаний», чтобы имя не
- * дублировалось):
- *   1. Учебный центр — курсы + справочник неисправностей.
- *   2. Регламенты — всегда доступная точка входа (жёлтый акцент при долге).
- *   3. База знаний — закреплённые + категории + недавние статьи.
+ * Three directions, like the web (`frontend/src/pages/KnowledgeBasePage.tsx`):
+ *   1. База знаний  — папки + закреплённые + недавние статьи (основной контент).
+ *   2. Регламенты   — всегда доступная точка входа (жёлтый акцент при долге).
+ *   3. Учебный центр — курсы и аттестация.
+ *
+ * «Справочник» (справочник неисправностей) удалён из мобильного приложения по
+ * просьбе владельца — точки входа на него больше нет.
  *
  * Умный поиск:
- *   • Search bar (debounced → listArticles({search})) — бэкенд ищет по
- *     title + body. При наличии запроса экран сворачивается в плоский список.
- *   • Фасеты по типу вложения (С видео / С документами / С фото) →
- *     listArticles({ hasAttachmentType }). Активный фасет сам запускает поиск,
- *     даже без текста; комбинируется с текстом.
- *
- * Managers (director/admin/superadmin) get a «+» in the header that opens the
- * editor.
+ *   • Search bar (debounced → knowledgeApi.search) — глобальный ранжированный
+ *     поиск по статьям + папкам + курсам. Любой текст сворачивает экран в
+ *     результаты; <2 символов показывает подсказку.
  *
  * Data freshness: React Query staleTime keeps it cache-first without touching
  * persistentCache. Lists revalidate quietly in the background.
@@ -44,7 +40,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
-import { rootCategories } from '../utils/knowledgeTree';
+import { rootCategories, childCategories } from '../utils/knowledgeTree';
 import { UserRole } from '../../../shared/types';
 import type {
   KnowledgeArticle,
@@ -57,6 +53,17 @@ const STALE = 60_000;
 
 /** Smart search needs ≥2 chars (server returns empty buckets below that). */
 const MIN_QUERY = 2;
+
+/** Russian plural picker: 1 → one, 2–4 → few, else many (10–20 → many). */
+function plural(n: number, one: string, few: string, many: string): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return one;
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return few;
+  return many;
+}
+const foldersLabel = (n: number) => `${n} ${plural(n, 'папка', 'папки', 'папок')}`;
+const articlesLabel = (n: number) => `${n} ${plural(n, 'статья', 'статьи', 'статей')}`;
 
 export default function KnowledgeBaseScreen() {
   const navigation = useNavigation<any>();
@@ -80,9 +87,9 @@ export default function KnowledgeBaseScreen() {
     staleTime: 5 * 60_000,
   });
 
-  // ── Courses (for the «Учебный центр» entry's overall progress) ──────────
-  // Чисто декоративный запрос: при ошибке (включая текущий 500 на
-  // /knowledge/courses) плитка просто показывает подпись без прогресса.
+  // ── Courses (for the «Учебный центр» card's overall progress) ───────────
+  // Чисто декоративный запрос: при ошибке плитка просто показывает подпись
+  // без прогресса.
   const { data: courses, refetch: refetchCourses } = useQuery<KnowledgeCourse[]>({
     queryKey: ['knowledge-courses'],
     queryFn: async () => (await knowledgeApi.listCourses()).data,
@@ -159,6 +166,20 @@ export default function KnowledgeBaseScreen() {
   // Root-level folders only — subfolders surface after drilling into a folder.
   const rootCats = React.useMemo(() => (categories ? rootCategories(categories) : []), [categories]);
 
+  // «3 папки · 12 статей» под каждой корневой папкой — count из дерева (подпапки)
+  // + из загруженного списка всех статей (прямые статьи в папке), как на вебе.
+  const folderSubtitle = React.useCallback(
+    (cat: KnowledgeCategory): string | undefined => {
+      const subN = categories ? childCategories(categories, cat.id).length : 0;
+      const artN = recent ? recent.filter((a) => (a.categoryId ?? null) === cat.id).length : 0;
+      const parts: string[] = [];
+      if (subN > 0) parts.push(foldersLabel(subN));
+      if (artN > 0) parts.push(articlesLabel(artN));
+      return parts.length > 0 ? parts.join('  ·  ') : undefined;
+    },
+    [categories, recent],
+  );
+
   const openArticle = React.useCallback(
     (article: KnowledgeArticle) => {
       navigation.navigate('KnowledgeArticle', { id: article.id, title: article.title });
@@ -196,11 +217,6 @@ export default function KnowledgeBaseScreen() {
     navigation.navigate('KnowledgeCourseList');
   }, [navigation]);
 
-  const openTroubleshooting = React.useCallback(() => {
-    haptic('tap');
-    navigation.navigate('KnowledgeTroubleshooting');
-  }, [navigation]);
-
   const headerTrailing = isManager ? (
     <Pressable
       onPress={() => {
@@ -216,9 +232,27 @@ export default function KnowledgeBaseScreen() {
     </Pressable>
   ) : undefined;
 
+  // Pending-aware amber treatment for the «Регламенты» direction card.
+  const regAmber = pendingCount > 0;
+  const regCardBg = regAmber
+    ? palette.mode === 'dark'
+      ? softTint(colors.amber[600], 'dark')
+      : colors.amber[50]
+    : palette.bg.card;
+  const regCardBorder = regAmber
+    ? palette.mode === 'dark'
+      ? palette.border.subtle
+      : colors.amber[200]
+    : palette.border.subtle;
+
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Обучение и база знаний" onBack={() => navigation.goBack()} trailing={headerTrailing} />
+      <IosScreenHeader
+        title="База знаний"
+        subtitle="Регламенты, учебный центр и статьи"
+        onBack={() => navigation.goBack()}
+        trailing={headerTrailing}
+      />
 
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[4] }]}
@@ -241,7 +275,7 @@ export default function KnowledgeBaseScreen() {
         {isSearching ? (
           // ── SMART SEARCH — honest state machine: too-short hint → skeleton →
           // error (никогда не «ничего не найдено» при упавшем запросе) →
-          // ranked buckets (статьи / папки / курсы) → truly-empty success.
+          // ranked buckets (папки / статьи / курсы) → truly-empty success.
           <View style={styles.section}>
             {!queryReady ? (
               <EmptyState
@@ -257,6 +291,17 @@ export default function KnowledgeBaseScreen() {
               <ListSkeleton count={5} />
             ) : resultCount > 0 ? (
               <View style={styles.results}>
+                {results.categories.length > 0 ? (
+                  <View>
+                    <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Папки</Text>
+                    <View style={styles.rowList}>
+                      {results.categories.map((c) => (
+                        <CategoryRow key={c.id} category={c} onPress={openCategory} />
+                      ))}
+                    </View>
+                  </View>
+                ) : null}
+
                 {results.articles.length > 0 ? (
                   <View>
                     <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
@@ -265,17 +310,6 @@ export default function KnowledgeBaseScreen() {
                     <View style={styles.rowList}>
                       {results.articles.map((a) => (
                         <ArticleRow key={a.id} article={a} onPress={openArticle} />
-                      ))}
-                    </View>
-                  </View>
-                ) : null}
-
-                {results.categories.length > 0 ? (
-                  <View>
-                    <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Папки</Text>
-                    <View style={styles.rowList}>
-                      {results.categories.map((c) => (
-                        <CategoryRow key={c.id} category={c} onPress={openCategory} />
                       ))}
                     </View>
                   </View>
@@ -302,135 +336,99 @@ export default function KnowledgeBaseScreen() {
           </View>
         ) : (
           <>
-            {/* ═══ Группа 1 — УЧЕБНЫЙ ЦЕНТР ════════════════════════════════
-                Курсы + справочник неисправностей: всё, что про обучение. */}
-            <View style={styles.section}>
-              <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
-                Учебный центр
-              </Text>
-              <View style={styles.featureRow}>
-                <Pressable
-                  onPress={openCourses}
-                  style={({ pressed }) => [
-                    styles.feature,
-                    {
-                      backgroundColor: palette.bg.card,
-                      borderColor: palette.border.subtle,
-                      opacity: pressed ? 0.8 : 1,
-                    },
-                  ]}
-                >
-                  <View style={[styles.featureIcon, { backgroundColor: palette.accent.primarySoft }]}>
-                    <Ionicons name="school" size={22} color={palette.accent.primary} />
-                  </View>
-                  <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
-                    Курсы
-                  </Text>
-                  {courseProgress !== null ? (
-                    <Text variant="caption" style={{ color: palette.accent.primary, fontWeight: '600' }}>
-                      Пройдено {courseProgress}%
-                    </Text>
-                  ) : (
-                    <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
-                      Курсы и аттестация
-                    </Text>
-                  )}
-                </Pressable>
-
-                <Pressable
-                  onPress={openTroubleshooting}
-                  style={({ pressed }) => [
-                    styles.feature,
-                    {
-                      backgroundColor: palette.bg.card,
-                      borderColor: palette.border.subtle,
-                      opacity: pressed ? 0.8 : 1,
-                    },
-                  ]}
-                >
-                  <View
-                    style={[
-                      styles.featureIcon,
-                      {
-                        backgroundColor:
-                          palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
-                      },
-                    ]}
-                  >
-                    <Ionicons name="construct" size={22} color={colors.amber[600]} />
-                  </View>
-                  <Text variant="bodyEmph" numberOfLines={1} style={{ color: palette.text.primary }}>
-                    Неисправности
-                  </Text>
-                  <Text variant="caption" numberOfLines={1} style={{ color: palette.text.tertiary }}>
-                    Симптом → решение
-                  </Text>
-                </Pressable>
-              </View>
-            </View>
-
-            {/* ═══ Группа 2 — РЕГЛАМЕНТЫ ═══════════════════════════════════
-                Всегда доступная точка входа; жёлтый акцент при долге. */}
-            <View style={styles.section}>
-              <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Регламенты</Text>
+            {/* ═══ НАПРАВЛЕНИЯ — Регламенты + Учебный центр ════════════════
+                Две премиальные карточки-входа: всё, что не «статьи». */}
+            <View style={styles.directions}>
+              {/* Регламенты — жёлтый акцент при невыполненном «Ознакомлен». */}
               <Pressable
                 onPress={openRegulations}
                 style={({ pressed }) => [
-                  styles.regBanner,
-                  pendingCount > 0
-                    ? palette.mode === 'dark'
-                      ? { backgroundColor: softTint(colors.amber[600], 'dark'), borderColor: palette.border.subtle }
-                      : { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }
-                    : { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                  { opacity: pressed ? 0.85 : 1 },
+                  styles.directionCard,
+                  { backgroundColor: regCardBg, borderColor: regCardBorder, opacity: pressed ? 0.85 : 1 },
                 ]}
+                accessibilityRole="button"
               >
                 <View
                   style={[
-                    styles.regIcon,
+                    styles.directionIcon,
                     {
-                      backgroundColor:
-                        pendingCount > 0
-                          ? palette.mode === 'dark'
-                            ? softTint(colors.amber[600], 'dark')
-                            : colors.amber[100]
-                          : palette.accent.primarySoft,
+                      backgroundColor: regAmber
+                        ? palette.mode === 'dark'
+                          ? softTint(colors.amber[600], 'dark')
+                          : colors.amber[100]
+                        : palette.accent.primarySoft,
                     },
                   ]}
                 >
                   <Ionicons
                     name="shield-checkmark"
                     size={22}
-                    color={pendingCount > 0 ? colors.amber[600] : palette.accent.primary}
+                    color={regAmber ? colors.amber[600] : palette.accent.primary}
                   />
                 </View>
-                <View style={{ flex: 1 }}>
+                <View style={styles.directionBody}>
                   <Text
-                    variant="bodyEmph"
-                    style={{ color: pendingCount > 0 ? colors.amber[800] : palette.text.primary }}
+                    variant="callout"
+                    numberOfLines={1}
+                    style={{ color: regAmber ? colors.amber[800] : palette.text.primary }}
                   >
-                    {pendingCount > 0 ? 'Регламенты ждут ознакомления' : 'Регламенты автосервиса'}
+                    {regAmber ? 'Регламенты ждут вас' : 'Регламенты'}
                   </Text>
                   <Text
                     variant="footnote"
-                    style={{ color: pendingCount > 0 ? colors.amber[700] : palette.text.tertiary }}
+                    numberOfLines={1}
+                    style={{ color: regAmber ? colors.amber[700] : palette.text.tertiary }}
                   >
-                    {pendingCount > 0
+                    {regAmber
                       ? pendingCount === 1
-                        ? '1 документ требует вашего «Ознакомлен»'
-                        : `${pendingCount} документов требуют вашего «Ознакомлен»`
-                      : 'Открыть и подтвердить ознакомление'}
+                        ? '1 документ требует «Ознакомлен»'
+                        : `${pendingCount} ${plural(pendingCount, 'документ требует', 'документа требуют', 'документов требуют')} «Ознакомлен»`
+                      : 'Правила и стандарты автосервиса'}
                   </Text>
                 </View>
+                {regAmber ? <View style={styles.dot} /> : null}
                 <Ionicons
                   name="chevron-forward"
                   size={18}
-                  color={pendingCount > 0 ? colors.amber[600] : palette.text.tertiary}
+                  color={regAmber ? colors.amber[600] : palette.text.tertiary}
                 />
+              </Pressable>
+
+              {/* Учебный центр — курсы и аттестация. */}
+              <Pressable
+                onPress={openCourses}
+                style={({ pressed }) => [
+                  styles.directionCard,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, opacity: pressed ? 0.85 : 1 },
+                ]}
+                accessibilityRole="button"
+              >
+                <View style={[styles.directionIcon, { backgroundColor: palette.accent.primarySoft }]}>
+                  <Ionicons name="school" size={22} color={palette.accent.primary} />
+                </View>
+                <View style={styles.directionBody}>
+                  <Text variant="callout" numberOfLines={1} style={{ color: palette.text.primary }}>
+                    Учебный центр
+                  </Text>
+                  {courseProgress !== null ? (
+                    <Text
+                      variant="footnote"
+                      numberOfLines={1}
+                      style={{ color: palette.accent.primary, fontWeight: '600' }}
+                    >
+                      Курсы пройдены на {courseProgress}%
+                    </Text>
+                  ) : (
+                    <Text variant="footnote" numberOfLines={1} style={{ color: palette.text.tertiary }}>
+                      Курсы, уроки и аттестация
+                    </Text>
+                  )}
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
               </Pressable>
             </View>
 
-            {/* ═══ Группа 3 — БАЗА ЗНАНИЙ (статьи) ═════════════════════════ */}
+            {/* ═══ БАЗА ЗНАНИЙ (папки + статьи) ════════════════════════════ */}
             <Text style={[iosSectionLabel, styles.sectionTitle, styles.groupHeader, { color: palette.text.secondary }]}>
               База знаний
             </Text>
@@ -449,7 +447,7 @@ export default function KnowledgeBaseScreen() {
               </View>
             ) : null}
 
-            {/* ── Категории (только корневые папки; подпапки — внутри) ──── */}
+            {/* ── Папки (только корневые; подпапки — внутри) ───────────── */}
             {rootCats.length > 0 || isManager ? (
               <View style={styles.section}>
                 <View style={styles.sectionHeaderRow}>
@@ -461,7 +459,7 @@ export default function KnowledgeBaseScreen() {
                       { color: palette.text.secondary },
                     ]}
                   >
-                    Категории
+                    Папки
                   </Text>
                   {isManager ? (
                     <Pressable onPress={openNewFolder} hitSlop={8} style={styles.addFolderBtn}>
@@ -477,31 +475,9 @@ export default function KnowledgeBaseScreen() {
                     Папок пока нет. Создайте первую, чтобы разложить статьи по разделам.
                   </Text>
                 ) : (
-                  <View style={styles.tileGrid}>
+                  <View style={styles.rowList}>
                     {rootCats.map((cat) => (
-                      <Pressable
-                        key={cat.id}
-                        onPress={() => openCategory(cat)}
-                        style={({ pressed }) => [
-                          styles.tile,
-                          {
-                            backgroundColor: palette.bg.card,
-                            borderColor: palette.border.subtle,
-                            opacity: pressed ? 0.7 : 1,
-                          },
-                        ]}
-                      >
-                        <View style={[styles.tileIcon, { backgroundColor: palette.accent.primarySoft }]}>
-                          <Ionicons
-                            name={(cat.icon as keyof typeof Ionicons.glyphMap) || 'folder-outline'}
-                            size={22}
-                            color={palette.accent.primary}
-                          />
-                        </View>
-                        <Text variant="footnote" numberOfLines={2} style={{ color: palette.text.primary }}>
-                          {cat.name}
-                        </Text>
-                      </Pressable>
+                      <CategoryRow key={cat.id} category={cat} subtitle={folderSubtitle(cat)} onPress={openCategory} />
                     ))}
                   </View>
                 )}
@@ -515,8 +491,6 @@ export default function KnowledgeBaseScreen() {
                 <ListSkeleton count={5} />
               ) : recentError && recent === undefined ? (
                 // Ошибка без кэша — честный error-state с «Повторить».
-                // «Пока пусто» при ошибке здесь и был баг «то показывает,
-                // то пишет что пусто».
                 <QueryErrorState
                   description="Проверьте соединение и попробуйте снова."
                   onRetry={() => refetchRecent()}
@@ -591,58 +565,29 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  regBanner: {
+  // Direction cards (Регламенты / Учебный центр)
+  directions: { gap: spacing[2.5], marginBottom: spacing[5] },
+  directionCard: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
     borderRadius: borderRadius['2xl'],
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing[3.5],
-    paddingVertical: spacing[3],
-  },
-  regIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: borderRadius.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-
-  featureRow: { flexDirection: 'row', gap: spacing[3] },
-  feature: {
-    flex: 1,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing[3.5],
     paddingVertical: spacing[3.5],
-    gap: spacing[2],
-    minHeight: 112,
   },
-  featureIcon: {
-    width: 44,
-    height: 44,
+  directionIcon: {
+    width: 46,
+    height: 46,
     borderRadius: borderRadius.lg,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: spacing[1],
   },
-
-  tileGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[3] },
-  tile: {
-    width: '47%',
-    flexGrow: 1,
-    borderRadius: borderRadius['2xl'],
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingHorizontal: spacing[3.5],
-    paddingVertical: spacing[3.5],
-    gap: spacing[2.5],
-    minHeight: 96,
-  },
-  tileIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: borderRadius.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
+  directionBody: { flex: 1, minWidth: 0, gap: 2 },
+  dot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: colors.amber[600],
   },
 });
