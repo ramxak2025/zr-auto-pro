@@ -5,7 +5,8 @@
  * комментарий. Позиции: заказано vs получено по каждой строке. Действия по
  * статусу (только write-роль director/admin/superadmin; сервер дублирует):
  *   • draft   — «Оформить заказ» (order) / «Изменить» / «Отменить» (cancel)
- *   • ordered — «Принять» (приёмка: по строкам или «Принять всё») / «Отменить»
+ *   • ordered — «Принять» → приёмка: «Принять полностью» (весь остаток одним
+ *     тапом) ИЛИ −/+ по строкам → «Принять выбранное» (частичная) / «Отменить»
  *   • received / cancelled — только чтение.
  *
  * Приёмка: receivedQuantity — ДЕЛЬТА (сколько принять сейчас), пустое тело =
@@ -170,6 +171,18 @@ export default function PurchaseOrderDetailScreen() {
     setReceiptInputs((prev) => ({ ...prev, [itemId]: String(n) }));
   };
 
+  // −/+ stepper for a line's «принять сейчас» count. Clamped to [0, max]
+  // (max = outstanding). Makes partial receipt one-tap convenient without
+  // opening the number-pad.
+  const stepReceipt = (itemId: string, delta: number, max: number) => {
+    haptic('tap');
+    setReceiptInputs((prev) => {
+      const cur = parseInt(prev[itemId] || '0', 10) || 0;
+      const next = Math.max(0, Math.min(max, cur + delta));
+      return { ...prev, [itemId]: String(next) };
+    });
+  };
+
   const confirmPartialReceive = () => {
     const body = items
       .map((it) => ({ itemId: it.id, receivedQuantity: parseInt(receiptInputs[it.id] || '0', 10) || 0 }))
@@ -298,22 +311,36 @@ export default function PurchaseOrderDetailScreen() {
                   </View>
                 </View>
 
-                {/* Inline receive input */}
+                {/* Inline receive controls — −/+ stepper + editable field.
+                    Pre-filled to the full outstanding on entry, so a straight
+                    «Принять выбранное» = принять всё; decrement л'−' для
+                    частичной приёмки. */}
                 {receiving && max > 0 ? (
                   <View style={styles.receiveRow}>
-                    <Text style={[styles.receiveLabel, { color: palette.text.tertiary }]}>
-                      Принять сейчас (остаток {max})
-                    </Text>
-                    <View style={[styles.receiveInputWrap, { borderColor: palette.border.subtle }]}>
+                    <Text style={[styles.receiveLabel, { color: palette.text.tertiary }]}>Принять · остаток {max}</Text>
+                    <View style={[styles.receiveStepper, { borderColor: palette.border.subtle }]}>
+                      <TouchableOpacity
+                        onPress={() => stepReceipt(it.id, -1, max)}
+                        style={styles.receiveStepBtn}
+                        hitSlop={6}
+                      >
+                        <Ionicons name="remove" size={18} color={palette.text.secondary} />
+                      </TouchableOpacity>
                       <TextInput
                         value={receiptInputs[it.id] ?? ''}
                         onChangeText={(t) => setReceiptValue(it.id, t, max)}
-                        style={[styles.receiveInput, { color: palette.text.primary }]}
+                        style={[styles.receiveStepInput, { color: palette.text.primary }]}
                         keyboardType="number-pad"
                         placeholder="0"
                         placeholderTextColor={palette.text.tertiary}
                       />
-                      <Text style={[styles.receiveUnit, { color: palette.text.tertiary }]}>шт</Text>
+                      <TouchableOpacity
+                        onPress={() => stepReceipt(it.id, 1, max)}
+                        style={styles.receiveStepBtn}
+                        hitSlop={6}
+                      >
+                        <Ionicons name="add" size={18} color={palette.text.secondary} />
+                      </TouchableOpacity>
                     </View>
                   </View>
                 ) : null}
@@ -371,33 +398,40 @@ export default function PurchaseOrderDetailScreen() {
           {busy ? (
             <ActivityIndicator color={colors.primary[600]} style={{ paddingVertical: spacing[2] }} />
           ) : receiving ? (
-            <View style={styles.actionRow}>
+            <View style={styles.receiveActions}>
+              {/* One-tap full receipt — приходует весь остаток по всем
+                  позициям (пустое тело → сервер примет всё). Полноширинная
+                  и зелёная — главный, очевидный путь приёмки. */}
               <TouchableOpacity
-                style={[styles.secondaryBtn, { borderColor: palette.border.strong }]}
-                onPress={() => {
-                  haptic('tap');
-                  setReceiving(false);
-                  setReceiptInputs({});
-                }}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>Отмена</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.secondaryBtn, { borderColor: colors.green[600] }]}
+                style={[styles.receiveAllBtn, { backgroundColor: colors.green[600] }]}
                 onPress={receiveAll}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.secondaryBtnText, { color: colors.green[700] }]}>Принять всё</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.primaryBtn, { backgroundColor: colors.green[600] }]}
-                onPress={confirmPartialReceive}
                 activeOpacity={0.85}
               >
-                <Ionicons name="checkmark" size={18} color={colors.white} />
-                <Text style={styles.primaryBtnText}>Подтвердить</Text>
+                <Ionicons name="checkmark-done" size={18} color={colors.white} />
+                <Text style={styles.primaryBtnText}>Принять полностью</Text>
               </TouchableOpacity>
+              {/* Partial — приходует введённые по строкам количества. */}
+              <View style={styles.actionRow}>
+                <TouchableOpacity
+                  style={[styles.secondaryBtn, { borderColor: palette.border.strong }]}
+                  onPress={() => {
+                    haptic('tap');
+                    setReceiving(false);
+                    setReceiptInputs({});
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.primaryBtn, { backgroundColor: colors.primary[600] }]}
+                  onPress={confirmPartialReceive}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="checkmark" size={18} color={colors.white} />
+                  <Text style={styles.primaryBtnText}>Принять выбранное</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ) : isDraft ? (
             <View style={styles.actionRow}>
@@ -570,17 +604,22 @@ const styles = StyleSheet.create({
     marginTop: spacing[1],
   },
   receiveLabel: { fontSize: 12, flexShrink: 1 },
-  receiveInputWrap: {
+  receiveStepper: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing[3],
-    minWidth: 92,
+    overflow: 'hidden',
   },
-  receiveInput: { flex: 1, fontSize: 15, fontWeight: '700', paddingVertical: spacing[2], textAlign: 'right' },
-  receiveUnit: { fontSize: 12 },
+  receiveStepBtn: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5] },
+  receiveStepInput: {
+    minWidth: 46,
+    textAlign: 'center',
+    fontSize: 15,
+    fontWeight: '700',
+    paddingVertical: spacing[1.5],
+    fontVariant: ['tabular-nums'],
+  },
 
   // Terminal hint
   terminalHint: {
@@ -600,6 +639,18 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   actionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5] },
+  // Receive-mode action stack: full-width «Принять полностью» on top, then
+  // the [Отмена][Принять выбранное] row. Two tiers so neither button is
+  // cramped or truncated on narrow iPhones.
+  receiveActions: { gap: spacing[2.5] },
+  receiveAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
+  },
   primaryBtn: {
     flex: 1,
     flexDirection: 'row',

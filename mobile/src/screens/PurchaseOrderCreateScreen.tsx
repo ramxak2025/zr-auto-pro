@@ -30,7 +30,6 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   Alert,
 } from 'react-native';
@@ -248,14 +247,19 @@ export default function PurchaseOrderCreateScreen() {
         }
       />
 
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-      >
+      {/* Keyboard handling. На iOS ScrollView сам добавляет нижний inset под
+          клавиатуру (automaticallyAdjustKeyboardInsets) и подкручивает
+          сфокусированное поле «Комментарий» так, чтобы его было видно над
+          клавиатурой. Sticky-бар ниже остаётся у нижнего края экрана (за
+          клавиатурой) и больше НЕ подлетает вверх с огромным отступом, как
+          это делал KeyboardAvoidingView behavior="padding". */}
+      <View style={styles.flexFill}>
         <ScrollView
+          style={styles.flexFill}
           contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }]}
           keyboardShouldPersistTaps="handled"
+          keyboardDismissMode="interactive"
+          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
           contentInset={{ bottom: tabBarHeight }}
           scrollIndicatorInsets={{ bottom: tabBarHeight }}
         >
@@ -491,7 +495,7 @@ export default function PurchaseOrderCreateScreen() {
             )}
           </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
+      </View>
 
       {/* ── Product picker (тот же, что в Кассе) ── */}
       <ProductPickerModal
@@ -517,6 +521,7 @@ export default function PurchaseOrderCreateScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  flexFill: { flex: 1 },
   scroll: { paddingHorizontal: spacing[4], paddingTop: spacing[1] },
   sectionLabel: { marginLeft: spacing[1], marginTop: spacing[4], marginBottom: spacing[2] },
 

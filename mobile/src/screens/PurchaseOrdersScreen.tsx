@@ -237,6 +237,7 @@ export default function PurchaseOrdersScreen({ embedded = false }: { embedded?: 
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
+        style={styles.chipsScroll}
         contentContainerStyle={[styles.chipsRow, embedded && styles.chipsRowEmbedded]}
         keyboardShouldPersistTaps="handled"
       >
@@ -411,6 +412,15 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
+  // ── Chip-row vertical bug fix ──────────────────────────────────────────
+  // Корень бага «половина экрана пустоты вокруг чипов»: горизонтальный
+  // ScrollView — прямой child flex:1-колонки (styles.safe). Без flexGrow:0
+  // колонка растягивает его по вертикали, а contentContainer alignItems:
+  // 'center' центрирует низкие чипы в середине высокой пустой полосы. То же
+  // лечение задокументировано в ChecksScreen.kindChipsScroll: flexGrow/
+  // flexShrink:0 + alignSelf:'flex-start' заставляют полосу обнимать высоту
+  // контента, и список идёт сразу под ней.
+  chipsScroll: { flexGrow: 0, flexShrink: 0, alignSelf: 'flex-start' },
   // Status chips — compact, refined pills (iOS-style). Inactive pills are
   // transparent with a hairline outline (not heavy grey blocks); the active
   // pill is a solid primary fill. Tight height + 12.5px label keep the row

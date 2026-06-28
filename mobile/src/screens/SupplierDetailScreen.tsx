@@ -769,11 +769,16 @@ export default function SupplierDetailScreen() {
                   activeOpacity={0.85}
                 >
                   <Ionicons name="add" size={18} color={colors.white} />
-                  <Text style={styles.ordersPrimaryBtnText}>Новый заказ</Text>
+                  <Text style={styles.ordersPrimaryBtnText} numberOfLines={1}>
+                    Новый заказ
+                  </Text>
                 </TouchableOpacity>
               )}
               <TouchableOpacity
-                style={[styles.ordersSecondaryBtn, { borderColor: palette.border.strong }]}
+                style={[
+                  styles.ordersSecondaryBtn,
+                  { borderColor: palette.border.strong, backgroundColor: palette.bg.muted },
+                ]}
                 onPress={() => {
                   haptic('tap');
                   setRequestOpen(true);
@@ -781,7 +786,7 @@ export default function SupplierDetailScreen() {
                 activeOpacity={0.8}
               >
                 <Ionicons name="chatbubbles-outline" size={16} color={colors.primary[600]} />
-                <Text style={[styles.ordersSecondaryBtnText, { color: palette.text.primary }]}>
+                <Text style={[styles.ordersSecondaryBtnText, { color: palette.text.primary }]} numberOfLines={1}>
                   Сформировать запрос
                 </Text>
               </TouchableOpacity>
@@ -1761,25 +1766,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   ordersCountText: { fontSize: 12, fontWeight: '700' },
-  ordersActions: { flexDirection: 'row', gap: spacing[2] },
+  // Stacked full-width actions. Раньше две кнопки стояли в строку
+  // (flex:1 / flex:1.2) и длинная подпись «Сформировать запрос» вылезала
+  // за правый край экрана на узких iPhone. Вертикальный стек с full-width
+  // кнопками + numberOfLines={1} гарантирует, что обе подписи всегда
+  // помещаются в границах карточки.
+  ordersActions: { gap: spacing[2] },
   ordersPrimaryBtn: {
-    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing[1.5],
-    paddingVertical: spacing[2.5],
+    paddingVertical: spacing[3],
     borderRadius: borderRadius.xl,
     backgroundColor: colors.primary[600],
   },
   ordersPrimaryBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white },
   ordersSecondaryBtn: {
-    flex: 1.2,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing[1.5],
-    paddingVertical: spacing[2.5],
+    paddingVertical: spacing[3],
     borderRadius: borderRadius.xl,
     borderWidth: 1,
   },
