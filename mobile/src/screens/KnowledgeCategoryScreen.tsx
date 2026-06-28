@@ -14,7 +14,7 @@
  *   • { type: 'regulation', name }  — the regulations collection (no folders)
  */
 import React from 'react';
-import { RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
+import { Pressable, RefreshControl, ScrollView, StyleSheet, View } from 'react-native';
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,13 +24,17 @@ import QueryErrorState from '../components/QueryErrorState';
 import { ListSkeleton } from '../components/Skeleton';
 import ArticleRow from '../components/knowledge/ArticleRow';
 import CategoryRow from '../components/knowledge/CategoryRow';
+import FolderManagerModal from '../components/knowledge/FolderManagerModal';
 import { Text } from '../platform/Typography';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useColors } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi } from '../api/services';
 import { spacing } from '../theme';
+import { haptic } from '../platform/haptics';
 import { childCategories, categoryAncestors } from '../utils/knowledgeTree';
+import { UserRole } from '../../../shared/types';
 import type { KnowledgeArticle, KnowledgeArticleType, KnowledgeCategory } from '../../../shared/types';
 
 type ParamList = {
@@ -51,11 +55,15 @@ export default function KnowledgeCategoryScreen() {
   const route = useRoute<RouteProp<ParamList, 'KnowledgeCategory'>>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
+  const { isRole } = useAuth();
+  const isManager = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
   const categoryId = route.params?.categoryId;
   const type = route.params?.type;
   const title = route.params?.name ?? (type === 'regulation' ? 'Регламенты' : 'Категория');
   const isRegulationCollection = type === 'regulation';
+
+  const [folderModalOpen, setFolderModalOpen] = React.useState(false);
 
   // ── Articles in this folder (the primary content) ───────────────────────
   const { data, isLoading, isError, isFetching, refetch, isRefetching } = useQuery<KnowledgeArticle[]>({
@@ -98,6 +106,17 @@ export default function KnowledgeCategoryScreen() {
     [navigation],
   );
 
+  // Manager: create an article that lands directly in this folder/collection.
+  const openNewArticle = React.useCallback(() => {
+    haptic('tap');
+    navigation.navigate('KnowledgeEditor', { categoryId, type });
+  }, [navigation, categoryId, type]);
+
+  const openNewSubfolder = React.useCallback(() => {
+    haptic('tap');
+    setFolderModalOpen(true);
+  }, []);
+
   const subfolderSubtitle = React.useCallback(
     (cat: KnowledgeCategory) => {
       if (!categories) return undefined;
@@ -110,10 +129,25 @@ export default function KnowledgeCategoryScreen() {
   const articles = data ?? [];
   const hasArticles = articles.length > 0;
   const hasFolders = subfolders.length > 0;
+  // Subfolders only make sense inside a real folder (a categoryId). The
+  // regulations collection is a type-filtered view, not a tree node.
+  const canCreateSubfolder = isManager && !!categoryId;
+
+  const headerTrailing = isManager ? (
+    <Pressable
+      onPress={openNewArticle}
+      hitSlop={10}
+      style={[styles.headerBtn, { backgroundColor: palette.accent.primarySoft }]}
+      accessibilityRole="button"
+      accessibilityLabel={isRegulationCollection ? 'Новый регламент' : 'Новая статья'}
+    >
+      <Ionicons name="add" size={22} color={palette.accent.primary} />
+    </Pressable>
+  ) : undefined;
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title={title} onBack={() => navigation.goBack()} />
+      <IosScreenHeader title={title} onBack={() => navigation.goBack()} trailing={headerTrailing} />
       <ScrollView
         contentContainerStyle={[styles.content, { paddingBottom: tabBarHeight + spacing[4] }]}
         contentInset={{ bottom: tabBarHeight }}
@@ -145,17 +179,38 @@ export default function KnowledgeCategoryScreen() {
           <QueryErrorState description="Проверьте соединение и попробуйте снова." onRetry={() => refetch()} />
         ) : data === undefined ? (
           <ListSkeleton count={6} />
-        ) : hasFolders || hasArticles ? (
+        ) : (
           <>
-            {/* Subfolders */}
-            {hasFolders ? (
+            {/* Subfolders — visible when present OR when a manager can add one. */}
+            {hasFolders || canCreateSubfolder ? (
               <View style={styles.section}>
-                <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>Папки</Text>
-                <View style={styles.rowList}>
-                  {subfolders.map((cat) => (
-                    <CategoryRow key={cat.id} category={cat} subtitle={subfolderSubtitle(cat)} onPress={openFolder} />
-                  ))}
+                <View style={styles.sectionHeaderRow}>
+                  <Text
+                    style={[
+                      iosSectionLabel,
+                      styles.sectionLabel,
+                      styles.sectionLabelFlush,
+                      { color: palette.text.secondary },
+                    ]}
+                  >
+                    Папки
+                  </Text>
+                  {canCreateSubfolder ? (
+                    <Pressable onPress={openNewSubfolder} hitSlop={8} style={styles.addFolderBtn}>
+                      <Ionicons name="folder-open-outline" size={15} color={palette.accent.primary} />
+                      <Text variant="footnote" style={{ color: palette.accent.primary, fontWeight: '600' }}>
+                        Подпапка
+                      </Text>
+                    </Pressable>
+                  ) : null}
                 </View>
+                {hasFolders ? (
+                  <View style={styles.rowList}>
+                    {subfolders.map((cat) => (
+                      <CategoryRow key={cat.id} category={cat} subtitle={subfolderSubtitle(cat)} onPress={openFolder} />
+                    ))}
+                  </View>
+                ) : null}
               </View>
             ) : null}
 
@@ -172,19 +227,42 @@ export default function KnowledgeCategoryScreen() {
                 </View>
               </View>
             ) : null}
+
+            {/* Truly empty — honest state; managers get a create CTA. */}
+            {!hasFolders && !hasArticles ? (
+              <EmptyState
+                icon={isRegulationCollection ? 'shield-check' : 'journal'}
+                title="Здесь пока пусто"
+                description={
+                  isManager
+                    ? isRegulationCollection
+                      ? 'Добавьте первый регламент в эту категорию.'
+                      : 'Добавьте статью или создайте подпапку, чтобы наполнить раздел.'
+                    : isRegulationCollection
+                      ? 'В этой категории ещё нет регламентов.'
+                      : 'В этой папке ещё нет статей и подпапок.'
+                }
+                action={
+                  isManager
+                    ? { label: isRegulationCollection ? 'Новый регламент' : 'Новая статья', onPress: openNewArticle }
+                    : undefined
+                }
+              />
+            ) : null}
           </>
-        ) : (
-          <EmptyState
-            icon={isRegulationCollection ? 'shield-check' : 'journal'}
-            title="Здесь пока пусто"
-            description={
-              isRegulationCollection
-                ? 'В этой категории ещё нет регламентов.'
-                : 'В этой папке ещё нет статей и подпапок.'
-            }
-          />
         )}
       </ScrollView>
+
+      {/* Manager: create a subfolder of THIS folder; drill in on success. */}
+      {canCreateSubfolder ? (
+        <FolderManagerModal
+          visible={folderModalOpen}
+          presetParentId={categoryId}
+          categories={categories ?? []}
+          onClose={() => setFolderModalOpen(false)}
+          onCreated={(cat) => openFolder(cat)}
+        />
+      ) : null}
     </View>
   );
 }
@@ -192,6 +270,13 @@ export default function KnowledgeCategoryScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   content: { paddingHorizontal: spacing[4], paddingTop: spacing[2] },
+  headerBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   breadcrumb: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -201,5 +286,13 @@ const styles = StyleSheet.create({
   },
   section: { marginBottom: spacing[5] },
   sectionLabel: { marginLeft: spacing[1], marginBottom: spacing[2] },
+  sectionLabelFlush: { marginBottom: 0 },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing[2],
+  },
+  addFolderBtn: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   rowList: { gap: spacing[2] },
 });

@@ -34,6 +34,7 @@ import { ListSkeleton } from '../components/Skeleton';
 import ArticleRow from '../components/knowledge/ArticleRow';
 import CategoryRow from '../components/knowledge/CategoryRow';
 import CourseCard from '../components/knowledge/CourseCard';
+import FolderManagerModal from '../components/knowledge/FolderManagerModal';
 import { Text } from '../platform/Typography';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -65,6 +66,7 @@ export default function KnowledgeBaseScreen() {
   const isManager = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
   const [search, setSearch] = React.useState('');
+  const [folderModalOpen, setFolderModalOpen] = React.useState(false);
   const debouncedSearch = useDebouncedValue(search.trim(), 300);
   // The search bar drives the GLOBAL smart search (articles + folders + courses).
   // Any text collapses the screen into ranked results; <2 chars shows a hint.
@@ -171,6 +173,11 @@ export default function KnowledgeBaseScreen() {
     },
     [navigation],
   );
+
+  const openNewFolder = React.useCallback(() => {
+    haptic('tap');
+    setFolderModalOpen(true);
+  }, []);
 
   const openCourse = React.useCallback(
     (course: KnowledgeCourse) => {
@@ -443,36 +450,61 @@ export default function KnowledgeBaseScreen() {
             ) : null}
 
             {/* ── Категории (только корневые папки; подпапки — внутри) ──── */}
-            {rootCats.length > 0 ? (
+            {rootCats.length > 0 || isManager ? (
               <View style={styles.section}>
-                <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>Категории</Text>
-                <View style={styles.tileGrid}>
-                  {rootCats.map((cat) => (
-                    <Pressable
-                      key={cat.id}
-                      onPress={() => openCategory(cat)}
-                      style={({ pressed }) => [
-                        styles.tile,
-                        {
-                          backgroundColor: palette.bg.card,
-                          borderColor: palette.border.subtle,
-                          opacity: pressed ? 0.7 : 1,
-                        },
-                      ]}
-                    >
-                      <View style={[styles.tileIcon, { backgroundColor: palette.accent.primarySoft }]}>
-                        <Ionicons
-                          name={(cat.icon as keyof typeof Ionicons.glyphMap) || 'folder-outline'}
-                          size={22}
-                          color={palette.accent.primary}
-                        />
-                      </View>
-                      <Text variant="footnote" numberOfLines={2} style={{ color: palette.text.primary }}>
-                        {cat.name}
+                <View style={styles.sectionHeaderRow}>
+                  <Text
+                    style={[
+                      iosSectionLabel,
+                      styles.sectionTitle,
+                      styles.sectionTitleFlush,
+                      { color: palette.text.secondary },
+                    ]}
+                  >
+                    Категории
+                  </Text>
+                  {isManager ? (
+                    <Pressable onPress={openNewFolder} hitSlop={8} style={styles.addFolderBtn}>
+                      <Ionicons name="folder-open-outline" size={15} color={palette.accent.primary} />
+                      <Text variant="footnote" style={{ color: palette.accent.primary, fontWeight: '600' }}>
+                        Новая папка
                       </Text>
                     </Pressable>
-                  ))}
+                  ) : null}
                 </View>
+                {rootCats.length === 0 ? (
+                  <Text variant="footnote" style={{ color: palette.text.tertiary, marginLeft: spacing[1] }}>
+                    Папок пока нет. Создайте первую, чтобы разложить статьи по разделам.
+                  </Text>
+                ) : (
+                  <View style={styles.tileGrid}>
+                    {rootCats.map((cat) => (
+                      <Pressable
+                        key={cat.id}
+                        onPress={() => openCategory(cat)}
+                        style={({ pressed }) => [
+                          styles.tile,
+                          {
+                            backgroundColor: palette.bg.card,
+                            borderColor: palette.border.subtle,
+                            opacity: pressed ? 0.7 : 1,
+                          },
+                        ]}
+                      >
+                        <View style={[styles.tileIcon, { backgroundColor: palette.accent.primarySoft }]}>
+                          <Ionicons
+                            name={(cat.icon as keyof typeof Ionicons.glyphMap) || 'folder-outline'}
+                            size={22}
+                            color={palette.accent.primary}
+                          />
+                        </View>
+                        <Text variant="footnote" numberOfLines={2} style={{ color: palette.text.primary }}>
+                          {cat.name}
+                        </Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                )}
               </View>
             ) : null}
 
@@ -517,6 +549,18 @@ export default function KnowledgeBaseScreen() {
           </>
         )}
       </ScrollView>
+
+      {/* Manager: create a root folder (or any nesting) from the home screen.
+          After creation we drill straight into the new folder. */}
+      {isManager ? (
+        <FolderManagerModal
+          visible={folderModalOpen}
+          presetParentId={null}
+          categories={categories ?? []}
+          onClose={() => setFolderModalOpen(false)}
+          onCreated={(cat) => openCategory(cat)}
+        />
+      ) : null}
     </View>
   );
 }
@@ -526,6 +570,14 @@ const styles = StyleSheet.create({
   content: { paddingHorizontal: spacing[4], paddingTop: spacing[2] },
   section: { marginBottom: spacing[5] },
   sectionTitle: { marginLeft: spacing[1], marginBottom: spacing[2] },
+  sectionTitleFlush: { marginBottom: 0 },
+  sectionHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing[2],
+  },
+  addFolderBtn: { flexDirection: 'row', alignItems: 'center', gap: 3 },
   groupHeader: { marginTop: spacing[1] },
   rowList: { gap: spacing[2] },
   results: { gap: spacing[5] },

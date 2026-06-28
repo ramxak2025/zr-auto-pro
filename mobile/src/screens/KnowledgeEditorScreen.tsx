@@ -33,14 +33,17 @@ import { getImageUrl } from '../api/axios';
 import { spacing, borderRadius, colors } from '../theme';
 import { haptic } from '../platform/haptics';
 import { parseVideoUrl, videoProviderLabel } from '../components/knowledge/videoUrl';
+import BlockEditor, { sanitizeBlocks, hasInvalidVideoBlock } from '../components/knowledge/BlockEditor';
+import FolderManagerModal from '../components/knowledge/FolderManagerModal';
 import type {
   KnowledgeArticle,
   KnowledgeArticleType,
   KnowledgeAttachment,
+  KnowledgeBlock,
   KnowledgeCategory,
 } from '../../../shared/types';
 
-type ParamList = { KnowledgeEditor: { id?: string } };
+type ParamList = { KnowledgeEditor: { id?: string; categoryId?: string; type?: KnowledgeArticleType } };
 
 export default function KnowledgeEditorScreen() {
   const navigation = useNavigation<any>();
@@ -53,16 +56,24 @@ export default function KnowledgeEditorScreen() {
   const isEdit = !!editId;
 
   // ── Form state ────────────────────────────────────────────────────────
+  // For a NEW article opened from a folder («+» on the category screen) the
+  // type / category are pre-seeded from the route params.
   const [title, setTitle] = React.useState('');
   const [body, setBody] = React.useState('');
-  const [type, setType] = React.useState<KnowledgeArticleType>('article');
-  const [categoryId, setCategoryId] = React.useState<string | null>(null);
+  // Rich block content (079) + a Блоки / Markdown switch. New articles default
+  // to блоки (the rich inline experience the owner wants); an existing
+  // markdown-only article opens straight in Markdown so its body is visible.
+  const [blocks, setBlocks] = React.useState<KnowledgeBlock[]>([]);
+  const [contentMode, setContentMode] = React.useState<'blocks' | 'markdown'>('blocks');
+  const [type, setType] = React.useState<KnowledgeArticleType>(route.params?.type ?? 'article');
+  const [categoryId, setCategoryId] = React.useState<string | null>(route.params?.categoryId ?? null);
   const [coverImage, setCoverImage] = React.useState<string | null>(null);
   const [attachments, setAttachments] = React.useState<KnowledgeAttachment[]>([]);
   const [pinned, setPinned] = React.useState(false);
   const [published, setPublished] = React.useState(true);
   const [uploading, setUploading] = React.useState(false);
   const [hydrated, setHydrated] = React.useState(false);
+  const [folderModalOpen, setFolderModalOpen] = React.useState(false);
   // «Ссылка на видео» field (YouTube / VK). Empty until the user types.
   const [videoUrl, setVideoUrl] = React.useState('');
   const [videoError, setVideoError] = React.useState<string | null>(null);
@@ -86,6 +97,10 @@ export default function KnowledgeEditorScreen() {
     if (existing && !hydrated) {
       setTitle(existing.title);
       setBody(existing.body ?? '');
+      const existingBlocks = existing.blocks ?? [];
+      setBlocks(existingBlocks);
+      // Has blocks → edit blocks; markdown-only → edit markdown; empty → blocks.
+      setContentMode(existingBlocks.length > 0 ? 'blocks' : existing.body?.trim() ? 'markdown' : 'blocks');
       setType(existing.type);
       setCategoryId(existing.categoryId ?? null);
       setCoverImage(existing.coverImage ?? null);
@@ -102,6 +117,10 @@ export default function KnowledgeEditorScreen() {
       const payload = {
         title: title.trim(),
         body,
+        // Always send both: the reader prefers non-empty blocks and falls back
+        // to the markdown body. sanitizeBlocks drops empty/invalid blocks; an
+        // empty array clears blocks → body is used.
+        blocks: sanitizeBlocks(blocks),
         type,
         categoryId,
         coverImage,
@@ -130,6 +149,14 @@ export default function KnowledgeEditorScreen() {
   const onSave = () => {
     if (!title.trim()) {
       Alert.alert('Заголовок обязателен', 'Введите название статьи.');
+      return;
+    }
+    // Don't silently drop a typo'd VK link — warn the author first.
+    if (hasInvalidVideoBlock(blocks)) {
+      Alert.alert(
+        'Проверьте ссылку на видео',
+        'Один из видео-блоков содержит ссылку, которую не удалось распознать как VK Видео. Исправьте или удалите блок.',
+      );
       return;
     }
     haptic('tap');
@@ -209,27 +236,12 @@ export default function KnowledgeEditorScreen() {
     setVideoUrl('');
   };
 
-  // ── New category (minimal management) ─────────────────────────────────
-  const createCategoryMutation = useMutation({
-    mutationFn: async (name: string) => (await knowledgeApi.createCategory({ name })).data,
-    onSuccess: (cat) => {
-      haptic('success');
-      queryClient.invalidateQueries({ queryKey: ['knowledge-categories'] });
-      setCategoryId(cat.id);
-    },
-  });
-
-  const promptNewCategory = () => {
+  // ── New folder / subfolder (name + optional parent) ───────────────────
+  // Opens a lightweight bottom-sheet so nesting can be built from the phone.
+  // The newly-created folder becomes the article's category.
+  const openFolderManager = () => {
     haptic('tap');
-    Alert.prompt?.(
-      'Новая категория',
-      'Название категории',
-      (text?: string) => {
-        const name = (text ?? '').trim();
-        if (name) createCategoryMutation.mutate(name);
-      },
-      'plain-text',
-    );
+    setFolderModalOpen(true);
   };
 
   const inputBg = palette.bg.card;
@@ -338,10 +350,10 @@ export default function KnowledgeEditorScreen() {
         {/* Category */}
         <View style={styles.catHeader}>
           <Text style={[iosSectionLabel, styles.labelInline, { color: palette.text.secondary }]}>Категория</Text>
-          <Pressable onPress={promptNewCategory} hitSlop={8} style={styles.addCatBtn}>
-            <Ionicons name="add" size={16} color={palette.accent.primary} />
+          <Pressable onPress={openFolderManager} hitSlop={8} style={styles.addCatBtn}>
+            <Ionicons name="folder-open-outline" size={16} color={palette.accent.primary} />
             <Text variant="footnote" style={{ color: palette.accent.primary, fontWeight: '600' }}>
-              Категория
+              Папка
             </Text>
           </Pressable>
         </View>
@@ -363,21 +375,63 @@ export default function KnowledgeEditorScreen() {
           ))}
         </ScrollView>
 
-        {/* Body */}
-        <Text style={[iosSectionLabel, styles.label, { color: palette.text.secondary }]}>Текст (Markdown)</Text>
-        <TextInput
-          value={body}
-          onChangeText={setBody}
-          placeholder={'# Заголовок\n\nТекст с **жирным**, *курсивом*, списками:\n- пункт\n- пункт'}
-          placeholderTextColor={palette.text.tertiary}
-          multiline
-          textAlignVertical="top"
-          style={[
-            styles.input,
-            styles.bodyInput,
-            { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary },
-          ]}
-        />
+        {/* Content — rich blocks (текст → фото → видео, inline) OR markdown */}
+        <View style={styles.catHeader}>
+          <Text style={[iosSectionLabel, styles.labelInline, { color: palette.text.secondary }]}>Содержание</Text>
+          <View style={[styles.modeSwitch, { backgroundColor: palette.bg.muted }]}>
+            {(['blocks', 'markdown'] as const).map((m) => {
+              const active = contentMode === m;
+              return (
+                <Pressable
+                  key={m}
+                  onPress={() => {
+                    haptic('select');
+                    setContentMode(m);
+                  }}
+                  style={[styles.modeItem, active && { backgroundColor: palette.bg.card }]}
+                >
+                  <Ionicons
+                    name={m === 'blocks' ? 'albums-outline' : 'document-text-outline'}
+                    size={14}
+                    color={active ? palette.text.primary : palette.text.secondary}
+                  />
+                  <Text
+                    variant="caption"
+                    style={{ color: active ? palette.text.primary : palette.text.secondary, fontWeight: '600' }}
+                  >
+                    {m === 'blocks' ? 'Блоки' : 'Markdown'}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+
+        {contentMode === 'blocks' ? (
+          <BlockEditor blocks={blocks} onChange={setBlocks} />
+        ) : (
+          <TextInput
+            value={body}
+            onChangeText={setBody}
+            placeholder={'# Заголовок\n\nТекст с **жирным**, *курсивом*, списками:\n- пункт\n- пункт'}
+            placeholderTextColor={palette.text.tertiary}
+            multiline
+            textAlignVertical="top"
+            style={[
+              styles.input,
+              styles.bodyInput,
+              { backgroundColor: inputBg, borderColor: inputBorder, color: palette.text.primary },
+            ]}
+          />
+        )}
+        <Text
+          variant="caption"
+          style={{ color: palette.text.tertiary, marginTop: spacing[1.5], marginLeft: spacing[1] }}
+        >
+          {contentMode === 'blocks'
+            ? 'Блоки показываются в статье в этом порядке: текст, заголовки, фото и видео — как на сайте.'
+            : 'Если блоки заполнены, в статье показываются они; иначе — этот Markdown-текст.'}
+        </Text>
 
         {/* Видео (YouTube / VK) */}
         <Text style={[iosSectionLabel, styles.label, { color: palette.text.secondary }]}>
@@ -495,6 +549,17 @@ export default function KnowledgeEditorScreen() {
           />
         </View>
       </ScrollView>
+
+      {/* Folder / subfolder creation (name + optional parent). Preset parent =
+          the article's currently-selected category, so a tap builds a subfolder
+          under it; the new folder is auto-selected as the article's category. */}
+      <FolderManagerModal
+        visible={folderModalOpen}
+        presetParentId={categoryId}
+        categories={categories ?? []}
+        onClose={() => setFolderModalOpen(false)}
+        onCreated={(cat) => setCategoryId(cat.id)}
+      />
     </View>
   );
 }
@@ -596,6 +661,16 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
     padding: 3,
     gap: 3,
+  },
+
+  modeSwitch: { flexDirection: 'row', borderRadius: borderRadius.md, padding: 2, gap: 2 },
+  modeItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.sm,
   },
   segmentItem: {
     flex: 1,
