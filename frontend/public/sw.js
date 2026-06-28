@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Autexa PWA Service Worker v12
+//  Autexa PWA Service Worker v13
 //
 //  SPEED STRATEGY:
 //  - GET /api/auth/* → bypass SW, always network (auth must be fresh)
@@ -11,8 +11,8 @@
 //  - Navigation HTML  → network-first, offline fallback to cached shell
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v12';
-const API_CACHE = 'autexa-api-v12';
+const STATIC_CACHE = 'autexa-static-v13';
+const API_CACHE = 'autexa-api-v13';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
 const API_CACHE_TTL = 30_000; // 30 seconds — serve cache if younger
 

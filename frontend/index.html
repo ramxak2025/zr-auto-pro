@@ -20,9 +20,42 @@
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
     <script>
+      // PWA auto-update: без этого новый деплой не виден, пока пользователь
+      // вручную не сделает хард-рефреш (а в установленном iOS-PWA — почти
+      // никогда). SW зовёт skipWaiting()+clients.claim() при install/activate,
+      // поэтому свежий sw.js сам станет controller'ом и выстрелит
+      // 'controllerchange' — мы на нём перезагружаем страницу РОВНО один раз.
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js');
+        var refreshing = false;
+        // Снимаем наличие controller'а НА МОМЕНТ ЗАГРУЗКИ: при самой первой
+        // установке SW тоже вызывает clients.claim() → 'controllerchange'
+        // прилетает на свежей странице, и перезагружать её НЕ нужно.
+        var hadControllerAtLoad = !!navigator.serviceWorker.controller;
+        navigator.serviceWorker.addEventListener('controllerchange', function () {
+          if (refreshing) return;
+          if (!hadControllerAtLoad) return; // первый SW на чистой странице — без reload
+          refreshing = true;
+          window.location.reload();
+        });
+        window.addEventListener('load', function () {
+          navigator.serviceWorker
+            .register('/sw.js')
+            .then(function (reg) {
+              reg.update().catch(function () {}); // проверить обновление сразу
+              setInterval(function () {
+                reg.update().catch(function () {});
+              }, 60000); // и периодически
+            })
+            .catch(function () {});
+        });
+        // Доп. проверка при возврате фокуса/резюме — закрывает кейс
+        // установленного iOS-PWA, который «оживает» из снапшота.
+        document.addEventListener('visibilitychange', function () {
+          if (document.visibilityState === 'visible') {
+            navigator.serviceWorker.getRegistration().then(function (r) {
+              if (r) r.update().catch(function () {});
+            });
+          }
         });
       }
     </script>
