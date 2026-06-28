@@ -378,6 +378,49 @@ function PlatformCard({ platform, link, onPress, index }: PlatformCardProps) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
+//  Money-integration entry card
+//  A plain navigation row (not a connect-modal trigger): the эквайринг /
+//  онлайн-касса / Apple Wallet settings live on PaymentIntegrationsScreen,
+//  so these cards just push there. Reuses the provider-card visual language
+//  so money + comms integrations read as one catalogue.
+// ─────────────────────────────────────────────────────────────────────
+
+interface MoneyEntryCardProps {
+  name: string;
+  description: string;
+  iconName: keyof typeof import('@expo/vector-icons/build/Ionicons').default.glyphMap;
+  tone: { bg: string; fg: string };
+  onPress: () => void;
+  index: number;
+}
+
+function MoneyEntryCard({ name, description, iconName, tone, onPress, index }: MoneyEntryCardProps) {
+  const palette = useColors();
+  return (
+    <AnimatedCard
+      index={index}
+      onPress={onPress}
+      style={[styles.providerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.providerCardRow}>
+        <View style={[styles.providerLogo, { backgroundColor: tone.bg }]}>
+          <Ionicons name={iconName as any} size={22} color={tone.fg} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.providerName, { color: palette.text.primary }]} numberOfLines={1}>
+            {name}
+          </Text>
+          <Text style={[styles.providerDesc, { color: palette.text.tertiary }]} numberOfLines={2}>
+            {description}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+      </View>
+    </AnimatedCard>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
 //  Provider connection modal
 // ─────────────────────────────────────────────────────────────────────
 
@@ -999,8 +1042,51 @@ export default function IntegrationsScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
       >
         <Text style={[styles.heroSub, { color: palette.text.secondary }]}>
-          Подключайте сервисы — звонки, мессенджеры, отзывы
+          Подключайте сервисы — приём оплат, касса, звонки, мессенджеры, отзывы
         </Text>
+
+        {/* Приём оплат и касса — money integrations live on their own settings
+            screen (PaymentIntegrations) because their secrets + long forms differ
+            from the messaging flow. Surfaced here so EVERY integration — including
+            эквайринг (ЮKassa/Тинькофф) и онлайн-касса 54-ФЗ (АТОЛ) — is reachable
+            from one «Интеграции» roof. The target screen self-gates to owner-class. */}
+        <SectionHeader title="Приём оплат и касса" hint="Деньги и фискализация" />
+        <View style={{ gap: spacing[2.5] }}>
+          <MoneyEntryCard
+            index={0}
+            name="Приём оплаты картой и СБП"
+            description="Эквайринг — ЮKassa или Тинькофф"
+            iconName="card-outline"
+            tone={{ bg: colors.blue[50], fg: colors.blue[600] }}
+            onPress={() => {
+              haptic('tap');
+              navigation.navigate('PaymentIntegrations');
+            }}
+          />
+          <MoneyEntryCard
+            index={1}
+            name="Онлайн-касса 54-ФЗ"
+            description="АТОЛ Онлайн — фискализация чеков"
+            iconName="receipt-outline"
+            tone={{ bg: colors.green[50], fg: colors.green[600] }}
+            onPress={() => {
+              haptic('tap');
+              navigation.navigate('PaymentIntegrations');
+            }}
+          />
+          <MoneyEntryCard
+            index={2}
+            name="Apple Wallet"
+            description="Карта лояльности клиента (.pkpass)"
+            iconName="wallet-outline"
+            tone={{ bg: palette.bg.muted, fg: palette.text.primary }}
+            onPress={() => {
+              haptic('tap');
+              navigation.navigate('PaymentIntegrations');
+            }}
+          />
+        </View>
+        <View style={{ height: spacing[5] }} />
 
         {loading && integrations.length === 0 && platformLinks.length === 0 ? (
           <ActivityIndicator color={palette.accent.primary} style={{ marginTop: spacing[8] }} />

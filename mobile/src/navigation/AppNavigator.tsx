@@ -45,6 +45,8 @@ import KnowledgeCourseDetailScreen from '../screens/KnowledgeCourseDetailScreen'
 import KnowledgeLessonScreen from '../screens/KnowledgeLessonScreen';
 import KnowledgeCourseEditorScreen from '../screens/KnowledgeCourseEditorScreen';
 import MarketingScreen from '../screens/MarketingScreen';
+import MarketingReportsScreen from '../screens/MarketingReportsScreen';
+import ReviewsReputationScreen from '../screens/ReviewsReputationScreen';
 import WinbackScreen from '../screens/WinbackScreen';
 import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
@@ -363,12 +365,16 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Salary" component={GatedSalary} />
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
       <MoreStack.Screen name="Reports" component={GatedReports} />
+      {/* «Маркетинг» hub → four direction sub-screens. All live in MoreStack so
+          the floating tab bar stays visible and back-nav steps in-section
+          (sub-screen → Маркетинг → Ещё). */}
       <MoreStack.Screen name="Marketing" component={MarketingScreen} />
-      {/* «Возвращение клиентов» — win-back outreach reached from the Marketing
-          screen (Отзывы → карточка). Lives in MoreStack so the floating tab bar
-          stays visible (back goes Winback → Marketing → Ещё). Owner-class gated
-          inside the screen (director/admin/superadmin), same as the Marketing
-          owner-only editors. */}
+      <MoreStack.Screen name="MarketingReports" component={MarketingReportsScreen} />
+      <MoreStack.Screen name="ReviewsReputation" component={ReviewsReputationScreen} />
+      {/* «Возвращение клиентов» — win-back broadcast reached from «Рассылки»
+          (Mailings → карточка). Lives in MoreStack so the floating tab bar
+          stays visible (back goes Winback → Рассылки → Ещё). Owner-class gated
+          inside the screen (director/admin/superadmin). */}
       <MoreStack.Screen name="Winback" component={WinbackScreen} />
       <MoreStack.Screen name="Calls" component={CallsScreen} />
       <MoreStack.Screen name="Mailings" component={MailingsScreen} />

@@ -306,15 +306,24 @@ const menuSections: MenuSection[] = [
     sectionKey: 'marketing',
     items: [
       {
-        label: 'Отзывы и репутация',
-        description: 'Сбор и публикация отзывов',
+        // «Маркетинг» hub — one entry that opens a clean 4-direction screen
+        // (Маркетинговые отчёты · Отзывы и репутация · Интеграции · Рассылки),
+        // replacing the old jumble of four sibling rows. The owner-class
+        // sub-sections (Интеграции / Рассылки) self-filter inside the hub by
+        // role, so this row stays open exactly like the «Отзывы и репутация»
+        // entry it supersedes. PaymentIntegrations (касса/эквайринг) now lives
+        // INSIDE «Интеграции», so its old «Остальное» row was removed.
+        label: 'Маркетинг',
+        description: 'Отчёты, отзывы, интеграции и рассылки',
         screen: 'Marketing',
         itemKey: 'marketing',
-        icon: 'star-outline',
+        icon: 'megaphone-outline',
         iconBg: colors.violet[50],
         iconColor: colors.violet[600],
       },
       {
+        // Звонки stay a direct row — a daily-use call journal (and a Dashboard
+        // shortcut target), not a marketing setting that belongs in the hub.
         label: 'Звонки',
         description: 'Журнал звонков и записи',
         screen: 'Calls',
@@ -323,29 +332,6 @@ const menuSections: MenuSection[] = [
         icon: 'call-outline',
         iconBg: colors.blue[50],
         iconColor: colors.blue[600],
-      },
-      {
-        label: 'Рассылки',
-        description: 'SMS и push клиентам',
-        screen: 'Mailings',
-        itemKey: 'mailings',
-        roles: ['director', 'superadmin'],
-        icon: 'paper-plane-outline',
-        iconBg: colors.purple[50],
-        iconColor: colors.purple[600],
-      },
-      {
-        label: 'Интеграции',
-        description: 'Телефония, мессенджеры, CRM',
-        screen: 'Integrations',
-        itemKey: 'integrations',
-        roles: ['director', 'superadmin'],
-        // `git-network-outline` resolved to Circle in our Lucide shim
-        // (owner saw a blank dot). `extension-puzzle-outline` maps to
-        // Lucide's Puzzle which renders properly.
-        icon: 'extension-puzzle-outline',
-        iconBg: colors.slate[100],
-        iconColor: colors.slate[600],
       },
     ],
   },
@@ -387,22 +373,6 @@ const menuSections: MenuSection[] = [
         icon: 'business-outline',
         iconBg: colors.slate[100],
         iconColor: colors.slate[600],
-      },
-      {
-        // Приём оплат (эквайринг ЮKassa/Тинькофф) + онлайн-касса 54-ФЗ (АТОЛ).
-        // Company-level financial config — concept-adjacent to «Настройки
-        // компании», so we reuse its item-key 'company-settings' (a new shared
-        // item-key would break the ITEM_KEYS drift-guard). Distinct title so it
-        // doesn't duplicate the marketing «Интеграции» row above. Owner-class:
-        // role-filtered here AND the screen + backend self-gate.
-        label: 'Приём оплат и касса',
-        description: 'Эквайринг (карта/СБП) и онлайн-касса 54-ФЗ',
-        screen: 'PaymentIntegrations',
-        itemKey: 'company-settings',
-        roles: ['director', 'admin', 'superadmin'],
-        icon: 'receipt-outline',
-        iconBg: colors.blue[50],
-        iconColor: colors.blue[600],
       },
       {
         label: 'Подписка',

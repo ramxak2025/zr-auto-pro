@@ -819,6 +819,32 @@ export default function MailingsScreen() {
         }
         keyboardShouldPersistTaps="handled"
       >
+        {/* Возвращение клиентов — segment broadcast to clients who haven't
+            visited for N days. It's a broadcast, so it belongs under «Рассылки»;
+            the full composer lives on WinbackScreen (owner-class self-gated). */}
+        <TouchableOpacity
+          style={[
+            styles.winbackCard,
+            { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary },
+          ]}
+          activeOpacity={0.85}
+          onPress={() => {
+            haptic('tap');
+            navigation.navigate('Winback');
+          }}
+        >
+          <View style={[styles.winbackIcon, { backgroundColor: palette.accent.primary }]}>
+            <Ionicons name="repeat-outline" size={18} color={colors.white} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.winbackTitle, { color: palette.text.primary }]}>Возвращение клиентов</Text>
+            <Text style={[styles.winbackSub, { color: palette.text.secondary }]}>
+              Напишите тем, кто давно не приезжал
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+        </TouchableOpacity>
+
         {activeTab === 'auto' && <AutoTab />}
         {activeTab === 'manual' && <ManualTab history={history} setHistory={setHistory} />}
         {activeTab === 'history' && <HistoryTab history={history} />}
@@ -833,6 +859,26 @@ export default function MailingsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+
+  // Возвращение клиентов entry card
+  winbackCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    padding: spacing[3.5],
+    marginBottom: spacing[3],
+  },
+  winbackIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  winbackTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.3 },
+  winbackSub: { fontSize: fontSize.xs, marginTop: 2 },
 
   // Round capsule segmented control
   tabBarWrap: {
