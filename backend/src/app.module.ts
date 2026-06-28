@@ -49,6 +49,7 @@ import { TelephonyModule } from './telephony/telephony.module';
 import { WalletModule } from './wallet/wallet.module';
 import { InstallmentsModule } from './installments/installments.module';
 import { AccountModule } from './account/account.module';
+import { MotivationModule } from './motivation/motivation.module';
 
 @Module({
   imports: [
@@ -101,6 +102,7 @@ import { AccountModule } from './account/account.module';
     WalletModule,
     InstallmentsModule,
     AccountModule,
+    MotivationModule,
   ],
   providers: [MigrationRunner],
 })

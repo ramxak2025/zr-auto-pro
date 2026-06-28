@@ -1337,6 +1337,12 @@ export interface MasterSalary {
   premiumsAmount?: number;
   /** Sum of penalties applied inside the period (056_salary_penalties). Subtracted from remainingAmount. */
   penaltiesAmount?: number;
+  /**
+   * «Мотивация» — sum of promo-product (акционные товары) bonuses accrued to this
+   * master inside the period (095_motivation_promo_products). Already INCLUDED in
+   * totalEarnings (and therefore remainingAmount). 0 when the tenant has no promos.
+   */
+  motivationAmount?: number;
   totalEarnings: number;
   totalRevenue: number;
   checkCount: number;
@@ -1376,6 +1382,61 @@ export interface SalarySummary {
   todayCard?: number;
   todayWarranty?: number;
   productPromotions?: ProductPromotion[];
+  /** «Мотивация» — promo-product bonus accrued to this master today (095). */
+  motivationToday?: number;
+  /** «Мотивация» — promo-product bonus accrued this month (095). */
+  motivationMonth?: number;
+  /** «Мотивация» — promo-product bonus accrued all-time (095). */
+  motivationTotal?: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  «Мотивация сотрудников» v1 — акционные товары
+//  (095_motivation_promo_products). Owner marks products as promotional with a
+//  percent; on a PAID check the credited master earns percent × margin, summed
+//  into the salary «Мотивация» component.
+// ───────────────────────────────────────────────────────────────────────
+
+/** A product flagged «акционный» with a bonus percent (tenant-scoped). */
+export interface MotivationPromo {
+  id: string;
+  productId: string;
+  productName: string;
+  /** Bonus percent applied to the sale margin (0..100). */
+  percent: number;
+  /** Paused promos keep their config but never accrue. */
+  active: boolean;
+  /** Optional window start (ISO). null = no lower bound. */
+  startsAt?: string | null;
+  /** Optional window end (ISO). null = no upper bound. */
+  endsAt?: string | null;
+  /** Current warehouse prices, for an at-a-glance bonus preview. */
+  sellPrice: number;
+  costPrice: number;
+  photo?: string;
+  /** round((sellPrice − costPrice) × percent / 100) — bonus per single unit now. */
+  estimatedBonusPerUnit: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One accrued promo-product bonus row (ledger), written when a check is paid. */
+export interface MotivationAccrual {
+  id: string;
+  /** Credited master (= checks.master_id). null if the user was later deleted. */
+  employeeId?: string | null;
+  employeeName?: string;
+  checkId: string;
+  checkNumber?: number;
+  productId?: string | null;
+  productName?: string;
+  qty: number;
+  /** Margin the bonus was computed from: Σ(sell − cost) × qty over the lines. */
+  marginBase: number;
+  percent: number;
+  /** marginBase × percent / 100 (RUB). */
+  amount: number;
+  accruedAt: string;
 }
 
 export interface DashboardStats {

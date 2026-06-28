@@ -130,6 +130,28 @@ export class SalaryService {
       penaltiesByUser[p.user_id].push(this.mapPenalty(p));
     }
 
+    // «Мотивация» (095_motivation_promo_products): sum each master's promo-product
+    // bonuses accrued inside the period. ADDITIVE — a tenant with no accruals
+    // yields an empty map, so motivationAmount is 0 and totalEarnings /
+    // remainingAmount stay byte-identical to before this feature. Same inclusive
+    // date-range convention as the checks / premiums queries above (accrued_at
+    // within [dateFrom, dateTo + 1 day)). Attributed by employee_id = the credited
+    // master, mirroring how product revenue is attributed to checks.master_id.
+    const { rows: motivationRows } = await this.pool.query(
+      `SELECT employee_id, COALESCE(SUM(amount), 0) AS amount
+         FROM motivation_accruals
+        WHERE tenant_id = $1
+          AND employee_id IS NOT NULL
+          AND accrued_at >= $2::timestamptz
+          AND accrued_at <= ($3::date + 1)::timestamptz
+        GROUP BY employee_id`,
+      [tenantID, dateFrom, dateTo],
+    );
+    const motivationByUser: Record<string, number> = {};
+    for (const m of motivationRows) {
+      motivationByUser[m.employee_id] = parseFloat(m.amount) || 0;
+    }
+
     return rows.map((r) => {
       const masterId = r.master_id;
       const masterPayments = paymentsByUser[masterId] || [];
@@ -142,7 +164,10 @@ export class SalaryService {
         0,
       );
       const penaltiesAmount = masterPenalties.reduce((sum: number, p: any) => sum + (p.amount || 0), 0);
-      const totalEarnings = baseEarnings + premiumsAmount;
+      // «Мотивация»: promo-product bonus the master earned in the period. Added to
+      // what the shop owes (totalEarnings → remainingAmount). 0 when no promos.
+      const motivationAmount = motivationByUser[masterId] || 0;
+      const totalEarnings = baseEarnings + premiumsAmount + motivationAmount;
 
       return {
         masterId,
@@ -153,6 +178,7 @@ export class SalaryService {
         productEarnings: parseFloat(r.product_earnings) || 0,
         premiumsAmount,
         penaltiesAmount,
+        motivationAmount,
         totalEarnings,
         totalRevenue: parseFloat(r.total_revenue) || 0,
         checkCount: parseInt(r.check_count) || 0,
@@ -607,6 +633,21 @@ export class SalaryService {
       ),
     }));
 
+    // «Мотивация» (095): this master's promo-product bonuses for today / this
+    // month / all-time. NEW additive fields — the existing today/week/month/total
+    // earnings above are intentionally LEFT UNTOUCHED (motivation is a separate
+    // component, never folded into base earnings), so legacy clients are unaffected.
+    const { rows: motRows } = await this.pool.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN accrued_at >= $2 THEN amount END), 0) AS today,
+         COALESCE(SUM(CASE WHEN accrued_at >= $3 THEN amount END), 0) AS month,
+         COALESCE(SUM(amount), 0) AS total
+       FROM motivation_accruals
+       WHERE tenant_id = $1 AND employee_id = $4`,
+      [tenantID, todayStart, monthStart, userID],
+    );
+    const mot = motRows[0] || { today: 0, month: 0, total: 0 };
+
     return {
       today: parseFloat(r.today) || 0,
       week: parseFloat(r.week) || 0,
@@ -623,6 +664,9 @@ export class SalaryService {
       todayCard: parseFloat(r.today_card) || 0,
       todayWarranty: parseFloat(r.today_warranty) || 0,
       productPromotions,
+      motivationToday: parseFloat(mot.today) || 0,
+      motivationMonth: parseFloat(mot.month) || 0,
+      motivationTotal: parseFloat(mot.total) || 0,
     };
   }
 }

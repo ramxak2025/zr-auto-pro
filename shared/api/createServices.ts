@@ -39,6 +39,8 @@ import type {
   MasterSalary,
   SalarySummary,
   SalaryPayment,
+  MotivationPromo,
+  MotivationAccrual,
   FinancialReport,
   DashboardStats,
   EmployeeRanking,
@@ -591,6 +593,41 @@ export function createSalaryApi(api: HttpClient) {
     addPenalty: (data: { userId: string; amount: number; description?: string; date?: string }) =>
       api.post<SalaryPenalty>('/salary/penalties', data),
     removePenalty: (id: string) => api.delete(`/salary/penalties/${id}`),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  «Мотивация сотрудников» v1 — акционные товары (095_motivation_promo_products).
+//  Backend: motivation/. The owner marks products as «акционные» with a percent;
+//  when such a product is sold on a PAID check the credited master (checks.master_id)
+//  earns percent × margin, accrued into a ledger and summed into the salary
+//  «Мотивация» component (MasterSalary.motivationAmount).
+//
+//  Promo config (getPromos / setPromo / clearPromo) is owner-class
+//  (director / admin / superadmin) server-side. `getAccruals` is open to any
+//  tenant user but the backend force-scopes a non-privileged caller to their OWN
+//  accruals (a master sees their own bonuses, not a colleague's).
+// ───────────────────────────────────────────────────────────────────────
+
+export function createMotivationApi(api: HttpClient) {
+  return {
+    /** All promo products for the tenant (owner-class), joined with current prices. */
+    getPromos: () => api.get<MotivationPromo[]>('/motivation/promos'),
+    /**
+     * Set / update a product's promo percent (upsert by tenant+product). `percent`
+     * is the bonus rate applied to the sale margin (0..100). Optionally pause via
+     * `active:false` or bound it with `startsAt` / `endsAt`.
+     */
+    setPromo: (data: { productId: string; percent: number; active?: boolean; startsAt?: string; endsAt?: string }) =>
+      api.post<MotivationPromo>('/motivation/promos', data),
+    /** Remove a product from the promo programme. Idempotent. */
+    clearPromo: (productId: string) => api.delete(`/motivation/promos/${productId}`),
+    /**
+     * Accrual ledger for transparency. Director / admin / superadmin get the whole
+     * tenant (optionally `?userId=`); any other role is force-scoped to self.
+     */
+    getAccruals: (params?: { userId?: string; dateFrom?: string; dateTo?: string }) =>
+      api.get<MotivationAccrual[]>('/motivation/accruals', { params }),
   };
 }
 

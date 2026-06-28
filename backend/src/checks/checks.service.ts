@@ -239,6 +239,14 @@ export class ChecksService {
       ]);
     }
 
+    // ── 1b) «Мотивация»: accrue promo-product bonuses (095) ────────────────
+    // A deferred draft becoming active IS the payment moment — accrue here so
+    // BOTH close paths (activateDeferred + fullUpdate, the only callers of this
+    // method, each gated on a genuine true→false transition) credit the master
+    // exactly once. Placed before the warranty early-return below so it always
+    // runs on activation. No-op for a tenant with no active promos.
+    await this.accrueMotivationPromos(client, tenantID, checkId);
+
     // ── 2) Create warranty_claims (idempotent) ────────────────────────────
     // Never duplicate: if this check already carries any warranty claim we
     // skip the whole step. A deferred draft skips warranty at create()-time,
@@ -273,6 +281,60 @@ export class ChecksService {
     if (warrantyLines.length > 0) {
       await this.warranty.createFromCheckLines(client, tenantID, checkId, checkDate, clientId, carId, warrantyLines);
     }
+  }
+
+  /**
+   * «Мотивация сотрудников» (095) — accrue promo-product bonuses for a check at
+   * the moment it becomes PAID. Runs INSIDE the caller's (row-locked or
+   * freshly-inserted) transaction so the bonus and the sale commit together — or
+   * both roll back. ADDITIVE: a tenant with no active promos produces zero rows
+   * and zero behaviour change, so the salary output stays byte-identical.
+   *
+   * For every product line whose product is an ACTIVE promo (within its optional
+   * window) the bonus = percent × MARGIN, where MARGIN = Σ(total_sell − total_cost)
+   * over that product's lines on the check — i.e. (sell − cost) × qty, the SAME
+   * per-line margin the existing product commission uses. Lines are aggregated per
+   * product (one accrual per product), and only POSITIVE-margin promos are written,
+   * so an unknown/zero cost or a loss never yields a negative bonus.
+   *
+   * ATTRIBUTION: employee_id = checks.master_id — mirrors EXACTLY how payroll
+   * attributes product revenue (SalaryService sums checks.product_salary_total by
+   * checks.master_id; the create-time product commission is likewise keyed on the
+   * check's master). master_id is read transactionally from the check row, so a
+   * master reassigned during a fullUpdate close is honoured.
+   *
+   * IDEMPOTENT: clears this check's accruals first, then re-derives — so a re-pay /
+   * re-close can never double-credit. The DELETE+INSERT is atomic within the
+   * caller's transaction; the unique index (095) is the DB-level backstop.
+   */
+  private async accrueMotivationPromos(client: PoolClient, tenantID: string, checkId: string): Promise<void> {
+    await client.query('DELETE FROM motivation_accruals WHERE tenant_id = $1 AND check_id = $2', [tenantID, checkId]);
+    await client.query(
+      `INSERT INTO motivation_accruals
+         (tenant_id, employee_id, check_id, product_id, qty, margin_base, percent, amount, accrued_at)
+       SELECT c.tenant_id, c.master_id, c.id, agg.product_id, agg.qty,
+              agg.margin_base, agg.percent,
+              ROUND(agg.margin_base * agg.percent / 100.0, 2), now()
+         FROM checks c
+         JOIN (
+           SELECT pl.product_id,
+                  SUM(pl.quantity)                        AS qty,
+                  SUM(pl.total_sell) - SUM(pl.total_cost) AS margin_base,
+                  MAX(mp.percent)                         AS percent
+             FROM check_product_lines pl
+             JOIN motivation_promo_products mp
+               ON mp.tenant_id  = $1
+              AND mp.product_id = pl.product_id
+              AND mp.active     = true
+              AND (mp.starts_at IS NULL OR mp.starts_at <= now())
+              AND (mp.ends_at   IS NULL OR mp.ends_at   >= now())
+            WHERE pl.check_id = $2 AND pl.product_id IS NOT NULL
+            GROUP BY pl.product_id
+         ) agg ON true
+        WHERE c.id = $2 AND c.tenant_id = $1 AND c.master_id IS NOT NULL
+          AND agg.margin_base > 0 AND agg.percent > 0`,
+      [tenantID, checkId],
+    );
   }
 
   private invalidateReports(tenantID: string) {
@@ -1353,6 +1415,15 @@ export class ChecksService {
             warrantyLines,
           );
         }
+      }
+
+      // ── «Мотивация»: accrue promo-product bonuses (095) ───────────────────
+      // A check created already-paid (not deferred) is the payment moment —
+      // accrue the акционные-товары bonus to the credited master here, in this
+      // transaction. A deferred draft accrues later, on close, via
+      // applyDeferredActivation. No-op when the tenant has no active promos.
+      if (!effectiveIsDeferred) {
+        await this.accrueMotivationPromos(client, tenantID, checkId);
       }
 
       // ── Рассрочка: create the installment plan inside this transaction ────
