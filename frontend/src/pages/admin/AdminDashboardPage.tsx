@@ -17,6 +17,7 @@ import {
 import { tenantsApi } from '../../api/services';
 import { PlatformStats } from '../../types';
 import LoadingSpinner from '../../components/LoadingSpinner';
+import MrrTrendChart from '../../components/MrrTrendChart';
 
 function formatRub(value: number | undefined): string {
   return `${(value ?? 0).toLocaleString('ru-RU')} ₽`;
@@ -122,6 +123,11 @@ export default function AdminDashboardPage() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* MRR trend — owner cabinet widget */}
+      <div className="mb-8">
+        <MrrTrendChart />
       </div>
 
       {/* Quick Links */}
