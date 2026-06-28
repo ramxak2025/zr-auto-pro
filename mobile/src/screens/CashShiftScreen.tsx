@@ -52,6 +52,7 @@ import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
+import { startTrackedActivity, endTrackedActivity, CASH_SHIFT_ACTIVITY_SLOT } from '../utils/liveActivityStore';
 import type { CashShift, CashShiftReport, CashCollection } from '../../../shared/types';
 
 // ────────────────────────────────────────────────────────────────────────
@@ -181,10 +182,17 @@ export default function CashShiftScreen() {
 
   const openMutation = useMutation({
     mutationFn: (d: { openingAmount: number; note?: string }) => cashShiftsApi.open(d),
-    onSuccess: () => {
+    onSuccess: (_res, vars) => {
       invalidateShift();
       closeInputModal();
       haptic('success');
+      // Live Activity (iOS 16.1+): касса открыта → на Lock Screen / Dynamic
+      // Island. Fire-and-forget; no-op на Android / iOS < 16.1.
+      void startTrackedActivity(
+        CASH_SHIFT_ACTIVITY_SLOT,
+        { kind: 'shift' },
+        { title: 'Кассовая смена', status: 'Касса открыта', amount: vars.openingAmount },
+      );
     },
     onError: () => {
       haptic('error');
@@ -215,6 +223,8 @@ export default function CashShiftScreen() {
       haptic('success');
       // Показываем итоговый Z-отчёт с расхождением сразу после закрытия.
       setDetailReport(res.data);
+      // Live Activity: смена закрыта → завершаем активность. Fire-and-forget.
+      void endTrackedActivity(CASH_SHIFT_ACTIVITY_SLOT, { title: 'Кассовая смена', status: 'Касса закрыта' });
     },
     onError: () => {
       haptic('error');

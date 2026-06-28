@@ -241,15 +241,26 @@ function OwnerHero({ name }: { name: string }) {
   const revenueToday = v2.data?.revenueToday ?? 0;
   const profitMonth = v2.data?.netProfitMonth ?? 0;
   const checksToday = v2.data?.checksToday ?? 0;
+  // Открытые заказ-наряды = открытые (отложенные) чеки. dashboardV2.deferredSum
+  // считает is_deferred=true (reports.service.ts) — это незакрытые заказ-наряды,
+  // тот же показатель, что владелец видит в карточке «Отложенные». Источник уже
+  // загружен ЭТИМ же v2-запросом → никакого нового сетевого запроса ради виджета.
+  const openOrders = v2.data?.deferredSum.count ?? 0;
   const ydayProfit = yday.data?.totalProfit ?? 0;
   const delta = useMemo(() => formatDeltaPct(profitToday, ydayProfit), [profitToday, ydayProfit]);
   const isLoading = v2.data === undefined && v2.isLoading;
 
   // Sync widget data whenever today's profit/revenue changes.
-  // Deps are the three numeric primitives that matter — NOT `v2.data`,
-  // because TanStack returns a fresh data reference on every successful
-  // refetch (even with `placeholderData: prev => prev`), which would
-  // otherwise fire `updateWidgetData` on every 60 s background poll.
+  // Deps are the numeric primitives that matter — NOT `v2.data`, because
+  // TanStack returns a fresh data reference on every successful refetch (even
+  // with `placeholderData: prev => prev`), which would otherwise fire
+  // `updateWidgetData` on every 60 s background poll.
+  //
+  // Premium medium/large-widget KPIs: we pass `openOrders` (already in
+  // dashboardV2). `cashOpen` (live cash-shift state) and `nextBooking` are
+  // intentionally OMITTED — the owner dashboard fetches neither a cash-shift nor
+  // a bookings query, and adding one solely to feed the widget is disallowed.
+  // The widget renders fine with these fields absent.
   const hasV2 = v2.data !== undefined;
   useEffect(() => {
     if (!hasV2) return;
@@ -258,8 +269,9 @@ function OwnerHero({ name }: { name: string }) {
       revenue: revenueToday,
       profitToday,
       checksCount: checksToday,
+      openOrders,
     });
-  }, [hasV2, revenueToday, checksToday, profitToday]);
+  }, [hasV2, revenueToday, checksToday, profitToday, openOrders]);
 
   // Theme-aware hero gradient. Light mode keeps the brand-blue look
   // already shipped; dark mode swaps in a deep indigo→near-black ramp

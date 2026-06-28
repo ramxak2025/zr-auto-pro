@@ -1,7 +1,7 @@
-import React from 'react';
+import React, { useEffect } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { StackActions, CommonActions } from '@react-navigation/native';
+import { StackActions, CommonActions, useNavigation } from '@react-navigation/native';
 import { useAuth } from '../contexts/AuthContext';
 import PlatformTabBar from './TabBar';
 
@@ -72,8 +72,9 @@ import { screenErrorBoundaryLayout } from '../components/ErrorBoundary';
 import FeatureGate from '../components/FeatureGate';
 import AdminShellNavigator from './AdminShellNavigator';
 import ImpersonationBanner from '../components/ImpersonationBanner';
-import { View } from 'react-native';
+import { View, AppState } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
+import { consumePendingAppIntent, type PendingAppIntent } from '../utils/appIntents';
 import type { Product } from '../../../shared/types';
 
 // Feature descriptions for lock screens
@@ -598,6 +599,42 @@ function TabNavigator() {
 }
 
 /**
+ * SiriIntentRouter — drains the Siri / App Intents queue
+ * («Создать заказ-наряд» / «Открыть кассу») on launch and on every foreground,
+ * then deep-links into the car-service tree. Renders nothing.
+ *
+ * `consumePendingAppIntent()` read-and-clears the queued action, so a shortcut
+ * fires exactly once; a null result is a no-op. Off iOS / iOS < 16 the bridge
+ * always returns null, so this is inert on Android. Mounted only inside the
+ * car-service tree (the platform-operator AdminShell has no Касса). It lives
+ * under the root `Main` screen, so `useNavigation()` resolves to the root stack
+ * and `navigate('Main', { screen })` switches the requested tab.
+ */
+function SiriIntentRouter() {
+  const navigation = useNavigation<any>();
+  useEffect(() => {
+    const route = (pending: PendingAppIntent | null) => {
+      if (!pending) return;
+      if (pending.action === 'create_order') {
+        // «Создать заказ-наряд» → центральная Касса (экран нового заказ-наряда).
+        navigation.navigate('Main', { screen: 'NewCheck' });
+      } else if (pending.action === 'open_cash') {
+        // «Открыть кассу» → экран кассовой смены.
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'CashShift' } });
+      }
+    };
+    // App launch (cold/warm): consume whatever Siri queued before mount.
+    route(consumePendingAppIntent());
+    // Foreground: Siri can queue an action while the app sits in the background.
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') route(consumePendingAppIntent());
+    });
+    return () => sub.remove();
+  }, [navigation]);
+  return null;
+}
+
+/**
  * MainShell — the authenticated root. Branches the navigator by role:
  *
  *   • A real superadmin (role 'superadmin', NOT impersonating) gets the
@@ -617,11 +654,21 @@ function MainShell() {
   const isPlatformOperator = user?.role === 'superadmin' && !isImpersonating;
 
   const navigator = isPlatformOperator ? <AdminShellNavigator /> : <TabNavigator />;
+  // Siri / App Intents deep-link router — car-service tree only (the
+  // platform-operator AdminShell has no Касса). Renders null, so it adds no
+  // layout or inset wrapping.
+  const intentRouter = isPlatformOperator ? null : <SiriIntentRouter />;
 
   // Fast path — no impersonation banner. Render the navigator straight, so a
-  // normal session has ZERO extra wrapping and the top inset stays untouched.
+  // normal session has ZERO extra layout wrapping and the top inset stays
+  // untouched (the router renders null alongside it).
   if (!isImpersonating) {
-    return navigator;
+    return (
+      <>
+        {navigator}
+        {intentRouter}
+      </>
+    );
   }
 
   // Impersonating: the banner sits ABOVE the navigator and PUSHES the
@@ -639,6 +686,7 @@ function MainShell() {
           </SafeAreaInsetsContext.Provider>
         )}
       </SafeAreaInsetsContext.Consumer>
+      {intentRouter}
     </View>
   );
 }

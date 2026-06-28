@@ -52,6 +52,13 @@ import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { columnVisual } from '../constants/workStatus';
+import { liveActivitiesAvailable, type LiveActivityState } from '../utils/liveActivity';
+import {
+  startTrackedActivity,
+  updateTrackedActivity,
+  endTrackedActivity,
+  orderActivitySlot,
+} from '../utils/liveActivityStore';
 import type { Check, ChecksBoard } from '../../../shared/types';
 
 const BOARD_KEY = ['checks', 'board'] as const;
@@ -62,6 +69,40 @@ function formatMoney(v: number) {
       .toString()
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
+}
+
+// ── Live Activity (iOS 16.1+) ────────────────────────────────────────────
+// Заказ-наряд «в работе» (in_progress) → Live Activity на Lock Screen /
+// Dynamic Island; любая следующая смена статуса её обновляет, «Выдан»
+// (delivered) — завершает. Ключи — дефолтные колонки доски: backend (082/091)
+// всегда отдаёт accepted/in_progress/ready/delivered, даже при кастомных
+// колонках. На полностью переименованной доске LA просто не стартует — это
+// некритичное улучшение. Всё fire-and-forget и no-op вне iOS / iOS < 16.1.
+const WORK_STATUS_IN_PROGRESS = 'in_progress';
+const WORK_STATUS_DELIVERED = 'delivered';
+
+type MoveVars = { id: string; target: string; check?: Check; targetLabel?: string };
+
+function syncOrderLiveActivity(vars: MoveVars): void {
+  const { target, check, targetLabel } = vars;
+  if (!check || !liveActivitiesAvailable()) return;
+  const slot = orderActivitySlot(check.id);
+  const state: LiveActivityState = {
+    title: check.car?.plateNumber || `Заказ-наряд №${check.number}`,
+    status: targetLabel || target,
+    subtitle: check.master?.fullName || check.client?.fullName || undefined,
+    amount: check.totalRevenue,
+  };
+  const itemsCount = (check.services?.length ?? 0) + (check.products?.length ?? 0);
+  if (itemsCount > 0) state.itemsCount = itemsCount;
+
+  if (target === WORK_STATUS_IN_PROGRESS) {
+    void startTrackedActivity(slot, { kind: 'order', orderId: check.id }, state);
+  } else if (target === WORK_STATUS_DELIVERED) {
+    void endTrackedActivity(slot, state);
+  } else {
+    void updateTrackedActivity(slot, state);
+  }
 }
 
 // ── BoardCard ───────────────────────────────────────────────────────────
@@ -176,7 +217,7 @@ export default function WorkBoardScreen() {
   // Снимаем карточку из текущей группы, добавляем в целевую В НАЧАЛО
   // (newest-first), обновляем workStatus. Откат — восстановление снимка.
   const moveMutation = useMutation({
-    mutationFn: ({ id, target }: { id: string; target: string }) => checksApi.setWorkStatus(id, target),
+    mutationFn: ({ id, target }: MoveVars) => checksApi.setWorkStatus(id, target),
     onMutate: async ({ id, target }) => {
       await queryClient.cancelQueries({ queryKey: BOARD_KEY });
       const prev = queryClient.getQueryData<ChecksBoard>(BOARD_KEY);
@@ -204,8 +245,11 @@ export default function WorkBoardScreen() {
       haptic('error');
       Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось переместить заказ-наряд');
     },
-    onSuccess: () => {
+    onSuccess: (_data, vars) => {
       haptic('success');
+      // Live Activity lifecycle (iOS 16.1+; no-op on Android / iOS < 16.1).
+      // Fire-and-forget — the user's move never waits on ActivityKit.
+      syncOrderLiveActivity(vars);
     },
     onSettled: () => {
       // Сервер — источник истины. Доска + журнал + деталь конкретного чека.
@@ -219,9 +263,12 @@ export default function WorkBoardScreen() {
       const current = picker;
       setPicker(null);
       if (!current || current.workStatus === target) return;
-      moveMutation.mutate({ id: current.id, target });
+      // Resolve the target column label now (fresh `board`) so the Live Activity
+      // can show «В работе»/«Выдан» without re-reading state in the callback.
+      const targetLabel = board?.columns.find((c) => c.key === target)?.label ?? target;
+      moveMutation.mutate({ id: current.id, target, check: current, targetLabel });
     },
-    [picker, moveMutation],
+    [picker, moveMutation, board],
   );
 
   const handleOpenCheck = useCallback(() => {
