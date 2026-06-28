@@ -49,6 +49,21 @@ public class AutexaLiquidGlassModule: Module {
       }
     }
 
+    // Read-and-clear the pending action queued by a Siri / App Intent
+    // (AutexaAppIntents.swift writes `{action, at}` JSON to the shared
+    // App Group under `autexa_pending_intent` when the user runs
+    // «Создать заказ-наряд» / «Открыть кассу»). The RN app calls this on
+    // launch / foreground to deep-link to the right screen, then the key
+    // is cleared so the action fires exactly once. Returns nil when empty.
+    Function("consumePendingAppIntent") { () -> String? in
+      guard let defaults = UserDefaults(suiteName: "group.com.autexa.mobile") else { return nil }
+      let json = defaults.string(forKey: "autexa_pending_intent")
+      if json != nil {
+        defaults.removeObject(forKey: "autexa_pending_intent")
+      }
+      return json
+    }
+
     // Force the entire app's interface style. Called from JS whenever the
     // user toggles dark/light mode in the React Native context. This
     // makes `UIVisualEffectView`s using `.systemThinMaterial` and friends

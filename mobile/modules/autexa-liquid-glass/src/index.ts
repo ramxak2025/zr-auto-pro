@@ -62,3 +62,98 @@ export function setIosAppearance(mode: 'dark' | 'light' | 'system'): void {
     }
   }
 }
+
+/**
+ * Read-and-clear the action queued by a Siri / App Intent
+ * («Создать заказ-наряд» / «Открыть кассу»). Returns the raw JSON string
+ * (`{"action":"create_order","at":"…"}`) or null. Bridges to the native
+ * AutexaLiquidGlass.consumePendingAppIntent(). No-op (null) off iOS.
+ */
+export function consumePendingAppIntent(): string | null {
+  if (typeof globalThis !== 'undefined' && (globalThis as any).expo) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { requireNativeModule } = require('expo-modules-core');
+      const mod = requireNativeModule('AutexaLiquidGlass');
+      return mod.consumePendingAppIntent() ?? null;
+    } catch {
+      // Module / function missing — no pending action.
+    }
+  }
+  return null;
+}
+
+// ── Live Activity (ActivityKit) low-level bridge ─────────────────────
+// Thin wrappers over the AutexaLiveActivity Expo module. The typed,
+// app-facing API lives in src/utils/liveActivity.ts. All calls funnel
+// through a single native-module lookup and no-op safely off iOS.
+
+function liveActivityModule(): any | null {
+  if (typeof globalThis !== 'undefined' && (globalThis as any).expo) {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { requireNativeModule } = require('expo-modules-core');
+      return requireNativeModule('AutexaLiveActivity');
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Are Live Activities supported AND enabled by the user? */
+export function liveActivitiesSupported(): boolean {
+  try {
+    return liveActivityModule()?.isSupported() === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Start an activity; resolves to its id (use for update/end) or null. */
+export async function startLiveActivity(attributesJson: string, contentJson: string): Promise<string | null> {
+  const mod = liveActivityModule();
+  if (!mod) return null;
+  try {
+    return (await mod.start(attributesJson, contentJson)) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Update a running activity by id. */
+export async function updateLiveActivity(id: string, contentJson: string): Promise<void> {
+  const mod = liveActivityModule();
+  if (!mod) return;
+  try {
+    await mod.update(id, contentJson);
+  } catch {
+    // non-critical
+  }
+}
+
+/** End a running activity by id, optionally with a final content state. */
+export async function endLiveActivity(
+  id: string,
+  contentJson?: string | null,
+  dismissImmediately = false,
+): Promise<void> {
+  const mod = liveActivityModule();
+  if (!mod) return;
+  try {
+    await mod.end(id, contentJson ?? null, dismissImmediately);
+  } catch {
+    // non-critical
+  }
+}
+
+/** End every running Autexa activity (e.g. on logout). */
+export async function endAllLiveActivities(): Promise<void> {
+  const mod = liveActivityModule();
+  if (!mod) return;
+  try {
+    await mod.endAll();
+  } catch {
+    // non-critical
+  }
+}

@@ -22,6 +22,15 @@ import SwiftUI
 // ═══════════════════════════════════════════════════════════════════
 
 // ── Data model ──────────────────────────────────────────────────────
+
+/// Next booking / installment teaser, written by the app already
+/// pre-formatted (`time` is a display string like "Сегодня 15:30" — the
+/// widget never re-parses dates, dodging timezone drift).
+struct BookingInfo: Codable {
+    var title: String?   // "Камри 2.5" / "Платёж: ООО Ромашка"
+    var time: String?    // "Сегодня 15:30" / "Завтра 10:00"
+}
+
 struct WidgetPayload: Codable {
     var role: String?
 
@@ -34,6 +43,12 @@ struct WidgetPayload: Codable {
     var revenue: Double?
     var profitToday: Double?
     var checksCount: Int?
+
+    // premium KPIs (all optional — older payloads decode fine and the
+    // views simply omit any field the app hasn't populated yet)
+    var openOrders: Int?     // открытые заказ-наряды
+    var cashOpen: Bool?      // касса открыта / закрыта
+    var nextBooking: BookingInfo?
 
     var updatedAt: String?
 
@@ -48,10 +63,13 @@ struct WidgetPayload: Codable {
     /// Gallery / placeholder previews.
     static let ownerSample = WidgetPayload(
         role: "owner", revenue: 48_500, profitToday: 21_300, checksCount: 14,
+        openOrders: 5, cashOpen: true,
+        nextBooking: BookingInfo(title: "Камри 2.5 — ТО", time: "Сегодня 15:30"),
         updatedAt: ISO8601DateFormatter().string(from: Date())
     )
     static let masterSample = WidgetPayload(
         role: "master", earningsToday: 6_400, earningsMonth: 84_200, shiftOpen: true,
+        nextBooking: BookingInfo(title: "Логан — замена масла", time: "Сегодня 16:00"),
         updatedAt: ISO8601DateFormatter().string(from: Date())
     )
 }
@@ -386,16 +404,252 @@ struct OwnerMediumView: View {
 
             Spacer(minLength: 4)
 
-            HStack(spacing: 4) {
-                Image(systemName: "doc.text.fill")
-                    .font(.system(size: 9, weight: .semibold))
-                    .foregroundStyle(autexaBlue)
-                Text("\(checksLabel(payload.checksCount ?? 0)) за сегодня")
-                    .font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(.secondary)
+            HStack(spacing: 10) {
+                HStack(spacing: 4) {
+                    Image(systemName: "wrench.and.screwdriver.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(autexaBlue)
+                    // Open work-orders if the app sent them, else fall back
+                    // to today's checks count (legacy payloads).
+                    if let open = payload.openOrders {
+                        Text("\(open) открыто")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("\(checksLabel(payload.checksCount ?? 0)) за сегодня")
+                            .font(.system(size: 10, weight: .medium))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer(minLength: 0)
+                if let cashOpen = payload.cashOpen {
+                    CashStatusPill(open: cashOpen)
+                }
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+    }
+}
+
+// ── Premium KPI building blocks ─────────────────────────────────────
+
+/// "Касса открыта" / "Касса закрыта" status capsule.
+struct CashStatusPill: View {
+    let open: Bool
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Image(systemName: open ? "lock.open.fill" : "lock.fill")
+                .font(.system(size: 9, weight: .semibold))
+            Text(open ? "Касса открыта" : "Касса закрыта")
+                .font(.system(size: 10, weight: .semibold))
+        }
+        .foregroundStyle(open ? Color.green : Color.secondary)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background(
+            Capsule().fill(open ? Color.green.opacity(0.13) : Color(.systemGray5).opacity(0.7))
+        )
+    }
+}
+
+/// Compact metric tile: small icon, value, caption. Used in the Large grid.
+struct KpiTile: View {
+    let icon: String
+    let tint: Color
+    let value: String
+    let caption: String
+    var sensitive: Bool = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Image(systemName: icon)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(tint)
+            Text(value)
+                .font(.system(size: 18, weight: .bold, design: .rounded))
+                .foregroundStyle(.primary)
+                .minimumScaleFactor(0.5)
+                .lineLimit(1)
+                .modifier(PrivacyIf(on: sensitive))
+            Text(caption)
+                .font(.system(size: 9, weight: .medium))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.tertiarySystemFill))
+        )
+    }
+}
+
+/// Applies `.privacySensitive()` only when `on` — lets one tile decide.
+struct PrivacyIf: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        if on { content.privacySensitive() } else { content }
+    }
+}
+
+/// "Ближайшая запись" row — calendar glyph, title, time chip.
+struct NextBookingRow: View {
+    let booking: BookingInfo
+
+    var body: some View {
+        HStack(spacing: 8) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(autexaBlue.opacity(0.12))
+                    .frame(width: 30, height: 30)
+                Image(systemName: "calendar.badge.clock")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(autexaBlue)
+            }
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Ближайшая запись")
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Text(booking.title ?? "—")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+            }
+            Spacer(minLength: 4)
+            if let time = booking.time, !time.isEmpty {
+                Text(time)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(autexaBlue)
+                    .lineLimit(1)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .fill(Color(.tertiarySystemFill))
+        )
+    }
+}
+
+// ── OWNER: Large — full «пульс сервиса» ─────────────────────────────
+struct OwnerLargeView: View {
+    let payload: WidgetPayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                BrandHeader()
+                if let cashOpen = payload.cashOpen {
+                    CashStatusPill(open: cashOpen)
+                }
+            }
+
+            // Hero — оборот сегодня
+            VStack(alignment: .leading, spacing: 2) {
+                Text("ОБОРОТ СЕГОДНЯ")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .kerning(0.5)
+                MoneyText(value: payload.revenue ?? 0, size: 38)
+            }
+
+            // KPI grid
+            HStack(spacing: 8) {
+                KpiTile(
+                    icon: "arrow.up.right",
+                    tint: .green,
+                    value: formatRub(payload.profitToday ?? 0),
+                    caption: "Чистая прибыль",
+                    sensitive: true
+                )
+                KpiTile(
+                    icon: "wrench.and.screwdriver.fill",
+                    tint: autexaBlue,
+                    value: "\(payload.openOrders ?? 0)",
+                    caption: "Открытые заказы"
+                )
+                KpiTile(
+                    icon: "doc.text.fill",
+                    tint: autexaBlue,
+                    value: "\(payload.checksCount ?? 0)",
+                    caption: "Чеки за день"
+                )
+            }
+
+            if let booking = payload.nextBooking, (booking.title?.isEmpty == false) {
+                NextBookingRow(booking: booking)
+            }
+
+            Spacer(minLength: 0)
+            UpdatedFootnote(iso: payload.updatedAt)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+// ── MASTER: Large — «Мой день» ──────────────────────────────────────
+struct MasterLargeView: View {
+    let payload: WidgetPayload
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                BrandHeader()
+                if let shiftOpen = payload.shiftOpen {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(shiftOpen ? Color.green : Color(.systemGray3))
+                            .frame(width: 6, height: 6)
+                        Text(shiftOpen ? "Смена открыта" : "Смена закрыта")
+                            .font(.system(size: 10, weight: .semibold))
+                            .foregroundStyle(shiftOpen ? Color.green : Color.secondary)
+                    }
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+                    .background(
+                        Capsule().fill(
+                            shiftOpen ? Color.green.opacity(0.13) : Color(.systemGray5).opacity(0.7)
+                        )
+                    )
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text("МОЙ ЗАРАБОТОК СЕГОДНЯ")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .kerning(0.5)
+                MoneyText(value: payload.earningsToday ?? 0, size: 38)
+            }
+
+            HStack(spacing: 8) {
+                KpiTile(
+                    icon: "calendar",
+                    tint: autexaBlue,
+                    value: formatRub(payload.earningsMonth ?? 0),
+                    caption: "За месяц",
+                    sensitive: true
+                )
+                KpiTile(
+                    icon: "checkmark.seal.fill",
+                    tint: .green,
+                    value: payload.shiftOpen == true ? "В смене" : "Не в смене",
+                    caption: "Статус"
+                )
+            }
+
+            if let booking = payload.nextBooking, (booking.title?.isEmpty == false) {
+                NextBookingRow(booking: booking)
+            }
+
+            Spacer(minLength: 0)
+            UpdatedFootnote(iso: payload.updatedAt)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
@@ -408,16 +662,16 @@ struct AuTexaWidgetEntryView: View {
         Group {
             if let payload = entry.payload, !payload.isCleared {
                 if payload.isMaster {
-                    if family == .systemMedium {
-                        MasterMediumView(payload: payload)
-                    } else {
-                        MasterSmallView(payload: payload)
+                    switch family {
+                    case .systemLarge: MasterLargeView(payload: payload)
+                    case .systemMedium: MasterMediumView(payload: payload)
+                    default: MasterSmallView(payload: payload)
                     }
                 } else {
-                    if family == .systemMedium {
-                        OwnerMediumView(payload: payload)
-                    } else {
-                        OwnerSmallView(payload: payload)
+                    switch family {
+                    case .systemLarge: OwnerLargeView(payload: payload)
+                    case .systemMedium: OwnerMediumView(payload: payload)
+                    default: OwnerSmallView(payload: payload)
                     }
                 }
             } else {
@@ -442,6 +696,6 @@ struct AuTexaWidget: Widget {
         }
         .configurationDisplayName("Autexa")
         .description("Заработок мастера или оборот и прибыль сервиса за сегодня")
-        .supportedFamilies([.systemSmall, .systemMedium])
+        .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }

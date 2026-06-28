@@ -1,6 +1,16 @@
 import { Platform } from 'react-native';
 import { setWidgetData } from '../../modules/autexa-liquid-glass/src/index';
 
+/**
+ * Ближайшая запись / платёж для большого виджета. `time` приходит уже
+ * отформатированной строкой («Сегодня 15:30») — виджет дату не парсит,
+ * чтобы избежать сдвига часовых поясов на стороне WidgetKit.
+ */
+export interface WidgetBooking {
+  title: string;
+  time: string;
+}
+
 /** Payload for masters — «Мой заработок» (сегодня + за месяц). */
 export interface MasterWidgetData {
   role: 'master';
@@ -10,6 +20,8 @@ export interface MasterWidgetData {
   earningsMonth: number;
   /** Открыта ли смена прямо сейчас (зелёная точка в виджете). */
   shiftOpen?: boolean;
+  /** Ближайшая запись (большой виджет). */
+  nextBooking?: WidgetBooking;
 }
 
 /** Payload for owners/admins — оборот, чистая прибыль и чеки за сегодня. */
@@ -21,6 +33,12 @@ export interface OwnerWidgetData {
   profitToday: number;
   /** Количество чеков за сегодня. */
   checksCount: number;
+  /** Открытые заказ-наряды (премиум-KPI, medium/large виджет). */
+  openOrders?: number;
+  /** Касса открыта / закрыта (премиум-KPI, medium/large виджет). */
+  cashOpen?: boolean;
+  /** Ближайшая запись / платёж (большой виджет). */
+  nextBooking?: WidgetBooking;
 }
 
 export type WidgetData = MasterWidgetData | OwnerWidgetData;

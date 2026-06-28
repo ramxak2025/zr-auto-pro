@@ -26,7 +26,8 @@
         "NSCameraUsageDescription": "Приложению нужен доступ к камере для фотографирования документов и автомобилей",
         "NSPhotoLibraryUsageDescription": "Приложению нужен доступ к галерее для выбора фотографий",
         "ITSAppUsesNonExemptEncryption": false,
-        "LSApplicationQueriesSchemes": ["tel", "telprompt"]
+        "LSApplicationQueriesSchemes": ["tel", "telprompt"],
+        "NSSupportsLiveActivities": true
       }
     },
     "android": {
@@ -103,6 +104,7 @@
       "./plugins/withDisableUserScriptSandboxing.js",
       "./plugins/withAndroidPredictiveBack.js",
       "./plugins/withWidgetExtension.js",
+      "./plugins/withNativeCapabilities.js",
       [
         "expo-build-properties",
         {
