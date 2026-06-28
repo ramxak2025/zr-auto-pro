@@ -22,7 +22,6 @@ import {
   ChevronRight,
   FileText,
   GraduationCap,
-  Wrench,
   ThumbsUp,
   ThumbsDown,
   AlertCircle,
@@ -51,7 +50,6 @@ import MarkdownView from '../components/MarkdownView';
 import ArticleBlocksReader from '../components/knowledge/ArticleBlocks';
 import BlockEditor from '../components/knowledge/BlockEditor';
 import LearningCenter from './knowledge/LearningCenter';
-import TroubleshootingReference from './knowledge/TroubleshootingReference';
 
 // ───────────────────────────────────────────────────────────────────────
 //  Query keys (shared convention: ['knowledge', <resource>, ...args])
@@ -89,8 +87,8 @@ function errMessage(err: unknown, fallback: string): string {
 }
 
 type View = { mode: 'browse' } | { mode: 'reader'; id: string };
-/** The four KB pillars. «База знаний» / «Регламенты» are folder-browsed article sets. */
-type Section = 'knowledge' | 'regulations' | 'learning' | 'troubleshooting';
+/** The three KB pillars. «База знаний» / «Регламенты» are folder-browsed article sets. */
+type Section = 'knowledge' | 'regulations' | 'learning';
 
 const SECTION_TYPE: Record<'knowledge' | 'regulations', KnowledgeArticleType> = {
   knowledge: 'article',
@@ -312,12 +310,6 @@ export default function KnowledgeBasePage() {
               active={section === 'learning'}
               onClick={() => goToSection('learning')}
             />
-            <SectionTab
-              label="Справочник"
-              icon={Wrench}
-              active={section === 'troubleshooting'}
-              onClick={() => goToSection('troubleshooting')}
-            />
           </div>
 
           {section === 'learning' && (
@@ -328,8 +320,6 @@ export default function KnowledgeBasePage() {
               initialCourseId={learningCourseId ?? undefined}
             />
           )}
-
-          {section === 'troubleshooting' && <TroubleshootingReference isManager={isManager} />}
 
           {isArticleSection && (
             <div className="space-y-5">

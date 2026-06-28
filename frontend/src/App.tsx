@@ -83,6 +83,8 @@ const CallsPage = lazyWithRetry(() => import('./pages/CallsPage'));
 const EquipmentPage = lazyWithRetry(() => import('./pages/EquipmentPage'));
 const KnowledgeBasePage = lazyWithRetry(() => import('./pages/KnowledgeBasePage'));
 const ReviewPublicPage = lazyWithRetry(() => import('./pages/ReviewPublicPage'));
+const PrivacyPage = lazyWithRetry(() => import('./pages/PrivacyPage'));
+const TermsPage = lazyWithRetry(() => import('./pages/TermsPage'));
 const NotificationSettingsPage = lazyWithRetry(() => import('./pages/NotificationSettingsPage'));
 
 // Admin pages
@@ -178,6 +180,10 @@ export default function App() {
         <Routes>
           {/* Public: Review page (no auth) */}
           <Route path="/review/:token" element={<ReviewPublicPage />} />
+
+          {/* Public: Privacy Policy & Terms of Use (no auth — required for App Store / Google Play review) */}
+          <Route path="/privacy" element={<PrivacyPage />} />
+          <Route path="/terms" element={<TermsPage />} />
 
           {/* Public: Login */}
           <Route
