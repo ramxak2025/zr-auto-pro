@@ -113,6 +113,33 @@ export interface BroadcastButton {
   url?: string;
 }
 
+/**
+ * Subscription billing state a broadcast segment can target (096):
+ *   trial   — active & in-window on a free (monthly_price = 0) plan;
+ *   paid    — active & in-window on a paid (monthly_price > 0) plan;
+ *   expired — subscription lapsed (subscription_end in the past).
+ */
+export type BroadcastSubscriptionStatus = 'trial' | 'paid' | 'expired';
+
+/**
+ * Optional recipient segment for a superadmin broadcast (096). ABSENT / empty =
+ * every active tenant (back-compat). Criteria AND-combine; the statuses inside
+ * `subscriptionStatuses` OR-combine. Resolved to a frozen tenant set at SEND
+ * time, so a deferred broadcast targets the tenants matching it when it fires.
+ */
+export interface BroadcastSegment {
+  /** Match tenants whose plan is any of these plan ids. */
+  planIds?: string[];
+  /** Match tenants in any of these billing states. */
+  subscriptionStatuses?: BroadcastSubscriptionStatus[];
+  /** 'active' = has checks within the window; 'dormant' = none. */
+  activity?: 'active' | 'dormant';
+  /** Activity window in days (default 30). */
+  activityWindowDays?: number;
+  /** Include manually-disabled (is_active = false) tenants too (default false). */
+  includeInactive?: boolean;
+}
+
 /** A persisted superadmin → director broadcast (GET /notifications/broadcasts/unseen). */
 export interface Broadcast {
   id: string;
@@ -121,6 +148,13 @@ export interface Broadcast {
   imageUrl?: string;
   buttons: BroadcastButton[];
   createdAt: string;
+  /**
+   * 096 — delivery instant (≈ createdAt for an immediate send, a future instant
+   * for a deferred one). Optional/null for legacy rows that predate scheduling.
+   */
+  scheduledAt?: string | null;
+  /** 096 — when fan-out fired; null = still queued (a scheduled, not-yet-sent broadcast). */
+  sentAt?: string | null;
 }
 
 /**
@@ -139,6 +173,17 @@ export interface BroadcastHistoryItem {
   createdAt: string;
   cancelledAt: string | null;
   seenCount: number;
+  // ─── 096 — targeting + scheduling ──────────────────────────────────────────
+  /** Delivery instant; for a deferred broadcast this is its future send time. */
+  scheduledAt: string | null;
+  /** When fan-out fired; null = still queued (scheduled, not yet sent). */
+  sentAt: string | null;
+  /** Segment criteria; null = broadcast to ALL active tenants. */
+  segment: BroadcastSegment | null;
+  /** true = sent to everyone (no segment). */
+  targetAll: boolean;
+  /** Materialized target tenants (0 for target_all, or for a not-yet-sent segment). */
+  recipientCount: number;
 }
 
 /** Data payload carried by the broadcast push (data.type === 'superadmin_broadcast'). */
@@ -163,6 +208,25 @@ export interface PlatformStats {
   arpu: number;
   /** Tenants created since the start of the current month. */
   newTenantsThisMonth: number;
+}
+
+/**
+ * One month of the platform MRR trend (GET /admin/mrr-trends, superadmin-only).
+ *
+ * Reconstructed from CURRENT tenant/plan state — Autexa keeps no historical
+ * subscription snapshots, so a tenant counts toward a month if it existed by
+ * that month's end and its subscription was still valid then; current
+ * `is_active` is used as the activity proxy. Oldest month first.
+ */
+export interface MrrTrendPoint {
+  /** Month label, 'YYYY-MM'. */
+  month: string;
+  /** Σ monthly_price of active PAYING tenants that month (rubles, rounded). */
+  mrr: number;
+  /** Active tenants that month. */
+  activeTenants: number;
+  /** Tenants created during that month. */
+  newTenants: number;
 }
 
 /**

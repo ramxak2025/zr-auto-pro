@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Query, Body, UseGuards } from '@nestjs/common';
 import { TenantsService } from './tenants.service';
 import { AuditService, AuditActor } from './audit.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
@@ -106,18 +106,32 @@ export class TenantsController {
 }
 
 /**
- * Superadmin platform-operator audit trail. Separate controller because the
- * route lives under `/admin`, not `/tenants`. Same global JwtAuthGuard; the
+ * Superadmin platform-operator endpoints not tied to a single tenant (audit
+ * trail + dashboard analytics). Separate controller because the routes live
+ * under `/admin`, not `/tenants`. Same global JwtAuthGuard; the
  * @Roles('superadmin') below is enforced by RolesGuard.
  */
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('admin')
 export class AdminAuditController {
-  constructor(private audit: AuditService) {}
+  constructor(
+    private audit: AuditService,
+    private tenantsService: TenantsService,
+  ) {}
 
   @Roles('superadmin')
   @Get('audit-log')
   listAuditLog() {
     return this.audit.list(50);
+  }
+
+  /**
+   * Monthly MRR trend for the admin dashboard. `months` defaults to 12 and is
+   * clamped to 1..36 server-side. Oldest month first.
+   */
+  @Roles('superadmin')
+  @Get('mrr-trends')
+  getMrrTrends(@Query('months') months?: string) {
+    return this.tenantsService.getMrrTrends(months !== undefined ? parseInt(months, 10) : undefined);
   }
 }

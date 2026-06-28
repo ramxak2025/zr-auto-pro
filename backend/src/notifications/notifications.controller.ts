@@ -36,7 +36,9 @@ export class NotificationsController {
 
   @Get('broadcasts/unseen')
   listUnseenBroadcasts(@CurrentUser() user: JwtPayload) {
-    return this.notifications.listUnseenBroadcasts(user.userID);
+    // tenantID drives the 096 segment-recipient match (target_all broadcasts
+    // ignore it and still reach everyone).
+    return this.notifications.listUnseenBroadcasts(user.userID, user.tenantID);
   }
 
   @Post('broadcasts/:id/seen')

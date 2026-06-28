@@ -14,6 +14,17 @@ import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { AuditService, AuditActor } from './audit.service';
 
+/**
+ * One month of the platform MRR trend (GET /admin/mrr-trends). Matches the
+ * shared `MrrTrendPoint` type. Oldest month first.
+ */
+export interface MrrTrendPoint {
+  month: string;
+  mrr: number;
+  activeTenants: number;
+  newTenants: number;
+}
+
 @Injectable()
 export class TenantsService {
   private readonly logger = new Logger('TenantsService');
@@ -108,6 +119,58 @@ export class TenantsService {
       arpu: activeTenants > 0 ? Math.round(mrr / activeTenants) : 0,
       newTenantsThisMonth: parseInt(r.new_tenants_this_month, 10),
     };
+  }
+
+  /**
+   * Monthly MRR trend for the admin dashboard (096) — the last N months
+   * (default 12, clamped 1..36), OLDEST month first.
+   *
+   * Autexa keeps NO historical subscription snapshots, so the series is
+   * reconstructed from CURRENT tenant/plan state: a tenant contributes to a
+   * month if it existed by that month's end and its subscription was still valid
+   * then (subscription_end NULL or >= month-end). `is_active` is the current
+   * value, used as the activity proxy — an honest approximation, not a ledger
+   * replay. `mrr` sums the denormalized tenants.monthly_price of ACTIVE PAYING
+   * (monthly_price > 0) tenants, the same source as getStats() so the dashboard
+   * stays coherent.
+   */
+  async getMrrTrends(months?: number): Promise<MrrTrendPoint[]> {
+    const n = Math.min(36, Math.max(1, Number.isFinite(months as number) ? Math.trunc(months as number) : 12));
+    const { rows } = await this.pool.query(
+      `WITH series AS (
+         SELECT generate_series(
+                  date_trunc('month', now()) - (($1::int - 1) * interval '1 month'),
+                  date_trunc('month', now()),
+                  interval '1 month'
+                ) AS m_start
+       )
+       SELECT
+         to_char(s.m_start, 'YYYY-MM') AS month,
+         COALESCE(SUM(t.monthly_price) FILTER (
+           WHERE t.is_active = true
+             AND COALESCE(t.monthly_price, 0) > 0
+             AND (t.subscription_end IS NULL OR t.subscription_end >= s.m_start + interval '1 month')
+         ), 0) AS mrr,
+         COUNT(t.id) FILTER (
+           WHERE t.is_active = true
+             AND (t.subscription_end IS NULL OR t.subscription_end >= s.m_start + interval '1 month')
+         ) AS active_tenants,
+         COUNT(t.id) FILTER (
+           WHERE t.created_at >= s.m_start
+             AND t.created_at < s.m_start + interval '1 month'
+         ) AS new_tenants
+       FROM series s
+       LEFT JOIN tenants t ON t.created_at < s.m_start + interval '1 month'
+       GROUP BY s.m_start
+       ORDER BY s.m_start ASC`,
+      [n],
+    );
+    return rows.map((r) => ({
+      month: r.month,
+      mrr: Math.round(parseFloat(r.mrr) || 0),
+      activeTenants: parseInt(r.active_tenants, 10) || 0,
+      newTenants: parseInt(r.new_tenants, 10) || 0,
+    }));
   }
 
   /**

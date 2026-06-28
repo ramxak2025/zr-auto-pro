@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { NotificationsController, AdminBroadcastController } from './notifications.controller';
 import { NotificationsService } from './notifications.service';
+import { BroadcastSchedulerService } from './broadcast-scheduler.service';
 import { TenantsModule } from '../tenants/tenants.module';
 
 // PushService comes from the @Global PushModule (push/push.module.ts), so it's
@@ -12,7 +13,7 @@ import { TenantsModule } from '../tenants/tenants.module';
 @Module({
   imports: [TenantsModule],
   controllers: [NotificationsController, AdminBroadcastController],
-  providers: [NotificationsService],
+  providers: [NotificationsService, BroadcastSchedulerService],
   exports: [NotificationsService],
 })
 export class NotificationsModule {}

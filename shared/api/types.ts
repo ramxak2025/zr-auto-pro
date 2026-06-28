@@ -10,6 +10,7 @@ import type {
   KnowledgeQuizQuestion,
   TroubleshootingSeverity,
   BroadcastButton,
+  BroadcastSegment,
   NotificationCategory,
 } from '../types';
 
@@ -26,6 +27,10 @@ export interface CreateBroadcastRequest {
   body: string;
   imageUrl?: string;
   buttons?: BroadcastButton[];
+  /** 096 — ISO 8601 instant to defer delivery to; omit / past = send immediately. */
+  scheduledAt?: string;
+  /** 096 — recipient segment; omit / empty = all active tenants. */
+  segment?: BroadcastSegment;
 }
 
 export interface LoginRequest {

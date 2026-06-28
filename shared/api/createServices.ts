@@ -51,6 +51,7 @@ import type {
   PaginatedResponse,
   SubscriptionInfo,
   PlatformStats,
+  MrrTrendPoint,
   TodayEmployeeStatus,
   MarketingDashboard,
   ReviewResponse,
@@ -282,6 +283,12 @@ export function createTenantsApi(api: HttpClient) {
 export function createAdminApi(api: HttpClient) {
   return {
     listAuditLog: () => api.get<AuditLogEntry[]>('/admin/audit-log'),
+    /**
+     * Monthly MRR trend for the admin dashboard (096). `months` defaults to 12
+     * server-side and is clamped to 1..36. Oldest month first.
+     */
+    getMrrTrends: (months?: number) =>
+      api.get<MrrTrendPoint[]>('/admin/mrr-trends', { params: months !== undefined ? { months } : undefined }),
   };
 }
 

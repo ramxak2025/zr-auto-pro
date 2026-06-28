@@ -1,4 +1,19 @@
-import { IsString, IsOptional, IsArray, IsIn, IsUrl, ValidateNested, MaxLength, ArrayMaxSize } from 'class-validator';
+import {
+  IsString,
+  IsOptional,
+  IsArray,
+  IsIn,
+  IsUrl,
+  IsBoolean,
+  IsInt,
+  IsUUID,
+  IsDateString,
+  Min,
+  Max,
+  ValidateNested,
+  MaxLength,
+  ArrayMaxSize,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 // Canonical user-facing notification categories. Kept in lock-step with the
@@ -39,8 +54,60 @@ export class BroadcastButtonDto {
   url?: string;
 }
 
+// Subscription billing state a broadcast segment can target. Kept in lock-step
+// with the shared `BroadcastSubscriptionStatus` union (shared/types/index.ts):
+//   trial   — active & in-window but on a free (monthly_price = 0) plan;
+//   paid    — active & in-window on a paid (monthly_price > 0) plan;
+//   expired — subscription_end is in the past (lapsed).
+export const BROADCAST_SUBSCRIPTION_STATUSES = ['trial', 'paid', 'expired'] as const;
+export type BroadcastSubscriptionStatus = (typeof BROADCAST_SUBSCRIPTION_STATUSES)[number];
+
+/**
+ * Optional recipient segment for a superadmin broadcast (096). ABSENT / empty =
+ * every active tenant (back-compat). Criteria AND-combine; the statuses inside
+ * `subscriptionStatuses` OR-combine. Resolved to a FROZEN tenant set at SEND
+ * time (notification_broadcast_recipients).
+ */
+export class BroadcastSegmentDto {
+  /** Match tenants whose plan is any of these plan ids. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(100)
+  @IsUUID('all', { each: true })
+  planIds?: string[];
+
+  /** Match tenants in any of these billing states. */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(BROADCAST_SUBSCRIPTION_STATUSES.length)
+  @IsIn(BROADCAST_SUBSCRIPTION_STATUSES as unknown as string[], { each: true })
+  subscriptionStatuses?: BroadcastSubscriptionStatus[];
+
+  /** 'active' = has checks within the window; 'dormant' = none. */
+  @IsOptional()
+  @IsIn(['active', 'dormant'])
+  activity?: 'active' | 'dormant';
+
+  /** Activity window in days (default 30). */
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(365)
+  activityWindowDays?: number;
+
+  /** Include manually-disabled (is_active = false) tenants too (default false). */
+  @IsOptional()
+  @IsBoolean()
+  includeInactive?: boolean;
+}
+
 /**
  * POST /admin/broadcast body — superadmin only (guarded in the controller).
+ *
+ * `scheduledAt` (096) defers delivery to a future instant; omit / a past instant
+ * = send immediately. `segment` (096) narrows the audience; omit / empty = all
+ * active tenants. Both are additive — a body with neither behaves exactly like
+ * the pre-096 immediate broadcast-to-everyone.
  */
 export class CreateBroadcastDto {
   @IsString()
@@ -62,4 +129,15 @@ export class CreateBroadcastDto {
   @ValidateNested({ each: true })
   @Type(() => BroadcastButtonDto)
   buttons?: BroadcastButtonDto[];
+
+  /** ISO 8601 instant to defer delivery to. Omit / past = send now. */
+  @IsOptional()
+  @IsDateString()
+  scheduledAt?: string;
+
+  /** Recipient segment. Omit / empty = all active tenants. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => BroadcastSegmentDto)
+  segment?: BroadcastSegmentDto;
 }
