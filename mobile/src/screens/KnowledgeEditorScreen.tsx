@@ -35,6 +35,7 @@ import { haptic } from '../platform/haptics';
 import { parseVideoUrl, videoProviderLabel } from '../components/knowledge/videoUrl';
 import BlockEditor, { sanitizeBlocks, hasInvalidVideoBlock } from '../components/knowledge/BlockEditor';
 import FolderManagerModal from '../components/knowledge/FolderManagerModal';
+import AudiencePicker, { type AudienceValue } from '../components/knowledge/AudiencePicker';
 import type {
   KnowledgeArticle,
   KnowledgeArticleType,
@@ -71,6 +72,8 @@ export default function KnowledgeEditorScreen() {
   const [attachments, setAttachments] = React.useState<KnowledgeAttachment[]>([]);
   const [pinned, setPinned] = React.useState(false);
   const [published, setPublished] = React.useState(true);
+  // #54 — regulation audience: «для всех» (default) или выбранные сотрудники.
+  const [audience, setAudience] = React.useState<AudienceValue>({ targetAll: true, targetUserIds: [] });
   const [uploading, setUploading] = React.useState(false);
   const [hydrated, setHydrated] = React.useState(false);
   const [folderModalOpen, setFolderModalOpen] = React.useState(false);
@@ -107,6 +110,8 @@ export default function KnowledgeEditorScreen() {
       setAttachments(existing.attachments ?? []);
       setPinned(existing.pinned);
       setPublished(existing.published);
+      // Pre-fill the audience picker from the saved regulation targeting.
+      setAudience({ targetAll: existing.targetAll ?? true, targetUserIds: existing.targetUserIds ?? [] });
       setHydrated(true);
     }
   }, [existing, hydrated]);
@@ -127,6 +132,10 @@ export default function KnowledgeEditorScreen() {
         attachments,
         pinned,
         published,
+        // #54 — only regulations carry an audience; plain articles never do.
+        ...(type === 'regulation'
+          ? { targetAll: audience.targetAll, targetUserIds: audience.targetAll ? [] : audience.targetUserIds }
+          : {}),
       };
       if (isEdit) {
         return (await knowledgeApi.updateArticle(editId as string, payload)).data;
@@ -346,6 +355,14 @@ export default function KnowledgeEditorScreen() {
             );
           })}
         </View>
+
+        {/* Audience (regulations only) — «для всех» или выбранные сотрудники */}
+        {type === 'regulation' ? (
+          <>
+            <Text style={[iosSectionLabel, styles.label, { color: palette.text.secondary }]}>Кому показывать</Text>
+            <AudiencePicker value={audience} onChange={setAudience} />
+          </>
+        ) : null}
 
         {/* Category */}
         <View style={styles.catHeader}>

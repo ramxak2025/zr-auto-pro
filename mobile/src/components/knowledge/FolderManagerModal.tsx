@@ -1,13 +1,17 @@
 /**
- * FolderManagerModal — create a Knowledge Base folder / subfolder from the phone.
+ * FolderManagerModal — create / edit a Knowledge Base folder from the phone.
  *
- * A lightweight bottom-sheet: name + an optional parent folder, so a manager can
- * build the nested tree (root → subfolder → …) the same way the web folder
- * manager does. Uses the existing `knowledgeApi.createCategory({ name, parentId })`
- * endpoint (079 contract) — no native code, ships via OTA. Android-safe.
+ * A lightweight bottom-sheet with two modes (079 + #54):
+ *   • CREATE (default): name + an optional parent folder, so a manager can
+ *     build the nested tree (root → subfolder → …).
+ *   • EDIT (`editCategory` set): rename, MOVE (re-parent), or DELETE the folder.
+ *     The folder's own subtree is excluded from the parent picker so it can't
+ *     become its own descendant (the server also rejects cycles with a 400).
+ *     Deleting a folder orphans its articles/subfolders to the root
+ *     (ON DELETE SET NULL) — nothing is lost.
  *
- * The server rejects cycles, but since we only CREATE here every existing
- * category is a valid parent — no descendant filtering needed.
+ * Uses the existing `knowledgeApi.{createCategory,updateCategory,deleteCategory}`
+ * (079 contract) — no native code, ships via OTA. Android-safe.
  */
 import React from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
@@ -19,64 +23,71 @@ import { spacing, borderRadius, colors } from '../../theme';
 import { useColors } from '../../contexts/ThemeContext';
 import { knowledgeApi } from '../../api/services';
 import { haptic } from '../../platform/haptics';
-import { rootCategories, childCategories } from '../../utils/knowledgeTree';
+import { flattenWithDepth } from './folderTree';
 import type { KnowledgeCategory } from '../../../../shared/types';
 
 interface FolderManagerModalProps {
   visible: boolean;
-  /** Pre-selected parent (the folder the manager is currently inside). */
+  /** Pre-selected parent (the folder the manager is currently inside). Create-only. */
   presetParentId?: string | null;
+  /** When set, the sheet edits this folder (rename / move / delete) instead of creating. */
+  editCategory?: KnowledgeCategory | null;
   categories: KnowledgeCategory[];
   onClose: () => void;
   /** Called with the freshly-created category after the cache is invalidated. */
   onCreated?: (category: KnowledgeCategory) => void;
-}
-
-/** Flatten the tree depth-first so subfolders are pickable with indentation. */
-function flattenWithDepth(categories: KnowledgeCategory[]): { cat: KnowledgeCategory; depth: number }[] {
-  const out: { cat: KnowledgeCategory; depth: number }[] = [];
-  const walk = (parentId: string | null, depth: number) => {
-    if (depth > 64) return;
-    const children = parentId === null ? rootCategories(categories) : childCategories(categories, parentId);
-    for (const cat of children) {
-      out.push({ cat, depth });
-      walk(cat.id, depth + 1);
-    }
-  };
-  walk(null, 0);
-  return out;
+  /** Called after an edit (rename / move) succeeds. */
+  onUpdated?: (category: KnowledgeCategory) => void;
+  /** Called after the folder is deleted. */
+  onDeleted?: () => void;
 }
 
 export default function FolderManagerModal({
   visible,
   presetParentId,
+  editCategory,
   categories,
   onClose,
   onCreated,
+  onUpdated,
+  onDeleted,
 }: FolderManagerModalProps) {
   const palette = useColors();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
 
+  const isEdit = !!editCategory;
+
   const [name, setName] = React.useState('');
   const [parentId, setParentId] = React.useState<string | null>(presetParentId ?? null);
 
-  // Reset the form each time the sheet opens (preset parent = current folder).
+  // Reset the form each time the sheet opens (edit → prefill from the folder;
+  // create → preset parent = current folder).
   React.useEffect(() => {
     if (visible) {
-      setName('');
-      setParentId(presetParentId ?? null);
+      setName(editCategory?.name ?? '');
+      setParentId(editCategory ? (editCategory.parentId ?? null) : (presetParentId ?? null));
     }
-  }, [visible, presetParentId]);
+  }, [visible, presetParentId, editCategory]);
 
-  const flat = React.useMemo(() => flattenWithDepth(categories), [categories]);
+  // In edit mode the folder can't be re-parented under itself or a descendant.
+  const flat = React.useMemo(
+    () => flattenWithDepth(categories, isEdit ? editCategory?.id : undefined),
+    [categories, isEdit, editCategory?.id],
+  );
+
+  const invalidate = React.useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['knowledge-categories'] });
+    // Deleting / moving a folder can re-home articles → refresh every list.
+    queryClient.invalidateQueries({ queryKey: ['knowledge-articles'] });
+  }, [queryClient]);
 
   const createMutation = useMutation({
     mutationFn: async () =>
       (await knowledgeApi.createCategory({ name: name.trim(), parentId: parentId ?? undefined })).data,
     onSuccess: (cat) => {
       haptic('success');
-      queryClient.invalidateQueries({ queryKey: ['knowledge-categories'] });
+      invalidate();
       onCreated?.(cat);
       onClose();
     },
@@ -86,13 +97,57 @@ export default function FolderManagerModal({
     },
   });
 
-  const onCreate = () => {
+  const updateMutation = useMutation({
+    mutationFn: async () =>
+      (await knowledgeApi.updateCategory(editCategory!.id, { name: name.trim(), parentId: parentId ?? null })).data,
+    onSuccess: (cat) => {
+      haptic('success');
+      invalidate();
+      onUpdated?.(cat);
+      onClose();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось сохранить папку. Попробуйте ещё раз.');
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async () => (await knowledgeApi.deleteCategory(editCategory!.id)).data,
+    onSuccess: () => {
+      haptic('success');
+      invalidate();
+      onDeleted?.();
+      onClose();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось удалить папку. Попробуйте ещё раз.');
+    },
+  });
+
+  const pending = createMutation.isPending || updateMutation.isPending || deleteMutation.isPending;
+
+  const onSubmit = () => {
     if (!name.trim()) {
       Alert.alert('Название обязательно', 'Введите название папки.');
       return;
     }
     haptic('tap');
-    createMutation.mutate();
+    if (isEdit) updateMutation.mutate();
+    else createMutation.mutate();
+  };
+
+  const onDelete = () => {
+    if (!editCategory) return;
+    Alert.alert(
+      'Удалить папку?',
+      `«${editCategory.name}» будет удалена. Вложенные папки и статьи переедут в корень — они не пропадут.`,
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Удалить', style: 'destructive', onPress: () => deleteMutation.mutate() },
+      ],
+    );
   };
 
   return (
@@ -108,7 +163,7 @@ export default function FolderManagerModal({
           <View style={[styles.handle, { backgroundColor: palette.border.strong }]} />
 
           <Text variant="title3" color={palette.text.primary} style={{ marginBottom: spacing[3] }}>
-            Новая папка
+            {isEdit ? 'Папка' : 'Новая папка'}
           </Text>
 
           <Text style={[styles.label, { color: palette.text.secondary }]}>Название</Text>
@@ -117,9 +172,9 @@ export default function FolderManagerModal({
             onChangeText={setName}
             placeholder="Например: Приёмка автомобиля"
             placeholderTextColor={palette.text.tertiary}
-            autoFocus
+            autoFocus={!isEdit}
             returnKeyType="done"
-            onSubmitEditing={onCreate}
+            onSubmitEditing={onSubmit}
             style={[
               styles.input,
               { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, color: palette.text.primary },
@@ -160,20 +215,42 @@ export default function FolderManagerModal({
           </ScrollView>
 
           <Pressable
-            onPress={onCreate}
-            disabled={createMutation.isPending}
+            onPress={onSubmit}
+            disabled={pending}
             style={({ pressed }) => [
               styles.createBtn,
-              { backgroundColor: palette.accent.primary, opacity: pressed || createMutation.isPending ? 0.85 : 1 },
+              { backgroundColor: palette.accent.primary, opacity: pressed || pending ? 0.85 : 1 },
             ]}
             accessibilityRole="button"
-            accessibilityLabel="Создать папку"
+            accessibilityLabel={isEdit ? 'Сохранить папку' : 'Создать папку'}
           >
-            <Ionicons name="folder-open-outline" size={18} color={colors.white} />
+            <Ionicons name={isEdit ? 'checkmark' : 'folder-open-outline'} size={18} color={colors.white} />
             <Text variant="callout" color={colors.white}>
-              {createMutation.isPending ? 'Создаём…' : 'Создать папку'}
+              {pending && !deleteMutation.isPending
+                ? isEdit
+                  ? 'Сохраняем…'
+                  : 'Создаём…'
+                : isEdit
+                  ? 'Сохранить'
+                  : 'Создать папку'}
             </Text>
           </Pressable>
+
+          {isEdit ? (
+            <Pressable
+              onPress={onDelete}
+              disabled={pending}
+              hitSlop={8}
+              style={styles.deleteBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Удалить папку"
+            >
+              <Ionicons name="trash-outline" size={17} color={colors.red[600]} />
+              <Text variant="bodyEmph" style={{ color: colors.red[600] }}>
+                {deleteMutation.isPending ? 'Удаляем…' : 'Удалить папку'}
+              </Text>
+            </Pressable>
+          ) : null}
         </Pressable>
       </Pressable>
     </Modal>
@@ -262,5 +339,13 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3.5],
     minHeight: 52,
     marginTop: spacing[4],
+  },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3],
+    marginTop: spacing[2],
   },
 });
