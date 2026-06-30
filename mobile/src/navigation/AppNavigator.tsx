@@ -38,6 +38,7 @@ import ExpensesScreen from '../screens/ExpensesScreen';
 import UsersScreen from '../screens/UsersScreen';
 import ScheduleScreen from '../screens/ScheduleScreen';
 import MoreScreen from '../screens/MoreScreen';
+import ProfileScreen from '../screens/ProfileScreen';
 import KnowledgeBaseScreen from '../screens/KnowledgeBaseScreen';
 import KnowledgeCategoryScreen from '../screens/KnowledgeCategoryScreen';
 import KnowledgeArticleScreen from '../screens/KnowledgeArticleScreen';
@@ -286,6 +287,11 @@ function MoreStackNavigator() {
   return (
     <MoreStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <MoreStack.Screen name="MoreHome" component={MoreScreen} />
+      {/* «Мой профиль» — self profile edit (ФИО/телефон/аватар), self password
+          change, owner approval queue, and «Удалить аккаунт». Reached by tapping
+          the profile header at the top of MoreScreen. Lives in MoreStack so the
+          floating tab bar stays visible (back goes Profile → Ещё). */}
+      <MoreStack.Screen name="Profile" component={ProfileScreen} />
       {/*
         Section detail screens live INSIDE the MoreStack so that a tap
         from a section list (Clients → ClientDetail, Suppliers →

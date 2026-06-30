@@ -1,6 +1,7 @@
 import api from './axios';
 import {
   createAuthApi,
+  createProfileApi,
   createUsersApi,
   createTenantsApi,
   createAdminApi,
@@ -52,6 +53,11 @@ import {
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
+// «Мой профиль» (migration 099). Self profile edit + self password change for
+// every role; владелец (director/superadmin) edits apply directly, сотрудник
+// (admin/master) edits create a pending change-request that an owner approves.
+// Consumed by ProfileScreen (entry: profile header on «Ещё»).
+export const profileApi = createProfileApi(api);
 export const usersApi = createUsersApi(api);
 export const tenantsApi = createTenantsApi(api);
 // Superadmin platform-operator endpoints not tied to a single tenant

@@ -1,32 +1,19 @@
-import React, { useRef, useEffect, useState } from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
-  StyleSheet,
-  Animated,
-  Alert,
-  ActivityIndicator,
-  Platform,
-  Linking,
-} from 'react-native';
+import React, { useRef, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Animated, Alert, Platform, Linking } from 'react-native';
 import CachedImage from '../components/CachedImage';
-import DeleteAccountModal from '../components/DeleteAccountModal';
-import type { DeleteAccountResponse } from '../../../shared/api/types';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
-import * as ImagePicker from 'expo-image-picker';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { uploadsApi, authApi, subscriptionApi, knowledgeApi, bookingsApi } from '../api/services';
+import { subscriptionApi, knowledgeApi, bookingsApi } from '../api/services';
 import { countUpcoming } from './bookings/bookingHelpers';
 import type { Booking } from '../../../shared/types';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
+import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { UserPermissions, SubscriptionInfo, SectionVisibility } from '../../../shared/types';
 import { ALL_ITEM_KEYS } from '../../../shared/types';
@@ -488,17 +475,11 @@ const MenuRow = React.memo(function MenuRow({
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
-  const { user, logout, hasPermission, refreshUser, isSectionVisible, isItemVisible } = useAuth();
+  const { user, logout, hasPermission, isSectionVisible, isItemVisible } = useAuth();
   const palette = useColors();
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
-  const [uploading, setUploading] = useState(false);
-  const [deleteVisible, setDeleteVisible] = useState(false);
-  // Account holder = director (the tenant owner). Deleting their account closes
-  // the whole company after the grace window; an employee only removes their
-  // own record. The backend is authoritative — this only picks the wording.
-  const isAccountHolder = user?.role === 'director';
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userInitial = user?.fullName?.charAt(0) || 'U';
   // Role badge — byte-identical pale chip in light, translucent accent glow in
@@ -564,28 +545,6 @@ export default function MoreScreen() {
     return true;
   };
 
-  const handleAvatarUpload = async () => {
-    try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.8,
-      });
-      if (result.canceled) return;
-
-      const asset = result.assets[0];
-      setUploading(true);
-      const uploadRes = await uploadsApi.upload(asset.uri, asset.fileName || 'avatar.jpg');
-      await authApi.updateAvatar(uploadRes.data.url);
-      await refreshUser();
-    } catch {
-      Alert.alert('Ошибка', 'Не удалось загрузить аватарку');
-    } finally {
-      setUploading(false);
-    }
-  };
-
   // Open a legal document (privacy / terms) in the system browser. Failure is
   // surfaced gently — the link just couldn't be opened.
   const openLink = async (url: string) => {
@@ -594,23 +553,6 @@ export default function MoreScreen() {
     } catch {
       Alert.alert('Не удалось открыть ссылку', url);
     }
-  };
-
-  // After a successful deletion: explain the outcome, then force logout through
-  // the single AuthContext path (same one «Выйти» / the 401 interceptor use) —
-  // no duplicated teardown logic. The director branch keeps the 30-day grace
-  // wording; an employee's record is gone immediately.
-  const handleDeleted = (res: DeleteAccountResponse) => {
-    setDeleteVisible(false);
-    const isTenant = res.status === 'tenant_deletion_requested';
-    Alert.alert(
-      isTenant ? 'Запрос на удаление принят' : 'Аккаунт удалён',
-      isTenant
-        ? 'Доступ закрыт. Все данные компании будут безвозвратно удалены через 30 дней. Если передумаете — свяжитесь с поддержкой до окончания этого срока.'
-        : 'Ваша учётная запись удалена. Сейчас вы выйдете из приложения.',
-      [{ text: 'OK', onPress: () => logout() }],
-      { cancelable: false },
-    );
   };
 
   // Entrance animation for user card
@@ -637,7 +579,10 @@ export default function MoreScreen() {
         scrollIndicatorInsets={{ bottom: tabBarHeight }}
         automaticallyAdjustContentInsets={false}
       >
-        {/* Identity card — compact iOS Settings-style profile cell */}
+        {/* Identity card — iOS Settings-style profile cell. The avatar + name
+            region is a tap target that opens «Мой профиль» (edit ФИО / телефон /
+            аватар, смена пароля, owner approval queue, удалить аккаунт). The
+            notifications bell stays a separate trailing action. */}
         <Animated.View
           style={[
             styles.userCard,
@@ -651,42 +596,38 @@ export default function MoreScreen() {
           ]}
         >
           <View style={styles.userRow}>
-            <View style={styles.avatarWrap}>
-              {avatarUrl ? (
-                <CachedImage
-                  source={{ uri: avatarUrl }}
-                  style={[styles.avatarImage, { borderColor: palette.border.subtle }]}
-                />
-              ) : (
-                <View style={[styles.avatar, { backgroundColor: palette.accent.primarySoft }]}>
-                  <Text style={[styles.avatarText, { color: palette.accent.primaryText }]}>{userInitial}</Text>
-                </View>
-              )}
-              <TouchableOpacity
-                style={[
-                  styles.avatarEditBtn,
-                  shadow,
-                  { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
-                ]}
-                onPress={handleAvatarUpload}
-                disabled={uploading}
-                hitSlop={6}
-              >
-                {uploading ? (
-                  <ActivityIndicator size="small" color={palette.text.secondary} />
+            <TouchableOpacity
+              style={styles.identityPress}
+              activeOpacity={0.6}
+              onPress={() => {
+                haptic('tap');
+                navigation.navigate('Profile');
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Мой профиль"
+            >
+              <View style={styles.avatarWrap}>
+                {avatarUrl ? (
+                  <CachedImage
+                    source={{ uri: avatarUrl }}
+                    style={[styles.avatarImage, { borderColor: palette.border.subtle }]}
+                  />
                 ) : (
-                  <Ionicons name="camera-outline" size={14} color={palette.text.secondary} />
+                  <View style={[styles.avatar, { backgroundColor: palette.accent.primarySoft }]}>
+                    <Text style={[styles.avatarText, { color: palette.accent.primaryText }]}>{userInitial}</Text>
+                  </View>
                 )}
-              </TouchableOpacity>
-            </View>
-            <View style={{ flex: 1, gap: 4 }}>
-              <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
-                {user?.fullName || 'User'}
-              </Text>
-              <View style={[styles.roleBadge, { backgroundColor: badgeColor.bg }]}>
-                <Text style={[styles.roleText, { color: badgeColor.text }]}>{roleLabel}</Text>
               </View>
-            </View>
+              <View style={{ flex: 1, gap: 4 }}>
+                <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
+                  {user?.fullName || 'User'}
+                </Text>
+                <View style={[styles.roleBadge, { backgroundColor: badgeColor.bg }]}>
+                  <Text style={[styles.roleText, { color: badgeColor.text }]}>{roleLabel}</Text>
+                </View>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+            </TouchableOpacity>
             {/* Notifications — every user picks their own categories. */}
             <TouchableOpacity
               style={[styles.bellBtn, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
@@ -803,24 +744,9 @@ export default function MoreScreen() {
           <Text style={styles.logoutText}>Выйти из аккаунта</Text>
         </TouchableOpacity>
 
-        {/* Удалить аккаунт — App Store 5.1.1(v) / Google Play in-app deletion.
-            Destructive, separated, opens a password-confirm sheet. */}
-        <TouchableOpacity
-          style={[styles.deleteAccountBtn, { borderColor: palette.border.subtle }]}
-          onPress={() => setDeleteVisible(true)}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="trash-outline" size={18} color={colors.red[600]} />
-          <Text style={styles.deleteAccountText}>Удалить аккаунт</Text>
-        </TouchableOpacity>
+        {/* «Удалить аккаунт» moved to «Мой профиль» (the destructive action lives
+            at the bottom of the profile screen, reached via the header above). */}
       </ScrollView>
-
-      <DeleteAccountModal
-        visible={deleteVisible}
-        onClose={() => setDeleteVisible(false)}
-        isAccountHolder={isAccountHolder}
-        onDeleted={handleDeleted}
-      />
     </View>
   );
 }
@@ -835,7 +761,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[4],
     paddingHorizontal: spacing[4],
   },
-  userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3.5] },
+  userRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  // Tap target spanning avatar + name + chevron → opens «Мой профиль».
+  identityPress: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[3.5] },
   avatarWrap: { position: 'relative' },
   avatar: {
     width: 48,
@@ -853,23 +781,6 @@ const styles = StyleSheet.create({
     borderColor: colors.gray[200],
   },
   avatarText: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.primary[700] },
-  avatarEditBtn: {
-    position: 'absolute',
-    bottom: -4,
-    right: -4,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: colors.white,
-    borderWidth: 1,
-    borderColor: colors.gray[200],
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: colors.black,
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    elevation: 2,
-  },
   userName: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.gray[900], letterSpacing: -0.2 },
   roleBadge: {
     alignSelf: 'flex-start',
@@ -972,6 +883,7 @@ const styles = StyleSheet.create({
   logoutText: { fontSize: 15, fontWeight: fontWeight.semibold, color: colors.red[600] },
 
   // Legal rows (Политика конфиденциальности / Условия использования)
+  // (Удалить аккаунт moved to «Мой профиль».)
   legalRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -981,18 +893,4 @@ const styles = StyleSheet.create({
     minHeight: 56,
   },
   legalText: { flex: 1, fontSize: 16, fontWeight: '600', letterSpacing: -0.2 },
-
-  // Delete account — destructive, visually separated from logout.
-  deleteAccountBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
-    borderRadius: borderRadius['2xl'],
-    borderWidth: StyleSheet.hairlineWidth,
-    paddingVertical: spacing[3.5],
-    minHeight: 52,
-    marginTop: spacing[1],
-  },
-  deleteAccountText: { fontSize: 15, fontWeight: fontWeight.semibold, color: colors.red[600] },
 });
