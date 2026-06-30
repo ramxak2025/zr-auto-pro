@@ -14,6 +14,36 @@ export interface Plan {
   createdAt: string;
 }
 
+/**
+ * Admin-UI grouping for the plan feature toggles (no enforcement meaning).
+ * Mirrors shared/constants/features.ts FeatureGroup + backend feature-catalog.ts.
+ */
+export type FeatureGroup = 'core' | 'section' | 'integration';
+
+/**
+ * One entry of the authoritative plan feature catalog
+ * (GET /plans/features-catalog, superadmin). The plan editor renders one toggle
+ * per item — including keys a plan currently has OFF — grouped by `group`.
+ */
+export interface FeatureCatalogItem {
+  key: string;
+  label: string;
+  /** Does this key gate a screen via FeatureGate? */
+  gated: boolean;
+  group: FeatureGroup;
+}
+
+/**
+ * Tenant subscription state (102). Drives the professional block screen + hard
+ * gate on every client:
+ *   active    — in-window (or no expiry) and not suspended;
+ *   expired   — subscription_end has passed;
+ *   suspended — an operator explicitly suspended the tenant (or a legacy manual
+ *               is_active=false). 'suspended' takes precedence over 'expired'.
+ * Missing on a legacy payload ⇒ treat as 'active'.
+ */
+export type SubscriptionStatus = 'active' | 'expired' | 'suspended';
+
 export interface Tenant {
   id: string;
   name: string;
@@ -50,6 +80,14 @@ export interface Tenant {
    * (director/admin/superadmin) — see {@link PosSettings}.
    */
   shiftModeEnabled?: boolean;
+  /**
+   * 102 — explicit suspension marker (superadmin POST /tenants/:id/suspend).
+   * Non-null ⇒ the tenant is suspended (and is_active is forced false).
+   * Absent/null on legacy payloads.
+   */
+  suspendedAt?: string | null;
+  /** 102 — optional human note for the suspension. */
+  suspendedReason?: string | null;
   users?: User[];
   userCount?: number;
   createdAt: string;
@@ -84,7 +122,18 @@ export interface SubscriptionInfo {
    * by plan name. See shared/constants/features.ts for the canonical key list.
    */
   features: string[];
+  /**
+   * 102 — authoritative subscription status. Clients render the block message +
+   * hard gate from this. Absent on a legacy payload ⇒ treat as 'active' (so old
+   * clients behave exactly as today when the field is missing).
+   */
+  status: SubscriptionStatus;
   monthlyPrice: number;
+  /**
+   * 102 — the tenant's effective plan price (== monthlyPrice). Explicit alias so
+   * the block screens can render «тариф X — N ₽» without aliasing in the UI.
+   */
+  planPrice: number;
   subscriptionEnd?: string | null;
   subscriptionNote?: string | null;
   maxUsers: number;
@@ -246,6 +295,33 @@ export interface TenantMetrics {
   revenueLast30d: number;
   lastActivityAt: string | null;
   productsCount: number;
+}
+
+/** Subscription block of the superadmin tenant cabinet (GET /tenants/:id/cabinet). */
+export interface TenantSubscriptionStatus {
+  status: SubscriptionStatus;
+  planId: string | null;
+  planName: string | null;
+  planPrice: number;
+  subscriptionEnd: string | null;
+  suspendedAt: string | null;
+  suspendedReason: string | null;
+  maxUsers: number;
+  currentUsers: number;
+}
+
+/**
+ * Superadmin "drill into a tenant" cabinet (GET /tenants/:id/cabinet,
+ * superadmin-only). One composed payload: identity + subscription status/plan +
+ * the activity {@link TenantMetrics} (same aggregates as GET /tenants/:id/metrics).
+ */
+export interface TenantCabinet {
+  id: string;
+  name: string;
+  isActive: boolean;
+  createdAt: string;
+  subscription: TenantSubscriptionStatus;
+  metrics: TenantMetrics;
 }
 
 /**

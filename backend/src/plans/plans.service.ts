@@ -1,10 +1,20 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { ALL_FEATURES, ALL_FEATURE_KEYS, FeatureDef } from './feature-catalog';
 
 @Injectable()
 export class PlansService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  /**
+   * The authoritative, runtime feature catalog (GET /plans/features-catalog).
+   * The superadmin plan editor renders one toggle per entry — including keys a
+   * plan currently has OFF — and groups them by `group`.
+   */
+  getFeatureCatalog(): readonly FeatureDef[] {
+    return ALL_FEATURES;
+  }
 
   private mapPlan(row: any) {
     return {
@@ -79,6 +89,24 @@ export class PlansService {
 
     vals.push(id);
     const { rows } = await this.pool.query(`UPDATE plans SET ${sets.join(', ')} WHERE id=$${idx} RETURNING *`, vals);
+    if (rows.length === 0) throw new NotFoundException({ message: 'Тариф не найден' });
+    return this.mapPlan(rows[0]);
+  }
+
+  /**
+   * Replace a plan's ENABLED feature set (PUT /plans/:id/features, superadmin).
+   * Dedicated, validated alternative to the generic PATCH: keys are checked
+   * against the catalog by SetPlanFeaturesDto, and defensively re-filtered to
+   * known keys + de-duplicated here before persisting, so the stored `features`
+   * JSONB can never drift from the catalog. Returns the updated plan.
+   */
+  async setFeatures(id: string, features: string[]) {
+    const allowed = new Set(ALL_FEATURE_KEYS);
+    const clean = Array.from(new Set(features)).filter((k) => allowed.has(k));
+    const { rows } = await this.pool.query(`UPDATE plans SET features=$1 WHERE id=$2 RETURNING *`, [
+      JSON.stringify(clean),
+      id,
+    ]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Тариф не найден' });
     return this.mapPlan(rows[0]);
   }

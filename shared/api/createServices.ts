@@ -50,6 +50,8 @@ import type {
   StockMovement,
   PaginatedResponse,
   SubscriptionInfo,
+  FeatureCatalogItem,
+  TenantCabinet,
   PlatformStats,
   MrrTrendPoint,
   TodayEmployeeStatus,
@@ -186,6 +188,8 @@ import type {
   UpdateTenantRequest,
   ExtendSubscriptionRequest,
   AssignPlanRequest,
+  SuspendTenantRequest,
+  SetPlanFeaturesRequest,
   CreatePlanRequest,
   UpdatePlanRequest,
   ImportPreviewRequest,
@@ -306,6 +310,8 @@ export function createTenantsApi(api: HttpClient) {
     getStats: () => api.get<PlatformStats>('/tenants/stats'),
     getById: (id: string) => api.get<Tenant>(`/tenants/${id}`),
     getMetrics: (id: string) => api.get<TenantMetrics>(`/tenants/${id}/metrics`),
+    /** Composed superadmin "drill-in": identity + subscription status/plan + metrics. */
+    getCabinet: (id: string) => api.get<TenantCabinet>(`/tenants/${id}/cabinet`),
     create: (data: CreateTenantRequest) => api.post<Tenant>('/tenants', data),
     update: (id: string, data: UpdateTenantRequest) => api.patch<Tenant>(`/tenants/${id}`, data),
     remove: (id: string) => api.delete(`/tenants/${id}`),
@@ -314,6 +320,11 @@ export function createTenantsApi(api: HttpClient) {
       api.post<Tenant>(`/tenants/${id}/extend`, { days } satisfies ExtendSubscriptionRequest),
     assignPlan: (id: string, planId: string) =>
       api.post<Tenant>(`/tenants/${id}/assign-plan`, { planId } satisfies AssignPlanRequest),
+    /** Explicitly suspend a tenant (status → 'suspended', is_active forced false). */
+    suspend: (id: string, reason?: string) =>
+      api.post<Tenant>(`/tenants/${id}/suspend`, { reason } satisfies SuspendTenantRequest),
+    /** Lift a suspension (re-activate; the subscription window itself is untouched). */
+    unsuspend: (id: string) => api.post<Tenant>(`/tenants/${id}/unsuspend`),
     impersonate: (id: string) => api.post<ImpersonateResponse>(`/tenants/${id}/impersonate`),
   };
 }
@@ -341,8 +352,13 @@ export function createMyCompanyApi(api: HttpClient) {
 export function createPlansApi(api: HttpClient) {
   return {
     getAll: () => api.get<Plan[]>('/plans'),
+    /** Full toggleable feature catalog for the plan editor (superadmin). */
+    getFeatureCatalog: () => api.get<FeatureCatalogItem[]>('/plans/features-catalog'),
     create: (data: CreatePlanRequest) => api.post<Plan>('/plans', data),
     update: (id: string, data: UpdatePlanRequest) => api.patch<Plan>(`/plans/${id}`, data),
+    /** Replace the plan's ENABLED feature set (validated against the catalog). */
+    setFeatures: (id: string, features: string[]) =>
+      api.put<Plan>(`/plans/${id}/features`, { features } satisfies SetPlanFeaturesRequest),
     remove: (id: string) => api.delete(`/plans/${id}`),
   };
 }

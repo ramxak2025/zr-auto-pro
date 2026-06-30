@@ -3,11 +3,60 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import * as https from 'https';
 
+/**
+ * Apple-like shaping for a single visible push (#55). All optional — omitting
+ * every field reproduces the pre-#55 message exactly.
+ */
+export interface PushOptions {
+  /**
+   * APNs `category` identifier — drives actionable buttons and is read by the
+   * iOS Notification Service Extension (a separate native task) as the
+   * content.categoryIdentifier. Defaults to the gating category for
+   * sendToUserCategory and to 'broadcast' for sendBroadcastToUser.
+   */
+  categoryId?: string;
+  /**
+   * iOS `thread-id` for GROUPING related notifications. Expo's send API has no
+   * top-level thread-id field, so it is mirrored into `data.threadId` for the
+   * NSE to apply as content.threadIdentifier. Defaults to the category.
+   */
+  threadId?: string;
+  /** iOS app-icon badge count. Only emitted when a real count is supplied. */
+  badge?: number;
+}
+
 @Injectable()
 export class PushService {
   private readonly logger = new Logger('PushService');
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
+
+  /**
+   * Build ONE Expo push message with Apple-like metadata (#55). `categoryId` and
+   * `badge` are real top-level Expo fields (→ APNs category / badge). `threadId`
+   * has no Expo top-level field, so category + threadId are ALSO mirrored into
+   * `data` where the iOS Notification Service Extension can read them to set
+   * content.threadIdentifier / categoryIdentifier — that's what makes iOS stack
+   * related notifications. The mirrored keys are harmless to the JS data handlers.
+   */
+  private buildExpoMessage(
+    token: string,
+    title: string,
+    body: string,
+    data: Record<string, unknown> | undefined,
+    opts: PushOptions = {},
+  ): Record<string, unknown> {
+    const message: Record<string, unknown> = { to: token, sound: 'default', title, body };
+    if (opts.categoryId) message.categoryId = opts.categoryId;
+    if (typeof opts.badge === 'number' && Number.isFinite(opts.badge) && opts.badge >= 0) {
+      message.badge = Math.trunc(opts.badge);
+    }
+    const mergedData: Record<string, unknown> = { ...(data ?? {}) };
+    if (opts.categoryId) mergedData.category = opts.categoryId;
+    if (opts.threadId) mergedData.threadId = opts.threadId;
+    message.data = mergedData;
+    return message;
+  }
 
   async upsertToken(userId: string, tenantId: string, token: string, platform: 'ios' | 'android') {
     // Token-hijack guard: ON CONFLICT used to blindly reassign the token to
@@ -45,18 +94,18 @@ export class PushService {
     return { message: 'Токен удалён' };
   }
 
-  async sendToUser(userId: string, title: string, body: string, data?: Record<string, unknown>): Promise<void> {
+  async sendToUser(
+    userId: string,
+    title: string,
+    body: string,
+    data?: Record<string, unknown>,
+    opts: PushOptions = {},
+  ): Promise<void> {
     try {
       const { rows } = await this.pool.query(`SELECT token FROM push_tokens WHERE user_id=$1`, [userId]);
       if (rows.length === 0) return;
 
-      const messages = rows.map((r: { token: string }) => ({
-        to: r.token,
-        sound: 'default',
-        title,
-        body,
-        data: data || {},
-      }));
+      const messages = rows.map((r: { token: string }) => this.buildExpoMessage(r.token, title, body, data, opts));
 
       await this.postToExpo(messages);
     } catch (err) {
@@ -83,6 +132,7 @@ export class PushService {
     title: string,
     body: string,
     data?: Record<string, unknown>,
+    opts: PushOptions = {},
   ): Promise<void> {
     try {
       const { rows } = await this.pool.query(
@@ -97,13 +147,15 @@ export class PushService {
       );
       if (rows.length === 0) return;
 
-      const messages = rows.map((r: { token: string }) => ({
-        to: r.token,
-        sound: 'default',
-        title,
-        body,
-        data: { ...(data || {}), category },
-      }));
+      // categoryId is always the gating category; thread by category (so all
+      // "salary" / "check_closed" notifications stack on iOS) unless overridden.
+      const messages = rows.map((r: { token: string }) =>
+        this.buildExpoMessage(r.token, title, body, data, {
+          categoryId: category,
+          threadId: opts.threadId ?? category,
+          badge: opts.badge,
+        }),
+      );
 
       await this.postToExpo(messages);
     } catch (err) {
@@ -125,18 +177,19 @@ export class PushService {
     title: string,
     body: string,
     data?: Record<string, unknown>,
+    opts: PushOptions = {},
   ): Promise<void> {
     try {
       const { rows } = await this.pool.query(`SELECT token FROM push_tokens WHERE user_id=$1`, [userId]);
       if (rows.length === 0) return;
 
-      const messages = rows.map((r: { token: string }) => ({
-        to: r.token,
-        sound: 'default',
-        title,
-        body,
-        data: data || {},
-      }));
+      const messages = rows.map((r: { token: string }) =>
+        this.buildExpoMessage(r.token, title, body, data, {
+          categoryId: opts.categoryId ?? 'broadcast',
+          threadId: opts.threadId ?? 'broadcast',
+          badge: opts.badge,
+        }),
+      );
 
       for (let i = 0; i < messages.length; i += 100) {
         await this.postToExpo(messages.slice(i, i + 100));

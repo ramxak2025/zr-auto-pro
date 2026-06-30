@@ -4,7 +4,7 @@ import { AuditService, AuditActor } from './audit.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
-import { ExtendSubscriptionDto, AssignPlanDto } from './dto/subscription.dto';
+import { ExtendSubscriptionDto, AssignPlanDto, SuspendTenantDto } from './dto/subscription.dto';
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
@@ -45,6 +45,13 @@ export class TenantsController {
     return this.tenantsService.getMetrics(id);
   }
 
+  /** Composed "drill-in" cabinet: identity + subscription status/plan + metrics. */
+  @Roles('superadmin')
+  @Get('tenants/:id/cabinet')
+  getCabinet(@Param('id') id: string) {
+    return this.tenantsService.getCabinet(id);
+  }
+
   @Roles('superadmin')
   @Post('tenants')
   create(@Body() dto: any) {
@@ -75,6 +82,18 @@ export class TenantsController {
   @Post('tenants/:id/assign-plan')
   async assignPlan(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: AssignPlanDto) {
     return this.tenantsService.assignPlan(id, dto.planId, await this.actor(user));
+  }
+
+  @Roles('superadmin')
+  @Post('tenants/:id/suspend')
+  async suspend(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: SuspendTenantDto) {
+    return this.tenantsService.suspend(id, dto.reason, await this.actor(user));
+  }
+
+  @Roles('superadmin')
+  @Post('tenants/:id/unsuspend')
+  async unsuspend(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
+    return this.tenantsService.unsuspend(id, await this.actor(user));
   }
 
   @Roles('superadmin')

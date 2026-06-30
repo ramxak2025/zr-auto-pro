@@ -385,10 +385,26 @@ export class NotificationsService {
     targetAll: boolean;
   }): Promise<void> {
     try {
+      // Apple-like badge: each recipient's count of LIVE broadcasts they have not
+      // yet seen (the only persisted unread-notification concept Autexa tracks).
+      // This released broadcast is already sent_at-stamped + unseen, so it's
+      // included. Same correlated predicate as listUnseenBroadcasts (sans LIMIT).
+      const unseenCount = `(
+        SELECT count(*)::int FROM notification_broadcasts bb
+         WHERE bb.cancelled_at IS NULL AND bb.sent_at IS NOT NULL
+           AND (bb.target_all = true OR EXISTS (
+             SELECT 1 FROM notification_broadcast_recipients rr
+              WHERE rr.broadcast_id = bb.id AND rr.tenant_id = u.tenant_id))
+           AND NOT EXISTS (
+             SELECT 1 FROM notification_broadcast_seen ss
+              WHERE ss.broadcast_id = bb.id AND ss.user_id = u.id))`;
       const { rows } = b.targetAll
-        ? await this.pool.query(`SELECT id FROM users WHERE role='director' AND is_active=true`)
+        ? await this.pool.query(
+            `SELECT u.id, ${unseenCount} AS unseen_count
+               FROM users u WHERE u.role='director' AND u.is_active=true`,
+          )
         : await this.pool.query(
-            `SELECT u.id
+            `SELECT u.id, ${unseenCount} AS unseen_count
                FROM users u
                JOIN notification_broadcast_recipients r ON r.tenant_id = u.tenant_id
               WHERE r.broadcast_id = $1 AND u.role='director' AND u.is_active=true`,
@@ -403,7 +419,13 @@ export class NotificationsService {
         buttons: b.buttons,
       };
       // sendBroadcastToUser already chunks the Expo send at 100 per device-set.
-      await Promise.all(rows.map((r: { id: string }) => this.push.sendBroadcastToUser(r.id, b.title, b.body, data)));
+      await Promise.all(
+        rows.map((r: { id: string; unseen_count?: number }) =>
+          this.push.sendBroadcastToUser(r.id, b.title, b.body, data, {
+            badge: typeof r.unseen_count === 'number' ? r.unseen_count : undefined,
+          }),
+        ),
+      );
     } catch (err) {
       this.logger.warn(`broadcast push fan-out failed for ${b.id}: ${err}`);
     }

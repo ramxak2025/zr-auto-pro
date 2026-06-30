@@ -1,29 +1,27 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Canonical feature registry — the SINGLE source of truth for plan feature keys
-//  on the CLIENTS (web + mobile).
+//  Plan feature catalog — the authoritative, runtime-served list of every
+//  toggleable plan feature key (#55).
 //
-//  Stops the ALL_FEATURES drift: the same list was hand-copied (and already
-//  diverging) in frontend/src/pages/admin/AdminPlansPage.tsx and
-//  mobile/src/screens/AdminScreen.tsx. Both editors — plus FeatureGate on web +
-//  mobile — should consume THIS array instead of their local copies.
+//  Served to the superadmin plan editor via GET /plans/features-catalog so the
+//  admin UI can render a toggle per feature PER TARIFF (including the ones a plan
+//  currently has OFF), and used to VALIDATE PUT /plans/:id/features so a stale or
+//  malicious client cannot write an unknown key into a plan's `features` JSONB.
 //
 //  Keys mirror the `features` JSONB on `plans` rows and what FeatureGate checks
-//  against `SubscriptionInfo.features`. The backend can't import from `shared/`,
-//  so this list is MIRRORED in backend/src/plans/feature-catalog.ts (which the
-//  GET /plans/features-catalog endpoint serves + uses to validate writes). Keep
-//  the two in sync.
+//  against `SubscriptionInfo.features` on web + mobile. The first block preserves
+//  EVERY pre-existing key 1:1 (checks_view … check_photos) so existing gating
+//  keeps working unchanged — we EXTEND, never rename. The remaining entries are
+//  the sections that shipped after the original catalog; migration 102 backfills
+//  them onto every existing plan so today's open access is preserved.
 //
-//  #55: extended with every section that shipped after the original catalog
-//  (motivation, installments, cash-shift, work-board, knowledge, purchase orders,
-//  loyalty + the marketing integrations). Migration 102 backfills these new keys
-//  onto every existing plan so today's OPEN access to those sections is preserved
-//  once the client UI wraps them in FeatureGate. We EXTEND, never rename — every
-//  pre-existing key (checks_view … check_photos) is unchanged.
+//  The backend can't import from `shared/`, so this list is MIRRORED in
+//  shared/constants/features.ts (clients import that copy). Keep the two in sync —
+//  same convention as ROLE_PERMISSION_DEFAULTS / SECTION_KEYS.
 //
-//  `gated`: whether the key paywalls a screen via FeatureGate. `false`
-//  (check_photos) means an always-on capability that is still a real, editable
-//  feature key. `group`: admin-UI sectioning only (core / section / integration),
-//  no enforcement meaning.
+//  `gated`: does the key paywall a screen via FeatureGate? `false` (check_photos)
+//  means an always-on capability that is still a real, editable feature key.
+//  `group`: purely for admin-UI sectioning of the toggles (core / section /
+//  integration) — it carries no enforcement meaning.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export type FeatureGroup = 'core' | 'section' | 'integration';
@@ -70,10 +68,23 @@ export const ALL_FEATURES: readonly FeatureDef[] = [
   { key: 'integration_telephony', label: 'Телефония (Mango)', gated: true, group: 'integration' },
 ] as const;
 
-/** Just the keys, in registry order — handy for validation / iteration. */
+/** Just the keys, in catalog order — used to validate PUT /plans/:id/features. */
 export const ALL_FEATURE_KEYS: readonly string[] = ALL_FEATURES.map((f) => f.key);
 
-/** Human-readable label for a feature key (falls back to the raw key). */
-export function featureLabel(key: string): string {
-  return ALL_FEATURES.find((f) => f.key === key)?.label ?? key;
-}
+/**
+ * The keys backfilled by migration 102 (the post-catalog sections). Kept here so
+ * the SQL list and the code stay traceable to one another. Not used at runtime.
+ */
+export const FEATURE_KEYS_ADDED_102: readonly string[] = [
+  'motivation_view',
+  'installments_view',
+  'cash_shift_view',
+  'work_board_view',
+  'knowledge_view',
+  'purchase_orders_view',
+  'loyalty_view',
+  'integration_fiscal',
+  'integration_acquiring',
+  'integration_messaging',
+  'integration_telephony',
+];

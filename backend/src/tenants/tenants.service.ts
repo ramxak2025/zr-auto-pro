@@ -25,6 +25,14 @@ export interface MrrTrendPoint {
   newTenants: number;
 }
 
+/**
+ * Tenant subscription state (mirrors the shared `SubscriptionStatus` union — keep
+ * in sync). `suspended` = an operator explicitly suspended the tenant (102) OR a
+ * legacy manual disable (is_active=false); `expired` = subscription_end lapsed;
+ * `active` = everything else (a NULL subscription_end means "no expiry").
+ */
+export type SubscriptionStatus = 'active' | 'expired' | 'suspended';
+
 @Injectable()
 export class TenantsService {
   private readonly logger = new Logger('TenantsService');
@@ -58,10 +66,29 @@ export class TenantsService {
       receiptFooter: row.receipt_footer,
       shiftsEnabled: row.shifts_enabled === true,
       shiftModeEnabled: row.shift_mode_enabled === true,
+      suspendedAt: row.suspended_at ?? null,
+      suspendedReason: row.suspended_reason ?? null,
       userCount: row.user_count !== undefined ? parseInt(row.user_count) : undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
+  }
+
+  /**
+   * Authoritative subscription status from a tenant row. `suspended` wins over
+   * `expired` (an operator block is a harder stop than a lapsed window). A
+   * legacy is_active=false reads as `suspended` so no data migration is needed.
+   */
+  private computeSubscriptionStatus(row: {
+    is_active?: boolean | null;
+    suspended_at?: Date | string | null;
+    subscription_end?: Date | string | null;
+  }): SubscriptionStatus {
+    if (row.suspended_at != null || row.is_active === false) return 'suspended';
+    if (row.subscription_end != null && new Date(row.subscription_end).getTime() < Date.now()) {
+      return 'expired';
+    }
+    return 'active';
   }
 
   async getAll() {
@@ -219,6 +246,50 @@ export class TenantsService {
     };
   }
 
+  /**
+   * Superadmin "drill into a tenant" cabinet (GET /tenants/:id/cabinet). One
+   * composed payload: identity + subscription STATUS/plan/price + activity
+   * metrics. Reuses getMetrics() for the activity aggregates (no duplicated SQL)
+   * and computeSubscriptionStatus() for the status, so the cabinet view and the
+   * tenant's own /subscription poll always agree.
+   */
+  async getCabinet(id: string) {
+    const { rows } = await this.pool.query(
+      `SELECT t.id, t.name, t.is_active, t.suspended_at, t.suspended_reason,
+              t.subscription_end, t.monthly_price, t.max_users, t.plan_id, t.created_at,
+              (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) AS current_users,
+              p.name AS plan_name
+         FROM tenants t
+         LEFT JOIN plans p ON p.id = t.plan_id
+        WHERE t.id = $1`,
+      [id],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+    const r = rows[0];
+
+    // getMetrics re-checks existence (cheap) and returns the activity signals.
+    const metrics = await this.getMetrics(id);
+
+    return {
+      id: r.id,
+      name: r.name,
+      isActive: r.is_active === true,
+      createdAt: r.created_at,
+      subscription: {
+        status: this.computeSubscriptionStatus(r),
+        planId: r.plan_id ?? null,
+        planName: r.plan_name ?? null,
+        planPrice: parseFloat(r.monthly_price) || 0,
+        subscriptionEnd: r.subscription_end ?? null,
+        suspendedAt: r.suspended_at ?? null,
+        suspendedReason: r.suspended_reason ?? null,
+        maxUsers: r.max_users,
+        currentUsers: parseInt(r.current_users, 10) || 0,
+      },
+      metrics,
+    };
+  }
+
   async getById(id: string) {
     const { rows } = await this.pool.query(
       `SELECT t.*,
@@ -338,6 +409,67 @@ export class TenantsService {
       });
     }
 
+    return this.mapTenant(rows[0]);
+  }
+
+  /**
+   * Explicitly SUSPEND a tenant (superadmin). Stamps `suspended_at` + an optional
+   * `suspended_reason` AND flips `is_active=false`, so every existing
+   * is_active-based path (MRR exclusion, broadcast audience) stays coherent and
+   * the tenant's /subscription status reads `suspended`. Idempotent: re-suspending
+   * refreshes the reason but COALESCEs the original suspension instant.
+   */
+  async suspend(id: string, reason: string | undefined, actor?: AuditActor) {
+    const { rows } = await this.pool.query(
+      `UPDATE tenants
+          SET suspended_at = COALESCE(suspended_at, now()),
+              suspended_reason = $2,
+              is_active = false,
+              updated_at = now()
+        WHERE id = $1
+        RETURNING *`,
+      [id, reason ?? null],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+
+    if (actor) {
+      await this.audit.log(actor, 'tenant_suspend', {
+        targetType: 'tenant',
+        targetId: id,
+        targetName: rows[0].name,
+        detail: { reason: reason ?? null },
+      });
+    }
+    return this.mapTenant(rows[0]);
+  }
+
+  /**
+   * Lift a suspension (superadmin): clear `suspended_at` + `suspended_reason` and
+   * re-activate the tenant. The subscription window itself is untouched — if it
+   * had already lapsed, the tenant returns to `expired` (not `active`).
+   * Idempotent for an already-active tenant.
+   */
+  async unsuspend(id: string, actor?: AuditActor) {
+    const { rows } = await this.pool.query(
+      `UPDATE tenants
+          SET suspended_at = NULL,
+              suspended_reason = NULL,
+              is_active = true,
+              updated_at = now()
+        WHERE id = $1
+        RETURNING *`,
+      [id],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+
+    if (actor) {
+      await this.audit.log(actor, 'tenant_unsuspend', {
+        targetType: 'tenant',
+        targetId: id,
+        targetName: rows[0].name,
+        detail: {},
+      });
+    }
     return this.mapTenant(rows[0]);
   }
 
@@ -768,7 +900,7 @@ export class TenantsService {
   async getSubscription(tenantID: string) {
     const { rows } = await this.pool.query(
       `SELECT t.name, t.monthly_price, t.subscription_end, t.subscription_note,
-              t.max_users, t.plan_id,
+              t.max_users, t.plan_id, t.is_active, t.suspended_at,
               (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) as current_users
        FROM tenants t WHERE t.id=$1`,
       [tenantID],
@@ -776,6 +908,8 @@ export class TenantsService {
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
 
     const r = rows[0];
+    const status = this.computeSubscriptionStatus(r);
+    const planPrice = parseFloat(r.monthly_price) || 0;
 
     // Resolve the CURRENT plan by the tenant's plan_id (the authoritative link),
     // not by name. Expose its feature keys directly as `features` so clients
@@ -800,7 +934,12 @@ export class TenantsService {
       planId: r.plan_id ?? null,
       planName,
       features,
-      monthlyPrice: parseFloat(r.monthly_price) || 0,
+      // `status` (102) lets every client render a professional block message +
+      // hard gate. `planPrice` is an explicit alias of the effective price for
+      // the same block screens; `monthlyPrice` is kept for shipped clients.
+      status,
+      planPrice,
+      monthlyPrice: planPrice,
       subscriptionEnd: r.subscription_end,
       subscriptionNote: r.subscription_note,
       maxUsers: r.max_users,

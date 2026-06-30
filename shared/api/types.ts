@@ -407,6 +407,20 @@ export interface AssignPlanRequest {
   planId: string;
 }
 
+/** POST /tenants/:id/suspend — explicitly suspend a tenant (superadmin). */
+export interface SuspendTenantRequest {
+  /** Optional human note stored on the tenant + surfaced in the cabinet status. */
+  reason?: string;
+}
+
+/**
+ * PUT /plans/:id/features — replace the plan's ENABLED feature set (superadmin).
+ * Keys are validated server-side against the catalog (GET /plans/features-catalog).
+ */
+export interface SetPlanFeaturesRequest {
+  features: string[];
+}
+
 export interface CreatePlanRequest {
   name: string;
   monthlyPrice: number;
