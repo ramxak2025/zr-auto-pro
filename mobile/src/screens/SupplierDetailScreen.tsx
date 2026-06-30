@@ -25,8 +25,6 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
-import ProductPickerModal from '../components/ProductPickerModal';
-import DateTimePickerModal from '../components/DateTimePickerModal';
 import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
 import { PO_STATUS_META, formatPoDate } from './purchaseOrders/purchaseOrderHelpers';
 import { useAuth } from '../contexts/AuthContext';
@@ -56,13 +54,6 @@ function formatMoney(v: number) {
 }
 function formatDate(d: string) {
   return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
-}
-
-interface DeliveryItem {
-  productId: string;
-  productName: string;
-  quantity: number;
-  price: number;
 }
 
 export default function SupplierDetailScreen() {
@@ -101,17 +92,11 @@ export default function SupplierDetailScreen() {
   // dismissed it.
   const [defectReturnConsumed, setDefectReturnConsumed] = useState(false);
 
-  // Delivery form
-  const [deliveryModalOpen, setDeliveryModalOpen] = useState(false);
-  const [deliveryItems, setDeliveryItems] = useState<DeliveryItem[]>([]);
-  const [deliveryComment, setDeliveryComment] = useState('');
-  // Backdated-invoice support — owner can stamp a delivery with a past
-  // date (накладные задним числом). Defaults to today; the backend
-  // honors `date?: string` on CreateDeliveryRequest. Reset to today
-  // every time the «Новая поставка» modal opens.
-  const [deliveryDate, setDeliveryDate] = useState<Date>(new Date());
-  const [deliveryDatePickerOpen, setDeliveryDatePickerOpen] = useState(false);
-  const [productPickerOpen, setProductPickerOpen] = useState(false);
+  // «Новая поставка» теперь ВСЕГДА начинается с выбора заказа, который мы
+  // принимаем (решение владельца: ad-hoc поставок нет — только приёмка по
+  // заказу). Тап открывает этот пикер; выбор заказа → SupplyReceiveScreen с
+  // предзаполненными ожидаемыми позициями. Ручного ввода накладной больше нет.
+  const [orderPickerOpen, setOrderPickerOpen] = useState(false);
 
   // Payment form
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
@@ -351,17 +336,6 @@ export default function SupplierDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] }),
     ]);
 
-  const createDeliveryMutation = useMutation({
-    mutationFn: (d: any) => suppliersApi.createDelivery(d),
-    onSuccess: () => {
-      invalidateAll();
-      setDeliveryModalOpen(false);
-      setDeliveryItems([]);
-      setDeliveryComment('');
-    },
-    onError: () => Alert.alert('Ошибка', 'Ошибка при создании поставки'),
-  });
-
   const createPaymentMutation = useMutation({
     mutationFn: (d: any) => suppliersApi.createPayment(d),
     onSuccess: () => {
@@ -472,53 +446,41 @@ export default function SupplierDetailScreen() {
     setRefreshing(false);
   };
 
-  const addProduct = (product: Product) => {
-    const existing = deliveryItems.find((i) => i.productId === product.id);
-    if (existing) {
-      setDeliveryItems((prev) =>
-        prev.map((i) => (i.productId === product.id ? { ...i, quantity: i.quantity + 1 } : i)),
-      );
-    } else {
-      setDeliveryItems((prev) => [
-        ...prev,
-        { productId: product.id, productName: product.name, quantity: 1, price: product.costPrice || 0 },
-      ]);
-    }
-  };
+  // Заказы, которые можно принять = со статусом `ordered` (оформлены, но ещё не
+  // получены полностью). Из них стартует «Новая поставка».
+  const receivableOrders = React.useMemo(
+    () => (supplierOrders || []).filter((o) => o.status === 'ordered'),
+    [supplierOrders],
+  );
 
-  const updateItemQty = (productId: string, delta: number) => {
-    setDeliveryItems((prev) =>
-      prev.map((i) => {
-        if (i.productId !== productId) return i;
-        const newQty = Math.max(1, i.quantity + delta);
-        return { ...i, quantity: newQty };
-      }),
-    );
-  };
-
-  const updateItemPrice = (productId: string, price: string) => {
-    setDeliveryItems((prev) => prev.map((i) => (i.productId === productId ? { ...i, price: Number(price) || 0 } : i)));
-  };
-
-  const removeItem = (productId: string) => {
-    setDeliveryItems((prev) => prev.filter((i) => i.productId !== productId));
-  };
-
-  const deliveryTotal = deliveryItems.reduce((s, i) => s + i.quantity * i.price, 0);
-
-  const handleCreateDelivery = () => {
-    if (deliveryItems.length === 0) {
-      Alert.alert('Ошибка', 'Добавьте хотя бы один товар');
+  // Старт приёмки: открыть пикер заказа. Если активных заказов нет — ведём
+  // владельца оформить заказ (без заказа поставку не принять).
+  const startNewSupply = () => {
+    haptic('tap');
+    if (receivableOrders.length === 0) {
+      if (canWriteOrders) {
+        Alert.alert('Нет активных заказов', 'Поставка принимается только по заказу. Создать новый заказ поставщику?', [
+          { text: 'Отмена', style: 'cancel' },
+          { text: 'Создать заказ', onPress: () => navigation.navigate('PurchaseOrderCreate', { supplierId: id }) },
+        ]);
+      } else {
+        Alert.alert('Нет активных заказов', 'Поставка принимается только по заказу. Сначала оформите заказ.');
+      }
       return;
     }
-    createDeliveryMutation.mutate({
-      supplierId: id,
-      // Backdated invoices — send the chosen date as ISO. Backend honors
-      // `date?: string`; omitting it would default to server "now".
-      date: deliveryDate.toISOString(),
-      comment: deliveryComment || undefined,
-      items: deliveryItems.map((i) => ({ productId: i.productId, quantity: i.quantity, price: i.price })),
-    });
+    // Один активный заказ — сразу открываем приёмку, без лишнего экрана выбора.
+    if (receivableOrders.length === 1) {
+      const po = receivableOrders[0];
+      navigation.navigate('SupplyReceive', { orderId: po.id, po });
+      return;
+    }
+    setOrderPickerOpen(true);
+  };
+
+  const pickOrderToReceive = (po: PurchaseOrder) => {
+    haptic('select');
+    setOrderPickerOpen(false);
+    navigation.navigate('SupplyReceive', { orderId: po.id, po });
   };
 
   const handleCreatePayment = () => {
@@ -917,26 +879,25 @@ export default function SupplierDetailScreen() {
 
         {tab === 'deliveries' && (
           <>
-            {/* Системный «Покупка б/у товара» поставщик ведёт свои поставки
-                автоматически — мы не даём заводить их руками. Для него выше
-                по экрану уже отрисован отдельный CTA «Покупка б/у товара»,
-                эта кнопка тут только запутает. На обычных поставщиках
-                ничего не меняется. */}
-            {!isUsedPurchaseSupplier && (
-              <TouchableOpacity
-                style={styles.actionBtn}
-                onPress={() => {
-                  setDeliveryItems([]);
-                  setDeliveryComment('');
-                  // Stamp fresh "today" each open — owner can backdate it
-                  // inside the modal if they're entering a past invoice.
-                  setDeliveryDate(new Date());
-                  setDeliveryModalOpen(true);
-                }}
-              >
+            {/* «Новая поставка» = приёмка ПО ЗАКАЗУ. Тап ведёт к выбору заказа
+                (или сразу в приёмку, если активный заказ один). Ручного ввода
+                накладной больше нет — поставка всегда привязана к заказу.
+                Системный «Покупка б/у» поставщик ведёт покупки своим CTA выше,
+                поэтому для него кнопку не показываем. Гейт canWriteOrders —
+                приёмка это write-операция (сервер дублирует проверку). */}
+            {!isUsedPurchaseSupplier && canWriteOrders && (
+              <TouchableOpacity style={styles.actionBtn} onPress={startNewSupply} activeOpacity={0.8}>
                 <Ionicons name="add-circle-outline" size={18} color={colors.primary[600]} />
                 <Text style={styles.actionBtnText}>Новая поставка</Text>
               </TouchableOpacity>
+            )}
+            {/* Подсказка, когда есть оформленные заказы, ожидающие приёмки. */}
+            {!isUsedPurchaseSupplier && canWriteOrders && receivableOrders.length > 0 && (
+              <Text style={[styles.deliveriesHint, { color: palette.text.tertiary }]}>
+                {receivableOrders.length === 1
+                  ? '1 заказ ожидает приёмки'
+                  : `${receivableOrders.length} заказа ожидают приёмки`}
+              </Text>
             )}
 
             {(deliveries || []).length === 0 && (
@@ -981,10 +942,21 @@ export default function SupplierDetailScreen() {
                     <View style={styles.deliveryTop}>
                       <View style={styles.deliveryTopLeft}>
                         <Text style={[styles.deliveryDate, { color: palette.text.primary }]}>{formatDate(d.date)}</Text>
-                        {d.paymentStatus === 'paid' && (
+                        {/* Поставка, принятая по заказу (098) — показываем связь. */}
+                        {d.purchaseOrderId && (
+                          <View style={[styles.statusBadge, { backgroundColor: colors.blue[50] }]}>
+                            <Ionicons name="clipboard-outline" size={11} color={colors.blue[600]} />
+                            <Text style={[styles.statusBadgeText, { color: colors.blue[600] }]}>по заказу</Text>
+                          </View>
+                        )}
+                        {d.paymentStatus === 'paid' ? (
                           <View style={[styles.statusBadge, styles.statusPaid]}>
                             <Ionicons name="checkmark-circle" size={13} color={colors.green[700]} />
                             <Text style={[styles.statusBadgeText, { color: colors.green[700] }]}>Оплачено</Text>
+                          </View>
+                        ) : (
+                          <View style={[styles.statusBadge, { backgroundColor: colors.orange[50] }]}>
+                            <Text style={[styles.statusBadgeText, { color: colors.orange[600] }]}>В долг</Text>
                           </View>
                         )}
                       </View>
@@ -1024,6 +996,18 @@ export default function SupplierDetailScreen() {
                             </Text>
                           </View>
                         ))}
+                        {/* Связь поставка → заказ: переход на карточку заказа. */}
+                        {d.purchaseOrderId && (
+                          <TouchableOpacity
+                            style={styles.openOrderLink}
+                            onPress={() => navigation.navigate('PurchaseOrderDetail', { id: d.purchaseOrderId })}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="clipboard-outline" size={13} color={colors.primary[600]} />
+                            <Text style={styles.openOrderLinkText}>Открыть заказ</Text>
+                            <Ionicons name="chevron-forward" size={12} color={colors.primary[600]} />
+                          </TouchableOpacity>
+                        )}
                       </View>
                     )}
 
@@ -1147,135 +1131,39 @@ export default function SupplierDetailScreen() {
         )}
       </ScrollView>
 
-      {/* New Delivery Modal */}
-      <Modal visible={deliveryModalOpen} onClose={() => setDeliveryModalOpen(false)} title="Новая поставка">
-        <ScrollView style={{ maxHeight: 400 }} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-          <TouchableOpacity
-            style={styles.addItemBtn}
-            onPress={() => {
-              setDeliveryModalOpen(false);
-              setTimeout(() => setProductPickerOpen(true), 300);
-            }}
-          >
-            <Ionicons name="add" size={18} color={colors.primary[600]} />
-            <Text style={styles.addItemText}>Добавить товар</Text>
-          </TouchableOpacity>
-
-          {deliveryItems.map((item) => (
-            <View key={item.productId} style={[styles.deliveryFormItem, { borderBottomColor: palette.border.subtle }]}>
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={[styles.itemName, { color: palette.text.primary }]} numberOfLines={1}>
-                  {item.productName}
-                </Text>
-                <View style={styles.itemControls}>
-                  <TouchableOpacity
-                    onPress={() => updateItemQty(item.productId, -1)}
-                    style={[styles.qtyBtn, { backgroundColor: palette.bg.muted }]}
-                  >
-                    <Ionicons name="remove" size={16} color={palette.text.secondary} />
-                  </TouchableOpacity>
-                  <Text style={[styles.qtyText, { color: palette.text.primary }]}>{item.quantity}</Text>
-                  <TouchableOpacity
-                    onPress={() => updateItemQty(item.productId, 1)}
-                    style={[styles.qtyBtn, { backgroundColor: palette.bg.muted }]}
-                  >
-                    <Ionicons name="add" size={16} color={palette.text.secondary} />
-                  </TouchableOpacity>
-                  <Text style={[styles.timesSign, { color: palette.text.tertiary }]}>x</Text>
-                  <TextInput
-                    value={String(item.price)}
-                    onChangeText={(v) => updateItemPrice(item.productId, v)}
-                    style={[styles.priceInput, f.input]}
-                    keyboardType="numeric"
-                  />
-                  <Text style={[styles.itemTotal, { color: palette.text.secondary }]}>
-                    {formatMoney(item.quantity * item.price)}
-                  </Text>
-                </View>
-              </View>
-              <TouchableOpacity onPress={() => removeItem(item.productId)} style={{ padding: 4 }}>
-                <Ionicons name="close" size={18} color={colors.red[400]} />
-              </TouchableOpacity>
-            </View>
-          ))}
-
-          {deliveryItems.length > 0 && (
-            <View style={[styles.deliveryTotalRow, { borderTopColor: palette.border.strong }]}>
-              <Text style={[styles.deliveryTotalLabel, { color: palette.text.primary }]}>Итого:</Text>
-              <Text style={styles.deliveryTotalValue}>{formatMoney(deliveryTotal)}</Text>
-            </View>
-          )}
-
-          {/* Дата поставки — позволяет заводить накладные задним числом.
-              По умолчанию сегодня; тап открывает календарь
-              (DateTimePickerModal, тот же, что в Расходах/Кассе). */}
-          <View style={styles.formField}>
-            <Text style={[styles.formLabel, f.label]}>Дата поставки</Text>
+      {/* Order picker — «Новая поставка» начинается с выбора заказа, который
+          мы принимаем. Открывается только когда заказов несколько (один —
+          сразу в приёмку из startNewSupply). Выбор → SupplyReceiveScreen. */}
+      <Modal visible={orderPickerOpen} onClose={() => setOrderPickerOpen(false)} title="Какой заказ принимаем?">
+        <Text style={[styles.orderPickerHint, { color: palette.text.secondary }]}>
+          Поставка принимается по заказу — выберите, который пришёл.
+        </Text>
+        <ScrollView style={{ maxHeight: 380 }} keyboardShouldPersistTaps="handled">
+          {receivableOrders.map((po) => (
             <TouchableOpacity
-              style={[styles.dateField, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-              onPress={() => setDeliveryDatePickerOpen(true)}
+              key={po.id}
+              style={[styles.orderPickerRow, { borderBottomColor: palette.border.subtle }]}
+              onPress={() => pickOrderToReceive(po)}
               activeOpacity={0.7}
             >
-              <Ionicons name="calendar-outline" size={18} color={colors.primary[600]} />
-              <Text style={[styles.dateFieldText, { color: palette.text.primary }]}>
-                {formatDate(deliveryDate.toISOString())}
-              </Text>
-              <Ionicons name="chevron-down" size={16} color={palette.text.tertiary} style={{ marginLeft: 'auto' }} />
+              <View style={[styles.orderStatusChip, { backgroundColor: PO_STATUS_META[po.status].bg }]}>
+                <Text style={[styles.orderStatusText, { color: PO_STATUS_META[po.status].text }]}>
+                  {PO_STATUS_META[po.status].label}
+                </Text>
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.orderPickerMeta, { color: palette.text.primary }]} numberOfLines={1}>
+                  {po.itemCount ?? 0} поз. · {formatMoney(po.total)}
+                </Text>
+                <Text style={[styles.orderPickerSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  Заказан {formatPoDate(po.orderedAt || po.createdAt)}
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
             </TouchableOpacity>
-          </View>
-
-          <View style={styles.formField}>
-            <Text style={[styles.formLabel, f.label]}>Комментарий</Text>
-            <TextInput
-              value={deliveryComment}
-              onChangeText={setDeliveryComment}
-              style={[styles.formInput, f.input, { height: 50, textAlignVertical: 'top' }]}
-              multiline
-              placeholder="Необязательно"
-              placeholderTextColor={palette.text.tertiary}
-            />
-          </View>
+          ))}
         </ScrollView>
-
-        <View style={[styles.formActions, f.actions]}>
-          <TouchableOpacity style={[styles.cancelBtn, f.cancel]} onPress={() => setDeliveryModalOpen(false)}>
-            <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.submitBtn} onPress={handleCreateDelivery}>
-            {createDeliveryMutation.isPending ? (
-              <ActivityIndicator color={colors.white} size="small" />
-            ) : (
-              <Text style={styles.submitBtnText}>Создать</Text>
-            )}
-          </TouchableOpacity>
-        </View>
       </Modal>
-
-      {/* Delivery date picker — backdated invoices. Shares the same
-          calendar component used across Расходы / Касса / Отчёты. */}
-      <DateTimePickerModal
-        visible={deliveryDatePickerOpen}
-        value={deliveryDate}
-        mode="date"
-        onConfirm={(d) => {
-          setDeliveryDate(d);
-          setDeliveryDatePickerOpen(false);
-        }}
-        onCancel={() => setDeliveryDatePickerOpen(false)}
-      />
-
-      {/* Product Picker with folder navigation */}
-      <ProductPickerModal
-        visible={productPickerOpen}
-        onClose={() => {
-          setProductPickerOpen(false);
-          setTimeout(() => setDeliveryModalOpen(true), 300);
-        }}
-        onSelectProduct={addProduct}
-        title="Выберите товар"
-        showCostPrice={true}
-        getCartQty={(id) => deliveryItems.find((i) => i.productId === id)?.quantity || 0}
-      />
 
       {/* New Payment Modal */}
       <Modal visible={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} title="Новый платёж">
@@ -1805,6 +1693,17 @@ const styles = StyleSheet.create({
   orderMeta: { flex: 1, minWidth: 0, fontSize: 12 },
   orderTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
   ordersMore: { fontSize: 12, textAlign: 'center', paddingTop: spacing[2] },
+  // Order picker (Новая поставка → выбор заказа)
+  orderPickerHint: { fontSize: fontSize.sm, lineHeight: 19, marginBottom: spacing[3] },
+  orderPickerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  orderPickerMeta: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  orderPickerSub: { fontSize: 12, marginTop: 2 },
   // Tabs
   tabRow: { flexDirection: 'row', backgroundColor: colors.gray[100], borderRadius: borderRadius.xl, padding: 3 },
   tabBtn: {
@@ -1838,6 +1737,16 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary[50],
   },
   actionBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.primary[600] },
+  deliveriesHint: { fontSize: 12, textAlign: 'center', marginTop: -spacing[1] },
+  // «Открыть заказ» — ссылка в раскрытой поставке, принятой по заказу.
+  openOrderLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    marginTop: spacing[2],
+    alignSelf: 'flex-start',
+  },
+  openOrderLinkText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.primary[600] },
   // Empty state
   emptyState: { alignItems: 'center', paddingVertical: spacing[8] },
   emptyText: { fontSize: fontSize.sm, color: colors.gray[400], marginTop: spacing[2] },
@@ -1891,7 +1800,14 @@ const styles = StyleSheet.create({
   deliveryTopRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
   deliveryDate: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
   deliveryAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  statusBadge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
+  statusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
   statusPaid: { backgroundColor: colors.green[50] },
   statusPartial: { backgroundColor: colors.yellow[50] },
   statusUnpaid: { backgroundColor: colors.red[50] },
@@ -1927,7 +1843,7 @@ const styles = StyleSheet.create({
   paymentTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   paymentDate: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
   paymentAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.green[600] },
-  // Delivery form
+  // «Добавить товар» pill — reused by the defect-return modal's picker trigger.
   addItemBtn: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1942,69 +1858,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing[3],
   },
   addItemText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.primary[600] },
-  // Date field — tappable row that opens the calendar picker. Styled
-  // like a read-only input so it reads as part of the form.
-  dateField: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    backgroundColor: colors.gray[50],
-    borderWidth: 1,
-    borderColor: colors.gray[300],
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: spacing[3.5],
-    paddingVertical: spacing[2.5],
-  },
-  dateFieldText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  deliveryFormItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-    paddingVertical: spacing[3],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.gray[100],
-  },
-  itemName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
-  itemControls: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], marginTop: 4 },
-  qtyBtn: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: colors.gray[100],
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  qtyText: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.semibold,
-    color: colors.gray[900],
-    minWidth: 20,
-    textAlign: 'center',
-  },
-  timesSign: { color: colors.gray[400], fontSize: fontSize.sm },
-  priceInput: {
-    width: 60,
-    height: 28,
-    borderWidth: 1,
-    borderColor: colors.gray[300],
-    borderRadius: borderRadius.md,
-    paddingHorizontal: spacing[2],
-    fontSize: fontSize.xs,
-    color: colors.gray[900],
-    textAlign: 'center',
-  },
-  itemTotal: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.gray[700] },
-  deliveryTotalRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: spacing[3],
-    borderTopWidth: 2,
-    borderTopColor: colors.gray[200],
-    marginBottom: spacing[3],
-  },
-  deliveryTotalLabel: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.gray[900] },
-  deliveryTotalValue: { fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.primary[600] },
   // Payment form
   debtInfo: {
     flexDirection: 'row',

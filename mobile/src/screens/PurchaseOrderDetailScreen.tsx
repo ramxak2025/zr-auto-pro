@@ -5,31 +5,23 @@
  * комментарий. Позиции: заказано vs получено по каждой строке. Действия по
  * статусу (только write-роль director/admin/superadmin; сервер дублирует):
  *   • draft   — «Оформить заказ» (order) / «Изменить» / «Отменить» (cancel)
- *   • ordered — «Принять» → приёмка: «Принять полностью» (весь остаток одним
- *     тапом) ИЛИ −/+ по строкам → «Принять выбранное» (частичная) / «Отменить»
+ *   • ordered — «Принять поставку» (→ SupplyReceiveScreen: цена за строку,
+ *     стоимость накладной, выбор «в долг / оплатить сразу») / «Изменить»
+ *     (backend разрешает правку на ordered) / «Отменить»
  *   • received / cancelled — только чтение.
  *
- * Приёмка: receivedQuantity — ДЕЛЬТА (сколько принять сейчас), пустое тело =
- * принять весь остаток. После успешной приёмки инвалидируем заказы И
- * товары/движения (['products'], ['all-products-check'], ['stock-movements'],
- * ['low-stock']) — остатки на складе изменились на сервере.
+ * Приёмка вынесена на отдельный экран SupplyReceiveScreen (поставка ↔ заказ ↔
+ * долг ↔ платёж, миграция 098). Он инвалидирует ['products'] /
+ * ['stock-movements'] / ['supplier-*'] и кладёт обновлённый заказ в
+ * ['purchase-order', id] — эта карточка освежается по возвращении.
  *
  * Мгновенная отрисовка шапки: route.params.po (из строки списка) идёт в
  * placeholderData, пока getById дотягивает позиции.
  *
- * Android-safe: ScrollView + inline-приёмка, без iOS-only API.
+ * Android-safe: ScrollView + навигация на экран приёмки, без iOS-only API.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-  Platform,
-} from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -60,9 +52,6 @@ export default function PurchaseOrderDetailScreen() {
   const id: string = route.params?.id;
   const seedPo: PurchaseOrder | undefined = route.params?.po;
 
-  const [receiving, setReceiving] = useState(false);
-  // itemId → текст «принять сейчас» (дельта).
-  const [receiptInputs, setReceiptInputs] = useState<Record<string, string>>({});
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [showRequest, setShowRequest] = useState(false);
 
@@ -95,16 +84,6 @@ export default function PurchaseOrderDetailScreen() {
     [suppliers, po?.supplierId],
   );
 
-  // ── Stock-touching invalidation (приёмка меняет остатки) ──────────────────
-  const invalidateAfterStockChange = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['purchase-orders'] });
-    queryClient.invalidateQueries({ queryKey: ['products'] });
-    queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
-    queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
-    queryClient.invalidateQueries({ queryKey: ['low-stock'] });
-    queryClient.invalidateQueries({ queryKey: ['warehouse-analytics'] });
-  }, [queryClient]);
-
   const applyUpdated = useCallback(
     (updated: PurchaseOrder) => {
       queryClient.setQueryData(['purchase-order', id], updated);
@@ -133,72 +112,15 @@ export default function PurchaseOrderDetailScreen() {
     onError: () => haptic('error'),
   });
 
-  const receiveMutation = useMutation({
-    mutationFn: (body?: { items?: Array<{ itemId: string; receivedQuantity: number }> }) =>
-      purchaseOrdersApi.receive(id, body),
-    onSuccess: (res) => {
-      haptic('success');
-      invalidateAfterStockChange();
-      applyUpdated(res.data);
-      setReceiving(false);
-      setReceiptInputs({});
-    },
-    onError: () => haptic('error'),
-  });
+  const busy = orderMutation.isPending || cancelMutation.isPending;
 
-  const busy = orderMutation.isPending || cancelMutation.isPending || receiveMutation.isPending;
-
-  // ── Receive helpers ───────────────────────────────────────────────────────
-  const enterReceiveMode = () => {
+  // Открыть экран приёмки поставки по этому заказу. Приёмка (цена за строку,
+  // стоимость накладной, выбор «в долг / оплатить сразу») живёт на отдельном
+  // SupplyReceiveScreen; он сам обновит кэш заказа и инвалидирует склад/леджер.
+  const openReceive = useCallback(() => {
     haptic('tap');
-    // По умолчанию принимаем весь остаток по каждой строке.
-    const init: Record<string, string> = {};
-    for (const it of items) {
-      const out = outstandingQty(it.quantity, it.receivedQuantity);
-      if (out > 0) init[it.id] = String(out);
-    }
-    setReceiptInputs(init);
-    setReceiving(true);
-  };
-
-  const setReceiptValue = (itemId: string, value: string, max: number) => {
-    const cleaned = value.replace(/[^0-9]/g, '');
-    if (cleaned === '') {
-      setReceiptInputs((prev) => ({ ...prev, [itemId]: '' }));
-      return;
-    }
-    const n = Math.min(max, parseInt(cleaned, 10));
-    setReceiptInputs((prev) => ({ ...prev, [itemId]: String(n) }));
-  };
-
-  // −/+ stepper for a line's «принять сейчас» count. Clamped to [0, max]
-  // (max = outstanding). Makes partial receipt one-tap convenient without
-  // opening the number-pad.
-  const stepReceipt = (itemId: string, delta: number, max: number) => {
-    haptic('tap');
-    setReceiptInputs((prev) => {
-      const cur = parseInt(prev[itemId] || '0', 10) || 0;
-      const next = Math.max(0, Math.min(max, cur + delta));
-      return { ...prev, [itemId]: String(next) };
-    });
-  };
-
-  const confirmPartialReceive = () => {
-    const body = items
-      .map((it) => ({ itemId: it.id, receivedQuantity: parseInt(receiptInputs[it.id] || '0', 10) || 0 }))
-      .filter((x) => x.receivedQuantity > 0);
-    if (body.length === 0) {
-      haptic('warning');
-      return;
-    }
-    haptic('tap');
-    receiveMutation.mutate({ items: body });
-  };
-
-  const receiveAll = () => {
-    haptic('tap');
-    receiveMutation.mutate(undefined); // пустое тело → сервер примет весь остаток
-  };
+    navigation.navigate('SupplyReceive', { orderId: id, po });
+  }, [navigation, id, po]);
 
   // ── Loading / error (нет seed-данных) ─────────────────────────────────────
   if (!po) {
@@ -265,7 +187,6 @@ export default function PurchaseOrderDetailScreen() {
           {items.map((it, idx) => {
             const out = outstandingQty(it.quantity, it.receivedQuantity);
             const fullyReceived = out === 0;
-            const max = out;
             return (
               <View
                 key={it.id}
@@ -310,40 +231,6 @@ export default function PurchaseOrderDetailScreen() {
                     </View>
                   </View>
                 </View>
-
-                {/* Inline receive controls — −/+ stepper + editable field.
-                    Pre-filled to the full outstanding on entry, so a straight
-                    «Принять выбранное» = принять всё; decrement л'−' для
-                    частичной приёмки. */}
-                {receiving && max > 0 ? (
-                  <View style={styles.receiveRow}>
-                    <Text style={[styles.receiveLabel, { color: palette.text.tertiary }]}>Принять · остаток {max}</Text>
-                    <View style={[styles.receiveStepper, { borderColor: palette.border.subtle }]}>
-                      <TouchableOpacity
-                        onPress={() => stepReceipt(it.id, -1, max)}
-                        style={styles.receiveStepBtn}
-                        hitSlop={6}
-                      >
-                        <Ionicons name="remove" size={18} color={palette.text.secondary} />
-                      </TouchableOpacity>
-                      <TextInput
-                        value={receiptInputs[it.id] ?? ''}
-                        onChangeText={(t) => setReceiptValue(it.id, t, max)}
-                        style={[styles.receiveStepInput, { color: palette.text.primary }]}
-                        keyboardType="number-pad"
-                        placeholder="0"
-                        placeholderTextColor={palette.text.tertiary}
-                      />
-                      <TouchableOpacity
-                        onPress={() => stepReceipt(it.id, 1, max)}
-                        style={styles.receiveStepBtn}
-                        hitSlop={6}
-                      >
-                        <Ionicons name="add" size={18} color={palette.text.secondary} />
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : null}
               </View>
             );
           })}
@@ -397,42 +284,6 @@ export default function PurchaseOrderDetailScreen() {
         >
           {busy ? (
             <ActivityIndicator color={colors.primary[600]} style={{ paddingVertical: spacing[2] }} />
-          ) : receiving ? (
-            <View style={styles.receiveActions}>
-              {/* One-tap full receipt — приходует весь остаток по всем
-                  позициям (пустое тело → сервер примет всё). Полноширинная
-                  и зелёная — главный, очевидный путь приёмки. */}
-              <TouchableOpacity
-                style={[styles.receiveAllBtn, { backgroundColor: colors.green[600] }]}
-                onPress={receiveAll}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="checkmark-done" size={18} color={colors.white} />
-                <Text style={styles.primaryBtnText}>Принять полностью</Text>
-              </TouchableOpacity>
-              {/* Partial — приходует введённые по строкам количества. */}
-              <View style={styles.actionRow}>
-                <TouchableOpacity
-                  style={[styles.secondaryBtn, { borderColor: palette.border.strong }]}
-                  onPress={() => {
-                    haptic('tap');
-                    setReceiving(false);
-                    setReceiptInputs({});
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>Отмена</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.primaryBtn, { backgroundColor: colors.primary[600] }]}
-                  onPress={confirmPartialReceive}
-                  activeOpacity={0.85}
-                >
-                  <Ionicons name="checkmark" size={18} color={colors.white} />
-                  <Text style={styles.primaryBtnText}>Принять выбранное</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
           ) : isDraft ? (
             <View style={styles.actionRow}>
               <TouchableOpacity
@@ -468,25 +319,41 @@ export default function PurchaseOrderDetailScreen() {
               </TouchableOpacity>
             </View>
           ) : isOrdered ? (
-            <View style={styles.actionRow}>
+            // ordered: главный путь — «Принять поставку» (открывает приёмку с
+            // ценой за строку / стоимостью накладной / выбором оплаты). Ниже —
+            // «Изменить» (backend разрешает правку на ordered) и «Отменить».
+            <View style={styles.receiveActions}>
               <TouchableOpacity
-                style={[styles.secondaryBtn, { borderColor: colors.red[200] }]}
-                onPress={() => {
-                  haptic('tap');
-                  setConfirmCancel(true);
-                }}
-                activeOpacity={0.8}
-              >
-                <Text style={[styles.secondaryBtnText, { color: colors.red[500] }]}>Отменить</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.primaryBtn, { backgroundColor: colors.green[600] }]}
-                onPress={enterReceiveMode}
+                style={[styles.receiveAllBtn, { backgroundColor: colors.green[600] }]}
+                onPress={openReceive}
                 activeOpacity={0.85}
               >
-                <Ionicons name="cube" size={17} color={colors.white} />
-                <Text style={styles.primaryBtnText}>Принять</Text>
+                <Ionicons name="cube" size={18} color={colors.white} />
+                <Text style={styles.primaryBtnText}>Принять поставку</Text>
               </TouchableOpacity>
+              <View style={styles.actionRow}>
+                <TouchableOpacity
+                  style={[styles.secondaryBtn, styles.secondaryBtnFlex, { borderColor: palette.border.strong }]}
+                  onPress={() => {
+                    haptic('tap');
+                    navigation.navigate('PurchaseOrderCreate', { editId: po.id, po });
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="create-outline" size={16} color={palette.text.secondary} />
+                  <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>Изменить</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.secondaryBtn, styles.secondaryBtnFlex, { borderColor: colors.red[200] }]}
+                  onPress={() => {
+                    haptic('tap');
+                    setConfirmCancel(true);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.secondaryBtnText, { color: colors.red[500] }]}>Отменить</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           ) : null}
         </View>
@@ -595,32 +462,6 @@ const styles = StyleSheet.create({
   },
   requestBtnText: { fontSize: 15, fontWeight: '700', letterSpacing: -0.2 },
 
-  // Receive inline
-  receiveRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    gap: spacing[2],
-    marginTop: spacing[1],
-  },
-  receiveLabel: { fontSize: 12, flexShrink: 1 },
-  receiveStepper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderRadius: borderRadius.lg,
-    overflow: 'hidden',
-  },
-  receiveStepBtn: { paddingHorizontal: spacing[3], paddingVertical: spacing[1.5] },
-  receiveStepInput: {
-    minWidth: 46,
-    textAlign: 'center',
-    fontSize: 15,
-    fontWeight: '700',
-    paddingVertical: spacing[1.5],
-    fontVariant: ['tabular-nums'],
-  },
-
   // Terminal hint
   terminalHint: {
     flexDirection: 'row',
@@ -670,6 +511,8 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   secondaryBtnText: { fontSize: 15, fontWeight: '700', letterSpacing: -0.2 },
+  // Equal-width row variant — [Изменить][Отменить] under «Принять поставку».
+  secondaryBtnFlex: { flex: 1, flexDirection: 'row', gap: spacing[1.5] },
   iconActionBtn: {
     width: 48,
     paddingVertical: spacing[3.5],

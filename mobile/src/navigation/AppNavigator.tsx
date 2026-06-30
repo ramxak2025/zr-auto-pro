@@ -25,6 +25,7 @@ import SupplierDetailScreen from '../screens/SupplierDetailScreen';
 import PurchaseOrdersScreen from '../screens/PurchaseOrdersScreen';
 import PurchaseOrderCreateScreen from '../screens/PurchaseOrderCreateScreen';
 import PurchaseOrderDetailScreen from '../screens/PurchaseOrderDetailScreen';
+import SupplyReceiveScreen from '../screens/SupplyReceiveScreen';
 import SalaryScreen from '../screens/SalaryScreen';
 import MotivationScreen from '../screens/MotivationScreen';
 import ReportsScreen from '../screens/ReportsScreen';
@@ -75,7 +76,7 @@ import ImpersonationBanner from '../components/ImpersonationBanner';
 import { View, AppState } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 import { consumePendingAppIntent, type PendingAppIntent } from '../utils/appIntents';
-import type { Product } from '../../../shared/types';
+import type { Product, PurchaseOrder } from '../../../shared/types';
 
 // Feature descriptions for lock screens
 const FEATURE_GATES: Record<string, { title: string; description: string; benefits: string[] }> = {
@@ -211,6 +212,15 @@ export type RootStackParamList = {
    * resets navigation state so a re-mount doesn't re-trigger it.
    */
   SupplierDetail: { id: string; openDefectReturn?: boolean };
+  /**
+   * Приёмка поставки ПО ЗАКАЗУ. `orderId` — заказ, который принимаем; `po` —
+   * строка заказа для мгновенной отрисовки шапки (позиции дотянет getById).
+   * Открывается из PurchaseOrderDetail («Принять поставку») и из
+   * SupplierDetail («Новая поставка» → выбор заказа). Зарегистрирован и в
+   * MoreStack (для PurchaseOrderDetail / Поставщики-в-секции), и в корневом
+   * стеке (для SupplierDetail, который перекрывает таб-бар).
+   */
+  SupplyReceive: { orderId: string; po?: PurchaseOrder };
 };
 
 export type TabParamList = {
@@ -348,6 +358,11 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="PurchaseOrders" component={GatedPurchaseOrders} />
       <MoreStack.Screen name="PurchaseOrderCreate" component={PurchaseOrderCreateScreen} />
       <MoreStack.Screen name="PurchaseOrderDetail" component={PurchaseOrderDetailScreen} />
+      {/* Приёмка поставки по заказу — открывается из PurchaseOrderDetail
+          («Принять поставку») и из SupplierDetail-в-секции («Новая поставка»).
+          Кредитует склад + ведёт долг/платёж поставщика; экран инвалидирует
+          ['products']/['stock-movements']/['supplier-*'] после приёмки. */}
+      <MoreStack.Screen name="SupplyReceive" component={SupplyReceiveScreen} />
       <MoreStack.Screen name="CashFlow" component={GatedCashFlow} />
       {/* Кассовая смена / Z-отчёт / Инкассация — UNGATED by plan-feature
           (no FeatureGate): viewing the current shift / Z-report / history is
@@ -709,6 +724,11 @@ export default function AppNavigator() {
           <Stack.Screen name="ClientDetail" component={ClientDetailScreen} />
           <Stack.Screen name="CarDetail" component={CarDetailScreen} />
           <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
+          {/* SupplyReceive on the ROOT stack too — the root SupplierDetail copy
+              (which intentionally covers the tab bar) reaches receiving via
+              «Новая поставка». MoreStack has its own copy above for the
+              in-section SupplierDetail / PurchaseOrderDetail callers. */}
+          <Stack.Screen name="SupplyReceive" component={SupplyReceiveScreen} />
         </>
       )}
     </Stack.Navigator>

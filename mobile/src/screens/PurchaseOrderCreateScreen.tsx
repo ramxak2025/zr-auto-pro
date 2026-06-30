@@ -13,8 +13,12 @@
  *   4. Живой итог Σ(кол-во × цена). Сохранить → create (draft) → открываем
  *      детальную, чтобы сразу «Оформить заказ».
  *
- * editId в route.params → режим редактирования черновика: предзаполняем
- * поставщика/строки/заметку и Save вызывает update(id, …).
+ * editId в route.params → режим редактирования: предзаполняем поставщика/строки/
+ * заметку и Save вызывает update(id, …). Backend разрешает правку на статусах
+ * draft И ordered (добавить/убрать позиции, изменить количество). Позиции, по
+ * которым уже была приёмка, защищены сервером — мы это отражаем в UI: строку с
+ * `receivedQuantity > 0` нельзя удалить и нельзя опустить ниже принятого, а при
+ * отказе сервера показываем его сообщение.
  *
  * Write-роль (director/admin/superadmin) гейтит весь экран на стороне списка
  * (кнопка «+» скрыта для остальных); сервер дублирует проверку.
@@ -59,6 +63,12 @@ interface DraftLine {
   quantity: number;
   /** Free-text cost so decimals (12.5) type cleanly; parsed to a number on save. */
   costText: string;
+  /**
+   * Already-received quantity for this line (ordered-order edits). 0 for new
+   * lines / drafts. Backend forbids dropping or under-receiving a line with
+   * receipts, so the UI locks remove and clamps qty ≥ received.
+   */
+  received: number;
 }
 
 function parseCost(costText: string): number {
@@ -88,6 +98,7 @@ export default function PurchaseOrderCreateScreen() {
       name: it.name,
       quantity: it.quantity,
       costText: it.costPrice ? String(it.costPrice) : '',
+      received: it.receivedQuantity ?? 0,
     })),
   );
   const [note, setNote] = useState(seedPo?.note ?? '');
@@ -135,6 +146,7 @@ export default function PurchaseOrderCreateScreen() {
           name: product.name,
           quantity: 1,
           costText: product.costPrice ? String(product.costPrice) : '',
+          received: 0,
         },
       ];
     });
@@ -143,7 +155,10 @@ export default function PurchaseOrderCreateScreen() {
   const changeQty = useCallback((productId: string, delta: number) => {
     haptic('tap');
     setLines((prev) =>
-      prev.map((l) => (l.productId === productId ? { ...l, quantity: Math.max(1, l.quantity + delta) } : l)),
+      prev.map((l) =>
+        // Нельзя опускать количество ниже уже принятого (backend это запретит).
+        l.productId === productId ? { ...l, quantity: Math.max(Math.max(1, l.received), l.quantity + delta) } : l,
+      ),
     );
   }, []);
 
@@ -154,8 +169,20 @@ export default function PurchaseOrderCreateScreen() {
   }, []);
 
   const removeLine = useCallback((productId: string) => {
-    haptic('tap');
-    setLines((prev) => prev.filter((l) => l.productId !== productId));
+    setLines((prev) => {
+      const line = prev.find((l) => l.productId === productId);
+      if (line && line.received > 0) {
+        // Защищённая позиция (уже принята) — сервер всё равно откажет, гасим здесь.
+        haptic('warning');
+        Alert.alert(
+          'Нельзя удалить позицию',
+          `По «${line.name}» уже принято ${line.received} шт — её нельзя убрать из заказа.`,
+        );
+        return prev;
+      }
+      haptic('tap');
+      return prev.filter((l) => l.productId !== productId);
+    });
   }, []);
 
   const total = useMemo(() => lines.reduce((s, l) => s + l.quantity * parseCost(l.costText), 0), [lines]);
@@ -169,6 +196,7 @@ export default function PurchaseOrderCreateScreen() {
         name: it.name,
         quantity: Math.max(1, it.suggestedQuantity),
         costText: it.costPrice ? String(it.costPrice) : '',
+        received: 0,
       })),
     );
     setShowSuggestions(false);
@@ -197,11 +225,16 @@ export default function PurchaseOrderCreateScreen() {
         navigation.replace('PurchaseOrderDetail', { id: po.id, po });
       }
     },
-    onError: () => {
+    onError: (err: any) => {
       haptic('error');
+      // Surface the backend's reason verbatim when present (e.g. «Нельзя
+      // изменить позицию с приёмкой») — that's how protected-line edits are
+      // explained to the owner.
+      const raw = err?.response?.data?.message;
+      const msg = Array.isArray(raw) ? raw.join('\n') : raw;
       Alert.alert(
         isEdit ? 'Не удалось сохранить' : 'Не удалось создать заказ',
-        'Проверьте подключение к интернету и попробуйте ещё раз.',
+        msg || 'Проверьте подключение к интернету и попробуйте ещё раз.',
       );
     },
   });
@@ -383,6 +416,7 @@ export default function PurchaseOrderCreateScreen() {
             <View style={[styles.linesCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
               {lines.map((l, idx) => {
                 const lineTotal = l.quantity * parseCost(l.costText);
+                const locked = l.received > 0;
                 return (
                   <View
                     key={l.productId}
@@ -398,9 +432,19 @@ export default function PurchaseOrderCreateScreen() {
                       <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={2}>
                         {l.name}
                       </Text>
-                      <TouchableOpacity onPress={() => removeLine(l.productId)} hitSlop={8} style={styles.lineRemove}>
-                        <Ionicons name="trash-outline" size={17} color={colors.red[500]} />
-                      </TouchableOpacity>
+                      {locked ? (
+                        // Защищённая позиция (есть приёмка) — удаление недоступно.
+                        <View style={[styles.lockedChip, { backgroundColor: colors.green[50] }]}>
+                          <Ionicons name="lock-closed" size={11} color={colors.green[700]} />
+                          <Text style={[styles.lockedChipText, { color: colors.green[700] }]}>
+                            принято {l.received}
+                          </Text>
+                        </View>
+                      ) : (
+                        <TouchableOpacity onPress={() => removeLine(l.productId)} hitSlop={8} style={styles.lineRemove}>
+                          <Ionicons name="trash-outline" size={17} color={colors.red[500]} />
+                        </TouchableOpacity>
+                      )}
                     </View>
                     <View style={styles.lineControls}>
                       {/* Qty stepper */}
@@ -617,6 +661,15 @@ const styles = StyleSheet.create({
   lineTop: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2] },
   lineName: { flex: 1, fontSize: 15, fontWeight: '600', letterSpacing: -0.1 },
   lineRemove: { padding: 2 },
+  lockedChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+  },
+  lockedChipText: { fontSize: 11, fontWeight: '700' },
   lineControls: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   stepper: {
     flexDirection: 'row',
