@@ -21,6 +21,8 @@ import {
   Activity,
   Clock,
   ClipboardList,
+  PauseCircle,
+  PlayCircle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format, parseISO, isPast, formatDistanceToNow } from 'date-fns';
@@ -28,7 +30,7 @@ import { ru } from 'date-fns/locale';
 
 import { tenantsApi, usersApi, plansApi } from '../../api/services';
 import { useAuth } from '../../contexts/AuthContext';
-import { Tenant, User, UserRole, UserPermissions, TenantMetrics, Plan } from '../../types';
+import { Tenant, User, UserRole, UserPermissions, TenantCabinet, SubscriptionStatus, Plan } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -45,6 +47,13 @@ const roleBadgeMap: Record<string, string> = {
   director: 'badge-blue',
   admin: 'badge-green',
   master: 'badge-yellow',
+};
+
+// Subscription status → badge label/class for the cabinet header (102).
+const subStatusMeta: Record<SubscriptionStatus, { label: string; badge: string }> = {
+  active: { label: 'Активна', badge: 'badge-green' },
+  expired: { label: 'Истекла', badge: 'badge-yellow' },
+  suspended: { label: 'Приостановлена', badge: 'badge-red' },
 };
 
 const defaultPermissions: UserPermissions = {
@@ -111,6 +120,11 @@ export default function AdminTenantDetailPage() {
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [impersonateConfirm, setImpersonateConfirm] = useState(false);
 
+  // Suspend / unsuspend (102)
+  const [suspendModalOpen, setSuspendModalOpen] = useState(false);
+  const [suspendReason, setSuspendReason] = useState('');
+  const [unsuspendConfirm, setUnsuspendConfirm] = useState(false);
+
   // Tenant edit modal
   const [tenantModalOpen, setTenantModalOpen] = useState(false);
   const [tenantForm, setTenantForm] = useState<TenantFormData>({
@@ -139,14 +153,18 @@ export default function AdminTenantDetailPage() {
     enabled: !!id,
   });
 
-  // Per-tenant activity metrics (superadmin health card).
-  const { data: metrics } = useQuery({
-    queryKey: ['tenant-metrics', id],
-    queryFn: () => tenantsApi.getMetrics(id!),
-    select: (res) => res.data as TenantMetrics,
+  // Composed superadmin cabinet: identity + subscription status/plan + activity
+  // metrics in one call (replaces the standalone GET /tenants/:id/metrics fetch).
+  const { data: cabinet } = useQuery({
+    queryKey: ['tenant-cabinet', id],
+    queryFn: () => tenantsApi.getCabinet(id!),
+    select: (res) => res.data as TenantCabinet,
     enabled: !!id,
     staleTime: 60_000,
   });
+
+  const metrics = cabinet?.metrics;
+  const subStatus = cabinet?.subscription;
 
   // Active plans for the assign-plan picker.
   const { data: plans } = useQuery({
@@ -177,7 +195,7 @@ export default function AdminTenantDetailPage() {
   // ── Subscription management ──
   const invalidateTenant = () => {
     queryClient.invalidateQueries({ queryKey: ['tenant', id] });
-    queryClient.invalidateQueries({ queryKey: ['tenant-metrics', id] });
+    queryClient.invalidateQueries({ queryKey: ['tenant-cabinet', id] });
     queryClient.invalidateQueries({ queryKey: ['tenants'] });
     queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
   };
@@ -224,6 +242,34 @@ export default function AdminTenantDetailPage() {
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.message || 'Не удалось войти как владелец');
+    },
+  });
+
+  // ── Suspend / unsuspend (102) ──
+  // Suspend forces is_active=false server-side → every employee hits the hard
+  // gate; the subscription window itself is untouched, so unsuspend simply
+  // restores access.
+  const suspendMutation = useMutation({
+    mutationFn: (reason: string | undefined) => tenantsApi.suspend(id!, reason),
+    onSuccess: () => {
+      invalidateTenant();
+      toast.success('Автосервис приостановлен');
+      setSuspendModalOpen(false);
+      setSuspendReason('');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Не удалось приостановить');
+    },
+  });
+
+  const unsuspendMutation = useMutation({
+    mutationFn: () => tenantsApi.unsuspend(id!),
+    onSuccess: () => {
+      invalidateTenant();
+      toast.success('Работа автосервиса возобновлена');
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Не удалось возобновить');
     },
   });
 
@@ -382,6 +428,10 @@ export default function AdminTenantDetailPage() {
   const subscriptionEnd = tenant.subscriptionEnd ? parseISO(tenant.subscriptionEnd) : null;
   const isExpired = subscriptionEnd ? isPast(subscriptionEnd) : false;
 
+  // Suspension drives the header action + cabinet banner. Prefer the cabinet
+  // status; fall back to the tenant's own suspendedAt marker until it resolves.
+  const isSuspended = subStatus ? subStatus.status === 'suspended' : !!tenant.suspendedAt;
+
   return (
     <div>
       {/* Back + Header */}
@@ -408,6 +458,23 @@ export default function AdminTenantDetailPage() {
               <LogIn className="w-4 h-4" />
               Войти как владелец
             </button>
+            {isSuspended ? (
+              <button
+                onClick={() => setUnsuspendConfirm(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-green-200 bg-green-50 px-3 py-1.5 text-xs font-medium text-green-700 transition-colors hover:bg-green-100"
+              >
+                <PlayCircle className="w-4 h-4" />
+                Возобновить
+              </button>
+            ) : (
+              <button
+                onClick={() => setSuspendModalOpen(true)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-1.5 text-xs font-medium text-red-700 transition-colors hover:bg-red-100"
+              >
+                <PauseCircle className="w-4 h-4" />
+                Приостановить
+              </button>
+            )}
             <button onClick={openTenantEdit} className="btn-secondary btn-sm">
               <Pencil className="w-4 h-4" />
               Редактировать
@@ -484,6 +551,64 @@ export default function AdminTenantDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Subscription status (superadmin cabinet) */}
+      {subStatus && (
+        <div className="card card-body mb-6">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <h2 className="text-lg font-semibold text-gray-900">Подписка</h2>
+            <span className={subStatusMeta[subStatus.status].badge}>{subStatusMeta[subStatus.status].label}</span>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div>
+              <p className="text-xs text-gray-500 mb-0.5">Тариф</p>
+              <p className="text-sm font-semibold text-gray-900">{subStatus.planName || 'Не назначен'}</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-0.5">Стоимость</p>
+              <p className="text-sm font-semibold text-gray-900">{formatRub(subStatus.planPrice)}/мес</p>
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-0.5">Оплачено до</p>
+              {subStatus.subscriptionEnd ? (
+                <p
+                  className={`text-sm font-semibold ${
+                    subStatus.status === 'expired' ? 'text-red-600' : 'text-gray-900'
+                  }`}
+                >
+                  {format(parseISO(subStatus.subscriptionEnd), 'd MMMM yyyy', { locale: ru })}
+                </p>
+              ) : (
+                <p className="text-sm font-semibold text-gray-400">Не указано</p>
+              )}
+            </div>
+            <div>
+              <p className="text-xs text-gray-500 mb-0.5">Сотрудников</p>
+              <p className="text-sm font-semibold text-gray-900">
+                {subStatus.currentUsers} / {subStatus.maxUsers}
+              </p>
+            </div>
+          </div>
+
+          {subStatus.status === 'suspended' && (
+            <div className="mt-4 flex items-start gap-3 rounded-lg bg-red-50 p-4">
+              <PauseCircle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-red-700">
+                  Работа приостановлена
+                  {subStatus.suspendedAt
+                    ? ` ${format(parseISO(subStatus.suspendedAt), 'd MMMM yyyy', { locale: ru })}`
+                    : ''}
+                </p>
+                {subStatus.suspendedReason && (
+                  <p className="text-sm text-red-600 mt-0.5">Причина: {subStatus.suspendedReason}</p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Activity metrics (показатели клиента) */}
       {metrics && (
@@ -950,6 +1075,65 @@ export default function AdminTenantDetailPage() {
         title="Войти как владелец"
         message={`Вы войдёте в аккаунт владельца «${tenant.name}» под временной сессией (30 минут). Текущая сессия суперадмина будет заменена — потребуется повторный вход. Продолжить?`}
         confirmText="Войти"
+        variant="primary"
+      />
+
+      {/* Suspend Modal (reason + confirm) */}
+      <Modal
+        isOpen={suspendModalOpen}
+        onClose={() => setSuspendModalOpen(false)}
+        title="Приостановить автосервис"
+        size="sm"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-500">
+            Сотрудники «{tenant.name}» потеряют доступ к приложению до возобновления. Срок подписки при этом не
+            меняется.
+          </p>
+          <div>
+            <label className="label">Причина (необязательно)</label>
+            <textarea
+              className="input"
+              rows={3}
+              value={suspendReason}
+              onChange={(e) => setSuspendReason(e.target.value)}
+              placeholder="Например: задолженность по оплате"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-200">
+            <button type="button" onClick={() => setSuspendModalOpen(false)} className="btn-secondary">
+              Отмена
+            </button>
+            <button
+              type="button"
+              disabled={suspendMutation.isPending}
+              onClick={() => suspendMutation.mutate(suspendReason.trim() || undefined)}
+              className="btn-danger"
+            >
+              {suspendMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Приостановка...
+                </>
+              ) : (
+                'Приостановить'
+              )}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Unsuspend Confirmation */}
+      <ConfirmDialog
+        isOpen={unsuspendConfirm}
+        onClose={() => setUnsuspendConfirm(false)}
+        onConfirm={() => {
+          setUnsuspendConfirm(false);
+          unsuspendMutation.mutate();
+        }}
+        title="Возобновить работу"
+        message={`Возобновить доступ для «${tenant.name}»? Сотрудники снова смогут работать в приложении.`}
+        confirmText="Возобновить"
         variant="primary"
       />
     </div>

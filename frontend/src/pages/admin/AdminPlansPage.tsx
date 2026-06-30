@@ -9,9 +9,10 @@ import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import EmptyState from '../../components/EmptyState';
-// Single source of truth for feature keys/labels — shared by web + mobile so the
-// plan editor can never drift (and `check_photos` is now toggleable).
-import { ALL_FEATURES } from '../../../../shared/constants/features';
+// Feature toggles bucketed by `group` (core / section / integration) so the editor
+// and plan cards render the 23 keys under section headings. FEATURE_GROUPS wraps
+// the shared single-source-of-truth registry (web + mobile), so it never drifts.
+import { FEATURE_GROUPS } from '../../utils/featureGroups';
 
 interface PlanFormData {
   name: string;
@@ -60,9 +61,17 @@ export default function AdminPlansPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => plansApi.update(id, data),
+    // Scalar fields go through PATCH /plans/:id; the ENABLED feature set is written
+    // through the dedicated, catalog-validated PUT /plans/:id/features (setFeatures).
+    mutationFn: async ({ id, data, features }: { id: string; data: any; features: string[] }) => {
+      await plansApi.update(id, data);
+      await plansApi.setFeatures(id, features);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['plans'] });
+      // Feature changes alter what tenants on this plan can open (FeatureGate reads
+      // the resolved sub.features), so refresh the subscription cache too.
+      queryClient.invalidateQueries({ queryKey: ['subscription'] });
       toast.success('Тариф обновлён');
       closeModal();
     },
@@ -122,20 +131,21 @@ export default function AdminPlansPage() {
       return;
     }
 
-    const payload = {
+    // Scalar plan fields. Features are persisted separately via setFeatures on
+    // edit; on create they ride along in the initial POST (no plan id yet).
+    const scalar = {
       name: form.name,
       monthlyPrice: Number(form.monthlyPrice),
       description: form.description || undefined,
-      features: form.features,
       maxUsers: Number(form.maxUsers),
       isActive: form.isActive,
       sortOrder: Number(form.sortOrder),
     };
 
     if (editingPlan) {
-      updateMutation.mutate({ id: editingPlan.id, data: payload });
+      updateMutation.mutate({ id: editingPlan.id, data: scalar, features: form.features });
     } else {
-      createMutation.mutate(payload);
+      createMutation.mutate({ ...scalar, features: form.features });
     }
   };
 
@@ -193,22 +203,31 @@ export default function AdminPlansPage() {
 
                 <div className="text-sm text-gray-600">До {plan.maxUsers} сотрудников</div>
 
-                {/* Feature availability list */}
-                <ul className="text-sm space-y-1">
-                  {ALL_FEATURES.map((feat) => {
-                    const included = features.includes(feat.key);
-                    return (
-                      <li key={feat.key} className="flex items-center gap-2">
-                        {included ? (
-                          <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
-                        ) : (
-                          <X className="w-4 h-4 text-red-400 flex-shrink-0" />
-                        )}
-                        <span className={included ? 'text-gray-700' : 'text-gray-400'}>{feat.label}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
+                {/* Feature availability — grouped by section */}
+                <div className="space-y-2.5">
+                  {FEATURE_GROUPS.map((grp) => (
+                    <div key={grp.group}>
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
+                        {grp.label}
+                      </p>
+                      <ul className="text-sm space-y-1">
+                        {grp.items.map((feat) => {
+                          const included = features.includes(feat.key);
+                          return (
+                            <li key={feat.key} className="flex items-center gap-2">
+                              {included ? (
+                                <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
+                              ) : (
+                                <X className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                              )}
+                              <span className={included ? 'text-gray-700' : 'text-gray-400'}>{feat.label}</span>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
 
                 <div className="pt-2 border-t border-gray-100">
                   {plan.isActive ? (
@@ -277,23 +296,30 @@ export default function AdminPlansPage() {
             />
           </div>
 
-          {/* Feature checkboxes */}
+          {/* Feature checkboxes — grouped by section (core / section / integration) */}
           <div>
             <label className="label">Доступные функции</label>
-            <div className="border border-gray-200 rounded-lg p-3 space-y-2 max-h-64 overflow-y-auto">
-              {ALL_FEATURES.map((feat) => (
-                <label
-                  key={feat.key}
-                  className="flex items-center gap-3 cursor-pointer py-1 px-2 rounded-md hover:bg-gray-50 transition-colors"
-                >
-                  <input
-                    type="checkbox"
-                    className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
-                    checked={form.features.includes(feat.key)}
-                    onChange={() => toggleFeature(feat.key)}
-                  />
-                  <span className="text-sm text-gray-700">{feat.label}</span>
-                </label>
+            <div className="border border-gray-200 rounded-lg p-3 space-y-3 max-h-72 overflow-y-auto">
+              {FEATURE_GROUPS.map((grp) => (
+                <div key={grp.group}>
+                  <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1 px-1">{grp.label}</p>
+                  <div className="space-y-0.5">
+                    {grp.items.map((feat) => (
+                      <label
+                        key={feat.key}
+                        className="flex items-center gap-3 cursor-pointer py-1 px-2 rounded-md hover:bg-gray-50 transition-colors"
+                      >
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                          checked={form.features.includes(feat.key)}
+                          onChange={() => toggleFeature(feat.key)}
+                        />
+                        <span className="text-sm text-gray-700">{feat.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           </div>

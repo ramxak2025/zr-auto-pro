@@ -1,6 +1,8 @@
 import { lazy, Suspense, ComponentType, ReactElement } from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from './contexts/AuthContext';
+import { subscriptionApi } from './api/services';
 import { UserRole } from './types';
 
 // Layouts — not lazy-loaded (always needed, small size)
@@ -160,13 +162,28 @@ function isSubscriptionExpired(subscriptionEnd?: string | null): boolean {
 export default function App() {
   const { user, loading } = useAuth();
 
+  // Authoritative subscription status (102) for the hard gate. This reuses the
+  // same ['subscription'] cache Layout / FeatureGate already warm, so it adds no
+  // extra network on the golden path.
+  const isBlockableRole = !!user && user.role !== UserRole.SUPERADMIN;
+  const { data: sub } = useQuery({
+    queryKey: ['subscription'],
+    queryFn: () => subscriptionApi.get().then((res) => res.data),
+    enabled: isBlockableRole,
+    staleTime: 5 * 60 * 1000,
+  });
+
   if (loading) {
     return <LoadingSpinner />;
   }
 
-  // Check subscription for non-superadmin users
+  // Hard gate: a tenant whose subscription is `expired` or `suspended` cannot use
+  // the app — every employee is routed to the block screen. `status` from
+  // GET /subscription is the authoritative driver; until it resolves we fall back
+  // to the me()-embedded subscriptionEnd date so an expired tenant never flashes
+  // the full app on first paint.
   const subscriptionBlocked =
-    user && user.role !== UserRole.SUPERADMIN && user.tenant && isSubscriptionExpired(user.tenant.subscriptionEnd);
+    isBlockableRole && (sub?.status ? sub.status !== 'active' : isSubscriptionExpired(user?.tenant?.subscriptionEnd));
 
   return (
     <ErrorBoundary>

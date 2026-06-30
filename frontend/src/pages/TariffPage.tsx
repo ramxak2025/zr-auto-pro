@@ -6,8 +6,9 @@ import { ru } from 'date-fns/locale';
 import { subscriptionApi } from '../api/services';
 import { SubscriptionInfo } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
-// Single source of truth for feature keys/labels — shared by web + mobile.
-import { ALL_FEATURES } from '../../../shared/constants/features';
+// Feature rows bucketed by `group` (core / section / integration) so each plan
+// card lists the 23 keys under section headings. Wraps the shared registry.
+import { FEATURE_GROUPS } from '../utils/featureGroups';
 
 const WHATSAPP_PHONE = '79884444436';
 
@@ -148,23 +149,32 @@ export default function TariffPage() {
                         <span className="text-sm font-semibold text-primary-700">До {plan.maxUsers} сотрудников</span>
                       </div>
 
-                      <ul className="space-y-1.5">
-                        {ALL_FEATURES.map((feat) => {
-                          const included = features.includes(feat.key);
-                          return (
-                            <li key={feat.key} className="flex items-center gap-2 text-sm">
-                              {included ? (
-                                <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
-                              ) : (
-                                <X className="w-4 h-4 text-gray-300 flex-shrink-0" />
-                              )}
-                              <span className={included ? 'text-gray-700' : 'text-gray-400 line-through'}>
-                                {feat.label}
-                              </span>
-                            </li>
-                          );
-                        })}
-                      </ul>
+                      <div className="space-y-3">
+                        {FEATURE_GROUPS.map((grp) => (
+                          <div key={grp.group}>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
+                              {grp.label}
+                            </p>
+                            <ul className="space-y-1.5">
+                              {grp.items.map((feat) => {
+                                const included = features.includes(feat.key);
+                                return (
+                                  <li key={feat.key} className="flex items-center gap-2 text-sm">
+                                    {included ? (
+                                      <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
+                                    ) : (
+                                      <X className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                                    )}
+                                    <span className={included ? 'text-gray-700' : 'text-gray-400 line-through'}>
+                                      {feat.label}
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </div>
+                        ))}
+                      </div>
 
                       {!isCurrent && (
                         <a
