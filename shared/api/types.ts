@@ -4,6 +4,7 @@
 
 import type {
   User,
+  ProfileChangeRequest,
   KnowledgeArticleType,
   KnowledgeAttachment,
   KnowledgeBlock,
@@ -716,4 +717,44 @@ export interface UpdateBookingSettingsRequest {
   reminderEnabled?: boolean;
   reminderHours?: number;
   channel?: 'auto' | 'sms' | 'whatsapp';
+}
+
+// ─── «Мой профиль» (migration 099) ──────────────────────────────────────────────
+
+/**
+ * PATCH /profile body — self edit of ФИО / телефон / аватар. All optional
+ * (send only what changed). NEVER carries a password (own self-service path).
+ * `avatar: ''` clears the avatar.
+ */
+export interface UpdateProfileRequest {
+  fullName?: string;
+  phone?: string;
+  avatar?: string;
+}
+
+/** Which branch the self-edit took (keyed off the caller's role server-side). */
+export type ProfileUpdateOutcome = 'applied' | 'requested';
+
+/**
+ * PATCH /profile result.
+ *   - 'applied'   (director/superadmin) → `user` is the updated canonical user.
+ *   - 'requested' (admin/master)        → `request` is the created/superseded
+ *                                          pending change request.
+ */
+export interface UpdateProfileResponse {
+  status: ProfileUpdateOutcome;
+  /** Convenience boolean: true when applied directly, false when a request was created. */
+  applied: boolean;
+  user?: User;
+  request?: ProfileChangeRequest;
+}
+
+/**
+ * POST /profile/password body — self-service for every role. The server
+ * verifies `currentPassword` (bcrypt.compare) and stores bcrypt.hash(new, 12).
+ * Passwords are never logged or returned.
+ */
+export interface ChangePasswordRequest {
+  currentPassword: string;
+  newPassword: string;
 }

@@ -143,6 +143,7 @@ import type {
   TelephonySettings,
   TelephonyProviderName,
   WalletSettings,
+  ProfileChangeRequest,
 } from '../types';
 import type {
   LoginRequest,
@@ -201,6 +202,9 @@ import type {
   UpdateBookingRequest,
   ConvertBookingRequest,
   UpdateBookingSettingsRequest,
+  UpdateProfileRequest,
+  UpdateProfileResponse,
+  ChangePasswordRequest,
 } from './types';
 
 export function createAuthApi(api: HttpClient) {
@@ -216,6 +220,36 @@ export function createAuthApi(api: HttpClient) {
     // current password + an explicit confirm flag. After a 200, the client must
     // drop its token and return to the login screen.
     deleteAccount: (data: DeleteAccountRequest) => api.post<DeleteAccountResponse>('/account/delete', data),
+  };
+}
+
+/**
+ * «Мой профиль» (migration 099). Self profile edit + self password change for
+ * any role, plus the owner-class approval queue for employee change requests.
+ *
+ * Consumers wire this like the others, e.g.
+ *   export const profileApi = createProfileApi(api);
+ *
+ *  - updateProfile      PATCH /profile — director/superadmin apply directly,
+ *                       admin/master create a pending request. The response
+ *                       `status` ('applied' | 'requested') says which happened.
+ *  - changePassword     POST  /profile/password — self-service, all roles.
+ *  - getMyChangeRequest GET   /profile/change-requests/mine — the caller's own
+ *                       pending request (or null), for the «на рассмотрении» state.
+ *  - listChangeRequests GET   /profile/change-requests — owner: tenant's pending
+ *                       requests with requester + old→new diff.
+ *  - approveChangeRequest / rejectChangeRequest — owner decision. Approve applies
+ *                       the diff to the user (with a phone-uniqueness check).
+ */
+export function createProfileApi(api: HttpClient) {
+  return {
+    updateProfile: (data: UpdateProfileRequest) => api.patch<UpdateProfileResponse>('/profile', data),
+    changePassword: (data: ChangePasswordRequest) => api.post<{ message: string }>('/profile/password', data),
+    getMyChangeRequest: () => api.get<ProfileChangeRequest | null>('/profile/change-requests/mine'),
+    listChangeRequests: () => api.get<ProfileChangeRequest[]>('/profile/change-requests'),
+    approveChangeRequest: (id: string) =>
+      api.post<ProfileChangeRequest>(`/profile/change-requests/${id}/approve`),
+    rejectChangeRequest: (id: string) => api.post<ProfileChangeRequest>(`/profile/change-requests/${id}/reject`),
   };
 }
 

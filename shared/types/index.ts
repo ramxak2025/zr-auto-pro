@@ -2631,3 +2631,55 @@ export interface WalletSettings {
   configured: boolean;
   updatedAt: string | null;
 }
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  «Мой профиль» — profile change requests (migration 099)
+//
+//  Владелец (director + superadmin) edits ФИО/телефон/аватар DIRECTLY. A
+//  Сотрудник (admin + master) instead SUBMITS a request that a владелец
+//  approves or rejects; the request carries the old→new diff. Password is
+//  NEVER part of this flow (it is self-service for every role and never
+//  exposed to an owner).
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Lifecycle of a profile change request. */
+export type ProfileChangeStatus = 'pending' | 'approved' | 'rejected';
+
+/** A profile field an employee may request to change (client-facing camelCase). */
+export type ProfileChangeField = 'fullName' | 'phone' | 'avatar';
+
+/** One per-field diff shown to the owner as «было → стало». */
+export interface ProfileChangeDiff {
+  field: ProfileChangeField;
+  /** Value at the time the request was created (may be null, e.g. no avatar). */
+  oldValue: string | null;
+  /** Requested new value (null clears, e.g. avatar). */
+  newValue: string | null;
+}
+
+/** Minimal requester identity attached to a request for the owner's review list. */
+export interface ProfileChangeRequester {
+  id: string;
+  fullName: string;
+  phone: string;
+  avatar?: string;
+  role: string;
+}
+
+/** A pending/decided employee profile change request (owner approval flow). */
+export interface ProfileChangeRequest {
+  id: string;
+  /** Tenant the request belongs to. */
+  tenantId?: string;
+  /** The employee (requester) whose profile would change. */
+  userId: string;
+  /** Requester identity for display (present on owner-facing reads). */
+  requester?: ProfileChangeRequester;
+  /** The requested field changes, old→new. */
+  changes: ProfileChangeDiff[];
+  status: ProfileChangeStatus;
+  createdAt: string;
+  /** The владелец who approved/rejected, once decided. */
+  decidedBy?: string;
+  decidedAt?: string;
+}

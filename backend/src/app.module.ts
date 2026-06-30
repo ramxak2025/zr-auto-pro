@@ -50,6 +50,7 @@ import { WalletModule } from './wallet/wallet.module';
 import { InstallmentsModule } from './installments/installments.module';
 import { AccountModule } from './account/account.module';
 import { MotivationModule } from './motivation/motivation.module';
+import { ProfileModule } from './profile/profile.module';
 
 @Module({
   imports: [
@@ -103,6 +104,7 @@ import { MotivationModule } from './motivation/motivation.module';
     InstallmentsModule,
     AccountModule,
     MotivationModule,
+    ProfileModule,
   ],
   providers: [MigrationRunner],
 })
