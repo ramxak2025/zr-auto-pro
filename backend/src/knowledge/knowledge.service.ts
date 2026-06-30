@@ -583,7 +583,7 @@ export class KnowledgeService {
    * indexed columns are never wrapped in a function. Non-managers only see
    * published articles; managers see drafts too.
    */
-  async listArticles(tenantID: string, role: string, query: ListArticlesQueryDto) {
+  async listArticles(tenantID: string, role: string, userID: string, query: ListArticlesQueryDto) {
     await this.ensureSeed(tenantID);
 
     const where: string[] = ['tenant_id=$1'];
@@ -593,6 +593,17 @@ export class KnowledgeService {
     const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
     if (!isManager) {
       where.push('published = true');
+      // #54: a targeted regulation (target_all=false) is visible only to the
+      // selected employees. Plain articles and «для всех» regulations are
+      // unaffected. Managers skip this filter and see everything.
+      where.push(
+        `(type <> 'regulation' OR target_all = true OR EXISTS (
+           SELECT 1 FROM knowledge_regulation_targets t
+           WHERE t.article_id = knowledge_articles.id AND t.user_id = $${i}
+         ))`,
+      );
+      params.push(userID);
+      i++;
     }
     if (query.categoryId) {
       where.push(`category_id=$${i++}`);
@@ -640,7 +651,7 @@ export class KnowledgeService {
     }
 
     const { rows } = await this.pool.query(
-      `SELECT id, title, type, category_id, pinned, cover_image, updated_at,
+      `SELECT id, title, type, category_id, pinned, published, target_all, cover_image, updated_at,
               mandatory, due_date, car_make, view_count, blocks,
               left(body, 200) AS excerpt_src
        FROM knowledge_articles
@@ -673,8 +684,21 @@ export class KnowledgeService {
 
     // Articles — title + body + block text. The block-text EXISTS subquery reads
     // every block's `text`/`caption` so a hit only inside a block still matches.
+    // Non-managers only see published articles AND only regulations they are in
+    // the audience of (#54). userID ($3) is bound only on that branch so the
+    // parameter count always matches the placeholders actually referenced.
+    const articleParams: any[] = [tenantID, term];
+    let articleVisibility = '';
+    if (!isManager) {
+      articleParams.push(userID);
+      articleVisibility = `AND published = true
+         AND (type <> 'regulation' OR target_all = true OR EXISTS (
+                SELECT 1 FROM knowledge_regulation_targets t
+                WHERE t.article_id = knowledge_articles.id AND t.user_id = $3
+              ))`;
+    }
     const { rows: articleRows } = await this.pool.query(
-      `SELECT id, title, type, category_id, pinned, cover_image, updated_at,
+      `SELECT id, title, type, category_id, pinned, published, target_all, cover_image, updated_at,
               mandatory, due_date, car_make, view_count, blocks,
               left(body, 200) AS excerpt_src,
               ( (CASE WHEN title ILIKE $2 THEN 3 ELSE 0 END)
@@ -685,14 +709,14 @@ export class KnowledgeService {
                   ) THEN 1 ELSE 0 END) ) AS score
        FROM knowledge_articles
        WHERE tenant_id=$1
-         ${isManager ? '' : 'AND published = true'}
+         ${articleVisibility}
          AND ( title ILIKE $2 OR body ILIKE $2 OR EXISTS (
                  SELECT 1 FROM jsonb_array_elements(COALESCE(blocks, '[]'::jsonb)) AS b
                  WHERE (b->>'text') ILIKE $2 OR (b->>'caption') ILIKE $2
                ) )
        ORDER BY score DESC, pinned DESC, updated_at DESC
        LIMIT 50`,
-      [tenantID, term],
+      articleParams,
     );
 
     // Categories — by name. Cheap; trigram index on name not present but the set
@@ -746,7 +770,16 @@ export class KnowledgeService {
       `SELECT a.id, a.category_id, a.type, a.title, a.body, a.cover_image, a.attachments,
               a.pinned, a.published, a.created_by, a.created_at, a.updated_at,
               a.version, a.mandatory, a.due_date, a.view_count, a.car_make, a.blocks,
+              a.target_all,
               c.name AS category_name,
+              -- #54: the regulation's audience — the selected user ids (empty
+              -- when target_all) + whether THIS user is one of them.
+              (SELECT COALESCE(array_agg(t.user_id), '{}'::uuid[])
+                 FROM knowledge_regulation_targets t WHERE t.article_id = a.id) AS target_user_ids,
+              EXISTS(
+                SELECT 1 FROM knowledge_regulation_targets t
+                WHERE t.article_id = a.id AND t.user_id = $3
+              ) AS is_targeted,
               -- Acked = an ack row exists AT THE CURRENT version. A bumped
               -- version (new revision) re-requires acknowledgment.
               EXISTS(
@@ -767,6 +800,11 @@ export class KnowledgeService {
     if (rows.length === 0) throw new NotFoundException({ message: 'Статья не найдена' });
     const row = rows[0];
     if (!isManager && !row.published) throw new NotFoundException({ message: 'Статья не найдена' });
+    // #54: a targeted regulation (target_all=false) is invisible to employees
+    // outside its audience — same 404 as an unpublished draft. Managers exempt.
+    if (!isManager && row.type === 'regulation' && row.target_all === false && !row.is_targeted) {
+      throw new NotFoundException({ message: 'Статья не найдена' });
+    }
 
     // Fire-and-forget view counter — never blocks the response, errors ignored.
     this.pool
@@ -785,13 +823,21 @@ export class KnowledgeService {
     const type = dto.type ?? 'article';
     const mandatory = dto.mandatory ?? false;
     const published = dto.published ?? true;
+    // #54: resolve the regulation audience. Explicit targetAll wins; otherwise a
+    // non-empty targetUserIds list implies targetAll=false; default = everyone.
+    let targetAll: boolean;
+    if (dto.targetAll !== undefined) targetAll = dto.targetAll;
+    else if (dto.targetUserIds && dto.targetUserIds.length > 0) targetAll = false;
+    else targetAll = true;
+
     const { rows } = await this.pool.query(
       `INSERT INTO knowledge_articles
          (tenant_id, category_id, type, title, body, cover_image, attachments, pinned, published,
-          created_by, mandatory, due_date, car_make, blocks)
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14::jsonb)
+          created_by, mandatory, due_date, car_make, blocks, target_all)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9, $10, $11, $12, $13, $14::jsonb, $15)
        RETURNING id, category_id, type, title, body, cover_image, attachments, pinned, published,
-                 created_by, created_at, updated_at, version, mandatory, due_date, view_count, car_make, blocks`,
+                 created_by, created_at, updated_at, version, mandatory, due_date, view_count, car_make,
+                 blocks, target_all`,
       [
         tenantID,
         dto.categoryId ?? null,
@@ -807,21 +853,30 @@ export class KnowledgeService {
         dto.dueDate ?? null,
         dto.carMake ?? null,
         blocksJson,
+        targetAll,
       ],
     );
     const row = rows[0];
 
+    // Persist the selected employees when targeting a subset. The SELECT-from-
+    // users guard silently drops any id that is not a real user of this tenant.
+    if (!targetAll && dto.targetUserIds && dto.targetUserIds.length > 0) {
+      await this.replaceRegulationTargets(tenantID, row.id, dto.targetUserIds);
+    }
+    const finalTargets = targetAll ? [] : await this.getRegulationTargets(tenantID, row.id);
+
     // Push «новый обязательный регламент» on assignment when a published
     // mandatory regulation is created. There is NO recurring scheduler for KB
     // reminders — this push-on-assignment + the due-date display are the only
-    // surfacing. Fire-and-forget after the commit.
+    // surfacing. Fire-and-forget after the commit. #54: only the audience.
     if (type === 'regulation' && mandatory && published) {
-      void this.notifyMandatoryRegulation(tenantID, createdBy, row.title, row.due_date);
+      void this.notifyMandatoryRegulation(tenantID, createdBy, row.id, targetAll, row.title, row.due_date);
     }
 
     return mapArticleFull({
       ...row,
       category_name: null,
+      target_user_ids: finalTargets,
       acknowledged: false,
       helpful_count: 0,
       not_helpful_count: 0,
@@ -829,11 +884,43 @@ export class KnowledgeService {
     });
   }
 
+  // ─── Regulation audience (#54) helpers ────────────────────────────────────
+
+  /** Current target user ids of a regulation (empty when target_all). */
+  private async getRegulationTargets(tenantID: string, articleID: string): Promise<string[]> {
+    const { rows } = await this.pool.query(
+      `SELECT user_id FROM knowledge_regulation_targets
+       WHERE tenant_id=$1 AND article_id=$2 ORDER BY user_id`,
+      [tenantID, articleID],
+    );
+    return rows.map((r: { user_id: string }) => r.user_id);
+  }
+
+  /**
+   * Replace the target set of a regulation with `userIds`. Foreign / invalid ids
+   * are dropped by the SELECT-from-users guard (only real tenant users persist).
+   * Pass [] to clear all targets (regulation then concerns nobody).
+   */
+  private async replaceRegulationTargets(tenantID: string, articleID: string, userIds: string[]): Promise<void> {
+    await this.pool.query('DELETE FROM knowledge_regulation_targets WHERE tenant_id=$1 AND article_id=$2', [
+      tenantID,
+      articleID,
+    ]);
+    if (userIds.length > 0) {
+      await this.pool.query(
+        `INSERT INTO knowledge_regulation_targets (tenant_id, article_id, user_id)
+         SELECT $1, $2, u.id FROM users u WHERE u.tenant_id=$1 AND u.id = ANY($3::uuid[])
+         ON CONFLICT (article_id, user_id) DO NOTHING`,
+        [tenantID, articleID, userIds],
+      );
+    }
+  }
+
   async updateArticle(tenantID: string, id: string, dto: UpdateArticleDto) {
     // Need the current row to decide on a version bump and detect a
     // not-mandatory → mandatory transition for the assignment push.
     const { rows: cur } = await this.pool.query(
-      `SELECT type, body, mandatory, published FROM knowledge_articles WHERE id=$1 AND tenant_id=$2`,
+      `SELECT type, body, mandatory, published, target_all FROM knowledge_articles WHERE id=$1 AND tenant_id=$2`,
       [id, tenantID],
     );
     if (cur.length === 0) throw new NotFoundException({ message: 'Статья не найдена' });
@@ -897,6 +984,19 @@ export class KnowledgeService {
       vals.push(dto.carMake ?? null);
     }
 
+    // #54: regulation audience. Touched only when targetAll or targetUserIds is
+    // present in the payload — omitting both leaves the audience unchanged.
+    // Resolution mirrors create: explicit targetAll wins; a non-empty
+    // targetUserIds list implies targetAll=false; otherwise keep the prior flag.
+    const audienceTouched = dto.targetAll !== undefined || dto.targetUserIds !== undefined;
+    let effectiveTargetAll: boolean = before.target_all;
+    if (dto.targetAll !== undefined) effectiveTargetAll = dto.targetAll;
+    else if (dto.targetUserIds && dto.targetUserIds.length > 0) effectiveTargetAll = false;
+    if (audienceTouched) {
+      sets.push(`target_all=$${i++}`);
+      vals.push(effectiveTargetAll);
+    }
+
     // Version bump: an explicit bumpVersion request OR a real body change on a
     // regulation increments version → re-requires acknowledgment of the new
     // revision. Only regulations carry an ack flow, so only they bump.
@@ -914,26 +1014,42 @@ export class KnowledgeService {
       `UPDATE knowledge_articles SET ${sets.join(', ')}
        WHERE id=$${i++} AND tenant_id=$${i}
        RETURNING id, category_id, type, title, body, cover_image, attachments, pinned, published,
-                 created_by, created_at, updated_at, version, mandatory, due_date, view_count, car_make, blocks`,
+                 created_by, created_at, updated_at, version, mandatory, due_date, view_count, car_make,
+                 blocks, target_all`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Статья не найдена' });
     const row = rows[0];
 
+    // #54: reconcile the regulation's target set after the row update.
+    //   * targetAll=true  → drop any explicit targets («для всех»);
+    //   * targetAll=false with an explicit list → replace it (send [] = nobody);
+    //   * targetAll=false without a list → keep the existing targets (flag-only).
+    if (audienceTouched) {
+      if (effectiveTargetAll) {
+        await this.replaceRegulationTargets(tenantID, id, []);
+      } else if (dto.targetUserIds !== undefined) {
+        await this.replaceRegulationTargets(tenantID, id, dto.targetUserIds);
+      }
+    }
+    const finalTargets = row.target_all ? [] : await this.getRegulationTargets(tenantID, id);
+
     // Push on assignment when the article becomes (or stays) a published
     // mandatory regulation AND something material changed for the audience: it
     // just became mandatory, OR it just got published, OR a new version was
     // cut. Avoids re-pushing on a cosmetic edit of an already-known regulation.
+    // #54: the push reaches only the regulation's audience.
     const isMandatoryReg = row.type === 'regulation' && row.mandatory && row.published;
     const becameMandatory = !before.mandatory && row.mandatory;
     const becamePublished = !before.published && row.published;
     if (isMandatoryReg && (becameMandatory || becamePublished || shouldBump)) {
-      void this.notifyMandatoryRegulation(tenantID, null, row.title, row.due_date);
+      void this.notifyMandatoryRegulation(tenantID, null, id, row.target_all, row.title, row.due_date);
     }
 
     return mapArticleFull({
       ...row,
       category_name: null,
+      target_user_ids: finalTargets,
       acknowledged: false,
       helpful_count: 0,
       not_helpful_count: 0,
@@ -950,15 +1066,22 @@ export class KnowledgeService {
   private async notifyMandatoryRegulation(
     tenantID: string,
     excludeUserId: string | null,
+    articleID: string,
+    targetAll: boolean,
     title: string,
     dueDate: Date | string | null,
   ): Promise<void> {
     try {
+      // #54: recipients = the regulation's audience. targetAll → all active
+      // non-superadmin users; otherwise only the selected target users.
       const { rows } = await this.pool.query(
-        `SELECT id FROM users
-          WHERE tenant_id=$1 AND is_active = true AND role <> 'superadmin'
-            AND ($2::uuid IS NULL OR id <> $2)`,
-        [tenantID, excludeUserId],
+        `SELECT u.id FROM users u
+          WHERE u.tenant_id=$1 AND u.is_active = true AND u.role <> 'superadmin'
+            AND ($2::uuid IS NULL OR u.id <> $2)
+            AND ($4 = true OR EXISTS (
+                   SELECT 1 FROM knowledge_regulation_targets t
+                   WHERE t.article_id = $3 AND t.user_id = u.id))`,
+        [tenantID, excludeUserId, articleID, targetAll],
       );
       const due = dueDate ? ` (до ${formatDueDate(dueDate)})` : '';
       const body = `Ознакомьтесь: «${title}»${due}`;
@@ -1056,36 +1179,47 @@ export class KnowledgeService {
    */
   async listAcks(tenantID: string, articleID: string) {
     const { rows: art } = await this.pool.query(
-      'SELECT version FROM knowledge_articles WHERE id=$1 AND tenant_id=$2 LIMIT 1',
+      'SELECT version, target_all FROM knowledge_articles WHERE id=$1 AND tenant_id=$2 LIMIT 1',
       [articleID, tenantID],
     );
     if (art.length === 0) throw new NotFoundException({ message: 'Статья не найдена' });
     const version: number = art[0].version ?? 1;
+    // #54: the audience is the whole staff when target_all, else only the
+    // selected targets. Both lists below are scoped to it, so "8/10 ознакомлены"
+    // counts only employees the regulation actually concerns.
+    const targetAll: boolean = art[0].target_all !== false;
 
     // Acked at the CURRENT version only — a stale ack (older version) does not
-    // count, so a re-published revision shows the user as pending again.
+    // count, so a re-published revision shows the user as pending again. Scoped
+    // to active, non-superadmin members of the audience.
     const { rows: acked } = await this.pool.query(
       `SELECT k.user_id, u.full_name, k.acknowledged_at
        FROM knowledge_acknowledgments k
        JOIN users u ON u.id = k.user_id
        WHERE k.tenant_id=$1 AND k.article_id=$2 AND k.version=$3
+         AND u.is_active = true AND u.role <> 'superadmin'
+         AND ($4 = true OR EXISTS (
+               SELECT 1 FROM knowledge_regulation_targets t
+               WHERE t.article_id=$2 AND t.user_id = u.id))
        ORDER BY k.acknowledged_at DESC`,
-      [tenantID, articleID, version],
+      [tenantID, articleID, version, targetAll],
     );
 
-    // Active tenant users who have NOT acked the current version. We only count
-    // "real" employees (active, non-superadmin) — same audience that must read
-    // regulations.
+    // Audience members who have NOT acked the current version. We only count
+    // "real" employees (active, non-superadmin) that the regulation concerns.
     const { rows: pending } = await this.pool.query(
       `SELECT u.id AS user_id, u.full_name
        FROM users u
        WHERE u.tenant_id=$1 AND u.is_active = true AND u.role <> 'superadmin'
+         AND ($4 = true OR EXISTS (
+               SELECT 1 FROM knowledge_regulation_targets t
+               WHERE t.article_id=$2 AND t.user_id = u.id))
          AND NOT EXISTS (
            SELECT 1 FROM knowledge_acknowledgments k
            WHERE k.article_id=$2 AND k.user_id = u.id AND k.version=$3
          )
        ORDER BY u.full_name`,
-      [tenantID, articleID, version],
+      [tenantID, articleID, version, targetAll],
     );
 
     const acknowledged = acked.map((r) => ({
@@ -1116,6 +1250,10 @@ export class KnowledgeService {
       `SELECT COUNT(*)::int AS count
        FROM knowledge_articles a
        WHERE a.tenant_id=$1 AND a.type='regulation' AND a.published = true
+         -- #54: only regulations whose audience includes this user.
+         AND (a.target_all = true OR EXISTS (
+               SELECT 1 FROM knowledge_regulation_targets t
+               WHERE t.article_id = a.id AND t.user_id = $2))
          AND NOT EXISTS (
            SELECT 1 FROM knowledge_acknowledgments k
            WHERE k.article_id = a.id AND k.user_id = $2 AND k.version = a.version
@@ -1147,7 +1285,11 @@ export class KnowledgeService {
            )
          )::int AS acknowledged
        FROM knowledge_articles a
-       WHERE a.tenant_id=$1 AND a.type='regulation' AND a.published = true`,
+       WHERE a.tenant_id=$1 AND a.type='regulation' AND a.published = true
+         -- #54: only regulations whose audience includes this employee.
+         AND (a.target_all = true OR EXISTS (
+               SELECT 1 FROM knowledge_regulation_targets t
+               WHERE t.article_id = a.id AND t.user_id = $2))`,
       [tenantID, userID],
     );
     return { total: rows[0]?.total ?? 0, acknowledged: rows[0]?.acknowledged ?? 0 };
@@ -1671,24 +1813,35 @@ export class KnowledgeService {
    * `model` is accepted for forward-compat but not yet filtered on (we key on
    * make only — keeps it simple, as specified).
    */
-  async forCar(tenantID: string, role: string, query: ForCarQueryDto) {
+  async forCar(tenantID: string, role: string, userID: string, query: ForCarQueryDto) {
     await this.ensureSeed(tenantID);
     const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
     const make = query.make?.trim() || null;
 
     // Articles: general (car_make null) + make-specific. When no make is given,
-    // we only return general articles (car_make null).
+    // we only return general articles (car_make null). Non-managers see only
+    // published articles and only regulations in their audience (#54). userID
+    // ($3) is bound on that branch only, matching the referenced placeholders.
+    const articleParams: any[] = [tenantID, make];
+    let regVisibility = '';
+    if (!isManager) {
+      articleParams.push(userID);
+      regVisibility = `AND published = true
+         AND (type <> 'regulation' OR target_all = true OR EXISTS (
+                SELECT 1 FROM knowledge_regulation_targets t
+                WHERE t.article_id = knowledge_articles.id AND t.user_id = $3))`;
+    }
     const { rows: articles } = await this.pool.query(
-      `SELECT id, title, type, category_id, pinned, cover_image, updated_at,
+      `SELECT id, title, type, category_id, pinned, published, target_all, cover_image, updated_at,
               mandatory, due_date, car_make, view_count,
               left(body, 200) AS excerpt_src
        FROM knowledge_articles
        WHERE tenant_id=$1
-         ${isManager ? '' : 'AND published = true'}
+         ${regVisibility}
          AND (car_make IS NULL OR ($2::text IS NOT NULL AND lower(car_make) = lower($2)))
        ORDER BY pinned DESC, updated_at DESC
        LIMIT 100`,
-      [tenantID, make],
+      articleParams,
     );
 
     let troubleshooting: any[] = [];
@@ -1718,20 +1871,31 @@ export class KnowledgeService {
    * over listArticles. No check-flow data model is touched; the mobile agent
    * just surfaces these. Returns [] if no such category exists.
    */
-  async listChecklists(tenantID: string, role: string) {
+  async listChecklists(tenantID: string, role: string, userID: string) {
     await this.ensureSeed(tenantID);
     const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+    // Non-managers see only published checklists and only regulations in their
+    // audience (#54). userID ($2) is bound on that branch only.
+    const params: any[] = [tenantID];
+    let regVisibility = '';
+    if (!isManager) {
+      params.push(userID);
+      regVisibility = `AND a.published = true
+         AND (a.type <> 'regulation' OR a.target_all = true OR EXISTS (
+                SELECT 1 FROM knowledge_regulation_targets t
+                WHERE t.article_id = a.id AND t.user_id = $2))`;
+    }
     const { rows } = await this.pool.query(
-      `SELECT a.id, a.title, a.type, a.category_id, a.pinned, a.cover_image, a.updated_at,
+      `SELECT a.id, a.title, a.type, a.category_id, a.pinned, a.published, a.target_all, a.cover_image, a.updated_at,
               a.mandatory, a.due_date, a.car_make, a.view_count,
               left(a.body, 200) AS excerpt_src
        FROM knowledge_articles a
        JOIN knowledge_categories c ON c.id = a.category_id
        WHERE a.tenant_id=$1 AND lower(c.name) = 'чек-листы'
-         ${isManager ? '' : 'AND a.published = true'}
+         ${regVisibility}
        ORDER BY a.pinned DESC, a.updated_at DESC
        LIMIT 200`,
-      [tenantID],
+      params,
     );
     return rows.map(mapArticleSlim);
   }
@@ -1757,6 +1921,9 @@ function mapArticleSlim(r: any) {
     type: r.type,
     categoryId: r.category_id ?? undefined,
     pinned: !!r.pinned,
+    // #54: hide via `published`. published=false ⇒ hidden from employees, still
+    // listed for managers — surfaced here so the manager list can badge/toggle.
+    published: !!r.published,
     coverImage: r.cover_image ?? undefined,
     updatedAt: r.updated_at,
     excerpt: bodyToExcerpt(r.excerpt_src),
@@ -1764,6 +1931,10 @@ function mapArticleSlim(r: any) {
     dueDate: r.due_date ?? undefined,
     carMake: r.car_make ?? undefined,
     viewCount: r.view_count ?? 0,
+    // #54: regulation audience flag (true = all employees). Only meaningful for
+    // regulations; the full target user list is returned by getArticle. Defaults
+    // to true when the column is absent — only an explicit false marks targeted.
+    targetAll: r.type === 'regulation' ? r.target_all !== false : undefined,
     // 079: present only when the SELECT pulled the `blocks` column; undefined
     // (omitted) otherwise. Empty/null blocks → undefined (fall back to body).
     blocks: parseBlocks(r.blocks),
@@ -1794,6 +1965,11 @@ function mapArticleFull(r: any) {
     dueDate: r.due_date ?? undefined,
     viewCount: r.view_count ?? 0,
     carMake: r.car_make ?? undefined,
+    // #54: regulation audience. targetAll=true ⇒ all employees; when false,
+    // targetUserIds is the selected subset that must acknowledge. Regulations
+    // only; undefined for plain articles.
+    targetAll: r.type === 'regulation' ? r.target_all !== false : undefined,
+    targetUserIds: r.type === 'regulation' ? (Array.isArray(r.target_user_ids) ? r.target_user_ids : []) : undefined,
     helpfulCount: r.helpful_count ?? 0,
     notHelpfulCount: r.not_helpful_count ?? 0,
     myFeedback: r.my_feedback === null || r.my_feedback === undefined ? undefined : !!r.my_feedback,

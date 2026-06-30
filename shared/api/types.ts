@@ -589,6 +589,12 @@ export interface KnowledgeArticleInput {
   coverImage?: string | null;
   attachments?: KnowledgeAttachment[];
   pinned?: boolean;
+  /**
+   * Visibility. `published: false` HIDES the article from regular employees
+   * (#54 «Скрыть») — it disappears from their lists/search/detail — while
+   * managers still see it and can un-hide by sending `published: true`. There is
+   * no separate `hidden` flag; this single flag is the hide switch.
+   */
   published?: boolean;
   // ─── Регламенты+ (064) ────────────────────────────────────────────────────
   /** Regulation must be acknowledged by the audience. */
@@ -602,6 +608,20 @@ export interface KnowledgeArticleInput {
    * change auto-bumps a regulation even without this flag.
    */
   bumpVersion?: boolean;
+  // ─── Regulation targeting / audience (#54) ────────────────────────────────
+  /**
+   * Audience of a regulation. `true` (default) = «для всех сотрудников»; `false`
+   * = only the employees in `targetUserIds` see it and must acknowledge. Omit to
+   * keep the current audience (on update). Only meaningful for type='regulation'.
+   * A non-empty `targetUserIds` without `targetAll` implies `targetAll: false`.
+   */
+  targetAll?: boolean;
+  /**
+   * Selected employees when `targetAll` is false. On update, this REPLACES the
+   * target set (send `[]` to target nobody); omit to leave it unchanged. Ids
+   * that are not real tenant users are silently dropped server-side.
+   */
+  targetUserIds?: string[];
 }
 
 export interface ListArticlesParams {

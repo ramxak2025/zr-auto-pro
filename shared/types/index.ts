@@ -2326,6 +2326,12 @@ export interface KnowledgeArticle {
   /** Empty array on the slim list; populated on getArticle. */
   attachments: KnowledgeAttachment[];
   pinned: boolean;
+  /**
+   * Visibility / «Скрыть» (#54). `false` = hidden: regular employees do not see
+   * the article in lists, search or detail; manager roles still see it and can
+   * un-hide by patching `published: true`. Present on BOTH the slim list and the
+   * full detail. (Reuses the existing flag — there is no separate `hidden`.)
+   */
   published: boolean;
   createdBy?: string;
   createdAt: string;
@@ -2344,6 +2350,22 @@ export interface KnowledgeArticle {
   viewCount?: number;
   /** Optional car-make tag for contextual KB (e.g. 'Lada'). null/absent = all makes. */
   carMake?: string;
+
+  // ─── Regulation targeting / audience (#54) ────────────────────────────────
+  /**
+   * Audience of a regulation. `true` = «для всех сотрудников» (default); `false`
+   * = only `targetUserIds` see it and must acknowledge — non-targeted employees
+   * neither see it nor count toward its pending acks. Present on the slim list
+   * AND detail for regulations; absent (undefined) for plain articles.
+   */
+  targetAll?: boolean;
+  /**
+   * The selected employee ids when `targetAll` is false (empty when targetAll).
+   * Returned by getArticle (detail) so the manager edit screen can pre-fill the
+   * audience; omitted from the slim list.
+   */
+  targetUserIds?: string[];
+
   /** helpful-vote count (getArticle). */
   helpfulCount?: number;
   /** not-helpful-vote count (getArticle). */

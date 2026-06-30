@@ -175,12 +175,12 @@ export class KnowledgeController {
 
   @Get('for-car')
   forCar(@CurrentUser() user: JwtPayload, @Query() query: ForCarQueryDto) {
-    return this.knowledge.forCar(user.tenantID, user.role, query);
+    return this.knowledge.forCar(user.tenantID, user.role, user.userID, query);
   }
 
   @Get('checklists')
   listChecklists(@CurrentUser() user: JwtPayload) {
-    return this.knowledge.listChecklists(user.tenantID, user.role);
+    return this.knowledge.listChecklists(user.tenantID, user.role, user.userID);
   }
 
   // ─── Regulation counters (declared before /articles/:id so the static
@@ -201,7 +201,7 @@ export class KnowledgeController {
 
   @Get('articles')
   listArticles(@CurrentUser() user: JwtPayload, @Query() query: ListArticlesQueryDto) {
-    return this.knowledge.listArticles(user.tenantID, user.role, query);
+    return this.knowledge.listArticles(user.tenantID, user.role, user.userID, query);
   }
 
   @Roles('director', 'admin', 'superadmin')

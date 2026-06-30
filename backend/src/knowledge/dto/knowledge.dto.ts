@@ -152,6 +152,24 @@ export class CreateArticleDto {
   @IsString()
   @MaxLength(80)
   carMake?: string | null;
+
+  // ─── Regulation targeting / audience (#54) ────────────────────────────────
+  /**
+   * Audience of a regulation. true (default) = «для всех сотрудников»; false =
+   * only the users in `targetUserIds` must see/acknowledge it. Only meaningful
+   * for type='regulation'. Omit ⇒ targetAll (everyone) unless targetUserIds is a
+   * non-empty list, which implies targetAll=false.
+   */
+  @IsOptional()
+  @IsBoolean()
+  targetAll?: boolean;
+
+  /** Selected employees when targetAll=false. Each id is a tenant user. */
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(500)
+  targetUserIds?: string[];
 }
 
 export class UpdateArticleDto {
@@ -224,6 +242,27 @@ export class UpdateArticleDto {
   @IsOptional()
   @IsBoolean()
   bumpVersion?: boolean;
+
+  // ─── Regulation targeting / audience (#54) ────────────────────────────────
+  /**
+   * Audience of a regulation. true = «для всех сотрудников»; false = only the
+   * users in `targetUserIds`. Omit both fields to leave the audience unchanged.
+   * Sending targetAll=true clears the target list. Only meaningful for
+   * type='regulation'.
+   */
+  @IsOptional()
+  @IsBoolean()
+  targetAll?: boolean;
+
+  /**
+   * Replacement set of targeted employees (only applied when targetAll resolves
+   * to false). Send [] to target nobody. Omit to keep the existing targets.
+   */
+  @IsOptional()
+  @IsArray()
+  @IsUUID('all', { each: true })
+  @ArrayMaxSize(500)
+  targetUserIds?: string[];
 }
 
 // ─── Query params for the list endpoint ──────────────────────────────────────
