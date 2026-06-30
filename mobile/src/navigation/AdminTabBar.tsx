@@ -49,7 +49,12 @@ export const ADMIN_TAB_DEFINITIONS: AdminTabDef[] = [
   { routeName: 'AdminTenants', label: 'Тенанты', icon: 'business-outline', iconActive: 'business' },
   { routeName: 'AdminPlans', label: 'Тарифы', icon: 'pricetags-outline', iconActive: 'pricetags' },
   { routeName: 'AdminBroadcast', label: 'Рассылка', icon: 'megaphone-outline', iconActive: 'megaphone' },
-  { routeName: 'AdminMore', label: 'Ещё', icon: 'ellipsis-horizontal-circle-outline', iconActive: 'ellipsis-horizontal-circle' },
+  {
+    routeName: 'AdminMore',
+    label: 'Ещё',
+    icon: 'ellipsis-horizontal-circle-outline',
+    iconActive: 'ellipsis-horizontal-circle',
+  },
 ];
 
 const CORNER_RADIUS = ADMIN_BAR_HEIGHT / 2;
@@ -158,11 +163,7 @@ export default function AdminTabBar({ state, navigation }: BottomTabBarProps) {
         {/* Top hairline rim — subtle premium touch on iOS, theme-aware on Android. */}
         <View style={[styles.topRim, { backgroundColor: topRimColor }]} pointerEvents="none" />
 
-        <View
-          style={styles.row}
-          onLayout={(e) => setRowWidth(e.nativeEvent.layout.width)}
-          pointerEvents="box-none"
-        >
+        <View style={styles.row} onLayout={(e) => setRowWidth(e.nativeEvent.layout.width)} pointerEvents="box-none">
           {/* Sliding active pill — sits BEHIND the icons. */}
           {slotWidth > 0 && (
             <Animated.View
@@ -208,12 +209,15 @@ interface AdminTabItemProps {
 }
 
 function AdminTabItem({ tab, focused, palette, reduceMotion, onPress }: AdminTabItemProps) {
-  const scale = useSharedValue(focused ? 1.06 : 1);
+  // Active tab pops a touch more (1.08) so the focused icon reads as clearly
+  // emphasised — the focused glyph (e.g. the filled `pricetags` price-tag) sits
+  // on the soft pill in `primaryText`, never a flat low-contrast blob.
+  const scale = useSharedValue(focused ? 1.08 : 1);
   React.useEffect(() => {
     if (reduceMotion) {
-      scale.value = focused ? 1.06 : 1;
+      scale.value = focused ? 1.08 : 1;
     } else {
-      scale.value = withSpring(focused ? 1.06 : 1, SPRING_TIGHT);
+      scale.value = withSpring(focused ? 1.08 : 1, SPRING_TIGHT);
     }
   }, [focused, reduceMotion, scale]);
   const iconStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
@@ -235,7 +239,7 @@ function AdminTabItem({ tab, focused, palette, reduceMotion, onPress }: AdminTab
       <Text
         variant="caption"
         numberOfLines={1}
-        style={{ marginTop: 2, color: tint, fontWeight: focused ? '600' : '500', fontSize: 10 }}
+        style={{ marginTop: 2, color: tint, fontWeight: focused ? '700' : '500', fontSize: 10 }}
       >
         {tab.label}
       </Text>

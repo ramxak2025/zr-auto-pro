@@ -2,7 +2,9 @@ import React, { useEffect } from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { StackActions, CommonActions, useNavigation } from '@react-navigation/native';
+import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
+import { subscriptionApi } from '../api/services';
 import PlatformTabBar from './TabBar';
 
 // Screens
@@ -56,6 +58,7 @@ import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import SubscriptionScreen from '../screens/SubscriptionScreen';
+import SubscriptionBlockedScreen from '../screens/SubscriptionBlockedScreen';
 import CallsScreen from '../screens/CallsScreen';
 import EquipmentScreen, { EquipmentEmployeeScreen } from '../screens/EquipmentScreen';
 import EmployeesScreen from '../screens/EmployeesScreen';
@@ -78,7 +81,7 @@ import ImpersonationBanner from '../components/ImpersonationBanner';
 import { View, AppState } from 'react-native';
 import { SafeAreaInsetsContext } from 'react-native-safe-area-context';
 import { consumePendingAppIntent, type PendingAppIntent } from '../utils/appIntents';
-import type { Product, PurchaseOrder } from '../../../shared/types';
+import type { Product, PurchaseOrder, SubscriptionInfo } from '../../../shared/types';
 
 // Feature descriptions for lock screens
 const FEATURE_GATES: Record<string, { title: string; description: string; benefits: string[] }> = {
@@ -664,6 +667,42 @@ function SiriIntentRouter() {
 }
 
 /**
+ * SubscriptionGate — the HARD subscription block (102). Wraps the entire
+ * car-service tree: when the tenant's authoritative `status` is 'expired' or
+ * 'suspended', EVERY employee (director / admin / master) gets the full-screen
+ * <SubscriptionBlockedScreen /> instead of the app — no tabs, no access — until
+ * the status flips back to 'active'.
+ *
+ * Reads the single shared ['subscription'] slot (prefetched after login, also
+ * read by FeatureGate + the Subscription screen), so no extra fetch on the
+ * happy path.
+ *
+ * FAIL-OPEN, like FeatureGate: only a POSITIVE expired/suspended from the
+ * server blocks. Loading, an error with no cache, or a legacy payload missing
+ * `status` all fall through to the app — a network blip must never lock a
+ * paying tenant out of their data.
+ *
+ * A real superadmin never reaches this branch (they get AdminShell); during
+ * impersonation the role is 'director', so an operator inspecting a blocked
+ * tenant sees the real block — and can still leave via the ImpersonationBanner
+ * mounted above this subtree.
+ */
+function SubscriptionGate({ children }: { children: React.ReactNode }) {
+  const { user } = useAuth();
+  const { data: sub } = useQuery<SubscriptionInfo>({
+    queryKey: ['subscription'],
+    queryFn: async () => (await subscriptionApi.get()).data,
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (user?.role === 'superadmin') return <>{children}</>;
+  if (!sub || (sub.status !== 'expired' && sub.status !== 'suspended')) {
+    return <>{children}</>;
+  }
+  return <SubscriptionBlockedScreen />;
+}
+
+/**
  * MainShell — the authenticated root. Branches the navigator by role:
  *
  *   • A real superadmin (role 'superadmin', NOT impersonating) gets the
@@ -682,7 +721,16 @@ function MainShell() {
   const { user, isImpersonating } = useAuth();
   const isPlatformOperator = user?.role === 'superadmin' && !isImpersonating;
 
-  const navigator = isPlatformOperator ? <AdminShellNavigator /> : <TabNavigator />;
+  // Non-operators (directors / masters / an impersonating superadmin) get the
+  // car-service tree behind the SubscriptionGate — a hard block when the tenant
+  // is expired/suspended. The real platform-operator AdminShell is never gated.
+  const navigator = isPlatformOperator ? (
+    <AdminShellNavigator />
+  ) : (
+    <SubscriptionGate>
+      <TabNavigator />
+    </SubscriptionGate>
+  );
   // Siri / App Intents deep-link router — car-service tree only (the
   // platform-operator AdminShell has no Касса). Renders null, so it adds no
   // layout or inset wrapping.

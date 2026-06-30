@@ -35,8 +35,8 @@ import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius, softTint } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { ALL_FEATURES } from '../../../../shared/constants/features';
-import type { Plan, Tenant } from '../../../../shared/types';
-import { formatMoney } from './adminShared';
+import type { Plan, Tenant, FeatureCatalogItem, FeatureGroup } from '../../../../shared/types';
+import { formatMoney, FEATURE_GROUP_LABELS, FEATURE_GROUP_ORDER } from './adminShared';
 
 interface PlanDraft {
   id?: string;
@@ -79,6 +79,28 @@ export default function AdminPlansScreen() {
     queryFn: async () => (await tenantsApi.getAll()).data,
   });
 
+  // Toggleable feature catalog (server-authoritative, superadmin). Falls back to
+  // the shared registry until the request resolves so the editor is never empty
+  // and a key the server adds later appears without a client rebuild.
+  const { data: catalog } = useQuery<FeatureCatalogItem[]>({
+    queryKey: ['admin-feature-catalog'],
+    queryFn: async () => (await plansApi.getFeatureCatalog()).data,
+    staleTime: 30 * 60 * 1000,
+  });
+
+  // Catalog grouped by `group`, in the canonical core → section → integration
+  // order, each group keeping its registry order. Memoised off whichever source
+  // (server catalog or shared fallback) is live.
+  const groupedFeatures = React.useMemo(() => {
+    const source: FeatureCatalogItem[] =
+      catalog && catalog.length > 0 ? catalog : (ALL_FEATURES as readonly FeatureCatalogItem[]).map((f) => f);
+    return FEATURE_GROUP_ORDER.map((group) => ({
+      group,
+      label: FEATURE_GROUP_LABELS[group],
+      items: source.filter((f) => f.group === group),
+    })).filter((g) => g.items.length > 0);
+  }, [catalog]);
+
   const sorted = React.useMemo(() => [...plans].sort((a, b) => a.sortOrder - b.sortOrder), [plans]);
 
   const invalidate = React.useCallback(() => {
@@ -88,17 +110,20 @@ export default function AdminPlansScreen() {
   const saveMutation = useMutation({
     mutationFn: async (draft: PlanDraft) => {
       setSaving(true);
-      const payload = {
+      const scalars = {
         name: draft.name.trim(),
         monthlyPrice: parseInt(draft.monthlyPrice, 10) || 0,
         maxUsers: parseInt(draft.maxUsers, 10) || 1,
         sortOrder: parseInt(draft.sortOrder, 10) || 0,
-        features: draft.features,
       };
       if (draft.id) {
-        await plansApi.update(draft.id, { ...payload, isActive: draft.isActive });
+        // Scalars via PATCH; the enabled feature set via the dedicated
+        // PUT /plans/:id/features endpoint (validated against the catalog).
+        await plansApi.update(draft.id, { ...scalars, isActive: draft.isActive });
+        await plansApi.setFeatures(draft.id, draft.features);
       } else {
-        await plansApi.create(payload);
+        // New plan — no id yet for setFeatures, so create carries the features.
+        await plansApi.create({ ...scalars, features: draft.features });
       }
     },
     onSuccess: () => {
@@ -327,35 +352,71 @@ export default function AdminPlansScreen() {
                 </View>
 
                 <Text style={[styles.featuresLabel, { color: palette.text.tertiary }]}>Функции тарифа</Text>
-                <View style={[styles.featuresCard, surface.card]}>
-                  {ALL_FEATURES.map((feat, i) => {
-                    const on = editing.features.includes(feat.key);
-                    return (
-                      <View
-                        key={feat.key}
-                        style={[
-                          styles.featRow,
-                          i > 0 && { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: palette.border.subtle },
-                        ]}
-                      >
-                        <Text style={[styles.featLabel, { color: palette.text.primary }]}>{feat.label}</Text>
-                        <Switch
-                          value={on}
-                          trackColor={{ true: palette.accent.primary }}
-                          onValueChange={(v) => {
+                {groupedFeatures.map((grp) => {
+                  const keys = grp.items.map((f) => f.key);
+                  const enabledCount = keys.filter((k) => editing.features.includes(k)).length;
+                  const allOn = enabledCount === keys.length;
+                  return (
+                    <View key={grp.group} style={styles.featGroup}>
+                      <View style={styles.featGroupHead}>
+                        <Text style={[styles.featGroupLabel, { color: palette.text.secondary }]}>
+                          {grp.label}{' '}
+                          <Text style={{ color: palette.text.tertiary }}>
+                            {enabledCount}/{keys.length}
+                          </Text>
+                        </Text>
+                        <Pressable
+                          onPress={() => {
                             haptic('select');
                             setEditing({
                               ...editing,
-                              features: v
-                                ? [...editing.features, feat.key]
-                                : editing.features.filter((k) => k !== feat.key),
+                              features: allOn
+                                ? editing.features.filter((k) => !keys.includes(k))
+                                : Array.from(new Set([...editing.features, ...keys])),
                             });
                           }}
-                        />
+                          hitSlop={6}
+                        >
+                          <Text style={[styles.featGroupAction, { color: palette.accent.primary }]}>
+                            {allOn ? 'Снять все' : 'Выбрать все'}
+                          </Text>
+                        </Pressable>
                       </View>
-                    );
-                  })}
-                </View>
+                      <View style={[styles.featuresCard, surface.card]}>
+                        {grp.items.map((feat, i) => {
+                          const on = editing.features.includes(feat.key);
+                          return (
+                            <View
+                              key={feat.key}
+                              style={[
+                                styles.featRow,
+                                i > 0 && {
+                                  borderTopWidth: StyleSheet.hairlineWidth,
+                                  borderTopColor: palette.border.subtle,
+                                },
+                              ]}
+                            >
+                              <Text style={[styles.featLabel, { color: palette.text.primary }]}>{feat.label}</Text>
+                              <Switch
+                                value={on}
+                                trackColor={{ true: palette.accent.primary }}
+                                onValueChange={(v) => {
+                                  haptic('select');
+                                  setEditing({
+                                    ...editing,
+                                    features: v
+                                      ? [...editing.features, feat.key]
+                                      : editing.features.filter((k) => k !== feat.key),
+                                  });
+                                }}
+                              />
+                            </View>
+                          );
+                        })}
+                      </View>
+                    </View>
+                  );
+                })}
 
                 {editing.id ? (
                   <Pressable
@@ -465,9 +526,20 @@ const styles = StyleSheet.create({
     marginTop: spacing[2],
     marginLeft: spacing[1],
   },
+  featGroup: { marginTop: spacing[3] },
+  featGroupHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing[1.5],
+    marginLeft: spacing[1],
+    paddingRight: spacing[1],
+  },
+  featGroupLabel: { fontSize: 13, fontWeight: '700' },
+  featGroupAction: { fontSize: 13, fontWeight: '600' },
   featuresCard: { paddingHorizontal: spacing[4] },
   featRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: spacing[3] },
-  featLabel: { fontSize: 15, fontWeight: '500', flex: 1 },
+  featLabel: { fontSize: 15, fontWeight: '500', flex: 1, paddingRight: spacing[3] },
   archiveBtn: {
     flexDirection: 'row',
     alignItems: 'center',

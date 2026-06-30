@@ -31,7 +31,6 @@ import {
   Dimensions,
 } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
-import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import CachedImage from './CachedImage';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
@@ -138,14 +137,12 @@ export default function BroadcastModal({ broadcast, onDismiss }: BroadcastModalP
                 accessibilityIgnoresInvertColors
               />
             ) : (
-              <LinearGradient
-                colors={[palette.accent.primary, colors.primary[700]] as [string, string]}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.iconRing}
-              >
-                <Ionicons name="megaphone" size={40} color={colors.white} />
-              </LinearGradient>
+              // Calm, native emblem — a soft-tinted circle with the accent
+              // glyph (no glowing gradient «marketing» blob). Reads like an
+              // iOS app icon badge, not a banner ad.
+              <View style={[styles.iconRing, { backgroundColor: palette.accent.primarySoft }]}>
+                <Ionicons name="megaphone" size={30} color={palette.accent.primaryText} />
+              </View>
             )}
 
             {/* Only title + body scroll. A long promo text scrolls INSIDE the
@@ -158,6 +155,8 @@ export default function BroadcastModal({ broadcast, onDismiss }: BroadcastModalP
               showsVerticalScrollIndicator={false}
               contentContainerStyle={styles.cardScrollContent}
             >
+              {/* Brand eyebrow — names the sender like a system notification. */}
+              <Text style={[styles.eyebrow, { color: palette.text.tertiary }]}>AUTEXA</Text>
               <Text style={[styles.title, { color: palette.text.primary }]}>{broadcast.title}</Text>
               {broadcast.body ? (
                 <Text style={[styles.body, { color: palette.text.secondary }]}>{broadcast.body}</Text>
@@ -212,14 +211,10 @@ const CTAButton = React.memo(function CTAButton({ label, primary, onPress, palet
         style={styles.ctaPressable}
       >
         {primary ? (
-          <LinearGradient
-            colors={[palette.accent.primary, colors.primary[700]] as [string, string]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 0 }}
-            style={styles.ctaGradient}
-          >
+          // Solid accent fill — the native iOS «default» action, not a gradient.
+          <View style={[styles.ctaFilled, { backgroundColor: palette.accent.primary }]}>
             <Text style={styles.ctaTextPrimary}>{label}</Text>
-          </LinearGradient>
+          </View>
         ) : (
           <View style={[styles.ctaOutline, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}>
             <Text style={[styles.ctaTextSecondary, { color: palette.text.primary }]}>{label}</Text>
@@ -276,19 +271,21 @@ const styles = StyleSheet.create({
     backgroundColor: colors.gray[100],
   },
   iconRing: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
+    width: 64,
+    height: 64,
+    borderRadius: 32,
     alignItems: 'center',
     justifyContent: 'center',
     alignSelf: 'center',
     marginTop: spacing[6],
-    marginBottom: -spacing[2],
-    shadowColor: colors.primary[600],
-    shadowOpacity: 0.4,
-    shadowRadius: 22,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 10,
+    marginBottom: -spacing[1],
+  },
+  eyebrow: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 2,
+    textAlign: 'center',
+    marginBottom: spacing[2],
   },
   title: {
     fontSize: fontSize['2xl'],
@@ -313,7 +310,7 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius['2xl'],
     overflow: 'hidden',
   },
-  ctaGradient: {
+  ctaFilled: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',

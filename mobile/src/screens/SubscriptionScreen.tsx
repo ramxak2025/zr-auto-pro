@@ -11,23 +11,26 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { SubscriptionInfo, Plan } from '../../../shared/types';
+import { ALL_FEATURES } from '../../../shared/constants/features';
+import type { SubscriptionInfo, Plan, FeatureGroup } from '../../../shared/types';
 
 const WHATSAPP_PHONE = '79884444436';
 
-const ALL_FEATURES: { key: string; label: string }[] = [
-  { key: 'checks_view', label: 'Заказ-наряды' },
-  { key: 'clients_view', label: 'Клиенты и авто' },
-  { key: 'warehouse_view', label: 'Склад' },
-  { key: 'services_view', label: 'Услуги' },
-  { key: 'suppliers_view', label: 'Поставщики' },
-  { key: 'cashflow_view', label: 'Движение денег' },
-  { key: 'salary_view', label: 'Зарплата' },
-  { key: 'schedule_view', label: 'Расписание' },
-  { key: 'reports_view', label: 'Отчёты' },
-  { key: 'users_manage', label: 'Управление пользователями' },
-  { key: 'export_data', label: 'Экспорт данных' },
-];
+// Single source of truth: the shared feature registry (23 keys), grouped for a
+// readable plan comparison. Replaces the hand-copied 11-key list that had
+// drifted out of sync with shared/constants/features.ts.
+const FEATURE_GROUP_LABELS: Record<FeatureGroup, string> = {
+  core: 'Основные',
+  section: 'Разделы',
+  integration: 'Интеграции',
+};
+const FEATURE_GROUPS = (['core', 'section', 'integration'] as FeatureGroup[])
+  .map((group) => ({
+    group,
+    label: FEATURE_GROUP_LABELS[group],
+    items: ALL_FEATURES.filter((f) => f.group === group),
+  }))
+  .filter((g) => g.items.length > 0);
 
 function formatDate(d: string) {
   return new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -233,29 +236,36 @@ export default function SubscriptionScreen() {
                         <Text style={styles.maxUsersText}>До {plan.maxUsers} сотрудников</Text>
                       </View>
 
-                      {/* Features list */}
+                      {/* Features list — grouped (core / section / integration). */}
                       <View style={styles.featuresList}>
-                        {ALL_FEATURES.map((feat) => {
-                          const included = features.includes(feat.key);
-                          return (
-                            <View key={feat.key} style={styles.featureRow}>
-                              <Ionicons
-                                name={included ? 'checkmark' : 'close'}
-                                size={18}
-                                color={included ? colors.green[500] : palette.text.tertiary}
-                              />
-                              <Text
-                                style={[
-                                  styles.featureText,
-                                  { color: palette.text.primary },
-                                  !included && { color: palette.text.tertiary, textDecorationLine: 'line-through' },
-                                ]}
-                              >
-                                {feat.label}
-                              </Text>
-                            </View>
-                          );
-                        })}
+                        {FEATURE_GROUPS.map((grp) => (
+                          <View key={grp.group} style={styles.featureGroup}>
+                            <Text style={[styles.featureGroupLabel, { color: palette.text.tertiary }]}>
+                              {grp.label}
+                            </Text>
+                            {grp.items.map((feat) => {
+                              const included = features.includes(feat.key);
+                              return (
+                                <View key={feat.key} style={styles.featureRow}>
+                                  <Ionicons
+                                    name={included ? 'checkmark-circle' : 'remove-circle-outline'}
+                                    size={18}
+                                    color={included ? colors.green[500] : palette.text.tertiary}
+                                  />
+                                  <Text
+                                    style={[
+                                      styles.featureText,
+                                      { color: palette.text.primary },
+                                      !included && { color: palette.text.tertiary, textDecorationLine: 'line-through' },
+                                    ]}
+                                  >
+                                    {feat.label}
+                                  </Text>
+                                </View>
+                              );
+                            })}
+                          </View>
+                        ))}
                       </View>
 
                       {/* Purchase CTA hidden on iOS (Guideline 3.1.1) — the plan
@@ -385,7 +395,14 @@ const styles = StyleSheet.create({
   },
   maxUsersText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.primary[700] },
   // Features
-  featuresList: { gap: spacing[1.5] },
+  featuresList: { gap: spacing[3] },
+  featureGroup: { gap: spacing[1.5] },
+  featureGroupLabel: {
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
   featureRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   featureText: { fontSize: fontSize.sm, color: colors.gray[700] },
   featureTextDisabled: { color: colors.gray[400], textDecorationLine: 'line-through' },

@@ -1,13 +1,15 @@
 /**
  * AdminTenantDetailScreen — full tenant management for the superadmin.
  *
- *   • Tenant identity + subscription summary.
- *   • «Показатели клиента» — activity metrics from getMetrics(id) (заказ-наряды
+ *   • Tenant identity + subscription summary (AUTHORITATIVE status from the
+ *     composed getCabinet(id): active / expired / suspended + plan + price).
+ *   • «Показатели клиента» — activity metrics from cabinet.metrics (заказ-наряды
  *     30д/всего, выручка 30д/всего, последняя активность, сотрудники, товары).
  *   • Subscription actions:
  *       – Продлить (+30 / +90 / произвольно дней → extend)
  *       – Сменить тариф (plan picker → assignPlan, resyncs price + maxUsers)
- *       – Активен toggle (update)
+ *       – Приостановить (suspend с причиной) / Возобновить (unsuspend) — hard
+ *         gate on every tenant device, mirrored by the status chip here
  *       – Войти как владелец (impersonate → AuthContext.beginImpersonation)
  */
 import React from 'react';
@@ -35,7 +37,7 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius, getBadgeColors } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { Tenant, Plan, TenantMetrics, User, PermissionKey } from '../../../../shared/types';
+import type { Tenant, Plan, TenantCabinet, SubscriptionStatus, User, PermissionKey } from '../../../../shared/types';
 import { UserRole, PERMISSION_KEYS, ROLE_PERMISSION_DEFAULTS } from '../../../../shared/types';
 import type { UpdateUserRequest } from '../../../../shared/api/types';
 import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
@@ -43,8 +45,7 @@ import {
   formatMoney,
   formatFullDate,
   formatDateTime,
-  isExpired,
-  tenantStatus,
+  subscriptionStatusInfo,
   StatusChip,
   InitialAvatar,
 } from './adminShared';
@@ -106,7 +107,9 @@ export default function AdminTenantDetailScreen() {
 
   const [customExtendOpen, setCustomExtendOpen] = React.useState(false);
   const [customDays, setCustomDays] = React.useState('');
-  const [busy, setBusy] = React.useState<null | 'extend' | 'plan' | 'toggle' | 'impersonate'>(null);
+  const [suspendOpen, setSuspendOpen] = React.useState(false);
+  const [suspendReason, setSuspendReason] = React.useState('');
+  const [busy, setBusy] = React.useState<null | 'extend' | 'plan' | 'suspend' | 'impersonate'>(null);
   const [editingUser, setEditingUser] = React.useState<UserDraft | null>(null);
   const [savingUser, setSavingUser] = React.useState(false);
 
@@ -127,10 +130,17 @@ export default function AdminTenantDetailScreen() {
     [tenant?.users],
   );
 
-  const { data: metrics } = useQuery<TenantMetrics>({
-    queryKey: ['admin-tenant-metrics', id],
-    queryFn: async () => (await tenantsApi.getMetrics(id)).data,
+  // Composed cabinet (102): identity + AUTHORITATIVE subscription status/plan +
+  // the activity metrics in one payload. Replaces the old standalone metrics
+  // query — `cabinet.metrics` feeds the grid, `cabinet.subscription` drives the
+  // status chip + suspend/resume action so the card mirrors what the gate
+  // enforces on the tenant's own devices.
+  const { data: cabinet } = useQuery<TenantCabinet>({
+    queryKey: ['admin-tenant-cabinet', id],
+    queryFn: async () => (await tenantsApi.getCabinet(id)).data,
   });
+  const metrics = cabinet?.metrics;
+  const sub = cabinet?.subscription;
 
   const { data: plans = [] } = useQuery<Plan[]>({
     queryKey: ['admin-plans'],
@@ -139,6 +149,7 @@ export default function AdminTenantDetailScreen() {
 
   const invalidate = React.useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['admin-tenant', id] });
+    queryClient.invalidateQueries({ queryKey: ['admin-tenant-cabinet', id] });
     queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
     queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
   }, [queryClient, id]);
@@ -175,10 +186,32 @@ export default function AdminTenantDetailScreen() {
     onSettled: () => setBusy(null),
   });
 
-  const toggleMutation = useMutation({
-    mutationFn: async (next: boolean) => {
-      setBusy('toggle');
-      await tenantsApi.update(id, { isActive: next });
+  const suspendMutation = useMutation({
+    mutationFn: async (reason: string) => {
+      setBusy('suspend');
+      // status → 'suspended', is_active forced false server-side. Empty reason
+      // is sent as undefined so the backend stores NULL rather than ''.
+      await tenantsApi.suspend(id, reason.trim() || undefined);
+    },
+    onSuccess: () => {
+      haptic('success');
+      setSuspendOpen(false);
+      setSuspendReason('');
+      invalidate();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось приостановить тенанта');
+    },
+    onSettled: () => setBusy(null),
+  });
+
+  const unsuspendMutation = useMutation({
+    mutationFn: async () => {
+      setBusy('suspend');
+      // Lifts the suspension (re-activate); the subscription WINDOW is untouched,
+      // so an already-expired tenant returns to 'expired', not 'active'.
+      await tenantsApi.unsuspend(id);
     },
     onSuccess: () => {
       haptic('success');
@@ -186,7 +219,7 @@ export default function AdminTenantDetailScreen() {
     },
     onError: () => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось изменить статус');
+      Alert.alert('Ошибка', 'Не удалось возобновить работу');
     },
     onSettled: () => setBusy(null),
   });
@@ -228,7 +261,7 @@ export default function AdminTenantDetailScreen() {
       haptic('success');
       setEditingUser(null);
       queryClient.invalidateQueries({ queryKey: ['admin-tenant', id] });
-      queryClient.invalidateQueries({ queryKey: ['admin-tenant-metrics', id] });
+      queryClient.invalidateQueries({ queryKey: ['admin-tenant-cabinet', id] });
     },
     onError: (error: unknown) => {
       haptic('error');
@@ -254,7 +287,7 @@ export default function AdminTenantDetailScreen() {
       haptic('success');
       setEditingUser(null);
       queryClient.invalidateQueries({ queryKey: ['admin-tenant', id] });
-      queryClient.invalidateQueries({ queryKey: ['admin-tenant-metrics', id] });
+      queryClient.invalidateQueries({ queryKey: ['admin-tenant-cabinet', id] });
     },
     onError: () => {
       haptic('error');
@@ -338,22 +371,24 @@ export default function AdminTenantDetailScreen() {
     ]);
   }, [plans, tenant, assignPlanMutation]);
 
-  const handleToggle = React.useCallback(() => {
+  const openSuspend = React.useCallback(() => {
+    haptic('tap');
+    setSuspendReason('');
+    setSuspendOpen(true);
+  }, []);
+
+  const handleUnsuspend = React.useCallback(() => {
     if (!tenant) return;
     haptic('tap');
     Alert.alert(
-      tenant.isActive ? 'Отключить тенанта?' : 'Активировать тенанта?',
-      `«${tenant.name}» будет ${tenant.isActive ? 'отключён' : 'активирован'}.`,
+      'Возобновить работу?',
+      `Доступ для сотрудников «${tenant.name}» будет восстановлен. Если срок подписки уже истёк — продлите её отдельно.`,
       [
         { text: 'Отмена', style: 'cancel' },
-        {
-          text: tenant.isActive ? 'Отключить' : 'Активировать',
-          style: tenant.isActive ? 'destructive' : 'default',
-          onPress: () => toggleMutation.mutate(!tenant.isActive),
-        },
+        { text: 'Возобновить', onPress: () => unsuspendMutation.mutate() },
       ],
     );
-  }, [tenant, toggleMutation]);
+  }, [tenant, unsuspendMutation]);
 
   const handleImpersonate = React.useCallback(() => {
     if (!tenant) return;
@@ -410,8 +445,15 @@ export default function AdminTenantDetailScreen() {
     );
   }
 
-  const planName = tenant.plan?.name || plans.find((p) => p.id === tenant.planId)?.name || 'Не назначен';
-  const expired = isExpired(tenant.subscriptionEnd);
+  const planName =
+    sub?.planName || tenant.plan?.name || plans.find((p) => p.id === tenant.planId)?.name || 'Не назначен';
+  // Authoritative status from the cabinet; while it loads, derive a sensible
+  // placeholder from the embedded tenant so the chip never flickers «active».
+  const status: SubscriptionStatus = sub?.status ?? (tenant.isActive ? 'active' : 'suspended');
+  const suspended = status === 'suspended';
+  const expired = status === 'expired';
+  const monthlyPrice = sub?.planPrice ?? tenant.monthlyPrice;
+  const subscriptionEnd = sub?.subscriptionEnd ?? tenant.subscriptionEnd;
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
@@ -426,17 +468,28 @@ export default function AdminTenantDetailScreen() {
         <View style={[styles.card, surface.card]}>
           <View style={styles.summaryHead}>
             <Text style={[styles.summaryTitle, { color: palette.text.primary }]}>Подписка</Text>
-            <StatusChip status={tenantStatus(tenant, palette.mode)} />
+            <StatusChip status={subscriptionStatusInfo(status, palette.mode)} />
           </View>
           <InfoRow label="Тариф" value={planName} palette={palette} />
-          <InfoRow label="Стоимость" value={`${formatMoney(tenant.monthlyPrice)}/мес`} palette={palette} />
+          <InfoRow label="Стоимость" value={`${formatMoney(monthlyPrice)}/мес`} palette={palette} />
           <InfoRow
             label="Оплачено до"
-            value={formatFullDate(tenant.subscriptionEnd)}
+            value={formatFullDate(subscriptionEnd)}
             valueColor={expired ? colors.red[600] : undefined}
             palette={palette}
           />
-          <InfoRow label="Макс. польз." value={String(tenant.maxUsers)} palette={palette} />
+          {suspended ? (
+            <InfoRow
+              label="Приостановлена"
+              value={sub?.suspendedAt ? formatFullDate(sub.suspendedAt) : '—'}
+              valueColor={colors.amber[700]}
+              palette={palette}
+            />
+          ) : null}
+          {suspended && sub?.suspendedReason ? (
+            <InfoRow label="Причина" value={sub.suspendedReason} palette={palette} />
+          ) : null}
+          <InfoRow label="Макс. польз." value={String(sub?.maxUsers ?? tenant.maxUsers)} palette={palette} />
           {tenant.phone ? <InfoRow label="Телефон" value={tenant.phone} palette={palette} /> : null}
           {tenant.email ? <InfoRow label="Email" value={tenant.email} palette={palette} /> : null}
           <InfoRow label="Создан" value={formatFullDate(tenant.createdAt)} palette={palette} last />
@@ -511,11 +564,11 @@ export default function AdminTenantDetailScreen() {
             surfaceCard={surface.card}
           />
           <ActionButton
-            icon={tenant.isActive ? 'pause-circle-outline' : 'play-circle-outline'}
-            label={tenant.isActive ? 'Отключить тенанта' : 'Активировать тенанта'}
-            onPress={handleToggle}
-            loading={busy === 'toggle'}
-            danger={tenant.isActive}
+            icon={suspended ? 'play-circle-outline' : 'pause-circle-outline'}
+            label={suspended ? 'Возобновить работу' : 'Приостановить'}
+            onPress={suspended ? handleUnsuspend : openSuspend}
+            loading={busy === 'suspend'}
+            danger={!suspended}
             palette={palette}
             surfaceCard={surface.card}
           />
@@ -630,6 +683,54 @@ export default function AdminTenantDetailScreen() {
                 }}
               >
                 <Text style={styles.modalConfirmText}>Продлить</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Suspend-with-reason modal (cross-platform — Alert.prompt is iOS-only). */}
+      <Modal
+        visible={suspendOpen}
+        transparent
+        statusBarTranslucent
+        animationType="fade"
+        onRequestClose={() => setSuspendOpen(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setSuspendOpen(false)}>
+          <Pressable style={[styles.modalCard, { backgroundColor: palette.bg.card }]} onPress={() => {}}>
+            <Text style={[styles.modalTitle, { color: palette.text.primary }]}>Приостановить тенанта?</Text>
+            <Text style={[styles.modalHint, { color: palette.text.secondary }]}>
+              Доступ ко всем разделам для сотрудников {tenant ? `«${tenant.name}»` : 'этого автосервиса'} будет закрыт
+              до возобновления. Причина видна только в админ-панели.
+            </Text>
+            <TextInput
+              style={[
+                styles.modalInput,
+                styles.modalInputMultiline,
+                { color: palette.text.primary, borderColor: palette.border.subtle },
+              ]}
+              placeholder="Причина (необязательно)"
+              placeholderTextColor={palette.text.tertiary}
+              value={suspendReason}
+              onChangeText={setSuspendReason}
+              multiline
+              maxLength={200}
+            />
+            <View style={styles.modalActions}>
+              <Pressable style={styles.modalCancel} onPress={() => setSuspendOpen(false)}>
+                <Text style={[styles.modalCancelText, { color: palette.text.secondary }]}>Отмена</Text>
+              </Pressable>
+              <Pressable
+                style={[styles.modalConfirm, { backgroundColor: colors.red[600] }]}
+                disabled={busy === 'suspend'}
+                onPress={() => suspendMutation.mutate(suspendReason)}
+              >
+                {busy === 'suspend' ? (
+                  <ActivityIndicator size="small" color={colors.white} />
+                ) : (
+                  <Text style={styles.modalConfirmText}>Приостановить</Text>
+                )}
               </Pressable>
             </View>
           </Pressable>
@@ -941,6 +1042,7 @@ const styles = StyleSheet.create({
     }),
   },
   modalTitle: { fontSize: 17, fontWeight: '700' },
+  modalHint: { fontSize: 13, lineHeight: 19 },
   modalInput: {
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: borderRadius.xl,
@@ -948,6 +1050,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3],
     fontSize: 16,
   },
+  modalInputMultiline: { minHeight: 72, textAlignVertical: 'top' },
   modalActions: { flexDirection: 'row', gap: spacing[3], marginTop: spacing[1] },
   modalCancel: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[3] },
   modalCancelText: { fontSize: 15, fontWeight: '600' },

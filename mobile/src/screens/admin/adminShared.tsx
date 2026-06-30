@@ -9,7 +9,21 @@ import { StyleSheet, View } from 'react-native';
 import { Text } from '../../platform/Typography';
 import { colors, spacing, borderRadius, getBadgeColors, softTint } from '../../theme';
 import type { SemanticPalette } from '../../theme/palette';
-import type { Tenant } from '../../../../shared/types';
+import type { Tenant, SubscriptionStatus, FeatureGroup } from '../../../../shared/types';
+
+/**
+ * Human labels for the feature-catalog groups (core / section / integration).
+ * Shared by the plan editor's grouped toggle list so the section headings read
+ * consistently in Russian.
+ */
+export const FEATURE_GROUP_LABELS: Record<FeatureGroup, string> = {
+  core: 'Основные',
+  section: 'Разделы',
+  integration: 'Интеграции',
+};
+
+/** Stable display order for the feature groups. */
+export const FEATURE_GROUP_ORDER: FeatureGroup[] = ['core', 'section', 'integration'];
 
 export function formatMoney(value: number): string {
   const rounded = Math.round(value || 0);
@@ -86,6 +100,31 @@ export function tenantStatus(tenant: Tenant, mode: 'light' | 'dark' = 'light'): 
   return dark
     ? { bg: badgesDark.green.bg, text: badgesDark.green.text, label: 'Активен' }
     : { bg: colors.green[50], text: colors.green[700], label: 'Активен' };
+}
+
+/**
+ * Authoritative subscription-status chip descriptor (102). Unlike
+ * {@link tenantStatus} (which derives a label from isActive + subscriptionEnd),
+ * this maps the SERVER-resolved `SubscriptionStatus` straight to a chip so the
+ * tenant cabinet shows exactly what the gate enforces:
+ *   active → green «Активна», expired → red «Истекла», suspended → amber
+ *   «Приостановлена». Light branches use the established pale objects; dark
+ *   swaps for translucent accent glows (mirrors tenantStatus).
+ */
+export function subscriptionStatusInfo(status: SubscriptionStatus, mode: 'light' | 'dark' = 'light'): StatusInfo {
+  const dark = mode === 'dark';
+  const badgesDark = getBadgeColors('dark');
+  if (status === 'suspended')
+    return dark
+      ? { bg: softTint(colors.amber[600], 'dark'), text: '#fcd34d', label: 'Приостановлена' }
+      : { bg: colors.amber[50], text: colors.amber[700], label: 'Приостановлена' };
+  if (status === 'expired')
+    return dark
+      ? { bg: badgesDark.red.bg, text: badgesDark.red.text, label: 'Истекла' }
+      : { bg: colors.red[50], text: colors.red[700], label: 'Истекла' };
+  return dark
+    ? { bg: badgesDark.green.bg, text: badgesDark.green.text, label: 'Активна' }
+    : { bg: colors.green[50], text: colors.green[700], label: 'Активна' };
 }
 
 /** Coloured status chip. */
