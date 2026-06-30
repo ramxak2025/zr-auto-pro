@@ -8,5 +8,8 @@ import { WarehousesModule } from '../warehouses/warehouses.module';
   imports: [StockMovementsModule, WarehousesModule],
   controllers: [SuppliersController],
   providers: [SuppliersService],
+  // Exported so PurchaseOrdersModule can reuse the supplier-ledger seam
+  // (recordOrderSupplyTx) when receiving an order into a supply + debt/payment.
+  exports: [SuppliersService],
 })
 export class SuppliersModule {}

@@ -9,6 +9,7 @@ import {
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
+import { SuppliersService } from '../suppliers/suppliers.service';
 import { CreatePurchaseOrderDto, PurchaseOrderItemInputDto } from './dto/create-purchase-order.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
 import { ReceivePurchaseOrderDto } from './dto/receive-purchase-order.dto';
@@ -20,6 +21,7 @@ export class PurchaseOrdersService {
   constructor(
     @Inject(PG_POOL) private pool: Pool,
     private stockMovements: StockMovementsService,
+    private suppliers: SuppliersService,
   ) {}
 
   // ── mappers ─────────────────────────────────────────────────────────────
@@ -210,19 +212,34 @@ export class PurchaseOrdersService {
     return this.loadDetail(this.pool, id, tenantID);
   }
 
-  // ── update (draft only) ───────────────────────────────────────────────────
+  // ── update (editable until fully received) ─────────────────────────────────
+  /**
+   * Edit an order while it is NOT yet fully received (owner spec v1):
+   *   • draft   → free editing; full line replace (no receipts exist yet).
+   *   • ordered → correct lines/quantities, but received_quantity is sacred:
+   *       – a line may not be removed once anything has been received against it;
+   *       – a line's quantity may not drop below what's already received;
+   *       – the supplier is locked (it owns the supplies/debt already booked).
+   *     The supply/debt/payment rows of earlier partial receipts are untouched.
+   *   • received / cancelled → not editable.
+   */
   async update(id: string, tenantID: string, dto: UpdatePurchaseOrderDto) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
 
       const { rows } = await client.query(
-        'SELECT status FROM purchase_orders WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+        'SELECT status, supplier_id FROM purchase_orders WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
         [id, tenantID],
       );
       if (rows.length === 0) throw new NotFoundException({ message: 'Заказ не найден' });
-      if (rows[0].status !== 'draft') {
-        throw new BadRequestException({ message: 'Редактировать можно только черновик' });
+      const status = rows[0].status as 'draft' | 'ordered' | 'received' | 'cancelled';
+      const currentSupplierId = rows[0].supplier_id as string;
+      if (status === 'received') {
+        throw new BadRequestException({ message: 'Принятый заказ нельзя редактировать' });
+      }
+      if (status === 'cancelled') {
+        throw new BadRequestException({ message: 'Отменённый заказ нельзя редактировать' });
       }
 
       const sets: string[] = [];
@@ -230,9 +247,14 @@ export class PurchaseOrdersService {
       let idx = 1;
 
       if (dto.supplierId !== undefined) {
-        await this.assertSupplierInTenant(client, dto.supplierId, tenantID);
-        sets.push(`supplier_id=$${idx++}`);
-        vals.push(dto.supplierId);
+        if (status === 'draft') {
+          await this.assertSupplierInTenant(client, dto.supplierId, tenantID);
+          sets.push(`supplier_id=$${idx++}`);
+          vals.push(dto.supplierId);
+        } else if (dto.supplierId !== currentSupplierId) {
+          // Supplier is locked once ordered — supplies/debt are attributed to it.
+          throw new BadRequestException({ message: 'Поставщика нельзя изменить после оформления заказа' });
+        }
       }
       if (dto.note !== undefined) {
         sets.push(`note=$${idx++}`);
@@ -241,18 +263,26 @@ export class PurchaseOrdersService {
 
       // Replacing items also recomputes the stored total.
       if (dto.items !== undefined) {
-        const { rows: items, total } = await this.resolveItems(client, tenantID, dto.items);
-        await client.query('DELETE FROM purchase_order_items WHERE purchase_order_id=$1 AND tenant_id=$2', [
-          id,
-          tenantID,
-        ]);
-        for (const it of items) {
-          await client.query(
-            `INSERT INTO purchase_order_items (tenant_id, purchase_order_id, product_id, name, quantity, cost_price, received_quantity)
-             VALUES ($1, $2, $3, $4, $5, $6, 0)`,
-            [tenantID, id, it.productId, it.name, it.quantity, it.costPrice],
-          );
+        const { rows: desired, total } = await this.resolveItems(client, tenantID, dto.items);
+
+        if (status === 'draft') {
+          // No receipts on a draft — wiping + re-inserting the line set is safe.
+          await client.query('DELETE FROM purchase_order_items WHERE purchase_order_id=$1 AND tenant_id=$2', [
+            id,
+            tenantID,
+          ]);
+          for (const it of desired) {
+            await client.query(
+              `INSERT INTO purchase_order_items (tenant_id, purchase_order_id, product_id, name, quantity, cost_price, received_quantity)
+               VALUES ($1, $2, $3, $4, $5, $6, 0)`,
+              [tenantID, id, it.productId, it.name, it.quantity, it.costPrice],
+            );
+          }
+        } else {
+          // status === 'ordered': merge BY product so received_quantity survives.
+          await this.reconcileOrderedItems(client, tenantID, id, desired);
         }
+
         sets.push(`total=$${idx++}`);
         vals.push(total);
       }
@@ -265,6 +295,25 @@ export class PurchaseOrdersService {
         );
       }
 
+      // If an `ordered` edit reduced the order down to what was already received,
+      // close it out (mirrors the receive() fully-received transition).
+      if (status === 'ordered' && dto.items !== undefined) {
+        const { rows: afterRows } = await client.query(
+          'SELECT quantity, received_quantity FROM purchase_order_items WHERE purchase_order_id=$1 AND tenant_id=$2',
+          [id, tenantID],
+        );
+        const fullyReceived =
+          afterRows.length > 0 &&
+          afterRows.every((r) => (parseFloat(r.received_quantity) || 0) + 1e-9 >= (parseFloat(r.quantity) || 0));
+        if (fullyReceived) {
+          await client.query(
+            `UPDATE purchase_orders SET status='received', received_at=now(), ordered_at=COALESCE(ordered_at, now())
+              WHERE id=$1 AND tenant_id=$2`,
+            [id, tenantID],
+          );
+        }
+      }
+
       const detail = await this.loadDetail(client, id, tenantID);
       await client.query('COMMIT');
       return detail;
@@ -275,6 +324,69 @@ export class PurchaseOrdersService {
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
       client.release();
+    }
+  }
+
+  /**
+   * Merge the desired line set onto an `ordered` order WITHOUT ever resetting
+   * received_quantity. Matches existing lines to desired lines by product_id:
+   *   • kept product  → UPDATE quantity (≥ received) + cost_price + name.
+   *   • dropped line  → DELETE only if nothing received; else 400.
+   *   • new product   → INSERT (received_quantity 0).
+   * The desired set must have unique products so the match is unambiguous.
+   * Runs on the caller's transaction; lines are locked FOR UPDATE.
+   */
+  private async reconcileOrderedItems(
+    client: PoolClient,
+    tenantID: string,
+    orderId: string,
+    desired: Array<{ productId: string; name: string; quantity: number; costPrice: number }>,
+  ): Promise<void> {
+    const seen = new Set<string>();
+    for (const it of desired) {
+      if (seen.has(it.productId)) {
+        throw new BadRequestException({ message: 'Один товар указан в заказе дважды' });
+      }
+      seen.add(it.productId);
+    }
+    const desiredByProduct = new Map(desired.map((it) => [it.productId, it]));
+
+    const { rows: existing } = await client.query(
+      `SELECT id, product_id, name, received_quantity
+         FROM purchase_order_items WHERE purchase_order_id=$1 AND tenant_id=$2 FOR UPDATE`,
+      [orderId, tenantID],
+    );
+
+    const applied = new Set<string>();
+    for (const row of existing) {
+      const want = desiredByProduct.get(row.product_id);
+      const received = parseFloat(row.received_quantity) || 0;
+      if (want && !applied.has(row.product_id)) {
+        if (want.quantity + 1e-9 < received) {
+          throw new BadRequestException({ message: `Нельзя заказать меньше, чем уже принято: ${want.name}` });
+        }
+        await client.query(
+          'UPDATE purchase_order_items SET quantity=$1, cost_price=$2, name=$3 WHERE id=$4 AND tenant_id=$5',
+          [want.quantity, want.costPrice, want.name, row.id, tenantID],
+        );
+        applied.add(row.product_id);
+      } else {
+        // Removed line (or a duplicate existing row for an already-applied
+        // product). Allowed only when nothing has been received against it.
+        if (received > 1e-9) {
+          throw new BadRequestException({ message: `Нельзя удалить уже принятую позицию: ${row.name}` });
+        }
+        await client.query('DELETE FROM purchase_order_items WHERE id=$1 AND tenant_id=$2', [row.id, tenantID]);
+      }
+    }
+
+    for (const it of desired) {
+      if (applied.has(it.productId)) continue;
+      await client.query(
+        `INSERT INTO purchase_order_items (tenant_id, purchase_order_id, product_id, name, quantity, cost_price, received_quantity)
+         VALUES ($1, $2, $3, $4, $5, $6, 0)`,
+        [tenantID, orderId, it.productId, it.name, it.quantity, it.costPrice],
+      );
     }
   }
 
@@ -319,8 +431,20 @@ export class PurchaseOrdersService {
    *
    * Body semantics:
    *   • no `items`        → receive the full outstanding qty of every line.
-   *   • `items: [...]`    → receive a delta on the listed lines only.
+   *   • `items: [...]`    → receive a delta on the listed lines only, each with
+   *                          an optional per-line `purchasePrice` (supply flow).
    * Over-receipt (received_quantity + delta > ordered quantity) is rejected.
+   *
+   * `paymentMode` (owner spec v1) turns the receipt into a SUPPLY, all in the
+   * same transaction as the stock income:
+   *   • each received line's purchase price updates the product COST BASIS;
+   *   • a `deliveries` row (the «Поставки» supply) is booked, linked to this
+   *     order, and supplier debt rises by the invoice total;
+   *   • 'paid' («Оплатить сразу») also auto-creates a supplier_payments row for
+   *     the invoice (debt nets to 0); 'debt' («Без оплаты») leaves it owed.
+   *   • omitted ⇒ legacy stock-only receive (no supply / debt / cost change).
+   * Partial receipts keep the remainder open on the order and book a supply per
+   * receipt.
    *
    * Status after receive:
    *   • every line fully received → status='received', received_at=now().
@@ -354,6 +478,16 @@ export class PurchaseOrdersService {
         throw new BadRequestException({ message: 'В заказе нет позиций' });
       }
 
+      // When `paymentMode` is present the receive becomes a SUPPLY: cost basis
+      // is updated, a deliveries row is booked, and the invoice becomes debt or
+      // an auto-payment. Absent ⇒ legacy stock-only receive (backward compatible).
+      const paymentMode = dto.paymentMode;
+      // Per-line purchase-price overrides (only meaningful in the supply flow).
+      const priceOverrideById = new Map<string, number>();
+      // Lines fed to the supplier-ledger seam after stock is credited.
+      const supplyLines: Array<{ productId: string; purchaseOrderItemId: string; quantity: number; price: number }> =
+        [];
+
       // Build a map of itemId → delta to receive.
       const deltaById = new Map<string, number>();
       if (dto.items && dto.items.length > 0) {
@@ -366,6 +500,13 @@ export class PurchaseOrdersService {
             throw new BadRequestException({ message: 'Позиция указана дважды' });
           }
           deltaById.set(reqItem.itemId, delta);
+          if (reqItem.purchasePrice !== undefined && reqItem.purchasePrice !== null) {
+            const price = parseFloat(String(reqItem.purchasePrice));
+            if (!isFinite(price) || price < 0) {
+              throw new BadRequestException({ message: 'Цена закупки не может быть отрицательной' });
+            }
+            priceOverrideById.set(reqItem.itemId, price);
+          }
         }
       } else {
         // Full receive — outstanding qty of every line.
@@ -394,13 +535,41 @@ export class PurchaseOrdersService {
           throw new BadRequestException({ message: `Нельзя принять больше заказанного: ${row.name}` });
         }
 
+        // Effective purchase price for this receipt: per-line override (supply
+        // flow only) → else the ordered cost_price snapshot. Drives the stock
+        // movement, the cost basis update and the supply invoice.
+        const effectivePrice = priceOverrideById.has(itemId)
+          ? (priceOverrideById.get(itemId) as number)
+          : parseFloat(row.cost_price) || 0;
+
         await this.stockMovements.applyIncomeTx(client, tenantID, userID, {
           productId: row.product_id,
           quantity: delta,
-          purchasePrice: parseFloat(row.cost_price) || 0,
+          purchasePrice: effectivePrice,
           supplierId: po.supplier_id,
           reason: 'Приёмка заказа поставщику',
         });
+
+        if (paymentMode) {
+          // Owner spec #3: the received purchase price updates the product COST
+          // BASIS (себестоимость — the field motivation 095 + reports read).
+          // Last-cost: the price just paid becomes the new basis. Guarded by
+          // `> 0` so an unpriced/zero line never clobbers a known cost. The
+          // product row is already locked (applyIncomeTx did FOR UPDATE).
+          if (effectivePrice > 0) {
+            await client.query('UPDATE products SET cost_price=$1 WHERE id=$2 AND tenant_id=$3', [
+              effectivePrice,
+              row.product_id,
+              tenantID,
+            ]);
+          }
+          supplyLines.push({
+            productId: row.product_id,
+            purchaseOrderItemId: itemId,
+            quantity: delta,
+            price: effectivePrice,
+          });
+        }
 
         await client.query(
           'UPDATE purchase_order_items SET received_quantity = received_quantity + $1 WHERE id=$2 AND tenant_id=$3',
@@ -433,6 +602,20 @@ export class PurchaseOrdersService {
             WHERE id=$1 AND tenant_id=$2`,
           [id, tenantID],
         );
+      }
+
+      // Supply flow (paymentMode present): book the supply (deliveries row linked
+      // to this order) + the supplier debt, and — for «оплатить сразу» — the
+      // auto-payment. Stock was ALREADY credited above, so this writes ledger
+      // rows only (no double stock count). Same transaction ⇒ all-or-nothing.
+      if (paymentMode && supplyLines.length > 0) {
+        await this.suppliers.recordOrderSupplyTx(client, tenantID, userID, {
+          supplierId: po.supplier_id,
+          purchaseOrderId: id,
+          comment: 'Приёмка заказа поставщику',
+          paymentMode,
+          lines: supplyLines,
+        });
       }
 
       const detail = await this.loadDetail(client, id, tenantID);

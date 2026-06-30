@@ -7,7 +7,7 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
@@ -202,7 +202,14 @@ export class SuppliersService {
     tenantID: string,
     userID: string | null,
     supplierId: string,
-    dto: { productName?: string; qty?: number; purchasePrice?: number; sellPrice?: number | null; category?: string; note?: string },
+    dto: {
+      productName?: string;
+      qty?: number;
+      purchasePrice?: number;
+      sellPrice?: number | null;
+      category?: string;
+      note?: string;
+    },
   ) {
     const productName = String(dto?.productName ?? '').trim();
     const qty = parseFloat(String(dto?.qty ?? ''));
@@ -385,6 +392,9 @@ export class SuppliersService {
       totalAmount: parseFloat(r.total_amount) || 0,
       paymentStatus: r.payment_status,
       comment: r.comment,
+      // Order-sourced supplies (098) link back to their purchase order + receiver.
+      purchaseOrderId: r.purchase_order_id ?? null,
+      receivedBy: r.received_by ?? null,
       items: [] as any[],
     }));
 
@@ -409,6 +419,7 @@ export class SuppliersService {
           quantity: parseFloat(item.quantity) || 0,
           price: parseFloat(item.price) || 0,
           total: parseFloat(item.total) || 0,
+          purchaseOrderItemId: item.purchase_order_item_id ?? null,
         });
       }
       for (const d of deliveries) {
@@ -437,6 +448,8 @@ export class SuppliersService {
       totalAmount: parseFloat(r.total_amount) || 0,
       paymentStatus: r.payment_status,
       comment: r.comment,
+      purchaseOrderId: r.purchase_order_id ?? null,
+      receivedBy: r.received_by ?? null,
     };
 
     const { rows: itemRows } = await this.pool.query(
@@ -452,6 +465,7 @@ export class SuppliersService {
       quantity: parseFloat(item.quantity) || 0,
       price: parseFloat(item.price) || 0,
       total: parseFloat(item.total) || 0,
+      purchaseOrderItemId: item.purchase_order_item_id ?? null,
     }));
 
     return delivery;
@@ -556,6 +570,8 @@ export class SuppliersService {
       amount: parseFloat(r.amount) || 0,
       date: r.date,
       comment: r.comment,
+      // Set when this payment was auto-created by «Оплатить сразу» at receiving (098).
+      deliveryId: r.delivery_id ?? null,
     }));
   }
 
@@ -600,5 +616,115 @@ export class SuppliersService {
     } finally {
       client.release();
     }
+  }
+
+  // ── Order-sourced supply (the Заказ → Поставка → Долг → Платёж seam) ─────────
+
+  /**
+   * Record a SUPPLY (поставка) created by receiving a purchase order, on the
+   * CALLER'S open transaction. This is the reuse seam that wires PO receiving to
+   * the existing supplier ledger — mirroring how PurchaseOrdersService already
+   * reuses StockMovementsService.applyIncomeTx for stock.
+   *
+   * It writes a `deliveries` row (the «Поставки» tab) linked to the order, one
+   * `delivery_items` row per received line (linked to its PO line), and moves the
+   * SAME supplier balance the manual delivery / payment flow moves:
+   *
+   *   • debt mode («Без оплаты») → total_purchases += invoice, current_debt +=
+   *     invoice. The supply is left payment_status='unpaid'; the owner settles it
+   *     later through the normal supplier Payments flow (partial / full).
+   *   • paid mode («Оплатить сразу») → total_purchases += invoice AND a
+   *     supplier_payments row for the full invoice is auto-created (total_paid +=
+   *     invoice, current_debt nets back to 0). The supply is payment_status='paid'
+   *     and the payment row points back at it via delivery_id.
+   *
+   * CRITICAL — no double counting: stock has ALREADY been credited by the PO
+   * receive (applyIncomeTx) before this is called, so this method NEVER touches
+   * products.stock. It only writes the financial/ledger rows for the supply.
+   *
+   * Caller MUST already hold an open transaction on `client` (and SHOULD have
+   * verified the supplier belongs to the tenant). This method issues no
+   * BEGIN / COMMIT / ROLLBACK itself.
+   */
+  async recordOrderSupplyTx(
+    client: PoolClient,
+    tenantID: string,
+    userID: string | null,
+    params: {
+      supplierId: string;
+      purchaseOrderId: string;
+      comment?: string | null;
+      paymentMode: 'debt' | 'paid';
+      lines: Array<{ productId: string; purchaseOrderItemId: string; quantity: number; price: number }>;
+    },
+  ): Promise<{ deliveryId: string; paymentId: string | null; invoiceTotal: number }> {
+    // Invoice total (стоимость накладной) = Σ received qty × purchase price.
+    let invoiceTotal = 0;
+    for (const line of params.lines) {
+      invoiceTotal += (Number(line.quantity) || 0) * (Number(line.price) || 0);
+    }
+    invoiceTotal = Math.round(invoiceTotal * 100) / 100;
+
+    const paid = params.paymentMode === 'paid';
+
+    // 1) The supply header (a deliveries row), linked to its order + receiver.
+    const { rows: delRows } = await client.query(
+      `INSERT INTO deliveries
+         (supplier_id, date, total_amount, payment_status, comment, tenant_id, purchase_order_id, received_by)
+       VALUES ($1, now(), $2, $3, $4, $5, $6, $7) RETURNING id`,
+      [
+        params.supplierId,
+        invoiceTotal,
+        paid ? 'paid' : 'unpaid',
+        params.comment ?? null,
+        tenantID,
+        params.purchaseOrderId,
+        userID,
+      ],
+    );
+    const deliveryId = delRows[0].id;
+
+    // 2) Supply lines (NO stock bump — already credited by the PO receive).
+    for (const line of params.lines) {
+      const qty = Number(line.quantity) || 0;
+      const price = Number(line.price) || 0;
+      const lineTotal = Math.round(qty * price * 100) / 100;
+      await client.query(
+        `INSERT INTO delivery_items (delivery_id, product_id, quantity, price, total, purchase_order_item_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [deliveryId, line.productId, qty, price, lineTotal, line.purchaseOrderItemId],
+      );
+    }
+
+    // 3) Supplier debt rises by the invoice — the SAME ledger the manual
+    //    delivery flow moves. Tenant-scoped UPDATE (defense in depth).
+    await client.query(
+      `UPDATE suppliers
+          SET total_purchases = total_purchases + $1,
+              current_debt    = current_debt + $1
+        WHERE id = $2 AND tenant_id = $3`,
+      [invoiceTotal, params.supplierId, tenantID],
+    );
+
+    // 4) «Оплатить сразу» — auto-create a payment for the full invoice, netting
+    //    the debt back to 0 for this supply. Skipped when invoice is 0.
+    let paymentId: string | null = null;
+    if (paid && invoiceTotal > 0) {
+      const { rows: payRows } = await client.query(
+        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, delivery_id)
+         VALUES ($1, $2, now(), $3, $4, $5) RETURNING id`,
+        [params.supplierId, invoiceTotal, 'Оплата при приёмке заказа', tenantID, deliveryId],
+      );
+      paymentId = payRows[0].id;
+      await client.query(
+        `UPDATE suppliers
+            SET total_paid    = total_paid + $1,
+                current_debt  = current_debt - $1
+          WHERE id = $2 AND tenant_id = $3`,
+        [invoiceTotal, params.supplierId, tenantID],
+      );
+    }
+
+    return { deliveryId, paymentId, invoiceTotal };
   }
 }

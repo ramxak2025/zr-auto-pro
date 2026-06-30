@@ -1453,9 +1453,21 @@ export function createPurchaseOrdersApi(api: HttpClient) {
      * quantity of every line; pass `items` to receive deltas on specific lines.
      * Each receipt credits stock via the income path. Fully received ⇒ status
      * 'received'; partial ⇒ stays 'ordered'.
+     *
+     * Supply flow (migration 098): pass `paymentMode` to make the receipt a
+     * SUPPLY — each line's optional `purchasePrice` updates the product cost
+     * basis, a delivery (поставка) linked to the order is booked, and the
+     * invoice total either becomes supplier DEBT (`'debt'` / «Без оплаты») or is
+     * auto-paid (`'paid'` / «Оплатить сразу»). Omit `paymentMode` for the legacy
+     * stock-only receive (no supply / debt / payment / cost-basis change).
      */
-    receive: (id: string, data?: { items?: Array<{ itemId: string; receivedQuantity: number }> }) =>
-      api.post<PurchaseOrder>(`/purchase-orders/${id}/receive`, data ?? {}),
+    receive: (
+      id: string,
+      data?: {
+        items?: Array<{ itemId: string; receivedQuantity: number; purchasePrice?: number }>;
+        paymentMode?: 'debt' | 'paid';
+      },
+    ) => api.post<PurchaseOrder>(`/purchase-orders/${id}/receive`, data ?? {}),
     /** Cancel (only if not yet received). */
     cancel: (id: string) => api.post<PurchaseOrder>(`/purchase-orders/${id}/cancel`, {}),
     /** Low-stock products grouped by preferred supplier — prefill a new order. */

@@ -1217,6 +1217,14 @@ export interface Delivery {
   totalAmount: number;
   paymentStatus: 'unpaid' | 'partial' | 'paid';
   comment?: string;
+  /**
+   * Set when this supply (поставка) was created by receiving a purchase order
+   * (migration 098). null for manual / legacy deliveries. Lets the «Поставки»
+   * tab show "по заказу" and link back to the order.
+   */
+  purchaseOrderId?: string | null;
+  /** User who accepted the supply at receiving (order-sourced supplies). */
+  receivedBy?: string | null;
 }
 
 export interface DeliveryItem {
@@ -1226,6 +1234,8 @@ export interface DeliveryItem {
   quantity: number;
   price: number;
   total: number;
+  /** The purchase-order line this supply line received against (098); null otherwise. */
+  purchaseOrderItemId?: string | null;
 }
 
 export interface SupplierPayment {
@@ -1234,6 +1244,12 @@ export interface SupplierPayment {
   amount: number;
   date: string;
   comment?: string;
+  /**
+   * Set when this payment was auto-created by «Оплатить сразу» at order receiving
+   * (migration 098) — points at the supply (delivery) it settled. null for manual
+   * payments made from the supplier Payments flow.
+   */
+  deliveryId?: string | null;
 }
 
 // ───────────────────────────────────────────────────────────────────────
