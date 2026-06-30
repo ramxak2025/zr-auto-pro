@@ -1,33 +1,28 @@
 /**
- * SalaryNotificationContext — detects unconfirmed salary payments for the
- * currently logged-in user and exposes a single global <SalaryReceivedModal />.
+ * SalaryNotificationContext — surfaces money the owner sent to the currently
+ * logged-in EMPLOYEE and drives the global <SalaryReceivedModal />.
  *
- * Detection strategy (intentionally simple, no new backend endpoint):
+ * Two flows coexist:
  *
- *   1. After login (or any cold-start with an active session), the
- *      provider fires `salaryApi.getAll({ dateFrom, dateTo })` for the
- *      CURRENT month.
- *   2. Walks every `MasterSalary.payments[]` and picks the first row
- *      where `confirmedAt === null` AND `userId === user.id`.
- *   3. That payment becomes `pendingPayment` in state → the modal mounts.
- *   4. After the employee confirms (`salaryApi.confirmPayment`), the
- *      query is invalidated so the same payment won't reappear, and the
- *      modal slides out.
+ *   1. NEW payouts (100_salary_payouts_and_fines) — `createPayout` →
+ *      `decidePayout`. The владелец issues a ЗП / АВАНС; it starts `pending`
+ *      and the employee must ACCEPT or REJECT. On accept the backend records
+ *      the expense (category «Зарплата»); on reject it's voided and the owner
+ *      sees the «Отклонено» status. Detected via
+ *      `salaryApi.listPayouts({ status: 'pending' })` (the server scopes an
+ *      employee to their own rows).
  *
- * Why month-scoped and not a generic endpoint:
- *   The task spec lists "GET /salary/payments/pending-confirmation" as
- *   "OR — simpler — when fetching `salaryApi.getAll(currentMonth)` …".
- *   We pick the simpler path since the salary endpoint already returns
- *   `confirmedAt` and is already cached + prefetched in many places —
- *   no new contract to add.
+ *   2. LEGACY salary_payments — `createPayment` → `confirmPayment`. A single
+ *      «Подтвердить получение» acknowledgement. Detected by walking the
+ *      current-month `salaryApi.getAll(...)` for an unconfirmed payment whose
+ *      `userId` is the current user. Kept intact for already-issued payments.
  *
- * Re-checks:
- *   • After login (push fires `refresh()`).
- *   • When the app comes to foreground (AppState change).
- *   • When a push notification of type `salary_payment` arrives.
+ * The NEW payout takes precedence: we check payouts first and only fall back to
+ * legacy detection when there's no pending payout. After a decision/confirm we
+ * re-check so a second pending item surfaces immediately.
  *
- * Owners (superadmin / director) NEVER receive this modal — the modal is
- * "ваши деньги пришли", which is meaningless for the person who SENT them.
+ * Re-checks fire after login, on app foreground, and on a salary/payout push.
+ * Owners (superadmin / director) never see the modal — they're the SENDERS.
  */
 import React from 'react';
 import { AppState, type AppStateStatus } from 'react-native';
@@ -35,11 +30,12 @@ import * as Notifications from 'expo-notifications';
 import { useQueryClient } from '@tanstack/react-query';
 import { salaryApi } from '../api/services';
 import { useAuth } from './AuthContext';
+import { haptic } from '../platform/haptics';
 import SalaryReceivedModal from '../components/SalaryReceivedModal';
-import type { MasterSalary, SalaryPayment } from '../../../shared/types';
+import type { MasterSalary, SalaryPayment, SalaryPayout } from '../../../shared/types';
 
 interface SalaryNotificationContextValue {
-  /** Re-fetches the salary endpoint to look for a fresh unconfirmed payment. */
+  /** Re-fetches the salary endpoints to look for a fresh unconfirmed payout/payment. */
   refresh: () => void;
 }
 
@@ -70,6 +66,15 @@ function findPendingPayment(rows: MasterSalary[] | undefined, userId: string): S
   return null;
 }
 
+function findPendingPayout(rows: SalaryPayout[] | undefined, userId: string): SalaryPayout | null {
+  if (!rows || rows.length === 0) return null;
+  // Oldest first so the employee clears the queue in the order it arrived.
+  for (const p of rows) {
+    if (p.status === 'pending' && p.userId === userId) return p;
+  }
+  return null;
+}
+
 interface ProviderProps {
   children: React.ReactNode;
 }
@@ -78,22 +83,41 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
 
+  const [pendingPayout, setPendingPayout] = React.useState<SalaryPayout | null>(null);
   const [pendingPayment, setPendingPayment] = React.useState<SalaryPayment | null>(null);
   const [modalVisible, setModalVisible] = React.useState(false);
-  const [confirming, setConfirming] = React.useState(false);
+  // Any decide/confirm mutation in flight. `decision` says which payout button
+  // is busy so only that one spins.
+  const [busy, setBusy] = React.useState(false);
+  const [decision, setDecision] = React.useState<'accept' | 'reject' | null>(null);
 
-  // Owners / directors never see the modal — they're the senders, not
-  // the recipients.
+  // Owners / directors never see the modal — they're the senders, not the
+  // recipients. «Сотрудник» = admin + master.
   const isRecipientRole = !!user && (user.role === 'master' || user.role === 'admin');
 
   const checkOnce = React.useCallback(async () => {
     if (!user || !isRecipientRole) return;
-    const { dateFrom, dateTo } = currentMonthRange();
+    // 1) NEW payouts first — these need an accept/reject decision.
     try {
+      const res = await salaryApi.listPayouts({ status: 'pending' });
+      const payout = findPendingPayout(res.data, user.id);
+      if (payout) {
+        setPendingPayout(payout);
+        setPendingPayment(null);
+        setModalVisible(true);
+        return;
+      }
+    } catch {
+      // Endpoint unavailable / transient — fall through to legacy detection.
+    }
+    // 2) LEGACY salary_payments — single «Подтвердить получение».
+    try {
+      const { dateFrom, dateTo } = currentMonthRange();
       const res = await salaryApi.getAll({ dateFrom, dateTo });
       const found = findPendingPayment(res.data, user.id);
       if (found) {
         setPendingPayment(found);
+        setPendingPayout(null);
         setModalVisible(true);
       }
     } catch {
@@ -101,11 +125,11 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
     }
   }, [user, isRecipientRole]);
 
-  // Initial check after login. Also re-checks every time `user` changes —
-  // covers manual logout/login within the same app session.
+  // Initial check after login. Also re-checks every time `user` changes.
   React.useEffect(() => {
     if (!user) {
       // Reset on logout so a stale modal doesn't show on the login screen.
+      setPendingPayout(null);
       setPendingPayment(null);
       setModalVisible(false);
       return;
@@ -113,9 +137,8 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
     checkOnce();
   }, [user, checkOnce]);
 
-  // Foreground events — owners often send the payment while the
-  // employee's app is backgrounded. When the employee brings the app
-  // back, we re-check so the modal can pop up immediately.
+  // Foreground events — the owner often issues the payout while the employee's
+  // app is backgrounded. Re-check when it returns so the modal pops immediately.
   React.useEffect(() => {
     const onChange = (s: AppStateStatus) => {
       if (s === 'active') checkOnce();
@@ -124,39 +147,89 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
     return () => sub.remove();
   }, [checkOnce]);
 
-  // Push-notification trigger. Backend already sends the push when
-  // `createPayment` runs; we listen for it and re-check the salary
-  // endpoint so the modal can mount even if the push arrived in the
-  // foreground (in which case the OS doesn't surface a banner).
+  // Push trigger. The backend pushes when a payout/payment is issued; re-check
+  // so the modal can mount even if the push arrived in the foreground.
   React.useEffect(() => {
     const sub = Notifications.addNotificationReceivedListener((notification) => {
       const data = notification.request.content.data as Record<string, unknown> | undefined;
       const t = typeof data?.type === 'string' ? data.type : '';
-      if (t === 'salary_payment' || t === 'salary' || t === 'salary-payment') {
+      if (t.includes('salary') || t.includes('payout')) {
         checkOnce();
       }
     });
     return () => sub.remove();
   }, [checkOnce]);
 
+  // Legacy confirm (salary_payments).
   const onConfirm = React.useCallback(async () => {
-    if (!pendingPayment || confirming) return;
-    setConfirming(true);
+    if (!pendingPayment || busy) return;
+    setBusy(true);
     try {
       await salaryApi.confirmPayment(pendingPayment.id);
-      // Drop the modal first so the employee gets immediate feedback,
-      // then invalidate the cache so the owner's screen sees the
-      // confirmedAt timestamp on next refetch.
       setModalVisible(false);
-      // Defer state cleanup so the close tween can play.
       setTimeout(() => setPendingPayment(null), 220);
       queryClient.invalidateQueries({ queryKey: ['salary'] });
+      // Surface the next pending item (payout or payment), if any.
+      setTimeout(() => checkOnce(), 500);
     } catch {
       // Stay on the modal so the employee can retry.
     } finally {
-      setConfirming(false);
+      setBusy(false);
     }
-  }, [pendingPayment, confirming, queryClient]);
+  }, [pendingPayment, busy, queryClient, checkOnce]);
+
+  // NEW payout — accept.
+  const onAccept = React.useCallback(async () => {
+    if (!pendingPayout || busy) return;
+    setBusy(true);
+    setDecision('accept');
+    try {
+      await salaryApi.decidePayout(pendingPayout.id, 'accept');
+      setModalVisible(false);
+      setTimeout(() => {
+        setPendingPayout(null);
+        setDecision(null);
+      }, 240);
+      haptic('success');
+      // Accept records an expense (category «Зарплата») — cash leaves the till,
+      // so the dashboard/cashflow + the employee's month card must refresh.
+      queryClient.invalidateQueries({ queryKey: ['salary'] });
+      queryClient.invalidateQueries({ queryKey: ['salary-employee-month'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      setTimeout(() => checkOnce(), 500);
+    } catch {
+      // Stay on the modal so the employee can retry.
+      setDecision(null);
+    } finally {
+      setBusy(false);
+    }
+  }, [pendingPayout, busy, queryClient, checkOnce]);
+
+  // NEW payout — reject.
+  const onReject = React.useCallback(async () => {
+    if (!pendingPayout || busy) return;
+    setBusy(true);
+    setDecision('reject');
+    try {
+      await salaryApi.decidePayout(pendingPayout.id, 'reject');
+      setModalVisible(false);
+      setTimeout(() => {
+        setPendingPayout(null);
+        setDecision(null);
+      }, 240);
+      haptic('warning');
+      // Reject voids the payout — no expense recorded; refresh the owner list +
+      // the employee's month card so the «Отклонено» status shows.
+      queryClient.invalidateQueries({ queryKey: ['salary'] });
+      queryClient.invalidateQueries({ queryKey: ['salary-employee-month'] });
+      setTimeout(() => checkOnce(), 500);
+    } catch {
+      setDecision(null);
+    } finally {
+      setBusy(false);
+    }
+  }, [pendingPayout, busy, queryClient, checkOnce]);
 
   const ctx = React.useMemo<SalaryNotificationContextValue>(
     () => ({
@@ -171,8 +244,12 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
       <SalaryReceivedModal
         visible={modalVisible}
         payment={pendingPayment}
-        confirming={confirming}
+        payout={pendingPayout}
+        confirming={busy}
+        decision={decision}
         onConfirm={onConfirm}
+        onAccept={onAccept}
+        onReject={onReject}
       />
     </SalaryNotificationContext.Provider>
   );

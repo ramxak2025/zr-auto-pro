@@ -48,8 +48,9 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { Text } from '../platform/Typography';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
+import type { SemanticPalette } from '../theme/palette';
 import { haptic } from '../platform/haptics';
-import type { SalaryPayment } from '../../../shared/types';
+import type { SalaryPayment, SalaryPayout } from '../../../shared/types';
 
 const { width: SCREEN_W, height: SCREEN_H } = Dimensions.get('window');
 
@@ -131,15 +132,26 @@ const ConfettiPiece = React.memo(function ConfettiPiece({ index, reduceMotion }:
 
 interface SalaryReceivedModalProps {
   visible: boolean;
+  /** Legacy `salary_payments` flow — single «Подтвердить получение» CTA. */
   payment: SalaryPayment | null;
-  /** Called when the employee taps "Подтвердить получение". Parent is
-   *  expected to call `salaryApi.confirmPayment(payment.id)` and dismiss. */
+  /**
+   * NEW redesigned `salary_payouts` flow (createPayout/decidePayout). When set
+   * it takes precedence over `payment` and the card shows accept/reject CTAs.
+   */
+  payout?: SalaryPayout | null;
+  /** Legacy: employee confirms receipt → `salaryApi.confirmPayment(payment.id)`. */
   onConfirm: () => void;
-  /** Mutation pending flag — disables the CTA + shows spinner. */
+  /** Payout: employee ACCEPTS → `salaryApi.decidePayout(payout.id, 'accept')`. */
+  onAccept?: () => void;
+  /** Payout: employee REJECTS → `salaryApi.decidePayout(payout.id, 'reject')`. */
+  onReject?: () => void;
+  /** Mutation pending flag — disables the CTAs + shows a spinner. */
   confirming: boolean;
+  /** Payout: which button is in flight, so only that one spins. */
+  decision?: 'accept' | 'reject' | null;
 }
 
-function paymentTitle(type: SalaryPayment['type']): string {
+function paymentTitle(type: SalaryPayment['type'] | SalaryPayout['type']): string {
   switch (type) {
     case 'advance':
       return 'Аванс';
@@ -159,7 +171,16 @@ function formatMoney(v: number): string {
   );
 }
 
-export default function SalaryReceivedModal({ visible, payment, onConfirm, confirming }: SalaryReceivedModalProps) {
+export default function SalaryReceivedModal({
+  visible,
+  payment,
+  payout = null,
+  onConfirm,
+  onAccept,
+  onReject,
+  confirming,
+  decision = null,
+}: SalaryReceivedModalProps) {
   const palette = useColors();
   const [reduceMotion, setReduceMotion] = React.useState(false);
   useEffect(() => {
@@ -195,10 +216,14 @@ export default function SalaryReceivedModal({ visible, payment, onConfirm, confi
     transform: [{ scale: cardScale.value }],
   }));
 
-  if (!payment) return null;
+  // The new payout takes precedence over a legacy payment when both happen to
+  // be present (the context surfaces one item at a time anyway).
+  const item = payout ?? payment;
+  if (!item) return null;
+  const isPayout = !!payout;
 
-  const title = paymentTitle(payment.type);
-  const ownerName = payment.creatorName || 'Руководителя';
+  const title = paymentTitle(item.type);
+  const ownerName = item.creatorName || 'Руководителя';
 
   return (
     <RNModal visible={visible} transparent animationType="none" statusBarTranslucent>
@@ -226,21 +251,37 @@ export default function SalaryReceivedModal({ visible, payment, onConfirm, confi
           </LinearGradient>
 
           <Text style={[styles.title, { color: palette.text.secondary }]}>{title}</Text>
-          <Text style={[styles.amount, { color: palette.text.primary }]}>{formatMoney(payment.amount)}</Text>
+          <Text style={[styles.amount, { color: palette.text.primary }]}>{formatMoney(item.amount)}</Text>
           <Text style={[styles.from, { color: palette.text.secondary }]}>От {ownerName}</Text>
 
-          {payment.comment ? (
-            <Text style={[styles.comment, { color: palette.text.secondary }]}>«{payment.comment}»</Text>
+          {item.comment ? (
+            <Text style={[styles.comment, { color: palette.text.secondary }]}>«{item.comment}»</Text>
           ) : null}
 
-          <View style={styles.ctaWrap}>
-            <View style={styles.ctaShadowWrap}>
-              <CTAButton confirming={confirming} onPress={onConfirm} />
+          {isPayout ? (
+            <View style={styles.payoutCtaRow}>
+              <RejectButton
+                busy={confirming && decision === 'reject'}
+                disabled={confirming}
+                palette={palette}
+                onPress={() => onReject?.()}
+              />
+              <AcceptButton
+                busy={confirming && decision === 'accept'}
+                disabled={confirming}
+                onPress={() => onAccept?.()}
+              />
             </View>
-          </View>
+          ) : (
+            <View style={styles.ctaWrap}>
+              <View style={styles.ctaShadowWrap}>
+                <CTAButton confirming={confirming} onPress={onConfirm} />
+              </View>
+            </View>
+          )}
 
           <Text style={[styles.hint, { color: palette.text.tertiary }]}>
-            Подтвердите получение денег от руководителя
+            {isPayout ? 'Примите или отклоните выплату от руководителя' : 'Подтвердите получение денег от руководителя'}
           </Text>
         </Animated.View>
       </View>
@@ -293,6 +334,98 @@ const CTAButton = React.memo(function CTAButton({ confirming, onPress }: CTAButt
             </>
           )}
         </LinearGradient>
+      </Pressable>
+    </Animated.View>
+  );
+});
+
+// ── Payout decision buttons (Принять / Отклонить) ───────────────────────────
+
+interface DecisionButtonProps {
+  busy: boolean;
+  disabled: boolean;
+  onPress: () => void;
+}
+
+const AcceptButton = React.memo(function AcceptButton({ busy, disabled, onPress }: DecisionButtonProps) {
+  const scale = useSharedValue(1);
+  const style = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  return (
+    <Animated.View style={[styles.acceptBtn, style]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Принять выплату"
+        disabled={disabled}
+        onPressIn={() => {
+          scale.value = withTiming(0.97, { duration: 120 });
+        }}
+        onPressOut={() => {
+          scale.value = withSpring(1, { damping: 10, stiffness: 200 });
+        }}
+        onPress={() => {
+          if (!disabled) {
+            haptic('impact');
+            onPress();
+          }
+        }}
+        style={styles.decisionPressable}
+      >
+        <LinearGradient
+          colors={[colors.green[500], colors.green[700]] as [string, string]}
+          start={{ x: 0, y: 0 }}
+          end={{ x: 1, y: 0 }}
+          style={styles.decisionInner}
+        >
+          {busy ? (
+            <ActivityIndicator color={colors.white} />
+          ) : (
+            <>
+              <Ionicons name="checkmark" size={20} color={colors.white} />
+              <Text style={styles.acceptText}>Принять</Text>
+            </>
+          )}
+        </LinearGradient>
+      </Pressable>
+    </Animated.View>
+  );
+});
+
+const RejectButton = React.memo(function RejectButton({
+  busy,
+  disabled,
+  palette,
+  onPress,
+}: DecisionButtonProps & { palette: SemanticPalette }) {
+  const scale = useSharedValue(1);
+  const style = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+  return (
+    <Animated.View style={[styles.rejectBtn, style]}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Отклонить выплату"
+        disabled={disabled}
+        onPressIn={() => {
+          scale.value = withTiming(0.97, { duration: 120 });
+        }}
+        onPressOut={() => {
+          scale.value = withSpring(1, { damping: 10, stiffness: 200 });
+        }}
+        onPress={() => {
+          if (!disabled) {
+            haptic('warning');
+            onPress();
+          }
+        }}
+        style={[styles.decisionInner, styles.rejectInner, { borderColor: palette.border.strong }]}
+      >
+        {busy ? (
+          <ActivityIndicator color={palette.text.secondary} />
+        ) : (
+          <>
+            <Ionicons name="close" size={20} color={palette.text.secondary} />
+            <Text style={[styles.rejectText, { color: palette.text.secondary }]}>Отклонить</Text>
+          </>
+        )}
       </Pressable>
     </Animated.View>
   );
@@ -413,5 +546,53 @@ const styles = StyleSheet.create({
     fontSize: fontSize.xs,
     color: colors.gray[400],
     textAlign: 'center',
+  },
+
+  // Payout accept/reject CTA pair
+  payoutCtaRow: {
+    flexDirection: 'row',
+    gap: spacing[3],
+    width: '100%',
+    marginTop: spacing[5],
+  },
+  acceptBtn: {
+    flex: 1.3,
+    borderRadius: borderRadius['2xl'],
+    overflow: 'hidden',
+    shadowColor: colors.green[700],
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 5 },
+  },
+  rejectBtn: {
+    flex: 1,
+    borderRadius: borderRadius['2xl'],
+  },
+  decisionPressable: {
+    borderRadius: borderRadius['2xl'],
+    overflow: 'hidden',
+  },
+  decisionInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[4],
+    minHeight: 56,
+  },
+  rejectInner: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius['2xl'],
+  },
+  acceptText: {
+    color: colors.white,
+    fontSize: fontSize.base,
+    fontWeight: fontWeight.bold,
+    letterSpacing: -0.2,
+  },
+  rejectText: {
+    fontSize: fontSize.base,
+    fontWeight: fontWeight.semibold,
+    letterSpacing: -0.2,
   },
 });

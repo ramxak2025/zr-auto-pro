@@ -27,6 +27,7 @@ import PurchaseOrderCreateScreen from '../screens/PurchaseOrderCreateScreen';
 import PurchaseOrderDetailScreen from '../screens/PurchaseOrderDetailScreen';
 import SupplyReceiveScreen from '../screens/SupplyReceiveScreen';
 import SalaryScreen from '../screens/SalaryScreen';
+import SalaryEmployeeScreen from '../screens/SalaryEmployeeScreen';
 import MotivationScreen from '../screens/MotivationScreen';
 import ReportsScreen from '../screens/ReportsScreen';
 import CashFlowScreen from '../screens/CashFlowScreen';
@@ -386,6 +387,13 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="InstallmentDetail" component={InstallmentDetailScreen} />
       <MoreStack.Screen name="InstallmentReminderSettings" component={InstallmentReminderSettingsScreen} />
       <MoreStack.Screen name="Salary" component={GatedSalary} />
+      {/* Полноэкранная карточка зарплаты сотрудника (заменила popup). Владелец
+          открывает её тапом по сотруднику в «Зарплата»; листает месяцы, выдаёт
+          выплаты/штрафы/премии. Живёт в MoreStack → floating tab bar остаётся
+          виден, back идёт карточка → список → Ещё (как Сотрудники → детали).
+          Сотрудник (admin/master) свою карточку видит прямо в SalaryScreen, без
+          навигации сюда. */}
+      <MoreStack.Screen name="SalaryEmployee" component={SalaryEmployeeScreen} />
       {/* «Мотивация сотрудников» v1 — акционные товары (backend motivation/, 095).
           UNGATED by plan-feature: the menu row is roles-filtered to owner/director
           (director/superadmin), and setPromo/clearPromo are owner-class enforced
