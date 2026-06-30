@@ -32,7 +32,6 @@ import {
 } from '../theme';
 import { buildShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
-import { AutexaGlassHeader } from 'autexa-liquid-glass';
 import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
 
 const paymentLabels: Record<string, string> = {
@@ -353,10 +352,22 @@ const CheckRow = React.memo(function CheckRow({
 // `onSelect` setter from `useState` is stable across renders.
 interface WarehouseDocRowProps {
   item: JournalDoc;
+  // Date-group divider above this row (rendered on the first row of each
+  // calendar day). Mirrors CheckRow's `showDateHeader` / `dateGroupLabel`
+  // contract so both Journal tabs render identical «Сегодня / Вчера / 5 июня»
+  // headers with the same visual treatment.
+  showDateHeader: boolean;
+  dateGroupLabel: string;
   onSelect: (doc: JournalDoc) => void;
   palette: SemanticPalette;
 }
-const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, palette }: WarehouseDocRowProps) {
+const WarehouseDocRow = React.memo(function WarehouseDocRow({
+  item,
+  showDateHeader,
+  dateGroupLabel,
+  onSelect,
+  palette,
+}: WarehouseDocRowProps) {
   const visual = journalKindVisual[item.kind];
   const isNegative = NEGATIVE_KINDS.has(item.kind);
   const amountColor =
@@ -372,49 +383,60 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({ item, onSelect, pa
   const title = item.kind === 'supplier_payment' && item.payeeName ? `Оплата: ${item.payeeName}` : item.title;
   const subtitle = item.subtitle || journalKindLabels[item.kind];
   return (
-    <TouchableOpacity
-      style={[
-        styles.warehouseCard,
-        buildShadow(palette),
-        {
-          // Card tint (teal/purple) is a near-white pastel in light; on the
-          // dark canvas it washes out, so dark uses a translucent glow of the
-          // SAME accent. Kinds without a cardBg keep the neutral card surface.
-          backgroundColor: visual.cardBg
-            ? palette.mode === 'dark'
-              ? softTint(visual.accentColor, 'dark')
-              : visual.cardBg
-            : palette.bg.card,
-          borderColor: palette.border.subtle,
-        },
-      ]}
-      activeOpacity={0.7}
-      onPress={() => onSelect(item)}
-    >
-      <View style={[styles.warehouseAccent, { backgroundColor: visual.accentColor }]} />
-      <View style={styles.warehouseCardContent}>
-        <View style={styles.warehouseCardHeader}>
-          <View style={[styles.warehouseIconWrap, { backgroundColor: visual.accentColor + '18' }]}>
-            <Ionicons name={visual.icon} size={18} color={visual.iconColor} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.warehouseCardTitle, { color: palette.text.primary }]} numberOfLines={1}>
-              {title}
-            </Text>
-            <Text style={[styles.warehouseCardSubtitle, { color: palette.text.tertiary }]} numberOfLines={1}>
-              {subtitle}
-            </Text>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={[styles.warehouseQty, { color: amountColor }]}>
-              {isNegative ? '-' : '+'}
-              {formatMoney(Math.abs(item.amount))}
-            </Text>
-            <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>{formatDate(item.occurredAt)}</Text>
+    <View>
+      {showDateHeader && (
+        <View style={styles.dateGroupHeader}>
+          <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
+          <Text style={[styles.dateGroupText, { color: palette.text.tertiary }]}>{dateGroupLabel}</Text>
+          <View style={[styles.dateGroupLine, { backgroundColor: palette.border.subtle }]} />
+        </View>
+      )}
+      <TouchableOpacity
+        style={[
+          styles.warehouseCard,
+          buildShadow(palette),
+          {
+            // Card tint (teal/purple) is a near-white pastel in light; on the
+            // dark canvas it washes out, so dark uses a translucent glow of the
+            // SAME accent. Kinds without a cardBg keep the neutral card surface.
+            backgroundColor: visual.cardBg
+              ? palette.mode === 'dark'
+                ? softTint(visual.accentColor, 'dark')
+                : visual.cardBg
+              : palette.bg.card,
+            borderColor: palette.border.subtle,
+          },
+        ]}
+        activeOpacity={0.7}
+        onPress={() => onSelect(item)}
+      >
+        <View style={[styles.warehouseAccent, { backgroundColor: visual.accentColor }]} />
+        <View style={styles.warehouseCardContent}>
+          <View style={styles.warehouseCardHeader}>
+            <View style={[styles.warehouseIconWrap, { backgroundColor: visual.accentColor + '18' }]}>
+              <Ionicons name={visual.icon} size={18} color={visual.iconColor} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.warehouseCardTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                {title}
+              </Text>
+              <Text style={[styles.warehouseCardSubtitle, { color: palette.text.tertiary }]} numberOfLines={1}>
+                {subtitle}
+              </Text>
+            </View>
+            <View style={{ alignItems: 'flex-end' }}>
+              <Text style={[styles.warehouseQty, { color: amountColor }]}>
+                {isNegative ? '-' : '+'}
+                {formatMoney(Math.abs(item.amount))}
+              </Text>
+              <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>
+                {formatDate(item.occurredAt)}
+              </Text>
+            </View>
           </View>
         </View>
-      </View>
-    </TouchableOpacity>
+      </TouchableOpacity>
+    </View>
   );
 });
 
@@ -465,10 +487,23 @@ export default function ChecksScreen() {
   // switches so toggling Чеки → Складские документы keeps the last
   // chosen chip active.
   const [warehouseKind, setWarehouseKind] = useState<JournalKind | null>(null);
+  // Warehouse-docs date range — client-side filter over the already-loaded
+  // feed (no per-change server round-trip). Kept SEPARATE from the checks
+  // tab's `dateFrom`/`dateTo` so the two tabs' filters never bleed together.
+  const [warehouseDateFrom, setWarehouseDateFrom] = useState<Date | null>(null);
+  const [warehouseDateTo, setWarehouseDateTo] = useState<Date | null>(null);
+  const [showWhDateFromPicker, setShowWhDateFromPicker] = useState(false);
+  const [showWhDateToPicker, setShowWhDateToPicker] = useState(false);
   const [selectedDoc, setSelectedDoc] = useState<JournalDoc | null>(null);
 
-  const activeFilterCount =
+  // Funnel-badge count is tab-aware — each tab owns its own filter set, so
+  // the dot/active-state reflects only the filters of the visible tab. The
+  // checks panel below still reads `activeFilterCount` (== checksFilterCount
+  // whenever that panel is on screen), so its behaviour is unchanged.
+  const checksFilterCount =
     (dateFrom ? 1 : 0) + (dateTo ? 1 : 0) + (filterMasterId ? 1 : 0) + (returnsOnly ? 1 : 0) + (deferredOnly ? 1 : 0);
+  const warehouseFilterCount = (warehouseKind ? 1 : 0) + (warehouseDateFrom ? 1 : 0) + (warehouseDateTo ? 1 : 0);
+  const activeFilterCount = activeTab === 'warehouse' ? warehouseFilterCount : checksFilterCount;
 
   const { data: allUsers } = useQuery<User[]>({
     queryKey: ['users-for-filter'],
@@ -613,10 +648,43 @@ export default function ChecksScreen() {
   // the backend `kind` is already canonical (stock_movements.type →
   // kind mapping lives in journal.service.ts), so this is a 1:1 match
   // with no duplicates and no empty-from-bad-mapping results.
-  const warehouseDocs = useMemo(
-    () => (warehouseKind ? allWarehouseDocs.filter((d) => d.kind === warehouseKind) : allWarehouseDocs),
-    [allWarehouseDocs, warehouseKind],
-  );
+  const warehouseDocs = useMemo(() => {
+    // Local YYYY-MM-DD formatter — compares calendar days regardless of the
+    // doc's time-of-day, matching how `formatDateGroup` buckets rows. Inlined
+    // (not the component's `toISODate`) so this memo doesn't depend on a
+    // per-render function identity.
+    const fmt = (d: Date) =>
+      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const fromISO = warehouseDateFrom ? fmt(warehouseDateFrom) : null;
+    const toISO = warehouseDateTo ? fmt(warehouseDateTo) : null;
+    return allWarehouseDocs.filter((d) => {
+      if (warehouseKind && d.kind !== warehouseKind) return false;
+      if (fromISO || toISO) {
+        const docISO = fmt(new Date(d.occurredAt));
+        if (fromISO && docISO < fromISO) return false;
+        if (toISO && docISO > toISO) return false;
+      }
+      return true;
+    });
+  }, [allWarehouseDocs, warehouseKind, warehouseDateFrom, warehouseDateTo]);
+
+  // Date-group headers for the warehouse-docs list — same precompute as
+  // `dateHeaderByIndex` on the checks tab: flag the first row of each
+  // calendar day so the row component renders a «Сегодня / Вчера / 5 июня»
+  // divider above it. Relies on the backend feed being date-desc sorted
+  // (journal.service.ts orders by occurredAt DESC).
+  const warehouseDateHeaderByIndex = useMemo(() => {
+    const flags: boolean[] = new Array(warehouseDocs.length).fill(false);
+    let prev = '';
+    for (let i = 0; i < warehouseDocs.length; i++) {
+      const grp = formatDateGroup(warehouseDocs[i].occurredAt);
+      if (grp !== prev) {
+        flags[i] = true;
+        prev = grp;
+      }
+    }
+    return flags;
+  }, [warehouseDocs]);
 
   // Optimistic delete — UX feels instant because the row disappears
   // BEFORE the server confirms. The rollback path restores the cache
@@ -781,8 +849,16 @@ export default function ChecksScreen() {
   );
 
   const renderWarehouseDoc = useCallback(
-    ({ item }: { item: JournalDoc }) => <WarehouseDocRow item={item} onSelect={setSelectedDoc} palette={palette} />,
-    [palette],
+    ({ item, index }: { item: JournalDoc; index: number }) => (
+      <WarehouseDocRow
+        item={item}
+        showDateHeader={warehouseDateHeaderByIndex[index] === true}
+        dateGroupLabel={formatDateGroup(item.occurredAt)}
+        onSelect={setSelectedDoc}
+        palette={palette}
+      />
+    ),
+    [warehouseDateHeaderByIndex, palette],
   );
 
   const isWarehouseLoading = warehouseLoading;
@@ -1150,6 +1226,120 @@ export default function ChecksScreen() {
         </View>
       )}
 
+      {/* Filters panel (warehouse-documents tab) — mirrors the checks
+          funnel panel exactly: collapsed by default, revealed by the SAME
+          filter button. Holds the warehouse-doc-specific filters — document
+          type (kind) + period (date range). Supplier / warehouse filters are
+          intentionally absent: the journal feed exposes no warehouse
+          dimension, and supplier debt/balance lives in the Suppliers screen
+          (see journal-documents-ux). */}
+      {showFilters && activeTab === 'warehouse' && (
+        <View style={styles.filtersPanel}>
+          {/* Period — same date-range control as the checks panel */}
+          <View style={styles.filterRow}>
+            <TouchableOpacity
+              style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => setShowWhDateFromPicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
+              <Text
+                style={[
+                  styles.filterDateText,
+                  { color: palette.text.tertiary },
+                  warehouseDateFrom && { color: palette.text.primary },
+                ]}
+              >
+                {warehouseDateFrom ? formatFilterDate(warehouseDateFrom) : 'С даты'}
+              </Text>
+              {warehouseDateFrom && (
+                <TouchableOpacity
+                  onPress={() => setWarehouseDateFrom(null)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle-outline" size={14} color={palette.text.tertiary} />
+                </TouchableOpacity>
+              )}
+            </TouchableOpacity>
+            <Ionicons name="arrow-forward" size={12} color={palette.text.tertiary} />
+            <TouchableOpacity
+              style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => setShowWhDateToPicker(true)}
+            >
+              <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
+              <Text
+                style={[
+                  styles.filterDateText,
+                  { color: palette.text.tertiary },
+                  warehouseDateTo && { color: palette.text.primary },
+                ]}
+              >
+                {warehouseDateTo ? formatFilterDate(warehouseDateTo) : 'По дату'}
+              </Text>
+              {warehouseDateTo && (
+                <TouchableOpacity
+                  onPress={() => setWarehouseDateTo(null)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="close-circle-outline" size={14} color={palette.text.tertiary} />
+                </TouchableOpacity>
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Document type — the kind chips, moved here from the old
+              always-visible glass strip so the tab opens clean (same
+              collapse-behind-funnel UX as the checks tab). Horizontal
+              scroll keeps all chips reachable; per-kind accent + icon
+              preserved from the previous strip. */}
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: spacing[2] }}>
+            <View style={styles.kindChipsRowInner}>
+              {KIND_CHIPS.map((chip) => {
+                const active = warehouseKind === chip.key;
+                const visual = chip.key ? journalKindVisual[chip.key] : null;
+                return (
+                  <TouchableOpacity
+                    key={chip.key ?? 'all'}
+                    onPress={() => setWarehouseKind(chip.key)}
+                    activeOpacity={0.7}
+                    style={[
+                      styles.kindChip,
+                      {
+                        backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.muted,
+                        borderColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.border.subtle,
+                      },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                    accessibilityLabel={chip.label}
+                  >
+                    {visual && (
+                      <Ionicons name={visual.icon} size={12} color={active ? colors.white : palette.text.secondary} />
+                    )}
+                    <Text style={[styles.kindChipText, { color: active ? colors.white : palette.text.secondary }]}>
+                      {chip.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </ScrollView>
+
+          {warehouseFilterCount > 0 && (
+            <TouchableOpacity
+              style={styles.clearFiltersBtn}
+              onPress={() => {
+                setWarehouseKind(null);
+                setWarehouseDateFrom(null);
+                setWarehouseDateTo(null);
+              }}
+            >
+              <Ionicons name="close-circle-outline" size={14} color={colors.red[500]} />
+              <Text style={styles.clearFiltersBtnText}>Сбросить фильтры</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
       {/* Date pickers */}
       <DateTimePickerModal
         visible={showDateFromPicker}
@@ -1172,6 +1362,28 @@ export default function ChecksScreen() {
           setPage(1);
         }}
         onCancel={() => setShowDateToPicker(false)}
+      />
+      {/* Warehouse-tab date pickers — separate visibility + state from the
+          checks pickers above so the two tabs' date ranges stay independent. */}
+      <DateTimePickerModal
+        visible={showWhDateFromPicker}
+        value={warehouseDateFrom || new Date()}
+        mode="date"
+        onConfirm={(d) => {
+          setShowWhDateFromPicker(false);
+          setWarehouseDateFrom(d);
+        }}
+        onCancel={() => setShowWhDateFromPicker(false)}
+      />
+      <DateTimePickerModal
+        visible={showWhDateToPicker}
+        value={warehouseDateTo || new Date()}
+        mode="date"
+        onConfirm={(d) => {
+          setShowWhDateToPicker(false);
+          setWarehouseDateTo(d);
+        }}
+        onCancel={() => setShowWhDateToPicker(false)}
       />
 
       {/* Content */}
@@ -1259,57 +1471,6 @@ export default function ChecksScreen() {
         </>
       ) : (
         <>
-          {/* Kind filter chips — drive `journalApi.warehouseDocs({type})`.
-              Horizontal scroll so all 7 chips fit on small screens.
-
-              The chip strip sits on a NATIVE Liquid-Glass material
-              (AutexaGlassHeader → UIVisualEffectView, auto-upgraded to iOS 26
-              UIGlassEffect). The glass is a pure visual background: the chips
-              below are unchanged RN TouchableOpacity, still drive the same
-              `warehouseKind` state + query, and render BYTE-FOR-BYTE the same
-              on Android / iOS where the native module is unavailable (then
-              AutexaGlassHeader is a transparent passthrough View). See
-              modules/autexa-liquid-glass/src/AutexaGlassHeader.tsx. */}
-          <AutexaGlassHeader variant="thinMaterial" style={styles.kindChipsGlass}>
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              style={styles.kindChipsScroll}
-              contentContainerStyle={styles.kindChipsRow}
-            >
-              <View style={styles.kindChipsRowInner}>
-                {KIND_CHIPS.map((chip) => {
-                  const active = warehouseKind === chip.key;
-                  const visual = chip.key ? journalKindVisual[chip.key] : null;
-                  return (
-                    <TouchableOpacity
-                      key={chip.key ?? 'all'}
-                      onPress={() => setWarehouseKind(chip.key)}
-                      activeOpacity={0.7}
-                      style={[
-                        styles.kindChip,
-                        {
-                          backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.muted,
-                          borderColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.border.subtle,
-                        },
-                      ]}
-                      accessibilityRole="button"
-                      accessibilityState={{ selected: active }}
-                      accessibilityLabel={chip.label}
-                    >
-                      {visual && (
-                        <Ionicons name={visual.icon} size={12} color={active ? colors.white : palette.text.secondary} />
-                      )}
-                      <Text style={[styles.kindChipText, { color: active ? colors.white : palette.text.secondary }]}>
-                        {chip.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-            </ScrollView>
-          </AutexaGlassHeader>
-
           {/* Cold-start path: skeleton only while the very first (unfiltered)
              fetch is in flight. Switching chips never shows a skeleton —
              the feed is already loaded and we filter it in memory.
@@ -1584,39 +1745,11 @@ const styles = StyleSheet.create({
   },
   deferredCountBadgeText: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.red[700] },
 
-  // ── Warehouse kind chips (above the warehouse-docs list) ────────
-  // Horizontal scroll row driving `journalApi.warehouseDocs({ type })`.
-  // Корень бага: ScrollView — прямой child flex-колонки (styles.safe,
-  // flex:1). Без flexGrow:0 колонка растягивала горизонтальный
-  // ScrollView по вертикали, и чипы «плавали» в середине высокой
-  // пустой полосы. flexGrow/flexShrink:0 заставляют ScrollView
-  // обнимать высоту контента (chip 32 + paddingBottom) — компактная
-  // полоса, под которой список идёт сразу. alignSelf:'flex-start'
-  // защищает от cross-axis stretch на узких/широких iPhone.
-  // Native Liquid-Glass material strip behind the kind chips. Must hug the
-  // chip-row height (flexGrow/flexShrink: 0), same lesson as kindChipsScroll
-  // below — the parent is a flex column (styles.safe, flex:1) and without
-  // this the glass band would stretch to fill the column and the chips would
-  // float in the middle of a tall empty strip. Full-width so the material
-  // reads edge-to-edge; the chips keep their own paddingHorizontal. A little
-  // top padding gives the chips breathing room inside the glass. On Android /
-  // no-module this style applies to a plain transparent View (no visual
-  // change vs. before).
-  kindChipsGlass: {
-    flexGrow: 0,
-    flexShrink: 0,
-    alignSelf: 'stretch',
-    paddingTop: spacing[1.5],
-  },
-  kindChipsScroll: {
-    flexGrow: 0,
-    flexShrink: 0,
-    alignSelf: 'flex-start',
-  },
-  kindChipsRow: {
-    paddingHorizontal: spacing[4],
-    paddingBottom: spacing[2],
-  },
+  // ── Warehouse kind chips (now inside the funnel filter panel) ───
+  // Document-type filter chips for the warehouse-docs tab. Moved out of the
+  // old always-visible Liquid-Glass strip and behind the funnel button so the
+  // tab opens clean, mirroring the checks tab. `kindChipsRowInner` lays the
+  // chips out in a row inside a horizontal ScrollView within the filter panel.
   kindChipsRowInner: {
     flexDirection: 'row',
     alignItems: 'center',
