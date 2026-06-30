@@ -53,6 +53,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useAllStaff, decideStaffListView } from '../hooks/useUsers';
 import { colors, spacing } from '../theme';
 import type { User, TodayEmployeeStatus, EmployeeRanking } from '../../../shared/types';
 import { roleLabels } from '../../../shared/utils/formatters';
@@ -182,22 +183,10 @@ export default function EmployeesScreen() {
   const showFinancials =
     me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin' || hasPermission('profit_view');
 
-  const {
-    data: users,
-    isLoading,
-    isFetching,
-    isError,
-    refetch,
-    dataUpdatedAt,
-  } = useQuery<User[]>({
-    queryKey: ['users-all'],
-    queryFn: async () => {
-      const res = await usersApi.getAll();
-      return Array.isArray(res.data) ? res.data : [];
-    },
-    staleTime: 60_000,
-    placeholderData: (prev) => prev,
-  });
+  // ['users-all'] — отдельный ключ (не ['users']) с той же resilient формой
+  // (`User[]`) через общий хук. См. hooks/useUsers.ts: единая queryFn гарантирует,
+  // что в кэш под этим ключом всегда ложится массив (а не сырой AxiosResponse).
+  const { data: users, isLoading, isFetching, isError, isSuccess, refetch, dataUpdatedAt } = useAllStaff();
 
   // ── Поиск + фильтр по роли (client-side: весь штат уже на руках) ──
   const [search, setSearch] = useState('');
@@ -320,6 +309,17 @@ export default function EmployeesScreen() {
 
   const isFiltering = search.trim().length > 0 || roleFilter !== 'all';
 
+  // Дискриминация loading / error / empty / list (чистая, юнит-тестируемая —
+  // hooks/useUsers.ts). «Сотрудников пока нет» рисуем ТОЛЬКО при подтверждённом
+  // успехе и реально пустом штате — никогда при загрузке/ошибке/placeholder
+  // (иначе при сбое сети или протухшем кэше экран мигал ложной пустотой).
+  const staffView = decideStaffListView({
+    hasData: users !== undefined,
+    isError,
+    isSuccess,
+    visibleCount: sortedUsers.length,
+  });
+
   const onRefresh = async () => {
     setRefreshing(true);
     await Promise.all([
@@ -422,7 +422,7 @@ export default function EmployeesScreen() {
         <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
       </View>
 
-      {users === undefined && isError ? (
+      {staffView === 'error' ? (
         // Запрос упал и кэша нет — честный error-state с Retry (глобальный
         // stale-while-revalidate покрывает случай «кэш есть, фон упал»).
         <QueryErrorState
@@ -430,9 +430,9 @@ export default function EmployeesScreen() {
           description="Проверьте соединение и попробуйте ещё раз."
           onRetry={() => refetch()}
         />
-      ) : users === undefined ? (
+      ) : staffView === 'skeleton' ? (
         <ListSkeleton count={9} />
-      ) : sortedUsers.length === 0 ? (
+      ) : staffView === 'empty' ? (
         <View style={{ flex: 1 }}>
           <EmptyState
             icon="people"

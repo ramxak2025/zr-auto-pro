@@ -46,6 +46,7 @@ import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useUsers } from '../hooks/useUsers';
 import type { TodayEmployeeStatus, ScheduleEntry, ScheduleSettings, User } from '../../../shared/types';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
 import { decideScheduleView } from './scheduleViewState';
@@ -746,21 +747,16 @@ function GridTab() {
     staleTime: 30_000,
   });
 
+  // ['users'] — общий слот (его пишут также login-prefetch и UsersScreen).
+  // Через общий хук форма гарантированно `User[]` у всех читателей, поэтому
+  // грид больше не схлопывается в «Нет мастеров» из-за чужой формы кэша.
   const {
     data: usersData,
     isLoading: usersLoading,
     isError: usersError,
     isSuccess: usersSuccess,
     refetch: refetchUsers,
-  } = useQuery<User[]>({
-    queryKey: ['users'],
-    queryFn: async () => {
-      const res = await usersApi.getAll();
-      return toArray<User>(res.data);
-    },
-    placeholderData: (prev) => prev,
-    staleTime: 5 * 60_000,
-  });
+  } = useUsers();
 
   // Deferred grid mount — the month grid is ~300-450 cells; mounting it
   // synchronously during the push transition blocked the JS thread and
@@ -2123,11 +2119,8 @@ function RatingTab() {
     placeholderData: (prev) => prev,
   });
 
-  const { data: usersData } = useQuery<User[]>({
-    queryKey: ['users'],
-    queryFn: async () => toArray<User>((await usersApi.getAll()).data),
-    placeholderData: (prev) => prev,
-  });
+  // ['users'] через общий хук — единая форма (`User[]`) у всех читателей слота.
+  const { data: usersData } = useUsers();
 
   // Same eligibility rule as the grid's activeUsers: owners (superadmin /
   // director / owner) не отображаются в графике — и в рейтинге тоже.
@@ -2499,14 +2492,8 @@ function SettingsTab() {
 
   const canEditSettings = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
 
-  const { data: usersData } = useQuery<User[]>({
-    queryKey: ['users'],
-    queryFn: async () => {
-      const res = await usersApi.getAll();
-      return toArray<User>(res.data);
-    },
-    placeholderData: (prev) => prev,
-  });
+  // ['users'] через общий хук — единая форма (`User[]`) у всех читателей слота.
+  const { data: usersData } = useUsers();
 
   const { data: workModes } = useQuery<any[]>({
     queryKey: ['work-modes'],

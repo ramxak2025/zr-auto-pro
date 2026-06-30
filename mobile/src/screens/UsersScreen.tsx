@@ -29,6 +29,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { useShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useUsers, decideStaffListView } from '../hooks/useUsers';
 import { haptic } from '../platform/haptics';
 import type {
   User,
@@ -493,11 +494,13 @@ export default function UsersScreen() {
   const [showAddProduct, setShowAddProduct] = useState(false);
   const [productSearchText, setProductSearchText] = useState('');
 
-  const { data, isLoading, isError, refetch } = useQuery({
-    queryKey: ['users'],
-    queryFn: () => usersApi.getAll(),
-    select: (res) => res.data as User[],
-  });
+  // ['users'] — общий слот, который пишут также login-prefetch и три вкладки
+  // ScheduleScreen. Раньше ЗДЕСЬ queryFn возвращала сырой AxiosResponse, а
+  // массив доставал `select` — единственный писатель не-массива в общий ключ.
+  // Когда слот перезаписывали массивом (Schedule/prefetch), `select(массив)
+  // .data === undefined` → users = [] → ложное «Нет сотрудников». Теперь форма
+  // едина (`User[]`) через общий хук — см. hooks/useUsers.ts.
+  const { data, isLoading, isError, isSuccess, refetch } = useUsers();
 
   const { data: allProducts } = useQuery<Product[]>({
     queryKey: ['all-products-commissions'],
@@ -509,6 +512,16 @@ export default function UsersScreen() {
   });
 
   const users = Array.isArray(data) ? data : [];
+
+  // Дискриминация loading / error / empty / list (чистая, юнит-тестируемая —
+  // hooks/useUsers.ts). «Нет сотрудников» рисуем ТОЛЬКО при подтверждённом
+  // успехе и реально пустом списке — никогда при загрузке/ошибке/placeholder.
+  const staffView = decideStaffListView({
+    hasData: data !== undefined,
+    isError,
+    isSuccess,
+    visibleCount: users.length,
+  });
 
   // Section visibility (#071) is persisted via its own endpoint AFTER the user
   // row exists. On create we only have the id from the create response, so the
@@ -1078,24 +1091,7 @@ export default function UsersScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
       >
-        {users.length === 0 ? (
-          isError ? (
-            // Ошибка загрузки без кэша (например, окно деплоя) — НЕ показываем
-            // «Нет сотрудников» (это вводит в заблуждение), а даём явную ошибку
-            // с «Повторить». Так список не выглядит пустым из-за сбоя сети.
-            <EmptyState
-              title="Не удалось загрузить"
-              description="Проверьте соединение и потяните вниз или нажмите «Повторить»"
-              action={{ label: 'Повторить', onPress: () => refetch() }}
-            />
-          ) : (
-            <EmptyState
-              title="Нет сотрудников"
-              description="Добавьте первого сотрудника"
-              action={{ label: 'Добавить', onPress: openCreate }}
-            />
-          )
-        ) : (
+        {staffView === 'list' ? (
           users.map((user, idx) => {
             const badge = getRoleBadge(user.role);
             const canDelete = user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director';
@@ -1116,6 +1112,26 @@ export default function UsersScreen() {
               />
             );
           })
+        ) : staffView === 'error' ? (
+          // Ошибка без кэша (например, окно деплоя) — НЕ «Нет сотрудников» (это
+          // вводит в заблуждение), а явная ошибка с «Повторить». Список не
+          // выглядит пустым из-за сбоя сети.
+          <EmptyState
+            title="Не удалось загрузить"
+            description="Проверьте соединение и потяните вниз или нажмите «Повторить»"
+            action={{ label: 'Повторить', onPress: () => refetch() }}
+          />
+        ) : staffView === 'empty' ? (
+          // Единственное легальное «пусто»: запрос ['users'] подтверждённо
+          // успешен и сотрудников реально нет.
+          <EmptyState
+            title="Нет сотрудников"
+            description="Добавьте первого сотрудника"
+            action={{ label: 'Добавить', onPress: openCreate }}
+          />
+        ) : (
+          // 'skeleton' — placeholder/stale без подтверждения: спиннер, НЕ «пусто».
+          <LoadingSpinner />
         )}
       </ScrollView>
 
