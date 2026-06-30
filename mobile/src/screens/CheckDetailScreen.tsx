@@ -33,7 +33,16 @@ import Modal from '../components/Modal';
 import { haptic } from '../platform/haptics';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, paymentMethodBadgeColor } from '../theme';
+import {
+  colors,
+  fontSize,
+  fontWeight,
+  borderRadius,
+  spacing,
+  getBadgeColors,
+  paymentMethodBadgeColor,
+  softTint,
+} from '../theme';
 import { buildShadow } from '../platform/iosSurface';
 import { columnVisual, workStatusVisual } from '../constants/workStatus';
 import type { Check, Tenant, FiscalReceipt } from '../../../shared/types';
@@ -82,6 +91,11 @@ export default function CheckDetailScreen() {
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
   const palette = useColors();
+  // Dark-mode flag — gates accent-tile fills (icon chips, action circles,
+  // status/plate badges, section headers) onto the muted `softTint` dark
+  // formula. The light branch always keeps the exact legacy `[50]` token so
+  // LIGHT mode stays pixel-identical.
+  const isDark = palette.mode === 'dark';
   const { id } = route.params;
   // ── Возврат заказ-наряда ────────────────────────────────────────────
   // Видна только для директора / администратора / superadmin: оформление
@@ -630,7 +644,10 @@ export default function CheckDetailScreen() {
     return (
       <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
         <View style={[styles.header, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}>
-          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={[styles.backBtn, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+          >
             <Ionicons name="chevron-back" size={20} color={colors.primary[600]} />
           </TouchableOpacity>
           <View style={styles.headerCenter}>
@@ -724,7 +741,16 @@ export default function CheckDetailScreen() {
             <TouchableOpacity
               onPress={openReturnModal}
               disabled={isReturned}
-              style={[styles.actionBtn, { backgroundColor: isReturned ? palette.bg.muted : colors.red[50] }]}
+              style={[
+                styles.actionBtn,
+                {
+                  backgroundColor: isReturned
+                    ? palette.bg.muted
+                    : isDark
+                      ? softTint(colors.red[600], 'dark')
+                      : colors.red[50],
+                },
+              ]}
               accessibilityRole="button"
               accessibilityLabel={isReturned ? 'Возврат уже оформлен' : 'Оформить возврат'}
               accessibilityState={{ disabled: isReturned }}
@@ -757,7 +783,10 @@ export default function CheckDetailScreen() {
                   },
                 ]);
               }}
-              style={[styles.actionBtn, { backgroundColor: colors.red[50] }]}
+              style={[
+                styles.actionBtn,
+                { backgroundColor: isDark ? softTint(colors.red[600], 'dark') : colors.red[50] },
+              ]}
             >
               <Ionicons name="trash-outline" size={17} color={colors.red[500]} />
             </TouchableOpacity>
@@ -779,8 +808,14 @@ export default function CheckDetailScreen() {
             style={[
               styles.statusChip,
               isDeferred
-                ? { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }
-                : { backgroundColor: colors.green[50], borderColor: colors.green[200] },
+                ? {
+                    backgroundColor: isDark ? softTint(colors.amber[600], 'dark') : colors.amber[50],
+                    borderColor: isDark ? 'rgba(217, 119, 6, 0.32)' : colors.amber[200],
+                  }
+                : {
+                    backgroundColor: isDark ? softTint(colors.green[600], 'dark') : colors.green[50],
+                    borderColor: isDark ? 'rgba(34, 197, 94, 0.3)' : colors.green[200],
+                  },
             ]}
           >
             <View
@@ -790,7 +825,12 @@ export default function CheckDetailScreen() {
               ]}
             />
             <Text
-              style={[styles.statusChipText, isDeferred ? { color: colors.amber[600] } : { color: colors.green[700] }]}
+              style={[
+                styles.statusChipText,
+                isDeferred
+                  ? { color: isDark ? colors.amber[200] : colors.amber[600] }
+                  : { color: isDark ? colors.green[300] : colors.green[700] },
+              ]}
             >
               {isDeferred ? 'Отложен' : 'Закрыт'}
             </Text>
@@ -952,7 +992,12 @@ export default function CheckDetailScreen() {
               onPress={() => openClient(navigation, check.clientId)}
               accessibilityRole={check.clientId ? 'button' : undefined}
             >
-              <View style={[styles.infoIcon, { backgroundColor: colors.blue[50] }]}>
+              <View
+                style={[
+                  styles.infoIcon,
+                  { backgroundColor: isDark ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
+                ]}
+              >
                 <Ionicons name="person" size={15} color={colors.blue[600]} />
               </View>
               <View style={styles.infoBody}>
@@ -968,7 +1013,10 @@ export default function CheckDetailScreen() {
               <View style={styles.infoActions}>
                 <TouchableOpacity
                   onPress={handleCallClient}
-                  style={[styles.infoActionBtn, { backgroundColor: colors.green[50] }]}
+                  style={[
+                    styles.infoActionBtn,
+                    { backgroundColor: isDark ? softTint(colors.green[600], 'dark') : colors.green[50] },
+                  ]}
                   hitSlop={6}
                   accessibilityRole="button"
                   accessibilityLabel="Позвонить клиенту"
@@ -977,7 +1025,10 @@ export default function CheckDetailScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={handleWhatsAppClient}
-                  style={[styles.infoActionBtn, { backgroundColor: colors.teal[50] }]}
+                  style={[
+                    styles.infoActionBtn,
+                    { backgroundColor: isDark ? softTint(colors.teal[600], 'dark') : colors.teal[50] },
+                  ]}
                   hitSlop={6}
                   accessibilityRole="button"
                   accessibilityLabel="Написать в WhatsApp"
@@ -1001,7 +1052,12 @@ export default function CheckDetailScreen() {
                 onPress={() => openCarOwner(navigation, check.clientId)}
                 accessibilityRole={check.clientId ? 'button' : undefined}
               >
-                <View style={[styles.infoIcon, { backgroundColor: colors.indigo[50] }]}>
+                <View
+                  style={[
+                    styles.infoIcon,
+                    { backgroundColor: isDark ? softTint(colors.indigo[600], 'dark') : colors.indigo[50] },
+                  ]}
+                >
                   <Ionicons name="car-sport" size={15} color={colors.indigo[600]} />
                 </View>
                 <View style={styles.infoBody}>
@@ -1013,8 +1069,18 @@ export default function CheckDetailScreen() {
                   </Text>
                 </View>
                 {check.car.plateNumber ? (
-                  <View style={styles.plateTag}>
-                    <Text style={styles.plateTagText}>{check.car.plateNumber}</Text>
+                  <View
+                    style={[
+                      styles.plateTag,
+                      isDark && {
+                        backgroundColor: softTint(colors.primary[600], 'dark'),
+                        borderColor: 'rgba(79, 131, 232, 0.35)',
+                      },
+                    ]}
+                  >
+                    <Text style={[styles.plateTagText, isDark && { color: colors.primary[300] }]}>
+                      {check.car.plateNumber}
+                    </Text>
                   </View>
                 ) : check.clientId ? (
                   <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
@@ -1034,7 +1100,12 @@ export default function CheckDetailScreen() {
                 onPress={() => openEmployee(navigation, check.masterId)}
                 accessibilityRole={check.masterId ? 'button' : undefined}
               >
-                <View style={[styles.infoIcon, { backgroundColor: colors.orange[50] }]}>
+                <View
+                  style={[
+                    styles.infoIcon,
+                    { backgroundColor: isDark ? softTint(colors.orange[500], 'dark') : colors.orange[50] },
+                  ]}
+                >
                   <Ionicons name="build" size={15} color={colors.orange[500]} />
                 </View>
                 <View style={styles.infoBody}>
@@ -1054,7 +1125,12 @@ export default function CheckDetailScreen() {
             <>
               <View style={[styles.infoDivider, { backgroundColor: palette.border.subtle }]} />
               <View style={styles.infoRowWrap}>
-                <View style={[styles.infoIcon, { backgroundColor: colors.teal[50] }]}>
+                <View
+                  style={[
+                    styles.infoIcon,
+                    { backgroundColor: isDark ? softTint(colors.teal[600], 'dark') : colors.teal[50] },
+                  ]}
+                >
                   <Ionicons name="speedometer" size={15} color={colors.teal[600]} />
                 </View>
                 <View style={styles.infoBody}>
@@ -1088,7 +1164,11 @@ export default function CheckDetailScreen() {
           >
             <View style={styles.sectionHeader}>
               <LinearGradient
-                colors={[colors.orange[50], palette.bg.card]}
+                colors={
+                  isDark
+                    ? [softTint(colors.orange[500], 'dark'), palette.bg.card]
+                    : [colors.orange[50], palette.bg.card]
+                }
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.sectionGradient}
@@ -1148,7 +1228,9 @@ export default function CheckDetailScreen() {
           >
             <View style={styles.sectionHeader}>
               <LinearGradient
-                colors={[colors.blue[50], palette.bg.card]}
+                colors={
+                  isDark ? [softTint(colors.blue[600], 'dark'), palette.bg.card] : [colors.blue[50], palette.bg.card]
+                }
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.sectionGradient}
@@ -1201,12 +1283,16 @@ export default function CheckDetailScreen() {
         {warrantyClaims.length > 0 && (
           <View style={[styles.warrantyCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.warrantyHeader}>
-              <View style={styles.warrantyHeaderIcon}>
+              <View
+                style={[styles.warrantyHeaderIcon, isDark && { backgroundColor: softTint(colors.green[600], 'dark') }]}
+              >
                 <Ionicons name="shield-checkmark" size={15} color={colors.green[600]} />
               </View>
               <Text style={[styles.warrantyTitle, { color: palette.text.primary }]}>Гарантия выдана</Text>
-              <View style={styles.warrantyBadge}>
-                <Text style={styles.warrantyBadgeText}>{warrantyClaims.length}</Text>
+              <View style={[styles.warrantyBadge, isDark && { backgroundColor: softTint(colors.green[600], 'dark') }]}>
+                <Text style={[styles.warrantyBadgeText, isDark && { color: colors.green[300] }]}>
+                  {warrantyClaims.length}
+                </Text>
               </View>
             </View>
             {warrantyClaims.map((claim, idx) => {
@@ -1271,7 +1357,9 @@ export default function CheckDetailScreen() {
           >
             <View style={styles.sectionHeader}>
               <LinearGradient
-                colors={[colors.teal[50], palette.bg.card]}
+                colors={
+                  isDark ? [softTint(colors.teal[600], 'dark'), palette.bg.card] : [colors.teal[50], palette.bg.card]
+                }
                 start={{ x: 0, y: 0 }}
                 end={{ x: 1, y: 0 }}
                 style={styles.sectionGradient}
@@ -1383,26 +1471,56 @@ export default function CheckDetailScreen() {
         {canFiscalize && (!!fiscalReceipt || (!isDeferred && !isReturned)) && (
           <View style={[styles.fiscalCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             <View style={styles.fiscalHeader}>
-              <View style={[styles.fiscalIconWrap, { backgroundColor: colors.violet[50] }]}>
+              <View
+                style={[
+                  styles.fiscalIconWrap,
+                  { backgroundColor: isDark ? softTint(colors.violet[600], 'dark') : colors.violet[50] },
+                ]}
+              >
                 <Ionicons name="receipt-outline" size={15} color={colors.violet[600]} />
               </View>
               <Text style={[styles.fiscalTitle, { color: palette.text.primary }]}>Онлайн-касса 54-ФЗ</Text>
               {fiscalReceipt?.status === 'done' && (
-                <View style={[styles.fiscalStatusPill, { backgroundColor: colors.green[50] }]}>
+                <View
+                  style={[
+                    styles.fiscalStatusPill,
+                    { backgroundColor: isDark ? softTint(colors.green[600], 'dark') : colors.green[50] },
+                  ]}
+                >
                   <Ionicons name="checkmark-circle" size={12} color={colors.green[600]} />
-                  <Text style={[styles.fiscalStatusPillText, { color: colors.green[700] }]}>Фискализирован</Text>
+                  <Text
+                    style={[styles.fiscalStatusPillText, { color: isDark ? colors.green[300] : colors.green[700] }]}
+                  >
+                    Фискализирован
+                  </Text>
                 </View>
               )}
               {fiscalReceipt?.status === 'pending' && (
-                <View style={[styles.fiscalStatusPill, { backgroundColor: colors.amber[50] }]}>
+                <View
+                  style={[
+                    styles.fiscalStatusPill,
+                    { backgroundColor: isDark ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+                  ]}
+                >
                   <ActivityIndicator size="small" color={colors.amber[600]} />
-                  <Text style={[styles.fiscalStatusPillText, { color: colors.amber[700] }]}>Отправка…</Text>
+                  <Text
+                    style={[styles.fiscalStatusPillText, { color: isDark ? colors.amber[200] : colors.amber[700] }]}
+                  >
+                    Отправка…
+                  </Text>
                 </View>
               )}
               {fiscalReceipt?.status === 'failed' && (
-                <View style={[styles.fiscalStatusPill, { backgroundColor: colors.red[50] }]}>
+                <View
+                  style={[
+                    styles.fiscalStatusPill,
+                    { backgroundColor: isDark ? softTint(colors.red[600], 'dark') : colors.red[50] },
+                  ]}
+                >
                   <Ionicons name="alert-circle" size={12} color={colors.red[600]} />
-                  <Text style={[styles.fiscalStatusPillText, { color: colors.red[700] }]}>Ошибка</Text>
+                  <Text style={[styles.fiscalStatusPillText, { color: isDark ? colors.red[300] : colors.red[700] }]}>
+                    Ошибка
+                  </Text>
                 </View>
               )}
             </View>
@@ -1460,7 +1578,9 @@ export default function CheckDetailScreen() {
               <TouchableOpacity
                 style={[
                   styles.fiscalActionBtn,
-                  { borderColor: colors.purple[200], backgroundColor: colors.violet[50] },
+                  isDark
+                    ? { borderColor: 'rgba(147, 51, 234, 0.35)', backgroundColor: softTint(colors.violet[600], 'dark') }
+                    : { borderColor: colors.purple[200], backgroundColor: colors.violet[50] },
                 ]}
                 onPress={handleFiscalize}
                 disabled={fiscalizeMutation.isPending}
@@ -1470,15 +1590,17 @@ export default function CheckDetailScreen() {
                 accessibilityState={{ disabled: fiscalizeMutation.isPending }}
               >
                 {fiscalizeMutation.isPending ? (
-                  <ActivityIndicator size="small" color={colors.violet[600]} />
+                  <ActivityIndicator size="small" color={isDark ? colors.purple[300] : colors.violet[600]} />
                 ) : (
                   <>
                     <Ionicons
                       name={fiscalReceipt?.status === 'failed' ? 'refresh' : 'receipt'}
                       size={16}
-                      color={colors.violet[600]}
+                      color={isDark ? colors.purple[300] : colors.violet[600]}
                     />
-                    <Text style={[styles.fiscalActionBtnText, { color: colors.violet[600] }]}>
+                    <Text
+                      style={[styles.fiscalActionBtnText, { color: isDark ? colors.purple[300] : colors.violet[600] }]}
+                    >
                       {fiscalReceipt?.status === 'failed' ? 'Повторить фискализацию' : 'Фискализировать чек'}
                     </Text>
                   </>
@@ -1683,7 +1805,7 @@ export default function CheckDetailScreen() {
               { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
               returnDestination === 'warehouse' && {
                 borderColor: colors.primary[500],
-                backgroundColor: colors.primary[50],
+                backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
               },
             ]}
             onPress={() => {
@@ -1713,7 +1835,7 @@ export default function CheckDetailScreen() {
               { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
               returnDestination === 'defect' && {
                 borderColor: colors.red[400],
-                backgroundColor: colors.red[50],
+                backgroundColor: isDark ? softTint(colors.red[600], 'dark') : colors.red[50],
               },
             ]}
             onPress={() => {

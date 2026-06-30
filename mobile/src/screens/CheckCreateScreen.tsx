@@ -344,6 +344,11 @@ export default function CheckCreateScreen() {
   const tabBarHeight = useTabBarHeight();
   const insetsTop = useSafeAreaInsets().top;
   const palette = useColors();
+  // Dark-mode flag — gates accent-tile fills (avatars, icon chips, plate /
+  // line badges, master/template chips) onto the muted `softTint` dark formula
+  // while keeping the light branch on the exact legacy `[50]` token so LIGHT
+  // mode stays pixel-identical.
+  const isDark = palette.mode === 'dark';
   const editId = route.params?.id;
   // ── Записи → касса (приход) ────────────────────────────────────────────
   // ADDITIVE, param-gated: when the Записи «Подтвердить приход» flow pushes
@@ -1679,9 +1684,19 @@ export default function CheckCreateScreen() {
                 снятие галочки «Отложить» внизу + сохранение закроет черновик
                 и проведёт его в выручку (бэк спишет склад/гарантии). */}
             {isEditingDeferred && (
-              <View style={styles.deferredEditHint}>
+              <View
+                style={[
+                  styles.deferredEditHint,
+                  isDark && {
+                    backgroundColor: softTint(colors.amber[600], 'dark'),
+                    borderColor: 'rgba(217, 119, 6, 0.32)',
+                  },
+                ]}
+              >
                 <Ionicons name="pause-circle" size={16} color={colors.amber[600]} />
-                <Text style={styles.deferredEditHintText}>Редактируется отложенный чек</Text>
+                <Text style={[styles.deferredEditHintText, isDark && { color: colors.amber[200] }]}>
+                  Редактируется отложенный чек
+                </Text>
               </View>
             )}
 
@@ -1758,8 +1773,16 @@ export default function CheckCreateScreen() {
               >
                 {/* — Section 1: client header — */}
                 <View style={styles.selectedCardTop}>
-                  <View style={styles.selectedCardAvatar}>
-                    <Ionicons name="person" size={22} color={colors.primary[700]} />
+                  <View
+                    style={[
+                      styles.selectedCardAvatar,
+                      isDark && {
+                        backgroundColor: softTint(colors.primary[600], 'dark'),
+                        borderColor: 'rgba(79, 131, 232, 0.35)',
+                      },
+                    ]}
+                  >
+                    <Ionicons name="person" size={22} color={isDark ? colors.primary[300] : colors.primary[700]} />
                   </View>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.selectedCardName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -1857,8 +1880,18 @@ export default function CheckCreateScreen() {
                         activeOpacity={0.7}
                       >
                         {car.plateNumber && (
-                          <View style={styles.plateChip}>
-                            <Text style={styles.plateChipText}>{car.plateNumber}</Text>
+                          <View
+                            style={[
+                              styles.plateChip,
+                              isDark && {
+                                backgroundColor: softTint(colors.primary[600], 'dark'),
+                                borderColor: 'rgba(79, 131, 232, 0.35)',
+                              },
+                            ]}
+                          >
+                            <Text style={[styles.plateChipText, isDark && { color: colors.primary[300] }]}>
+                              {car.plateNumber}
+                            </Text>
                           </View>
                         )}
                         <View style={{ flex: 1 }}>
@@ -1888,13 +1921,20 @@ export default function CheckCreateScreen() {
                       <TouchableOpacity
                         style={[
                           styles.createClientBtn,
-                          { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+                          isDark
+                            ? {
+                                backgroundColor: softTint(colors.primary[600], 'dark'),
+                                borderColor: 'rgba(79, 131, 232, 0.35)',
+                              }
+                            : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
                         ]}
                         onPress={() => setShowQuickCreate(true)}
                         activeOpacity={0.8}
                       >
                         <Ionicons name="person-add-outline" size={15} color={colors.primary[600]} />
-                        <Text style={styles.createClientBtnText}>Создать клиента</Text>
+                        <Text style={[styles.createClientBtnText, isDark && { color: colors.primary[300] }]}>
+                          Создать клиента
+                        </Text>
                       </TouchableOpacity>
                     </View>
                   )}
@@ -2091,12 +2131,20 @@ export default function CheckCreateScreen() {
                 <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Товары и услуги</Text>
               </View>
               <TouchableOpacity
-                style={[styles.templateChip, { backgroundColor: colors.primary[50], borderColor: colors.primary[100] }]}
+                style={[
+                  styles.templateChip,
+                  isDark
+                    ? {
+                        backgroundColor: softTint(colors.primary[600], 'dark'),
+                        borderColor: 'rgba(79, 131, 232, 0.35)',
+                      }
+                    : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+                ]}
                 onPress={() => setShowTemplatesPicker(true)}
                 hitSlop={8}
               >
                 <Ionicons name="copy-outline" size={13} color={colors.primary[600]} />
-                <Text style={styles.templateChipText}>Шаблоны</Text>
+                <Text style={[styles.templateChipText, isDark && { color: colors.primary[300] }]}>Шаблоны</Text>
               </TouchableOpacity>
             </View>
 
@@ -2106,18 +2154,27 @@ export default function CheckCreateScreen() {
             >
               <View style={styles.linesSectionHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                  <View style={[styles.sectionIcon, { backgroundColor: colors.orange[50] }]}>
+                  <View
+                    style={[
+                      styles.sectionIcon,
+                      { backgroundColor: isDark ? softTint(colors.orange[500], 'dark') : colors.orange[50] },
+                    ]}
+                  >
                     <Ionicons name="build-outline" size={14} color={colors.orange[500]} />
                   </View>
                   <Text style={[styles.linesSectionTitle, { color: palette.text.primary }]}>Услуги</Text>
                   {serviceLines.length > 0 && (
-                    <View style={styles.lineBadge}>
-                      <Text style={styles.lineBadgeText}>{serviceLines.length}</Text>
+                    <View
+                      style={[styles.lineBadge, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+                    >
+                      <Text style={[styles.lineBadgeText, isDark && { color: colors.primary[300] }]}>
+                        {serviceLines.length}
+                      </Text>
                     </View>
                   )}
                 </View>
                 <TouchableOpacity
-                  style={styles.addLineBtn}
+                  style={[styles.addLineBtn, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
                   onPress={() => {
                     setServiceSearch('');
                     setShowServicePicker(true);
@@ -2145,9 +2202,14 @@ export default function CheckCreateScreen() {
                       <Ionicons name="close-circle-outline" size={18} color={colors.red[400]} />
                     </TouchableOpacity>
                   </View>
-                  <TouchableOpacity style={styles.lineMasterRow} onPress={() => setShowMasterPicker(idx)}>
+                  <TouchableOpacity
+                    style={[styles.lineMasterRow, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+                    onPress={() => setShowMasterPicker(idx)}
+                  >
                     <Ionicons name="person-outline" size={12} color={colors.primary[500]} />
-                    <Text style={styles.lineMasterText}>{getMasterName(line.lineMasterId || line.masterId)}</Text>
+                    <Text style={[styles.lineMasterText, isDark && { color: colors.primary[300] }]}>
+                      {getMasterName(line.lineMasterId || line.masterId)}
+                    </Text>
                     <Ionicons name="chevron-down" size={10} color={palette.text.tertiary} />
                   </TouchableOpacity>
                   <View style={styles.lineInputs}>
@@ -2211,17 +2273,29 @@ export default function CheckCreateScreen() {
             >
               <View style={styles.linesSectionHeader}>
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                  <View style={[styles.sectionIcon, { backgroundColor: colors.blue[50] }]}>
+                  <View
+                    style={[
+                      styles.sectionIcon,
+                      { backgroundColor: isDark ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
+                    ]}
+                  >
                     <Ionicons name="cube-outline" size={14} color={colors.blue[600]} />
                   </View>
                   <Text style={[styles.linesSectionTitle, { color: palette.text.primary }]}>Товары</Text>
                   {productLines.length > 0 && (
-                    <View style={styles.lineBadge}>
-                      <Text style={styles.lineBadgeText}>{productLines.length}</Text>
+                    <View
+                      style={[styles.lineBadge, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+                    >
+                      <Text style={[styles.lineBadgeText, isDark && { color: colors.primary[300] }]}>
+                        {productLines.length}
+                      </Text>
                     </View>
                   )}
                 </View>
-                <TouchableOpacity style={styles.addLineBtn} onPress={() => setShowProductPicker(true)}>
+                <TouchableOpacity
+                  style={[styles.addLineBtn, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+                  onPress={() => setShowProductPicker(true)}
+                >
                   <Ionicons name="add" size={16} color={colors.primary[600]} />
                 </TouchableOpacity>
               </View>
@@ -2665,7 +2739,13 @@ export default function CheckCreateScreen() {
                     style={[
                       styles.deferToggle,
                       { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                      isDeferred && styles.deferToggleActive,
+                      isDeferred &&
+                        (isDark
+                          ? {
+                              backgroundColor: softTint(colors.amber[600], 'dark'),
+                              borderColor: 'rgba(217, 119, 6, 0.4)',
+                            }
+                          : styles.deferToggleActive),
                     ]}
                     onPress={() => setIsDeferred(!isDeferred)}
                   >
@@ -2770,7 +2850,9 @@ export default function CheckCreateScreen() {
                     style={[
                       styles.masterCircle,
                       { backgroundColor: palette.bg.muted },
-                      isSelected && { backgroundColor: colors.primary[100] },
+                      isSelected && {
+                        backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[100],
+                      },
                     ]}
                   >
                     <Ionicons
@@ -2783,7 +2865,7 @@ export default function CheckCreateScreen() {
                     style={[
                       styles.pickerName,
                       { color: palette.text.primary },
-                      isSelected && { color: colors.primary[700] },
+                      isSelected && { color: isDark ? colors.primary[300] : colors.primary[700] },
                     ]}
                   >
                     {m.fullName}
@@ -2872,9 +2954,12 @@ export default function CheckCreateScreen() {
             </View>
           ) : (
             templates.map((tpl) => (
-              <View key={tpl.id} style={[styles.pickerItem, { borderBottomColor: colors.gray[100] }]}>
+              <View
+                key={tpl.id}
+                style={[styles.pickerItem, { borderBottomColor: isDark ? palette.border.subtle : colors.gray[100] }]}
+              >
                 <View style={{ flex: 1 }}>
-                  <Text style={[styles.pickerName, { color: colors.gray[900] }]}>{tpl.name}</Text>
+                  <Text style={[styles.pickerName, { color: palette.text.primary }]}>{tpl.name}</Text>
                   <Text style={{ fontSize: 11, color: colors.gray[400], marginTop: 2 }}>
                     {tpl.services.length > 0 ? `${tpl.services.length} усл.` : ''}
                     {tpl.services.length > 0 && tpl.products.length > 0 ? ' · ' : ''}
@@ -2885,13 +2970,21 @@ export default function CheckCreateScreen() {
                   <TouchableOpacity
                     onPress={() => applyTemplate(tpl)}
                     style={{
-                      backgroundColor: colors.primary[50],
+                      backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
                       borderRadius: 8,
                       paddingHorizontal: spacing[3],
                       paddingVertical: 6,
                     }}
                   >
-                    <Text style={{ fontSize: 13, color: colors.primary[600], fontWeight: '600' }}>Применить</Text>
+                    <Text
+                      style={{
+                        fontSize: 13,
+                        color: isDark ? colors.primary[300] : colors.primary[600],
+                        fontWeight: '600',
+                      }}
+                    >
+                      Применить
+                    </Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     onPress={() =>
