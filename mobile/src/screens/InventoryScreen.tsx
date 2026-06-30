@@ -39,7 +39,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import { colors, spacing, fontSize, fontWeight, borderRadius } from '../theme';
+import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
 import type { Product, PaginatedResponse, Warehouse } from '../../../shared/types';
 
@@ -374,8 +374,32 @@ export default function InventoryScreen() {
             accessibilityLabel={`Фактический остаток: ${item.name}`}
           />
           {touched && diff !== 0 ? (
-            <View style={[styles.diffBadge, { backgroundColor: diff > 0 ? colors.green[50] : colors.red[50] }]}>
-              <Text variant="caption" color={diff > 0 ? colors.green[700] : colors.red[700]} style={styles.diffText}>
+            <View
+              style={[
+                styles.diffBadge,
+                {
+                  backgroundColor:
+                    palette.mode === 'dark'
+                      ? softTint(diff > 0 ? colors.green[600] : colors.red[600], 'dark')
+                      : diff > 0
+                        ? colors.green[50]
+                        : colors.red[50],
+                },
+              ]}
+            >
+              <Text
+                variant="caption"
+                color={
+                  palette.mode === 'dark'
+                    ? diff > 0
+                      ? colors.green[400]
+                      : colors.red[400]
+                    : diff > 0
+                      ? colors.green[700]
+                      : colors.red[700]
+                }
+                style={styles.diffText}
+              >
                 {diff > 0 ? '+' : ''}
                 {diff}
               </Text>

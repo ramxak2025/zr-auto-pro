@@ -35,10 +35,10 @@ import { useColors } from '../contexts/ThemeContext';
 import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
-import { colors, borderRadius, spacing } from '../theme';
+import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type PurchaseOrder, type Supplier } from '../../../shared/types';
-import { PO_STATUS_META, formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purchaseOrderHelpers';
+import { getPoStatusMeta, formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purchaseOrderHelpers';
 
 export default function PurchaseOrderDetailScreen() {
   const navigation = useNavigation<any>();
@@ -67,8 +67,9 @@ export default function PurchaseOrderDetailScreen() {
     placeholderData: (prev) => prev ?? seedPo,
   });
 
-  const meta = po ? PO_STATUS_META[po.status] : null;
+  const meta = po ? getPoStatusMeta(palette.mode)[po.status] : null;
   const items = useMemo(() => po?.items ?? [], [po]);
+  const dark = palette.mode === 'dark';
 
   // Supplier phone for the WhatsApp deep link — cache-first ['suppliers'] list
   // (already persisted/warmed). Fetched lazily when the request sheet opens; a
@@ -217,13 +218,25 @@ export default function PurchaseOrderDetailScreen() {
                     <View
                       style={[
                         styles.qtyBadge,
-                        { backgroundColor: fullyReceived ? colors.green[50] : palette.bg.muted },
+                        {
+                          backgroundColor: fullyReceived
+                            ? dark
+                              ? getBadgeColors('dark').green.bg
+                              : colors.green[50]
+                            : palette.bg.muted,
+                        },
                       ]}
                     >
                       <Text
                         style={[
                           styles.qtyBadgeText,
-                          { color: fullyReceived ? colors.green[700] : palette.text.secondary },
+                          {
+                            color: fullyReceived
+                              ? dark
+                                ? getBadgeColors('dark').green.text
+                                : colors.green[700]
+                              : palette.text.secondary,
+                          },
                         ]}
                       >
                         Получено {it.receivedQuantity}
@@ -297,7 +310,7 @@ export default function PurchaseOrderDetailScreen() {
                 <Ionicons name="create-outline" size={18} color={palette.text.secondary} />
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.iconActionBtn, { borderColor: colors.red[200] }]}
+                style={[styles.iconActionBtn, { borderColor: dark ? 'rgba(248, 113, 113, 0.40)' : colors.red[200] }]}
                 onPress={() => {
                   haptic('tap');
                   setConfirmCancel(true);
@@ -344,7 +357,11 @@ export default function PurchaseOrderDetailScreen() {
                   <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>Изменить</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.secondaryBtn, styles.secondaryBtnFlex, { borderColor: colors.red[200] }]}
+                  style={[
+                    styles.secondaryBtn,
+                    styles.secondaryBtnFlex,
+                    { borderColor: dark ? 'rgba(248, 113, 113, 0.40)' : colors.red[200] },
+                  ]}
                   onPress={() => {
                     haptic('tap');
                     setConfirmCancel(true);

@@ -1494,7 +1494,10 @@ export default function ExpensesScreen() {
               style={[
                 styles.catPickerItem,
                 { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                !selectedCategoryId && styles.catPickerItemActive,
+                !selectedCategoryId &&
+                  (palette.mode === 'dark'
+                    ? { borderColor: palette.accent.primary, backgroundColor: softTint(colors.primary[600], 'dark') }
+                    : styles.catPickerItemActive),
               ]}
               onPress={() => setSelectedCategoryId('')}
               activeOpacity={0.7}
@@ -1504,7 +1507,8 @@ export default function ExpensesScreen() {
                 style={[
                   styles.catPickerText,
                   { color: palette.text.secondary },
-                  !selectedCategoryId && styles.catPickerTextActive,
+                  !selectedCategoryId &&
+                    (palette.mode === 'dark' ? { color: colors.primary[300] } : styles.catPickerTextActive),
                 ]}
               >
                 Без категории
@@ -1518,7 +1522,13 @@ export default function ExpensesScreen() {
                   style={[
                     styles.catPickerItem,
                     { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-                    catActive && styles.catPickerItemActive,
+                    catActive &&
+                      (palette.mode === 'dark'
+                        ? {
+                            borderColor: palette.accent.primary,
+                            backgroundColor: softTint(colors.primary[600], 'dark'),
+                          }
+                        : styles.catPickerItemActive),
                   ]}
                   onPress={() => setSelectedCategoryId(c.id)}
                   activeOpacity={0.7}
@@ -1528,7 +1538,8 @@ export default function ExpensesScreen() {
                     style={[
                       styles.catPickerText,
                       { color: palette.text.secondary },
-                      catActive && styles.catPickerTextActive,
+                      catActive &&
+                        (palette.mode === 'dark' ? { color: colors.primary[300] } : styles.catPickerTextActive),
                     ]}
                   >
                     {c.name}

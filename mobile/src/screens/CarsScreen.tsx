@@ -11,7 +11,7 @@ import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { normalizePlateQuery, plateMatches, looksLikePlateQuery } from '../utils/plateNormalize';
 import { haptic } from '../platform/haptics';
@@ -114,8 +114,17 @@ export default function CarsScreen() {
                   <Text style={[styles.plateText, { color: palette.text.primary }]}>{item.plateNumber}</Text>
                 </View>
               ) : (
-                <View style={styles.carIconBox}>
-                  <Ionicons name="car-sport-outline" size={22} color={colors.primary[600]} />
+                <View
+                  style={[
+                    styles.carIconBox,
+                    palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
+                  ]}
+                >
+                  <Ionicons
+                    name="car-sport-outline"
+                    size={22}
+                    color={palette.mode === 'dark' ? colors.primary[300] : colors.primary[600]}
+                  />
                 </View>
               )}
             </View>

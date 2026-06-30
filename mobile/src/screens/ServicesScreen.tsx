@@ -24,7 +24,7 @@ import EmptyState from '../components/EmptyState';
 import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Service, PaginatedResponse } from '../../../shared/types';
@@ -56,7 +56,12 @@ const ServiceRow = React.memo(function ServiceRow({ item, index, onOpen, palette
       onPress={() => onOpen(item)}
     >
       <View style={styles.serviceRow}>
-        <View style={styles.serviceIconCircle}>
+        <View
+          style={[
+            styles.serviceIconCircle,
+            palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
+          ]}
+        >
           <Ionicons name="construct-outline" size={16} color={colors.primary[500]} />
         </View>
         <View style={styles.serviceInfo}>
@@ -340,7 +345,12 @@ export default function ServicesScreen() {
                     onPress={() => setActivePath((prev) => [...prev, folderName])}
                     activeOpacity={0.6}
                   >
-                    <View style={styles.folderIconBox}>
+                    <View
+                      style={[
+                        styles.folderIconBox,
+                        palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
+                      ]}
+                    >
                       <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
                     </View>
                     <View style={styles.folderInfo}>
@@ -421,13 +431,18 @@ export default function ServicesScreen() {
           </TouchableOpacity>
           {editingService && (
             <TouchableOpacity
-              style={styles.deleteFormBtn}
+              style={[
+                styles.deleteFormBtn,
+                palette.mode === 'dark' && { backgroundColor: softTint(colors.red[600], 'dark') },
+              ]}
               onPress={() => {
                 setDeleteId(editingService.id);
                 closeModal();
               }}
             >
-              <Text style={styles.deleteFormBtnText}>Удалить</Text>
+              <Text style={[styles.deleteFormBtnText, palette.mode === 'dark' && { color: colors.red[300] }]}>
+                Удалить
+              </Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity

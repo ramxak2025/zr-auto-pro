@@ -55,7 +55,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { marketingApi, telephonyApi } from '../api/services';
 import { SERVER_URL } from '../api/axios';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
@@ -276,8 +276,17 @@ function ProviderCard({ provider, integration, onPress, index }: ProviderCardPro
       style={[styles.providerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.providerCardRow}>
-        <View style={[styles.providerLogo, { backgroundColor: provider.tone.bg }]}>
-          <Ionicons name={provider.iconName as any} size={22} color={provider.tone.fg} />
+        <View
+          style={[
+            styles.providerLogo,
+            { backgroundColor: palette.mode === 'dark' ? softTint(provider.tone.fg, 'dark') : provider.tone.bg },
+          ]}
+        >
+          <Ionicons
+            name={provider.iconName as any}
+            size={22}
+            color={palette.mode === 'dark' ? provider.tone.bg : provider.tone.fg}
+          />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.providerName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -305,14 +314,14 @@ function StatusPill({ kind }: { kind: 'ok' | 'warn' | 'off' }) {
   const palette = useColors();
   const map = {
     ok: {
-      bg: colors.green[50],
-      fg: colors.green[700],
+      bg: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
+      fg: palette.mode === 'dark' ? colors.green[300] : colors.green[700],
       label: 'Подключено',
       dot: colors.green[500],
     },
     warn: {
-      bg: colors.amber[50],
-      fg: colors.amber[700],
+      bg: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
+      fg: palette.mode === 'dark' ? colors.amber[200] : colors.amber[700],
       label: 'Есть ошибки',
       dot: colors.amber[600],
     },
@@ -352,8 +361,17 @@ function PlatformCard({ platform, link, onPress, index }: PlatformCardProps) {
       style={[styles.providerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.providerCardRow}>
-        <View style={[styles.providerLogo, { backgroundColor: platform.tone.bg }]}>
-          <Ionicons name={platform.iconName as any} size={22} color={platform.tone.fg} />
+        <View
+          style={[
+            styles.providerLogo,
+            { backgroundColor: palette.mode === 'dark' ? softTint(platform.tone.fg, 'dark') : platform.tone.bg },
+          ]}
+        >
+          <Ionicons
+            name={platform.iconName as any}
+            size={22}
+            color={palette.mode === 'dark' ? platform.tone.bg : platform.tone.fg}
+          />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.providerName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -403,8 +421,13 @@ function MoneyEntryCard({ name, description, iconName, tone, onPress, index }: M
       style={[styles.providerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.providerCardRow}>
-        <View style={[styles.providerLogo, { backgroundColor: tone.bg }]}>
-          <Ionicons name={iconName as any} size={22} color={tone.fg} />
+        <View
+          style={[
+            styles.providerLogo,
+            { backgroundColor: palette.mode === 'dark' ? softTint(tone.fg, 'dark') : tone.bg },
+          ]}
+        >
+          <Ionicons name={iconName as any} size={22} color={palette.mode === 'dark' ? tone.bg : tone.fg} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.providerName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -561,8 +584,17 @@ function ProviderModal({
   return (
     <Modal visible={!!provider} onClose={onClose} title={provider.name}>
       <View style={styles.modalHeaderBlock}>
-        <View style={[styles.modalLogo, { backgroundColor: provider.tone.bg }]}>
-          <Ionicons name={provider.iconName as any} size={26} color={provider.tone.fg} />
+        <View
+          style={[
+            styles.modalLogo,
+            { backgroundColor: palette.mode === 'dark' ? softTint(provider.tone.fg, 'dark') : provider.tone.bg },
+          ]}
+        >
+          <Ionicons
+            name={provider.iconName as any}
+            size={26}
+            color={palette.mode === 'dark' ? provider.tone.bg : provider.tone.fg}
+          />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>{provider.description}</Text>
@@ -885,8 +917,17 @@ function PlatformModal({
     return (
       <Modal visible={!!platform} onClose={onClose} title={platform.name}>
         <View style={styles.modalHeaderBlock}>
-          <View style={[styles.modalLogo, { backgroundColor: platform.tone.bg }]}>
-            <Ionicons name={platform.iconName as any} size={26} color={platform.tone.fg} />
+          <View
+            style={[
+              styles.modalLogo,
+              { backgroundColor: palette.mode === 'dark' ? softTint(platform.tone.fg, 'dark') : platform.tone.bg },
+            ]}
+          >
+            <Ionicons
+              name={platform.iconName as any}
+              size={26}
+              color={palette.mode === 'dark' ? platform.tone.bg : platform.tone.fg}
+            />
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>{platform.description}</Text>
@@ -905,8 +946,17 @@ function PlatformModal({
   return (
     <Modal visible={!!platform} onClose={onClose} title={platform.name}>
       <View style={styles.modalHeaderBlock}>
-        <View style={[styles.modalLogo, { backgroundColor: platform.tone.bg }]}>
-          <Ionicons name={platform.iconName as any} size={26} color={platform.tone.fg} />
+        <View
+          style={[
+            styles.modalLogo,
+            { backgroundColor: palette.mode === 'dark' ? softTint(platform.tone.fg, 'dark') : platform.tone.bg },
+          ]}
+        >
+          <Ionicons
+            name={platform.iconName as any}
+            size={26}
+            color={palette.mode === 'dark' ? platform.tone.bg : platform.tone.fg}
+          />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>{platform.description}</Text>

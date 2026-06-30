@@ -47,7 +47,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { purchaseOrdersApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
-import { colors, borderRadius, spacing } from '../theme';
+import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type PurchaseOrder } from '../../../shared/types';
 import { formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purchaseOrderHelpers';
@@ -81,6 +81,7 @@ export default function SupplyReceiveScreen() {
   const { isRole } = useAuth();
   const canWrite = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
 
+  const dark = palette.mode === 'dark';
   const orderId: string = route.params?.orderId;
   const seedPo: PurchaseOrder | undefined = route.params?.po;
 
@@ -354,8 +355,30 @@ export default function SupplyReceiveScreen() {
                       </Text>
                     </View>
                   ) : null}
-                  <View style={[styles.qtyBadge, { backgroundColor: done ? colors.green[50] : palette.bg.muted }]}>
-                    <Text style={[styles.qtyBadgeText, { color: done ? colors.green[700] : palette.text.secondary }]}>
+                  <View
+                    style={[
+                      styles.qtyBadge,
+                      {
+                        backgroundColor: done
+                          ? dark
+                            ? getBadgeColors('dark').green.bg
+                            : colors.green[50]
+                          : palette.bg.muted,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.qtyBadgeText,
+                        {
+                          color: done
+                            ? dark
+                              ? getBadgeColors('dark').green.text
+                              : colors.green[700]
+                            : palette.text.secondary,
+                        },
+                      ]}
+                    >
                       {done ? 'Получено полностью' : `Остаток ${max}`}
                     </Text>
                   </View>

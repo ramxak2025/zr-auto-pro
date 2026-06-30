@@ -16,6 +16,7 @@ import { Pressable, StyleSheet, View, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
+import { useOptionalColors } from '../contexts/ThemeContext';
 import { colors, spacing, borderRadius, fontWeight } from '../theme';
 
 export type PlateMode = 'ru' | 'foreign';
@@ -26,8 +27,10 @@ interface Props {
 }
 
 export default function PlateModeSwitcher({ value, onChange }: Props) {
+  const palette = useOptionalColors();
+  const dark = palette.mode === 'dark';
   return (
-    <View style={styles.wrap}>
+    <View style={[styles.wrap, dark && { backgroundColor: palette.bg.muted }]}>
       <Segment
         active={value === 'ru'}
         label="RU"
@@ -63,18 +66,40 @@ interface SegmentProps {
 }
 
 function Segment({ active, label, flag, icon, onPress }: SegmentProps) {
+  const palette = useOptionalColors();
+  const dark = palette.mode === 'dark';
   return (
     <Pressable
       onPress={onPress}
-      style={[styles.segment, active && styles.segmentActive]}
+      style={[styles.segment, active && styles.segmentActive, active && dark && { backgroundColor: palette.bg.card }]}
       hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
     >
       {flag ? (
         <Text style={[styles.flag, !active && { opacity: 0.55 }]}>{flag}</Text>
       ) : icon ? (
-        <Ionicons name={icon} size={14} color={active ? colors.primary[700] : colors.gray[500]} />
+        <Ionicons
+          name={icon}
+          size={14}
+          color={
+            active
+              ? dark
+                ? palette.accent.primaryText
+                : colors.primary[700]
+              : dark
+                ? palette.text.tertiary
+                : colors.gray[500]
+          }
+        />
       ) : null}
-      <Text style={[styles.label, active ? styles.labelActive : styles.labelInactive]}>{label}</Text>
+      <Text
+        style={[
+          styles.label,
+          active ? styles.labelActive : styles.labelInactive,
+          dark && (active ? { color: palette.accent.primaryText } : { color: palette.text.tertiary }),
+        ]}
+      >
+        {label}
+      </Text>
     </Pressable>
   );
 }

@@ -43,7 +43,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { paymentsApi } from '../api/services';
 import type { Payment } from '../../../shared/types';
@@ -280,7 +280,14 @@ export default function SbpPaymentModal({ visible, amount, checkId, onClose, onS
 
             {phase === 'not_configured' && (
               <View style={styles.centerBlock}>
-                <View style={[styles.statusIcon, { backgroundColor: colors.amber[50] }]}>
+                <View
+                  style={[
+                    styles.statusIcon,
+                    {
+                      backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
+                    },
+                  ]}
+                >
                   <Ionicons name="alert-circle-outline" size={30} color={colors.amber[600]} />
                 </View>
                 <Text style={[styles.centerTitle, { color: palette.text.primary }]}>Эквайринг не подключён</Text>
@@ -300,7 +307,14 @@ export default function SbpPaymentModal({ visible, amount, checkId, onClose, onS
 
             {phase === 'error' && (
               <View style={styles.centerBlock}>
-                <View style={[styles.statusIcon, { backgroundColor: colors.rose[50] }]}>
+                <View
+                  style={[
+                    styles.statusIcon,
+                    {
+                      backgroundColor: palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50],
+                    },
+                  ]}
+                >
                   <Ionicons name="close-circle-outline" size={30} color={colors.rose[600]} />
                 </View>
                 <Text style={[styles.centerTitle, { color: palette.text.primary }]}>Не удалось создать платёж</Text>
@@ -370,10 +384,24 @@ export default function SbpPaymentModal({ visible, amount, checkId, onClose, onS
 
             {phase === 'succeeded' && (
               <View style={styles.centerBlock}>
-                <View style={[styles.statusIcon, { backgroundColor: colors.green[50] }]}>
+                <View
+                  style={[
+                    styles.statusIcon,
+                    {
+                      backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
+                    },
+                  ]}
+                >
                   <Ionicons name="checkmark-circle" size={34} color={colors.green[600]} />
                 </View>
-                <Text style={[styles.centerTitle, { color: colors.green[700] }]}>Оплата получена</Text>
+                <Text
+                  style={[
+                    styles.centerTitle,
+                    { color: palette.mode === 'dark' ? colors.green[400] : colors.green[700] },
+                  ]}
+                >
+                  Оплата получена
+                </Text>
                 <Text style={[styles.centerText, { color: palette.text.secondary }]}>Проводим чек…</Text>
               </View>
             )}

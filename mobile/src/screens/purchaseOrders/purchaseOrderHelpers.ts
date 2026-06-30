@@ -9,7 +9,7 @@
  * Receiving credits product stock server-side; received is terminal.
  */
 import { Ionicons } from '@expo/vector-icons';
-import { colors } from '../../theme';
+import { colors, getBadgeColors } from '../../theme';
 import type { PurchaseOrderStatus } from '../../../../shared/types';
 
 export interface PoStatusMeta {
@@ -28,6 +28,36 @@ export const PO_STATUS_META: Record<PurchaseOrderStatus, PoStatusMeta> = {
   received: { label: 'Получен', bg: colors.green[50], text: colors.green[700], icon: 'checkmark-done-outline' },
   cancelled: { label: 'Отменён', bg: colors.red[50], text: colors.red[600], icon: 'close-circle-outline' },
 };
+
+/** Status → dark badge palette key — drives the dark-mode chip fill + text. */
+const PO_STATUS_BADGE_KEY: Record<PurchaseOrderStatus, 'gray' | 'blue' | 'green' | 'red'> = {
+  draft: 'gray',
+  ordered: 'blue',
+  received: 'green',
+  cancelled: 'red',
+};
+
+/**
+ * Theme-aware status metadata.
+ *
+ * LIGHT returns the byte-identical `PO_STATUS_META` above (the web-matched
+ * pale-`[50]` chips — DO NOT change them). DARK swaps the pale fills + dark
+ * `[600]/[700]` text for the established translucent dark-badge colours
+ * (`badgeColorsDark` via `getBadgeColors('dark')`) so the status chips and the
+ * icon-tile that reuses `meta.bg` don't glow on the near-black canvas. `label`
+ * + `icon` are theme-independent and carried through unchanged.
+ */
+export function getPoStatusMeta(mode: 'light' | 'dark'): Record<PurchaseOrderStatus, PoStatusMeta> {
+  if (mode === 'light') return PO_STATUS_META;
+  const badges = getBadgeColors('dark');
+  const out = {} as Record<PurchaseOrderStatus, PoStatusMeta>;
+  (Object.keys(PO_STATUS_META) as PurchaseOrderStatus[]).forEach((status) => {
+    const base = PO_STATUS_META[status];
+    const badge = badges[PO_STATUS_BADGE_KEY[status]];
+    out[status] = { ...base, bg: badge.bg, text: badge.text };
+  });
+  return out;
+}
 
 /** Order used for the list status-filter chips. */
 export const PO_STATUS_ORDER: PurchaseOrderStatus[] = ['draft', 'ordered', 'received', 'cancelled'];

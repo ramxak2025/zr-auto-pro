@@ -26,11 +26,11 @@ import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
-import { PO_STATUS_META, formatPoDate } from './purchaseOrders/purchaseOrderHelpers';
+import { getPoStatusMeta, formatPoDate } from './purchaseOrders/purchaseOrderHelpers';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { haptic } from '../platform/haptics';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint, getBadgeColors } from '../theme';
 import {
   UserRole,
   type Supplier,
@@ -61,6 +61,23 @@ export default function SupplierDetailScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
+  const dark = palette.mode === 'dark';
+  // Established dark-badge palette (`badgeColorsDark`). Referenced ONLY inside
+  // `dark` branches below so light mode keeps its exact web-matched `[50]`
+  // fills + `[600]/[700]` text — never read this in the light path.
+  const db = getBadgeColors('dark');
+  // Theme-resolved purchase-order status palette (light = web-matched pale
+  // chips, dark = translucent badge fills). Used by the «Заказы» block + the
+  // order picker below.
+  const poMeta = getPoStatusMeta(palette.mode);
+  // Dark-mode fragments for the dashed accent «add» buttons + the debt
+  // callout. Each is `null` in light so the static StyleSheet (web-matched
+  // pale `primary[50]` / `red[50]` fills) renders byte-identically.
+  const actionBtnDark = dark
+    ? { backgroundColor: softTint(colors.primary[600], 'dark'), borderColor: 'rgba(79, 131, 232, 0.35)' }
+    : null;
+  const actionTextDark = dark ? { color: colors.primary[300] } : null;
+  const accentIconColor = dark ? colors.primary[300] : colors.primary[600];
   const { isRole } = useAuth();
   // Write gate for placing purchase orders — director / admin / superadmin
   // (matches PurchaseOrdersScreen); the server re-checks on every mutation.
@@ -617,12 +634,15 @@ export default function SupplierDetailScreen() {
             <Ionicons
               name="alert-circle-outline"
               size={16}
-              color={supplier.currentDebt > 0 ? colors.red[600] : palette.text.tertiary}
+              color={supplier.currentDebt > 0 ? (dark ? colors.red[400] : colors.red[600]) : palette.text.tertiary}
               style={{ marginBottom: 2 }}
             />
             <Text style={[styles.statLabel, { color: palette.text.secondary }]}>Долг</Text>
             <Text
-              style={[styles.statValue, { color: supplier.currentDebt > 0 ? colors.red[600] : palette.text.primary }]}
+              style={[
+                styles.statValue,
+                { color: supplier.currentDebt > 0 ? (dark ? colors.red[400] : colors.red[600]) : palette.text.primary },
+              ]}
             >
               {formatMoney(supplier.currentDebt)}
             </Text>
@@ -759,7 +779,7 @@ export default function SupplierDetailScreen() {
             ) : (
               <View>
                 {supplierOrders.slice(0, 6).map((po) => {
-                  const meta = PO_STATUS_META[po.status];
+                  const meta = poMeta[po.status];
                   return (
                     <TouchableOpacity
                       key={po.id}
@@ -886,9 +906,9 @@ export default function SupplierDetailScreen() {
                 поэтому для него кнопку не показываем. Гейт canWriteOrders —
                 приёмка это write-операция (сервер дублирует проверку). */}
             {!isUsedPurchaseSupplier && canWriteOrders && (
-              <TouchableOpacity style={styles.actionBtn} onPress={startNewSupply} activeOpacity={0.8}>
-                <Ionicons name="add-circle-outline" size={18} color={colors.primary[600]} />
-                <Text style={styles.actionBtnText}>Новая поставка</Text>
+              <TouchableOpacity style={[styles.actionBtn, actionBtnDark]} onPress={startNewSupply} activeOpacity={0.8}>
+                <Ionicons name="add-circle-outline" size={18} color={accentIconColor} />
+                <Text style={[styles.actionBtnText, actionTextDark]}>Новая поставка</Text>
               </TouchableOpacity>
             )}
             {/* Подсказка, когда есть оформленные заказы, ожидающие приёмки. */}
@@ -944,19 +964,39 @@ export default function SupplierDetailScreen() {
                         <Text style={[styles.deliveryDate, { color: palette.text.primary }]}>{formatDate(d.date)}</Text>
                         {/* Поставка, принятая по заказу (098) — показываем связь. */}
                         {d.purchaseOrderId && (
-                          <View style={[styles.statusBadge, { backgroundColor: colors.blue[50] }]}>
-                            <Ionicons name="clipboard-outline" size={11} color={colors.blue[600]} />
-                            <Text style={[styles.statusBadgeText, { color: colors.blue[600] }]}>по заказу</Text>
+                          <View style={[styles.statusBadge, { backgroundColor: dark ? db.blue.bg : colors.blue[50] }]}>
+                            <Ionicons
+                              name="clipboard-outline"
+                              size={11}
+                              color={dark ? db.blue.text : colors.blue[600]}
+                            />
+                            <Text style={[styles.statusBadgeText, { color: dark ? db.blue.text : colors.blue[600] }]}>
+                              по заказу
+                            </Text>
                           </View>
                         )}
                         {d.paymentStatus === 'paid' ? (
-                          <View style={[styles.statusBadge, styles.statusPaid]}>
-                            <Ionicons name="checkmark-circle" size={13} color={colors.green[700]} />
-                            <Text style={[styles.statusBadgeText, { color: colors.green[700] }]}>Оплачено</Text>
+                          <View
+                            style={[styles.statusBadge, dark ? { backgroundColor: db.green.bg } : styles.statusPaid]}
+                          >
+                            <Ionicons
+                              name="checkmark-circle"
+                              size={13}
+                              color={dark ? db.green.text : colors.green[700]}
+                            />
+                            <Text style={[styles.statusBadgeText, { color: dark ? db.green.text : colors.green[700] }]}>
+                              Оплачено
+                            </Text>
                           </View>
                         ) : (
-                          <View style={[styles.statusBadge, { backgroundColor: colors.orange[50] }]}>
-                            <Text style={[styles.statusBadgeText, { color: colors.orange[600] }]}>В долг</Text>
+                          <View
+                            style={[styles.statusBadge, { backgroundColor: dark ? db.orange.bg : colors.orange[50] }]}
+                          >
+                            <Text
+                              style={[styles.statusBadgeText, { color: dark ? db.orange.text : colors.orange[600] }]}
+                            >
+                              В долг
+                            </Text>
                           </View>
                         )}
                       </View>
@@ -967,7 +1007,7 @@ export default function SupplierDetailScreen() {
                         <Ionicons
                           name={isExpanded ? 'chevron-up' : 'chevron-down'}
                           size={16}
-                          color={colors.gray[400]}
+                          color={palette.text.tertiary}
                         />
                       </View>
                     </View>
@@ -1024,15 +1064,15 @@ export default function SupplierDetailScreen() {
         {tab === 'payments' && (
           <>
             <TouchableOpacity
-              style={styles.actionBtn}
+              style={[styles.actionBtn, actionBtnDark]}
               onPress={() => {
                 setPaymentAmount('');
                 setPaymentComment('');
                 setPaymentModalOpen(true);
               }}
             >
-              <Ionicons name="add-circle-outline" size={18} color={colors.primary[600]} />
-              <Text style={styles.actionBtnText}>Новый платёж</Text>
+              <Ionicons name="add-circle-outline" size={18} color={accentIconColor} />
+              <Text style={[styles.actionBtnText, actionTextDark]}>Новый платёж</Text>
             </TouchableOpacity>
 
             {(payments || []).length === 0 && (
@@ -1061,7 +1101,9 @@ export default function SupplierDetailScreen() {
                         <Text style={[styles.commentText, { color: palette.text.tertiary }]}>{p.comment}</Text>
                       )}
                     </View>
-                    <Text style={styles.paymentAmount}>{formatMoney(p.amount)}</Text>
+                    <Text style={[styles.paymentAmount, dark && { color: colors.green[400] }]}>
+                      {formatMoney(p.amount)}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -1075,9 +1117,9 @@ export default function SupplierDetailScreen() {
                 «Покупка б/у» поставщика нет товаров с закупкой через
                 стандартный flow, поэтому возвращать им нечего. */}
             {!isUsedPurchaseSupplier && (
-              <TouchableOpacity style={styles.actionBtn} onPress={openReturnDefect}>
-                <Ionicons name="arrow-undo-outline" size={18} color={colors.primary[600]} />
-                <Text style={styles.actionBtnText}>Оформить возврат брака</Text>
+              <TouchableOpacity style={[styles.actionBtn, actionBtnDark]} onPress={openReturnDefect}>
+                <Ionicons name="arrow-undo-outline" size={18} color={accentIconColor} />
+                <Text style={[styles.actionBtnText, actionTextDark]}>Оформить возврат брака</Text>
               </TouchableOpacity>
             )}
 
@@ -1117,7 +1159,7 @@ export default function SupplierDetailScreen() {
                         ) : null}
                       </View>
                       <View style={{ alignItems: 'flex-end' }}>
-                        <Text style={[styles.paymentAmount, { color: colors.orange[600] }]}>
+                        <Text style={[styles.paymentAmount, { color: dark ? colors.orange[400] : colors.orange[600] }]}>
                           −{formatMoney(debtReduction)}
                         </Text>
                         <Text style={[styles.commentText, { marginTop: 0, color: palette.text.tertiary }]}>долг</Text>
@@ -1146,9 +1188,9 @@ export default function SupplierDetailScreen() {
               onPress={() => pickOrderToReceive(po)}
               activeOpacity={0.7}
             >
-              <View style={[styles.orderStatusChip, { backgroundColor: PO_STATUS_META[po.status].bg }]}>
-                <Text style={[styles.orderStatusText, { color: PO_STATUS_META[po.status].text }]}>
-                  {PO_STATUS_META[po.status].label}
+              <View style={[styles.orderStatusChip, { backgroundColor: poMeta[po.status].bg }]}>
+                <Text style={[styles.orderStatusText, { color: poMeta[po.status].text }]}>
+                  {poMeta[po.status].label}
                 </Text>
               </View>
               <View style={{ flex: 1, minWidth: 0 }}>
@@ -1168,10 +1210,12 @@ export default function SupplierDetailScreen() {
       {/* New Payment Modal */}
       <Modal visible={paymentModalOpen} onClose={() => setPaymentModalOpen(false)} title="Новый платёж">
         {supplier.currentDebt > 0 && (
-          <View style={styles.debtInfo}>
+          <View style={[styles.debtInfo, dark && { backgroundColor: softTint(colors.red[600], 'dark') }]}>
             <View>
-              <Text style={styles.debtInfoLabel}>Текущий долг</Text>
-              <Text style={styles.debtInfoValue}>{formatMoney(supplier.currentDebt)}</Text>
+              <Text style={[styles.debtInfoLabel, dark && { color: colors.red[300] }]}>Текущий долг</Text>
+              <Text style={[styles.debtInfoValue, dark && { color: colors.red[300] }]}>
+                {formatMoney(supplier.currentDebt)}
+              </Text>
             </View>
             <TouchableOpacity style={styles.payFullBtn} onPress={() => setPaymentAmount(String(supplier.currentDebt))}>
               <Text style={styles.payFullBtnText}>Весь долг</Text>
@@ -1310,7 +1354,13 @@ export default function SupplierDetailScreen() {
                     style={[
                       styles.categoryChip,
                       { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                      upCategory === cat.path && styles.categoryChipActive,
+                      upCategory === cat.path &&
+                        (dark
+                          ? {
+                              backgroundColor: softTint(colors.primary[600], 'dark'),
+                              borderColor: palette.accent.primary,
+                            }
+                          : styles.categoryChipActive),
                     ]}
                     onPress={() => setUpCategory(cat.path)}
                   >
@@ -1318,7 +1368,8 @@ export default function SupplierDetailScreen() {
                       style={[
                         styles.categoryChipText,
                         { color: palette.text.secondary },
-                        upCategory === cat.path && styles.categoryChipTextActive,
+                        upCategory === cat.path &&
+                          (dark ? { color: colors.primary[300] } : styles.categoryChipTextActive),
                       ]}
                       numberOfLines={1}
                     >
@@ -1370,14 +1421,14 @@ export default function SupplierDetailScreen() {
       <Modal visible={returnDefectModalOpen} onClose={() => setReturnDefectModalOpen(false)} title="Возврат брака">
         {/* Picker trigger — same UX as the delivery flow's "Добавить товар" */}
         <TouchableOpacity
-          style={[styles.addItemBtn, { marginBottom: spacing[3] }]}
+          style={[styles.addItemBtn, { marginBottom: spacing[3] }, actionBtnDark]}
           onPress={() => {
             setReturnDefectModalOpen(false);
             setTimeout(() => setDefectPickerOpen(true), 250);
           }}
         >
-          <Ionicons name={defectProduct ? 'swap-horizontal' : 'cube-outline'} size={18} color={colors.primary[600]} />
-          <Text style={styles.addItemText}>
+          <Ionicons name={defectProduct ? 'swap-horizontal' : 'cube-outline'} size={18} color={accentIconColor} />
+          <Text style={[styles.addItemText, actionTextDark]}>
             {defectProduct ? `Товар: ${defectProduct.name}` : 'Выбрать товар из брака'}
           </Text>
         </TouchableOpacity>

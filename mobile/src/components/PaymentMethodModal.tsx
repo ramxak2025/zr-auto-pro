@@ -35,7 +35,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import type { PaymentMethod } from '../../../shared/types';
 
@@ -201,6 +201,11 @@ export default function PaymentMethodModal({ visible, value, onSelect, onClose }
           <View style={styles.list}>
             {PAYMENT_OPTIONS.map((opt) => {
               const active = value === opt.key;
+              // Light keeps the option's pale `[50]` tint; dark swaps it for a
+              // muted translucent tint of the same accent so the card/icon-tile
+              // don't glow on the dark sheet.
+              const tint = palette.mode === 'dark' ? softTint(opt.color, 'dark') : opt.tint;
+              const activeIconBg = palette.mode === 'dark' ? palette.bg.elevated : '#FFFFFF';
               return (
                 <TouchableOpacity
                   key={opt.key}
@@ -209,13 +214,13 @@ export default function PaymentMethodModal({ visible, value, onSelect, onClose }
                   style={[
                     styles.option,
                     { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                    active && { borderColor: opt.color, backgroundColor: opt.tint },
+                    active && { borderColor: opt.color, backgroundColor: tint },
                   ]}
                   accessibilityRole="button"
                   accessibilityState={{ selected: active }}
                   accessibilityLabel={opt.label}
                 >
-                  <View style={[styles.optionIcon, { backgroundColor: active ? '#FFFFFF' : opt.tint }]}>
+                  <View style={[styles.optionIcon, { backgroundColor: active ? activeIconBg : tint }]}>
                     <Ionicons name={opt.icon} size={22} color={opt.color} />
                   </View>
                   <View style={styles.optionText}>

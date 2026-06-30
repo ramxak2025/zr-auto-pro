@@ -132,7 +132,18 @@ function AutoTab() {
         index={0}
         style={[styles.bigToggleCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       >
-        <View style={[styles.bigToggleIcon, { backgroundColor: enabled ? colors.green[50] : palette.bg.muted }]}>
+        <View
+          style={[
+            styles.bigToggleIcon,
+            {
+              backgroundColor: enabled
+                ? palette.mode === 'dark'
+                  ? softTint(colors.green[600], 'dark')
+                  : colors.green[50]
+                : palette.bg.muted,
+            },
+          ]}
+        >
           <Ionicons
             name={enabled ? 'notifications' : 'notifications-outline'}
             size={20}
@@ -667,14 +678,25 @@ function HistoryTab({ history }: { history: ManualHistoryEntry[] }) {
               style={[
                 styles.histIcon,
                 {
-                  backgroundColor: h.channel === 'whatsapp' ? '#dcf8c6' : palette.accent.primarySoft,
+                  backgroundColor:
+                    h.channel === 'whatsapp'
+                      ? palette.mode === 'dark'
+                        ? softTint(colors.green[600], 'dark')
+                        : '#dcf8c6'
+                      : palette.accent.primarySoft,
                 },
               ]}
             >
               <Ionicons
                 name={h.channel === 'whatsapp' ? 'logo-whatsapp' : 'chatbox'}
                 size={18}
-                color={h.channel === 'whatsapp' ? '#075E54' : palette.accent.primary}
+                color={
+                  h.channel === 'whatsapp'
+                    ? palette.mode === 'dark'
+                      ? colors.green[400]
+                      : '#075E54'
+                    : palette.accent.primary
+                }
               />
             </View>
             <View style={{ flex: 1 }}>

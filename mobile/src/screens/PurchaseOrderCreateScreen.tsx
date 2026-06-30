@@ -47,7 +47,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
-import { colors, borderRadius, spacing } from '../theme';
+import { colors, borderRadius, spacing, softTint, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import {
   type Product,
@@ -82,6 +82,7 @@ export default function PurchaseOrderCreateScreen() {
   const queryClient = useQueryClient();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
+  const dark = palette.mode === 'dark';
 
   const editId: string | undefined = route.params?.editId;
   const seedPo: PurchaseOrder | undefined = route.params?.po;
@@ -264,7 +265,12 @@ export default function PurchaseOrderCreateScreen() {
         trailing={
           !isEdit ? (
             <TouchableOpacity
-              style={[styles.suggestBtn, { backgroundColor: colors.amber[50], borderColor: colors.amber[200] }]}
+              style={[
+                styles.suggestBtn,
+                dark
+                  ? { backgroundColor: softTint(colors.amber[600], 'dark'), borderColor: 'rgba(217, 119, 6, 0.40)' }
+                  : { backgroundColor: colors.amber[50], borderColor: colors.amber[200] },
+              ]}
               onPress={() => {
                 haptic('tap');
                 setShowSuggestions((v) => !v);
@@ -273,8 +279,8 @@ export default function PurchaseOrderCreateScreen() {
               accessibilityRole="button"
               accessibilityLabel="Дозаказ по остаткам"
             >
-              <Ionicons name="sparkles-outline" size={14} color={colors.amber[700]} />
-              <Text style={styles.suggestBtnText}>Дозаказ</Text>
+              <Ionicons name="sparkles-outline" size={14} color={dark ? colors.amber[200] : colors.amber[700]} />
+              <Text style={[styles.suggestBtnText, dark && { color: colors.amber[200] }]}>Дозаказ</Text>
             </TouchableOpacity>
           ) : undefined
         }
@@ -298,7 +304,12 @@ export default function PurchaseOrderCreateScreen() {
         >
           {/* ── Дозаказ panel ── */}
           {showSuggestions ? (
-            <View style={[styles.suggestPanel, { backgroundColor: palette.bg.card, borderColor: colors.amber[200] }]}>
+            <View
+              style={[
+                styles.suggestPanel,
+                { backgroundColor: palette.bg.card, borderColor: dark ? 'rgba(217, 119, 6, 0.35)' : colors.amber[200] },
+              ]}
+            >
               <Text style={[styles.suggestTitle, { color: palette.text.primary }]}>Дозаказ по низким остаткам</Text>
               {suggestions === undefined ? (
                 <ActivityIndicator color={colors.primary[600]} style={{ paddingVertical: spacing[3] }} />
@@ -434,9 +445,23 @@ export default function PurchaseOrderCreateScreen() {
                       </Text>
                       {locked ? (
                         // Защищённая позиция (есть приёмка) — удаление недоступно.
-                        <View style={[styles.lockedChip, { backgroundColor: colors.green[50] }]}>
-                          <Ionicons name="lock-closed" size={11} color={colors.green[700]} />
-                          <Text style={[styles.lockedChipText, { color: colors.green[700] }]}>
+                        <View
+                          style={[
+                            styles.lockedChip,
+                            { backgroundColor: dark ? getBadgeColors('dark').green.bg : colors.green[50] },
+                          ]}
+                        >
+                          <Ionicons
+                            name="lock-closed"
+                            size={11}
+                            color={dark ? getBadgeColors('dark').green.text : colors.green[700]}
+                          />
+                          <Text
+                            style={[
+                              styles.lockedChipText,
+                              { color: dark ? getBadgeColors('dark').green.text : colors.green[700] },
+                            ]}
+                          >
                             принято {l.received}
                           </Text>
                         </View>

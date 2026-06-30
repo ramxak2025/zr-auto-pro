@@ -2,7 +2,8 @@ import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Modal from './Modal';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { useColors } from '../contexts/ThemeContext';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 
 interface DuplicateWarningDialogProps {
   visible: boolean;
@@ -34,59 +35,69 @@ export default function DuplicateWarningDialog({
   openExistingLabel = 'Открыть существующего',
   existingCars,
 }: DuplicateWarningDialogProps) {
+  const palette = useColors();
+  const dark = palette.mode === 'dark';
   return (
     <Modal visible={visible} onClose={onClose} title={title}>
       <View style={styles.row}>
-        <View style={styles.iconBox}>
-          <Ionicons name="warning-outline" size={20} color="#D97706" />
+        <View style={[styles.iconBox, dark && { backgroundColor: softTint(colors.amber[600], 'dark') }]}>
+          <Ionicons name="warning-outline" size={20} color={dark ? colors.amber[200] : '#D97706'} />
         </View>
-        <Text style={styles.description}>{description}</Text>
+        <Text style={[styles.description, dark && { color: palette.text.secondary }]}>{description}</Text>
       </View>
 
-      <TouchableOpacity activeOpacity={0.7} onPress={onOpenExisting} style={styles.existingCard}>
+      <TouchableOpacity
+        activeOpacity={0.7}
+        onPress={onOpenExisting}
+        style={[styles.existingCard, dark && { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+      >
         <View style={styles.existingHeader}>
           <View style={{ flex: 1 }}>
-            <Text style={styles.existingLabel} numberOfLines={1}>
+            <Text style={[styles.existingLabel, dark && { color: palette.text.primary }]} numberOfLines={1}>
               {existingLabel}
             </Text>
             {existingSubtitle ? (
-              <Text style={styles.existingSubtitle} numberOfLines={1}>
+              <Text style={[styles.existingSubtitle, dark && { color: palette.text.tertiary }]} numberOfLines={1}>
                 {existingSubtitle}
               </Text>
             ) : null}
           </View>
-          <Ionicons name="chevron-forward" size={18} color={colors.gray[400]} />
+          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
         </View>
 
         {existingCars && existingCars.length > 0 && (
-          <View style={styles.carsBox}>
-            <Text style={styles.carsHeader}>Уже привязано:</Text>
+          <View style={[styles.carsBox, dark && { borderTopColor: palette.border.subtle }]}>
+            <Text style={[styles.carsHeader, dark && { color: palette.text.tertiary }]}>Уже привязано:</Text>
             <ScrollView style={{ maxHeight: 140 }}>
               {existingCars.slice(0, 5).map((car, i) => (
                 <View key={i} style={styles.carRow}>
-                  <Ionicons name="car-outline" size={14} color={colors.gray[500]} />
-                  <Text style={styles.carPlate}>{car.plateNumber}</Text>
-                  <Text style={styles.carModel} numberOfLines={1}>
+                  <Ionicons name="car-outline" size={14} color={dark ? palette.text.tertiary : colors.gray[500]} />
+                  <Text style={[styles.carPlate, dark && { color: palette.text.primary }]}>{car.plateNumber}</Text>
+                  <Text style={[styles.carModel, dark && { color: palette.text.secondary }]} numberOfLines={1}>
                     {car.makeModel}
                   </Text>
                 </View>
               ))}
-              {existingCars.length > 5 && <Text style={styles.carsMore}>… и ещё {existingCars.length - 5}</Text>}
+              {existingCars.length > 5 && (
+                <Text style={[styles.carsMore, dark && { color: palette.text.tertiary }]}>
+                  … и ещё {existingCars.length - 5}
+                </Text>
+              )}
             </ScrollView>
           </View>
         )}
       </TouchableOpacity>
 
       <View style={styles.actions}>
-        <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
-          <Text style={styles.cancelText}>Отмена</Text>
+        <TouchableOpacity style={[styles.cancelBtn, dark && { backgroundColor: palette.bg.muted }]} onPress={onClose}>
+          <Text style={[styles.cancelText, dark && { color: palette.text.secondary }]}>Отмена</Text>
         </TouchableOpacity>
         <TouchableOpacity style={styles.confirmBtn} onPress={onOpenExisting}>
           <Text style={styles.confirmText}>{openExistingLabel}</Text>
         </TouchableOpacity>
       </View>
       <TouchableOpacity onPress={onCreateAnyway} style={styles.createAnyway}>
-        <Text style={styles.createAnywayText}>Всё равно создать</Text>
+        <Text style={[styles.createAnywayText, dark && { color: palette.text.secondary }]}>Всё равно создать</Text>
       </TouchableOpacity>
     </Modal>
   );

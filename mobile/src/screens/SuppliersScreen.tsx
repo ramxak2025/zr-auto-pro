@@ -84,6 +84,9 @@ interface SupplierRowProps {
   /** Debt icon-circle fill — resolved in the parent (where the theme
    *  palette lives) so the memoised row stays subscription-free. */
   iconCircleDebtBg: string;
+  /** Debt amount text colour — lightened in dark so the saturated
+   *  orange[700] doesn't read as dark-on-dark. Resolved in the parent. */
+  debtColor: string;
 }
 const SupplierRow = React.memo(function SupplierRow({
   item,
@@ -100,6 +103,7 @@ const SupplierRow = React.memo(function SupplierRow({
   iconCircleCleanBg,
   iconCircleCleanColor,
   iconCircleDebtBg,
+  debtColor,
 }: SupplierRowProps) {
   const hasDebt = item.currentDebt > 0;
 
@@ -139,7 +143,7 @@ const SupplierRow = React.memo(function SupplierRow({
         <View style={styles.amountWrap}>
           {hasDebt ? (
             <>
-              <Text style={styles.debtAmount}>{formatMoney(item.currentDebt)}</Text>
+              <Text style={[styles.debtAmount, { color: debtColor }]}>{formatMoney(item.currentDebt)}</Text>
               <Text style={[styles.debtLabel, { color: textTertiary }]}>долг</Text>
             </>
           ) : (
@@ -209,6 +213,7 @@ const SystemSupplierCard = React.memo(function SystemSupplierCard({
   onPressIn,
 }: SystemSupplierCardProps) {
   const palette = useColors();
+  const dark = palette.mode === 'dark';
   return (
     <TouchableOpacity
       activeOpacity={0.85}
@@ -217,36 +222,37 @@ const SystemSupplierCard = React.memo(function SystemSupplierCard({
       style={styles.systemCardWrap}
     >
       <LinearGradient
-        colors={[colors.primary[50], colors.primary[100]]}
+        // Light: the established pale primary gradient. Dark: a subtle
+        // translucent accent tint over the canvas so the card reads as a
+        // gently elevated blue-tinted surface — never the bright pale wash
+        // (which glows on the near-black canvas).
+        colors={
+          dark ? ['rgba(79, 131, 232, 0.16)', 'rgba(79, 131, 232, 0.06)'] : [colors.primary[50], colors.primary[100]]
+        }
         start={{ x: 0, y: 0 }}
         end={{ x: 1, y: 1 }}
-        style={styles.systemCardSurface}
+        style={[styles.systemCardSurface, dark && { borderColor: 'rgba(79, 131, 232, 0.30)' }]}
       >
-        <View style={styles.systemIconCircle}>
-          <Ionicons name="cube-outline" size={20} color={colors.primary[700]} />
-          <View style={styles.systemIconBadge}>
+        <View style={[styles.systemIconCircle, dark && { backgroundColor: palette.bg.elevated }]}>
+          <Ionicons name="cube-outline" size={20} color={dark ? colors.primary[300] : colors.primary[700]} />
+          <View style={[styles.systemIconBadge, dark && { borderColor: palette.bg.elevated }]}>
             <Ionicons name="arrow-down" size={10} color={colors.white} />
           </View>
         </View>
         <View style={styles.systemInfo}>
           <View style={styles.systemNameRow}>
-            <Text style={styles.systemName} numberOfLines={1}>
+            <Text style={[styles.systemName, dark && { color: colors.primary[100] }]} numberOfLines={1}>
               {item.name}
             </Text>
-            <View
-              style={[
-                styles.systemChip,
-                palette.mode === 'dark' && { backgroundColor: softTint(colors.primary[600], 'dark') },
-              ]}
-            >
-              <Text style={styles.systemChipText}>СИСТЕМНЫЙ</Text>
+            <View style={[styles.systemChip, dark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}>
+              <Text style={[styles.systemChipText, dark && { color: colors.primary[300] }]}>СИСТЕМНЫЙ</Text>
             </View>
           </View>
-          <Text style={styles.systemSubtitle} numberOfLines={2}>
+          <Text style={[styles.systemSubtitle, dark && { color: palette.text.secondary }]} numberOfLines={2}>
             Приём б/у запчастей от клиентов: долг поставщику растёт
           </Text>
         </View>
-        <Ionicons name="chevron-forward" size={16} color={colors.primary[600]} />
+        <Ionicons name="chevron-forward" size={16} color={dark ? colors.primary[300] : colors.primary[600]} />
       </LinearGradient>
     </TouchableOpacity>
   );
@@ -257,6 +263,7 @@ export default function SuppliersScreen() {
   const queryClient = useQueryClient();
   const { hasPermission, isRole } = useAuth();
   const palette = useColors();
+  const dark = palette.mode === 'dark';
   const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [refreshing, setRefreshing] = useState(false);
@@ -494,6 +501,7 @@ export default function SuppliersScreen() {
         iconCircleCleanBg={palette.bg.muted}
         iconCircleCleanColor={palette.text.tertiary}
         iconCircleDebtBg={palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50]}
+        debtColor={palette.mode === 'dark' ? colors.orange[400] : colors.orange[700]}
       />
     ),
     [
@@ -729,7 +737,7 @@ export default function SuppliersScreen() {
                       {s.name}
                     </Text>
                     {hasDebt ? (
-                      <Text style={styles.pickerDebt} numberOfLines={1}>
+                      <Text style={[styles.pickerDebt, dark && { color: colors.orange[400] }]} numberOfLines={1}>
                         Долг {formatMoney(s.currentDebt)}
                       </Text>
                     ) : (

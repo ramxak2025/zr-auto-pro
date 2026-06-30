@@ -40,7 +40,14 @@ import { haptic } from '../platform/haptics';
 import { colors, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type PurchaseOrder, type PurchaseOrderStatus, type Supplier } from '../../../shared/types';
-import { PO_STATUS_META, PO_STATUS_ORDER, formatMoney, formatPoDate } from './purchaseOrders/purchaseOrderHelpers';
+import {
+  PO_STATUS_META,
+  PO_STATUS_ORDER,
+  getPoStatusMeta,
+  formatMoney,
+  formatPoDate,
+  type PoStatusMeta,
+} from './purchaseOrders/purchaseOrderHelpers';
 
 type StatusFilter = 'all' | PurchaseOrderStatus;
 
@@ -48,6 +55,9 @@ type StatusFilter = 'all' | PurchaseOrderStatus;
 interface RowProps {
   item: PurchaseOrder;
   onPress: (po: PurchaseOrder) => void;
+  /** Theme-resolved status chip/icon colours — passed in so the memoised row
+   *  stays subscription-free and reads the dark badge palette in dark mode. */
+  meta: PoStatusMeta;
   cardBg: string;
   separatorColor: string;
   textPrimary: string;
@@ -58,6 +68,7 @@ interface RowProps {
 const PurchaseOrderRow = React.memo(function PurchaseOrderRow({
   item,
   onPress,
+  meta,
   cardBg,
   separatorColor,
   textPrimary,
@@ -65,7 +76,6 @@ const PurchaseOrderRow = React.memo(function PurchaseOrderRow({
   textTertiary,
   mutedBg,
 }: RowProps) {
-  const meta = PO_STATUS_META[item.status];
   return (
     <Pressable
       onPress={() => onPress(item)}
@@ -185,11 +195,17 @@ export default function PurchaseOrdersScreen({ embedded = false }: { embedded?: 
     [navigation],
   );
 
+  // Theme-resolved status palette — light returns the web-matched pale chips,
+  // dark the translucent badge fills. Memoised per mode so memoised rows see a
+  // stable `meta` reference and don't re-render on unrelated parent updates.
+  const statusMeta = useMemo(() => getPoStatusMeta(palette.mode), [palette.mode]);
+
   const renderItem = useCallback(
     ({ item }: { item: PurchaseOrder }) => (
       <PurchaseOrderRow
         item={item}
         onPress={openDetail}
+        meta={statusMeta[item.status]}
         cardBg={palette.bg.card}
         separatorColor={palette.border.subtle}
         textPrimary={palette.text.primary}
@@ -200,6 +216,7 @@ export default function PurchaseOrdersScreen({ embedded = false }: { embedded?: 
     ),
     [
       openDetail,
+      statusMeta,
       palette.bg.card,
       palette.bg.muted,
       palette.border.subtle,

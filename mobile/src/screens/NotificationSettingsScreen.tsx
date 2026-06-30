@@ -22,7 +22,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Text } from '../platform/Typography';
 import { useColors } from '../contexts/ThemeContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
@@ -94,6 +94,9 @@ interface PrefRowProps {
   descColor: string;
   separatorColor: string;
   trackOn: string;
+  /** Theme-resolved icon-tile fill — light keeps the catalogue's pale
+   *  `[50]` tint, dark gets a muted translucent tint of the same accent. */
+  iconBg: string;
 }
 
 const PrefRow = React.memo(function PrefRow({
@@ -106,11 +109,12 @@ const PrefRow = React.memo(function PrefRow({
   descColor,
   separatorColor,
   trackOn,
+  iconBg,
 }: PrefRowProps) {
   return (
     <>
       <View style={styles.row}>
-        <View style={[styles.rowIcon, { backgroundColor: row.iconBg }]}>
+        <View style={[styles.rowIcon, { backgroundColor: iconBg }]}>
           <Ionicons name={row.icon} size={20} color={row.iconColor} />
         </View>
         <View style={styles.rowTextWrap}>
@@ -233,6 +237,7 @@ export default function NotificationSettingsScreen() {
                   descColor={palette.text.secondary}
                   separatorColor={palette.border.subtle}
                   trackOn={palette.accent.primary}
+                  iconBg={palette.mode === 'dark' ? softTint(row.iconColor, 'dark') : row.iconBg}
                 />
               ))}
             </View>

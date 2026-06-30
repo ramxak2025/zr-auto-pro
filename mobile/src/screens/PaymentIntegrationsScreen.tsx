@@ -47,7 +47,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { UserRole } from '../../../shared/types';
@@ -193,7 +193,12 @@ function AcquiringSection({ index }: { index: number }) {
     <AnimatedCard index={index}>
       <View style={s.card}>
         <View style={s.cardHeader}>
-          <View style={[s.iconBadge, { backgroundColor: colors.blue[50] }]}>
+          <View
+            style={[
+              s.iconBadge,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
+            ]}
+          >
             <Ionicons name="card-outline" size={18} color={colors.blue[600]} />
           </View>
           <View style={{ flex: 1 }}>
@@ -356,7 +361,12 @@ function FiscalSection({ index }: { index: number }) {
     <AnimatedCard index={index}>
       <View style={s.card}>
         <View style={s.cardHeader}>
-          <View style={[s.iconBadge, { backgroundColor: colors.green[50] }]}>
+          <View
+            style={[
+              s.iconBadge,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+            ]}
+          >
             <Ionicons name="receipt-outline" size={18} color={colors.green[600]} />
           </View>
           <View style={{ flex: 1 }}>

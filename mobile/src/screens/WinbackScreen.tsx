@@ -114,8 +114,30 @@ const WinbackRow = React.memo(function WinbackRow({ client, showBorder, palette 
         </Text>
       </View>
       <View style={{ alignItems: 'flex-end' }}>
-        <View style={[styles.agoPill, { backgroundColor: never ? colors.orange[50] : palette.bg.muted }]}>
-          <Text style={[styles.agoPillText, { color: never ? colors.orange[700] : palette.text.secondary }]}>
+        <View
+          style={[
+            styles.agoPill,
+            {
+              backgroundColor: never
+                ? palette.mode === 'dark'
+                  ? softTint(colors.orange[600], 'dark')
+                  : colors.orange[50]
+                : palette.bg.muted,
+            },
+          ]}
+        >
+          <Text
+            style={[
+              styles.agoPillText,
+              {
+                color: never
+                  ? palette.mode === 'dark'
+                    ? colors.orange[400]
+                    : colors.orange[700]
+                  : palette.text.secondary,
+              },
+            ]}
+          >
             {lastVisitLabel(client.lastVisit)}
           </Text>
         </View>

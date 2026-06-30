@@ -13,6 +13,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import Animated, { Easing, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
+import { useOptionalColors } from '../contexts/ThemeContext';
 
 interface SkeletonProps {
   width?: number | `${number}%`;
@@ -22,6 +23,8 @@ interface SkeletonProps {
 }
 
 export function Skeleton({ width = '100%', height = 16, radius = 6, style }: SkeletonProps) {
+  const palette = useOptionalColors();
+  const dark = palette.mode === 'dark';
   const progress = useSharedValue(-1);
 
   // Kick off once, run forever
@@ -41,19 +44,23 @@ export function Skeleton({ width = '100%', height = 16, radius = 6, style }: Ske
           height,
           borderRadius: radius,
           overflow: 'hidden',
-          // Subtle primary[50] tint — reads as Autexa brand instead of
-          // anonymous gray.
-          backgroundColor: '#eaf1fb',
+          // Light: subtle primary[50] brand tint. Dark: a muted elevated
+          // fill on the dark canvas — the pale brand wash would glow.
+          backgroundColor: dark ? palette.bg.muted : '#eaf1fb',
         },
         style,
       ]}
     >
       <Animated.View style={[StyleSheet.absoluteFill, animatedStyle]}>
         <LinearGradient
-          // White core sweep tinted with the brand blue at the edges so
-          // the moving highlight feels native to Autexa rather than a
-          // generic content placeholder.
-          colors={['rgba(37,99,235,0)', 'rgba(255,255,255,0.95)', 'rgba(37,99,235,0)']}
+          // Moving highlight sweep. Light: a bright brand-tinted white core.
+          // Dark: a low-alpha white so the shimmer reads as a gentle lift,
+          // never a bright bar on the near-black surface.
+          colors={
+            dark
+              ? ['rgba(255,255,255,0)', 'rgba(255,255,255,0.07)', 'rgba(255,255,255,0)']
+              : ['rgba(37,99,235,0)', 'rgba(255,255,255,0.95)', 'rgba(37,99,235,0)']
+          }
           start={{ x: 0, y: 0.5 }}
           end={{ x: 1, y: 0.5 }}
           style={StyleSheet.absoluteFill}
@@ -65,8 +72,9 @@ export function Skeleton({ width = '100%', height = 16, radius = 6, style }: Ske
 
 /** Convenience — a list-row skeleton matching the 56-pt list rows in the app. */
 export function SkeletonRow() {
+  const palette = useOptionalColors();
   return (
-    <View style={styles.row}>
+    <View style={[styles.row, { backgroundColor: palette.bg.card }]}>
       <Skeleton width={44} height={44} radius={22} />
       <View style={{ marginLeft: 12, flex: 1, gap: 8 }}>
         <Skeleton width={'70%'} height={13} radius={4} />

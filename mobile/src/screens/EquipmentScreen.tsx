@@ -1210,7 +1210,7 @@ function TrashDialog({ visible, onClose }: { visible: boolean; onClose: () => vo
                     haptic('tap');
                     restoreMut.mutate(item.id);
                   }}
-                  style={styles.equipBtn}
+                  style={[styles.equipBtn, palette.mode === 'dark' && { backgroundColor: palette.bg.muted }]}
                 >
                   <Ionicons name="arrow-undo" size={14} color={colors.green[500]} />
                 </TouchableOpacity>
