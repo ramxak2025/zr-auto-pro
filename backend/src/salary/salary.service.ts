@@ -1,7 +1,9 @@
-import { Injectable, Inject, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
+import { Injectable, Inject, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { PushService } from '../push/push.service';
+import { ExpensesService } from '../expenses/expenses.service';
+import { invalidateReportsForTenant } from '../common/reports-cache';
 
 interface PremiumDto {
   userId: string;
@@ -19,7 +21,23 @@ export class SalaryService {
   constructor(
     @Inject(PG_POOL) private pool: Pool,
     private push: PushService,
+    private expenses: ExpensesService,
   ) {}
+
+  private static readonly MONTH_NAMES = [
+    'Январь',
+    'Февраль',
+    'Март',
+    'Апрель',
+    'Май',
+    'Июнь',
+    'Июль',
+    'Август',
+    'Сентябрь',
+    'Октябрь',
+    'Ноябрь',
+    'Декабрь',
+  ];
 
   async getAll(tenantID: string, query: any) {
     const dateFrom =
@@ -468,6 +486,14 @@ export class SalaryService {
       throw new BadRequestException({ message: 'Сумма штрафа должна быть положительной' });
     }
 
+    // Mandatory reason «за что». Enforced here (whitespace-only → 400), in the
+    // DTO (@IsNotEmpty) and at the DB (salary_penalties.description NOT NULL +
+    // non-blank CHECK, 100_salary_payouts_and_fines).
+    const comment = String(dto.description ?? '').trim();
+    if (!comment) {
+      throw new BadRequestException({ message: 'Укажите причину штрафа' });
+    }
+
     // The target must belong to the caller's tenant — same isolation guard
     // used by createPayment / createPremium.
     const { rows: userRows } = await this.pool.query('SELECT full_name FROM users WHERE id=$1 AND tenant_id=$2', [
@@ -480,20 +506,17 @@ export class SalaryService {
       `INSERT INTO salary_penalties (tenant_id, user_id, amount, description, date, created_by)
        VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6)
        RETURNING *`,
-      [tenantID, dto.userId, amount, dto.description ?? null, dto.date ?? null, createdBy],
+      [tenantID, dto.userId, amount, comment, dto.date ?? null, createdBy],
     );
     const p = rows[0];
     p.user_name = userRows[0].full_name;
 
     // Notify the employee so a penalty is never silent.
     const formatted = amount.toLocaleString('ru-RU');
-    this.push.sendToUserCategory(
-      dto.userId,
-      'penalty',
-      'Штраф наложен',
-      dto.description ? `${formatted} ₽ — ${dto.description}` : `Сумма: ${formatted} ₽`,
-      { kind: 'penalty', penaltyId: p.id },
-    );
+    this.push.sendToUserCategory(dto.userId, 'penalty', 'Штраф наложен', `${formatted} ₽ — ${comment}`, {
+      kind: 'penalty',
+      penaltyId: p.id,
+    });
 
     return this.mapPenalty(p);
   }
@@ -534,6 +557,9 @@ export class SalaryService {
       userName: r.user_name ?? undefined,
       amount: parseFloat(r.amount) || 0,
       description: r.description ?? undefined,
+      // Owner-facing alias of `description` — the fine «comment» (за что). Now
+      // always present (NOT NULL since 100). SalaryFine.comment reads this.
+      comment: r.description ?? undefined,
       date: r.date,
       createdBy: r.created_by ?? undefined,
       creatorName: r.creator_name ?? undefined,
@@ -667,6 +693,400 @@ export class SalaryService {
       motivationToday: parseFloat(mot.today) || 0,
       motivationMonth: parseFloat(mot.month) || 0,
       motivationTotal: parseFloat(mot.total) || 0,
+    };
+  }
+
+  // ─── Payouts with confirmation (100_salary_payouts_and_fines) ────────────
+  //
+  // A NEW, separate flow from the legacy salary_payments path (which writes the
+  // expense immediately on create). Here the владелец (director/superadmin)
+  // issues a payout → it sits `pending` → the employee accepts or rejects →
+  // ONLY on accept is an expense recorded (dated the accept day). The legacy
+  // createPayment / confirmPayment path is intentionally left untouched.
+
+  /**
+   * Owner (director/superadmin) issues a salary / advance payout to an
+   * employee. Starts `pending` and pushes the employee to decide. No money
+   * moves yet — the expense is written only when the employee accepts.
+   */
+  async createPayout(
+    tenantID: string,
+    createdBy: string,
+    dto: { employeeId: string; type: 'salary' | 'advance'; amount: number; comment?: string },
+  ) {
+    if (!dto || !dto.employeeId) {
+      throw new BadRequestException({ message: 'employeeId обязателен' });
+    }
+    const type = dto.type === 'advance' ? 'advance' : 'salary';
+    const amount = Number(dto.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException({ message: 'Сумма выплаты должна быть положительной' });
+    }
+
+    // Tenant-isolation: the recipient must belong to the caller's tenant.
+    const { rows: userRows } = await this.pool.query('SELECT full_name FROM users WHERE id=$1 AND tenant_id=$2', [
+      dto.employeeId,
+      tenantID,
+    ]);
+    if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
+
+    const comment = dto.comment ? String(dto.comment).trim() || null : null;
+    const { rows } = await this.pool.query(
+      `INSERT INTO salary_payouts (tenant_id, employee_id, type, amount, status, comment, created_by)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+       RETURNING *`,
+      [tenantID, dto.employeeId, type, amount, comment, createdBy],
+    );
+    const p = rows[0];
+    p.user_name = userRows[0].full_name;
+
+    // Push the employee to confirm receipt. Category 'salary' respects the
+    // employee's «Уведомления» toggle. Fire-and-forget (push is never source
+    // of truth).
+    const title = type === 'advance' ? 'Аванс к выплате' : 'Зарплата к выплате';
+    const formatted = amount.toLocaleString('ru-RU');
+    this.push.sendToUserCategory(dto.employeeId, 'salary', title, `Сумма: ${formatted} ₽ — подтвердите получение`, {
+      kind: 'payout',
+      payoutId: p.id,
+      payoutType: type,
+      action: 'decide',
+    });
+
+    return this.mapPayout(p);
+  }
+
+  /**
+   * The employee accepts or rejects a pending payout. Money path — fully
+   * transactional and idempotent:
+   *   - the row is locked FOR UPDATE and the flip only happens while it is
+   *     still `pending` (a second accept can never double-record an expense);
+   *   - on accept the «Зарплата» expense is inserted INSIDE the same
+   *     transaction and linked back via expense_id, so status + expense commit
+   *     atomically;
+   *   - on reject nothing is recorded.
+   * Only the recipient may decide (the role gate on the route is open; this
+   * is the real authorization check).
+   */
+  async decidePayout(payoutId: string, tenantID: string, userID: string, decision: 'accept' | 'reject') {
+    const client = await this.pool.connect();
+    let result: any;
+    let employeeName = 'Сотрудник';
+    let ownerToNotify: string | null = null;
+    try {
+      await client.query('BEGIN');
+
+      const { rows: lockRows } = await client.query(
+        `SELECT p.*, u.full_name AS employee_name
+           FROM salary_payouts p
+           LEFT JOIN users u ON u.id = p.employee_id
+          WHERE p.id = $1 AND p.tenant_id = $2
+          FOR UPDATE`,
+        [payoutId, tenantID],
+      );
+      if (lockRows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Выплата не найдена' });
+      }
+      const payout = lockRows[0];
+      employeeName = payout.employee_name || employeeName;
+      ownerToNotify = payout.created_by ?? null;
+
+      // Authorization: only the recipient decides.
+      if (payout.employee_id !== userID) {
+        await client.query('ROLLBACK');
+        throw new ForbiddenException({ message: 'Решение принимает только получатель выплаты' });
+      }
+      // Idempotency guard: only a pending payout can be decided.
+      if (payout.status !== 'pending') {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({ message: 'Выплата уже обработана' });
+      }
+
+      if (decision === 'accept') {
+        const typeLabel = payout.type === 'advance' ? 'Аванс' : 'Зарплата';
+        const note = payout.comment ? ` — ${payout.comment}` : '';
+        const description = `${typeLabel}: ${employeeName}${note}`;
+        // Expense via ExpensesService, inside this transaction, dated now()
+        // (the accept day). user_id / created_by → the владелец who issued.
+        const expense = await this.expenses.recordSalaryExpense(
+          tenantID,
+          {
+            amount: parseFloat(payout.amount) || 0,
+            description,
+            date: new Date().toISOString(),
+            createdBy: payout.created_by ?? null,
+          },
+          client,
+        );
+        const { rows: upd } = await client.query(
+          `UPDATE salary_payouts
+              SET status = 'accepted', decided_at = now(), expense_id = $3
+            WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
+            RETURNING *`,
+          [payoutId, tenantID, expense.id],
+        );
+        // Defensive: the FOR UPDATE lock already guarantees we are the only
+        // writer, but re-checking the WHERE status='pending' rowcount makes the
+        // double-record impossibility explicit.
+        if (upd.length === 0) {
+          await client.query('ROLLBACK');
+          throw new BadRequestException({ message: 'Выплата уже обработана' });
+        }
+        result = upd[0];
+      } else {
+        const { rows: upd } = await client.query(
+          `UPDATE salary_payouts
+              SET status = 'rejected', decided_at = now()
+            WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
+            RETURNING *`,
+          [payoutId, tenantID],
+        );
+        if (upd.length === 0) {
+          await client.query('ROLLBACK');
+          throw new BadRequestException({ message: 'Выплата уже обработана' });
+        }
+        result = upd[0];
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // The UPDATE ... RETURNING row has no users join — carry the recipient name
+    // captured from the locked SELECT so mapPayout populates userName.
+    result.user_name = employeeName;
+
+    // ── Post-commit side-effects (fire-and-forget) ──────────────────────────
+    if (decision === 'accept') {
+      // The new expense moves the cash position — drop the tenant's cached
+      // report aggregates and nudge other devices to refetch money queries.
+      invalidateReportsForTenant(tenantID);
+      this.push.sendDataToTenant(tenantID, userID, { type: 'cash-changed', tenantId: tenantID }).catch(() => {
+        /* best-effort */
+      });
+    }
+    // Notify the владелец who issued the payout of the employee's decision.
+    if (ownerToNotify) {
+      const title = decision === 'accept' ? 'Выплата подтверждена' : 'Выплата отклонена';
+      const verb = decision === 'accept' ? 'подтвердил(а) получение' : 'отклонил(а) выплату';
+      const formatted = (parseFloat(result.amount) || 0).toLocaleString('ru-RU');
+      this.push.sendToUserCategory(ownerToNotify, 'salary', title, `${employeeName} ${verb}: ${formatted} ₽`, {
+        kind: 'payout',
+        payoutId: result.id,
+        status: result.status,
+      });
+    }
+
+    return this.mapPayout(result);
+  }
+
+  /**
+   * List payouts. Owner (director/superadmin) sees the whole tenant (optionally
+   * filtered by employee / status / month); an employee is scoped to their own
+   * by the controller. `monthYear` filters by the issue month (created_at).
+   */
+  async listPayouts(
+    tenantID: string,
+    query: { employeeId?: string; status?: 'pending' | 'accepted' | 'rejected'; monthYear?: string },
+  ) {
+    const conds: string[] = ['p.tenant_id = $1'];
+    const params: any[] = [tenantID];
+    let idx = 2;
+    if (query.employeeId) {
+      conds.push(`p.employee_id = $${idx++}`);
+      params.push(query.employeeId);
+    }
+    if (query.status) {
+      conds.push(`p.status = $${idx++}`);
+      params.push(query.status);
+    }
+    if (query.monthYear) {
+      conds.push(`to_char(p.created_at, 'YYYY-MM') = $${idx++}`);
+      params.push(query.monthYear);
+    }
+    const { rows } = await this.pool.query(
+      `SELECT p.*, u.full_name AS user_name, c.full_name AS creator_name
+         FROM salary_payouts p
+         LEFT JOIN users u ON u.id = p.employee_id
+         LEFT JOIN users c ON c.id = p.created_by
+        WHERE ${conds.join(' AND ')}
+        ORDER BY p.created_at DESC`,
+      params,
+    );
+    return rows.map((r) => this.mapPayout(r));
+  }
+
+  private mapPayout(r: any) {
+    return {
+      id: r.id,
+      userId: r.employee_id,
+      userName: r.user_name ?? undefined,
+      type: r.type,
+      amount: parseFloat(r.amount) || 0,
+      status: r.status,
+      comment: r.comment ?? undefined,
+      createdBy: r.created_by ?? undefined,
+      creatorName: r.creator_name ?? undefined,
+      createdAt: r.created_at,
+      decidedAt: r.decided_at ?? null,
+      expenseId: r.expense_id ?? null,
+    };
+  }
+
+  // ─── Per-employee monthly salary detail ──────────────────────────────────
+  //
+  // Powers the full-screen salary card that pages month-by-month. Returns one
+  // employee's breakdown for one calendar month: earnings (service + product),
+  // «Мотивация», premiums, fines (deducted), payouts (with statuses) and the
+  // computed «к выплате». Mirrors getAll's component math (totalEarnings = base
+  // + premiums + motivation; remaining subtracts fines) and additionally counts
+  // accepted payouts (+ legacy salary_payments) as paid.
+
+  async getEmployeeMonth(tenantID: string, employeeId: string, month?: string) {
+    const monthYear = /^\d{4}-\d{2}$/.test(month ?? '')
+      ? (month as string)
+      : `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+    const [yearStr, monStr] = monthYear.split('-');
+    const year = parseInt(yearStr, 10);
+    const mon = parseInt(monStr, 10); // 1-12
+    // Half-open [monthStart, nextMonthStart) in UTC.
+    const monthStart = new Date(Date.UTC(year, mon - 1, 1)).toISOString();
+    const nextMonthStart = new Date(Date.UTC(year, mon, 1)).toISOString();
+
+    const { rows: userRows } = await this.pool.query(
+      `SELECT full_name, COALESCE(salary_percent, 0) AS salary_percent,
+              COALESCE(product_salary_percent, 0) AS product_salary_percent
+         FROM users WHERE id = $1 AND tenant_id = $2`,
+      [employeeId, tenantID],
+    );
+    if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
+    const user = userRows[0];
+
+    // Earnings from this master's non-deferred checks in the month.
+    const { rows: earnRows } = await this.pool.query(
+      `SELECT COALESCE(SUM(service_salary_total), 0) AS service_earnings,
+              COALESCE(SUM(COALESCE(product_salary_total, 0)), 0) AS product_earnings,
+              COALESCE(SUM(total_revenue), 0) AS total_revenue,
+              COUNT(id) AS check_count
+         FROM checks
+        WHERE master_id = $1 AND tenant_id = $2 AND is_deferred = false
+          AND date >= $3 AND date < $4`,
+      [employeeId, tenantID, monthStart, nextMonthStart],
+    );
+    const e = earnRows[0];
+    const serviceEarnings = parseFloat(e.service_earnings) || 0;
+    const productEarnings = parseFloat(e.product_earnings) || 0;
+
+    // «Мотивация» (095): promo-product bonus accrued in the month.
+    const { rows: motRows } = await this.pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS amount
+         FROM motivation_accruals
+        WHERE tenant_id = $1 AND employee_id = $2
+          AND accrued_at >= $3 AND accrued_at < $4`,
+      [tenantID, employeeId, monthStart, nextMonthStart],
+    );
+    const motivationAmount = parseFloat(motRows[0].amount) || 0;
+
+    // Premiums awarded in the month (cash premiums add to earnings).
+    const { rows: premRows } = await this.pool.query(
+      `SELECT sp.*, u.full_name AS user_name, a.full_name AS awarder_name
+         FROM salary_premiums sp
+         LEFT JOIN users u ON u.id = sp.user_id
+         LEFT JOIN users a ON a.id = sp.awarded_by
+        WHERE sp.tenant_id = $1 AND sp.user_id = $2
+          AND sp.created_at >= $3 AND sp.created_at < $4
+        ORDER BY sp.created_at DESC`,
+      [tenantID, employeeId, monthStart, nextMonthStart],
+    );
+    const premiums = premRows.map((r) => this.mapPremium(r));
+    const premiumsAmount = premiums.reduce((sum, p) => sum + (p.type === 'cash' ? p.amount || 0 : 0), 0);
+
+    // Fines (штрафы, 056) applied in the month — deducted from «к выплате».
+    const { rows: fineRows } = await this.pool.query(
+      `SELECT pen.*, u.full_name AS user_name, c.full_name AS creator_name
+         FROM salary_penalties pen
+         LEFT JOIN users u ON u.id = pen.user_id
+         LEFT JOIN users c ON c.id = pen.created_by
+        WHERE pen.tenant_id = $1 AND pen.user_id = $2
+          AND pen.date >= $3 AND pen.date < $4
+        ORDER BY pen.date DESC`,
+      [tenantID, employeeId, monthStart, nextMonthStart],
+    );
+    const fines = fineRows.map((r) => this.mapPenalty(r));
+    const finesAmount = fines.reduce((sum, f) => sum + (f.amount || 0), 0);
+
+    // Payouts issued in the month (any status). Accepted ones count as paid.
+    const { rows: payoutRows } = await this.pool.query(
+      `SELECT p.*, u.full_name AS user_name, c.full_name AS creator_name
+         FROM salary_payouts p
+         LEFT JOIN users u ON u.id = p.employee_id
+         LEFT JOIN users c ON c.id = p.created_by
+        WHERE p.tenant_id = $1 AND p.employee_id = $2
+          AND p.created_at >= $3 AND p.created_at < $4
+        ORDER BY p.created_at DESC`,
+      [tenantID, employeeId, monthStart, nextMonthStart],
+    );
+    const payouts = payoutRows.map((r) => this.mapPayout(r));
+    const acceptedPayoutsAmount = payouts.reduce((sum, p) => sum + (p.status === 'accepted' ? p.amount || 0 : 0), 0);
+
+    // Legacy salary_payments for the month (old immediate-expense flow) — also
+    // money paid; included so the card never hides a recorded payment.
+    const { rows: paymentRows } = await this.pool.query(
+      `SELECT sp.*, u.full_name AS user_name, c.full_name AS creator_name
+         FROM salary_payments sp
+         LEFT JOIN users u ON u.id = sp.user_id
+         LEFT JOIN users c ON c.id = sp.created_by
+        WHERE sp.tenant_id = $1 AND sp.user_id = $2 AND sp.month_year = $3
+        ORDER BY sp.date DESC`,
+      [tenantID, employeeId, monthYear],
+    );
+    const payments = paymentRows.map((p) => ({
+      id: p.id,
+      userId: p.user_id,
+      userName: p.user_name,
+      amount: parseFloat(p.amount) || 0,
+      monthYear: p.month_year,
+      type: p.type,
+      comment: p.comment,
+      createdBy: p.created_by,
+      creatorName: p.creator_name,
+      date: p.date,
+      createdAt: p.created_at,
+    }));
+    const legacyPaidAmount = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+
+    const totalEarnings = serviceEarnings + productEarnings + premiumsAmount + motivationAmount;
+    const paidAmount = acceptedPayoutsAmount + legacyPaidAmount;
+
+    return {
+      userId: employeeId,
+      userName: user.full_name,
+      month: monthYear,
+      salaryPercent: parseFloat(user.salary_percent) || 0,
+      productSalaryPercent: parseFloat(user.product_salary_percent) || 0,
+      serviceEarnings,
+      productEarnings,
+      premiumsAmount,
+      motivationAmount,
+      totalEarnings,
+      finesAmount,
+      paidAmount,
+      // What the shop still owes for the month after fines and what's paid.
+      remainingAmount: totalEarnings - finesAmount - paidAmount,
+      totalRevenue: parseFloat(e.total_revenue) || 0,
+      checkCount: parseInt(e.check_count, 10) || 0,
+      payouts,
+      fines,
+      premiums,
+      payments,
     };
   }
 }

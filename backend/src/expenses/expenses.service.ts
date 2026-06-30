@@ -6,7 +6,7 @@ import {
   BadRequestException,
   ForbiddenException,
 } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 import { PushService } from '../push/push.service';
@@ -283,6 +283,55 @@ export class ExpensesService {
     if (rows.length === 0) throw new NotFoundException({ message: 'Расход не найден' });
     invalidateReportsForTenant(tenantID);
     return { message: 'Удалено' };
+  }
+
+  /**
+   * Record a system-generated «Зарплата» expense — used when a salary payout
+   * is ACCEPTED by the employee (100_salary_payouts_and_fines). This is the
+   * single place the salary-payout money path writes to `expenses`, so the
+   * SQL is not hand-rolled inside SalaryService.
+   *
+   * Unlike {@link create} this bypasses the employee permission / daily-limit /
+   * approval logic: a payout accepted by the recipient is always an approved
+   * owner expense, regardless of who triggered the accept. Source is 'owner'
+   * and approval_status 'approved'; `user_id` / `created_by` are attributed to
+   * the владелец who issued the payout (may be null if that user was removed).
+   *
+   * Accepts an optional `executor` (a transaction `PoolClient`) so the expense
+   * insert participates in the caller's payout-accept transaction — the payout
+   * status flip and the expense insert commit (or roll back) atomically.
+   * Side-effects (reports-cache invalidation, cross-device push) are the
+   * caller's responsibility AFTER commit. Returns the new expense row.
+   */
+  async recordSalaryExpense(
+    tenantID: string,
+    data: { amount: number; description: string; date: string | Date; createdBy: string | null },
+    executor: Pool | PoolClient = this.pool,
+  ): Promise<{ id: string; amount: number; date: string }> {
+    // Find-or-create the tenant's «Зарплата» category (same convention as the
+    // legacy salary-payment path).
+    let categoryId: string;
+    const { rows: catRows } = await executor.query(
+      `SELECT id FROM expense_categories WHERE tenant_id = $1 AND name = 'Зарплата' LIMIT 1`,
+      [tenantID],
+    );
+    if (catRows.length > 0) {
+      categoryId = catRows[0].id;
+    } else {
+      const { rows: newCat } = await executor.query(
+        `INSERT INTO expense_categories (name, tenant_id) VALUES ('Зарплата', $1) RETURNING id`,
+        [tenantID],
+      );
+      categoryId = newCat[0].id;
+    }
+
+    const { rows } = await executor.query(
+      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $5, 'owner', 'approved', $6)
+       RETURNING id, amount, date`,
+      [categoryId, data.amount, data.description, data.date, data.createdBy, tenantID],
+    );
+    return { id: rows[0].id, amount: parseFloat(rows[0].amount) || 0, date: rows[0].date };
   }
 
   async getTotalForPeriod(tenantID: string, dateFrom: string, dateTo: string) {

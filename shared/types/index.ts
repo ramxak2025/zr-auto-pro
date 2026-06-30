@@ -2122,11 +2122,102 @@ export interface SalaryPenalty {
   /** Positive deduction amount (RUB). Subtracted from the employee's remaining owed salary. */
   amount: number;
   description?: string;
+  /**
+   * Owner-facing alias of `description` — the fine reason «за что». Now always
+   * present (NOT NULL since 100_salary_payouts_and_fines). Same value as
+   * `description`; `SalaryFine` reads this.
+   */
+  comment?: string;
   /** When the penalty applies. */
   date: string;
   createdBy?: string;
   creatorName?: string;
   createdAt: string;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Salary payouts-with-confirmation + fines (100_salary_payouts_and_fines)
+//
+//  PAYOUT: владелец (director + superadmin) issues a ЗП / АВАНС to an employee
+//  → it starts `pending` and the employee accepts or rejects it (push-driven).
+//  On accept the amount is recorded into expenses (category «Зарплата», dated
+//  the accept day) and `expenseId` links it; on reject the payout is voided and
+//  nothing is recorded. Separate from the legacy `SalaryPayment` flow.
+//
+//  FINE (штраф): a mandatory-comment deduction, backed by salary_penalties
+//  (056). `SalaryFine` is the owner-facing shape of a penalty with the reason
+//  always present.
+// ───────────────────────────────────────────────────────────────────────
+
+export type SalaryPayoutType = 'salary' | 'advance';
+export type SalaryPayoutStatus = 'pending' | 'accepted' | 'rejected';
+
+export interface SalaryPayout {
+  id: string;
+  /** Recipient employee id. */
+  userId: string;
+  userName?: string;
+  type: SalaryPayoutType;
+  amount: number;
+  status: SalaryPayoutStatus;
+  /** Optional owner note (a payout comment is NOT required, unlike a fine). */
+  comment?: string;
+  /** The владелец who issued the payout. */
+  createdBy?: string;
+  creatorName?: string;
+  createdAt: string;
+  /** When the employee accepted / rejected. Null while `pending`. */
+  decidedAt?: string | null;
+  /** Expense row written on accept (category «Зарплата»). Null until accepted. */
+  expenseId?: string | null;
+}
+
+/** A штраф with a MANDATORY reason. Backed by salary_penalties (056). */
+export interface SalaryFine {
+  id: string;
+  userId: string;
+  userName?: string;
+  /** Positive deduction amount (RUB). Subtracted from «к выплате». */
+  amount: number;
+  /** Reason «за что» — always present. */
+  comment: string;
+  date: string;
+  createdBy?: string;
+  creatorName?: string;
+  createdAt: string;
+}
+
+/**
+ * One employee's salary breakdown for one calendar month — powers the
+ * full-screen salary card that pages month-by-month (`getEmployeeMonth`).
+ * `totalEarnings` = service + product + premiums + motivation (mirrors
+ * MasterSalary). `remainingAmount` = totalEarnings − finesAmount − paidAmount,
+ * where paidAmount counts accepted payouts plus legacy salary_payments.
+ */
+export interface SalaryMonthDetail {
+  userId: string;
+  userName: string;
+  /** 'YYYY-MM'. */
+  month: string;
+  salaryPercent: number;
+  productSalaryPercent?: number;
+  serviceEarnings: number;
+  productEarnings: number;
+  premiumsAmount: number;
+  motivationAmount: number;
+  totalEarnings: number;
+  /** Sum of fines (штрафы) in the month — deducted. */
+  finesAmount: number;
+  /** Accepted payouts + legacy salary_payments in the month. */
+  paidAmount: number;
+  remainingAmount: number;
+  totalRevenue: number;
+  checkCount: number;
+  payouts: SalaryPayout[];
+  fines: SalaryFine[];
+  premiums: SalaryPremium[];
+  /** Legacy salary_payments for the month (old immediate-expense flow). */
+  payments: SalaryPayment[];
 }
 
 // ───────────────────────────────────────────────────────────────────────

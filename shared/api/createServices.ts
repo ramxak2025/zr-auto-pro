@@ -92,6 +92,11 @@ import type {
   PerCarChecks,
   SalaryPremium,
   SalaryPenalty,
+  SalaryPayout,
+  SalaryPayoutType,
+  SalaryPayoutStatus,
+  SalaryFine,
+  SalaryMonthDetail,
   ExpenseCategory,
   JournalDoc,
   KnowledgeCategory,
@@ -628,12 +633,50 @@ export function createSalaryApi(api: HttpClient) {
       }) => api.post<SalaryPremium>('/salary/premiums', data),
       remove: (id: string) => api.delete(`/salary/premiums/${id}`),
     },
-    // Penalties (штрафы, 056_salary_penalties). Director / admin / superadmin
-    // only — they subtract from the employee's remaining owed salary.
+    // Penalties (штрафы, 056_salary_penalties). Director / superadmin only —
+    // they subtract from the employee's remaining owed salary.
+    // DEPRECATED low-level alias of the fine API below — prefer `createFine`
+    // (mandatory comment). Kept for backward compatibility; the backend now
+    // requires a non-empty reason regardless of which name you call.
     listPenalties: (params?: { userId?: string }) => api.get<SalaryPenalty[]>('/salary/penalties', { params }),
     addPenalty: (data: { userId: string; amount: number; description?: string; date?: string }) =>
       api.post<SalaryPenalty>('/salary/penalties', data),
     removePenalty: (id: string) => api.delete(`/salary/penalties/${id}`),
+
+    // ── Payouts with confirmation (100_salary_payouts_and_fines) ───────────
+    // Владелец (director/superadmin) issues a ЗП / АВАНС → employee accepts or
+    // rejects → on accept it's recorded to expenses; on reject it's voided.
+    /** Owner issues a payout (starts `pending`, pushes the employee to decide). */
+    createPayout: (data: { employeeId: string; type: SalaryPayoutType; amount: number; comment?: string }) =>
+      api.post<SalaryPayout>('/salary/payouts', data),
+    /** The recipient employee accepts or rejects a pending payout. */
+    decidePayout: (id: string, decision: 'accept' | 'reject') =>
+      api.post<SalaryPayout>(`/salary/payouts/${id}/decide`, { decision }),
+    /**
+     * List payouts + statuses. Owner sees the whole tenant; an employee is
+     * scoped to their own server-side. `monthYear` filters by issue month.
+     */
+    listPayouts: (params?: { employeeId?: string; status?: SalaryPayoutStatus; monthYear?: string }) =>
+      api.get<SalaryPayout[]>('/salary/payouts', { params }),
+
+    // ── Fines (штрафы) — mandatory comment «за что» ────────────────────────
+    // Owner-facing surface over salary_penalties (056). `comment` is required
+    // and enforced at the DTO + DB (NOT NULL / non-blank CHECK).
+    /** Owner issues a fine to an employee. `comment` (за что) is mandatory. */
+    createFine: (data: { userId: string; amount: number; comment: string; date?: string }) =>
+      api.post<SalaryFine>('/salary/penalties', {
+        userId: data.userId,
+        amount: data.amount,
+        description: data.comment,
+        date: data.date,
+      }),
+    listFines: (params?: { userId?: string }) => api.get<SalaryFine[]>('/salary/penalties', { params }),
+    removeFine: (id: string) => api.delete(`/salary/penalties/${id}`),
+
+    // ── Per-employee monthly salary detail (full-screen card, pages months) ──
+    /** Breakdown for one employee + one month ('YYYY-MM'). Owner: any; employee: self. */
+    getEmployeeMonth: (employeeId: string, month: string) =>
+      api.get<SalaryMonthDetail>(`/salary/employee/${employeeId}/month`, { params: { month } }),
   };
 }
 

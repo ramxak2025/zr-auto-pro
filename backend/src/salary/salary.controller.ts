@@ -6,6 +6,13 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 import { CreateSalaryPaymentDto } from './dto/create-payment.dto';
 import { CreatePremiumDto } from './dto/create-premium.dto';
 import { CreatePenaltyDto } from './dto/create-penalty.dto';
+import { CreatePayoutDto } from './dto/create-payout.dto';
+import { DecidePayoutDto } from './dto/decide-payout.dto';
+
+// «Владелец» (issues payouts / fines) = director + superadmin. admin + master
+// are employees: they never issue, and see only their own salary. superadmin is
+// always allowed via the RolesGuard bypass; listed explicitly for clarity.
+const OWNER_ROLES = ['director', 'superadmin'];
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('salary')
@@ -49,6 +56,51 @@ export class SalaryController {
     return this.salaryService.confirmPayment(id, user.tenantID, user.userID);
   }
 
+  // ── Payouts with confirmation (100_salary_payouts_and_fines) ─────────────
+
+  // Owner issues a ЗП / АВАНС; employee then accepts or rejects it.
+  @Roles(...OWNER_ROLES)
+  @Post('payouts')
+  createPayout(@CurrentUser() user: JwtPayload, @Body() dto: CreatePayoutDto) {
+    return this.salaryService.createPayout(user.tenantID, user.userID, dto);
+  }
+
+  // Employee's decision on a pending payout. Role gate is intentionally open —
+  // the service authorizes the caller as the recipient (and ignores anyone
+  // else), mirroring confirmPayment above.
+  @Post('payouts/:id/decide')
+  decidePayout(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: DecidePayoutDto) {
+    return this.salaryService.decidePayout(id, user.tenantID, user.userID, dto.decision);
+  }
+
+  // List payouts + statuses. Owner (director/superadmin) sees the whole tenant;
+  // an employee (admin/master) is scoped to their OWN payouts — we force the
+  // employeeId filter to themselves so they can't read a colleague's or dump
+  // the tenant. Same self-scoping pattern as listPremiums.
+  @Get('payouts')
+  listPayouts(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: { employeeId?: string; status?: 'pending' | 'accepted' | 'rejected'; monthYear?: string },
+  ) {
+    const privileged = OWNER_ROLES.includes(user.role);
+    const q = { ...(query || {}) };
+    if (!privileged) q.employeeId = user.userID;
+    return this.salaryService.listPayouts(user.tenantID, q);
+  }
+
+  // Per-employee monthly salary detail (the full-screen card pages months).
+  // Owner can view any employee in the tenant; an employee is forced to self.
+  @Get('employee/:employeeId/month')
+  getEmployeeMonth(
+    @Param('employeeId') employeeId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query('month') month?: string,
+  ) {
+    const privileged = OWNER_ROLES.includes(user.role);
+    const target = privileged ? employeeId : user.userID;
+    return this.salaryService.getEmployeeMonth(user.tenantID, target, month);
+  }
+
   // ── Premiums ───────────────────────────────────────────────────────────
 
   @Roles('director', 'admin', 'superadmin')
@@ -80,25 +132,31 @@ export class SalaryController {
     return this.salaryService.removePremium(id, user.tenantID);
   }
 
-  // ── Penalties (штрафы, 056_salary_penalties) ────────────────────────────
+  // ── Fines / penalties (штрафы, 056_salary_penalties) ─────────────────────
+  // The owner's «штрафы». Issued by владелец (director + superadmin) only —
+  // admin + master are employees and never fine. Comment («за что») is
+  // MANDATORY (DTO @IsNotEmpty + DB NOT NULL/CHECK). The shared contract
+  // exposes these via createFine / listFines / removeFine. No consumer used
+  // the previous admin-inclusive gate, so tightening breaks nothing.
 
-  @Roles('director', 'admin', 'superadmin')
+  @Roles(...OWNER_ROLES)
   @Post('penalties')
   createPenalty(@CurrentUser() user: JwtPayload, @Body() dto: CreatePenaltyDto) {
     return this.salaryService.createPenalty(user.tenantID, user.userID, dto);
   }
 
   /**
-   * Penalties for the tenant (or one employee via `?userId=`). Same internal-
-   * finance sensitivity as payments — director / admin / superadmin only.
+   * Fines for the tenant (or one employee via `?userId=`). Owner-only finance
+   * data — director / superadmin. Employees see their fines via the per-month
+   * detail (getEmployeeMonth), not here.
    */
-  @Roles('director', 'admin', 'superadmin')
+  @Roles(...OWNER_ROLES)
   @Get('penalties')
   listPenalties(@CurrentUser() user: JwtPayload, @Query() query: { userId?: string }) {
     return this.salaryService.listPenalties(user.tenantID, query || {});
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @Roles(...OWNER_ROLES)
   @Delete('penalties/:id')
   deletePenalty(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.salaryService.deletePenalty(id, user.tenantID);
