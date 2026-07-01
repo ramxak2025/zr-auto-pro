@@ -7,11 +7,12 @@ import {
   InternalServerErrorException,
   Logger,
 } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthUser } from '../common/auth-cache';
+import { invalidateReportsForTenant } from '../common/reports-cache';
 import { SECTION_KEYS, SectionKey } from './dto/section-visibility.dto';
 import { ALL_ITEM_KEYS, OWNER_PROTECTED_ITEM_KEYS } from './dto/item-visibility.dto';
 
@@ -224,12 +225,19 @@ export class UsersService {
     // Confirm the target lives in the actor's tenant. Without this the
     // surrounding `WHERE id=$ AND tenant_id=$` only protects mutation;
     // we'd still leak existence via different error paths.
-    const { rows: targetRows } = await this.pool.query('SELECT role FROM users WHERE id=$1 AND tenant_id=$2', [
-      id,
-      tenantID,
-    ]);
+    const { rows: targetRows } = await this.pool.query(
+      `SELECT role, COALESCE(salary_percent, 0) AS salary_percent,
+              COALESCE(product_salary_percent, 0) AS product_salary_percent
+         FROM users WHERE id=$1 AND tenant_id=$2`,
+      [id, tenantID],
+    );
     if (targetRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
     const targetRole = targetRows[0].role as string;
+    // #62: capture the pre-edit percents so we can tell whether a percent
+    // ACTUALLY changed (and only then recompute the current month — a same-value
+    // save, or an unrelated profile edit, stays a no-op and byte-identical).
+    const oldSalaryPercent = parseFloat(targetRows[0].salary_percent) || 0;
+    const oldProductSalaryPercent = parseFloat(targetRows[0].product_salary_percent) || 0;
 
     // No one — not even superadmin — can demote the only director left in a
     // tenant, and a non-superadmin cannot edit a superadmin / director other
@@ -341,15 +349,54 @@ export class UsersService {
       return this.getById(id, tenantID);
     }
 
+    // #62: did a salary percent actually change value? Only then do we recompute
+    // the current month (past months stay at their historical baked percent).
+    const servicePctChanged = dto.salaryPercent !== undefined && (Number(dto.salaryPercent) || 0) !== oldSalaryPercent;
+    const productPctChanged =
+      dto.productSalaryPercent !== undefined && (Number(dto.productSalaryPercent) || 0) !== oldProductSalaryPercent;
+    const pctChanged = servicePctChanged || productPctChanged;
+
     sets.push(`updated_at=now()`);
     vals.push(id, tenantID);
 
-    const { rows } = await this.pool.query(
-      `UPDATE users SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}
-       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, tenant_id, created_at`,
-      vals,
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+    const updateSql = `UPDATE users SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}
+       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, tenant_id, created_at`;
+
+    let updatedRow: any;
+    if (pctChanged) {
+      // Persist the new percent AND re-bake the current month's checks in ONE
+      // transaction so the percent and the recomputed salary commit atomically.
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+        const { rows } = await client.query(updateSql, vals);
+        if (rows.length === 0) {
+          await client.query('ROLLBACK');
+          throw new NotFoundException({ message: 'Пользователь не найден' });
+        }
+        updatedRow = rows[0];
+        await this.recomputeCurrentMonthSalary(client, tenantID, id, {
+          service: servicePctChanged,
+          product: productPctChanged,
+        });
+        await client.query('COMMIT');
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          /* already rolled back */
+        }
+        client.release();
+        throw err;
+      }
+      client.release();
+      // Current-month check salary / profit moved — drop cached report aggregates.
+      invalidateReportsForTenant(tenantID);
+    } else {
+      const { rows } = await this.pool.query(updateSql, vals);
+      if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+      updatedRow = rows[0];
+    }
 
     // Any update may have changed role / permissions / is_active — drop this
     // user's cached JWT validations so the change takes effect on their next
@@ -381,7 +428,116 @@ export class UsersService {
       }
     }
 
-    return this.mapUser(rows[0]);
+    return this.mapUser(updatedRow);
+  }
+
+  /**
+   * #62 — re-bake the CURRENT calendar month's non-deferred checks for `userId`
+   * after their salary percent changed, so the current month reflects the new
+   * percent while PAST months keep their historical (already-baked) percent.
+   * Runs INSIDE the caller's transaction (same one that persisted the percent),
+   * so the change is atomic. Current-month + tenant + user scoped; a no-op when
+   * neither flag is set. Mirrors the baking formulas in ChecksService.
+   *
+   *  - service: re-bake this user's own service lines (skipping lines whose
+   *    service carries its own `master_percent` override — that percent is
+   *    independent of the user percent), then refresh each affected check's
+   *    service_salary_total + total_cost + profit.
+   *  - product: re-bake product_salary_total for checks this user CREATED,
+   *    honouring per-product commission overrides (else the user's global
+   *    product %), then refresh total_cost + profit.
+   */
+  private async recomputeCurrentMonthSalary(
+    client: PoolClient,
+    tenantID: string,
+    userId: string,
+    opts: { service: boolean; product: boolean },
+  ): Promise<void> {
+    if (!opts.service && !opts.product) return;
+
+    // Half-open [monthStart, nextMonthStart) in UTC — same convention as the
+    // per-employee monthly salary card (SalaryService.getEmployeeMonth).
+    const now = new Date();
+    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
+    const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+
+    if (opts.service) {
+      // 1) Re-bake per-line salary for the lines THIS user executes (no override).
+      await client.query(
+        `UPDATE check_service_lines sl
+            SET salary_amount = ROUND(COALESCE(sl.total, 0)::numeric * COALESCE(u.salary_percent, 0) / 100.0, 2)
+           FROM checks c, users u
+          WHERE sl.check_id = c.id
+            AND u.id = $2 AND u.tenant_id = $1
+            AND c.tenant_id = $1 AND c.is_deferred = false
+            AND c.date >= $3 AND c.date < $4
+            AND COALESCE(sl.master_id, c.master_id) = $2
+            AND NOT EXISTS (
+              SELECT 1 FROM services s
+               WHERE s.id = sl.service_id AND s.tenant_id = $1 AND s.master_percent IS NOT NULL
+            )`,
+        [tenantID, userId, monthStart, nextMonthStart],
+      );
+      // 2) Refresh service_salary_total (+ cost / profit) for the affected checks
+      //    from the sum of ALL their (now-updated) service lines.
+      await client.query(
+        `UPDATE checks c
+            SET service_salary_total = agg.svc,
+                total_cost = COALESCE(c.product_cost_total, 0) + agg.svc + COALESCE(c.product_salary_total, 0),
+                profit = COALESCE(c.total_revenue, 0)
+                         - (COALESCE(c.product_cost_total, 0) + agg.svc + COALESCE(c.product_salary_total, 0))
+           FROM (
+             SELECT sl.check_id, COALESCE(SUM(COALESCE(sl.salary_amount, 0)), 0)::numeric AS svc
+               FROM check_service_lines sl
+               JOIN checks cc ON cc.id = sl.check_id
+              WHERE cc.tenant_id = $1 AND cc.is_deferred = false
+                AND cc.date >= $3 AND cc.date < $4
+              GROUP BY sl.check_id
+           ) agg
+          WHERE c.id = agg.check_id
+            AND c.tenant_id = $1 AND c.is_deferred = false
+            AND c.date >= $3 AND c.date < $4
+            AND EXISTS (
+              SELECT 1 FROM check_service_lines sl2
+               WHERE sl2.check_id = c.id AND COALESCE(sl2.master_id, c.master_id) = $2
+            )`,
+        [tenantID, userId, monthStart, nextMonthStart],
+      );
+    }
+
+    if (opts.product) {
+      // Re-bake product_salary_total for checks this user created, honouring
+      // per-product commission overrides (else the user's global product %),
+      // then refresh total_cost + profit. Same profit>0 gate as ChecksService.
+      await client.query(
+        `UPDATE checks c
+            SET product_salary_total = agg.pst,
+                total_cost = COALESCE(c.product_cost_total, 0) + COALESCE(c.service_salary_total, 0) + agg.pst,
+                profit = COALESCE(c.total_revenue, 0)
+                         - (COALESCE(c.product_cost_total, 0) + COALESCE(c.service_salary_total, 0) + agg.pst)
+           FROM (
+             SELECT pl.check_id,
+                    COALESCE(SUM(
+                      CASE WHEN (COALESCE(pl.total_sell, 0) - COALESCE(pl.total_cost, 0)) > 0
+                           THEN (COALESCE(pl.total_sell, 0) - COALESCE(pl.total_cost, 0))
+                                * COALESCE(pc.percent, u.product_salary_percent, 0) / 100.0
+                           ELSE 0 END
+                    ), 0)::numeric AS pst
+               FROM check_product_lines pl
+               JOIN checks cc ON cc.id = pl.check_id
+                    AND cc.master_id = $2 AND cc.tenant_id = $1 AND cc.is_deferred = false
+                    AND cc.date >= $3 AND cc.date < $4
+               JOIN users u ON u.id = cc.master_id AND u.tenant_id = cc.tenant_id
+               LEFT JOIN product_commissions pc
+                    ON pc.product_id = pl.product_id AND pc.user_id = cc.master_id AND pc.tenant_id = cc.tenant_id
+              GROUP BY pl.check_id
+           ) agg
+          WHERE c.id = agg.check_id
+            AND c.tenant_id = $1 AND c.is_deferred = false
+            AND c.date >= $3 AND c.date < $4`,
+        [tenantID, userId, monthStart, nextMonthStart],
+      );
+    }
   }
 
   /**
@@ -916,7 +1072,15 @@ export class UsersService {
         }
       }
 
+      // #62: changing the global product % and/or per-product commissions must
+      // recompute the CURRENT month's product salary for checks this user
+      // created (past months keep their historical baked values). Runs in this
+      // same transaction so config + recompute commit atomically.
+      await this.recomputeCurrentMonthSalary(client, tenantID, userId, { service: false, product: true });
+
       await client.query('COMMIT');
+      // Current-month product salary / profit moved — drop cached aggregates.
+      invalidateReportsForTenant(tenantID);
       return this.getProductCommissions(userId, tenantID);
     } catch (err) {
       await client.query('ROLLBACK');

@@ -90,6 +90,15 @@ function normalizeColor(color: unknown): string | null {
 }
 
 /**
+ * Round a money value to 2 decimals (half-away-from-zero, guarded against binary
+ * float artefacts). Used so each baked per-line service salary is a real 2-decimal
+ * amount whose sum equals the check's stored service_salary_total exactly (#56).
+ */
+function round2(value: number): number {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+/**
  * Opaque keyset cursor for the checks journal: base64url of `<date>|<id>`.
  * `date` is the row's ISO timestamp, `id` its UUID — together they form the
  * (date DESC, id DESC) keyset. Opaque on purpose so the FE just round-trips
@@ -513,6 +522,12 @@ export class ChecksService {
     const keysetMode = query.cursor !== undefined;
     const cursor = keysetMode ? parseCheckCursor(query.cursor) : null;
 
+    // #59: journal executor marker. The requesting user's id — used to flag
+    // per-check whether they are an EXECUTOR (a service line's master) on the
+    // check but NOT its creator. null when no actor (the flag then resolves to
+    // false for every row via the NULL-safe comparison below).
+    const meId = actor?.userID ?? null;
+
     let where = 'ch.tenant_id = $1';
     const params: any[] = [tenantID];
     let idx = 2;
@@ -592,12 +607,19 @@ export class ChecksService {
         params.push(cursor.date, cursor.id);
         idx += 2;
       }
+      const meIdx = idx;
+      params.push(meId);
+      idx++;
       params.push(limit);
       const res = await this.pool.query(
         `SELECT ch.*,
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
-                ca.plate_number, ca.make_model
+                ca.plate_number, ca.make_model,
+                (ch.master_id IS DISTINCT FROM $${meIdx} AND EXISTS (
+                   SELECT 1 FROM check_service_lines sl
+                    WHERE sl.check_id = ch.id AND sl.master_id = $${meIdx}
+                )) AS is_executor_for_me
          FROM checks ch
          LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
@@ -609,12 +631,19 @@ export class ChecksService {
       );
       rows = res.rows;
     } else {
+      const meIdx = idx;
+      params.push(meId);
+      idx++;
       params.push(limit, offset);
       const res = await this.pool.query(
         `SELECT ch.*,
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
-                ca.plate_number, ca.make_model
+                ca.plate_number, ca.make_model,
+                (ch.master_id IS DISTINCT FROM $${meIdx} AND EXISTS (
+                   SELECT 1 FROM check_service_lines sl
+                    WHERE sl.check_id = ch.id AND sl.master_id = $${meIdx}
+                )) AS is_executor_for_me
          FROM checks ch
          LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
@@ -639,6 +668,10 @@ export class ChecksService {
       if (row.car_id) {
         (ch as any).car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
       }
+      // #59: true when the requesting user is a service-line executor on this
+      // check but is NOT its creator (added as executor by someone else). Drives
+      // a per-check tint in the journal (mobile). Additive — false otherwise.
+      (ch as any).isExecutor = row.is_executor_for_me === true;
       // Slim payload: list view never carries inline service / product line
       // arrays — they belong to the detail endpoint. Caller can opt in to a
       // subset via ?fields=. Counts are intentionally not included; the FE
@@ -1226,8 +1259,13 @@ export class ChecksService {
         // Service-specific percent takes priority over master default
         const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
         const salaryPct = serviceOverride !== null ? serviceOverride : salaryMap[masterId] || 0;
-        serviceSalaryTotal += (total * salaryPct) / 100;
-        serviceLines.push({ ...svc, total, masterId });
+        // #56: bake the per-line salary and attribute it to THIS line's executor
+        // (masterId). Rounded to money precision so the persisted per-line amounts
+        // sum EXACTLY to service_salary_total (which we keep as Σ of the rounded
+        // lines) — the salary reads now attribute service earnings per line.
+        const lineSalary = round2((total * salaryPct) / 100);
+        serviceSalaryTotal += lineSalary;
+        serviceLines.push({ ...svc, total, masterId, salaryAmount: lineSalary });
       }
 
       // Calculate product totals and product commission for master
@@ -1340,8 +1378,8 @@ export class ChecksService {
       // Insert service lines
       for (const svc of serviceLines) {
         await client.query(
-          `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total)
-           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total, salary_amount)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
           [
             checkId,
             svc.serviceId || null,
@@ -1350,6 +1388,7 @@ export class ChecksService {
             svc.price || 0,
             svc.quantity || 1,
             svc.total,
+            svc.salaryAmount ?? 0,
           ],
         );
       }
@@ -1873,8 +1912,10 @@ export class ChecksService {
         const masterId = svc.masterId || primaryMasterId;
         const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
         const salaryPct = serviceOverride !== null ? serviceOverride : salaryMap[masterId] || 0;
-        serviceSalaryTotal += (total * salaryPct) / 100;
-        serviceLines.push({ ...svc, total, masterId });
+        // #56: bake the per-line salary for THIS line's executor (see create()).
+        const lineSalary = round2((total * salaryPct) / 100);
+        serviceSalaryTotal += lineSalary;
+        serviceLines.push({ ...svc, total, masterId, salaryAmount: lineSalary });
       }
 
       // Calculate product totals and product commission
@@ -2023,8 +2064,17 @@ export class ChecksService {
 
       for (const svc of serviceLines) {
         await client.query(
-          `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-          [id, svc.serviceId || null, svc.masterId || null, svc.name, svc.price || 0, svc.quantity || 1, svc.total],
+          `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total, salary_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            id,
+            svc.serviceId || null,
+            svc.masterId || null,
+            svc.name,
+            svc.price || 0,
+            svc.quantity || 1,
+            svc.total,
+            svc.salaryAmount ?? 0,
+          ],
         );
       }
 

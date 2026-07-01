@@ -862,6 +862,14 @@ export interface Check {
    * owner-configurable.
    */
   workStatus?: string | null;
+  /**
+   * Journal executor marker (#59). Only populated on the check LIST response
+   * (GET /checks): true when the REQUESTING user is a service-line executor on
+   * this check but is NOT its creator (i.e. they were added as an executor by
+   * someone else). Drives a per-check tint in the journal. Additive & per-viewer
+   * — absent/false everywhere else; existing consumers safely ignore it.
+   */
+  isExecutor?: boolean;
   createdAt: string;
 }
 

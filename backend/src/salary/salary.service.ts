@@ -45,22 +45,44 @@ export class SalaryService {
     const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
 
     const { rows } = await this.pool.query(
-      `SELECT u.id as master_id, u.full_name as master_name,
+      `WITH svc AS (
+         -- #56: service salary attributed to each service line's EXECUTOR
+         -- (COALESCE(line.master_id, check.master_id)) — not the check creator.
+         -- Sums the baked per-line salary_amount, so this reads stored data and
+         -- retroactively fixes past checks.
+         SELECT COALESCE(sl.master_id, ch.master_id) AS earner_id,
+                COALESCE(SUM(COALESCE(sl.salary_amount, 0)), 0) AS service_earnings
+           FROM checks ch
+           JOIN check_service_lines sl ON sl.check_id = ch.id
+          WHERE ch.tenant_id = $1 AND ch.is_deferred = false
+            AND ch.date >= $2 AND ch.date <= ($3::date + 1)::timestamptz
+          GROUP BY COALESCE(sl.master_id, ch.master_id)
+       ),
+       prod AS (
+         -- Product salary, revenue and check-count stay attributed to the check
+         -- creator (checks.master_id) — untouched by #56.
+         SELECT ch.master_id AS earner_id,
+                COALESCE(SUM(COALESCE(ch.product_salary_total, 0)), 0) AS product_earnings,
+                COALESCE(SUM(ch.total_revenue), 0) AS total_revenue,
+                COUNT(ch.id) AS check_count
+           FROM checks ch
+          WHERE ch.tenant_id = $1 AND ch.is_deferred = false
+            AND ch.date >= $2 AND ch.date <= ($3::date + 1)::timestamptz
+          GROUP BY ch.master_id
+       )
+       SELECT u.id as master_id, u.full_name as master_name,
               COALESCE(u.salary_percent, 0) as salary_percent,
               COALESCE(u.product_salary_percent, 0) as product_salary_percent,
-              COALESCE(SUM(ch.service_salary_total), 0) as service_earnings,
-              COALESCE(SUM(COALESCE(ch.product_salary_total, 0)), 0) as product_earnings,
-              COALESCE(SUM(ch.service_salary_total) + SUM(COALESCE(ch.product_salary_total, 0)), 0) as total_earnings,
-              COALESCE(SUM(ch.total_revenue), 0) as total_revenue,
-              COUNT(ch.id) as check_count
-       FROM users u
-       LEFT JOIN checks ch ON ch.master_id = u.id
-         AND ch.tenant_id = u.tenant_id
-         AND ch.date >= $2 AND ch.date <= ($3::date + 1)::timestamptz
-         AND ch.is_deferred = false
-       WHERE u.tenant_id = $1 AND u.role IN ('master', 'admin')
-       GROUP BY u.id, u.full_name, u.salary_percent, u.product_salary_percent
-       ORDER BY total_earnings DESC`,
+              COALESCE(svc.service_earnings, 0) as service_earnings,
+              COALESCE(prod.product_earnings, 0) as product_earnings,
+              COALESCE(svc.service_earnings, 0) + COALESCE(prod.product_earnings, 0) as total_earnings,
+              COALESCE(prod.total_revenue, 0) as total_revenue,
+              COALESCE(prod.check_count, 0) as check_count
+         FROM users u
+         LEFT JOIN svc ON svc.earner_id = u.id
+         LEFT JOIN prod ON prod.earner_id = u.id
+        WHERE u.tenant_id = $1 AND u.role IN ('master', 'admin')
+        ORDER BY total_earnings DESC`,
       [tenantID, dateFrom, dateTo],
     );
 
@@ -616,14 +638,15 @@ export class SalaryService {
     );
     const user = userRows[0] || { full_name: '', salary_percent: 0, product_salary_percent: 0 };
 
-    const { rows } = await this.pool.query(
+    // Product salary + cash/card/warranty + check counts stay attributed to the
+    // check creator (master_id = $1). Service salary is summed separately by the
+    // line executor (#56) below, then folded into today/week/month/total.
+    const { rows: prodRows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN date >= $2 THEN service_salary_total + COALESCE(product_salary_total, 0) END), 0) as today,
-         COALESCE(SUM(CASE WHEN date >= $3 THEN service_salary_total + COALESCE(product_salary_total, 0) END), 0) as week,
-         COALESCE(SUM(CASE WHEN date >= $4 THEN service_salary_total + COALESCE(product_salary_total, 0) END), 0) as month,
-         COALESCE(SUM(service_salary_total + COALESCE(product_salary_total, 0)), 0) as total,
-         COALESCE(SUM(CASE WHEN date >= $2 THEN service_salary_total END), 0) as today_service,
          COALESCE(SUM(CASE WHEN date >= $2 THEN COALESCE(product_salary_total, 0) END), 0) as today_product,
+         COALESCE(SUM(CASE WHEN date >= $3 THEN COALESCE(product_salary_total, 0) END), 0) as week_product,
+         COALESCE(SUM(CASE WHEN date >= $4 THEN COALESCE(product_salary_total, 0) END), 0) as month_product,
+         COALESCE(SUM(COALESCE(product_salary_total, 0)), 0) as total_product,
          COUNT(CASE WHEN date >= $2 THEN 1 END) as today_checks,
          COUNT(CASE WHEN date >= $4 THEN 1 END) as month_checks,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IN ('cash','cash_card') THEN cash_amount END), 0) as today_cash,
@@ -634,7 +657,30 @@ export class SalaryService {
       [userID, todayStart, weekStart, monthStart, tenantID],
     );
 
-    const r = rows[0];
+    // #56: service salary this user EARNED as the line executor — their own
+    // service lines on ANY check (whoever created it), bucketed by check date.
+    const { rows: svcRows } = await this.pool.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN ch.date >= $2 THEN COALESCE(sl.salary_amount, 0) END), 0) as today_service,
+         COALESCE(SUM(CASE WHEN ch.date >= $3 THEN COALESCE(sl.salary_amount, 0) END), 0) as week_service,
+         COALESCE(SUM(CASE WHEN ch.date >= $4 THEN COALESCE(sl.salary_amount, 0) END), 0) as month_service,
+         COALESCE(SUM(COALESCE(sl.salary_amount, 0)), 0) as total_service
+       FROM checks ch
+       JOIN check_service_lines sl ON sl.check_id = ch.id
+       WHERE COALESCE(sl.master_id, ch.master_id) = $1 AND ch.is_deferred = false AND ch.tenant_id = $5`,
+      [userID, todayStart, weekStart, monthStart, tenantID],
+    );
+
+    const prodAgg = prodRows[0];
+    const svcAgg = svcRows[0];
+    const todayService = parseFloat(svcAgg.today_service) || 0;
+    const weekService = parseFloat(svcAgg.week_service) || 0;
+    const monthService = parseFloat(svcAgg.month_service) || 0;
+    const totalService = parseFloat(svcAgg.total_service) || 0;
+    const todayProduct = parseFloat(prodAgg.today_product) || 0;
+    const weekProduct = parseFloat(prodAgg.week_product) || 0;
+    const monthProduct = parseFloat(prodAgg.month_product) || 0;
+    const totalProduct = parseFloat(prodAgg.total_product) || 0;
 
     // Fetch product commission promotions for this master
     const { rows: promoRows } = await this.pool.query(
@@ -675,20 +721,20 @@ export class SalaryService {
     const mot = motRows[0] || { today: 0, month: 0, total: 0 };
 
     return {
-      today: parseFloat(r.today) || 0,
-      week: parseFloat(r.week) || 0,
-      month: parseFloat(r.month) || 0,
-      total: parseFloat(r.total) || 0,
-      todayService: parseFloat(r.today_service) || 0,
-      todayProduct: parseFloat(r.today_product) || 0,
+      today: todayService + todayProduct,
+      week: weekService + weekProduct,
+      month: monthService + monthProduct,
+      total: totalService + totalProduct,
+      todayService,
+      todayProduct,
       masterName: user.full_name,
       salaryPercent: parseFloat(user.salary_percent) || 0,
       productSalaryPercent: parseFloat(user.product_salary_percent) || 0,
-      todayChecks: parseInt(r.today_checks) || 0,
-      monthChecks: parseInt(r.month_checks) || 0,
-      todayCash: parseFloat(r.today_cash) || 0,
-      todayCard: parseFloat(r.today_card) || 0,
-      todayWarranty: parseFloat(r.today_warranty) || 0,
+      todayChecks: parseInt(prodAgg.today_checks) || 0,
+      monthChecks: parseInt(prodAgg.month_checks) || 0,
+      todayCash: parseFloat(prodAgg.today_cash) || 0,
+      todayCard: parseFloat(prodAgg.today_card) || 0,
+      todayWarranty: parseFloat(prodAgg.today_warranty) || 0,
       productPromotions,
       motivationToday: parseFloat(mot.today) || 0,
       motivationMonth: parseFloat(mot.month) || 0,
@@ -970,10 +1016,10 @@ export class SalaryService {
     if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
     const user = userRows[0];
 
-    // Earnings from this master's non-deferred checks in the month.
+    // Product salary, revenue and check-count from this master's own (created)
+    // non-deferred checks in the month — attribution unchanged.
     const { rows: earnRows } = await this.pool.query(
-      `SELECT COALESCE(SUM(service_salary_total), 0) AS service_earnings,
-              COALESCE(SUM(COALESCE(product_salary_total, 0)), 0) AS product_earnings,
+      `SELECT COALESCE(SUM(COALESCE(product_salary_total, 0)), 0) AS product_earnings,
               COALESCE(SUM(total_revenue), 0) AS total_revenue,
               COUNT(id) AS check_count
          FROM checks
@@ -982,7 +1028,17 @@ export class SalaryService {
       [employeeId, tenantID, monthStart, nextMonthStart],
     );
     const e = earnRows[0];
-    const serviceEarnings = parseFloat(e.service_earnings) || 0;
+    // #56: service salary this employee earned as the LINE executor (their own
+    // service lines on ANY check in the month, not only checks they created).
+    const { rows: svcEarnRows } = await this.pool.query(
+      `SELECT COALESCE(SUM(COALESCE(sl.salary_amount, 0)), 0) AS service_earnings
+         FROM checks ch
+         JOIN check_service_lines sl ON sl.check_id = ch.id
+        WHERE COALESCE(sl.master_id, ch.master_id) = $1 AND ch.tenant_id = $2 AND ch.is_deferred = false
+          AND ch.date >= $3 AND ch.date < $4`,
+      [employeeId, tenantID, monthStart, nextMonthStart],
+    );
+    const serviceEarnings = parseFloat(svcEarnRows[0].service_earnings) || 0;
     const productEarnings = parseFloat(e.product_earnings) || 0;
 
     // «Мотивация» (095): promo-product bonus accrued in the month.
