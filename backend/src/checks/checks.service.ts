@@ -1689,6 +1689,25 @@ export class ChecksService {
       await this.assertCashierForPayment(tenantID, actor);
     }
 
+    // Round 7 item 12 (residual): masters may edit only THEIR OWN checks on the
+    // plain field-update path too. The close-transition and full-re-edit paths
+    // already enforce this (fullUpdate/activateDeferred/editClosedCheck guards);
+    // without this check a master could still PATCH paymentMethod/paymentStatus
+    // of a FOREIGN check via the raw API even though the UI never offers it.
+    // Comment quick-edit has its own dedicated endpoint (updateOwnComment) with
+    // the same own-check rule; work-status board moves use setWorkStatus and
+    // are deliberately NOT restricted here. Owner-class stays unrestricted.
+    if (userRole === 'master') {
+      const { rows: ownRows } = await this.pool.query(`SELECT master_id FROM checks WHERE id=$1 AND tenant_id=$2`, [
+        id,
+        tenantID,
+      ]);
+      if (ownRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      if (!actorUserId || String(ownRows[0].master_id) !== String(actorUserId)) {
+        throw new ForbiddenException({ message: 'Можно редактировать только свои заказ-наряды' });
+      }
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -1935,6 +1954,15 @@ export class ChecksService {
       // original refusal.
       if (!userHasPermission(actor, 'edit_closed_check')) {
         throw new ForbiddenException({ message: 'Редактирование доступно только для отложенных чеков' });
+      }
+      // Round 7 (item 12): мастер — даже держа edit_closed_check — правит только
+      // СВОИ заказ-наряды (master_id = actor), в точности как close-гейты ниже и
+      // в activateDeferred. Чужой проведённый чек мастер может только смотреть
+      // (в журнале он подсвечен isExecutor-оттенком). Owner-class (director/
+      // admin/superadmin) не затронут: userRole !== 'master'. checkRows уже
+      // прочитан выше — лишнего запроса нет.
+      if (userRole === 'master' && (!actorUserId || String(checkRows[0].master_id) !== String(actorUserId))) {
+        throw new ForbiddenException({ message: 'Можно редактировать только свои заказ-наряды' });
       }
       return this.editClosedCheck(id, tenantID, dto, actorUserId, actor);
     }
