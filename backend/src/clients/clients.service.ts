@@ -1,7 +1,13 @@
-import { Injectable, Inject, NotFoundException } from '@nestjs/common';
+import { Injectable, Inject, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
-import { normalizePhone } from '../common/normalize-phone';
+import { phoneSearchKey } from '../common/normalize-phone';
+
+// Format-agnostic phone key expression, mirrors `phoneSearchKey` (JS) and the
+// functional indexes in migration 104. Normalises the stored value to its
+// last-10 national digits so any format (+7 / 8 / 7 / spaces / dashes / parens)
+// compares equal. Kept as a constant so query + dedup + index never drift.
+const PHONE_KEY_SQL = `right(regexp_replace(phone, '[^0-9]', '', 'g'), 10)`;
 
 @Injectable()
 export class ClientsService {
@@ -13,13 +19,18 @@ export class ClientsService {
    * Returns at most one match (the first by created_at).
    */
   async findByPhone(tenantID: string, phone: string) {
-    const normalized = normalizePhone(phone || '');
-    if (!normalized) return null;
+    // Match on the normalized core so a client saved as «+7 (988) 444-44-85»
+    // is found when the user types «89884444485» or «9884444485» (#64). The
+    // previous exact `phone = '+7…'` compare missed every non-canonical row,
+    // which is exactly why the duplicate-warning never fired and the cash
+    // screen created a second client (#57 BUG B).
+    const key = phoneSearchKey(phone || '');
+    if (!key) return null;
     const { rows } = await this.pool.query(
       `SELECT id, full_name, phone, created_at
-       FROM clients WHERE tenant_id = $1 AND phone = $2
+       FROM clients WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2
        ORDER BY created_at LIMIT 1`,
-      [tenantID, normalized],
+      [tenantID, key],
     );
     if (rows.length === 0) return null;
     const client = {
@@ -80,35 +91,47 @@ export class ClientsService {
 
     let where = 'c.tenant_id = $1';
     const params: any[] = [tenantID];
-    let idx = 2;
 
     if (search) {
-      // Plates and phones are stored without spaces; let the user search with
-      // or without them.
-      const compactSearch = search.replace(/\s+/g, '');
-      where += ` AND (
-        c.full_name ILIKE $${idx}
-        OR REPLACE(c.phone, ' ', '') ILIKE $${idx + 1}
-        OR EXISTS (
-          SELECT 1 FROM cars ca
-          WHERE ca.client_id = c.id
-            AND REPLACE(ca.plate_number, ' ', '') ILIKE $${idx + 1}
-        )
-      )`;
-      params.push(`%${search}%`, `%${compactSearch}%`);
-      idx += 2;
+      // Build the OR-group dynamically so the phone branch can be omitted when
+      // the query has no digits (otherwise a `LIKE '%%'` would match every
+      // client). Param indices key off params.length, so they never drift.
+      const ors: string[] = [];
+
+      params.push(`%${search}%`);
+      ors.push(`c.full_name ILIKE $${params.length}`);
+
+      // Phone: normalise BOTH the query and the stored value to their last-10
+      // national digits, then substring-match — so «9884444485», «89884444485»,
+      // «+79884444485» and «8 (988) 444-44-85» all find the same client (#64).
+      // This is also the fix for #57 BUG A: masters typing a customer's phone in
+      // a different format than it was saved used to get zero results.
+      const phoneKey = phoneSearchKey(search);
+      if (phoneKey) {
+        params.push(`%${phoneKey}%`);
+        ors.push(`${PHONE_KEY_SQL} LIKE $${params.length}`);
+      }
+
+      // Plate: stored compactly (no spaces); match with spaces stripped.
+      params.push(`%${search.replace(/\s+/g, '')}%`);
+      ors.push(
+        `EXISTS (SELECT 1 FROM cars ca WHERE ca.client_id = c.id AND REPLACE(ca.plate_number, ' ', '') ILIKE $${params.length})`,
+      );
+
+      where += ` AND (${ors.join(' OR ')})`;
     }
 
     const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM clients c WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
+    const limitIdx = params.length + 1;
     params.push(limit, offset);
     const { rows } = await this.pool.query(
       // Retail client pinned to the top so the cash screen always shows it
       // first; the rest are newest-first as before.
       `SELECT c.* FROM clients c WHERE ${where}
        ORDER BY c.is_retail DESC NULLS LAST, c.created_at DESC
-       LIMIT $${idx} OFFSET $${idx + 1}`,
+       LIMIT $${limitIdx} OFFSET $${limitIdx + 1}`,
       params,
     );
 
@@ -170,10 +193,48 @@ export class ClientsService {
   }
 
   async create(tenantID: string, dto: any) {
+    // full_name / phone are NOT NULL. Coerce + validate here so a missing field
+    // returns a friendly 400 instead of a raw Postgres NOT NULL 500 — that raw
+    // 500 was #57 BUG B ("создание клиента падает"): any create call that
+    // omitted the phone (undefined → NULL) blew up on save.
+    const fullName = typeof dto.fullName === 'string' ? dto.fullName.trim() : '';
+    if (!fullName) {
+      throw new BadRequestException({ message: 'Укажите имя клиента' });
+    }
+    const phone = typeof dto.phone === 'string' ? dto.phone.trim() : '';
+
+    // Duplicate guard (#57 BUG B): if a client with the same normalized phone
+    // already exists in THIS tenant, don't silently create a second row —
+    // return 409 with the existing client's id so the UI can jump to it
+    // («Клиент с этим номером уже добавлен → Перейти к клиенту»). There is no
+    // DB unique constraint on phone (numbers are stored in many formats and the
+    // retail client has ''), so this is the authoritative dedup.
+    const key = phoneSearchKey(phone);
+    if (key) {
+      const { rows: dupe } = await this.pool.query(
+        `SELECT id, full_name, phone FROM clients
+          WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2
+          ORDER BY created_at LIMIT 1`,
+        [tenantID, key],
+      );
+      if (dupe.length > 0) {
+        throw new ConflictException({
+          message: 'Клиент с этим номером уже добавлен',
+          code: 'CLIENT_PHONE_EXISTS',
+          clientId: dupe[0].id as string,
+          client: {
+            id: dupe[0].id as string,
+            fullName: dupe[0].full_name as string,
+            phone: dupe[0].phone as string,
+          },
+        });
+      }
+    }
+
     const { rows } = await this.pool.query(
       `INSERT INTO clients (full_name, phone, comment, source, owner_notes, tenant_id)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [dto.fullName, dto.phone, dto.comment, dto.source ?? null, dto.ownerNotes ?? null, tenantID],
+      [fullName, phone, dto.comment ?? null, dto.source ?? null, dto.ownerNotes ?? null, tenantID],
     );
     const client = this.mapClient(rows[0]);
     (client as any).cars = [];

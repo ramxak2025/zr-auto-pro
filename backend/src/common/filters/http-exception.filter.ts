@@ -30,8 +30,21 @@ export class HttpExceptionFilter implements ExceptionFilter {
       status = exception.getStatus();
       const res = exception.getResponse();
       if (typeof res === 'object' && res !== null) {
-        message = (res as any).message || message;
-        if (Array.isArray(message)) message = message[0];
+        const obj = res as Record<string, unknown>;
+        let msg: unknown = obj.message ?? message;
+        if (Array.isArray(msg)) msg = msg[0];
+        // Preserve any EXTRA structured fields the thrower attached — e.g. the
+        // ConflictException that carries { code, clientId, client } for the
+        // duplicate-phone contract (shared `ClientPhoneConflict`). `message` is
+        // still flattened to a string and Nest's internal `statusCode`/`error`
+        // scaffolding is stripped, so every existing consumer keeps seeing an
+        // identical `{ message }`: a plain `{ message }` throw yields no extras.
+        const extra: Record<string, unknown> = { ...obj };
+        delete extra.message;
+        delete extra.statusCode;
+        delete extra.error;
+        response.status(status).json({ message: msg, ...extra });
+        return;
       } else if (typeof res === 'string') {
         message = res;
       }

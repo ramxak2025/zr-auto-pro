@@ -140,11 +140,15 @@ export class CarsService {
     // by the FE before create) is meaningless for them and is skipped. Foreign
     // plates are stored verbatim — no RU validation is applied here.
     const noPlate = !!dto.noPlate;
-    const plateNumber = noPlate ? '' : dto.plateNumber;
+    // plate_number + make_model are NOT NULL. Coerce undefined → '' so the
+    // quick-create-from-cash flow (which may send a plate but no make/model,
+    // or vice-versa) can't hit a raw NOT NULL 500 on save (#57 BUG B).
+    const plateNumber = noPlate ? '' : typeof dto.plateNumber === 'string' ? dto.plateNumber : '';
+    const makeModel = typeof dto.makeModel === 'string' ? dto.makeModel : '';
     const { rows } = await this.pool.query(
       `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id, no_plate)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [plateNumber, dto.makeModel, dto.comment, dto.clientId, tenantID, noPlate],
+      [plateNumber, makeModel, dto.comment ?? null, dto.clientId ?? null, tenantID, noPlate],
     );
     return this.mapCar(rows[0]);
   }

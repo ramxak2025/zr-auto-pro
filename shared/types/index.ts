@@ -656,6 +656,21 @@ export interface Client {
   createdAt: string;
 }
 
+/**
+ * Body of the 409 Conflict returned by `POST /clients` when a client with the
+ * same normalized phone (see `phoneSearchKey`) already exists in the tenant.
+ * The FE reads `clientId` to offer «Клиент с этим номером уже добавлен →
+ * Перейти к клиенту» instead of surfacing a raw error. Additive contract —
+ * success responses are unchanged (`Client`); this only types the error body.
+ */
+export interface ClientPhoneConflict {
+  message: string;
+  code: 'CLIENT_PHONE_EXISTS';
+  /** Existing client's id — navigate / select it instead of creating a dup. */
+  clientId: string;
+  client: { id: string; fullName: string; phone: string };
+}
+
 export interface Car {
   id: string;
   plateNumber: string;

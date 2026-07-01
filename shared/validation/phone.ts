@@ -39,3 +39,24 @@ export function isValidPhone(phone: string): boolean {
   const digits = phone.replace(/\D/g, '');
   return digits.length >= 10;
 }
+
+/**
+ * Reduce a phone (in ANY format) to its core national key for matching:
+ * strip every non-digit, then keep the last 10 digits — which drops a leading
+ * country code (7 / 8 / +7) so that
+ *   «+7 (988) 444-44-85», «89884444485», «79884444485» and «9884444485»
+ * all collapse to the same key «9884444485».
+ *
+ * Use this to normalise BOTH the search query AND the stored value before
+ * comparing, so a client is found / deduped regardless of how the phone was
+ * typed or saved. The backend mirrors this exactly:
+ *   - JS/TS:  raw.replace(/\D/g, '').slice(-10)
+ *   - SQL:    right(regexp_replace(phone, '[^0-9]', '', 'g'), 10)
+ * (see backend/src/common/normalize-phone.ts + migration 104).
+ *
+ * Returns '' for input without digits (e.g. the pinned retail client), which
+ * callers treat as "no phone key" — never matched or deduped.
+ */
+export function phoneSearchKey(raw: string): string {
+  return (raw || '').replace(/\D/g, '').slice(-10);
+}
