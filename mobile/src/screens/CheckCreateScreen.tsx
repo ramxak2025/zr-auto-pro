@@ -850,12 +850,14 @@ export default function CheckCreateScreen() {
   // when the user is superadmin. Subscription query is already cached
   // app-wide via the same query key, so this is essentially free.
   const { user: authUser, hasPermission } = useAuth();
-  // «Продажа в рассрочку» — способ оплаты «Рассрочка» доступен только при праве
-  // sell_installment (owner-class — implicit, см. AuthContext.hasPermission) и
-  // только для НОВОГО чека: план создаётся в момент продажи, не при правке.
+  // «Рассрочка» — способ оплаты доступен только при праве sell_installment
+  // (owner-class — implicit, см. AuthContext.hasPermission) и только для НОВОГО
+  // чека: план создаётся в момент продажи, не при правке. Способ показывается
+  // ОДНИМ пунктом в общей модалке выбора оплаты (PaymentMethodModal), рядом с
+  // Наличные/Карта/Смешанная/По гарантии — отдельного тоггла больше нет.
   const canSellInstallment = hasPermission('sell_installment');
   const isInstallment = paymentMethod === ('installment' as PaymentMethod);
-  const showInstallmentToggle = canSellInstallment && !editId;
+  const canOfferInstallment = canSellInstallment && !editId;
   const { data: subInfo } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
     queryFn: async () => (await subscriptionApi.get()).data,
@@ -2491,62 +2493,43 @@ export default function CheckCreateScreen() {
                 <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Оплата</Text>
               </View>
 
-              {/* «Продажа в рассрочку» — переключатель (только при праве
-                  sell_installment и для нового чека). Включает способ оплаты
-                  «Рассрочка»: вместо нал/карта/СБП показываем поля первого
-                  платежа и даты. Остальные способы — без изменений. */}
-              {showInstallmentToggle && (
-                <TouchableOpacity
-                  style={[
-                    styles.installmentToggle,
-                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                    isInstallment && {
-                      borderColor: colors.amber[600],
-                      backgroundColor: softTint(colors.amber[600], palette.mode),
-                    },
-                  ]}
-                  onPress={() => {
-                    haptic('tap');
-                    if (isInstallment) {
-                      setPaymentMethod('cash' as PaymentMethod);
-                    } else {
-                      setPaymentMethod('installment' as PaymentMethod);
-                      setIsDeferred(false);
-                    }
-                  }}
-                  activeOpacity={0.8}
-                  accessibilityRole="switch"
-                  accessibilityState={{ checked: isInstallment }}
-                  accessibilityLabel="Продажа в рассрочку"
-                >
-                  <View
-                    style={[
-                      styles.installmentToggleIcon,
-                      { backgroundColor: isInstallment ? colors.amber[600] : palette.bg.card },
-                    ]}
-                  >
-                    <Ionicons name="card-outline" size={18} color={isInstallment ? colors.white : colors.amber[600]} />
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text
-                      style={[
-                        styles.installmentToggleLabel,
-                        { color: isInstallment ? colors.amber[700] : palette.text.primary },
-                      ]}
+              {/* Способ оплаты — ЕДИНЫЙ селектор: Наличные / Карта / Смешанная /
+                  По гарантии и — при праве sell_installment на НОВОМ чеке —
+                  «Рассрочка» одним пунктом в ТОЙ ЖЕ модалке, выбирается тем же
+                  тапом, что и остальные (отдельного тоггла больше нет). Кнопка
+                  открывает центральную модалку; текущий способ показан компактно
+                  (цветной тайл-иконка + подпись). Скрыта только при правке уже
+                  оформленной рассрочки — там ниже read-only баннер, способ
+                  менять нельзя. */}
+              {!(isInstallment && !canOfferInstallment) &&
+                (() => {
+                  const visual = paymentMethodVisual(paymentMethod);
+                  return (
+                    <TouchableOpacity
+                      style={[styles.paymentSelector, { backgroundColor: palette.bg.muted, borderColor: visual.color }]}
+                      onPress={() => {
+                        haptic('tap');
+                        setShowPaymentPicker(true);
+                      }}
+                      activeOpacity={0.8}
+                      accessibilityRole="button"
+                      accessibilityLabel={`Способ оплаты: ${paymentMethodLabel(paymentMethod)}`}
                     >
-                      Продажа в рассрочку
-                    </Text>
-                    <Text style={[styles.installmentToggleHint, { color: palette.text.tertiary }]} numberOfLines={1}>
-                      Часть сейчас, остаток — частями
-                    </Text>
-                  </View>
-                  <Ionicons
-                    name={isInstallment ? 'checkmark-circle' : 'ellipse-outline'}
-                    size={22}
-                    color={isInstallment ? colors.amber[600] : palette.text.tertiary}
-                  />
-                </TouchableOpacity>
-              )}
+                      <View style={[styles.paymentSelectorIcon, { backgroundColor: visual.tint }]}>
+                        <Ionicons name={visual.icon} size={20} color={visual.color} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.paymentSelectorHint, { color: palette.text.tertiary }]}>
+                          Способ оплаты
+                        </Text>
+                        <Text style={[styles.paymentSelectorValue, { color: palette.text.primary }]} numberOfLines={1}>
+                          {paymentMethodLabel(paymentMethod)}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-down" size={18} color={palette.text.tertiary} />
+                    </TouchableOpacity>
+                  );
+                })()}
 
               {isInstallment ? (
                 <InstallmentSaleFields
@@ -2560,48 +2543,10 @@ export default function CheckCreateScreen() {
                     haptic('tap');
                     setShowInstallmentDatePicker(true);
                   }}
-                  readOnly={!showInstallmentToggle}
+                  readOnly={!canOfferInstallment}
                 />
               ) : (
                 <>
-                  {/* Одна кнопка «Оплата» открывает центральную модалку выбора.
-                Текущий способ показан компактно: цветной тайл-иконка + подпись.
-                Inline-ряд из четырёх кнопок заменён на этот аккуратный селектор. */}
-                  {(() => {
-                    const visual = paymentMethodVisual(paymentMethod);
-                    return (
-                      <TouchableOpacity
-                        style={[
-                          styles.paymentSelector,
-                          { backgroundColor: palette.bg.muted, borderColor: visual.color },
-                        ]}
-                        onPress={() => {
-                          haptic('tap');
-                          setShowPaymentPicker(true);
-                        }}
-                        activeOpacity={0.8}
-                        accessibilityRole="button"
-                        accessibilityLabel={`Способ оплаты: ${paymentMethodLabel(paymentMethod)}`}
-                      >
-                        <View style={[styles.paymentSelectorIcon, { backgroundColor: visual.tint }]}>
-                          <Ionicons name={visual.icon} size={20} color={visual.color} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={[styles.paymentSelectorHint, { color: palette.text.tertiary }]}>
-                            Способ оплаты
-                          </Text>
-                          <Text
-                            style={[styles.paymentSelectorValue, { color: palette.text.primary }]}
-                            numberOfLines={1}
-                          >
-                            {paymentMethodLabel(paymentMethod)}
-                          </Text>
-                        </View>
-                        <Ionicons name="chevron-down" size={18} color={palette.text.tertiary} />
-                      </TouchableOpacity>
-                    );
-                  })()}
-
                   {paymentMethod === ('cash' as PaymentMethod) && (
                     <View
                       style={[
@@ -3035,12 +2980,18 @@ export default function CheckCreateScreen() {
       />
 
       {/* Центральная модалка выбора способа оплаты. Закрывается сразу после
-          выбора; sub-UI для cash / cash_card живёт в секции оплаты как прежде. */}
+          выбора; sub-UI для cash / cash_card / рассрочки живёт в секции оплаты
+          как прежде. «Рассрочка» — доп. пункт этой же модалки (при праве
+          sell_installment на новом чеке), выбирается тем же тапом. */}
       <PaymentMethodModal
         visible={showPaymentPicker}
         value={paymentMethod}
+        showInstallment={canOfferInstallment}
         onSelect={(m) => {
           setPaymentMethod(m);
+          // Рассрочку нельзя откладывать — выбор «Рассрочки» снимает «Отложить
+          // чек», как это делал прежний отдельный переключатель.
+          if (m === ('installment' as PaymentMethod)) setIsDeferred(false);
           setShowPaymentPicker(false);
         }}
         onClose={() => setShowPaymentPicker(false)}
@@ -3694,26 +3645,6 @@ const styles = StyleSheet.create({
     padding: spacing[2.5],
   },
   deferToggleActive: { borderColor: colors.amber[200], backgroundColor: colors.amber[50] },
-  // Рассрочка toggle
-  installmentToggle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    borderRadius: borderRadius.xl,
-    borderWidth: 1.5,
-    paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2.5],
-    marginBottom: spacing[2.5],
-  },
-  installmentToggleIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: borderRadius.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  installmentToggleLabel: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.2 },
-  installmentToggleHint: { fontSize: 12, marginTop: 2 },
   deferredEditHint: {
     flexDirection: 'row',
     alignItems: 'center',

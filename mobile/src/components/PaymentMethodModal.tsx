@@ -3,11 +3,14 @@
  * для кассы. Заменяет инлайновый ряд из четырёх кнопок на одной кнопке
  * «Оплата», открывающей этот выбор крупными карточками.
  *
- * Четыре способа (ключи строго из shared `PaymentMethod` — enum НЕ меняем):
+ * Способы (ключи строго из shared `PaymentMethod` — enum НЕ меняем):
  *   • cash      — Наличные
  *   • card      — Карта
  *   • cash_card — Смешанная (часть наличными, часть на карту)
  *   • warranty  — По гарантии
+ *   • installment — Рассрочка (доп. пункт, виден ТОЛЬКО при prop
+ *     `showInstallment` — т.е. у пользователей с правом sell_installment на
+ *     новом чеке; выбирается тем же тапом, что и остальные способы)
  *
  * Каждая карточка: цветная иконка Ionicons в скруглённом тайле, заголовок,
  * короткое описание; активная подсвечивается цветом способа + галочкой
@@ -94,9 +97,28 @@ const PAYMENT_OPTIONS: readonly PaymentOption[] = [
   },
 ] as const;
 
+// «Рассрочка» — отдельный способ оплаты. Держим ОТДЕЛЬНОЙ константой (а не в
+// PAYMENT_OPTIONS), чтобы без явного разрешения родителя (prop `showInstallment`)
+// пункт вообще не попадал в список выбора. Amber-идентичность совпадает с
+// инлайновым блоком полей рассрочки в кассе; иконка-календарь — чтобы не
+// дублировать «карту» из способа «Карта».
+const INSTALLMENT_OPTION: PaymentOption = {
+  key: 'installment' as PaymentMethod,
+  label: 'Рассрочка',
+  description: 'Часть сейчас, остаток — частями',
+  icon: 'calendar-outline',
+  color: colors.amber[600],
+  tint: colors.amber[50],
+};
+
+// Полный справочник (включая рассрочку) — для подписи/визуала уже ВЫБРАННОГО
+// способа на кнопке «Оплата», независимо от того, показан ли пункт в списке.
+// Иначе выбранная «Рассрочка» отрисовалась бы как «Наличные».
+const ALL_PAYMENT_OPTIONS: readonly PaymentOption[] = [...PAYMENT_OPTIONS, INSTALLMENT_OPTION];
+
 /** Краткая подпись способа для компактного отображения выбранного метода. */
 export function paymentMethodLabel(method: PaymentMethod): string {
-  return PAYMENT_OPTIONS.find((o) => o.key === method)?.label ?? 'Наличные';
+  return ALL_PAYMENT_OPTIONS.find((o) => o.key === method)?.label ?? 'Наличные';
 }
 
 /** Иконка + акцентный цвет выбранного способа — для кнопки «Оплата». */
@@ -105,7 +127,7 @@ export function paymentMethodVisual(method: PaymentMethod): {
   color: string;
   tint: string;
 } {
-  const o = PAYMENT_OPTIONS.find((opt) => opt.key === method) ?? PAYMENT_OPTIONS[0];
+  const o = ALL_PAYMENT_OPTIONS.find((opt) => opt.key === method) ?? ALL_PAYMENT_OPTIONS[0];
   return { icon: o.icon, color: o.color, tint: o.tint };
 }
 
@@ -116,9 +138,18 @@ interface PaymentMethodModalProps {
   /** Выбор способа. Родитель закрывает модалку. */
   onSelect: (method: PaymentMethod) => void;
   onClose: () => void;
+  /** Показать «Рассрочку» доп. пунктом (право sell_installment + новый чек).
+   *  По умолчанию скрыта — полная обратная совместимость. */
+  showInstallment?: boolean;
 }
 
-export default function PaymentMethodModal({ visible, value, onSelect, onClose }: PaymentMethodModalProps) {
+export default function PaymentMethodModal({
+  visible,
+  value,
+  onSelect,
+  onClose,
+  showInstallment = false,
+}: PaymentMethodModalProps) {
   const palette = useColors();
 
   // Reduce Motion — кэшируем синхронно, чтобы первый кадр уже знал, нужна ли
@@ -199,7 +230,7 @@ export default function PaymentMethodModal({ visible, value, onSelect, onClose }
           </View>
 
           <View style={styles.list}>
-            {PAYMENT_OPTIONS.map((opt) => {
+            {(showInstallment ? ALL_PAYMENT_OPTIONS : PAYMENT_OPTIONS).map((opt) => {
               const active = value === opt.key;
               // Light keeps the option's pale `[50]` tint; dark swaps it for a
               // muted translucent tint of the same accent so the card/icon-tile
