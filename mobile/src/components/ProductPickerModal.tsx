@@ -43,6 +43,22 @@ const FOLDER_COLS = 3;
 const FOLDER_GAP = spacing[2];
 const FOLDER_WIDTH = (SCREEN_WIDTH - spacing[4] * 2 - FOLDER_GAP * (FOLDER_COLS - 1)) / FOLDER_COLS;
 
+// Bug #58 — the in-cash picker must list EVERY product of the selected
+// warehouse, fully in sync with the Склад (ProductsScreen) list. The old
+// hard `limit: 500` silently truncated the server response at 500 rows:
+// the backend sorts `ORDER BY p.name` (products.service.getAll), so any
+// product whose name sorts past position 500 — e.g. «шланги газовые» («Ш»
+// is near the end of the Cyrillic alphabet) — never reached the client.
+// The picker then filters CLIENT-SIDE over that capped list, so neither
+// folder-browsing nor search could ever surface those tail products, even
+// though the warehouse screen found them (it searches SERVER-SIDE via
+// `productsApi.getAll({ search })`, which matches across the whole table).
+// The backend applies NO hard cap (`limit = parseInt(query.limit) || 100`),
+// so a high ceiling returns the entire warehouse in one page. Real tenants
+// never approach this count and FlashList virtualises the rows regardless,
+// so browse + client-side search now see the complete, in-sync list.
+const PICKER_PRODUCT_LIMIT = 100000;
+
 function formatMoney(v: number) {
   return (
     Math.round(v)
@@ -371,7 +387,9 @@ export default function ProductPickerModal({
   } = useQuery<Product[]>({
     queryKey: warehouseId ? ['all-products-check', { warehouseId }] : ['all-products-check'],
     queryFn: async () => {
-      const params: { limit: number; warehouseId?: string } = { limit: 500 };
+      // `PICKER_PRODUCT_LIMIT` (not 500) so the whole warehouse loads and the
+      // picker mirrors Склад exactly — see bug #58 note on the constant.
+      const params: { limit: number; warehouseId?: string } = { limit: PICKER_PRODUCT_LIMIT };
       if (warehouseId) params.warehouseId = warehouseId;
       const res = await productsApi.getAll(params);
       return (res.data?.data || res.data) as Product[];
