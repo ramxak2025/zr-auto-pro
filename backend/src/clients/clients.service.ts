@@ -107,10 +107,26 @@ export class ClientsService {
       // «+79884444485» and «8 (988) 444-44-85» all find the same client (#64).
       // This is also the fix for #57 BUG A: masters typing a customer's phone in
       // a different format than it was saved used to get zero results.
+      //
+      // TRUNK-PREFIX VARIANT (round 7 item 8c): a PARTIAL query that still
+      // carries the trunk digit — «8988», «8(988)», «7-988», «+7 988» — reduces
+      // to a key starting with 8/7 («8988»), which is NOT a substring of the
+      // stored national key («9884444485»): the leading trunk digit breaks
+      // containment, so live narrowing found nothing until the number was long
+      // enough for last-10 to shed it. Match BOTH the raw key and the key with
+      // a single leading 7/8 stripped. A fragment genuinely starting with 8/7
+      // («8444» mid-number) still matches via the raw variant — the OR only
+      // widens results.
       const phoneKey = phoneSearchKey(search);
       if (phoneKey) {
-        params.push(`%${phoneKey}%`);
-        ors.push(`${PHONE_KEY_SQL} LIKE $${params.length}`);
+        const phoneVariants = new Set<string>([phoneKey]);
+        if (phoneKey.length >= 2 && (phoneKey[0] === '7' || phoneKey[0] === '8')) {
+          phoneVariants.add(phoneKey.slice(1));
+        }
+        for (const variant of phoneVariants) {
+          params.push(`%${variant}%`);
+          ors.push(`${PHONE_KEY_SQL} LIKE $${params.length}`);
+        }
       }
 
       // Plate: stored compactly (no spaces); match with spaces stripped.
