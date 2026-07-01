@@ -1,19 +1,21 @@
 /**
  * QuickClientCreateSheet — быстрое создание клиента прямо из Кассы.
  *
- * Открывается из состояния «Клиент не найден» поиска по госномеру, чтобы
- * касса не превращалась в тупик: имя + телефон + (предзаполненный из поиска)
- * госномер + марка/модель — и клиент с авто сразу подставляются в чек.
+ * Открывается из состояния «Клиент не найден» поиска, чтобы касса не
+ * превращалась в тупик: имя + телефон + (предзаполненный из поиска) госномер +
+ * марка/модель — и клиент с авто сразу подставляются в чек.
  *
- * Поток повторяет проверенную последовательность ClientsScreen:
- *   1. `clientsApi.lookupByPhone` — дубликат по телефону → DuplicateWarningDialog;
- *   2. `carsApi.lookupByPlate` — дубликат по номеру → DuplicateWarningDialog;
- *   3. `clientsApi.create`, затем `carsApi.create` с clientId из ответа
+ * Поток:
+ *   1. (опц.) `carsApi.lookupByPlate` — дубликат по номеру → DuplicateWarningDialog;
+ *   2. `clientsApi.create`, затем `carsApi.create` с clientId из ответа
  *      (двухшаговый — CreateClientRequest не принимает машину inline).
  *
- * Отличие от ClientsScreen: «Открыть существующего» здесь означает «подставить
- * существующего клиента/владельца в чек» (через onSelectExisting), а не
- * навигацию в карточку — мы внутри кассового флоу.
+ * Дубликат по ТЕЛЕФОНУ ловит сам бэкенд: `POST /clients` возвращает 409
+ * `{ code:'CLIENT_PHONE_EXISTS', clientId, client }` (нормализация номера — та
+ * же last-10, что и в поиске). В ответ показываем «Клиент с этим номером уже
+ * добавлен» + «Перейти к клиенту», который через onSelectExisting подставляет
+ * существующего клиента в текущий чек. «Всё равно создать» для телефона нет —
+ * бэкенд дубликат по номеру не создаёт. Пустое имя → дружелюбный 400.
  */
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
@@ -24,7 +26,6 @@ import { BottomSheet } from './BottomSheet';
 import RussianPlateInput from './RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from './PlateModeSwitcher';
 import DuplicateWarningDialog from './DuplicateWarningDialog';
-import { normalizePlateForSearch } from '../utils/plateMask';
 import { formatPhone } from '../../../shared/validation/phone';
 import { haptic } from '../platform/haptics';
 import { useColors } from '../contexts/ThemeContext';
@@ -42,13 +43,6 @@ interface QuickClientCreateSheetProps {
   /** Найден существующий клиент/владелец — родитель подставляет его в чек. */
   onSelectExisting: (clientId: string, carId?: string) => void;
 }
-
-type DuplicateClient = {
-  id: string;
-  fullName: string;
-  phone: string;
-  cars?: Array<{ id: string; plateNumber: string; makeModel: string }>;
-};
 
 type DuplicateCar = {
   id: string;
@@ -76,7 +70,6 @@ export default function QuickClientCreateSheet({
   const [makeModel, setMakeModel] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const [duplicateClient, setDuplicateClient] = useState<DuplicateClient | null>(null);
   const [duplicateCar, setDuplicateCar] = useState<DuplicateCar | null>(null);
 
   // Каждое открытие — чистая форма с номером из поиска (в текущем режиме
@@ -88,28 +81,29 @@ export default function QuickClientCreateSheet({
     setMakeModel('');
     setPlate(initialPlate);
     setPlateMode(initialPlateMode);
-    setDuplicateClient(null);
     setDuplicateCar(null);
     setSubmitting(false);
   }, [visible, initialPlate, initialPlateMode]);
 
-  /** Создание: (опц. проверка дубля по номеру) → клиент → авто. */
+  /** Создание: (опц. проверка дубля по номеру) → клиент → авто.
+   *  Дубликат по ТЕЛЕФОНУ возвращает сам бэкенд (409) — ловим в catch. */
   const submitFlow = async (opts?: { forceCar?: boolean }) => {
     const cleanPlate = plate.trim();
-    // Дубликат по номеру важен только когда номер реально введён.
-    if (cleanPlate.length > 0 && !opts?.forceCar) {
-      try {
-        const res = await carsApi.lookupByPlate(cleanPlate);
-        if (res.data) {
-          setDuplicateCar(res.data);
-          return;
-        }
-      } catch {
-        // best-effort — при сбое проверки продолжаем создание.
-      }
-    }
     setSubmitting(true);
     try {
+      // Дубликат по номеру важен только когда номер реально введён.
+      if (cleanPlate.length > 0 && !opts?.forceCar) {
+        try {
+          const res = await carsApi.lookupByPlate(cleanPlate);
+          if (res.data) {
+            setDuplicateCar(res.data);
+            return;
+          }
+        } catch {
+          // best-effort — при сбое проверки продолжаем создание.
+        }
+      }
+
       const clientRes = await clientsApi.create({ fullName: fullName.trim(), phone });
       let car: Car | null = null;
       if (cleanPlate.length > 0 || makeModel.trim().length > 0) {
@@ -126,51 +120,46 @@ export default function QuickClientCreateSheet({
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       haptic('success');
       onCreated(clientRes.data, car);
-    } catch {
-      Alert.alert('Ошибка', 'Не удалось создать клиента');
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleSubmit = async () => {
-    if (!fullName.trim() || !phone.trim()) {
-      Alert.alert('Ошибка', 'Укажите имя и телефон клиента');
-      return;
-    }
-    setSubmitting(true);
-    try {
-      const res = await clientsApi.lookupByPhone(phone);
-      if (res.data) {
-        setDuplicateClient(res.data);
+    } catch (err: any) {
+      const status = err?.response?.status;
+      const data = err?.response?.data;
+      // 409 — клиент с этим телефоном уже есть. Вместо создания дубликата
+      // (бэкенд его и не даст) предлагаем перейти к существующему и подставить
+      // его в текущий чек через onSelectExisting(clientId).
+      if (status === 409 && data?.code === 'CLIENT_PHONE_EXISTS' && data?.clientId) {
+        haptic('warning');
+        Alert.alert(
+          'Клиент уже добавлен',
+          typeof data?.message === 'string' ? data.message : 'Клиент с этим номером уже добавлен',
+          [
+            { text: 'Отмена', style: 'cancel' },
+            { text: 'Перейти к клиенту', onPress: () => onSelectExisting(String(data.clientId)) },
+          ],
+        );
         return;
       }
-      await submitFlow();
-    } catch {
-      // lookup — best-effort; при сбое идём создавать.
-      await submitFlow();
+      // Дружелюбный 400 (пустое имя) и любой другой сбой — показываем реальную
+      // причину, а не глухое «Не удалось создать клиента».
+      const friendly =
+        (data && typeof data.message === 'string' && data.message) ||
+        (data && typeof data.error === 'string' && data.error) ||
+        (typeof data === 'string' ? data : '') ||
+        'Не удалось создать клиента';
+      Alert.alert('Ошибка', String(friendly));
     } finally {
       setSubmitting(false);
     }
   };
 
-  // «Выбрать в чек» для дубликата клиента: подставляем клиента, а если у
-  // него уже есть авто с введённым номером — сразу и его.
-  const handleSelectExistingClient = () => {
-    if (!duplicateClient) return;
-    const q = normalizePlateForSearch(plate, plateMode);
-    const matchingCar =
-      q.length > 0
-        ? duplicateClient.cars?.find((c) => normalizePlateForSearch(c.plateNumber || '', plateMode).includes(q))
-        : undefined;
-    const clientId = duplicateClient.id;
-    const carId = matchingCar?.id;
-    setDuplicateClient(null);
-    onSelectExisting(clientId, carId);
-  };
-
-  const handleCreateClientAnyway = () => {
-    setDuplicateClient(null);
+  const handleSubmit = () => {
+    if (!fullName.trim()) {
+      Alert.alert('Ошибка', 'Укажите имя клиента');
+      return;
+    }
+    if (!phone.trim()) {
+      Alert.alert('Ошибка', 'Укажите телефон клиента');
+      return;
+    }
     void submitFlow();
   };
 
@@ -267,20 +256,6 @@ export default function QuickClientCreateSheet({
           </TouchableOpacity>
         </View>
       </BottomSheet>
-
-      {/* Дубликат по телефону — как в ClientsScreen, но «открыть» = выбрать в чек. */}
-      <DuplicateWarningDialog
-        visible={!!duplicateClient}
-        onClose={() => setDuplicateClient(null)}
-        onCreateAnyway={handleCreateClientAnyway}
-        onOpenExisting={handleSelectExistingClient}
-        title="Такой клиент уже есть"
-        description="Клиент с этим телефоном уже существует. Выбрать существующего в чек или всё равно создать?"
-        existingLabel={duplicateClient?.fullName || ''}
-        existingSubtitle={duplicateClient?.phone ? formatPhone(duplicateClient.phone) : undefined}
-        existingCars={duplicateClient?.cars}
-        openExistingLabel="Выбрать в чек"
-      />
 
       {/* Дубликат по номеру — выбираем владельца машины прямо в чек. */}
       <DuplicateWarningDialog

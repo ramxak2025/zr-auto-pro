@@ -75,7 +75,7 @@ import type {
   ActiveWarranty,
   ChecksBoard,
 } from '../../../shared/types';
-import { formatPhone } from '../../../shared/validation/phone';
+import { formatPhone, phoneSearchKey } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
 import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 
@@ -503,18 +503,38 @@ export default function CheckCreateScreen() {
   // filtering); the NETWORK query keys off a 300ms-debounced snapshot so
   // typing "Р332РА05" fires one request, not eight (RNPERF-5).
   const normalizedSearch = useMemo(() => normalizePlateForSearch(plateSearch, plateMode), [plateSearch, plateMode]);
+  // ── Phone-aware client search (#57) ───────────────────────────────────────
+  // A Russian plate holds at MOST 6 digits (3 in the main block + 3 region), so
+  // ≥7 digits unambiguously means the master is typing a PHONE, not a plate. We
+  // reduce the input with the shared `phoneSearchKey` (last-10 national digits —
+  // the SAME normalization the backend uses), so «89884444485», «+79884444485»
+  // and «8 (988) 444-44-85» all resolve to one client. When the input ISN'T
+  // phone-like we fall back to the plate-normalized string byte-for-byte, so the
+  // plate path is completely untouched. NB: digits are only typable in INT mode
+  // (the RU mask rejects a leading digit), so phone search runs on the INT tab.
+  const phoneKey = useMemo(() => phoneSearchKey(plateSearch), [plateSearch]);
+  const isPhoneSearch = phoneKey.length >= 7;
+  const currentSearch = isPhoneSearch ? phoneKey : normalizedSearch;
+
   const debouncedPlate = useDebouncedValue(plateSearch, 300);
   const debouncedNormalized = useMemo(
     () => normalizePlateForSearch(debouncedPlate, plateMode),
     [debouncedPlate, plateMode],
   );
+  const debouncedPhoneKey = useMemo(() => phoneSearchKey(debouncedPlate), [debouncedPlate]);
+  // Value actually sent to the backend `?search=` — the phone key when the
+  // (debounced) input is phone-like, otherwise the plate-normalized string. The
+  // backend matches name, phone (normalized last-10) AND plate, so this one
+  // param covers every case.
+  const networkSearch = debouncedPhoneKey.length >= 7 ? debouncedPhoneKey : debouncedNormalized;
+
   const { data: plateClients, isFetching: isFetchingPlate } = useQuery<Client[]>({
-    queryKey: ['clients-plate', debouncedNormalized, plateMode],
+    queryKey: ['clients-plate', networkSearch, plateMode],
     queryFn: async () => {
-      const res = await clientsApi.getAll({ search: debouncedNormalized, limit: 20 });
+      const res = await clientsApi.getAll({ search: networkSearch, limit: 20 });
       return res.data.data || [];
     },
-    enabled: debouncedNormalized.length >= 2,
+    enabled: networkSearch.length >= 2,
     placeholderData: (prev) => prev,
   });
 
@@ -623,13 +643,41 @@ export default function CheckCreateScreen() {
     });
   }, [queryClient, pickerWarehouseId, activeWarehouse?.id]);
 
-  // Plate search results — match normalized plate substring or fullName loose match
+  // Client search results. Two paths:
+  //   • PHONE (isPhoneSearch): surface the matched client REGARDLESS of car /
+  //     plate / name. The previous plate-or-name-only filter silently dropped
+  //     phone-matched clients even though the backend returned them — that was
+  //     the core of #57. A client with cars yields one row per car (the master
+  //     picks the right one); a client with no car yields a single car-less row.
+  //   • PLATE / NAME: unchanged from before.
   const plateResults = useMemo(() => {
     if (!plateClients) return [];
     const sn = normalizedSearch;
     const fnQuery = plateSearch.toLowerCase();
-    const results: { client: Client; car: Car }[] = [];
+    const results: { client: Client; car?: Car }[] = [];
     for (const client of plateClients) {
+      // ── PHONE PATH ──────────────────────────────────────────────────────
+      // Surface the phone-matched client REGARDLESS of car/plate/name — the old
+      // filter dropped phone-matched clients even though the backend returned
+      // them (core of #57). Phone compared via the shared last-10 key on both
+      // sides. Plate matching is kept too, so a foreign INT plate that happens
+      // to be all digits still surfaces (no regression). Cars yield one row
+      // each (master picks the right one); a car-less client yields one row.
+      if (isPhoneSearch) {
+        const matchesPhone = !!client.phone && phoneSearchKey(client.phone).includes(phoneKey);
+        const cars = client.cars || [];
+        let pushed = false;
+        for (const car of cars) {
+          const carPlateNorm = normalizePlateForSearch(car.plateNumber || '', plateMode);
+          if (matchesPhone || (!!sn && carPlateNorm.includes(sn))) {
+            results.push({ client, car });
+            pushed = true;
+          }
+        }
+        if (!pushed && matchesPhone) results.push({ client });
+        continue;
+      }
+      // ── PLATE / NAME PATH (unchanged) ─────────────────────────────────────
       if (!client.cars) continue;
       for (const car of client.cars) {
         const carPlateNorm = normalizePlateForSearch(car.plateNumber || '', plateMode);
@@ -641,7 +689,7 @@ export default function CheckCreateScreen() {
       }
     }
     return results;
-  }, [plateClients, plateSearch, plateMode, normalizedSearch]);
+  }, [plateClients, plateSearch, plateMode, normalizedSearch, isPhoneSearch, phoneKey]);
 
   // Filtered services
   const filteredServices = useMemo(() => {
@@ -1862,7 +1910,7 @@ export default function CheckCreateScreen() {
                 />
 
                 {/* Inline search results — appear right below the plate */}
-                {normalizedSearch.length >= 2 && plateResults.length > 0 && (
+                {(normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length > 0 && (
                   <View
                     style={[
                       styles.inlineResults,
@@ -1871,17 +1919,17 @@ export default function CheckCreateScreen() {
                   >
                     {plateResults.slice(0, 5).map(({ client, car }) => (
                       <TouchableOpacity
-                        key={`${client.id}-${car.id}`}
+                        key={`${client.id}-${car?.id ?? 'nocar'}`}
                         style={[styles.inlineResultItem, { borderBottomColor: palette.border.subtle }]}
                         onPress={() => {
                           animateClientToggle();
                           setClientId(client.id);
-                          setCarId(car.id);
+                          setCarId(car?.id ?? '');
                           setPlateSearch('');
                         }}
                         activeOpacity={0.7}
                       >
-                        {car.plateNumber && (
+                        {car?.plateNumber && (
                           <View
                             style={[
                               styles.plateChip,
@@ -1898,10 +1946,10 @@ export default function CheckCreateScreen() {
                         )}
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.inlineResultName, { color: palette.text.primary }]} numberOfLines={1}>
-                            {car.makeModel}
+                            {car?.makeModel || client.fullName}
                           </Text>
                           <Text style={[styles.inlineResultSub, { color: palette.text.tertiary }]} numberOfLines={1}>
-                            {client.fullName}
+                            {car ? client.fullName : formatPhone(client.phone || '')}
                           </Text>
                         </View>
                         <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
@@ -1913,9 +1961,9 @@ export default function CheckCreateScreen() {
                     debounced snapshot has caught up with what's typed AND the
                     request settled. During the 300ms debounce window the
                     state must not flash (RNPERF-5). */}
-                {normalizedSearch.length >= 2 &&
+                {(normalizedSearch.length >= 2 || isPhoneSearch) &&
                   plateResults.length === 0 &&
-                  debouncedNormalized === normalizedSearch &&
+                  networkSearch === currentSearch &&
                   !isFetchingPlate && (
                     <View style={styles.notFoundBox}>
                       <Text style={[styles.inlineNoResults, { color: palette.text.tertiary }]}>Клиент не найден</Text>
@@ -1953,7 +2001,7 @@ export default function CheckCreateScreen() {
                       Розничный покупатель
                     </Text>
                     <Text style={[styles.retailDefaultHint, { color: palette.text.tertiary }]}>
-                      Наберите госномер чтобы привязать клиента
+                      Наберите госномер или телефон (в режиме INT), чтобы привязать клиента
                     </Text>
                   </View>
                 </View>
