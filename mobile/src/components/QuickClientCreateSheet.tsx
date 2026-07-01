@@ -44,6 +44,9 @@ interface QuickClientCreateSheetProps {
   /** Предзаполнение из поиска Кассы — чистая строка номера. */
   initialPlate: string;
   initialPlateMode: PlateMode;
+  /** Предзаполнение из поиска по ТЕЛЕФОНУ (Round 7 #8) — как набрано в Кассе.
+   *  Пустая строка / undefined → поведение байт-в-байт прежнее. */
+  initialPhone?: string;
   /** Клиент (и опционально авто) созданы — родитель подставляет их в чек. */
   onCreated: (client: Client, car: Car | null) => void;
   /** Найден существующий клиент/владелец — родитель подставляет его в чек. */
@@ -63,6 +66,7 @@ export default function QuickClientCreateSheet({
   onClose,
   initialPlate,
   initialPlateMode,
+  initialPhone,
   onCreated,
   onSelectExisting,
 }: QuickClientCreateSheetProps) {
@@ -79,17 +83,28 @@ export default function QuickClientCreateSheet({
   const [duplicateCar, setDuplicateCar] = useState<DuplicateCar | null>(null);
 
   // Каждое открытие — чистая форма с номером из поиска (в текущем режиме
-  // RU/INT), чтобы не перенабирать то, что уже введено в Кассе.
+  // RU/INT), чтобы не перенабирать то, что уже введено в Кассе. Из поиска по
+  // ТЕЛЕФОНУ (Round 7 #8) предзаполняется телефон: маска +7 применяется только
+  // когда набранное похоже на НАЧАЛО номера (7/8 — как есть, 9… — национальный
+  // без транка, дописываем 7). Короткий фрагмент («4485») оставляем цифрами —
+  // formatPhone принял бы первую цифру за код страны и исказил бы номер.
   useEffect(() => {
     if (!visible) return;
     setFullName('');
-    setPhone('');
+    const seedDigits = (initialPhone || '').replace(/\D/g, '');
+    if (seedDigits.startsWith('7') || seedDigits.startsWith('8')) {
+      setPhone(formatPhone(seedDigits));
+    } else if (seedDigits.startsWith('9')) {
+      setPhone(formatPhone('7' + seedDigits));
+    } else {
+      setPhone(seedDigits);
+    }
     setMakeModel('');
     setPlate(initialPlate);
     setPlateMode(initialPlateMode);
     setDuplicateCar(null);
     setSubmitting(false);
-  }, [visible, initialPlate, initialPlateMode]);
+  }, [visible, initialPlate, initialPlateMode, initialPhone]);
 
   /** 409 по ТЕЛЕФОНУ, но пользователь ввёл авто: вместо тупика «просто перейти
    *  к клиенту» привязываем машину к УЖЕ существующему клиенту и сразу
@@ -119,6 +134,7 @@ export default function QuickClientCreateSheet({
       });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
+      queryClient.invalidateQueries({ queryKey: ['cars-plate'] });
       haptic('success');
       onSelectExisting(existingClientId, carRes.data.id);
     } catch (e: any) {
@@ -165,6 +181,7 @@ export default function QuickClientCreateSheet({
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
       queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
+      queryClient.invalidateQueries({ queryKey: ['cars-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       haptic('success');
       onCreated(clientRes.data, car);

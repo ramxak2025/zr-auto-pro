@@ -192,6 +192,23 @@ export default function ClientsScreen() {
     placeholderData: (prev) => prev,
   });
 
+  // ── Round 7 #8 TASK A (зеркально Кассе): совпадения с ПЕРВЫХ символов ──
+  // /clients?search= для частичного номера («Х8») зашумляется телефонной
+  // веткой бэкенда (`PHONE_KEY LIKE '%8%'` матчит почти всех), и страница
+  // LIMIT 20 теряет реальный номер до почти полного ввода. /cars?search=
+  // матчит только номер/марку и отдаёт клиента вложенным — дополняем его
+  // результатами список (dedup в plateResults ниже). Ключ ['cars-plate']
+  // совпадает с Кассой, так что кеш подсказок общий.
+  const carsPlateQuery = useQuery<Car[]>({
+    queryKey: ['cars-plate', normalizedPlate, plateMode],
+    queryFn: async () => {
+      const res = await carsApi.getAll({ search: normalizedPlate, limit: 20 });
+      return Array.isArray(res.data.data) ? res.data.data : [];
+    },
+    enabled: mode === 'plate' && normalizedPlate.length >= 2,
+    placeholderData: (prev) => prev,
+  });
+
   // Client+optional-car create. Mirror the previous behaviour but with
   // `source` baked into the create payload. The inline car still flows
   // through `carsApi.create` only after the client succeeds.
@@ -230,6 +247,7 @@ export default function ClientsScreen() {
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
       queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
+      queryClient.invalidateQueries({ queryKey: ['cars-plate'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       haptic('success');
       closeModal();
@@ -410,6 +428,7 @@ export default function ClientsScreen() {
     setRefreshing(true);
     if (mode === 'plate') {
       await queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
+      await queryClient.invalidateQueries({ queryKey: ['cars-plate'] });
     } else {
       // People-list now lives under the infinite key — invalidate that so
       // pull-to-refresh actually refetches the loaded pages.
@@ -513,8 +532,30 @@ export default function ClientsScreen() {
         (matches ? hits : misses).push({ client, car });
       }
     }
+    // Round 7 #8 TASK A: префиксные совпадения из /cars — строки, которые
+    // зашумлённая страница /clients теряет для короткого запроса. Dedup по
+    // паре клиент+авто (plateKeyExtractor использует этот же ключ); машины
+    // без владельца пропускаем — тап открывает карточку клиента. Добавка
+    // сортируется по номеру, чтобы подсказки шли детерминированно, а не в
+    // порядке created_at DESC бэкенда.
+    const carsList = Array.isArray(carsPlateQuery.data) ? carsPlateQuery.data : [];
+    if (q.length > 0 && carsList.length > 0) {
+      const seen = new Set([...hits, ...misses].map((r) => `${r.client.id}-${r.car.id}`));
+      const extras: { client: Client; car: Car }[] = [];
+      for (const car of carsList) {
+        const owner = car.client;
+        if (!owner?.id || !car.plateNumber) continue;
+        if (!normalizePlateForSearch(car.plateNumber, plateMode).includes(q)) continue;
+        const key = `${owner.id}-${car.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        extras.push({ client: owner, car });
+      }
+      extras.sort((a, b) => (a.car.plateNumber || '').localeCompare(b.car.plateNumber || '', 'ru'));
+      hits.push(...extras);
+    }
     return [...hits, ...misses];
-  }, [plateQuery.data, normalizedPlate, plateMode]);
+  }, [plateQuery.data, carsPlateQuery.data, normalizedPlate, plateMode]);
 
   const retailPinTargetId = retailFromServer?.id || '__retail__';
 
@@ -741,7 +782,7 @@ export default function ClientsScreen() {
             getItemLayout={getPlateItemLayout}
             ListHeaderComponent={retailHeader}
             ListEmptyComponent={
-              normalizedPlate.length >= 2 && !plateQuery.isFetching ? (
+              normalizedPlate.length >= 2 && !plateQuery.isFetching && !carsPlateQuery.isFetching ? (
                 <EmptyState icon="car" title="Ничего не найдено" description={`Госномер «${plateSearch}» не найден`} />
               ) : normalizedPlate.length < 2 ? (
                 <EmptyState

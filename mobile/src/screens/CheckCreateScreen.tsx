@@ -46,6 +46,7 @@ import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
+import ClientCarPickerSheet from '../components/ClientCarPickerSheet';
 import PaymentMethodModal, { paymentMethodLabel, paymentMethodVisual } from '../components/PaymentMethodModal';
 import SbpPaymentModal from '../components/SbpPaymentModal';
 import InstallmentSaleFields from '../components/installments/InstallmentSaleFields';
@@ -75,7 +76,7 @@ import type {
   ActiveWarranty,
   ChecksBoard,
 } from '../../../shared/types';
-import { formatPhone, phoneSearchKey } from '../../../shared/validation/phone';
+import { formatPhone, phoneSearchKey, phoneSearchVariants } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
 import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 
@@ -455,6 +456,14 @@ export default function CheckCreateScreen() {
   // Pickers
   const [plateSearch, setPlateSearch] = useState('');
   const [plateMode, setPlateMode] = useState<PlateMode>('ru');
+  // ── Явный режим поиска: госномер ⇄ телефон (Round 7 #8, TASK B) ─────────
+  // 'plate' — прежний путь (RU/INT маска), байт-в-байт. 'phone' — отдельный
+  // числовой TextInput мимо маски: результаты — КЛИЕНТЫ, тап подставляет
+  // клиента (+ авто: 0 авто — без машины, 1 — сразу, ≥2 — ClientCarPickerSheet).
+  const [searchMode, setSearchMode] = useState<'plate' | 'phone'>('plate');
+  const [phoneSearch, setPhoneSearch] = useState('');
+  // Клиент с ≥2 авто, ожидающий выбора машины (phone-режим). null = закрыт.
+  const [carPickerClient, setCarPickerClient] = useState<Client | null>(null);
 
   // Cache Reduce-Motion preference synchronously so the next LayoutAnimation
   // call can opt out without waiting on an async query.
@@ -519,17 +528,18 @@ export default function CheckCreateScreen() {
   // filtering); the NETWORK query keys off a 300ms-debounced snapshot so
   // typing "Р332РА05" fires one request, not eight (RNPERF-5).
   const normalizedSearch = useMemo(() => normalizePlateForSearch(plateSearch, plateMode), [plateSearch, plateMode]);
-  // ── Phone-aware client search (#57, progressive) ──────────────────────────
-  // A RU/foreign plate ALWAYS contains letters, so PURE-DIGIT input is a phone.
-  // We reduce the input with the shared `phoneSearchKey` (last-10 national digits
-  // — the SAME normalization the backend uses), so «89884444485», «+79884444485»
-  // and «8 (988) 444-44-85» all resolve to one client, and we search by SUBSTRING
-  // so the list narrows LIVE from the first ~3 digits (owner ask). When the input
-  // carries ANY letter we fall back to the plate-normalized string byte-for-byte,
-  // so the plate/name path is completely untouched. NB: digits are only typable
-  // in INT mode (the RU mask rejects a leading digit), so phone search runs on
-  // the INT tab.
-  const phoneKey = useMemo(() => phoneSearchKey(plateSearch), [plateSearch]);
+  const isPhoneMode = searchMode === 'phone';
+  // ── Phone-aware client search (#57 progressive + Round 7 #8 explicit) ─────
+  // Digit-bearing raw input: the EXPLICIT phone mode (TASK B) has its own
+  // TextInput that bypasses the plate mask entirely; the plate tabs keep the
+  // implicit #57 path (pure-digit INT input = phone) byte-for-byte.
+  const rawPhoneInput = isPhoneMode ? phoneSearch : plateSearch;
+  const phoneKey = useMemo(() => phoneSearchKey(rawPhoneInput), [rawPhoneInput]);
+  // TASK C: trunk-prefix-tolerant variants («8988», «8(988)», «7-988», «+7 988»
+  // all mean the national «988…»). Display filters match when ANY variant is
+  // contained in the stored last-10 key; the LAST element is the most-national
+  // form (see phoneSearchVariants contract in shared/validation/phone.ts).
+  const phoneVariants = useMemo(() => phoneSearchVariants(rawPhoneInput), [rawPhoneInput]);
   // A RU/foreign plate ALWAYS contains letters, so pure-digit input is a PHONE.
   // We treat digit-only input of ≥3 as a PROGRESSIVE phone search (narrow the
   // client list live from the first digits) — while ANY letter keeps the input
@@ -538,26 +548,41 @@ export default function CheckCreateScreen() {
   // full 10-digit number). The old 7-digit gate had no letter guard, but a plate
   // holds ≤6 digits so it never fired on a plate — the `!hasLetters` guard makes
   // that invariant explicit now that 3-digit plates would otherwise collide.
+  // In the EXPLICIT phone mode the letter guard is moot (phone-pad, no letters).
   const hasLetters = useMemo(() => /[A-Za-zА-Яа-яЁё]/.test(plateSearch), [plateSearch]);
-  const isPhoneSearch = !hasLetters && phoneKey.length >= 3;
-  const currentSearch = isPhoneSearch ? phoneKey : normalizedSearch;
+  const isPhoneSearch = isPhoneMode ? phoneKey.length >= 3 : !hasLetters && phoneKey.length >= 3;
+  const currentSearch = isPhoneSearch ? phoneVariants[phoneVariants.length - 1] || '' : normalizedSearch;
 
   const debouncedPlate = useDebouncedValue(plateSearch, 300);
+  const debouncedPhoneInput = useDebouncedValue(rawPhoneInput, 300);
   const debouncedNormalized = useMemo(
     () => normalizePlateForSearch(debouncedPlate, plateMode),
     [debouncedPlate, plateMode],
   );
-  const debouncedPhoneKey = useMemo(() => phoneSearchKey(debouncedPlate), [debouncedPlate]);
+  const debouncedPhoneKey = useMemo(() => phoneSearchKey(debouncedPhoneInput), [debouncedPhoneInput]);
+  const debouncedPhoneVariants = useMemo(() => phoneSearchVariants(debouncedPhoneInput), [debouncedPhoneInput]);
   const debouncedHasLetters = useMemo(() => /[A-Za-zА-Яа-яЁё]/.test(debouncedPlate), [debouncedPlate]);
-  // Value actually sent to the backend `?search=` — the phone key when the
-  // (debounced) input is a digit-only phone (≥3, progressive), otherwise the
-  // plate-normalized string. Mirrors the display `isPhoneSearch` logic so the
-  // `networkSearch === currentSearch` gate below stays consistent. The backend
-  // matches name, phone (normalized last-10 SUBSTRING) AND plate, so this one
-  // param covers every case. NB: in RU mode the plate normaliser drops a leading
-  // digit → for phone input we MUST send the phone key, not the empty normalized
-  // plate, otherwise the query would never fire.
-  const networkSearch = !debouncedHasLetters && debouncedPhoneKey.length >= 3 ? debouncedPhoneKey : debouncedNormalized;
+  const debouncedIsPhone = isPhoneMode
+    ? debouncedPhoneKey.length >= 3
+    : !debouncedHasLetters && debouncedPhoneKey.length >= 3;
+  // Value actually sent to the backend `?search=` — for phone input the
+  // TRUNK-STRIPPED (most-national) variant, otherwise the plate-normalized
+  // string. WHY the stripped variant (TASK C): the backend matches by
+  // SUBSTRING of the stored last-10 national key, and `'9884444485'` does NOT
+  // contain `'8988'` — a trunk-prefixed query would return zero rows. Any key
+  // containing a trunk-prefixed form also contains its national suffix, so
+  // sending the stripped variant is a SUPERSET fetch; the display filter then
+  // narrows with ALL variants. Mirrors the display `isPhoneSearch` logic so
+  // the `networkSearch === currentSearch` settled-gate below stays consistent.
+  // NB: in RU mode the plate normaliser drops a leading digit → for phone
+  // input we MUST send the phone variant, not the empty normalized plate. In
+  // the explicit phone mode a sub-threshold input sends NOTHING (never the
+  // stale debounced plate from before the mode switch).
+  const networkSearch = debouncedIsPhone
+    ? debouncedPhoneVariants[debouncedPhoneVariants.length - 1] || ''
+    : isPhoneMode
+      ? ''
+      : debouncedNormalized;
 
   const { data: plateClients, isFetching: isFetchingPlate } = useQuery<Client[]>({
     queryKey: ['clients-plate', networkSearch, plateMode],
@@ -566,6 +591,28 @@ export default function CheckCreateScreen() {
       return res.data.data || [];
     },
     enabled: networkSearch.length >= 2,
+    placeholderData: (prev) => prev,
+  });
+
+  // ── Round 7 #8 TASK A: подсказки с ПЕРВЫХ символов номера («Х8» → Х807…) ──
+  // Root cause: /clients?search= строит OR-группу, и для смешанного
+  // буквы+цифры запроса ветка телефона (`PHONE_KEY LIKE '%8%'` для «Х8»)
+  // матчит почти всех клиентов живого тенанта; страница LIMIT 20 (новые
+  // первыми) заполняется телефонным шумом, реальный клиент с номером Х807…
+  // в неё не попадает, и локальный фильтр честно отбрасывает все 20 строк —
+  // до тех пор, пока запрос не станет почти полным номером. /cars?search=
+  // матчит ТОЛЬКО `REPLACE(plate_number,' ','') ILIKE %q%` (+make_model), без
+  // телефонной ветки, и отдаёт клиента вложенным в машину — поэтому прямой
+  // поиск по машинам возвращает префиксные совпадения с первых двух символов.
+  // Результаты вливаются в plateResults ниже (dedup по клиент+авто).
+  const { data: plateCars, isFetching: isFetchingCars } = useQuery<Car[]>({
+    queryKey: ['cars-plate', networkSearch, plateMode],
+    queryFn: async () => {
+      const res = await carsApi.getAll({ search: networkSearch, limit: 20 });
+      return res.data.data || [];
+    },
+    // Только «номерные» запросы (есть буквы → это не телефонный путь).
+    enabled: !isPhoneMode && debouncedHasLetters && networkSearch.length >= 2,
     placeholderData: (prev) => prev,
   });
 
@@ -704,20 +751,22 @@ export default function CheckCreateScreen() {
   //     picks the right one); a client with no car yields a single car-less row.
   //   • PLATE / NAME: unchanged from before.
   const plateResults = useMemo(() => {
-    if (!plateClients) return [];
     const sn = normalizedSearch;
     const fnQuery = plateSearch.toLowerCase();
     const results: { client: Client; car?: Car }[] = [];
-    for (const client of plateClients) {
+    for (const client of plateClients || []) {
       // ── PHONE PATH ──────────────────────────────────────────────────────
       // Surface the phone-matched client REGARDLESS of car/plate/name — the old
       // filter dropped phone-matched clients even though the backend returned
-      // them (core of #57). Phone compared via the shared last-10 key on both
-      // sides. Plate matching is kept too, so a foreign INT plate that happens
-      // to be all digits still surfaces (no regression). Cars yield one row
-      // each (master picks the right one); a car-less client yields one row.
+      // them (core of #57). Phone compared via the shared last-10 key against
+      // EVERY trunk variant of the query (TASK C): «8988» must find the stored
+      // key '9884444485' even though the raw containment fails. Plate matching
+      // is kept too, so a foreign INT plate that happens to be all digits still
+      // surfaces (no regression). Cars yield one row each (master picks the
+      // right one); a car-less client yields one row.
       if (isPhoneSearch) {
-        const matchesPhone = !!client.phone && phoneSearchKey(client.phone).includes(phoneKey);
+        const clientKey = client.phone ? phoneSearchKey(client.phone) : '';
+        const matchesPhone = !!clientKey && phoneVariants.some((v) => clientKey.includes(v));
         const cars = client.cars || [];
         let pushed = false;
         for (const car of cars) {
@@ -741,8 +790,54 @@ export default function CheckCreateScreen() {
         }
       }
     }
+    // ── TASK A: префиксные совпадения из /cars ────────────────────────────
+    // Дополняем список машинами из прямого поиска по номеру (см. запрос
+    // выше): это и есть строки, которые «зашумлённая» страница /clients
+    // теряет для короткого запроса. Dedup по паре клиент+авто; машины без
+    // клиента пропускаем — в чек подставляется именно пара. Затем точные
+    // префиксы (номер НАЧИНАЕТСЯ с запроса) поднимаются над вхождениями в
+    // середине; stable sort сохраняет прежний порядок внутри рангов, так что
+    // существующие результаты не перетасовываются.
+    if (!isPhoneSearch && sn && plateCars && plateCars.length > 0) {
+      const seen = new Set(results.map((r) => `${r.client.id}-${r.car?.id ?? ''}`));
+      const extras: { client: Client; car: Car }[] = [];
+      for (const car of plateCars) {
+        const owner = car.client;
+        if (!owner?.id) continue;
+        const carPlateNorm = normalizePlateForSearch(car.plateNumber || '', plateMode);
+        if (!carPlateNorm.includes(sn)) continue;
+        const key = `${owner.id}-${car.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        extras.push({ client: owner, car });
+      }
+      // Внутри добавки — детерминированный алфавитный порядок номеров
+      // (бэкенд отдаёт created_at DESC, что для подсказок выглядит случайно).
+      extras.sort((a, b) => (a.car.plateNumber || '').localeCompare(b.car.plateNumber || '', 'ru'));
+      results.push(...extras);
+      const rank = (r: { client: Client; car?: Car }) => {
+        const norm = normalizePlateForSearch(r.car?.plateNumber || '', plateMode);
+        if (norm.startsWith(sn)) return 0;
+        if (norm.includes(sn)) return 1;
+        return 2; // совпадения по имени и пр. — ниже номерных
+      };
+      results.sort((a, b) => rank(a) - rank(b));
+    }
     return results;
-  }, [plateClients, plateSearch, plateMode, normalizedSearch, isPhoneSearch, phoneKey]);
+  }, [plateClients, plateCars, plateSearch, plateMode, normalizedSearch, isPhoneSearch, phoneVariants]);
+
+  // ── Round 7 #8 TASK B: результаты ЯВНОГО поиска по телефону — КЛИЕНТЫ ────
+  // В phone-режиме строка результата — клиент (имя + телефон), не пары
+  // клиент+авто: машина выбирается на тапе (0 авто — без машины, 1 — сразу,
+  // ≥2 — ClientCarPickerSheet). Матч — теми же trunk-вариантами (TASK C).
+  const phoneClientResults = useMemo<Client[]>(() => {
+    if (!isPhoneMode || !isPhoneSearch) return [];
+    return (plateClients || []).filter((client) => {
+      if (!client.phone) return false;
+      const key = phoneSearchKey(client.phone);
+      return !!key && phoneVariants.some((v) => key.includes(v));
+    });
+  }, [isPhoneMode, isPhoneSearch, plateClients, phoneVariants]);
 
   // Filtered services
   const filteredServices = useMemo(() => {
@@ -910,8 +1005,49 @@ export default function CheckCreateScreen() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isFromBooking, editId]);
 
-  const selectedClient = clientData || plateClients?.find((c) => c.id === clientId);
+  const selectedClient =
+    clientData ||
+    plateClients?.find((c) => c.id === clientId) ||
+    // Строка подсказки могла прийти из /cars (TASK A) — клиент вложен в
+    // машину. Без этого fallback'а карточка мигала бы пустым поиском, пока
+    // ['client-detail'] не догрузится.
+    (plateCars || []).find((c) => c.client?.id === clientId)?.client;
   const selectedCar = clientCars?.find((c) => c.id === carId) ?? clientCars?.[0];
+
+  /** Переключение цели поиска: госномер ⇄ телефон (Round 7 #8). Обе строки
+   *  очищаются — чистый старт в новом режиме, ни маска, ни телефонные цифры
+   *  не перетекают между полями. */
+  const switchSearchMode = React.useCallback(
+    (next: 'plate' | 'phone') => {
+      if (searchMode === next) return;
+      animateClientToggle();
+      setSearchMode(next);
+      setPlateSearch('');
+      setPhoneSearch('');
+    },
+    [searchMode, animateClientToggle],
+  );
+
+  /** Тап по клиенту в phone-режиме: 0 авто → клиент без машины (как
+   *  безмашинные строки plate-поиска); 1 авто → клиент + эта машина; ≥2 —
+   *  открываем ClientCarPickerSheet. Выбор идёт тем же setClientId/setCarId
+   *  путём, что и plate-поиск. */
+  const handlePhoneClientTap = React.useCallback(
+    (client: Client) => {
+      const cars = client.cars || [];
+      if (cars.length >= 2) {
+        haptic('select');
+        setCarPickerClient(client);
+        return;
+      }
+      animateClientToggle();
+      setClientId(client.id);
+      setCarId(cars[0]?.id ?? '');
+      setPlateSearch('');
+      setPhoneSearch('');
+    },
+    [animateClientToggle],
+  );
 
   // Редактируем отложенный (черновик) чек: пользователь пришёл сюда по
   // «Продолжить» из деталки. Берём флаг из ЗАГРУЖЕННОГО серверного чека, а не
@@ -1982,6 +2118,7 @@ export default function CheckCreateScreen() {
                       setClientId('');
                       setCarId('');
                       setPlateSearch('');
+                      setPhoneSearch('');
                     }}
                     hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                     style={[styles.selectedCardClose, { backgroundColor: palette.bg.muted }]}
@@ -2027,22 +2164,125 @@ export default function CheckCreateScreen() {
               </View>
             ) : (
               <>
-                {/* ═══ ПОИСК ПО ГОСНОМЕРУ ═══ */}
+                {/* ═══ ПОИСК ПО ГОСНОМЕРУ / ПО ТЕЛЕФОНУ (Round 7 #8) ═══ */}
                 <View style={styles.plateLabelRow}>
-                  <Text style={[styles.sectionSubLabel, { color: palette.text.secondary }]}>ПОИСК ПО ГОСНОМЕРУ</Text>
-                  <PlateModeSwitcher value={plateMode} onChange={setPlateMode} />
+                  <Text style={[styles.sectionSubLabel, { color: palette.text.secondary }]}>
+                    {isPhoneMode ? 'ПОИСК ПО ТЕЛЕФОНУ' : 'ПОИСК ПО ГОСНОМЕРУ'}
+                  </Text>
+                  <PlateModeSwitcher
+                    value={plateMode}
+                    onChange={(m) => {
+                      // Тап по RU/INT из phone-режима возвращает поиск по
+                      // номеру (switch no-op'ится, когда режим уже 'plate').
+                      switchSearchMode('plate');
+                      setPlateMode(m);
+                    }}
+                    phoneActive={isPhoneMode}
+                    onPhoneSelect={() => switchSearchMode('phone')}
+                  />
                 </View>
 
-                {/* Realistic license plate input — controlled mode */}
-                <RussianPlateInput
-                  value={plateSearch}
-                  onChangeText={setPlateSearch}
-                  autoFocus={false}
-                  mode={plateMode}
-                />
+                {isPhoneMode ? (
+                  /* Числовой поиск по телефону — отдельный TextInput МИМО
+                     маски номера. Форматирование не навязываем: владелец может
+                     набрать и «8988…», и хвост номера — trunk-варианты (TASK C)
+                     находят клиента в любом виде. */
+                  <View
+                    style={[
+                      styles.phoneSearchRow,
+                      { backgroundColor: palette.bg.elevated, borderColor: palette.border.strong },
+                    ]}
+                  >
+                    <Ionicons name="call-outline" size={18} color={colors.blue[500]} />
+                    <TextInput
+                      value={phoneSearch}
+                      onChangeText={setPhoneSearch}
+                      style={[styles.phoneSearchInput, { color: palette.text.primary }]}
+                      keyboardType="phone-pad"
+                      placeholder="Телефон клиента"
+                      placeholderTextColor={palette.text.tertiary}
+                      autoCorrect={false}
+                      maxLength={18}
+                    />
+                    {phoneSearch.length > 0 && (
+                      <TouchableOpacity
+                        onPress={() => setPhoneSearch('')}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        accessibilityLabel="Очистить телефон"
+                      >
+                        <Ionicons name="close-circle" size={18} color={palette.text.tertiary} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ) : (
+                  /* Realistic license plate input — controlled mode */
+                  <RussianPlateInput
+                    value={plateSearch}
+                    onChangeText={setPlateSearch}
+                    autoFocus={false}
+                    mode={plateMode}
+                  />
+                )}
 
-                {/* Inline search results — appear right below the plate */}
-                {(normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length > 0 && (
+                {/* Inline search results — appear right below the input.
+                    Phone mode: строки-КЛИЕНТЫ (имя + телефон, счётчик авто);
+                    plate mode: прежние пары клиент+авто. */}
+                {isPhoneMode && phoneClientResults.length > 0 && (
+                  <View
+                    style={[
+                      styles.inlineResults,
+                      { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                    ]}
+                  >
+                    {phoneClientResults.slice(0, 5).map((client) => {
+                      const carCount = client.cars?.length ?? 0;
+                      return (
+                        <TouchableOpacity
+                          key={client.id}
+                          style={[styles.inlineResultItem, { borderBottomColor: palette.border.subtle }]}
+                          onPress={() => handlePhoneClientTap(client)}
+                          activeOpacity={0.7}
+                        >
+                          <View
+                            style={[
+                              styles.phoneResultAvatar,
+                              isDark
+                                ? {
+                                    backgroundColor: softTint(colors.primary[600], 'dark'),
+                                    borderColor: 'rgba(79, 131, 232, 0.35)',
+                                  }
+                                : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+                            ]}
+                          >
+                            <Ionicons
+                              name="person"
+                              size={15}
+                              color={isDark ? colors.primary[300] : colors.primary[700]}
+                            />
+                          </View>
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.inlineResultName, { color: palette.text.primary }]} numberOfLines={1}>
+                              {client.fullName}
+                            </Text>
+                            <Text style={[styles.inlineResultSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                              {formatPhone(client.phone || '')}
+                            </Text>
+                          </View>
+                          {carCount > 0 && (
+                            <View style={[styles.carCountChip, { backgroundColor: palette.bg.muted }]}>
+                              <Ionicons name="car-sport-outline" size={12} color={palette.text.secondary} />
+                              <Text style={[styles.carCountChipText, { color: palette.text.secondary }]}>
+                                {carCount}
+                              </Text>
+                            </View>
+                          )}
+                          <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+                {!isPhoneMode && (normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length > 0 && (
                   <View
                     style={[
                       styles.inlineResults,
@@ -2093,10 +2333,12 @@ export default function CheckCreateScreen() {
                     debounced snapshot has caught up with what's typed AND the
                     request settled. During the 300ms debounce window the
                     state must not flash (RNPERF-5). */}
-                {(normalizedSearch.length >= 2 || isPhoneSearch) &&
-                  plateResults.length === 0 &&
+                {(isPhoneMode
+                  ? isPhoneSearch && phoneClientResults.length === 0
+                  : (normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length === 0) &&
                   networkSearch === currentSearch &&
-                  !isFetchingPlate && (
+                  !isFetchingPlate &&
+                  !isFetchingCars && (
                     <View style={styles.notFoundBox}>
                       <Text style={[styles.inlineNoResults, { color: palette.text.tertiary }]}>Клиент не найден</Text>
                       {/* M2: не тупик — создаём клиента с этим номером прямо из кассы. */}
@@ -2133,7 +2375,9 @@ export default function CheckCreateScreen() {
                       Розничный покупатель
                     </Text>
                     <Text style={[styles.retailDefaultHint, { color: palette.text.tertiary }]}>
-                      Наберите госномер или телефон (в режиме INT), чтобы привязать клиента
+                      {isPhoneMode
+                        ? 'Наберите телефон, чтобы привязать клиента'
+                        : 'Наберите госномер — или телефон через переключатель ТЕЛ'}
                     </Text>
                   </View>
                 </View>
@@ -3140,8 +3384,9 @@ export default function CheckCreateScreen() {
       <QuickClientCreateSheet
         visible={showQuickCreate}
         onClose={() => setShowQuickCreate(false)}
-        initialPlate={plateSearch}
+        initialPlate={isPhoneMode ? '' : plateSearch}
         initialPlateMode={plateMode}
+        initialPhone={isPhoneMode ? phoneSearch : ''}
         onCreated={(client, car) => {
           setShowQuickCreate(false);
           // Засеваем кеш карточки клиента, чтобы selected-card появилась
@@ -3154,6 +3399,7 @@ export default function CheckCreateScreen() {
           setClientId(client.id);
           if (car) setCarId(car.id);
           setPlateSearch('');
+          setPhoneSearch('');
         }}
         onSelectExisting={(existingClientId, existingCarId) => {
           setShowQuickCreate(false);
@@ -3161,6 +3407,24 @@ export default function CheckCreateScreen() {
           setClientId(existingClientId);
           if (existingCarId) setCarId(existingCarId);
           setPlateSearch('');
+          setPhoneSearch('');
+        }}
+      />
+
+      {/* Round 7 #8: у телефонного совпадения ≥2 авто — выбор машины. Пара
+          клиент+авто уходит в чек тем же setClientId/setCarId путём, что и
+          подсказки по госномеру. */}
+      <ClientCarPickerSheet
+        visible={!!carPickerClient}
+        client={carPickerClient}
+        onClose={() => setCarPickerClient(null)}
+        onPick={(client, car) => {
+          setCarPickerClient(null);
+          animateClientToggle();
+          setClientId(client.id);
+          setCarId(car.id);
+          setPlateSearch('');
+          setPhoneSearch('');
         }}
       />
 
@@ -3524,6 +3788,46 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     marginBottom: spacing[1.5],
   },
+  // ── Явный поиск по телефону (Round 7 #8) ──────────────────────────────
+  // Отдельная строка-инпут МИМО маски номера: та же «primary» роль, что и
+  // плашка (близкая высота), но обычное поле с телефонной клавиатурой.
+  phoneSearchRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    height: 56,
+    borderWidth: 1.5,
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[3.5],
+  },
+  phoneSearchInput: {
+    flex: 1,
+    fontSize: 20,
+    fontWeight: '600',
+    letterSpacing: 0.5,
+    paddingVertical: 0,
+    ...Platform.select({
+      android: { paddingTop: 0, paddingBottom: 0, textAlignVertical: 'center' as const },
+    }),
+  },
+  // Строка-клиент в результатах phone-поиска: аватар + имя/телефон + счётчик авто.
+  phoneResultAvatar: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  },
+  carCountChip: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 3,
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+  },
+  carCountChipText: { fontSize: 11, fontWeight: fontWeight.semibold },
   // Car
   carChip: {
     flexDirection: 'row',

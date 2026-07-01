@@ -24,35 +24,60 @@ export type PlateMode = 'ru' | 'foreign';
 interface Props {
   value: PlateMode;
   onChange: (mode: PlateMode) => void;
+  /**
+   * Optional third segment «ТЕЛ» — явный поиск по телефону (Касса, Round 7 #8).
+   * Both props must be provided together; when omitted the switcher renders
+   * the classic two-segment RU/INT control byte-for-byte (Клиенты,
+   * QuickClientCreateSheet, CarPlateField consumers are untouched).
+   *
+   * While `phoneActive` is true the RU/INT segments render inactive; tapping
+   * either one re-selects the plate target (fires `onChange` even when the
+   * underlying plate mode didn't change, so the parent can exit phone mode).
+   */
+  phoneActive?: boolean;
+  onPhoneSelect?: () => void;
 }
 
-export default function PlateModeSwitcher({ value, onChange }: Props) {
+export default function PlateModeSwitcher({ value, onChange, phoneActive = false, onPhoneSelect }: Props) {
   const palette = useOptionalColors();
   const dark = palette.mode === 'dark';
   return (
     <View style={[styles.wrap, dark && { backgroundColor: palette.bg.muted }]}>
       <Segment
-        active={value === 'ru'}
+        active={!phoneActive && value === 'ru'}
         label="RU"
         flag="🇷🇺"
         onPress={() => {
-          if (value !== 'ru') {
+          if (value !== 'ru' || phoneActive) {
             haptic('select');
             onChange('ru');
           }
         }}
       />
       <Segment
-        active={value === 'foreign'}
+        active={!phoneActive && value === 'foreign'}
         label="INT"
         icon="globe-outline"
         onPress={() => {
-          if (value !== 'foreign') {
+          if (value !== 'foreign' || phoneActive) {
             haptic('select');
             onChange('foreign');
           }
         }}
       />
+      {onPhoneSelect && (
+        <Segment
+          active={phoneActive}
+          label="ТЕЛ"
+          icon="call-outline"
+          onPress={() => {
+            if (!phoneActive) {
+              haptic('select');
+              onPhoneSelect();
+            }
+          }}
+        />
+      )}
     </View>
   );
 }
