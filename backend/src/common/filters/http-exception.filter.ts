@@ -1,5 +1,10 @@
 import { ExceptionFilter, Catch, ArgumentsHost, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { Response, Request } from 'express';
+// Import Sentry the same way sentry.ts does. Importing `../sentry` (rather than
+// `@sentry/nestjs` directly) also guarantees Sentry.init() has already run and
+// gives us the `isSentryEnabled` DSN flag for the capture guard below.
+import * as Sentry from '@sentry/nestjs';
+import { isSentryEnabled } from '../sentry';
 
 @Catch()
 export class HttpExceptionFilter implements ExceptionFilter {
@@ -43,18 +48,45 @@ export class HttpExceptionFilter implements ExceptionFilter {
         delete extra.message;
         delete extra.statusCode;
         delete extra.error;
+        // Observe 5xx even on the HttpException branch (e.g. an explicit
+        // InternalServerErrorException) BEFORE writing the unchanged body.
+        this.report5xx(status, request, exception, msg);
         response.status(status).json({ message: msg, ...extra });
         return;
       } else if (typeof res === 'string') {
         message = res;
       }
-    } else {
-      this.logger.error(
-        `ERROR [${request.method} ${request.url}]: ${exception}`,
-        exception instanceof Error ? exception.stack : undefined,
-      );
     }
 
+    // Reaches here for a non-HttpException (unknown throw → 500) or an
+    // HttpException with a plain string body. Observe any 5xx with method+url.
+    this.report5xx(status, request, exception, message);
+
     response.status(status).json({ message });
+  }
+
+  /**
+   * Structured 5xx observability. Runs ONLY after the `headersSent` guard and
+   * ONLY for status >= 500, so 4xx (validation, auth, conflicts) stay quiet.
+   * Logs the failing method+url+message+stack so the VDS logs reveal WHICH
+   * endpoint is 500-ing (there is no backend Sentry project yet), and — when a
+   * DSN is configured — forwards the exception. Everything is wrapped so a
+   * logging/Sentry failure can never mask the original error or crash the
+   * process from inside the exception filter.
+   */
+  private report5xx(status: number, request: Request, exception: unknown, message: unknown): void {
+    if (status < 500) return;
+    try {
+      const method = request?.method ?? '?';
+      const url = request?.originalUrl || request?.url || '?';
+      const stack = exception instanceof Error ? exception.stack : undefined;
+      const detail = exception instanceof Error ? exception.message : String(message ?? '');
+      this.logger.error(`5xx ${status} [${method} ${url}]: ${detail}`, stack);
+      if (isSentryEnabled) {
+        Sentry.captureException(exception);
+      }
+    } catch {
+      /* observability must never throw inside the exception filter */
+    }
   }
 }

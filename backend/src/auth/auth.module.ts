@@ -37,7 +37,14 @@ function loadJwtSecret(): string {
     PassportModule,
     JwtModule.register({
       secret: loadJwtSecret(),
-      signOptions: { expiresIn: '7d' },
+      // 30-day access tokens. Autexa is a staff-facing business app used daily
+      // from a personal phone — a 7-day TTL was silently logging masters out
+      // mid-work (~20 users hitting `auth_expired_forced_logout` in Sentry,
+      // ongoing). A longer window is safe here because per-token revocation is
+      // retained: POST /auth/logout black-lists the jti in `revoked_tokens`
+      // (checked on every request), and deactivating/dismissing a user rejects
+      // their tokens immediately regardless of expiry.
+      signOptions: { expiresIn: '30d' },
     }),
   ],
   controllers: [AuthController],

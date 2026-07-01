@@ -1827,6 +1827,41 @@ export class ChecksService {
       }
     }
 
+    // ── Round 7 safety net: editing must NEVER steal the check onto the editor ──
+    // When an owner/admin/director edits another master's draft, some clients
+    // default `masterId` (and per-line executors) to the CURRENT user. If the
+    // incoming master equals the actor but the check currently belongs to a
+    // DIFFERENT master, treat it as that accidental default and KEEP the original
+    // master, so salary keeps following the real executor. A genuine reassignment
+    // to a third person (masterId != actor) still applies. Normalising the DTO
+    // once here keeps every downstream read consistent (master_id write, salary
+    // attribution, per-line executors) with no other change to the math below.
+    {
+      const currentMasterId: string | null = checkRows[0].master_id ? String(checkRows[0].master_id) : null;
+      if (
+        actorUserId &&
+        dto.masterId !== undefined &&
+        dto.masterId !== null &&
+        String(dto.masterId) === String(actorUserId) &&
+        currentMasterId !== null &&
+        currentMasterId !== String(actorUserId)
+      ) {
+        dto.masterId = currentMasterId;
+        if (Array.isArray(dto.services)) {
+          for (const svc of dto.services) {
+            if (
+              svc &&
+              svc.masterId !== undefined &&
+              svc.masterId !== null &&
+              String(svc.masterId) === String(actorUserId)
+            ) {
+              svc.masterId = currentMasterId;
+            }
+          }
+        }
+      }
+    }
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -2412,6 +2447,39 @@ export class ChecksService {
       ]);
       if (lockRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
       const prior = lockRows[0];
+
+      // ── Round 7 safety net (see fullUpdate) ─────────────────────────────────
+      // Editing a closed check must never silently reassign it onto the editor.
+      // If `masterId` defaults to the actor but the check currently belongs to a
+      // DIFFERENT master, keep the original master (salary/attribution follow the
+      // real executor); a genuine reassignment to a third person still applies.
+      // Per-line executors defaulted to the editor get the same treatment.
+      // Normalised once so the master_id write, recompute and audit stay aligned.
+      {
+        const currentMasterId: string | null = prior.master_id ? String(prior.master_id) : null;
+        if (
+          actorUserId &&
+          dto.masterId !== undefined &&
+          dto.masterId !== null &&
+          String(dto.masterId) === String(actorUserId) &&
+          currentMasterId !== null &&
+          currentMasterId !== String(actorUserId)
+        ) {
+          dto.masterId = currentMasterId;
+          if (Array.isArray(dto.services)) {
+            for (const svc of dto.services) {
+              if (
+                svc &&
+                svc.masterId !== undefined &&
+                svc.masterId !== null &&
+                String(svc.masterId) === String(actorUserId)
+              ) {
+                svc.masterId = currentMasterId;
+              }
+            }
+          }
+        }
+      }
 
       // Re-assert closed under the lock (routing guaranteed it, but a concurrent
       // writer could have changed it). A deferred draft belongs to fullUpdate.

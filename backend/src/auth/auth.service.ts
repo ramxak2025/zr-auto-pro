@@ -95,11 +95,18 @@ export class AuthService {
   }
 
   async logout(jti: string, userId: string, tenantId: string): Promise<void> {
+    // Derive `expires_at` from a JWT `exp` claim, not a hardcoded window, so the
+    // revocation row lives at least as long as the token it revokes — a row that
+    // expired first would silently un-revoke a still-valid token. Re-signing a
+    // throwaway token makes it inherit JwtModule's configured `expiresIn` (now
+    // 30d), so the derived expiry tracks the real token TTL automatically and
+    // needs no edit here if the TTL changes again. The fallback mirrors that TTL
+    // (30 days, not a stale 7) and only fires if decode yields no `exp`.
     const decoded = this.jwtService.decode(this.jwtService.sign({ sub: userId, jti })) as Record<
       string,
       unknown
     > | null;
-    const exp = decoded?.exp ? new Date((decoded.exp as number) * 1000) : new Date(Date.now() + 7 * 86400000);
+    const exp = decoded?.exp ? new Date((decoded.exp as number) * 1000) : new Date(Date.now() + 30 * 86400000);
     await this.pool.query(
       `INSERT INTO revoked_tokens (jti, user_id, tenant_id, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
       [jti, userId, tenantId, exp],

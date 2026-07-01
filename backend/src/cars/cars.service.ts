@@ -130,6 +130,27 @@ export class CarsService {
     return this.mapCar(rows[0]);
   }
 
+  /**
+   * Find an existing car with the same normalized plate that already belongs to
+   * THIS client. Uses the exact same plate normalization as `findByPlate`
+   * (lookup-by-plate): the SQL strips spaces/dashes/slashes + uppercases the
+   * stored column and compares against `normalizePlate(...).key`. Scoped to the
+   * one client so the dedup can only ever attach to that client's own car.
+   */
+  private async findExistingPlateForClient(tenantID: string, clientId: string, normKey: string) {
+    const { rows } = await this.pool.query(
+      `SELECT ca.*, cl.full_name as client_full_name, cl.phone as client_phone
+       FROM cars ca LEFT JOIN clients cl ON cl.id = ca.client_id
+       WHERE ca.tenant_id = $1
+         AND ca.client_id = $2
+         AND REPLACE(REPLACE(REPLACE(UPPER(ca.plate_number), ' ', ''), '-', ''), '/', '') = $3
+       ORDER BY ca.created_at
+       LIMIT 1`,
+      [tenantID, clientId, normKey],
+    );
+    return rows.length > 0 ? this.mapCar(rows[0]) : null;
+  }
+
   async create(tenantID: string, dto: any) {
     // If linked to a client, the client must live in the same tenant.
     // Without this a director could attach a car to another tenant's client.
@@ -145,6 +166,21 @@ export class CarsService {
     // or vice-versa) can't hit a raw NOT NULL 500 on save (#57 BUG B).
     const plateNumber = noPlate ? '' : typeof dto.plateNumber === 'string' ? dto.plateNumber : '';
     const makeModel = typeof dto.makeModel === 'string' ? dto.makeModel : '';
+
+    // Idempotent attach: when creating a plated car for an EXISTING client, if
+    // that client already has a car with the same normalized plate, return the
+    // existing car instead of inserting a duplicate row. Supports the mobile
+    // flow where a customer's new car is attached to an already-existing client
+    // (retried / double-tapped saves must not fan out into duplicate cars).
+    // No-plate cars are skipped — an empty plate is not a stable identity.
+    if (dto.clientId && !noPlate) {
+      const norm = normalizePlate(plateNumber);
+      if (!norm.isEmpty && norm.key) {
+        const existing = await this.findExistingPlateForClient(tenantID, dto.clientId, norm.key);
+        if (existing) return existing;
+      }
+    }
+
     const { rows } = await this.pool.query(
       `INSERT INTO cars (plate_number, make_model, comment, client_id, tenant_id, no_plate)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
