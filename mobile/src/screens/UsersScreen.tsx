@@ -93,6 +93,7 @@ const PERMISSION_LABELS: Record<PermissionKey, string> = {
   // Склад
   warehouse_access: 'Доступ к складу',
   suppliers_access: 'Доступ к поставщикам',
+  warehouse_delete: 'Удаление на складе',
   // CRM
   clients_view: 'Видит клиентов',
   clients_edit: 'Редактирует клиентов',
@@ -109,6 +110,7 @@ const PERMISSION_LABELS: Record<PermissionKey, string> = {
 const PERMISSION_HINTS: Partial<Record<PermissionKey, string>> = {
   checks_view_all: 'Без этого права мастер видит только свои чеки.',
   user_management: 'Даёт доступ к этому экрану — правам и сотрудникам.',
+  warehouse_delete: 'Разрешает удалять товары и папки склада. Удалённое попадает в Корзину — можно восстановить.',
 };
 
 // Per-group SF-style icon + display order. Keys of PERMISSION_GROUPS drive the

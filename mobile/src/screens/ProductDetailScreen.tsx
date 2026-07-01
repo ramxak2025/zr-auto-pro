@@ -82,7 +82,9 @@ import type { Product, StockMovement, ProductPriceHistoryEntry } from '../../../
 interface ProductEditPayload {
   name?: string;
   category?: string;
-  photo?: string;
+  // #63 — `null` clears the stored photo server-side; `undefined`/omitted
+  // leaves it unchanged. Mirrors the shared UpdateProductRequest.photo.
+  photo?: string | null;
   costPrice?: number;
   sellPrice?: number;
   stock?: number;
@@ -176,6 +178,12 @@ export default function ProductDetailScreen() {
   // Edit (PATCH /products/:id) is role-gated on the backend; warehouse_access
   // is the same permission the warehouse screen uses to surface edit.
   const canManageWarehouse = hasPermission('warehouse_access');
+  // #60 — «Удаление на складе». Owner-class (superadmin/director/admin) всегда
+  // разрешено — бэкенд PermissionsGuard так же байпасит их; мастеру право
+  // выдаёт владелец. Удаление мягкое: товар уходит в Корзину, откуда его
+  // можно восстановить.
+  const isOwnerClass = user?.role === 'superadmin' || user?.role === 'director' || user?.role === 'admin';
+  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_delete');
 
   const passedProduct = (route.params as ProductDetailParams).product;
   const productId = passedProduct.id;
@@ -306,6 +314,36 @@ export default function ProductDetailScreen() {
     },
   });
 
+  // #60 — мягкое удаление товара (DELETE /products/:id → deleted_at). Товар
+  // уходит в Корзину склада (TrashScreen), откуда восстанавливается. Гейт —
+  // canDeleteWarehouse; бэкенд дополнительно проверяет warehouse_delete.
+  const deleteMutation = useMutation({
+    mutationFn: () => productsApi.remove(productId),
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      navigation.goBack();
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось удалить товар');
+    },
+  });
+
+  const confirmDelete = useCallback(() => {
+    haptic('warning');
+    Alert.alert('Удалить товар', `«${product.name}» переместится в Корзину склада. Оттуда его можно восстановить.`, [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Удалить', style: 'destructive', onPress: () => deleteMutation.mutate() },
+    ]);
+    // deleteMutation identity меняется на isPending — намеренно исключаем, чтобы
+    // хендлер не пересоздавался в полёте.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [product.name]);
+
   const pickImage = useCallback(async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
@@ -327,8 +365,15 @@ export default function ProductDetailScreen() {
       Alert.alert('Ошибка', 'Укажите название товара');
       return;
     }
-    let uploadedPhotoPath: string | undefined = product.photo || undefined;
-    if (photoUri && photoUri.startsWith('file://')) {
+    // #63 — определяем, какое фото сохранить:
+    //   • фото убрали (photoUri пуст) → null → бэкенд ОЧИЩАЕТ фото. Раньше
+    //     здесь слался старый product.photo, поэтому удаление не «прилипало».
+    //   • выбрали новое (file://) → загружаем и берём вернувшийся URL;
+    //   • не трогали (существующий серверный путь) → отправляем как есть.
+    let uploadedPhotoPath: string | null;
+    if (!photoUri) {
+      uploadedPhotoPath = null;
+    } else if (photoUri.startsWith('file://')) {
       try {
         setUploadingPhoto(true);
         const filename = photoUri.split('/').pop() || 'photo.jpg';
@@ -340,6 +385,8 @@ export default function ProductDetailScreen() {
         return;
       }
       setUploadingPhoto(false);
+    } else {
+      uploadedPhotoPath = photoUri;
     }
     const payload: ProductEditPayload = {
       name: name.trim(),
@@ -367,7 +414,6 @@ export default function ProductDetailScreen() {
     costPrice,
     canSeeCostPrice,
     photoUri,
-    product.photo,
     saveMutation,
   ]);
 
@@ -917,6 +963,33 @@ export default function ProductDetailScreen() {
               </TouchableOpacity>
             ) : null}
           </View>
+
+          {/* #60 — удаление товара. Видно только тем, у кого есть право
+              «Удаление на складе» (или owner-class). Мягкое → в Корзину. */}
+          {canDeleteWarehouse ? (
+            <TouchableOpacity
+              style={[
+                styles.deleteBtn,
+                { borderColor: colors.red[500] + '55', backgroundColor: colors.red[500] + '12' },
+              ]}
+              onPress={confirmDelete}
+              disabled={deleteMutation.isPending}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Удалить товар"
+            >
+              {deleteMutation.isPending ? (
+                <ActivityIndicator color={colors.red[600]} size="small" />
+              ) : (
+                <>
+                  <Ionicons name="trash-outline" size={18} color={colors.red[600]} />
+                  <Text variant="bodyEmph" color={colors.red[600]}>
+                    Удалить товар
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          ) : null}
         </ScrollView>
       )}
 
@@ -1301,6 +1374,18 @@ const styles = StyleSheet.create({
     gap: 4,
     paddingVertical: spacing[3.5],
     borderTopWidth: StyleSheet.hairlineWidth,
+  },
+
+  // #60 — «Удалить товар» (view mode)
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    marginTop: spacing[5],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
   },
 
   // Fullscreen photo

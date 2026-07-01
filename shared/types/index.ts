@@ -542,6 +542,7 @@ export type PermissionKey =
   | 'can_add_expenses'
   | 'warehouse_access'
   | 'suppliers_access'
+  | 'warehouse_delete'
   | 'clients_view'
   | 'clients_edit'
   | 'schedule_view'
@@ -570,7 +571,7 @@ export const PERMISSION_GROUPS = {
     'sell_installment',
   ],
   Финансы: ['profit_view', 'financial_reports', 'export_data', 'can_add_expenses', 'salary_view'],
-  Склад: ['warehouse_access', 'suppliers_access'],
+  Склад: ['warehouse_access', 'suppliers_access', 'warehouse_delete'],
   CRM: [
     'clients_view',
     'clients_edit',
@@ -624,6 +625,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     // Склад — reads are open elsewhere; mutations are role-gated. No access flag by default.
     warehouse_access: false,
     suppliers_access: false,
+    warehouse_delete: false, // #60 — удаление товаров/папок выключено по умолчанию; владелец выдаёт явно
+
     // CRM — masters can see their own clients/cars; broad CRM editing off.
     clients_view: true,
     clients_edit: false,

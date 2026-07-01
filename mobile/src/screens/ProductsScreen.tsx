@@ -85,6 +85,9 @@ interface FolderRowProps {
   hasLow: boolean;
   lastCheckIso?: string;
   onOpen: (name: string) => void;
+  /** #60 \u2014 long-press \u043f\u043e \u043f\u0430\u043f\u043a\u0435 \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 (\u0442\u043e\u043b\u044c\u043a\u043e \u043a\u043e\u0433\u0434\u0430 \u0443 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f
+   *  \u0435\u0441\u0442\u044c \u043f\u0440\u0430\u0432\u043e warehouse_delete / owner-class). undefined \u2192 long-press \u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d. */
+  onLongPress?: (name: string) => void;
   /** Palette tokens \u2014 passed in so the memoised row picks up dark mode
    *  without subscribing to the theme context itself. */
   rowBg: string;
@@ -100,6 +103,7 @@ const FolderRow = React.memo(function FolderRow({
   hasLow,
   lastCheckIso,
   onOpen,
+  onLongPress,
   rowBg,
   separatorColor,
   textPrimary,
@@ -109,6 +113,7 @@ const FolderRow = React.memo(function FolderRow({
   return (
     <TouchableOpacity
       onPress={() => onOpen(folderName)}
+      onLongPress={onLongPress ? () => onLongPress(folderName) : undefined}
       activeOpacity={0.6}
       style={[styles.folderRow, { backgroundColor: rowBg, borderBottomColor: separatorColor }]}
     >
@@ -284,6 +289,11 @@ export default function ProductsScreen() {
   const canManageWarehouse = hasPermission('warehouse_access');
   // Directors, admins, superadmins see cost price. Masters don't.
   const canSeeCostPrice = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  // #60 — «Удаление на складе». Owner-class (superadmin/director/admin) всегда
+  // разрешено — бэкенд PermissionsGuard так же байпасит их; мастеру право
+  // выдаёт владелец на экране «Сотрудники». Удаление мягкое → в Корзину.
+  const isOwnerClass = user?.role === 'superadmin' || user?.role === 'director' || user?.role === 'admin';
+  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_delete');
 
   const [search, setSearch] = useState('');
   const limit = 500;
@@ -363,6 +373,23 @@ export default function ProductsScreen() {
   // Per-product action sheet (only on main warehouse): edit / move to
   // defect / move to used. Opened by long-press on a product row.
   const [actionsForProduct, setActionsForProduct] = useState<Product | null>(null);
+
+  // #60 — удаление папки (полной или пустой). Long-press по папке (если есть
+  // право warehouse_delete / owner-class): у ПОЛНОЙ папки открывается выбор
+  // (перенести товары в корень / удалить вместе с товарами), ПУСТАЯ сразу
+  // ведёт в подтверждение. Всё мягкое → в Корзину, обратимо.
+  const [folderActions, setFolderActions] = useState<{
+    name: string;
+    fullPath: string;
+    catId: string;
+    count: number;
+  } | null>(null);
+  const [confirmFolderDelete, setConfirmFolderDelete] = useState<{
+    name: string;
+    fullPath: string;
+    catId: string;
+    mode: 'contents' | 'empty';
+  } | null>(null);
 
   // «Перенести в папку» — folder picker target. Opened from the long-press
   // action sheet; commits a category change via productsApi.update (same
@@ -588,11 +615,54 @@ export default function ProductsScreen() {
     },
   });
 
+  // #60 — удаление папки через backend DELETE /warehouse/categories/:id.
+  // Эндпоинту нужен id категории. Если папка «производная» (существует только
+  // из-за category-путей товаров, без строки warehouse_categories → catId ''),
+  // сначала создаём/оживляем строку (create возвращает id этого path), затем
+  // удаляем — так каскад в Корзину / перенос в корень делает ОДНА серверная
+  // транзакция. Всё мягкое и обратимое.
+  const deleteFolderMutation = useMutation({
+    mutationFn: async ({
+      catId,
+      fullPath,
+      opts,
+    }: {
+      catId: string;
+      fullPath: string;
+      opts?: { moveTo?: string; deleteContents?: boolean };
+    }) => {
+      let id = catId;
+      if (!id) {
+        const res = await warehouseCategoriesApi.create(fullPath, activeWarehouseId || undefined);
+        id = res.data.id;
+      }
+      return warehouseCategoriesApi.remove(id, opts);
+    },
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      setFolderActions(null);
+      setConfirmFolderDelete(null);
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось удалить папку');
+    },
+  });
+
   const deleteMutation = useMutation({
     mutationFn: (id: string) => productsApi.remove(id),
     onSuccess: () => {
+      // #60 — мягкое удаление → товар появляется в Корзине (products-trash),
+      // папки дерева могут поредеть (warehouse-categories).
+      haptic('success');
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['products-trash'] });
     },
     onError: () => {
       haptic('error');
@@ -951,6 +1021,52 @@ export default function ProductsScreen() {
     }
   };
 
+  // #60 — long-press по папке. Пустую сразу ведём в подтверждение; полную — в
+  // выбор действий (перенести товары в корень / удалить вместе с товарами).
+  // Гейт снаружи (onLongPress передаётся только при canDeleteWarehouse),
+  // подстрахуемся и по данным.
+  const openFolderActions = useCallback(
+    (folderName: string) => {
+      const entry = sortedFolders.find(([n]) => n === folderName);
+      if (!entry) return;
+      const info = entry[1];
+      haptic('impact');
+      if (info.count === 0) {
+        setConfirmFolderDelete({ name: folderName, fullPath: info.fullPath, catId: info.catId, mode: 'empty' });
+      } else {
+        setFolderActions({ name: folderName, fullPath: info.fullPath, catId: info.catId, count: info.count });
+      }
+    },
+    [sortedFolders],
+  );
+
+  // Полная папка: перенести товары в корень (moveTo=''), затем удалить папку.
+  // Товары сохраняются на складе — операция не деструктивна.
+  const moveFolderToRoot = (fa: { name: string; fullPath: string; catId: string }) => {
+    setFolderActions(null);
+    deleteFolderMutation.mutate(
+      { catId: fa.catId, fullPath: fa.fullPath, opts: { moveTo: '' } },
+      { onSuccess: () => Alert.alert('Готово', `Товары из «${fa.name}» перенесены в корень, папка удалена.`) },
+    );
+  };
+
+  // Подтверждённое удаление: 'contents' → папка + товары в Корзину; 'empty' →
+  // просто удалить пустую папку. И то, и другое обратимо.
+  const runFolderDelete = (c: { name: string; fullPath: string; catId: string; mode: 'contents' | 'empty' }) => {
+    deleteFolderMutation.mutate(
+      { catId: c.catId, fullPath: c.fullPath, opts: c.mode === 'contents' ? { deleteContents: true } : undefined },
+      {
+        onSuccess: () =>
+          Alert.alert(
+            'Готово',
+            c.mode === 'contents'
+              ? `Папка «${c.name}» и её товары перемещены в Корзину. Их можно восстановить.`
+              : `Папка «${c.name}» удалена.`,
+          ),
+      },
+    );
+  };
+
   // --- Image picking ---
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -1047,7 +1163,9 @@ export default function ProductsScreen() {
   };
 
   const handleSubmit = async () => {
-    let uploadedPhotoPath = editingProduct?.photo || undefined;
+    // #63 — тип допускает null: убранное фото у существующего товара шлём как
+    // null (иначе поле просто не отправится и старое фото останется на сервере).
+    let uploadedPhotoPath: string | null | undefined = editingProduct?.photo || undefined;
 
     // Upload new photo if it's a local file URI
     if (photoUri && photoUri.startsWith('file://')) {
@@ -1066,7 +1184,9 @@ export default function ProductsScreen() {
       }
       setUploadingPhoto(false);
     } else if (!photoUri) {
-      uploadedPhotoPath = undefined; // photo was removed
+      // #63 — фото убрали: у существующего товара шлём null (бэкенд очистит),
+      // у нового — undefined (поля просто нет в payload).
+      uploadedPhotoPath = editingProduct ? null : undefined;
     }
 
     const payload = {
@@ -1516,6 +1636,7 @@ export default function ProductsScreen() {
             hasLow={info.hasLow}
             lastCheckIso={folderLastCheck.get(folderName)}
             onOpen={enterFolder}
+            onLongPress={canDeleteWarehouse ? openFolderActions : undefined}
             rowBg={palette.bg.card}
             separatorColor={palette.border.subtle}
             textPrimary={palette.text.primary}
@@ -1530,6 +1651,8 @@ export default function ProductsScreen() {
     search,
     sortedFolders,
     folderLastCheck,
+    canDeleteWarehouse,
+    openFolderActions,
     palette.bg.card,
     palette.border.subtle,
     palette.text.primary,
@@ -1991,7 +2114,7 @@ export default function ProductsScreen() {
               {'\u041E\u0442\u043C\u0435\u043D\u0430'}
             </Text>
           </TouchableOpacity>
-          {editingProduct && (
+          {editingProduct && canDeleteWarehouse && (
             <TouchableOpacity
               style={[
                 styles.deleteFormBtn,
@@ -2790,15 +2913,76 @@ export default function ProductsScreen() {
           setDeleteId(null);
         }}
         title={'\u0423\u0434\u0430\u043B\u0438\u0442\u044C \u0442\u043E\u0432\u0430\u0440'}
-        message={'\u0412\u044B \u0443\u0432\u0435\u0440\u0435\u043D\u044B?'}
+        message={
+          '\u0422\u043E\u0432\u0430\u0440 \u043F\u0435\u0440\u0435\u043C\u0435\u0441\u0442\u0438\u0442\u0441\u044F \u0432 \u041A\u043E\u0440\u0437\u0438\u043D\u0443 \u0441\u043A\u043B\u0430\u0434\u0430 \u2014 \u043E\u0442\u0442\u0443\u0434\u0430 \u0435\u0433\u043E \u043C\u043E\u0436\u043D\u043E \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C.'
+        }
         confirmText={'\u0423\u0434\u0430\u043B\u0438\u0442\u044C'}
         variant="danger"
       />
 
-      {/* iter#12: на iOS убран весь UI редактирования и удаления папок —
-          swipe-actions работали нестабильно, владелец явно попросил
-          выкинуть. Удаление/переименование/реордер папок остаются
-          доступны через web-админ (backend endpoints не трогали). */}
+      {/* #60 — подтверждение удаления папки: 'contents' (папка + товары в
+          Корзину) или 'empty' (пустая папка). И то, и другое обратимо. */}
+      <ConfirmDialog
+        visible={!!confirmFolderDelete}
+        onClose={() => setConfirmFolderDelete(null)}
+        onConfirm={() => {
+          if (confirmFolderDelete) runFolderDelete(confirmFolderDelete);
+        }}
+        title={confirmFolderDelete?.mode === 'contents' ? 'Удалить папку с товарами' : 'Удалить папку'}
+        message={
+          confirmFolderDelete?.mode === 'contents'
+            ? `Папка «${confirmFolderDelete?.name}» и её товары уйдут в Корзину склада. Их можно восстановить.`
+            : `Пустая папка «${confirmFolderDelete?.name}» будет удалена. При необходимости создайте её заново.`
+        }
+        confirmText="Удалить"
+        variant="danger"
+      />
+
+      {/* #60 — выбор действия для ПОЛНОЙ папки. Long-press по папке доступен
+          только при праве «Удаление на складе» (или owner-class). Раньше UI
+          удаления папок был выключен (iter#12) из-за нестабильного swipe —
+          теперь это НЕ swipe, а long-press + явный выбор, поэтому безопасно.
+          Переименование/реордер папок по-прежнему только в web-админ. */}
+      <Modal
+        visible={!!folderActions}
+        onClose={() => setFolderActions(null)}
+        title={folderActions ? `Папка «${folderActions.name}»` : 'Папка'}
+      >
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={() => folderActions && moveFolderToRoot(folderActions)}
+        >
+          <View style={[styles.opsIcon, { backgroundColor: palette.accent.primarySoft }]}>
+            <Ionicons name="arrow-up-outline" size={22} color={palette.accent.primary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Перенести товары в корень</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+              Товары останутся на складе, папка будет удалена
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+          onPress={() => {
+            const fa = folderActions;
+            setFolderActions(null);
+            if (fa) setConfirmFolderDelete({ name: fa.name, fullPath: fa.fullPath, catId: fa.catId, mode: 'contents' });
+          }}
+        >
+          <View style={[styles.opsIcon, { backgroundColor: 'rgba(239, 68, 68, 0.14)' }]}>
+            <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Удалить папку с товарами</Text>
+            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+              Товары уйдут в Корзину — можно восстановить
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+      </Modal>
 
       {/* Warehouse switcher sheet (main / defect / used). */}
       <WarehouseSwitcher
@@ -2903,6 +3087,29 @@ export default function ProductsScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
+        {/* #60 — удаление товара. Видно только при праве «Удаление на складе»
+            (или owner-class). Мягкое → в Корзину, обратимо. */}
+        {canDeleteWarehouse ? (
+          <TouchableOpacity
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => {
+              const p = actionsForProduct;
+              setActionsForProduct(null);
+              if (p) setDeleteId(p.id);
+            }}
+          >
+            <View style={[styles.opsIcon, { backgroundColor: 'rgba(239, 68, 68, 0.14)' }]}>
+              <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Удалить товар'}</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                {'В Корзину склада — можно восстановить'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        ) : null}
       </Modal>
 
       {/* «История движения товара» — read-only журнал stock-movements.
