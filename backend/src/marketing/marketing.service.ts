@@ -17,6 +17,14 @@ interface MessagingProviderAdapter {
   sendMessage(phone: string, message: string): Promise<{ success: boolean; error?: string }>;
 }
 
+// Hard deadline for EVERY outbound provider call (audit round 7, item 7). A
+// bare `fetch` has NO timeout — a hung provider (WhatsApp / Telegram / SMS.RU /
+// МоиЗвонки) used to pin the request (or the review-job interval) until the
+// socket died on its own. AbortSignal.timeout turns that into a normal
+// rejection that flows through each adapter's existing catch → the caller gets
+// the usual `{ success:false, error: '…сетевая ошибка…' }` shape.
+const PROVIDER_TIMEOUT_MS = 10_000;
+
 // ─── WhatsApp Cloud API Real Adapter ─────────────────────────────────
 // Sends a plain-text message to the client phone via Meta's WhatsApp Cloud API:
 //   POST https://graph.facebook.com/v19.0/{phoneNumberId}/messages
@@ -53,6 +61,7 @@ class WhatsAppAdapter implements MessagingProviderAdapter {
           type: 'text',
           text: { body: message },
         }),
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
       });
 
       const data = await response.json().catch(() => ({}));
@@ -100,6 +109,7 @@ class TelegramAdapter implements MessagingProviderAdapter {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ chat_id: this.chatId, text: message }),
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
       });
 
       const data = await response.json().catch(() => ({}));
@@ -140,7 +150,9 @@ class SmsRuAdapter implements MessagingProviderAdapter {
         params.set('from', this.senderName);
       }
 
-      const response = await fetch(`https://sms.ru/sms/send?${params.toString()}`);
+      const response = await fetch(`https://sms.ru/sms/send?${params.toString()}`, {
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
+      });
       const data = await response.json();
 
       Logger.log(
@@ -197,6 +209,7 @@ class MoiZvonkiAdapter implements MessagingProviderAdapter {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
+        signal: AbortSignal.timeout(PROVIDER_TIMEOUT_MS),
       });
 
       const data = await response.json();

@@ -13,12 +13,34 @@ interface Entry<T> {
 }
 
 export class TtlCache {
+  // Hard entry cap (audit round 7, item 11). Expired entries were only ever
+  // deleted lazily on a `get` of the SAME key — a scanner minting unique keys
+  // (e.g. per-offset chart params) grew the Map without bound. On overflow the
+  // OLDEST-inserted entry is evicted (Map preserves insertion order); the
+  // 5-minute sweep below reclaims expired entries that nobody re-reads.
+  private static readonly MAX_ENTRIES = 5000;
+  private static readonly SWEEP_INTERVAL_MS = 5 * 60_000;
+
   private store = new Map<string, Entry<unknown>>();
   // In-flight promises keyed by cache key. Concurrent cold-key callers share
   // ONE computation instead of stampeding the DB (the dashboard fires ~15
   // widget queries at once on a cold cache). Entries are deleted as soon as
   // the promise settles, so this never holds memory beyond a single compute.
   private inflight = new Map<string, Promise<unknown>>();
+
+  constructor() {
+    // unref(): a periodic sweep must never keep the process alive on its own
+    // (graceful shutdown, one-off scripts, tests).
+    const timer = setInterval(() => this.sweepExpired(), TtlCache.SWEEP_INTERVAL_MS);
+    if (typeof timer.unref === 'function') timer.unref();
+  }
+
+  /** Drop every entry whose TTL has passed. Called by the periodic timer. */
+  sweepExpired(now = Date.now()) {
+    for (const [key, entry] of this.store) {
+      if (entry.expiresAt < now) this.store.delete(key);
+    }
+  }
 
   /** Read a value if it hasn't expired; otherwise return undefined. */
   get<T>(key: string): T | undefined {
@@ -33,6 +55,16 @@ export class TtlCache {
 
   /** Cache a value for ttlMs milliseconds. */
   set<T>(key: string, value: T, ttlMs: number) {
+    // Overflow guard: reclaim expired entries first; if the cache is still at
+    // the cap, evict oldest-inserted until there's room for the new key.
+    if (!this.store.has(key) && this.store.size >= TtlCache.MAX_ENTRIES) {
+      this.sweepExpired();
+      while (this.store.size >= TtlCache.MAX_ENTRIES) {
+        const oldest = this.store.keys().next();
+        if (oldest.done) break;
+        this.store.delete(oldest.value);
+      }
+    }
     this.store.set(key, { value, expiresAt: Date.now() + ttlMs });
   }
 

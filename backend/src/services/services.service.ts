@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { capLimit } from '../common/cap-limit';
 
 @Injectable()
 export class ServicesService {
@@ -29,7 +30,9 @@ export class ServicesService {
 
   async getAll(tenantID: string, query: any) {
     const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 100;
+    // Cap 10 000 (not lower): the cash-screen service picker fetches the full
+    // catalogue today — see cap-limit.ts.
+    const limit = capLimit(query.limit, 100, 10000);
     const offset = (page - 1) * limit;
     const search = query.search || '';
     const category = query.category || '';

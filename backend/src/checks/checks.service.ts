@@ -19,6 +19,7 @@ import { MarketingService } from '../marketing/marketing.service';
 import { InstallmentsService } from '../installments/installments.service';
 import { AuditService } from '../tenants/audit.service';
 import { parseFields, filterShape } from '../common/field-filter';
+import { capLimit } from '../common/cap-limit';
 import { ttlCache } from '../common/ttl-cache';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
@@ -522,7 +523,7 @@ export class ChecksService {
 
   async getAll(tenantID: string, query: any, actor?: ChecksActor) {
     const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 50;
+    const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
 
     // OPTIONAL keyset pagination. Presence of the `cursor` query param (even
@@ -1150,6 +1151,43 @@ export class ChecksService {
     return { success: true };
   }
 
+  /**
+   * Allocate the next per-tenant check number (107) INSIDE the caller's open
+   * transaction. The UPDATE takes a row lock on the tenant's counter row, so
+   * concurrent creates for the same tenant serialise here and each gets a
+   * distinct consecutive number; the number only "spends" if the surrounding
+   * transaction commits (a rollback returns it — no gaps from failed saves).
+   *
+   * A tenant with no counter row yet (created after migration 107 seeded the
+   * existing ones) is seeded lazily from its current MAX(number)+1. The seed
+   * INSERT uses ON CONFLICT DO NOTHING so two concurrent first-creates collapse
+   * to one row, then the retry UPDATE serialises them like the normal path.
+   * uq_checks_tenant_number is the DB-level backstop either way.
+   */
+  private async allocateCheckNumberTx(client: PoolClient, tenantID: string): Promise<number> {
+    const { rows } = await client.query(
+      `UPDATE tenant_counters SET next_check_number = next_check_number + 1
+        WHERE tenant_id = $1
+        RETURNING next_check_number - 1 AS num`,
+      [tenantID],
+    );
+    if (rows.length > 0) return parseInt(rows[0].num, 10);
+
+    await client.query(
+      `INSERT INTO tenant_counters (tenant_id, next_check_number)
+       SELECT $1::uuid, COALESCE((SELECT MAX(number) FROM checks WHERE tenant_id = $1), 0) + 1
+       ON CONFLICT (tenant_id) DO NOTHING`,
+      [tenantID],
+    );
+    const { rows: retry } = await client.query(
+      `UPDATE tenant_counters SET next_check_number = next_check_number + 1
+        WHERE tenant_id = $1
+        RETURNING next_check_number - 1 AS num`,
+      [tenantID],
+    );
+    return parseInt(retry[0].num, 10);
+  }
+
   async create(tenantID: string, userID: string, userRole: string, dto: any, actor?: ChecksActor) {
     if (!dto.masterId) throw new BadRequestException({ message: 'Мастер обязателен' });
 
@@ -1272,7 +1310,9 @@ export class ChecksService {
 
       const serviceLines: any[] = [];
       for (const svc of services) {
-        const total = (svc.price || 0) * (svc.quantity || 1);
+        // Money precision (audit round 7, item 6): the line total is a real
+        // 2-decimal amount, same round2 discipline as lineSalary below.
+        const total = round2((svc.price || 0) * (svc.quantity || 1));
         serviceTotal += total;
         const masterId = svc.masterId || dto.masterId;
         // Service-specific percent takes priority over master default
@@ -1326,8 +1366,10 @@ export class ChecksService {
         // exactly as today — only the sell price is locked.
         const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
         const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
-        const totalSell = effectiveSellPrice * (prod.quantity || 1);
-        const totalCost = (prod.costPrice || 0) * (prod.quantity || 1);
+        // Money precision (item 6): per-line sell/cost are real 2-decimal
+        // amounts, so Σ(lines) matches the stored totals cent-for-cent.
+        const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
+        const totalCost = round2((prod.costPrice || 0) * (prod.quantity || 1));
         const productProfit = totalSell - totalCost;
         productTotal += totalSell;
         productCostTotal += totalCost;
@@ -1335,17 +1377,28 @@ export class ChecksService {
         // Product commission: specific per-product % takes priority, otherwise global %
         const pct = productCommissionMap[prod.productId] ?? globalProductPct;
         if (pct > 0 && productProfit > 0) {
-          productSalaryTotal += (productProfit * pct) / 100;
+          // Rounded per-addend (item 6) — mirrors the lineSalary round2 so the
+          // accumulated commission is an exact money amount, not float dust.
+          productSalaryTotal += round2((productProfit * pct) / 100);
         }
 
         productLines.push({ ...prod, sellPrice: effectiveSellPrice, totalSell, totalCost });
       }
 
+      // Normalise the accumulated sums once before deriving totals (item 6):
+      // every addend above is round2()-ed, but a float SUM of 2-decimal values
+      // can still carry binary dust (0.1+0.2 style) — the stored NUMERIC(12,2)
+      // must equal the JS math cent-for-cent.
+      serviceTotal = round2(serviceTotal);
+      serviceSalaryTotal = round2(serviceSalaryTotal);
+      productTotal = round2(productTotal);
+      productCostTotal = round2(productCostTotal);
+      productSalaryTotal = round2(productSalaryTotal);
       const discount = dto.discount || 0;
       const discountedProductTotal = productTotal - discount;
-      const totalRevenue = serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0);
-      const totalCost = productCostTotal + serviceSalaryTotal + productSalaryTotal;
-      const profit = totalRevenue - totalCost;
+      const totalRevenue = round2(serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0));
+      const totalCost = round2(productCostTotal + serviceSalaryTotal + productSalaryTotal);
+      const profit = round2(totalRevenue - totalCost);
 
       // Parse date
       let checkDate = dto.date || new Date().toISOString();
@@ -1361,14 +1414,21 @@ export class ChecksService {
         }
       }
 
+      // Per-tenant numbering (107): allocate under the counter row lock and set
+      // `number` explicitly — the global SERIAL default is no longer consulted
+      // on this path, so each tenant's journal numbering is gapless and leaks
+      // nothing about other tenants' volume.
+      const checkNumber = await this.allocateCheckNumberTx(client, tenantID);
+
       const { rows: checkRows } = await client.query(
-        `INSERT INTO checks (date, master_id, client_id, car_id, mileage, comment, discount,
+        `INSERT INTO checks (number, date, master_id, client_id, car_id, mileage, comment, discount,
          is_deferred, payment_method, cash_amount, card_amount,
          service_total, product_total, total_revenue, product_cost_total,
          service_salary_total, product_salary_total, total_cost, profit, tenant_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
          RETURNING *`,
         [
+          checkNumber,
           checkDate,
           dto.masterId,
           dto.clientId || null,
@@ -1973,7 +2033,9 @@ export class ChecksService {
       const serviceLines: any[] = [];
       const primaryMasterId = dto.masterId || existingMasterId;
       for (const svc of services) {
-        const total = (svc.price || 0) * (svc.quantity || 1);
+        // Money precision (audit round 7, item 6): the line total is a real
+        // 2-decimal amount, same round2 discipline as lineSalary below.
+        const total = round2((svc.price || 0) * (svc.quantity || 1));
         serviceTotal += total;
         const masterId = svc.masterId || primaryMasterId;
         const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
@@ -2017,25 +2079,36 @@ export class ChecksService {
       for (const prod of products) {
         const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
         const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
-        const totalSell = effectiveSellPrice * (prod.quantity || 1);
-        const totalCost = (prod.costPrice || 0) * (prod.quantity || 1);
+        // Money precision (item 6): per-line sell/cost are real 2-decimal
+        // amounts, so Σ(lines) matches the stored totals cent-for-cent.
+        const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
+        const totalCost = round2((prod.costPrice || 0) * (prod.quantity || 1));
         const productProfit = totalSell - totalCost;
         productTotal += totalSell;
         productCostTotal += totalCost;
 
         const pct = productCommissionMap[prod.productId] ?? globalProductPct;
         if (pct > 0 && productProfit > 0) {
-          productSalaryTotal += (productProfit * pct) / 100;
+          // Rounded per-addend (item 6) — mirrors the lineSalary round2 so the
+          // accumulated commission is an exact money amount, not float dust.
+          productSalaryTotal += round2((productProfit * pct) / 100);
         }
 
         productLines.push({ ...prod, sellPrice: effectiveSellPrice, totalSell, totalCost });
       }
 
+      // Normalise the accumulated sums once before deriving totals (item 6) —
+      // same money-precision discipline as create().
+      serviceTotal = round2(serviceTotal);
+      serviceSalaryTotal = round2(serviceSalaryTotal);
+      productTotal = round2(productTotal);
+      productCostTotal = round2(productCostTotal);
+      productSalaryTotal = round2(productSalaryTotal);
       const discount = dto.discount ?? (parseFloat(checkRows[0].discount) || 0);
       const discountedProductTotal = productTotal - discount;
-      const totalRevenue = serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0);
-      const totalCost = productCostTotal + serviceSalaryTotal + productSalaryTotal;
-      const profit = totalRevenue - totalCost;
+      const totalRevenue = round2(serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0));
+      const totalCost = round2(productCostTotal + serviceSalaryTotal + productSalaryTotal);
+      const profit = round2(totalRevenue - totalCost);
 
       // Update check record
       const updateFields: string[] = [];
@@ -2271,7 +2344,8 @@ export class ChecksService {
     let serviceSalaryTotal = 0;
     const serviceLines: any[] = [];
     for (const svc of services) {
-      const total = (svc.price || 0) * (svc.quantity || 1);
+      // Money precision (item 6) — same round2 discipline as create/fullUpdate.
+      const total = round2((svc.price || 0) * (svc.quantity || 1));
       serviceTotal += total;
       const masterId = svc.masterId || primaryMasterId;
       const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
@@ -2310,21 +2384,29 @@ export class ChecksService {
     for (const prod of products) {
       const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
       const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
-      const totalSell = effectiveSellPrice * (prod.quantity || 1);
-      const totalCost = (prod.costPrice || 0) * (prod.quantity || 1);
+      // Money precision (item 6) — same round2 discipline as create/fullUpdate.
+      const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
+      const totalCost = round2((prod.costPrice || 0) * (prod.quantity || 1));
       const productProfit = totalSell - totalCost;
       productTotal += totalSell;
       productCostTotal += totalCost;
       const pct = productCommissionMap[prod.productId] ?? globalProductPct;
-      if (pct > 0 && productProfit > 0) productSalaryTotal += (productProfit * pct) / 100;
+      if (pct > 0 && productProfit > 0) productSalaryTotal += round2((productProfit * pct) / 100);
       productLines.push({ ...prod, sellPrice: effectiveSellPrice, totalSell, totalCost });
     }
 
+    // Normalise the accumulated sums once before deriving totals (item 6) —
+    // same money-precision discipline as create()/fullUpdate().
+    serviceTotal = round2(serviceTotal);
+    serviceSalaryTotal = round2(serviceSalaryTotal);
+    productTotal = round2(productTotal);
+    productCostTotal = round2(productCostTotal);
+    productSalaryTotal = round2(productSalaryTotal);
     const discount = dto.discount ?? (parseFloat(prior.discount) || 0);
     const discountedProductTotal = productTotal - discount;
-    const totalRevenue = serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0);
-    const totalCost = productCostTotal + serviceSalaryTotal + productSalaryTotal;
-    const profit = totalRevenue - totalCost;
+    const totalRevenue = round2(serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0));
+    const totalCost = round2(productCostTotal + serviceSalaryTotal + productSalaryTotal);
+    const profit = round2(totalRevenue - totalCost);
 
     return {
       serviceLines,
@@ -2972,9 +3054,13 @@ export class ChecksService {
     if (toDeduct.length > 0) {
       // Sufficiency check FIRST — refuse the whole restore if any product can't
       // cover its re-deduction (restore-specific: never go negative).
+      // FOR UPDATE (audit round 7, item 5): row-lock the products so the
+      // check-then-deduct below is atomic against a concurrent sale/return —
+      // without it a parallel writer could consume the stock between the read
+      // and the UPDATE and the restore would drive stock negative anyway.
       const productIds = toDeduct.map((x) => x.productId);
       const { rows: stockRows } = await client.query(
-        'SELECT id, name, stock FROM products WHERE id = ANY($1) AND tenant_id=$2',
+        'SELECT id, name, stock FROM products WHERE id = ANY($1) AND tenant_id=$2 FOR UPDATE',
         [productIds, tenantID],
       );
       const stockMap: Record<string, number> = {};
@@ -3131,6 +3217,50 @@ export class ChecksService {
     }
   }
 
+  /**
+   * Log-table retention (audit round 7, item 12). These tables grow unbounded
+   * on a live tenant and nothing ever pruned them:
+   *   • `calls`       — telephony event log (Mango pushes every ring): 12 months;
+   *   • `review_jobs` — review-request queue: FINISHED rows (sent / skipped /
+   *                     failed) after 6 months; pending/processing are kept —
+   *                     deleting an unfinished job would re-spawn it via
+   *                     scanCompletedChecks for a recent check;
+   *   • `sms_history` — outbound message log: 12 months.
+   * No financial data is touched — these are operational logs only; the funnel
+   * report reads current-period windows far inside the retention horizon.
+   * Same pattern as purgeExpiredTrash: nightly, RUN_BACKGROUND_JOBS-gated (one
+   * replica), per-table try/catch so a missing table (fresh install mid-
+   * migration) or one failure never blocks the others or the scheduler.
+   */
+  @Cron('41 3 * * *', { timeZone: 'Europe/Moscow' })
+  async purgeOldLogRows(): Promise<void> {
+    if (!RUN_BACKGROUND_JOBS) return;
+    const targets: Array<{ label: string; sql: string }> = [
+      {
+        label: 'calls >12mo',
+        sql: `DELETE FROM calls WHERE started_at < now() - interval '12 months'`,
+      },
+      {
+        label: 'review_jobs finished >6mo',
+        sql: `DELETE FROM review_jobs WHERE status IN ('sent','skipped','failed') AND created_at < now() - interval '6 months'`,
+      },
+      {
+        label: 'sms_history >12mo',
+        sql: `DELETE FROM sms_history WHERE created_at < now() - interval '12 months'`,
+      },
+    ];
+    for (const t of targets) {
+      try {
+        const { rowCount } = await this.pool.query(t.sql);
+        if (rowCount && rowCount > 0) {
+          this.logger.log(`Log retention: purged ${rowCount} rows (${t.label})`);
+        }
+      } catch (err) {
+        this.logger.error(`purgeOldLogRows (${t.label}) failed: ${err instanceof Error ? err.message : err}`);
+      }
+    }
+  }
+
   async getDashboard(tenantID: string) {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
@@ -3162,11 +3292,17 @@ export class ChecksService {
   }
 
   async getDashboardChart(tenantID: string, period: string, offset: number = 0) {
+    // Clamp the caller-supplied offset to a sane window (item 11): ±1200
+    // periods ≈ 100 years even at monthly granularity. An unbounded offset
+    // (e.g. ?offset=1e15) would overflow Date arithmetic into Invalid Date →
+    // a 500 from Postgres — and each distinct value would also mint a fresh
+    // cache key, letting a scanner balloon the TtlCache.
+    const safeOffset = Math.max(-1200, Math.min(1200, Math.trunc(Number(offset)) || 0));
     // 30s cache, in-flight de-duplicated (see TtlCache.wrap). Invalidated on
     // any check create/update/delete via `reports:<tenant>` prefix purge, so a
     // sale shows up immediately rather than up to 30s late.
-    return ttlCache.wrap(`reports:dashboard-chart:${tenantID}:${period}:${offset}`, 30_000, () =>
-      this.computeDashboardChart(tenantID, period, offset),
+    return ttlCache.wrap(`reports:dashboard-chart:${tenantID}:${period}:${safeOffset}`, 30_000, () =>
+      this.computeDashboardChart(tenantID, period, safeOffset),
     );
   }
 

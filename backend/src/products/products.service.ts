@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { capLimit } from '../common/cap-limit';
 import { parseFields, filterShape } from '../common/field-filter';
 
 @Injectable()
@@ -78,7 +79,9 @@ export class ProductsService {
 
   async getAll(tenantID: string, query: any) {
     const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 100;
+    // Cap 10 000 (not lower): the mobile warehouse picker legitimately fetches
+    // the full catalogue today — see cap-limit.ts.
+    const limit = capLimit(query.limit, 100, 10000);
     const offset = (page - 1) * limit;
     const search = query.search || '';
 

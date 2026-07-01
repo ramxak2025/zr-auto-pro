@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { capLimit } from '../common/cap-limit';
 import { normalizePlate } from '../imports/normalize-plate';
 
 @Injectable()
@@ -77,7 +78,7 @@ export class CarsService {
 
   async getAll(tenantID: string, query: any) {
     const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 50;
+    const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
     const search = query.search || '';
 

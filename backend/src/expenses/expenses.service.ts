@@ -89,8 +89,17 @@ export class ExpensesService {
   // --- Expenses ---
 
   async getAll(tenantID: string, query: any) {
-    const dateFrom = query.dateFrom;
+    // Safety net (audit round 7, item 8): both web (ExpensesPage) and mobile
+    // (ExpensesScreen) always send an explicit dateFrom/dateTo — but a bare
+    // call without any range used to scan the tenant's ENTIRE expense history
+    // unbounded. Default a missing range to the current month; the LIMIT 1000
+    // below bounds the response either way.
+    let dateFrom = query.dateFrom;
     const dateTo = query.dateTo;
+    if (!dateFrom && !dateTo) {
+      const now = new Date();
+      dateFrom = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+    }
 
     let where = 'e.tenant_id = $1';
     const params: any[] = [tenantID];
@@ -122,7 +131,8 @@ export class ExpensesService {
        LEFT JOIN users u ON u.id = e.user_id
        LEFT JOIN users cu ON cu.id = e.created_by
        WHERE ${where}
-       ORDER BY e.date DESC`,
+       ORDER BY e.date DESC
+       LIMIT 1000`,
       params,
     );
 
@@ -180,6 +190,11 @@ export class ExpensesService {
     const amount = parseFloat(String(dto.amount));
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException({ message: 'Сумма должна быть положительной' });
+    }
+    // Sanity ceiling (audit round 7, item 2): kills 1e308-style overflow abuse
+    // while staying an order of magnitude above any real автосервис expense.
+    if (amount > 100_000_000) {
+      throw new BadRequestException({ message: 'Сумма слишком велика' });
     }
     const date = dto.date || new Date().toISOString();
 

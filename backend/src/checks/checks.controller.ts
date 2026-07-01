@@ -1,5 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { ChecksService } from './checks.service';
+import { CreateCheckDto } from './dto/create-check.dto';
+import { UpdateCheckDto } from './dto/update-check.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -154,14 +156,18 @@ export class ChecksController {
   }
 
   @Post()
-  create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+  create(@CurrentUser() user: JwtPayload, @Body() dto: CreateCheckDto) {
+    // Money-field validation (item 2): the typed DTO makes the global
+    // ValidationPipe bound-check price/quantity/cash/card/discount/mileage
+    // (0..10M) and strip unknown fields (whitelist). Required-ness / business
+    // rules stay in the service with their friendly Russian 400s.
     // `user` is forwarded as the actor so the service can resolve the cashier
     // role-gate (role + permissions) when POS shift-mode is ON. OFF → ignored.
     return this.checksService.create(user.tenantID, user.userID, user.role, dto, user);
   }
 
   @Patch(':id')
-  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
+  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateCheckDto) {
     return this.checksService.update(id, user.tenantID, user.role, dto, user.userID, user);
   }
 

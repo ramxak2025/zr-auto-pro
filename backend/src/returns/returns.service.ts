@@ -80,13 +80,21 @@ export class ReturnsService {
       await client.query('BEGIN');
 
       // Verify the check belongs to this tenant + grab basic data.
+      //
+      // FOR UPDATE (audit round 7, item 1): lock the check row for the whole
+      // return so two CONCURRENT returns can't both read is_returned=false and
+      // both add the stock back / reverse the money twice. The second
+      // transaction blocks here until the first commits, then re-reads the row
+      // with is_returned=true and takes the clean «уже возвращён» exit below.
       const { rows: checkRows } = await client.query(
-        `SELECT id, total_revenue, is_returned FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL LIMIT 1`,
+        `SELECT id, total_revenue, is_returned FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
         [checkId, tenantID],
       );
       if (checkRows.length === 0) {
         throw new NotFoundException({ message: 'Заказ-наряд не найден' });
       }
+      // Re-checked UNDER the row lock — this is now the authoritative guard,
+      // not a best-effort JS pre-check.
       if (checkRows[0].is_returned) {
         throw new BadRequestException({ message: 'Заказ-наряд уже возвращён' });
       }
@@ -223,7 +231,12 @@ export class ReturnsService {
       // already capped at total_revenue above, so these never go negative.
       // The card reduction takes whatever the refund couldn't draw from cash
       // (cash first, then card) — a full return zeroes both exactly.
-      await client.query(
+      // `AND is_returned = false` + rowCount check: belt-and-braces on top of
+      // the FOR UPDATE above. Even if a future refactor drops the row lock,
+      // the money reversal can only ever apply to a not-yet-returned check —
+      // zero rows updated means someone beat us to it → roll the WHOLE return
+      // back (header row, return lines, stock movements included).
+      const { rowCount: returnedNow } = await client.query(
         `UPDATE checks
             SET is_returned = true,
                 returned_at = now(),
@@ -233,9 +246,13 @@ export class ReturnsService {
                 profit = COALESCE(profit, 0) - $5,
                 cash_amount = GREATEST(COALESCE(cash_amount, 0) - $5, 0),
                 card_amount = GREATEST(COALESCE(card_amount, 0) - GREATEST($5 - COALESCE(cash_amount, 0), 0), 0)
-          WHERE id = $3 AND tenant_id = $4`,
+          WHERE id = $3 AND tenant_id = $4 AND is_returned = false`,
         [dto.destination, dto.scope, checkId, tenantID, refundAmount],
       );
+      if (!returnedNow) {
+        // Rolls back via the catch below — nothing of this return persists.
+        throw new BadRequestException({ message: 'Заказ-наряд уже возвращён' });
+      }
 
       await client.query('COMMIT');
 

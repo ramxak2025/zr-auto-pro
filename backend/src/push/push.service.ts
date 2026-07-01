@@ -301,6 +301,11 @@ export class PushService {
         resolve(); // don't throw — push failure is non-fatal
       });
 
+      // 10s hard deadline (audit round 7, item 7): a hung exp.host connection
+      // must not pin this Promise (and whatever awaits it) forever. destroy()
+      // surfaces through the 'error' handler above → logged, resolved, done.
+      req.setTimeout(10_000, () => req.destroy(new Error('push timeout')));
+
       req.write(payload);
       req.end();
     });

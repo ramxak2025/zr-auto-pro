@@ -97,10 +97,19 @@ export class MigrationRunner implements OnModuleInit {
           ? await this.runWithoutTransaction(client, file, sql)
           : await this.runInTransaction(client, file, sql);
 
-        if (ok) {
-          await client.query('INSERT INTO _migrations (name) VALUES ($1)', [file]);
-          this.logger.log(`Migration ${file} applied`);
+        if (!ok) {
+          // FAIL-FAST (audit round 7, item 10). Historically a failed migration
+          // was logged and the loop CONTINUED — later migrations ran on top of
+          // the failed one's missing state and the app started anyway, serving
+          // requests against a half-migrated schema. Abort startup instead: the
+          // two-replica deploy keeps the OLD container serving while this one
+          // crash-loops, and the failed file is retried on every boot (it was
+          // never marked applied).
+          throw new Error(`Migration ${file} failed — aborting startup (see error above)`);
         }
+
+        await client.query('INSERT INTO _migrations (name) VALUES ($1)', [file]);
+        this.logger.log(`Migration ${file} applied`);
       }
     } finally {
       await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]).catch(() => {});

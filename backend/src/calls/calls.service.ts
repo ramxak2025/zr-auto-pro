@@ -69,10 +69,14 @@ export class CallsService {
     this.logger.log(`Fetching calls from ${dateFrom} to ${dateTo} via ${apiUrl}`);
 
     try {
+      // 10s hard deadline (item 7): a hung МоиЗвонки endpoint must fail the
+      // request cleanly (the catch below already maps it to a 400 «сетевая
+      // ошибка») instead of pinning a pooled HTTP worker indefinitely.
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `request_data=${encodeURIComponent(requestData)}`,
+        signal: AbortSignal.timeout(10_000),
       });
 
       const raw = await response.text();
@@ -440,10 +444,13 @@ export class CallsService {
     });
 
     try {
+      // Same 10s deadline as getCalls (item 7); the catch below keeps the
+      // existing graceful fallback to the direct /records URL.
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: `request_data=${encodeURIComponent(requestData)}`,
+        signal: AbortSignal.timeout(10_000),
       });
       const data = await response.json();
       if (data.url) {

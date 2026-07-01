@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { capLimit } from '../common/cap-limit';
 import { phoneSearchKey } from '../common/normalize-phone';
 
 // Format-agnostic phone key expression, mirrors `phoneSearchKey` (JS) and the
@@ -85,7 +86,7 @@ export class ClientsService {
 
   async getAll(tenantID: string, query: any) {
     const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 50;
+    const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
     const search = query.search || '';
 
@@ -231,14 +232,53 @@ export class ClientsService {
       }
     }
 
+    try {
+      const { rows } = await this.pool.query(
+        `INSERT INTO clients (full_name, phone, comment, source, owner_notes, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+        [fullName, phone, dto.comment ?? null, dto.source ?? null, dto.ownerNotes ?? null, tenantID],
+      );
+      const client = this.mapClient(rows[0]);
+      (client as any).cars = [];
+      return client;
+    } catch (err) {
+      // Race loser of the pre-check above (108): a concurrent create slipped in
+      // between the SELECT and this INSERT and the unique index
+      // uq_clients_tenant_phone_key rejected the second row. Map it to the SAME
+      // 409 CLIENT_PHONE_EXISTS contract the friendly path returns, so the UI
+      // shows its normal «Перейти к клиенту» flow instead of a raw 500.
+      throw (await this.mapPhoneUniqueViolation(err, tenantID, phone)) ?? err;
+    }
+  }
+
+  /**
+   * If `err` is the unique_violation (23505) from uq_clients_tenant_phone_key
+   * (migration 108), look up the winning row and build the standard 409
+   * ConflictException (`CLIENT_PHONE_EXISTS` + existing client payload).
+   * Returns null for any other error so the caller rethrows it untouched.
+   */
+  private async mapPhoneUniqueViolation(err: unknown, tenantID: string, phone: string) {
+    const e = err as { code?: string; constraint?: string } | null;
+    if (!e || e.code !== '23505' || e.constraint !== 'uq_clients_tenant_phone_key') return null;
+    const key = phoneSearchKey(phone || '');
+    if (!key) return null;
     const { rows } = await this.pool.query(
-      `INSERT INTO clients (full_name, phone, comment, source, owner_notes, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [fullName, phone, dto.comment ?? null, dto.source ?? null, dto.ownerNotes ?? null, tenantID],
+      `SELECT id, full_name, phone FROM clients
+        WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2
+        ORDER BY created_at LIMIT 1`,
+      [tenantID, key],
     );
-    const client = this.mapClient(rows[0]);
-    (client as any).cars = [];
-    return client;
+    if (rows.length === 0) return null; // winner vanished — let the raw error surface
+    return new ConflictException({
+      message: 'Клиент с этим номером уже добавлен',
+      code: 'CLIENT_PHONE_EXISTS',
+      clientId: rows[0].id as string,
+      client: {
+        id: rows[0].id as string,
+        fullName: rows[0].full_name as string,
+        phone: rows[0].phone as string,
+      },
+    });
   }
 
   async update(id: string, tenantID: string, dto: any) {
@@ -270,12 +310,18 @@ export class ClientsService {
     if (sets.length === 0) return this.getById(id, tenantID);
 
     vals.push(id, tenantID);
-    const { rows } = await this.pool.query(
-      `UPDATE clients SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
-      vals,
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
-    return this.mapClient(rows[0]);
+    try {
+      const { rows } = await this.pool.query(
+        `UPDATE clients SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+        vals,
+      );
+      if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
+      return this.mapClient(rows[0]);
+    } catch (err) {
+      // Editing a phone into one another client already owns hits the same
+      // unique index (108) — surface the same 409 contract as create().
+      throw (await this.mapPhoneUniqueViolation(err, tenantID, typeof dto.phone === 'string' ? dto.phone : '')) ?? err;
+    }
   }
 
   async exportCsv(tenantID: string) {

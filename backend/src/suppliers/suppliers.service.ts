@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { capLimit } from '../common/cap-limit';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
 
@@ -67,7 +68,7 @@ export class SuppliersService {
 
   async getAll(tenantID: string, query: any) {
     const page = parseInt(query.page) || 1;
-    const limit = parseInt(query.limit) || 50;
+    const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
     const search = query.search || '';
 
