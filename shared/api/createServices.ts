@@ -532,6 +532,15 @@ export function createChecksApi(api: HttpClient) {
     create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),
     update: (id: string, data: UpdateCheckRequest) => api.patch<Check>(`/checks/${id}`, data),
     /**
+     * «Комментарий своего чека — день в день»: правит ТОЛЬКО комментарий и
+     * доступен ЛЮБОМУ сотруднику БЕЗ edit-permissions, но сервер жёстко
+     * принуждает «свой чек (master_id = вызывающий) + сегодняшняя бизнес-дата
+     * по МСК» (иначе 403/404), включая уже проведённые чеки. Пустая строка
+     * очищает комментарий. Полное редактирование остаётся за update().
+     * Additive — существующие потребители не затронуты.
+     */
+    updateComment: (id: string, comment: string) => api.patch<Check>(`/checks/${id}/comment`, { comment }),
+    /**
      * Корзина (106): DELETE is now a REVERSIBLE soft-delete — it reverses the
      * check's footprint (stock / salary / motivation / warranty / cash-flow) and
      * moves it to the trash instead of hard-deleting. Owner-class only (server-

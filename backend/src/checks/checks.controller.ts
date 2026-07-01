@@ -2,6 +2,7 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } f
 import { ChecksService } from './checks.service';
 import { CreateCheckDto } from './dto/create-check.dto';
 import { UpdateCheckDto } from './dto/update-check.dto';
+import { UpdateCheckCommentDto } from './dto/update-check-comment.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
@@ -153,6 +154,22 @@ export class ChecksController {
   @Patch(':id/work-status')
   setWorkStatus(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { workStatus?: string }) {
     return this.checksService.setWorkStatus(id, user.tenantID, dto?.workStatus);
+  }
+
+  /**
+   * «Комментарий своего чека — день в день». ЛЮБОЙ авторизованный сотрудник —
+   * намеренно БЕЗ @Roles и без edit-permission гейта — может изменить ТОЛЬКО
+   * комментарий СВОЕГО чека (master_id = actor) и ТОЛЬКО в календарный день
+   * его создания (по Europe/Moscow — той же зоне, что и MSK-кроны продукта),
+   * включая уже проведённые чеки. Вчерашний чек так уже не правится. Полное
+   * редактирование остаётся за прежним permission-гейтом на @Patch(':id').
+   * Всё принуждение (свой/сегодня/не в корзине) — в WHERE самого UPDATE в
+   * сервисе. Объявлен ДО @Patch(':id'): двухсегментный литеральный путь
+   * не должен проглатываться параметрическим маршрутом (как GET 'trash').
+   */
+  @Patch(':id/comment')
+  updateOwnComment(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateCheckCommentDto) {
+    return this.checksService.updateOwnComment(id, user.tenantID, user.userID, dto.comment);
   }
 
   @Post()

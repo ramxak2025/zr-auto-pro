@@ -840,6 +840,59 @@ export class ChecksService {
   }
 
   /**
+   * «Комментарий своего чека — день в день» (round 7, item 10). ЛЮБОЙ сотрудник
+   * (без edit_closed_check / checks_edit) меняет ТОЛЬКО комментарий ТОЛЬКО
+   * своего чека (master_id = actor) и ТОЛЬКО в календарный день его создания —
+   * по Europe/Moscow, той же зоне, что и MSK-кроны продукта. `date` — это
+   * бизнес-дата чека, которую показывает и сортирует журнал (ORDER BY ch.date).
+   *
+   * ВСЁ принуждение сидит в WHERE одного UPDATE — «свой», «сегодня», «не в
+   * корзине» и tenant-изоляция проверяются атомарно с самой записью, гонок с
+   * полуночью/удалением нет. Комментарий не двигает деньги/склад/зарплату —
+   * никаких каскадов, invalidateReports и emitCashChanged не нужны.
+   *
+   * Пустая/пробельная строка нормализуется в NULL (= «очистить комментарий»),
+   * чтобы UI-условия вида `check.comment &&` вели себя как раньше.
+   *
+   * rowCount=0 → один диагностический SELECT ради точного статуса: чужой /
+   * несуществующий / в корзине → 404 (не раскрываем чужие чеки), свой живой,
+   * но не сегодняшний → 403 с человеческим сообщением.
+   */
+  async updateOwnComment(id: string, tenantID: string, actorUserId: string, comment: string) {
+    const normalized = comment.trim().length === 0 ? null : comment;
+    const { rowCount } = await this.pool.query(
+      `UPDATE checks
+          SET comment = $1
+        WHERE id = $2
+          AND tenant_id = $3
+          AND deleted_at IS NULL
+          AND master_id = $4
+          AND (date AT TIME ZONE 'Europe/Moscow')::date = (now() AT TIME ZONE 'Europe/Moscow')::date`,
+      [normalized, id, tenantID, actorUserId],
+    );
+
+    if (!rowCount) {
+      const { rows } = await this.pool.query(
+        `SELECT master_id, deleted_at,
+                ((date AT TIME ZONE 'Europe/Moscow')::date = (now() AT TIME ZONE 'Europe/Moscow')::date) AS is_today
+           FROM checks
+          WHERE id = $1 AND tenant_id = $2`,
+        [id, tenantID],
+      );
+      const row = rows[0];
+      // Несуществующий, чужой или лежащий в корзине чек неразличимы снаружи —
+      // единый 404, как в getById (чужие чеки не подсвечиваем существованием).
+      if (!row || row.deleted_at !== null || row.master_id !== actorUserId) {
+        throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      }
+      // Свой живой чек, но бизнес-дата уже не сегодняшняя (по МСК).
+      throw new ForbiddenException({ message: 'Комментарий можно изменить только в день создания чека' });
+    }
+
+    return this.getById(id, tenantID);
+  }
+
+  /**
    * Best-effort «машина готова» client message. Fire-and-forget: never awaited,
    * never throws into the caller — a messaging failure (no provider, no phone,
    * network error) is swallowed with a warn log. Tenant isolation and the

@@ -111,6 +111,11 @@ export default function CheckDetailScreen() {
   // оплата». Менять может тот, кто редактирует чеки (право checks_edit:
   // director/superadmin всегда, admin/master по матрице прав).
   const [workStatusPickerOpen, setWorkStatusPickerOpen] = useState(false);
+  // ── Быстрое редактирование комментария своего сегодняшнего чека ──────
+  // Отдельный маленький sheet (не полный редактор): доступен и БЕЗ прав
+  // редактирования, поэтому не смешиваем с canEdit-потоком CheckCreate.
+  const [commentModalOpen, setCommentModalOpen] = useState(false);
+  const [commentDraft, setCommentDraft] = useState('');
   const [returnScope, setReturnScope] = useState<ReturnScope>('full');
   const [returnDestination, setReturnDestination] = useState<ReturnDestination>('warehouse');
   const [returnReason, setReturnReason] = useState('');
@@ -345,6 +350,35 @@ export default function CheckDetailScreen() {
     setWorkStatusPickerOpen(false);
     if (check?.workStatus === target) return;
     workStatusMutation.mutate(target);
+  };
+
+  // ── Комментарий своего чека — день в день (round 7, item 10) ──────────
+  // PATCH /checks/:id/comment. Узкое послабление: ЛЮБОЙ сотрудник без
+  // edit-permissions правит ТОЛЬКО комментарий СВОЕГО сегодняшнего чека
+  // (включая проведённые). Сервер — единственный настоящий страж (свой +
+  // сегодня по МСК); UI лишь прячет карандаш там, где заведомо откажут.
+  // Комментарий не двигает деньги — инвалидируем только деталь + журнал.
+  const commentMutation = useMutation({
+    mutationFn: (comment: string) => checksApi.updateComment(id, comment),
+    onSuccess: async () => {
+      haptic('success');
+      setCommentModalOpen(false);
+      await queryClient.refetchQueries({ queryKey: ['check', id] });
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+    },
+    onError: (err: any) => {
+      haptic('error');
+      // 403 «только в день создания» / 404 «не найден» — показываем текст
+      // бэкенда дословно: он точнее любого нашего локального угадывания.
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить комментарий');
+    },
+  });
+
+  const openCommentEditor = () => {
+    haptic('select');
+    setCommentDraft(check?.comment ?? '');
+    setCommentModalOpen(true);
   };
 
   // ── Фискализация чека (онлайн-касса 54-ФЗ, АТОЛ) ──────────────────────
@@ -699,11 +733,37 @@ export default function CheckDetailScreen() {
   // (owner-class обходит). Возврат и рассрочку бэкенд редактировать
   // отказывается (403/400) → для них кнопку прячем, чтобы не завести в ошибку.
   const canEditClosedCheck = isOwnerClass || hasPermission('edit_closed_check');
+  // «Чужой чек» (round 7, item 12): мастер видит чужой чек в журнале
+  // (isExecutor-оттенок) и может открыть-посмотреть, но «Изменить» не получает —
+  // даже держа checks_edit / edit_closed_check. Зеркалит серверный гейт
+  // (master_id = actor для роли master); owner-class выше правит любые.
+  const isOwnCheck = !!user?.id && check.masterId === user.id;
+  const foreignForMaster = user?.role === 'master' && !isOwnCheck;
   // Отложенный черновик правится по-старому (checks_edit). Закрытый — только с
-  // edit_closed_check/owner-class. Возврат заморожен, рассрочка — отдельно.
-  const canEdit = isReturned ? false : isDeferred ? hasPermission('checks_edit') : !isInstallment && canEditClosedCheck;
+  // edit_closed_check/owner-class. Возврат заморожен, рассрочка — отдельно;
+  // мастер — только свои (foreignForMaster глушит обе ветки).
+  const canEdit =
+    isReturned || foreignForMaster
+      ? false
+      : isDeferred
+        ? hasPermission('checks_edit')
+        : !isInstallment && canEditClosedCheck;
   const canDelete = hasPermission('checks_delete') && !isReturned;
   const canViewProfit = hasPermission('profit_view');
+  // «Комментарий своего чека — день в день» (round 7, item 10): БЕЗ проверки
+  // edit-permissions — любой сотрудник, но только СВОЙ чек (isOwnCheck выше) и
+  // только СЕГОДНЯ, включая уже проведённые. Дату сверяем по локальному
+  // календарю устройства — сервер (единственный настоящий страж) проверяет по
+  // МСК и на пограничных случаях вежливо откажет своим 403-текстом.
+  // Возвращённый чек в этом экране заморожен целиком — карандаш прячем и
+  // здесь, для единообразия.
+  const checkDay = new Date(check.date);
+  const today = new Date();
+  const isCheckToday =
+    checkDay.getFullYear() === today.getFullYear() &&
+    checkDay.getMonth() === today.getMonth() &&
+    checkDay.getDate() === today.getDate();
+  const canQuickEditComment = isOwnCheck && isCheckToday && !isReturned;
   // Фискализация — кассовые роли (те же, что работают кассу/закрывают чеки).
   // Сервер всё равно гейтит endpoint; UI отрезает остальных сразу.
   const canFiscalize =
@@ -1167,13 +1227,38 @@ export default function CheckDetailScreen() {
           ) : null}
         </View>
 
-        {/* Comment */}
-        {check.comment && (
+        {/* Comment. Карандаш — «день в день» правка комментария СВОЕГО чека:
+            виден и без edit-permissions, и на проведённых чеках (сервер
+            принуждает «свой + сегодня»). Когда комментария нет, а правка
+            доступна — ghost-строка «Добавить комментарий» на том же месте. */}
+        {check.comment ? (
           <View style={[styles.commentCard, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
             <Ionicons name="chatbubble-ellipses" size={15} color={colors.primary[400]} />
             <Text style={[styles.commentText, { color: palette.text.secondary }]}>{check.comment}</Text>
+            {canQuickEditComment && (
+              <TouchableOpacity
+                onPress={openCommentEditor}
+                style={styles.commentEditBtn}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Изменить комментарий"
+              >
+                <Ionicons name="pencil" size={14} color={colors.primary[500]} />
+              </TouchableOpacity>
+            )}
           </View>
-        )}
+        ) : canQuickEditComment ? (
+          <TouchableOpacity
+            style={[styles.commentAddRow, { borderColor: palette.border.strong }]}
+            onPress={openCommentEditor}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Добавить комментарий"
+          >
+            <Ionicons name="chatbubble-ellipses-outline" size={15} color={palette.text.tertiary} />
+            <Text style={[styles.commentAddText, { color: palette.text.tertiary }]}>Добавить комментарий</Text>
+          </TouchableOpacity>
+        ) : null}
 
         {/* Services — services может быть undefined в placeholder-данных
             из journal cache; используем безопасную локальную ссылку. */}
@@ -1992,6 +2077,61 @@ export default function CheckDetailScreen() {
           )}
         </View>
       </Modal>
+
+      {/* Комментарий «день в день» — маленький sheet со стандартным Modal.
+          Достижим только через canQuickEditComment (свой сегодняшний чек);
+          сервер всё равно принуждает то же правило и на отказ отвечает
+          человеческим 403/404 — его текст показываем дословно. */}
+      <Modal
+        visible={commentModalOpen}
+        onClose={() => setCommentModalOpen(false)}
+        title={`Комментарий · Чек #${check.number}`}
+      >
+        <Text style={[styles.commentSheetHint, { color: palette.text.tertiary }]}>
+          Комментарий своего чека можно изменить только в день его создания
+        </Text>
+        <TextInput
+          value={commentDraft}
+          onChangeText={setCommentDraft}
+          style={[
+            styles.commentSheetInput,
+            {
+              backgroundColor: palette.bg.muted,
+              borderColor: palette.border.subtle,
+              color: palette.text.primary,
+            },
+          ]}
+          multiline
+          maxLength={2000}
+          autoFocus
+          placeholder="Например: клиент просил перезвонить после обеда"
+          placeholderTextColor={palette.text.tertiary}
+        />
+        <View style={[styles.returnFormActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity
+            style={[styles.returnCancelBtn, { borderColor: palette.border.strong }]}
+            onPress={() => setCommentModalOpen(false)}
+            disabled={commentMutation.isPending}
+          >
+            <Text style={[styles.returnCancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.commentSaveBtn}
+            onPress={() => {
+              if (commentMutation.isPending) return;
+              commentMutation.mutate(commentDraft);
+            }}
+            activeOpacity={0.85}
+            disabled={commentMutation.isPending}
+          >
+            {commentMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.returnSubmitBtnText}>Сохранить</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -2204,6 +2344,53 @@ const styles = StyleSheet.create({
     padding: spacing[3.5],
   },
   commentText: { fontSize: fontSize.sm, flex: 1, lineHeight: 20 },
+  // Карандаш «изменить комментарий» — компактный, выровнен по первой строке
+  // текста (alignItems карточки — flex-start), hitSlop расширяет тап-зону.
+  commentEditBtn: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: -4,
+    marginRight: -4,
+  },
+  // Ghost-строка «Добавить комментарий» — когда комментария нет, а «день в
+  // день» правка доступна. Пунктир, tertiary-текст: приглашение, не CTA.
+  commentAddRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    paddingVertical: spacing[3],
+  },
+  commentAddText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  // Sheet редактирования комментария (день в день)
+  commentSheetHint: { fontSize: 12, lineHeight: 17, marginBottom: spacing[3] },
+  commentSheetInput: {
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.sm,
+    minHeight: 88,
+    textAlignVertical: 'top',
+    marginBottom: spacing[3],
+  },
+  // «Сохранить» — primary-синяя (в отличие от красного returnSubmitBtn),
+  // та же геометрия, что и у остальных кнопок футеров этого экрана.
+  commentSaveBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.primary[600],
+    minWidth: 132,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
 
   // Section card
   sectionCard: {
