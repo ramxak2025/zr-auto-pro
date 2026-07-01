@@ -31,7 +31,8 @@ import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import SearchInput from '../components/SearchInput';
-import type { Check, User, PaginatedResponse, StockMovement } from '../types';
+import { UserRole } from '../types';
+import type { Check, User, PaginatedResponse, StockMovement, TrashedCheck } from '../types';
 import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 
 const movementTypeConfig: Record<string, { label: string; color: string; bg: string; icon: typeof Package }> = {
@@ -200,12 +201,169 @@ const MobileCheckCard = memo(function MobileCheckCard({
   );
 });
 
+// ─── Корзина (106): soft-deleted checks, restorable for 30 days ─────────────
+const TRASH_RETENTION_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Full days left before a trashed check is purged (30 days from deletedAt). */
+function trashDaysLeft(deletedAt: string): number {
+  const expiresAt = new Date(deletedAt).getTime() + TRASH_RETENTION_DAYS * DAY_MS;
+  return Math.max(0, Math.ceil((expiresAt - Date.now()) / DAY_MS));
+}
+
+function TrashSection({
+  items,
+  isLoading,
+  isError,
+  onRetry,
+  onRestore,
+  restoringId,
+}: {
+  items: TrashedCheck[];
+  isLoading: boolean;
+  isError: boolean;
+  onRetry: () => void;
+  onRestore: (id: string, number: number) => void;
+  restoringId: string | null;
+}) {
+  if (isLoading) return <LoadingSpinner />;
+
+  if (isError) {
+    return (
+      <div className="card card-body text-center">
+        <p className="text-sm text-gray-500">Не удалось загрузить корзину.</p>
+        <button type="button" onClick={onRetry} className="btn-secondary mt-3 mx-auto">
+          Повторить
+        </button>
+      </div>
+    );
+  }
+
+  if (items.length === 0) {
+    return (
+      <EmptyState
+        icon={Trash2}
+        title="Корзина пуста"
+        description={`Удалённые заказ-наряды хранятся здесь ${TRASH_RETENTION_DAYS} дней, затем удаляются навсегда`}
+      />
+    );
+  }
+
+  return (
+    <>
+      {/* Mobile cards */}
+      <div className="md:hidden space-y-3">
+        {items.map((c) => {
+          const days = trashDaysLeft(c.deletedAt);
+          return (
+            <div key={c.id} className="rounded-2xl border border-gray-100 bg-white shadow-sm px-4 py-3.5">
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-base font-bold text-gray-900">#{c.number}</span>
+                  {c.isDeferred && (
+                    <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                      Отложен
+                    </span>
+                  )}
+                </div>
+                <span className="text-sm font-bold text-gray-900 flex-shrink-0">{formatMoney(c.totalRevenue)}</span>
+              </div>
+              <p className="text-sm font-medium text-gray-800 truncate">{c.clientName ?? 'Розничный покупатель'}</p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Чек от {format(new Date(c.date), 'dd.MM.yyyy', { locale: ru })}
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Удалён {format(new Date(c.deletedAt), 'dd.MM.yyyy HH:mm', { locale: ru })}
+                {c.deletedByName ? ` · ${c.deletedByName}` : ''}
+              </p>
+              <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-gray-50">
+                <span className={`text-xs font-semibold ${days <= 5 ? 'text-red-500' : 'text-gray-400'}`}>
+                  Осталось {days} дн.
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onRestore(c.id, c.number)}
+                  disabled={restoringId !== null}
+                  className="btn-secondary btn-sm"
+                >
+                  <Undo2 className="w-3.5 h-3.5" />
+                  Восстановить
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden md:block table-container overflow-y-auto md:max-h-[calc(100vh-12rem)]">
+        <table className="table">
+          <thead className="sticky top-0 z-10">
+            <tr>
+              <th>#</th>
+              <th>Дата</th>
+              <th>Клиент</th>
+              <th>Сумма</th>
+              <th>Удалён</th>
+              <th>До удаления</th>
+              <th className="w-40"></th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((c) => {
+              const days = trashDaysLeft(c.deletedAt);
+              return (
+                <tr key={c.id}>
+                  <td className="font-medium">
+                    <span>{c.number}</span>
+                    {c.isDeferred && (
+                      <span className="ml-1.5 text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
+                        Отложен
+                      </span>
+                    )}
+                  </td>
+                  <td className="text-sm">{format(new Date(c.date), 'dd.MM.yyyy', { locale: ru })}</td>
+                  <td className="text-sm font-medium">{c.clientName ?? 'Розничный покупатель'}</td>
+                  <td className="font-semibold">{formatMoney(c.totalRevenue)}</td>
+                  <td>
+                    <div className="text-sm">{format(new Date(c.deletedAt), 'dd.MM.yyyy HH:mm', { locale: ru })}</div>
+                    {c.deletedByName && <div className="text-xs text-gray-400">{c.deletedByName}</div>}
+                  </td>
+                  <td>
+                    <span className={`text-sm font-semibold ${days <= 5 ? 'text-red-500' : 'text-gray-500'}`}>
+                      {days} дн.
+                    </span>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      onClick={() => onRestore(c.id, c.number)}
+                      disabled={restoringId !== null}
+                      className="btn-secondary btn-sm"
+                    >
+                      <Undo2 className="w-3.5 h-3.5" />
+                      Восстановить
+                    </button>
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </>
+  );
+}
+
 export default function ChecksPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { hasPermission } = useAuth();
+  const { hasPermission, isRole } = useAuth();
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
+  // Корзина (106) — owner-class only (director/admin/superadmin), the same
+  // gate the server enforces on GET /checks/trash and POST /checks/:id/restore.
+  const canSeeTrash = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
   // Pre-fill the master filter from ?masterId=… so deep-links from the
   // Employees page ("Чеки сотрудника" button) drop the user straight into
   // a pre-filtered view.
@@ -217,6 +375,7 @@ export default function ChecksPage() {
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
   const [showWarehouseDocs, setShowWarehouseDocs] = useState(false);
+  const [showTrash, setShowTrash] = useState(false);
   const limit = 20;
 
   const { data: mastersData } = useQuery<User[]>({
@@ -243,7 +402,9 @@ export default function ChecksPage() {
   const deleteMutation = useMutation({
     mutationFn: (id: string) => checksApi.remove(id),
     onSuccess: () => {
-      toast.success('Чек удалён');
+      toast.success('Заказ-наряд перемещён в корзину (хранится 30 дней)');
+      // ['checks'] prefix also covers the board (['checks','board']) and the
+      // trash (['checks','trash']), so the trashed check shows up there at once.
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
@@ -256,8 +417,48 @@ export default function ChecksPage() {
 
   const handleDelete = (e: React.MouseEvent, checkId: string, checkNumber: number) => {
     e.stopPropagation();
-    if (window.confirm(`Удалить чек #${checkNumber}? Это действие необратимо.`)) {
+    if (window.confirm(`Переместить чек #${checkNumber} в корзину? Восстановить можно в течение 30 дней.`)) {
       deleteMutation.mutate(checkId);
+    }
+  };
+
+  // Корзина (106): list is fetched only when the section is open AND the user
+  // is owner-class — a master never fires the owner-only request at all.
+  const {
+    data: trashedChecks,
+    isLoading: trashLoading,
+    isError: trashIsError,
+    refetch: refetchTrash,
+  } = useQuery<TrashedCheck[]>({
+    queryKey: ['checks', 'trash'],
+    queryFn: async () => {
+      const res = await checksApi.trash();
+      return res.data;
+    },
+    enabled: canSeeTrash && showTrash,
+  });
+
+  const restoreMutation = useMutation({
+    mutationFn: (id: string) => checksApi.restore(id),
+    onSuccess: () => {
+      toast.success('Заказ-наряд восстановлен');
+      // Same set the delete flow invalidates: ['checks'] prefix covers the
+      // journal pages, the work board and the trash list itself.
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
+    },
+    onError: (err: any) => {
+      // Surface the backend refusal verbatim — e.g. «Недостаточно товара на
+      // складе для восстановления: …» when stock can't be re-deducted.
+      toast.error(err?.response?.data?.message || 'Не удалось восстановить заказ-наряд');
+    },
+  });
+
+  const handleRestore = (id: string, number: number) => {
+    if (window.confirm(`Восстановить заказ-наряд #${number}?`)) {
+      restoreMutation.mutate(id);
     }
   };
 
@@ -337,6 +538,7 @@ export default function ChecksPage() {
             type="button"
             onClick={() => {
               setShowWarehouseDocs(!showWarehouseDocs);
+              setShowTrash(false);
               setPage(1);
             }}
             className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${
@@ -348,11 +550,29 @@ export default function ChecksPage() {
             <Package className="w-3.5 h-3.5" />
             Документы склада
           </button>
+          {canSeeTrash && (
+            <button
+              type="button"
+              onClick={() => {
+                setShowTrash(!showTrash);
+                setShowWarehouseDocs(false);
+                setPage(1);
+              }}
+              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold transition-colors ${
+                showTrash
+                  ? 'bg-red-100 text-red-700 border border-red-200'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              }`}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Корзина
+            </button>
+          )}
         </div>
       </div>
 
       {/* Stock Movements — write-offs, corrections, purchases with colors */}
-      {recentMovements.length > 0 && (
+      {!showTrash && recentMovements.length > 0 && (
         <div className="space-y-1.5">
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider px-1">Складские операции</p>
           {(showWarehouseDocs ? recentMovements : recentMovements.slice(0, 5)).map((m) => {
@@ -397,7 +617,7 @@ export default function ChecksPage() {
       )}
 
       {/* Summary strip — totals for the loaded page of checks */}
-      {!showWarehouseDocs && !isLoading && checks.length > 0 && (
+      {!showTrash && !showWarehouseDocs && !isLoading && checks.length > 0 && (
         <div className={`grid grid-cols-2 gap-2.5 ${canViewProfit ? 'lg:grid-cols-4' : 'lg:grid-cols-3'}`}>
           <div className="rounded-xl bg-gray-50 p-3">
             <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Всего чеков</p>
@@ -421,7 +641,16 @@ export default function ChecksPage() {
       )}
 
       {/* Content */}
-      {showWarehouseDocs ? (
+      {showTrash ? (
+        <TrashSection
+          items={trashedChecks ?? []}
+          isLoading={trashLoading}
+          isError={trashIsError}
+          onRetry={() => refetchTrash()}
+          onRestore={handleRestore}
+          restoringId={restoreMutation.isPending ? (restoreMutation.variables ?? null) : null}
+        />
+      ) : showWarehouseDocs ? (
         recentMovements.length === 0 && (
           <EmptyState
             icon={Package}

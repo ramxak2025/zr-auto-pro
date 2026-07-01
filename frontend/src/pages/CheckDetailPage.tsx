@@ -121,7 +121,7 @@ export default function CheckDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      toast.success('Чек удалён');
+      toast.success('Заказ-наряд перемещён в корзину (хранится 30 дней)');
       navigate('/checks');
     },
     onError: (err: any) => {
@@ -688,7 +688,7 @@ export default function CheckDetailPage() {
         onClose={() => setShowDeleteDialog(false)}
         onConfirm={() => deleteMutation.mutate()}
         title={'Удалить чек'}
-        message={`Вы уверены, что хотите удалить чек #${check.number}? Это действие нельзя отменить.`}
+        message={`Переместить чек #${check.number} в корзину? Восстановить можно в течение 30 дней.`}
         confirmText={'Удалить'}
         variant="danger"
       />
