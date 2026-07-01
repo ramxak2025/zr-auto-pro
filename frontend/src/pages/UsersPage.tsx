@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
@@ -19,6 +19,8 @@ import toast from 'react-hot-toast';
 import { usersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { User, UserRole, UserPermissions, Product, PaginatedResponse } from '../types';
+import { ROLE_PERMISSION_DEFAULTS, PERMISSION_KEYS } from '../types';
+import type { PermissionKey } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -103,25 +105,22 @@ interface UserFormData {
   permissions: UserPermissions;
 }
 
-const defaultPermissions: UserPermissions = {
-  checks_view: true,
-  checks_create: true,
-  checks_edit: false,
-  checks_delete: false,
-  checks_change_datetime: false,
-  accept_payment: false, // not a cashier by default — owner grants it explicitly
-  profit_view: false,
-  clients_view: true,
-  clients_edit: false,
-  warehouse_access: false,
-  suppliers_access: false,
-  financial_reports: false,
-  export_data: false,
-  user_management: false,
-  schedule_view: false,
-  salary_view: false,
-  marketing_access: false,
-};
+/**
+ * Полная карта прав из РОЛЕВЫХ эффективных дефолтов (ROLE_PERMISSION_DEFAULTS —
+ * та же таблица, которую зеркалит серверный PermissionsGuard для ключей,
+ * отсутствующих в сохранённой карте). Ключ вне дефолтов роли → false.
+ *
+ * Фикс бага «права сбрасываются при сохранении»: раньше здесь была локальная
+ * таблица defaultPermissions, расходившаяся с серверными фоллбэками
+ * (у мастера checks_edit / schedule_view на сервере по умолчанию TRUE, тут были
+ * FALSE), и она уезжала полной заменой карты при КАЖДОМ сохранении профиля.
+ */
+function permissionsFromRoleDefaults(role: UserRole): UserPermissions {
+  const defaults = ROLE_PERMISSION_DEFAULTS[role] ?? {};
+  const map = {} as Record<PermissionKey, boolean>;
+  for (const key of PERMISSION_KEYS) map[key] = defaults[key] === true;
+  return map;
+}
 
 const emptyForm: UserFormData = {
   fullName: '',
@@ -130,7 +129,7 @@ const emptyForm: UserFormData = {
   role: UserRole.MASTER,
   salaryPercent: 0,
   isActive: true,
-  permissions: { ...defaultPermissions },
+  permissions: permissionsFromRoleDefaults(UserRole.MASTER),
 };
 
 export default function UsersPage() {
@@ -140,6 +139,15 @@ export default function UsersPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserFormData>({ ...emptyForm });
+  // Матрица прав: пока авторитетная карта тянется с выделенного endpoint'а,
+  // чекбоксы заблокированы; отправляем права ТОЛЬКО если владелец их трогал
+  // (touched) — сохранение одного лишь профиля больше не переписывает права.
+  const [permsLoading, setPermsLoading] = useState(false);
+  const [permsTouched, setPermsTouched] = useState(false);
+  const [permsLoadFailed, setPermsLoadFailed] = useState(false);
+  // Сессия редактирования: поздний ответ GET-прав предыдущего сотрудника не
+  // должен вливаться в форму текущего.
+  const editSessionRef = useRef(0);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [commissionModalOpen, setCommissionModalOpen] = useState(false);
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
@@ -168,7 +176,14 @@ export default function UsersPage() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => usersApi.update(id, data),
+    // Права идут через ВЫДЕЛЕННЫЙ endpoint (self-lockout-guard на сервере), а не
+    // в общем PATCH-теле: общий PATCH раньше вёз permissions из устаревшего
+    // seed'а и сбрасывал права при любом сохранении профиля. __permissions
+    // приходит только когда владелец реально менял чекбоксы.
+    mutationFn: async ({ id, data, __permissions }: { id: string; data: any; __permissions?: UserPermissions }) => {
+      await usersApi.update(id, data);
+      if (__permissions) await usersApi.updatePermissions(id, __permissions);
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast.success('Сотрудник обновлён');
@@ -196,13 +211,21 @@ export default function UsersPage() {
   }
 
   const openCreate = () => {
+    editSessionRef.current++; // инвалидируем возможный in-flight GET прав
     setEditingUser(null);
+    setPermsLoading(false);
+    setPermsTouched(false);
+    setPermsLoadFailed(false);
     setForm({ ...emptyForm });
     setModalOpen(true);
   };
 
   const openEdit = (user: User) => {
+    const session = ++editSessionRef.current;
     setEditingUser(user);
+    setPermsLoading(true);
+    setPermsTouched(false);
+    setPermsLoadFailed(false);
     setForm({
       fullName: user.fullName,
       phone: user.phone || '',
@@ -210,14 +233,35 @@ export default function UsersPage() {
       role: user.role,
       salaryPercent: user.salaryPercent,
       isActive: user.isActive,
-      permissions: { ...defaultPermissions, ...user.permissions },
+      // Seed: ролевые эффективные дефолты + карта из строки списка (list может
+      // быть stale — авторитетная карта дотягивается ниже).
+      permissions: { ...permissionsFromRoleDefaults(user.role), ...user.permissions },
     });
     setModalOpen(true);
+    // Авторитетная сохранённая карта — с выделенного endpoint'а, как на mobile.
+    usersApi
+      .getPermissions(user.id)
+      .then((res) => {
+        if (editSessionRef.current !== session) return;
+        setForm((prev) => ({ ...prev, permissions: { ...permissionsFromRoleDefaults(user.role), ...res.data } }));
+      })
+      .catch(() => {
+        if (editSessionRef.current !== session) return;
+        setPermsLoadFailed(true);
+      })
+      .finally(() => {
+        if (editSessionRef.current !== session) return;
+        setPermsLoading(false);
+      });
   };
 
   const closeModal = () => {
+    editSessionRef.current++;
     setModalOpen(false);
     setEditingUser(null);
+    setPermsLoading(false);
+    setPermsTouched(false);
+    setPermsLoadFailed(false);
     setForm({ ...emptyForm });
   };
 
@@ -236,27 +280,40 @@ export default function UsersPage() {
       return;
     }
 
+    // ВАЖНО: permissions в общем теле только при СОЗДАНИИ (id ещё нет, выделенный
+    // endpoint недоступен). При редактировании общий PATCH прав не везёт — их
+    // сохраняет выделенный endpoint ниже, и только если чекбоксы реально трогали.
     const payload: any = {
       fullName: form.fullName,
       phone: form.phone,
       role: form.role,
       salaryPercent: Number(form.salaryPercent),
       isActive: form.isActive,
-      permissions: form.permissions,
     };
 
     if (!editingUser) {
       payload.password = form.password;
+      payload.permissions = form.permissions;
       createMutation.mutate(payload);
     } else {
       if (form.password) {
         payload.password = form.password;
       }
-      updateMutation.mutate({ id: editingUser.id, data: payload });
+      // Self-lockout net (как на mobile): редактируя СВОЙ аккаунт, нельзя снять
+      // с себя user_management — иначе потеряешь доступ к этому же экрану.
+      const editsOwnAccount = editingUser.id === currentUser?.id;
+      const permissions: UserPermissions | undefined =
+        permsLoading || !permsTouched
+          ? undefined
+          : editsOwnAccount
+            ? { ...form.permissions, user_management: true }
+            : form.permissions;
+      updateMutation.mutate({ id: editingUser.id, data: payload, __permissions: permissions });
     }
   };
 
   const togglePermission = (key: keyof UserPermissions) => {
+    setPermsTouched(true);
     setForm((prev) => ({
       ...prev,
       permissions: {
@@ -530,12 +587,20 @@ export default function UsersPage() {
           {/* Permissions */}
           <div>
             <label className="label">Права доступа</label>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
+            {permsLoading && <p className="text-xs text-gray-400 mt-1">Загружаем сохранённые права…</p>}
+            {permsLoadFailed && !permsLoading && (
+              <p className="text-xs text-red-500 mt-1">
+                Не удалось загрузить сохранённые права — показаны последние известные значения. Обновите страницу,
+                прежде чем менять галочки.
+              </p>
+            )}
+            <div className={`grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2 ${permsLoading ? 'opacity-50' : ''}`}>
               {(Object.keys(permissionLabels) as (keyof UserPermissions)[]).map((key) => (
                 <label key={key} className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
-                    checked={form.permissions[key]}
+                    checked={!!form.permissions[key]}
+                    disabled={permsLoading}
                     onChange={() => togglePermission(key)}
                     className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
                   />

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -286,24 +286,15 @@ function mapToItems(map: ItemVisibilityMap): ItemVisibility[] {
   return ALL_ITEM_KEYS.map((k) => ({ itemKey: k, isVisible: map[k] ?? true }));
 }
 
-const defaultPermissions: UserPermissions = {
-  checks_view: true,
-  checks_create: true,
-  checks_edit: false,
-  checks_delete: false,
-  checks_change_datetime: false,
-  profit_view: false,
-  clients_view: true,
-  clients_edit: false,
-  warehouse_access: false,
-  suppliers_access: false,
-  financial_reports: false,
-  export_data: false,
-  user_management: false,
-  schedule_view: false,
-  salary_view: false,
-  marketing_access: false,
-};
+// NOTE (баг «права сбрасываются при сохранении»): раньше здесь жила локальная
+// таблица defaultPermissions, РАСХОДИВШАЯСЯ с серверными фоллбэками
+// (checks_edit / schedule_view у мастера на сервере по умолчанию TRUE, здесь
+// были FALSE, 10 канонических ключей отсутствовали вовсе). Матрица сидировалась
+// от неё, а сохранение делало полную замену карты — мастер со «спарсовой»
+// сохранённой картой терял права при любом сохранении профиля. Теперь seed
+// всегда идёт от permissionsFromRoleDefaults(role) — того же
+// ROLE_PERMISSION_DEFAULTS, который зеркалит PermissionsGuard на сервере, —
+// то есть тумблеры показывают ровно то, что реально действует.
 
 function formatMoney(v: number) {
   return (
@@ -446,7 +437,10 @@ const emptyForm: UserForm = {
   isActive: true,
   hiddenFromSchedule: false,
   hiddenEverywhere: false,
-  permissions: { ...defaultPermissions },
+  // Новый сотрудник — роль master по умолчанию, значит и матрица прав должна
+  // стартовать с ЭФФЕКТИВНЫХ дефолтов мастера (тех же, что применит сервер к
+  // пустой карте), а не с локальной таблицы.
+  permissions: permissionsFromRoleDefaults(UserRole.MASTER),
   sectionVisibility: { ...defaultSectionVisibility },
   itemVisibility: defaultItemVisibility(),
 };
@@ -478,6 +472,19 @@ export default function UsersScreen() {
   // the edited user we show a spinner so the owner never toggles against a
   // stale seed. Seeded false; set true the moment openEdit kicks off the fetch.
   const [permissionsLoading, setPermissionsLoading] = useState(false);
+  // Владелец РЕАЛЬНО трогал матрицу в этой сессии редактирования (тумблер /
+  // пресет / шаблон). Если нет — __permissions вообще не отправляется:
+  // профильное сохранение (имя, %, пароль) больше никогда не переписывает
+  // права. Именно немой full-replace устаревшего seed'а и был багом
+  // «сохраняешь — права сбрасываются».
+  const [permissionsTouched, setPermissionsTouched] = useState(false);
+  // GET /users/:id/permissions не удался (сеть / окно деплоя): матрица показана
+  // из seed'а списка (может быть неактуальна) — честно предупреждаем.
+  const [permissionsLoadFailed, setPermissionsLoadFailed] = useState(false);
+  // Монотонный id сессии редактирования. Ответы фоновых fetch'ей из ПРЕДЫДУЩЕЙ
+  // сессии (быстро закрыли одного сотрудника и открыли другого) обязаны
+  // игнорироваться — иначе права сотрудника A вливались в форму сотрудника B.
+  const editSessionRef = useRef(0);
 
   // ── Role templates (saved permission blueprints) ──────────────────────────
   // `templatesSheetOpen` shows the «Применить роль» picker (also the manage hub:
@@ -720,9 +727,12 @@ export default function UsersScreen() {
   // on every render. Each handler is also passed into UserCard.memo, so
   // identity stability matters for the list re-render cost.
   const openEdit = useCallback((user: User) => {
+    const session = ++editSessionRef.current;
     setEditingUser(user);
     setExpandedGroup(null);
     setPermissionsLoading(true);
+    setPermissionsTouched(false);
+    setPermissionsLoadFailed(false);
     setForm({
       fullName: user.fullName,
       phone: user.phone ? formatPhone(user.phone) : '',
@@ -733,7 +743,12 @@ export default function UsersScreen() {
       isActive: user.isActive,
       hiddenFromSchedule: !!user.hiddenFromSchedule,
       hiddenEverywhere: !!user.hiddenEverywhere,
-      permissions: { ...defaultPermissions, ...user.permissions },
+      // База слияния — РОЛЕВЫЕ эффективные дефолты (то, что сервер реально
+      // применяет к ключам, отсутствующим в сохранённой карте), поверх них —
+      // сохранённая карта из строки списка. Ключ отсутствует в хранилище →
+      // тумблер показывает действующий фоллбэк, и full-replace-сохранение
+      // записывает ровно то же поведение (а не «сброс»).
+      permissions: { ...permissionsFromRoleDefaults(user.role), ...user.permissions },
       // Seed from whatever the list payload already carries (avoids a flash of
       // wrong toggles); the authoritative overrides are then refetched below.
       sectionVisibility: toVisibilityMap(user.sectionVisibility),
@@ -743,29 +758,39 @@ export default function UsersScreen() {
     // 071 / 073 — fetch the authoritative per-section AND per-item overrides for
     // this employee. The list endpoint may omit them; these guarantee the
     // toggles reflect the stored state. Failure is non-fatal — we keep the
-    // optimistic seed above.
+    // optimistic seed above. Every callback is session-guarded: a late response
+    // for a PREVIOUS employee must not leak into the currently open form.
     usersApi
       .getSectionVisibility(user.id)
       .then((res) => {
+        if (editSessionRef.current !== session) return;
         setForm((prev) => ({ ...prev, sectionVisibility: toVisibilityMap(res.data) }));
       })
       .catch(() => {});
     usersApi
       .getItemVisibility(user.id)
       .then((res) => {
+        if (editSessionRef.current !== session) return;
         setForm((prev) => ({ ...prev, itemVisibility: toItemVisibilityMap(res.data) }));
       })
       .catch(() => {});
     // Action permissions — load the AUTHORITATIVE stored map from the dedicated
-    // endpoint (the list payload's `permissions` may be partial/empty for an
-    // existing master). Merge over defaults so every canonical key has a value.
+    // endpoint (the list payload's `permissions` may be stale: ['users'] живёт
+    // в persistent-кэше). Merge over the same role-aware defaults as the seed.
     usersApi
       .getPermissions(user.id)
       .then((res) => {
-        setForm((prev) => ({ ...prev, permissions: { ...defaultPermissions, ...res.data } }));
+        if (editSessionRef.current !== session) return;
+        setForm((prev) => ({ ...prev, permissions: { ...permissionsFromRoleDefaults(user.role), ...res.data } }));
       })
-      .catch(() => {})
-      .finally(() => setPermissionsLoading(false));
+      .catch(() => {
+        if (editSessionRef.current !== session) return;
+        setPermissionsLoadFailed(true);
+      })
+      .finally(() => {
+        if (editSessionRef.current !== session) return;
+        setPermissionsLoading(false);
+      });
   }, []);
 
   const openCommissions = useCallback(async (user: User) => {
@@ -818,17 +843,28 @@ export default function UsersScreen() {
     );
   }
 
+  // Смена сессии (++editSessionRef) инвалидирует все in-flight fetch'и openEdit —
+  // их guard'нутые callbacks (включая finally со спиннером) молча выходят,
+  // поэтому permissions-флаги сбрасываем здесь явно.
   const openCreate = () => {
+    editSessionRef.current++;
     setEditingUser(null);
     setExpandedGroup(null);
+    setPermissionsLoading(false);
+    setPermissionsTouched(false);
+    setPermissionsLoadFailed(false);
     setForm({ ...emptyForm, itemVisibility: defaultItemVisibility() });
     setModalOpen(true);
   };
 
   const closeModal = () => {
+    editSessionRef.current++;
     setModalOpen(false);
     setEditingUser(null);
     setExpandedGroup(null);
+    setPermissionsLoading(false);
+    setPermissionsTouched(false);
+    setPermissionsLoadFailed(false);
     setForm({ ...emptyForm, itemVisibility: defaultItemVisibility() });
   };
 
@@ -876,14 +912,22 @@ export default function UsersScreen() {
       // NOT the generic update body — so it's intentionally omitted from
       // `payload`. Owner-class users render a read-only note (the server
       // bypasses their map), so we skip the permissions PATCH entirely for them
-      // — nothing the owner could change. Final client-side self-lockout net:
-      // editing your OWN account can never drop `user_management`.
+      // — nothing the owner could change.
+      //
+      // КЛЮЧЕВОЕ (фикс «права сбрасываются»): карту отправляем ТОЛЬКО если
+      // владелец реально трогал матрицу в этой сессии. Нетронутая матрица →
+      // undefined → PATCH прав вообще не выполняется, и сохранение имени/%/
+      // пароля физически не способно изменить права. Пока авторитетная карта
+      // грузится (permissionsLoading), матрица скрыта и трогать её нельзя —
+      // тоже не отправляем. Final client-side self-lockout net: editing your
+      // OWN account can never drop `user_management`.
       const editsOwnAccount = editingUser.id === currentUser?.id;
-      const permissions: UserPermissions | undefined = editedIsOwnerClass
-        ? undefined
-        : editsOwnAccount
-          ? { ...form.permissions, user_management: true }
-          : form.permissions;
+      const permissions: UserPermissions | undefined =
+        editedIsOwnerClass || permissionsLoading || !permissionsTouched
+          ? undefined
+          : editsOwnAccount
+            ? { ...form.permissions, user_management: true }
+            : form.permissions;
       updateMutation.mutate({
         id: editingUser.id,
         data: payload,
@@ -909,6 +953,7 @@ export default function UsersScreen() {
     if (editedIsOwnerClass) return;
     if (key === 'user_management' && editingSelf) return;
     haptic('select');
+    setPermissionsTouched(true);
     setForm((prev) => ({
       ...prev,
       permissions: { ...prev.permissions, [key]: !prev.permissions[key] },
@@ -920,6 +965,7 @@ export default function UsersScreen() {
   const applyPermissionPreset = (role: UserRole) => {
     if (editedIsOwnerClass) return;
     haptic('impact');
+    setPermissionsTouched(true);
     const preset = permissionsFromRoleDefaults(role);
     setForm((prev) => ({
       ...prev,
@@ -970,6 +1016,7 @@ export default function UsersScreen() {
   const applyTemplate = (tpl: PermissionTemplate) => {
     if (editedIsOwnerClass) return;
     haptic('impact');
+    setPermissionsTouched(true);
     const next = permissionsFromTemplate(tpl.permissions);
     setForm((prev) => ({
       ...prev,
@@ -1522,6 +1569,15 @@ export default function UsersScreen() {
                   </View>
                 )}
 
+                {/* GET прав не удался: тумблеры ниже — из кэшированного списка,
+                    могут быть неактуальны. Сохранение отправит права только если
+                    их трогали, но владелец должен знать, что смотрит на seed. */}
+                {permissionsLoadFailed && !permissionsLoading && (
+                  <Text style={[styles.sectionVisHint, { color: colors.red[500], marginBottom: spacing[2] }]}>
+                    Не удалось загрузить сохранённые права — показаны последние известные значения. Потяните список вниз
+                    и откройте сотрудника заново, прежде чем менять тумблеры.
+                  </Text>
+                )}
                 {permissionsLoading ? (
                   <View style={styles.permLoading}>
                     <ActivityIndicator size="small" color={colors.primary[600]} />

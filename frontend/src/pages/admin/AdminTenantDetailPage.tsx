@@ -395,10 +395,15 @@ export default function AdminTenantDetailPage() {
       salaryPercent: Number(userForm.salaryPercent),
       isActive: userForm.isActive,
       tenantId: id,
-      permissions: { ...defaultPermissions },
     };
 
     if (editingUser) {
+      // РЕДАКТИРОВАНИЕ: permissions в payload НЕ кладём. Раньше сюда всегда
+      // уходила захардкоженная { ...defaultPermissions } — каждый суперадмин-
+      // edit сотрудника молча затирал права, настроенные владельцем в
+      // приложении (users.service пишет permissions при любом присутствии
+      // ключа). Права правит владелец через свой редактор; отсюда — только
+      // профиль. При СОЗДАНИИ дефолты оставляем — у нового юзера прав ещё нет.
       if (userForm.password) payload.password = userForm.password;
       updateUserMutation.mutate({ userId: editingUser.id, data: payload });
     } else {
@@ -407,6 +412,7 @@ export default function AdminTenantDetailPage() {
         return;
       }
       payload.password = userForm.password;
+      payload.permissions = { ...defaultPermissions };
       createUserMutation.mutate(payload);
     }
   };
