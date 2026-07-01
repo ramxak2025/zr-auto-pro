@@ -513,6 +513,28 @@ export interface UserPermissions {
    * together (the mobile map is an exhaustive Record<PermissionKey, string>).
    */
   warehouse_delete?: boolean;
+  /**
+   * «Редактирование закрытого заказ-наряда» (#61) — may edit a PROVEDЁN
+   * (closed / not-deferred) check: change its services / products / client /
+   * car / executor / payment. On save the backend re-derives EVERYTHING the
+   * check affected (stock, per-line + total salary, cash-flow, cost/profit,
+   * «Мотивация» accruals) in ONE transaction and re-writes it — the check STAYS
+   * closed. OFF by default — the owner grants it explicitly. Owner-class roles
+   * (director/admin/superadmin) always allowed. Server-enforced in
+   * ChecksService (userHasPermission('edit_closed_check')); the backend default
+   * mirror lives in PermissionsGuard.MASTER_PERMISSION_DEFAULTS.
+   *
+   * NOTE: intentionally added here (typed, grantable via PATCH
+   * /users/:id/permissions) but NOT yet in the PermissionKey union /
+   * PERMISSION_GROUPS UI catalog — mirrors exactly how `warehouse_delete` was
+   * first introduced. Surfacing the toggle in the permissions editor is the
+   * #61 client (mobile) wave: that wave adds 'edit_closed_check' to
+   * PermissionKey + PERMISSION_GROUPS.Касса + ROLE_PERMISSION_DEFAULTS[master]
+   * AND the web/mobile PERMISSION_LABELS maps together (the mobile map is an
+   * exhaustive Record<PermissionKey, string>, so adding the key here-only keeps
+   * all three typechecks green without touching mobile/web).
+   */
+  edit_closed_check?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

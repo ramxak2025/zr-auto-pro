@@ -50,6 +50,10 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   // Право продавать в рассрочку (093) — off by default; owner grants explicitly.
   // Gates creating a check with paymentMethod 'installment'.
   sell_installment: false,
+  // Редактирование закрытого (проведённого) заказ-наряда (#61) — off by default;
+  // the owner grants it explicitly. Gates the closed-check cascade-recompute edit
+  // path in ChecksService. Mirrors shared UserPermissions.edit_closed_check.
+  edit_closed_check: false,
   // Финансы — none by default.
   profit_view: false,
   financial_reports: false,

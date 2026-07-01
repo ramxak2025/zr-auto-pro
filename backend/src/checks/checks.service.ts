@@ -15,6 +15,7 @@ import { WarrantyService } from '../warranty/warranty.service';
 import { PushService } from '../push/push.service';
 import { MarketingService } from '../marketing/marketing.service';
 import { InstallmentsService } from '../installments/installments.service';
+import { AuditService } from '../tenants/audit.service';
 import { parseFields, filterShape } from '../common/field-filter';
 import { ttlCache } from '../common/ttl-cache';
 import { invalidateReportsForTenant } from '../common/reports-cache';
@@ -146,6 +147,12 @@ export class ChecksService {
     // the sale and the debt obligation are atomic. @Optional mirrors the other
     // injected services; ChecksModule wires it in, so it's present in practice.
     @Optional() private installments?: InstallmentsService,
+    // Audit trail for the CLOSED-check money edit (#61). @Optional mirrors the
+    // other cross-module injections; ChecksModule imports TenantsModule so it is
+    // present in practice. editClosedCheck writes its audit row transactionally
+    // (AuditService.logTx) — and, if this were ever absent, falls back to an
+    // inline transactional INSERT so a committed money edit is NEVER un-audited.
+    @Optional() private audit?: AuditService,
   ) {}
 
   /**
@@ -1792,7 +1799,17 @@ export class ChecksService {
     // Prior persisted state — the authority for the true→false transition.
     const wasDeferred: boolean = checkRows[0].is_deferred === true;
     if (!wasDeferred) {
-      throw new ForbiddenException({ message: 'Редактирование доступно только для отложенных чеков' });
+      // CLOSED (проведённый) check line-edit (#61). Historically forbidden; now
+      // allowed for a holder of the grantable `edit_closed_check` permission
+      // (owner-class bypasses). It routes to a DEDICATED cascade-recompute path
+      // that reverses the OLD side-effects and applies the NEW ones in ONE
+      // transaction — this fullUpdate body (below) stays exclusively the deferred
+      // draft→close path, byte-for-byte unchanged. A non-holder still gets the
+      // original refusal.
+      if (!userHasPermission(actor, 'edit_closed_check')) {
+        throw new ForbiddenException({ message: 'Редактирование доступно только для отложенных чеков' });
+      }
+      return this.editClosedCheck(id, tenantID, dto, actorUserId, actor);
     }
 
     // A genuine activation = this draft is being closed (is_deferred true→false).
@@ -2149,6 +2166,570 @@ export class ChecksService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Re-derive a check's service/product lines + all money fields from an edit
+   * DTO, using EXACTLY the same math create()/fullUpdate() bake at close (so an
+   * edit produces byte-identical numbers to a fresh sale of the same content):
+   *   • service line total = price×qty; per-line salary baked to the line's
+   *     executor with the service-override-else-user percent (#56), rounded so
+   *     Σ per-line == service_salary_total;
+   *   • product sell price locked to the warehouse value (092); product cost as
+   *     sent; product commission = specific-else-global %, only on positive
+   *     margin; product_salary_total attributed to the check master;
+   *   • totals: revenue = serviceTotal + max(0, productTotal − discount);
+   *     totalCost = productCost + serviceSalary + productSalary; profit = rev −
+   *     cost.
+   * `prior` is the locked check row (source of the unchanged master/discount
+   * fallbacks). Pure computation — reads reference tables (users/services/
+   * products) but writes NOTHING; the caller persists the result.
+   */
+  private async recomputeClosedCheckLines(client: PoolClient, tenantID: string, dto: any, prior: any) {
+    const services = dto.services || [];
+    const products = dto.products || [];
+    const primaryMasterId: string = dto.masterId || prior.master_id;
+
+    // Service salary percents (per-executor default + per-service override).
+    const masterIds = new Set<string>();
+    if (dto.masterId) masterIds.add(dto.masterId);
+    if (prior.master_id) masterIds.add(prior.master_id);
+    for (const svc of services) if (svc.masterId) masterIds.add(svc.masterId);
+
+    const salaryMap: Record<string, number> = {};
+    if (masterIds.size > 0) {
+      const { rows: salaryRows } = await client.query(
+        `SELECT id, COALESCE(salary_percent, 0) as salary_percent FROM users WHERE id = ANY($1) AND tenant_id = $2`,
+        [Array.from(masterIds), tenantID],
+      );
+      for (const r of salaryRows) salaryMap[r.id] = parseFloat(r.salary_percent) || 0;
+    }
+
+    const serviceIds = services.map((s: any) => s.serviceId).filter(Boolean);
+    const serviceMasterPct: Record<string, number | null> = {};
+    if (serviceIds.length > 0) {
+      const { rows: srvRows } = await client.query(
+        `SELECT id, master_percent FROM services WHERE id = ANY($1) AND tenant_id = $2`,
+        [serviceIds, tenantID],
+      );
+      for (const r of srvRows) {
+        serviceMasterPct[r.id] =
+          r.master_percent !== null && r.master_percent !== undefined ? parseFloat(r.master_percent) : null;
+      }
+    }
+
+    let serviceTotal = 0;
+    let serviceSalaryTotal = 0;
+    const serviceLines: any[] = [];
+    for (const svc of services) {
+      const total = (svc.price || 0) * (svc.quantity || 1);
+      serviceTotal += total;
+      const masterId = svc.masterId || primaryMasterId;
+      const serviceOverride = svc.serviceId ? serviceMasterPct[svc.serviceId] : null;
+      const salaryPct = serviceOverride !== null ? serviceOverride : salaryMap[masterId] || 0;
+      const lineSalary = round2((total * salaryPct) / 100);
+      serviceSalaryTotal += lineSalary;
+      serviceLines.push({ ...svc, total, masterId, salaryAmount: lineSalary });
+    }
+
+    // Product totals + commission (attributed to the check master, like create).
+    let productTotal = 0;
+    let productCostTotal = 0;
+    let productSalaryTotal = 0;
+    const productLines: any[] = [];
+
+    const { rows: masterProdRows } = await client.query(
+      'SELECT COALESCE(product_salary_percent, 0) as product_salary_percent FROM users WHERE id = $1 AND tenant_id = $2',
+      [primaryMasterId, tenantID],
+    );
+    const globalProductPct = parseFloat(masterProdRows[0]?.product_salary_percent) || 0;
+
+    const referencedProductIds: string[] = products
+      .map((p: any) => p.productId)
+      .filter((x: string | undefined): x is string => !!x);
+    const productCommissionMap: Record<string, number> = {};
+    if (referencedProductIds.length > 0) {
+      const { rows: pcRows } = await client.query(
+        `SELECT product_id, percent FROM product_commissions WHERE user_id = $1 AND product_id = ANY($2) AND tenant_id = $3`,
+        [primaryMasterId, referencedProductIds, tenantID],
+      );
+      for (const r of pcRows) productCommissionMap[r.product_id] = parseFloat(r.percent) || 0;
+    }
+
+    const warehouseSellMap = await this.loadWarehouseSellPrices(client, tenantID, referencedProductIds);
+
+    for (const prod of products) {
+      const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
+      const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
+      const totalSell = effectiveSellPrice * (prod.quantity || 1);
+      const totalCost = (prod.costPrice || 0) * (prod.quantity || 1);
+      const productProfit = totalSell - totalCost;
+      productTotal += totalSell;
+      productCostTotal += totalCost;
+      const pct = productCommissionMap[prod.productId] ?? globalProductPct;
+      if (pct > 0 && productProfit > 0) productSalaryTotal += (productProfit * pct) / 100;
+      productLines.push({ ...prod, sellPrice: effectiveSellPrice, totalSell, totalCost });
+    }
+
+    const discount = dto.discount ?? (parseFloat(prior.discount) || 0);
+    const discountedProductTotal = productTotal - discount;
+    const totalRevenue = serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0);
+    const totalCost = productCostTotal + serviceSalaryTotal + productSalaryTotal;
+    const profit = totalRevenue - totalCost;
+
+    return {
+      serviceLines,
+      productLines,
+      referencedProductIds,
+      primaryMasterId,
+      serviceTotal,
+      productTotal,
+      productCostTotal,
+      serviceSalaryTotal,
+      productSalaryTotal,
+      discount,
+      totalRevenue,
+      totalCost,
+      profit,
+    };
+  }
+
+  /**
+   * Warranty recompute for a CLOSED-check edit (#61). Warranty claims are a
+   * materialised side-effect of close (createFromCheckLines). On edit we must
+   * re-derive them from the NEW lines — but a claim that has been REDEEMED
+   * (used_at IS NOT NULL) is honoured history and MUST survive:
+   *   1. delete only this check's UNUSED claims;
+   *   2. recreate from the new lines, EXCLUDING any (kind, item-id) that still
+   *      has a USED claim on this check — so a warranty already consumed by a
+   *      later check is never silently re-granted.
+   * started_at stays the ORIGINAL sale date (`checkDate` = the check's unchanged
+   * date), so an unchanged item's window is identical before/after — the whole
+   * step is content-idempotent. Runs in the caller's transaction.
+   */
+  private async recomputeWarrantyForClosedEdit(
+    client: PoolClient,
+    tenantID: string,
+    checkId: string,
+    checkDate: string,
+    clientId: string | null,
+    carId: string | null,
+    serviceLines: any[],
+    productLines: any[],
+  ): Promise<void> {
+    const { rows: usedRows } = await client.query(
+      `SELECT kind, product_id, service_id FROM warranty_claims
+        WHERE tenant_id = $1 AND check_id = $2 AND used_at IS NOT NULL`,
+      [tenantID, checkId],
+    );
+    const usedKeys = new Set<string>();
+    for (const r of usedRows) {
+      usedKeys.add(r.kind === 'product' ? `p:${r.product_id}` : `s:${r.service_id}`);
+    }
+
+    // Drop the reversible (unused) claims; used ones are preserved as history.
+    await client.query(`DELETE FROM warranty_claims WHERE tenant_id = $1 AND check_id = $2 AND used_at IS NULL`, [
+      tenantID,
+      checkId,
+    ]);
+
+    const warrantyLines: Array<{
+      kind: 'product' | 'service';
+      productId?: string | null;
+      serviceId?: string | null;
+      itemName?: string | null;
+    }> = [];
+    for (const svc of serviceLines) {
+      if (svc.serviceId && !usedKeys.has(`s:${svc.serviceId}`)) {
+        warrantyLines.push({ kind: 'service', serviceId: svc.serviceId, itemName: svc.name });
+      }
+    }
+    for (const prod of productLines) {
+      if (prod.productId && !usedKeys.has(`p:${prod.productId}`)) {
+        warrantyLines.push({ kind: 'product', productId: prod.productId, itemName: prod.name });
+      }
+    }
+    if (warrantyLines.length > 0) {
+      await this.warranty.createFromCheckLines(client, tenantID, checkId, checkDate, clientId, carId, warrantyLines);
+    }
+  }
+
+  /**
+   * Edit a CLOSED (проведённый) check (#61) — the cascade-recompute path. Gated
+   * upstream by the `edit_closed_check` permission (owner-class bypasses). The
+   * check STAYS closed (is_deferred is never flipped, date/number/created_at are
+   * never rewritten); only its content + money are re-derived.
+   *
+   * EVERY materialised side-effect of the original close is reversed + reapplied
+   * in ONE transaction (single BEGIN/COMMIT, check row locked FOR UPDATE):
+   *   • STOCK      — add back the OLD product-line quantities, deduct the NEW
+   *                  ones (atomic per-product; net = the delta, oversell allowed
+   *                  exactly like a sale). Editing twice with the same content is
+   *                  a no-op on stock (old == new cancels).
+   *   • SALARY     — service_salary_total + per-line salary_amount (baked to the
+   *                  line executor) + product_salary_total are recomputed and
+   *                  rewritten; the salary reports read these directly (derived),
+   *                  so they re-attribute automatically.
+   *   • CASH/COST/ — cash_amount/card_amount + product_cost_total/total_cost/
+   *     PROFIT       profit/total_revenue rewritten on the row; every report is
+   *                  derived from these, so cash-flow/dashboard follow.
+   *   • MOTIVATION — accrueMotivationPromos re-runs (idempotent DELETE-then-INSERT
+   *                  per check), re-crediting the CURRENT master from the NEW
+   *                  product lines.
+   *   • WARRANTY   — unused claims re-derived from the new lines; redeemed claims
+   *                  preserved (see recomputeWarrantyForClosedEdit).
+   *   • REPORTS    — tenant report caches invalidated after commit.
+   *
+   * REFUSED (can't be cleanly reversed → STOP, no corruption):
+   *   • a RETURNED check (money already reversed by the returns flow);
+   *   • a check sold in РАССРОЧКУ (installment debt ledger + payments).
+   * LEFT UNTOUCHED BY DESIGN:
+   *   • LOYALTY (client_bonuses) — a decoupled, immutable single-sided ledger
+   *     with a hard no-negative-balance rule; auto-clawback of already-spent
+   *     cashback could drive a client negative. The revenue before→after is
+   *     captured in the audit row so the owner can adjust bonuses manually.
+   *
+   * A failure anywhere rolls the WHOLE thing back — no half-applied money/stock.
+   * The edit is AUDITED transactionally (admin_audit_log) — money data.
+   */
+  private async editClosedCheck(
+    id: string,
+    tenantID: string,
+    dto: any,
+    actorUserId: string | null,
+    actor?: ChecksActor,
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Lock the check row for the whole edit so a concurrent edit/return/delete
+      // can't race the reverse+reapply. This locked row is the authority for the
+      // prior state (stock reversal basis, money before-image, guards).
+      const { rows: lockRows } = await client.query('SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
+        id,
+        tenantID,
+      ]);
+      if (lockRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      const prior = lockRows[0];
+
+      // Re-assert closed under the lock (routing guaranteed it, but a concurrent
+      // writer could have changed it). A deferred draft belongs to fullUpdate.
+      if (prior.is_deferred === true) {
+        throw new BadRequestException({ message: 'Отложенный заказ-наряд редактируется обычным способом' });
+      }
+      // A RETURNED check already had its money reversed + stock restored by the
+      // returns flow — re-deriving totals here would double-count. STOP.
+      if (prior.is_returned === true) {
+        throw new BadRequestException({ message: 'Возвращённый заказ-наряд редактировать нельзя' });
+      }
+      // A check sold in installment carries a debt ledger (installment_plans +
+      // payments) that can't be cleanly re-derived from new totals. STOP — the
+      // owner edits the рассрочка separately. Prefer the owning service; fall
+      // back to a direct existence check so the guard is never silently skipped.
+      const hasInstallment = this.installments
+        ? await this.installments.hasPlanForCheckTx(client, tenantID, id)
+        : (
+            await client.query(`SELECT 1 FROM installment_plans WHERE tenant_id=$1 AND check_id=$2 LIMIT 1`, [
+              tenantID,
+              id,
+            ])
+          ).rows.length > 0;
+      if (hasInstallment) {
+        throw new BadRequestException({
+          message: 'Заказ-наряд продан в рассрочку — измените рассрочку отдельно, затем заказ-наряд',
+        });
+      }
+
+      // Cross-tenant integrity guards (same as create()/fullUpdate): every
+      // client-supplied reference must belong to this tenant.
+      const services = dto.services || [];
+      const products = dto.products || [];
+      if (dto.masterId) await this.assertOwnsByTenant(client, tenantID, 'users', dto.masterId, 'Мастер');
+      if (dto.clientId) await this.assertOwnsByTenant(client, tenantID, 'clients', dto.clientId, 'Клиент');
+      if (dto.carId) await this.assertOwnsByTenant(client, tenantID, 'cars', dto.carId, 'Машина');
+      const svcIds: string[] = services
+        .map((s: any) => s.serviceId)
+        .filter((x: string | undefined): x is string => !!x);
+      if (svcIds.length > 0) await this.assertManyOwnedByTenant(client, tenantID, 'services', svcIds, 'Услуга');
+      const prodIds: string[] = products
+        .map((p: any) => p.productId)
+        .filter((x: string | undefined): x is string => !!x);
+      if (prodIds.length > 0) await this.assertManyOwnedByTenant(client, tenantID, 'products', prodIds, 'Товар');
+      const lineMasterIds: string[] = services
+        .map((s: any) => s.masterId)
+        .filter((x: string | undefined): x is string => !!x);
+      if (lineMasterIds.length > 0)
+        await this.assertManyOwnedByTenant(client, tenantID, 'users', lineMasterIds, 'Мастер');
+
+      // OLD product quantities (the amount originally deducted from stock),
+      // aggregated per product BEFORE the lines are rewritten.
+      const { rows: oldProdRows } = await client.query(
+        `SELECT product_id, COALESCE(SUM(quantity), 0) AS qty
+           FROM check_product_lines
+          WHERE check_id = $1 AND product_id IS NOT NULL
+          GROUP BY product_id`,
+        [id],
+      );
+
+      // Recompute lines + money from the edit DTO (same math as close).
+      const c = await this.recomputeClosedCheckLines(client, tenantID, dto, prior);
+
+      // ── 1) Reverse OLD stock: add back exactly what the sale deducted ──────
+      for (const r of oldProdRows) {
+        const qty = parseFloat(r.qty) || 0;
+        if (qty <= 0) continue;
+        await client.query(`UPDATE products SET stock = stock + $1 WHERE id = $2 AND tenant_id = $3`, [
+          qty,
+          r.product_id,
+          tenantID,
+        ]);
+      }
+
+      // ── 2) Rewrite the check row — is_deferred/date/number/created_at stay ──
+      const updateFields: string[] = [];
+      const updateVals: any[] = [];
+      let ui = 1;
+      if (dto.masterId !== undefined) {
+        updateFields.push(`master_id=$${ui++}`);
+        updateVals.push(dto.masterId);
+      }
+      if (dto.clientId !== undefined) {
+        updateFields.push(`client_id=$${ui++}`);
+        updateVals.push(dto.clientId || null);
+      }
+      if (dto.carId !== undefined) {
+        updateFields.push(`car_id=$${ui++}`);
+        updateVals.push(dto.carId || null);
+      }
+      if (dto.mileage !== undefined) {
+        updateFields.push(`mileage=$${ui++}`);
+        updateVals.push(dto.mileage || null);
+      }
+      if (dto.comment !== undefined) {
+        updateFields.push(`comment=$${ui++}`);
+        updateVals.push(dto.comment || null);
+      }
+      if (dto.discount !== undefined) {
+        updateFields.push(`discount=$${ui++}`);
+        updateVals.push(dto.discount || 0);
+      }
+      if (dto.paymentMethod !== undefined) {
+        updateFields.push(`payment_method=$${ui++}`);
+        updateVals.push(dto.paymentMethod);
+      }
+      if (dto.cashAmount !== undefined) {
+        updateFields.push(`cash_amount=$${ui++}`);
+        updateVals.push(dto.cashAmount || 0);
+      }
+      if (dto.cardAmount !== undefined) {
+        updateFields.push(`card_amount=$${ui++}`);
+        updateVals.push(dto.cardAmount || 0);
+      }
+      // Always rewrite the derived money fields.
+      updateFields.push(`service_total=$${ui++}`);
+      updateVals.push(c.serviceTotal);
+      updateFields.push(`product_total=$${ui++}`);
+      updateVals.push(c.productTotal);
+      updateFields.push(`total_revenue=$${ui++}`);
+      updateVals.push(c.totalRevenue);
+      updateFields.push(`product_cost_total=$${ui++}`);
+      updateVals.push(c.productCostTotal);
+      updateFields.push(`service_salary_total=$${ui++}`);
+      updateVals.push(c.serviceSalaryTotal);
+      updateFields.push(`product_salary_total=$${ui++}`);
+      updateVals.push(c.productSalaryTotal);
+      updateFields.push(`total_cost=$${ui++}`);
+      updateVals.push(c.totalCost);
+      updateFields.push(`profit=$${ui++}`);
+      updateVals.push(c.profit);
+      updateVals.push(id, tenantID);
+      await client.query(
+        `UPDATE checks SET ${updateFields.join(', ')} WHERE id=$${ui++} AND tenant_id=$${ui}`,
+        updateVals,
+      );
+
+      // ── 3) Replace the lines ──────────────────────────────────────────────
+      await client.query('DELETE FROM check_service_lines WHERE check_id=$1', [id]);
+      await client.query('DELETE FROM check_product_lines WHERE check_id=$1', [id]);
+      for (const svc of c.serviceLines) {
+        await client.query(
+          `INSERT INTO check_service_lines (check_id, service_id, master_id, name, price, quantity, total, salary_amount) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            id,
+            svc.serviceId || null,
+            svc.masterId || null,
+            svc.name,
+            svc.price || 0,
+            svc.quantity || 1,
+            svc.total,
+            svc.salaryAmount ?? 0,
+          ],
+        );
+      }
+      for (const prod of c.productLines) {
+        await client.query(
+          `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+          [
+            id,
+            prod.productId || null,
+            prod.name,
+            prod.sellPrice || 0,
+            prod.costPrice || 0,
+            prod.quantity || 1,
+            prod.totalSell,
+            prod.totalCost,
+          ],
+        );
+      }
+
+      // ── 4) Apply NEW stock: deduct the new quantities (aggregated per product) ─
+      const newAgg: Record<string, number> = {};
+      for (const prod of c.productLines) {
+        if (!prod.productId) continue;
+        newAgg[prod.productId] = (newAgg[prod.productId] || 0) + (parseFloat(prod.quantity) || 0);
+      }
+      for (const [productId, qty] of Object.entries(newAgg)) {
+        if (qty <= 0) continue;
+        await client.query(`UPDATE products SET stock = stock - $1 WHERE id = $2 AND tenant_id = $3`, [
+          qty,
+          productId,
+          tenantID,
+        ]);
+      }
+
+      // ── 5) Motivation — idempotent re-accrual from the new lines + master ───
+      await this.accrueMotivationPromos(client, tenantID, id);
+
+      // ── 6) Warranty — re-derive unused claims, preserve redeemed history ────
+      const effectiveClientId = dto.clientId !== undefined ? dto.clientId || null : (prior.client_id ?? null);
+      const effectiveCarId = dto.carId !== undefined ? dto.carId || null : (prior.car_id ?? null);
+      await this.recomputeWarrantyForClosedEdit(
+        client,
+        tenantID,
+        id,
+        prior.date instanceof Date ? prior.date.toISOString() : String(prior.date),
+        effectiveClientId,
+        effectiveCarId,
+        c.serviceLines,
+        c.productLines,
+      );
+
+      // ── 7) Audit (transactional — money data) ───────────────────────────────
+      const before = {
+        totalRevenue: parseFloat(prior.total_revenue) || 0,
+        cashAmount: parseFloat(prior.cash_amount) || 0,
+        cardAmount: parseFloat(prior.card_amount) || 0,
+        serviceTotal: parseFloat(prior.service_total) || 0,
+        productTotal: parseFloat(prior.product_total) || 0,
+        productCostTotal: parseFloat(prior.product_cost_total) || 0,
+        serviceSalaryTotal: parseFloat(prior.service_salary_total) || 0,
+        productSalaryTotal: parseFloat(prior.product_salary_total) || 0,
+        totalCost: parseFloat(prior.total_cost) || 0,
+        profit: parseFloat(prior.profit) || 0,
+        discount: parseFloat(prior.discount) || 0,
+        masterId: prior.master_id ?? null,
+        clientId: prior.client_id ?? null,
+        carId: prior.car_id ?? null,
+      };
+      const after = {
+        totalRevenue: c.totalRevenue,
+        cashAmount: dto.cashAmount !== undefined ? dto.cashAmount || 0 : before.cashAmount,
+        cardAmount: dto.cardAmount !== undefined ? dto.cardAmount || 0 : before.cardAmount,
+        serviceTotal: c.serviceTotal,
+        productTotal: c.productTotal,
+        productCostTotal: c.productCostTotal,
+        serviceSalaryTotal: c.serviceSalaryTotal,
+        productSalaryTotal: c.productSalaryTotal,
+        totalCost: c.totalCost,
+        profit: c.profit,
+        discount: c.discount,
+        masterId: dto.masterId !== undefined ? dto.masterId : before.masterId,
+        clientId: effectiveClientId,
+        carId: effectiveCarId,
+      };
+      const actorName = await this.resolveActorNameTx(client, tenantID, actorUserId);
+      await this.writeClosedEditAudit(client, actorUserId, actorName, id, prior.number, {
+        tenantId: tenantID,
+        checkNumber: prior.number,
+        before,
+        after,
+      });
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // A closed-check edit moves revenue/profit/cash/salary — drop cached
+    // aggregates and nudge other devices to refetch (mirrors create/fullUpdate).
+    this.invalidateReports(tenantID);
+    this.emitCashChanged(tenantID, actorUserId);
+    return this.getById(id, tenantID);
+  }
+
+  /**
+   * Best-effort display-name resolve for the audit row, on the caller's
+   * transaction connection + tenant-scoped. Never throws (a name lookup must not
+   * abort the money edit) — returns null on any miss/error.
+   */
+  private async resolveActorNameTx(
+    client: PoolClient,
+    tenantID: string,
+    userId: string | null,
+  ): Promise<string | null> {
+    if (!userId) return null;
+    try {
+      const { rows } = await client.query(`SELECT full_name FROM users WHERE id=$1 AND tenant_id=$2 LIMIT 1`, [
+        userId,
+        tenantID,
+      ]);
+      return rows[0]?.full_name ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Append the closed-check-edit audit row IN the caller's transaction (atomic
+   * with the money change). Prefers the shared AuditService writer; falls back
+   * to an inline INSERT so a committed edit is NEVER left un-audited even if the
+   * optional service is absent. Same 068 admin_audit_log table + column set.
+   */
+  private async writeClosedEditAudit(
+    client: PoolClient,
+    actorUserId: string | null,
+    actorName: string | null,
+    checkId: string,
+    checkNumber: unknown,
+    detail: Record<string, unknown>,
+  ): Promise<void> {
+    const target = {
+      targetType: 'check',
+      targetId: checkId,
+      targetName: checkNumber !== null && checkNumber !== undefined ? `#${checkNumber}` : null,
+      detail,
+    };
+    // logTx's AuditActor.userId is a non-null string; only take that path with a
+    // real actor id. A (theoretical) null actor uses the inline INSERT, which
+    // writes actor_user_id = NULL cleanly (an empty string would break the UUID).
+    if (this.audit && actorUserId) {
+      await this.audit.logTx(client, { userId: actorUserId, name: actorName }, 'check_closed_edit', target);
+      return;
+    }
+    await client.query(
+      `INSERT INTO admin_audit_log
+         (actor_user_id, actor_name, action, target_type, target_id, target_name, detail)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+      [actorUserId, actorName, 'check_closed_edit', 'check', checkId, target.targetName, JSON.stringify(detail)],
+    );
   }
 
   async remove(id: string, tenantID: string, userRole: string) {

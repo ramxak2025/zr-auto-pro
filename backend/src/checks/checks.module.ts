@@ -5,6 +5,7 @@ import { WarrantyModule } from '../warranty/warranty.module';
 import { PushModule } from '../push/push.module';
 import { MarketingModule } from '../marketing/marketing.module';
 import { InstallmentsModule } from '../installments/installments.module';
+import { TenantsModule } from '../tenants/tenants.module';
 
 @Module({
   // MarketingModule exports MarketingService — reused (not reimplemented) for the
@@ -15,7 +16,12 @@ import { InstallmentsModule } from '../installments/installments.module';
   // paymentMethod 'installment' creates its installment plan INSIDE the
   // check-create transaction. No cycle: InstallmentsModule does NOT import
   // ChecksModule.
-  imports: [WarrantyModule, PushModule, MarketingModule, InstallmentsModule],
+  //
+  // TenantsModule exports AuditService — reused (same pattern as
+  // NotificationsModule) so the closed-check money edit (#61) appends a
+  // transactional row to admin_audit_log. No cycle: TenantsModule imports only
+  // AuthModule and does NOT import ChecksModule.
+  imports: [WarrantyModule, PushModule, MarketingModule, InstallmentsModule, TenantsModule],
   controllers: [ChecksController],
   providers: [ChecksService],
 })

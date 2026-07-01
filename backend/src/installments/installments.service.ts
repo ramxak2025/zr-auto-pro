@@ -182,6 +182,24 @@ export class InstallmentsService {
     );
   }
 
+  /**
+   * Does an installment plan already exist for this check? Runs on the caller's
+   * transaction connection (PoolClient) so the check sits INSIDE the same
+   * BEGIN/row-lock as the caller's decision. Reused by ChecksService when it
+   * edits a CLOSED check (#61): a check sold in rassrochka carries a debt ledger
+   * (installment_plans + installment_payments) that can't be cleanly re-derived
+   * from the edited totals, so the edit is refused when this returns true — the
+   * owner manages the rassrochka separately. Tenant-scoped; uses
+   * idx_installment_plans_check.
+   */
+  async hasPlanForCheckTx(client: PoolClient, tenantID: string, checkId: string): Promise<boolean> {
+    const { rows } = await client.query(
+      `SELECT 1 FROM installment_plans WHERE tenant_id = $1 AND check_id = $2 LIMIT 1`,
+      [tenantID, checkId],
+    );
+    return rows.length > 0;
+  }
+
   // ─── Operations ─────────────────────────────────────────────────────────
 
   /**

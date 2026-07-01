@@ -1,5 +1,5 @@
 import { Injectable, Inject, Logger } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 
 /**
@@ -84,6 +84,34 @@ export class AuditService {
     } catch (err) {
       this.logger.error(`audit log failed (action=${action}): ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  /**
+   * TRANSACTIONAL audit write — runs the SAME INSERT as {@link log} but on a
+   * caller-supplied transaction connection so the audit row commits ATOMICALLY
+   * with the caller's change. Unlike `log()` this does NOT swallow errors: the
+   * caller has deliberately chosen atomicity (used by ChecksService for the
+   * closed-check money edit #61 — "it's money data", so a committed edit is
+   * GUARANTEED to carry its audit row, and an audit failure rolls the edit back
+   * rather than leaving an un-audited money change). Once a statement errors
+   * inside a transaction Postgres aborts it anyway, so swallowing here would be
+   * a lie; propagating lets the caller's BEGIN/ROLLBACK do the right thing.
+   */
+  async logTx(client: PoolClient, actor: AuditActor, action: string, target: AuditTarget = {}): Promise<void> {
+    await client.query(
+      `INSERT INTO admin_audit_log
+         (actor_user_id, actor_name, action, target_type, target_id, target_name, detail)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+      [
+        actor.userId,
+        actor.name ?? null,
+        action,
+        target.targetType ?? null,
+        target.targetId ?? null,
+        target.targetName ?? null,
+        JSON.stringify(target.detail ?? {}),
+      ],
+    );
   }
 
   /** Recent audit entries for the SUPERADMIN PLATFORM cabinet. */
