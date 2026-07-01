@@ -157,6 +157,16 @@ type ActiveTab = 'checks' | 'warehouse';
 // separator unmounts/remounts between rows).
 const ListGap = () => <View style={{ height: spacing[2] }} />;
 
+// ── Executor accent ────────────────────────────────────────────────────
+// «Исполнитель»: чек, в строке услуг которого текущий мастер назначен
+// исполнителем, но НЕ является его создателем (backend отдаёт
+// `check.isExecutor`). Мастеру нужно с одного взгляда отличать «свои»
+// чеки от «где я просто исполнитель». Берём фиолетовый акцент — заведомо
+// отличный от синего primary (свои чеки) и от красного (отложен/возврат),
+// при этом спокойный и премиальный. Все тинты проводим через softTint,
+// поэтому в light и dark выходит корректно (пастель / приглушённое стекло).
+const EXECUTOR_ACCENT = colors.violet[600];
+
 // ── CheckRow ───────────────────────────────────────────────────────────
 // Memoised journal row. Extracted to module scope so FlashList can
 // recycle the React element without prop identity changing every parent
@@ -198,6 +208,12 @@ const CheckRow = React.memo(function CheckRow({
 }: CheckRowProps) {
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   const badge = getBadgeColors(palette.mode)[badgeKey];
+  // Чек, где текущий мастер — исполнитель, но не автор. Тонируем карточку
+  // и показываем чип «Исполнитель». `execBadge` берём из той же палитры
+  // бейджей, что и способ оплаты рядом, — визуально согласованно и
+  // корректно в обеих темах (light: пастель, dark: приглушённое стекло).
+  const isExecutor = check.isExecutor === true;
+  const execBadge = getBadgeColors(palette.mode).purple;
   // Time string — computed once per row mount; row is memoised, so the
   // `new Date(...).toLocaleTimeString(...)` no longer runs on every
   // parent re-render of the screen.
@@ -217,12 +233,22 @@ const CheckRow = React.memo(function CheckRow({
           styles.checkCard,
           buildShadow(palette),
           {
-            backgroundColor: palette.bg.card,
+            // Свои чеки — без изменений (palette.bg.card). Чек, где мастер лишь
+            // исполнитель, получает мягкий фиолетовый тинт, чтобы отличаться от
+            // «своих» с одного взгляда. Отложенный сохраняет свою карточную
+            // поверхность (его состояние сигналит красная рамка ниже), поэтому
+            // два трактования не конфликтуют.
+            backgroundColor:
+              isExecutor && !check.isDeferred ? softTint(EXECUTOR_ACCENT, palette.mode) : palette.bg.card,
             borderColor: check.isDeferred
               ? palette.mode === 'dark'
                 ? 'rgba(239,68,68,0.3)'
                 : colors.red[100]
-              : palette.border.subtle,
+              : isExecutor
+                ? palette.mode === 'dark'
+                  ? 'rgba(124,58,237,0.35)'
+                  : colors.purple[200]
+                : palette.border.subtle,
           },
           check.isDeferred && styles.checkCardDeferred,
         ]}
@@ -233,13 +259,21 @@ const CheckRow = React.memo(function CheckRow({
         <View
           style={[
             styles.accentBar,
-            check.isDeferred ? { backgroundColor: colors.red[400] } : { backgroundColor: colors.primary[400] },
+            {
+              backgroundColor: check.isDeferred ? colors.red[400] : isExecutor ? EXECUTOR_ACCENT : colors.primary[400],
+            },
           ]}
         />
         <View style={styles.checkContent}>
           <View style={styles.checkHeader}>
             <View style={styles.checkHeaderLeft}>
               <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
+              {isExecutor && (
+                <View style={[styles.executorBadge, { backgroundColor: execBadge.bg }]}>
+                  <Ionicons name="construct" size={9} color={execBadge.text} />
+                  <Text style={[styles.executorBadgeText, { color: execBadge.text }]}>Исполнитель</Text>
+                </View>
+              )}
               {check.isDeferred && (
                 <View
                   style={[
@@ -1896,6 +1930,18 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   deferredText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.red[700] },
+  // «Исполнитель» — компактный фиолетовый чип рядом с номером чека. Тот же
+  // pill-паттерн, что и deferredBadge; цвета приходят inline из getBadgeColors
+  // (purple), поэтому корректны в light и dark.
+  executorBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    paddingHorizontal: spacing[1.5],
+    paddingVertical: 1,
+    borderRadius: borderRadius.full,
+  },
+  executorBadgeText: { fontSize: 9, fontWeight: fontWeight.bold },
   // Возвращённый чек — насыщенно красная плашка с иконкой стрелки.
   // Сильнее «Отложен», потому что возврат — терминальное состояние:
   // редактировать чек больше нельзя.
