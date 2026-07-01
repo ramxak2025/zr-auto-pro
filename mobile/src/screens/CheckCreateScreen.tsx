@@ -81,6 +81,16 @@ import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
+/**
+ * Full-warehouse limit for the shared ['all-products-check', { warehouseId }]
+ * cache slot. MUST mirror `PICKER_PRODUCT_LIMIT` in `ProductPickerModal.tsx`
+ * (module-private there): both observers share one query key, so a smaller
+ * limit here would re-introduce the "bundle component beyond position 500 is
+ * silently dropped" bug the Round 7 audit closed. Effectively "no limit" —
+ * the backend caps the response by tenant size, not by this number.
+ */
+const PICKER_CACHE_PRODUCT_LIMIT = 100000;
+
 function formatMoney(v: number) {
   return (
     Math.round(v)
@@ -588,16 +598,32 @@ export default function CheckCreateScreen() {
     enabled: showServicePicker,
   });
 
-  // Products picker query — CRITICAL screen. Stock numbers must NEVER
-  // be stale here: picking a product is the moment the user commits to
-  // "this is in the warehouse". A cached snapshot showing 5 items when
-  // we actually have 0 ends with a ring-out that can't be fulfilled.
-  // HYBRID-perf plan, part 3: override the global `placeholderData:
-  // prev => prev` and force a fresh fetch on every mount.
+  // Products cache for bundle expansion + the oversell guard — CRITICAL
+  // screen. Stock numbers must NEVER be stale here: picking a product is
+  // the moment the user commits to "this is in the warehouse".
+  //
+  // Round 7 audit #1: this used to be a SEPARATE legacy query on the
+  // un-scoped ['all-products-check'] key with `limit: 500` (main warehouse
+  // only, first 500 by name). On tenants with >500 products a bundle
+  // component beyond position 500 was SILENTLY dropped from the check and
+  // the oversell guard went blind for those products. Now we observe the
+  // exact scoped key ProductPickerModal itself populates
+  // (['all-products-check', { warehouseId }], FULL list — same
+  // PICKER_CACHE_PRODUCT_LIMIT, no 500 cap), so both consumers read the
+  // same complete list the user sees in the picker. While `warehouses` is
+  // still resolving the key falls back to the legacy un-scoped slot warmed
+  // by the login prefetch — a transient window before any interaction is
+  // possible. `enabled: showProductPicker` keeps the fetch discipline
+  // identical to before (fresh fetch on every picker open; React Query
+  // dedupes with the picker's own observer since the key is shared), while
+  // a disabled observer still reads whatever the mount prefetch below /
+  // the picker already cached.
   const { data: allProducts } = useQuery<Product[]>({
-    queryKey: ['all-products-check'],
+    queryKey: pickerWarehouseId ? ['all-products-check', { warehouseId: pickerWarehouseId }] : ['all-products-check'],
     queryFn: async () => {
-      const res = await productsApi.getAll({ limit: 500 });
+      const params: { limit: number; warehouseId?: string } = { limit: PICKER_CACHE_PRODUCT_LIMIT };
+      if (pickerWarehouseId) params.warehouseId = pickerWarehouseId;
+      const res = await productsApi.getAll(params);
       return res.data.data || res.data;
     },
     enabled: showProductPicker,
@@ -648,15 +674,21 @@ export default function CheckCreateScreen() {
   // frame, no "товаров нет" flash. Categories are scoped by the
   // currently-active warehouse so folders never leak across warehouses.
   useEffect(() => {
+    const wid = pickerWarehouseId || activeWarehouse?.id;
+    // Warm the SAME scoped slot the picker + bundle expansion + oversell
+    // guard read (full list, no 500 cap). Until warehouses resolve, fall
+    // back to the legacy un-scoped slot — it stays useful as the picker's
+    // placeholder seed (see ProductPickerModal.placeholderData).
     queryClient.prefetchQuery({
-      queryKey: ['all-products-check'],
+      queryKey: wid ? ['all-products-check', { warehouseId: wid }] : ['all-products-check'],
       queryFn: async () => {
-        const res = await productsApi.getAll({ limit: 500 });
+        const params: { limit: number; warehouseId?: string } = { limit: PICKER_CACHE_PRODUCT_LIMIT };
+        if (wid) params.warehouseId = wid;
+        const res = await productsApi.getAll(params);
         return res.data.data || res.data;
       },
       staleTime: 5 * 60_000,
     });
-    const wid = pickerWarehouseId || activeWarehouse?.id;
     queryClient.prefetchQuery({
       queryKey: wid ? ['warehouse-categories', { warehouseId: wid }] : ['warehouse-categories'],
       queryFn: async () => (await warehouseCategoriesApi.getAll(wid || undefined)).data,
@@ -1195,12 +1227,19 @@ export default function CheckCreateScreen() {
       // After creating / editing a check we have to bust every cache
       // entry that the new revenue / inventory delta touches. The legacy
       // `['dashboard']` invalidation was a no-op (no such key exists).
-      // RNPERF-9: only the Журнал refetches immediately — it's the screen
-      // the user lands on right after a save. Every other (heavy) key is
-      // invalidated with `refetchType: 'inactive'`: hidden-but-mounted
-      // screens are marked stale and refetch on their next visit instead
-      // of firing a 9-request storm during the save transition.
+      // RNPERF-9 + Round 7 audit #2: the Журнал (landing screen after save)
+      // and Склад (mounted tab showing the decremented stock) refetch
+      // immediately; every other heavy key is invalidated with
+      // `refetchType: 'none'` — marked stale, refetched on the next
+      // mount/visit. NOTE: the previous `refetchType: 'inactive'` did the
+      // OPPOSITE of this intent — in query-core 5.x 'inactive' immediately
+      // refetches all UNOBSERVED cache entries (a hidden burst of ~9
+      // requests during the save transition) while mounted screens were
+      // only marked stale. 'none' refetches nothing now; mounted screens
+      // self-heal via their focus-gated 30s polls (Dashboard / CashFlow) /
+      // remounts, exactly as they already did under 'inactive'.
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['products'] });
       const heavyKeys: string[][] = [
         ['checks'],
         ['checks-dashboard'],
@@ -1208,17 +1247,18 @@ export default function CheckCreateScreen() {
         ['dashboard-chart'],
         ['cashflow'],
         ['low-stock'],
-        ['products'],
         // The cash product-picker + the oversell-confirm read stock from
-        // ['all-products-check'] (limit 500), NOT ['products'] — so without
-        // this the NEXT check created in the same session sees pre-decrement
-        // stock and a stale oversell threshold. Mirror ProductsScreen, which
-        // already busts this key on every stock mutation.
+        // ['all-products-check', { warehouseId }] (full list), NOT
+        // ['products'] — so without this the NEXT check created in the same
+        // session sees pre-decrement stock and a stale oversell threshold.
+        // Mirror ProductsScreen, which already busts this key on every stock
+        // mutation. 'none' suffices: the picker query re-fetches on every
+        // open anyway (staleTime 0 + refetchOnMount 'always').
         ['all-products-check'],
         ['warehouse-analytics'],
       ];
       for (const queryKey of heavyKeys) {
-        queryClient.invalidateQueries({ queryKey, refetchType: 'inactive' });
+        queryClient.invalidateQueries({ queryKey, refetchType: 'none' });
       }
 
       // #12: гарантии могли измениться этим чеком (гарантийный случай мог
@@ -1381,8 +1421,9 @@ export default function CheckCreateScreen() {
   const cardAmountCalc = Math.max(total - parseMoneyInput(cashAmount), 0);
 
   // ── M4: oversell guard ─────────────────────────────────────────────
-  // Cached stock per productId from the same ['all-products-check'] cache
-  // the picker reads (prefetched on mount). Quantities are aggregated per
+  // Cached stock per productId from the same scoped
+  // ['all-products-check', { warehouseId }] cache the picker reads
+  // (full list, prefetched on mount). Quantities are aggregated per
   // productId before comparing — addProductLine merges lines, but a
   // template apply can still introduce a second line for the same product.
   // The snapshot can be STALE, so an oversell is a confirm, never a hard
@@ -1453,22 +1494,43 @@ export default function CheckCreateScreen() {
     );
   };
 
-  const addProductLine = (product: Product) => {
+  const addProductLine = async (product: Product) => {
     // Handle bundle products — expand into individual component products
     if (product.isBundle && product.bundleItems && product.bundleItems.length > 0) {
+      // Round 7 audit #1: resolve EVERY component BEFORE touching state.
+      // The scoped cache now covers the whole active warehouse (no 500 cap),
+      // but a component can still be missing (живёт на другом складе, свежая
+      // позиция ещё не в кеше) — point-fetch it by id instead of SILENTLY
+      // dropping the line from the check, which is how комплекты теряли
+      // содержимое on tenants with >500 products. Only an unreachable
+      // component (deleted / network error) keeps the old skip behavior,
+      // and now loudly.
       const productsList = allProducts || [];
+      const resolved: { qty: number; component: Product }[] = [];
+      for (const bi of product.bundleItems) {
+        let component = productsList.find((p) => p.id === bi.productId);
+        if (!component) {
+          try {
+            component = (await productsApi.getById(bi.productId)).data;
+          } catch (err) {
+            console.warn('[CheckCreate] компонент комплекта недоступен — строка пропущена', bi.productId, err);
+            continue;
+          }
+        }
+        if (!component) continue;
+        resolved.push({ qty: bi.quantity || 1, component });
+      }
       setProductLines((prev) => {
         const updated = [...prev];
-        for (const bi of product.bundleItems!) {
-          const bundleProduct = productsList.find((p) => p.id === bi.productId);
-          if (!bundleProduct) continue;
+        for (const { qty, component: bundleProduct } of resolved) {
           const existIdx = updated.findIndex((l) => l.productId === bundleProduct.id);
           if (existIdx >= 0) {
+            const newQty = updated[existIdx].quantity + qty;
             updated[existIdx] = {
               ...updated[existIdx],
-              quantity: updated[existIdx].quantity + (bi.quantity || 1),
-              totalSell: updated[existIdx].sellPrice * (updated[existIdx].quantity + (bi.quantity || 1)),
-              totalCost: updated[existIdx].costPrice * (updated[existIdx].quantity + (bi.quantity || 1)),
+              quantity: newQty,
+              totalSell: updated[existIdx].sellPrice * newQty,
+              totalCost: updated[existIdx].costPrice * newQty,
             };
           } else {
             updated.push({
@@ -1476,9 +1538,9 @@ export default function CheckCreateScreen() {
               name: bundleProduct.name,
               sellPrice: bundleProduct.sellPrice,
               costPrice: bundleProduct.costPrice,
-              quantity: bi.quantity || 1,
-              totalSell: bundleProduct.sellPrice * (bi.quantity || 1),
-              totalCost: bundleProduct.costPrice * (bi.quantity || 1),
+              quantity: qty,
+              totalSell: bundleProduct.sellPrice * qty,
+              totalCost: bundleProduct.costPrice * qty,
             });
           }
         }
@@ -2986,9 +3048,10 @@ export default function CheckCreateScreen() {
 
       {/* Product Picker — extracted into <ProductPickerModal/>. Visual rows
           mirror the warehouse list (`ProductsScreen.tsx`); the modal is
-          virtualised via FlashList and reads from the same
-          `['all-products-check']` cache key prefetched on login + on this
-          screen mount, so opening the picker is a cache-hit, no flash. */}
+          virtualised via FlashList and reads from the same scoped
+          `['all-products-check', { warehouseId }]` cache key this screen
+          prefetches on mount (and login warms the un-scoped fallback slot),
+          so opening the picker is a cache-hit, no flash. */}
       <ProductPickerModal
         visible={showProductPicker}
         onClose={() => setShowProductPicker(false)}

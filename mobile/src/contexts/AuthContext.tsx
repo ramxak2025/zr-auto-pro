@@ -3,6 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import Constants from 'expo-constants';
+// Same alias style as CheckCreateScreen — expo-image is cross-platform, and
+// its static cache-clear methods are the only thing this file needs.
+import { Image as ExpoImage } from 'expo-image';
 import type { QueryClient } from '@tanstack/react-query';
 import {
   authApi,
@@ -449,11 +452,20 @@ let registeredPushToken: string | null = null;
 async function registerPushToken(): Promise<void> {
   try {
     if (Platform.OS === 'android') {
+      // The local notification channel is FCM-independent and cheap — keep it
+      // so any displayed notification keeps its importance settings.
       await Notifications.setNotificationChannelAsync('default', {
         name: 'default',
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
       });
+      // Android FCM не настроен (нет google-services.json), поэтому
+      // getExpoPushTokenAsync падает «Default FirebaseApp is not initialized»
+      // на каждом логине и заспамливает Sentry (issue REACT-NATIVE-7, 26
+      // событий). Пропускаем и запрос permission'а (бессмысленный без FCM),
+      // и регистрацию токена. Включить обратно после добавления
+      // Firebase-проекта. iOS-путь ниже не тронут.
+      return;
     }
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
@@ -693,6 +705,13 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     await AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
     await AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
     await clearPersistentCache().catch(() => {});
+    // Round 7 audit #4: the expo-image disk/memory cache (product photos,
+    // avatars — see CachedImage's `cachePolicy="memory-disk"`) survived
+    // logout, so user B on the same device could still be served user A's
+    // cached bitmaps. Fire-and-forget: losing the image cache only costs a
+    // re-download, and it must never block or fail the logout itself.
+    ExpoImage.clearDiskCache().catch(() => {});
+    ExpoImage.clearMemoryCache().catch(() => {});
     // Wipe the home-screen widget payload — the owner's revenue/profit (or a
     // master's earnings) must never stay visible on the springboard after
     // logout, nor leak into the next user's widget until their dashboard
@@ -722,6 +741,11 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       queryClient?.cancelQueries().catch(() => {});
       queryClient?.clear();
       await clearPersistentCache().catch(() => {});
+      // Round 7 audit #4: same image-cache isolation as logout() — the
+      // superadmin's cached bitmaps must not bleed into the impersonated
+      // tenant's session (fire-and-forget, errors swallowed).
+      ExpoImage.clearDiskCache().catch(() => {});
+      ExpoImage.clearMemoryCache().catch(() => {});
       // Same widget isolation as login(): the superadmin's (or previous
       // session's) widget payload must not survive into the impersonated
       // tenant's session.

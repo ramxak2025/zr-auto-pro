@@ -298,10 +298,15 @@ export default function App() {
       lastInvalidatedAt = now;
       // Money keys mirrored from the write-side invalidations in
       // CheckCreate / CheckDetail / Checks / Salary / CashFlow screens.
+      // Round 7 audit #2: only the two surfaces the user actually watches
+      // live (Главная + Журнал — always-mounted tabs) refetch actively;
+      // cashflow / expenses are just marked stale (`refetchType: 'none'`)
+      // and revalidate via their own focus-gated 30s polls / remount —
+      // a push must never fan out into a hidden refetch storm.
       queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
-      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
-      queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'], refetchType: 'none' });
+      queryClient.invalidateQueries({ queryKey: ['expenses'], refetchType: 'none' });
     });
     return () => sub.remove();
   }, []);
