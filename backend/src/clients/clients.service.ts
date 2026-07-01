@@ -117,7 +117,15 @@ export class ClientsService {
       // a single leading 7/8 stripped. A fragment genuinely starting with 8/7
       // («8444» mid-number) still matches via the raw variant — the OR only
       // widens results.
-      const phoneKey = phoneSearchKey(search);
+      // LETTER GUARD (round 7 item 8a root cause): a query with LETTERS is a
+      // plate or a name, never a phone. Without this, «Х8» extracted digit '8'
+      // and the phone branch LIKE '%8%' matched nearly every client — the
+      // 20-row page filled with phone noise and the real Х8… plate matches
+      // never reached the client, so plate suggestions "didn't work" until the
+      // query got long enough to be selective. Digits-only queries keep the
+      // full phone behaviour.
+      const hasLetters = /[a-zа-яё]/i.test(search);
+      const phoneKey = hasLetters ? '' : phoneSearchKey(search);
       if (phoneKey) {
         const phoneVariants = new Set<string>([phoneKey]);
         if (phoneKey.length >= 2 && (phoneKey[0] === '7' || phoneKey[0] === '8')) {
