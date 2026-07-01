@@ -400,6 +400,12 @@ export default function CheckCreateScreen() {
   // Client/Car selection
   const [clientId, setClientId] = useState('');
   const [carId, setCarId] = useState('');
+  // Check-level master (кому принадлежит чек: на него пишется выручка и ЗП).
+  // Пусто при обычном создании → падает на currentUser (см. defaultMasterId).
+  // В режиме редактирования гидрируется из загруженного чека, чтобы правка
+  // чужого заказ-наряда админом/владельцем НЕ переназначала чек (и зарплату)
+  // на редактирующего.
+  const [masterId, setMasterId] = useState('');
   const [mileage, setMileage] = useState('');
   const [comment, setComment] = useState('');
   const [discount, setDiscount] = useState('');
@@ -503,17 +509,27 @@ export default function CheckCreateScreen() {
   // filtering); the NETWORK query keys off a 300ms-debounced snapshot so
   // typing "Р332РА05" fires one request, not eight (RNPERF-5).
   const normalizedSearch = useMemo(() => normalizePlateForSearch(plateSearch, plateMode), [plateSearch, plateMode]);
-  // ── Phone-aware client search (#57) ───────────────────────────────────────
-  // A Russian plate holds at MOST 6 digits (3 in the main block + 3 region), so
-  // ≥7 digits unambiguously means the master is typing a PHONE, not a plate. We
-  // reduce the input with the shared `phoneSearchKey` (last-10 national digits —
-  // the SAME normalization the backend uses), so «89884444485», «+79884444485»
-  // and «8 (988) 444-44-85» all resolve to one client. When the input ISN'T
-  // phone-like we fall back to the plate-normalized string byte-for-byte, so the
-  // plate path is completely untouched. NB: digits are only typable in INT mode
-  // (the RU mask rejects a leading digit), so phone search runs on the INT tab.
+  // ── Phone-aware client search (#57, progressive) ──────────────────────────
+  // A RU/foreign plate ALWAYS contains letters, so PURE-DIGIT input is a phone.
+  // We reduce the input with the shared `phoneSearchKey` (last-10 national digits
+  // — the SAME normalization the backend uses), so «89884444485», «+79884444485»
+  // and «8 (988) 444-44-85» all resolve to one client, and we search by SUBSTRING
+  // so the list narrows LIVE from the first ~3 digits (owner ask). When the input
+  // carries ANY letter we fall back to the plate-normalized string byte-for-byte,
+  // so the plate/name path is completely untouched. NB: digits are only typable
+  // in INT mode (the RU mask rejects a leading digit), so phone search runs on
+  // the INT tab.
   const phoneKey = useMemo(() => phoneSearchKey(plateSearch), [plateSearch]);
-  const isPhoneSearch = phoneKey.length >= 7;
+  // A RU/foreign plate ALWAYS contains letters, so pure-digit input is a PHONE.
+  // We treat digit-only input of ≥3 as a PROGRESSIVE phone search (narrow the
+  // client list live from the first digits) — while ANY letter keeps the input
+  // on the untouched plate/name path, byte-for-byte as before. Threshold lowered
+  // 7→3 (#57 follow-up: owners want live narrowing, not a match only after the
+  // full 10-digit number). The old 7-digit gate had no letter guard, but a plate
+  // holds ≤6 digits so it never fired on a plate — the `!hasLetters` guard makes
+  // that invariant explicit now that 3-digit plates would otherwise collide.
+  const hasLetters = useMemo(() => /[A-Za-zА-Яа-яЁё]/.test(plateSearch), [plateSearch]);
+  const isPhoneSearch = !hasLetters && phoneKey.length >= 3;
   const currentSearch = isPhoneSearch ? phoneKey : normalizedSearch;
 
   const debouncedPlate = useDebouncedValue(plateSearch, 300);
@@ -522,11 +538,16 @@ export default function CheckCreateScreen() {
     [debouncedPlate, plateMode],
   );
   const debouncedPhoneKey = useMemo(() => phoneSearchKey(debouncedPlate), [debouncedPlate]);
+  const debouncedHasLetters = useMemo(() => /[A-Za-zА-Яа-яЁё]/.test(debouncedPlate), [debouncedPlate]);
   // Value actually sent to the backend `?search=` — the phone key when the
-  // (debounced) input is phone-like, otherwise the plate-normalized string. The
-  // backend matches name, phone (normalized last-10) AND plate, so this one
-  // param covers every case.
-  const networkSearch = debouncedPhoneKey.length >= 7 ? debouncedPhoneKey : debouncedNormalized;
+  // (debounced) input is a digit-only phone (≥3, progressive), otherwise the
+  // plate-normalized string. Mirrors the display `isPhoneSearch` logic so the
+  // `networkSearch === currentSearch` gate below stays consistent. The backend
+  // matches name, phone (normalized last-10 SUBSTRING) AND plate, so this one
+  // param covers every case. NB: in RU mode the plate normaliser drops a leading
+  // digit → for phone input we MUST send the phone key, not the empty normalized
+  // plate, otherwise the query would never fire.
+  const networkSearch = !debouncedHasLetters && debouncedPhoneKey.length >= 3 ? debouncedPhoneKey : debouncedNormalized;
 
   const { data: plateClients, isFetching: isFetchingPlate } = useQuery<Client[]>({
     queryKey: ['clients-plate', networkSearch, plateMode],
@@ -814,6 +835,10 @@ export default function CheckCreateScreen() {
     const c = editCheck;
     setClientId(c.clientId || '');
     setCarId(c.carId || '');
+    // Сохраняем ОРИГИНАЛЬНОГО мастера чека. Без этого payload на сохранении
+    // ушёл бы с masterId редактирующего (defaultMasterId = currentUser), и бэк
+    // переназначил бы заказ-наряд и зарплату на того, кто его открыл (#TASK-A).
+    setMasterId(c.master?.id || c.masterId || '');
     setMileage(c.mileage ? String(c.mileage) : '');
     setComment(c.comment || '');
     setDiscount(c.discount ? String(c.discount) : '');
@@ -1389,7 +1414,10 @@ export default function CheckCreateScreen() {
   const currentUser = authUser;
   // Записи → касса: если приход открыли с конкретным мастером, услуги/товары
   // по умолчанию вешаем на него (param-gated; обычный поток — текущий юзер).
-  const defaultMasterId = (isFromBooking && route.params?.prefillMasterId) || currentUser?.id || '';
+  // Режим редактирования: `masterId` уже гидрирован из чека → сохраняем
+  // оригинального мастера, а не редактирующего (#TASK-A). Новые строки в
+  // редактируемом чеке тоже дефолтятся на его мастера, а не на open'нувшего.
+  const defaultMasterId = masterId || (isFromBooking && route.params?.prefillMasterId) || currentUser?.id || '';
   // Mirror warehouse role gating — directors / admins / superadmins see
   // cost price inside the picker, masters don't. Same predicate as
   // `ProductsScreen.tsx`'s `canSeeCostPrice`.

@@ -12,10 +12,16 @@
  *
  * Дубликат по ТЕЛЕФОНУ ловит сам бэкенд: `POST /clients` возвращает 409
  * `{ code:'CLIENT_PHONE_EXISTS', clientId, client }` (нормализация номера — та
- * же last-10, что и в поиске). В ответ показываем «Клиент с этим номером уже
- * добавлен» + «Перейти к клиенту», который через onSelectExisting подставляет
- * существующего клиента в текущий чек. «Всё равно создать» для телефона нет —
- * бэкенд дубликат по номеру не создаёт. Пустое имя → дружелюбный 400.
+ * же last-10, что и в поиске). Реакция зависит от того, ввёл ли пользователь
+ * авто:
+ *   • ввёл госномер/марку → «Клиент уже есть … Добавить автомобиль X к нему?»,
+ *     по «Да» привязываем машину к существующему клиенту (carsApi.create, или
+ *     переиспользуем найденную по номеру) и через onSelectExisting(clientId,
+ *     carId) подставляем пару в текущий чек — поток кассы не упирается в тупик;
+ *   • авто не вводил → «Клиент уже добавлен» + «Перейти к клиенту»
+ *     (onSelectExisting(clientId)).
+ * «Всё равно создать» для телефона нет — бэкенд дубликат по номеру не создаёт.
+ * Пустое имя → дружелюбный 400.
  */
 import React, { useEffect, useState } from 'react';
 import { View, Text, TextInput, TouchableOpacity, StyleSheet, Alert, ActivityIndicator } from 'react-native';
@@ -85,6 +91,48 @@ export default function QuickClientCreateSheet({
     setSubmitting(false);
   }, [visible, initialPlate, initialPlateMode]);
 
+  /** 409 по ТЕЛЕФОНУ, но пользователь ввёл авто: вместо тупика «просто перейти
+   *  к клиенту» привязываем машину к УЖЕ существующему клиенту и сразу
+   *  подставляем клиента+авто в текущий чек (с госномером). Если такой номер уже
+   *  заведён у этого же клиента — переиспользуем существующую машину, а не
+   *  плодим дубликат. */
+  const attachCarToExisting = async (existingClientId: string, cleanPlate: string) => {
+    setSubmitting(true);
+    try {
+      // Номер мог быть уже заведён у этого клиента — тогда берём его машину.
+      if (cleanPlate.length > 0) {
+        try {
+          const found = await carsApi.lookupByPlate(cleanPlate);
+          if (found.data && found.data.clientId === existingClientId) {
+            haptic('success');
+            onSelectExisting(existingClientId, found.data.id);
+            return;
+          }
+        } catch {
+          // best-effort — при сбое проверки создаём машину ниже.
+        }
+      }
+      const carRes = await carsApi.create({
+        plateNumber: cleanPlate,
+        makeModel: makeModel.trim(),
+        clientId: existingClientId,
+      });
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
+      haptic('success');
+      onSelectExisting(existingClientId, carRes.data.id);
+    } catch (e: any) {
+      const d = e?.response?.data;
+      const friendly =
+        (d && typeof d.message === 'string' && d.message) ||
+        (d && typeof d.error === 'string' && d.error) ||
+        'Не удалось добавить автомобиль к клиенту';
+      Alert.alert('Ошибка', String(friendly));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   /** Создание: (опц. проверка дубля по номеру) → клиент → авто.
    *  Дубликат по ТЕЛЕФОНУ возвращает сам бэкенд (409) — ловим в catch. */
   const submitFlow = async (opts?: { forceCar?: boolean }) => {
@@ -123,17 +171,38 @@ export default function QuickClientCreateSheet({
     } catch (err: any) {
       const status = err?.response?.status;
       const data = err?.response?.data;
-      // 409 — клиент с этим телефоном уже есть. Вместо создания дубликата
-      // (бэкенд его и не даст) предлагаем перейти к существующему и подставить
-      // его в текущий чек через onSelectExisting(clientId).
+      // 409 — клиент с этим телефоном уже есть. Бэкенд дубликат по номеру не
+      // создаёт, поэтому предлагаем перейти к существующему клиенту.
       if (status === 409 && data?.code === 'CLIENT_PHONE_EXISTS' && data?.clientId) {
+        const existingId = String(data.clientId);
+        const existingName =
+          (data?.client && typeof data.client.fullName === 'string' && data.client.fullName) || 'Клиент';
+        const existingPhone = (data?.client && typeof data.client.phone === 'string' && data.client.phone) || '';
+        // Пользователь ввёл авто → не тупик: предлагаем привязать этот
+        // автомобиль к найденному клиенту и сразу подставить пару в чек.
+        const hasCar = cleanPlate.length > 0 || makeModel.trim().length > 0;
+        if (hasCar) {
+          haptic('warning');
+          const plateLabel = cleanPlate || makeModel.trim();
+          Alert.alert(
+            'Клиент уже есть',
+            `${existingName} уже есть в базе${existingPhone ? ` (номер ${formatPhone(existingPhone)})` : ''}. ` +
+              `Добавить автомобиль ${plateLabel} к нему?`,
+            [
+              { text: 'Отмена', style: 'cancel' },
+              { text: 'Да, добавить авто', onPress: () => void attachCarToExisting(existingId, cleanPlate) },
+            ],
+          );
+          return;
+        }
+        // Авто не вводили → прежнее поведение: просто перейти к клиенту.
         haptic('warning');
         Alert.alert(
           'Клиент уже добавлен',
           typeof data?.message === 'string' ? data.message : 'Клиент с этим номером уже добавлен',
           [
             { text: 'Отмена', style: 'cancel' },
-            { text: 'Перейти к клиенту', onPress: () => onSelectExisting(String(data.clientId)) },
+            { text: 'Перейти к клиенту', onPress: () => onSelectExisting(existingId) },
           ],
         );
         return;
