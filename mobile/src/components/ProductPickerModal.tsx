@@ -4,6 +4,8 @@ import {
   Text,
   TouchableOpacity,
   TextInput,
+  ScrollView,
+  RefreshControl,
   StyleSheet,
   Dimensions,
   Animated,
@@ -14,6 +16,7 @@ import {
   AccessibilityInfo,
 } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CachedImage from './CachedImage';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,15 +36,12 @@ import type { Product } from '../../../shared/types';
 // Rapid double-tap window. A second press on the SAME product row within
 // this window is treated as an accidental double-tap and ignored, so an
 // itchy finger adds the item once instead of twice. A deliberate re-add is
-// still possible after the window elapses (or via the qty stepper in the
-// cart). 500 ms comfortably covers an accidental double-bounce without
-// feeling sticky for an intentional second tap.
+// still possible after the window elapses (or via the cart «+» button). 500 ms
+// comfortably covers an accidental double-bounce without feeling sticky for
+// an intentional second tap.
 const ROW_TAP_DEBOUNCE_MS = 500;
 
-const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
-const FOLDER_COLS = 3;
-const FOLDER_GAP = spacing[2];
-const FOLDER_WIDTH = (SCREEN_WIDTH - spacing[4] * 2 - FOLDER_GAP * (FOLDER_COLS - 1)) / FOLDER_COLS;
+const { height: SCREEN_HEIGHT } = Dimensions.get('window');
 
 // Bug #58 — the in-cash picker must list EVERY product of the selected
 // warehouse, fully in sync with the Склад (ProductsScreen) list. The old
@@ -100,6 +100,12 @@ interface ProductPickerModalProps {
   getCartQty?: (productId: string) => number;
   title?: string;
   showCostPrice?: boolean;
+  /**
+   * Legacy folder-grid annotations. The picker no longer drills into folders
+   * (flat list + filter chips now), so this is unused by the current caller —
+   * kept in the public interface for backward compatibility so the parent
+   * needs no edits.
+   */
   folderAnnotations?: Map<string, FolderAnnotation>;
   /**
    * Active warehouse id used to filter the query — when set the picker fires
@@ -120,21 +126,6 @@ interface ProductPickerModalProps {
   warrantyNames?: ReadonlySet<string>;
 }
 
-/**
- * Discriminated row union for the FlashList — folders sit above products
- * in the same virtualised list so we never re-render the whole sheet on
- * folder/product navigation. `header` placeholders the folders grid as a
- * single sticky-ish row at the top so FlashList can recycle every other
- * cell as a product row of the same shape.
- */
-type FolderRow = {
-  type: 'folders';
-  entries: Array<[string, number]>;
-  annotations?: Map<string, FolderAnnotation>;
-};
-type ProductRow = { type: 'product'; product: Product };
-type Row = FolderRow | ProductRow;
-
 interface PickerProductRowItemProps {
   product: Product;
   cartQty: number;
@@ -146,9 +137,9 @@ interface PickerProductRowItemProps {
 }
 
 /**
- * Memoised product row — visual mirror of `ProductsScreen.tsx`'s row at
- * lines ~885-936 so the picker reads as the SAME list, just inside a
- * modal sheet. Differences vs warehouse:
+ * Memoised product row — visual mirror of `ProductsScreen.tsx`'s row so the
+ * picker reads as the SAME list, just inside a modal sheet. Differences vs
+ * warehouse:
  *   - 56x56 photo (warehouse uses 42 — bigger here for thumb-friendly
  *     tap targets in the cash hot path).
  *   - Right column shows stock + cart-qty badge instead of an edit
@@ -227,61 +218,6 @@ const PickerProductRow = React.memo(function PickerProductRow({
   );
 });
 
-interface FolderGridRowProps {
-  entries: Array<[string, number]>;
-  annotations?: Map<string, FolderAnnotation>;
-  onSelect: (name: string) => void;
-  palette: SemanticPalette;
-}
-
-/**
- * Folder grid — three columns, mirror of the inventory folder grid in
- * `ProductsScreen.tsx` (`foldersGrid` style + FOLDER_WIDTH constant).
- * Lives as ONE FlashList row so it recycles cleanly with the product
- * cells below.
- */
-const FolderGridRow = React.memo(function FolderGridRow({
-  entries,
-  annotations,
-  onSelect,
-  palette,
-}: FolderGridRowProps) {
-  return (
-    <View style={styles.foldersGrid}>
-      {entries.map(([name, count]) => {
-        const annotation = annotations?.get(name);
-        return (
-          <TouchableOpacity
-            key={name}
-            style={[
-              styles.folderCard,
-              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-              buildShadow(palette),
-            ]}
-            onPress={() => onSelect(name)}
-            activeOpacity={0.6}
-          >
-            <View style={[styles.folderIconBox, { backgroundColor: palette.accent.primarySoft }]}>
-              <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
-            </View>
-            <Text style={[styles.folderName, { color: palette.text.primary }]} numberOfLines={2}>
-              {name}
-            </Text>
-            <Text style={[styles.folderCount, { color: palette.text.tertiary }]}>
-              {count} {'тов.'}
-            </Text>
-            {annotation ? (
-              <Text style={[styles.folderAnnotation, { color: annotation.color }]} numberOfLines={1}>
-                {annotation.label}
-              </Text>
-            ) : null}
-          </TouchableOpacity>
-        );
-      })}
-    </View>
-  );
-});
-
 export default function ProductPickerModal({
   visible,
   onClose,
@@ -289,24 +225,32 @@ export default function ProductPickerModal({
   getCartQty,
   title = 'Товары',
   showCostPrice = false,
-  folderAnnotations,
   warehouseId,
   warehouseSwitcher,
   warrantyNames,
 }: ProductPickerModalProps) {
   const palette = useColors();
-  const [productPath, setProductPath] = useState<string[]>([]);
+  const insets = useSafeAreaInsets();
   // Inline warehouse-switcher dropdown — local state. NOT a nested
   // RNModal: an RNModal-inside-an-RNModal froze the iOS app during the
   // present transition. An absolute-positioned dropdown sitting inside
   // the picker's own modal container avoids that entirely.
   const [showWarehouseDropdown, setShowWarehouseDropdown] = useState(false);
   // `localSearch` is what the input renders (every keystroke), `productSearch`
-  // is the debounced value that drives the heavy filter+folder useMemo. The
-  // 200 ms debounce keeps the FlashList stable while the user is still
-  // typing, so the rows don't reflow on every character.
+  // is the debounced value that drives the heavy filter useMemo. The 200 ms
+  // debounce keeps the FlashList stable while the user is still typing, so
+  // the rows don't reflow on every character.
   const [localSearch, setLocalSearch] = useState('');
   const [productSearch, setProductSearch] = useState('');
+  // Active folder filter chip. `null` === «Все» (no folder filter). Selecting
+  // the active chip again clears it. Owner-chosen variant A: a flat product
+  // list filtered by a horizontal chip strip instead of drilling into folders
+  // and having to swipe back out to open another folder.
+  const [activeCategory, setActiveCategory] = useState<string | null>(null);
+  // Running-cart review panel expand/collapse.
+  const [cartExpanded, setCartExpanded] = useState(false);
+  // Pull-to-refresh spinner (Task 2 — kill stale product lists).
+  const [refreshing, setRefreshing] = useState(false);
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Per-product last-accepted-tap timestamps for the double-tap guard.
   // Declared up here (not next to `handleSelect`) so `handleClose`, which
@@ -331,6 +275,9 @@ export default function ProductPickerModal({
 
   const handleBarCodeScanned = useCallback(({ data }: { data: string }) => {
     setShowScanner(false);
+    // A scan is a precise lookup — clear any active folder chip so the
+    // scanned item surfaces regardless of which folder it lives in.
+    setActiveCategory(null);
     setLocalSearch(data);
     if (debounceRef.current) clearTimeout(debounceRef.current);
     debounceRef.current = setTimeout(() => setProductSearch(data), 200);
@@ -360,17 +307,11 @@ export default function ProductPickerModal({
   // warehouse filter we keep the legacy `['all-products-check']` key so the
   // login-time prefetch remains a hit.
   //
-  // Cache-FIRST, not fresh-only. The previous version disabled
-  // `placeholderData` and forced `refetchOnMount: 'always'` + `staleTime: 0`
-  // "to never show stale stock" — but that produced the exact bug the owner
-  // reported: opening «Добавить товар» flashed an EMPTY list (or a long
-  // spinner) while the always-on cold fetch ran, even though a perfectly
-  // good cached list was sitting in the QueryClient. We now mirror
-  // ProductsScreen: render the cached list INSTANTLY, then let SWR refresh
-  // the stock numbers in the background within ~150 ms. Stock is still
-  // re-validated on every open (a short `staleTime` means the background
-  // refetch fires), and the order is only committed on submit — so the
-  // numbers the user commits to are fresh, without ever blanking the sheet.
+  // Cache-FIRST, not fresh-only. We render the cached list INSTANTLY, then let
+  // SWR refresh the stock numbers in the background within ~150 ms. Stock is
+  // still re-validated on every open (a short `staleTime` + the explicit
+  // open-revalidate effect below), and the order is only committed on submit —
+  // so the numbers the user commits to are fresh, without ever blanking sheet.
   const queryClient = useQueryClient();
   // Which warehouse is "main"? Needed by the placeholder seeding below —
   // the login-time prefetch and the CheckCreateScreen mount prefetch warm
@@ -421,58 +362,80 @@ export default function ProductPickerModal({
     staleTime: 30_000,
   });
 
-  const { sortedProductFolders, visibleProducts } = useMemo(() => {
+  // Revalidate on open (Task 2 — kill stale product lists). Masters keep the
+  // app open for hours and stock moves under them, so different devices showed
+  // different cached snapshots. Fire a background refetch every time the picker
+  // becomes visible. Cache-first paint is preserved by `placeholderData` + the
+  // persistent cache, so this never blanks the list — it only refreshes the
+  // numbers. `refetch` identity is stable (React Query memoises it), so the
+  // effect runs on each open, not on every render; React Query dedupes if the
+  // mount fetch is already in flight.
+  useEffect(() => {
+    if (visible) refetch();
+  }, [visible, refetch]);
+
+  // Switching warehouse changes the product set; a category chip from the
+  // previous warehouse may not exist here, so clear the folder filter.
+  useEffect(() => {
+    setActiveCategory(null);
+  }, [warehouseId]);
+
+  // Top-level folder chips — one per first-segment category. Tapping a chip
+  // filters the flat list to that folder's whole subtree; «Все» clears it.
+  const categoryChips = useMemo(() => {
     const products = Array.isArray(allProducts) ? allProducts : [];
-    if (productSearch) {
-      const q = productSearch.toLowerCase();
-      return {
-        sortedProductFolders: [] as Array<[string, number]>,
-        visibleProducts: products.filter(
-          (p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)),
-        ),
-      };
-    }
-
-    const subs = new Map<string, number>();
-    const prods: Product[] = [];
-
+    const set = new Set<string>();
     for (const p of products) {
       const cat = p.category || '';
-      const catParts = cat ? cat.split('/') : [];
-      const matchesPath = productPath.every((seg, i) => catParts[i] === seg);
-      if (!matchesPath && productPath.length > 0) continue;
-
-      if (catParts.length > productPath.length) {
-        const folderName = catParts[productPath.length];
-        subs.set(folderName, (subs.get(folderName) || 0) + 1);
-      } else if (catParts.length === productPath.length) {
-        prods.push(p);
-      }
+      if (!cat) continue;
+      const top = cat.split('/')[0].trim();
+      if (top) set.add(top);
     }
+    return Array.from(set).sort((a, b) => a.localeCompare(b));
+  }, [allProducts]);
 
-    if (productPath.length === 0) {
+  // Single flat product list, filtered by the active chip AND the search text
+  // together. No folder drill-in/out — the whole warehouse is one list.
+  const visibleProducts = useMemo(() => {
+    let list = Array.isArray(allProducts) ? allProducts : [];
+    if (activeCategory) {
+      list = list.filter((p) => {
+        const cat = p.category || '';
+        return cat === activeCategory || cat.startsWith(`${activeCategory}/`);
+      });
+    }
+    if (productSearch) {
+      const q = productSearch.toLowerCase();
+      list = list.filter(
+        (p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)),
+      );
+    }
+    return list;
+  }, [allProducts, activeCategory, productSearch]);
+
+  // Running cart — derived from the parent's truth via `getCartQty`. We only
+  // have an ADD callback (`onSelectProduct`) + a qty READER (`getCartQty`),
+  // so the picker scans the loaded product list for anything with qty > 0 to
+  // render the cart summary (count + total) and the review rows. One linear
+  // pass; recomputed when the product list or the cart changes.
+  const cart = useMemo(() => {
+    const products = Array.isArray(allProducts) ? allProducts : [];
+    const items: Array<{ product: Product; qty: number }> = [];
+    let totalQty = 0;
+    let totalSum = 0;
+    if (getCartQty) {
       for (const p of products) {
-        if (!p.category && !prods.includes(p)) prods.push(p);
+        const qty = getCartQty(p.id);
+        if (qty > 0) {
+          items.push({ product: p, qty });
+          totalQty += qty;
+          totalSum += p.sellPrice * qty;
+        }
       }
+      items.sort((a, b) => a.product.name.localeCompare(b.product.name));
     }
-
-    return {
-      sortedProductFolders: Array.from(subs.entries()).sort((a, b) => a[0].localeCompare(b[0])),
-      visibleProducts: prods,
-    };
-  }, [allProducts, productPath, productSearch]);
-
-  // Compose folders + products into ONE list so FlashList virtualises the
-  // whole sheet (no nested ScrollView, no over-rendering). The folders
-  // grid lives in row 0, products fill the rest.
-  const rows = useMemo<Row[]>(() => {
-    const out: Row[] = [];
-    if (!productSearch && sortedProductFolders.length > 0) {
-      out.push({ type: 'folders', entries: sortedProductFolders, annotations: folderAnnotations });
-    }
-    for (const p of visibleProducts) out.push({ type: 'product', product: p });
-    return out;
-  }, [productSearch, sortedProductFolders, visibleProducts, folderAnnotations]);
+    return { items, totalQty, totalSum };
+  }, [allProducts, getCartQty]);
 
   // Card slide-up entrance. We drive it ourselves (instead of RNModal's
   // built-in `animationType="slide"`) so the ModalBlurBackdrop stays a
@@ -507,8 +470,24 @@ export default function ProductPickerModal({
     }
   }, [visible, cardTranslateY]);
 
-  // Swipe-to-go-back from the folder navigation
+  const handleClose = useCallback(() => {
+    setLocalSearch('');
+    setProductSearch('');
+    setActiveCategory(null);
+    setCartExpanded(false);
+    // Drop any per-product double-tap locks so the next open starts clean.
+    lastTapRef.current.clear();
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    onClose();
+  }, [onClose]);
+
+  // Edge-swipe-to-close. There's no folder navigation to pop anymore, so a
+  // rightward swipe from the left edge simply dismisses the sheet. A ref keeps
+  // the closure pointing at the latest `handleClose` without re-creating the
+  // PanResponder.
   const panX = useRef(new Animated.Value(0)).current;
+  const handleCloseRef = useRef(handleClose);
+  handleCloseRef.current = handleClose;
   const panResponder = useRef(
     PanResponder.create({
       onMoveShouldSetPanResponder: (_, gs) => gs.dx > 15 && Math.abs(gs.dx) > Math.abs(gs.dy) * 1.5 && gs.x0 < 40,
@@ -516,34 +495,18 @@ export default function ProductPickerModal({
         if (gs.dx > 0) panX.setValue(gs.dx);
       },
       onPanResponderRelease: (_, gs) => {
-        if (gs.dx > 100) {
-          if (productPath.length > 0) {
-            setProductPath((prev) => prev.slice(0, -1));
-          } else {
-            handleClose();
-          }
-        }
+        if (gs.dx > 100) handleCloseRef.current();
         Animated.spring(panX, { toValue: 0, useNativeDriver: true }).start();
       },
     }),
   ).current;
 
-  const handleClose = useCallback(() => {
-    setLocalSearch('');
-    setProductSearch('');
-    setProductPath([]);
-    // Drop any per-product double-tap locks so the next open starts clean.
-    lastTapRef.current.clear();
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    onClose();
-  }, [onClose]);
-
-  // Double-tap guard. We DON'T disable the row in React state (that would
-  // force a re-render of the whole virtualised list on every tap and fight
-  // FlashList recycling); instead we gate on the cheap imperative
+  // Double-tap guard on product ROWS. We DON'T disable the row in React state
+  // (that would force a re-render of the whole virtualised list on every tap
+  // and fight FlashList recycling); instead we gate on the cheap imperative
   // `lastTapRef` map declared above. An accidental rapid double-tap on the
-  // same product fires `onSelectProduct` only ONCE; a deliberate re-add
-  // after `ROW_TAP_DEBOUNCE_MS` (or the qty stepper in the cart) still works.
+  // same product fires `onSelectProduct` only ONCE; a deliberate re-add after
+  // `ROW_TAP_DEBOUNCE_MS` (or the cart «+» button) still works.
   const handleSelect = useCallback(
     (product: Product) => {
       const now = Date.now();
@@ -561,27 +524,47 @@ export default function ProductPickerModal({
     [onSelectProduct],
   );
 
-  const handleEnterFolder = useCallback((name: string) => {
-    setProductPath((prev) => [...prev, name]);
+  // Explicit «+» in the cart review — an intentional increment, so it is NOT
+  // subject to the accidental-double-tap guard (a master may bump qty quickly).
+  const handleCartAdd = useCallback(
+    (product: Product) => {
+      haptic('tap');
+      onSelectProduct(product);
+    },
+    [onSelectProduct],
+  );
+
+  const handleDone = useCallback(() => {
+    haptic('tap');
+    handleClose();
+  }, [handleClose]);
+
+  const selectCategory = useCallback((next: string | null) => {
+    haptic('select');
+    setActiveCategory(next);
   }, []);
 
+  // Pull-to-refresh (Task 2). Invalidate EVERY warehouse slot of the picker
+  // cache (['all-products-check', ...]) so main/defect/used all refresh,
+  // mirroring ProductsScreen.onRefresh. `invalidateQueries` refetches the
+  // active (currently-mounted) query and the awaited promise resolves when
+  // that network round-trip finishes, so the spinner reflects real work.
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+    } finally {
+      setRefreshing(false);
+    }
+  }, [queryClient]);
+
   const renderItem = useCallback(
-    ({ item }: { item: Row }) => {
-      if (item.type === 'folders') {
-        return (
-          <FolderGridRow
-            entries={item.entries}
-            annotations={item.annotations}
-            onSelect={handleEnterFolder}
-            palette={palette}
-          />
-        );
-      }
-      const qty = getCartQty ? getCartQty(item.product.id) : 0;
-      const underWarranty = warrantyNames ? warrantyNames.has(item.product.name.trim().toLowerCase()) : false;
+    ({ item }: { item: Product }) => {
+      const qty = getCartQty ? getCartQty(item.id) : 0;
+      const underWarranty = warrantyNames ? warrantyNames.has(item.name.trim().toLowerCase()) : false;
       return (
         <PickerProductRow
-          product={item.product}
+          product={item}
           cartQty={qty}
           showCostPrice={showCostPrice}
           underWarranty={underWarranty}
@@ -590,15 +573,10 @@ export default function ProductPickerModal({
         />
       );
     },
-    [getCartQty, handleEnterFolder, handleSelect, showCostPrice, warrantyNames, palette],
+    [getCartQty, handleSelect, showCostPrice, warrantyNames, palette],
   );
 
-  const keyExtractor = useCallback((item: Row, index: number) => {
-    if (item.type === 'folders') return `folders-${index}`;
-    return item.product.id;
-  }, []);
-
-  const getItemType = useCallback((item: Row) => item.type, []);
+  const keyExtractor = useCallback((item: Product) => item.id, []);
 
   // First-load skeleton fires ONLY when there is no data at all yet
   // (`data === undefined`). When `data` is `[]` we trust the query and
@@ -609,13 +587,11 @@ export default function ProductPickerModal({
   // state, or QueryErrorState with «Повторить». The error branch only
   // fires when there is NO data to show (cold cache + both fetch attempts
   // failed); with stale data present the list stays up and the background
-  // refetch failure is silent (stale-while-revalidate contract). Without
-  // this branch an errored cold query rendered a completely BLANK sheet
-  // forever: skeleton was off (isLoading false once status==='error') and
-  // the FlashList empty-component resolved to `null`.
+  // refetch failure is silent (stale-while-revalidate contract).
   const showInitialSkeleton = visible && allProducts === undefined && isLoading;
   const showErrorState = visible && allProducts === undefined && isError;
   const queryResolvedEmpty = visible && Array.isArray(allProducts) && allProducts.length === 0;
+  const hasActiveFilter = !!productSearch || !!activeCategory;
 
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
@@ -640,11 +616,8 @@ export default function ProductPickerModal({
           </View>
 
           {/* Header — close button on the left, title centered, warehouse
-              switcher pill on the right. Owner ask: "не просто над поиском
-              справа в шапке этого окна справа от Товары и там нет все
-              склады! там конкретно должны переключаться не смешиваясь."
-              The pill is presentational; tapping it opens the parent's
-              bottom-sheet so this component stays dumb. */}
+              switcher pill on the right. The pill is presentational; tapping
+              it toggles the inline dropdown so this component stays dumb. */}
           <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
             <TouchableOpacity onPress={handleClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
               <Ionicons name="close" size={22} color={palette.text.secondary} />
@@ -770,76 +743,195 @@ export default function ProductPickerModal({
             </View>
           </RNModal>
 
-          {/* Breadcrumbs */}
-          {!productSearch && productPath.length > 0 ? (
-            <View style={styles.breadcrumbRow}>
-              <TouchableOpacity onPress={() => setProductPath([])} style={styles.breadcrumbItem}>
-                <Ionicons name="home-outline" size={14} color={colors.primary[600]} />
-              </TouchableOpacity>
-              {productPath.map((seg, i) => (
-                <React.Fragment key={`${seg}-${i}`}>
-                  <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
-                  <TouchableOpacity
-                    onPress={() => setProductPath((prev) => prev.slice(0, i + 1))}
-                    style={styles.breadcrumbItem}
-                  >
-                    <Text
-                      style={[
-                        styles.breadcrumbText,
-                        i === productPath.length - 1 && {
-                          color: palette.text.primary,
-                          fontWeight: fontWeight.bold,
-                        },
-                      ]}
-                    >
-                      {seg}
-                    </Text>
-                  </TouchableOpacity>
-                </React.Fragment>
+          {/* Folder filter chips — horizontal, single-select, «Все» resets.
+              Replaces the old folder grid + drill-in/out: tapping a chip
+              filters the one flat list, no entering/leaving folders. Pinned
+              under the search so it's always reachable while scrolling. */}
+          {categoryChips.length > 0 ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              style={styles.chipStripWrap}
+              contentContainerStyle={styles.chipStrip}
+            >
+              <ChipButton
+                label="Все"
+                active={activeCategory === null}
+                onPress={() => selectCategory(null)}
+                palette={palette}
+              />
+              {categoryChips.map((c) => (
+                <ChipButton
+                  key={c}
+                  label={c}
+                  active={activeCategory === c}
+                  onPress={() => selectCategory(activeCategory === c ? null : c)}
+                  palette={palette}
+                />
               ))}
+            </ScrollView>
+          ) : null}
+
+          {/* Body — skeleton on cold start, error+retry when the fetch died
+              with no cache to fall back on, FlashList otherwise. Wrapped in a
+              flex:1 region so the running-cart bar always pins to the bottom. */}
+          <View style={styles.body}>
+            {showInitialSkeleton ? (
+              <View style={styles.skeletonWrap}>
+                <ListSkeleton count={8} />
+              </View>
+            ) : showErrorState ? (
+              <View style={styles.stateWrap}>
+                <QueryErrorState
+                  title={'Не удалось загрузить товары'}
+                  description={'Проверьте соединение и попробуйте ещё раз'}
+                  onRetry={() => refetch()}
+                />
+              </View>
+            ) : (
+              <FlashList
+                data={visibleProducts}
+                renderItem={renderItem}
+                keyExtractor={keyExtractor}
+                keyboardShouldPersistTaps="handled"
+                contentContainerStyle={styles.listContent}
+                removeClippedSubviews
+                refreshControl={
+                  <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+                }
+                ListEmptyComponent={
+                  queryResolvedEmpty ? (
+                    <View style={styles.empty}>
+                      <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
+                      <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Нет товаров'}</Text>
+                    </View>
+                  ) : hasActiveFilter ? (
+                    <View style={styles.empty}>
+                      <Ionicons name="search-outline" size={40} color={palette.text.tertiary} />
+                      <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Ничего не найдено'}</Text>
+                    </View>
+                  ) : null
+                }
+              />
+            )}
+          </View>
+
+          {/* Running cart review — expandable list of what's in the check so
+              far. Increment-only «+» (the picker's public contract exposes an
+              add callback + a qty reader, no decrement). Bounded height so it
+              never eats the whole list. */}
+          {cartExpanded && cart.items.length > 0 ? (
+            <View
+              style={[styles.cartPanel, { backgroundColor: palette.bg.card, borderTopColor: palette.border.subtle }]}
+            >
+              <ScrollView style={styles.cartScroll} keyboardShouldPersistTaps="handled">
+                {cart.items.map(({ product, qty }) => (
+                  <View key={product.id} style={[styles.cartRow, { borderBottomColor: palette.border.subtle }]}>
+                    <Text style={[styles.cartRowName, { color: palette.text.primary }]} numberOfLines={1}>
+                      {product.name}
+                    </Text>
+                    <Text style={[styles.cartRowMeta, { color: palette.text.tertiary }]}>
+                      {qty} × {formatMoney(product.sellPrice)}
+                    </Text>
+                    <Text style={[styles.cartRowSum, { color: palette.text.primary }]}>
+                      {formatMoney(product.sellPrice * qty)}
+                    </Text>
+                    <TouchableOpacity
+                      onPress={() => handleCartAdd(product)}
+                      style={[styles.cartRowPlus, { backgroundColor: palette.accent.primarySoft }]}
+                      hitSlop={6}
+                      accessibilityLabel={`Добавить ещё: ${product.name}`}
+                    >
+                      <Ionicons name="add" size={18} color={palette.accent.primaryText} />
+                    </TouchableOpacity>
+                  </View>
+                ))}
+              </ScrollView>
             </View>
           ) : null}
 
-          {/* Body — skeleton on cold start, error+retry when the fetch
-              died with no cache to fall back on, FlashList otherwise */}
-          {showInitialSkeleton ? (
-            <View style={styles.skeletonWrap}>
-              <ListSkeleton count={8} />
-            </View>
-          ) : showErrorState ? (
-            <QueryErrorState
-              title={'Не удалось загрузить товары'}
-              description={'Проверьте соединение и попробуйте ещё раз'}
-              onRetry={() => refetch()}
-            />
-          ) : (
-            <FlashList
-              data={rows}
-              renderItem={renderItem}
-              keyExtractor={keyExtractor}
-              getItemType={getItemType}
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={styles.listContent}
-              ListEmptyComponent={
-                queryResolvedEmpty ? (
-                  <View style={styles.empty}>
-                    <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
-                    <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Нет товаров'}</Text>
+          {/* Running-cart bar — pinned to the bottom above the home indicator.
+              Left = tappable summary (count + total, toggles the review panel);
+              right = «Готово» (commit action = close, adds are already applied
+              incrementally to the parent's check). */}
+          <View
+            style={[
+              styles.cartBar,
+              {
+                backgroundColor: palette.bg.elevated,
+                borderTopColor: palette.border.subtle,
+                paddingBottom: Math.max(insets.bottom, spacing[2]),
+              },
+            ]}
+          >
+            {cart.items.length > 0 ? (
+              <Pressable
+                style={styles.cartSummary}
+                onPress={() => setCartExpanded((v) => !v)}
+                accessibilityLabel="Показать корзину"
+              >
+                <View style={[styles.cartIconWrap, { backgroundColor: palette.accent.primarySoft }]}>
+                  <Ionicons name="cart" size={18} color={palette.accent.primaryText} />
+                  <View style={styles.cartCountBadge}>
+                    <Text style={styles.cartCountBadgeText}>{cart.totalQty}</Text>
                   </View>
-                ) : productSearch ? (
-                  <View style={styles.empty}>
-                    <Ionicons name="search-outline" size={40} color={palette.text.tertiary} />
-                    <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Ничего не найдено'}</Text>
-                  </View>
-                ) : null
-              }
-            />
-          )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.cartTotalLabel, { color: palette.text.tertiary }]}>В чеке</Text>
+                  <Text style={[styles.cartTotalValue, { color: palette.text.primary }]} numberOfLines={1}>
+                    {formatMoney(cart.totalSum)}
+                  </Text>
+                </View>
+                <Ionicons name={cartExpanded ? 'chevron-down' : 'chevron-up'} size={18} color={palette.text.tertiary} />
+              </Pressable>
+            ) : (
+              <View style={styles.cartSummary}>
+                <Text style={[styles.cartEmptyHint, { color: palette.text.tertiary }]}>
+                  Нажмите на товар, чтобы добавить
+                </Text>
+              </View>
+            )}
+            <TouchableOpacity style={styles.doneBtn} onPress={handleDone} activeOpacity={0.85}>
+              <Text style={styles.doneBtnText}>Готово</Text>
+            </TouchableOpacity>
+          </View>
         </Animated.View>
       </View>
     </RNModal>
   );
 }
+
+interface ChipButtonProps {
+  label: string;
+  active: boolean;
+  onPress: () => void;
+  palette: SemanticPalette;
+}
+
+/**
+ * Folder filter chip — pill mirror of the app's other chip strips (knowledge
+ * FilterChips / ChecksScreen employee chips): filled accent when active,
+ * hairline card when idle.
+ */
+const ChipButton = React.memo(function ChipButton({ label, active, onPress, palette }: ChipButtonProps) {
+  return (
+    <Pressable
+      onPress={onPress}
+      style={[
+        styles.chip,
+        {
+          backgroundColor: active ? palette.accent.primary : palette.bg.card,
+          borderColor: active ? palette.accent.primary : palette.border.subtle,
+        },
+      ]}
+    >
+      <Text style={[styles.chipText, { color: active ? colors.white : palette.text.secondary }]} numberOfLines={1}>
+        {label}
+      </Text>
+    </Pressable>
+  );
+});
 
 const styles = StyleSheet.create({
   // Transparent host: the dim is now a frosted ModalBlurBackdrop
@@ -884,10 +976,9 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
   },
   searchInput: { flex: 1, fontSize: fontSize.sm, color: colors.gray[900], paddingVertical: 0 },
-  // Warehouse switcher pill — lives in the modal HEADER on the right
-  // of the title (owner ask: "справа в шапке этого окна справа от
-  // Товары"). Compact iosPill-family chip: pale primary fill,
-  // hairline tint border, chevron-down icon hinting the bottom-sheet.
+  // Warehouse switcher pill — lives in the modal HEADER on the right of the
+  // title. Compact iosPill-family chip: pale primary fill, hairline tint
+  // border, chevron-down icon hinting the dropdown.
   headerWarehouseChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -906,10 +997,10 @@ const styles = StyleSheet.create({
     color: colors.primary[700],
     letterSpacing: -0.1,
   },
-  // Inline dropdown surface — anchored just below the header. Renders
-  // INSIDE the picker's RNModal so iOS doesn't need to coordinate a
-  // second modal present transition. Soft drop shadow + hairline rim
-  // so it floats above the search row.
+  // Inline dropdown surface — anchored just below the header. Renders INSIDE
+  // the picker's RNModal so iOS doesn't need to coordinate a second modal
+  // present transition. Soft drop shadow + hairline rim so it floats above
+  // the search row.
   warehouseDropdown: {
     marginHorizontal: spacing[4],
     marginTop: 4,
@@ -944,58 +1035,23 @@ const styles = StyleSheet.create({
     color: colors.gray[500],
     marginTop: 1,
   },
-  breadcrumbRow: {
+  // Folder filter chips
+  chipStripWrap: { flexGrow: 0, marginBottom: spacing[1] },
+  chipStrip: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
-    gap: spacing[1],
+    gap: spacing[2],
     paddingHorizontal: spacing[4],
-    paddingBottom: spacing[1],
+    paddingVertical: spacing[1],
   },
-  breadcrumbItem: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], paddingVertical: 2 },
-  breadcrumbText: { fontSize: fontSize.xs, color: colors.primary[600], fontWeight: fontWeight.medium },
-  // Folders — three-column grid, mirror of ProductsScreen.foldersGrid /
-  // folderCard / folderIconBox so the picker reads as the same surface.
-  foldersGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: FOLDER_GAP,
-    paddingHorizontal: spacing[4],
-    paddingTop: spacing[2],
-    paddingBottom: spacing[3],
+  chip: {
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    maxWidth: 200,
   },
-  folderCard: {
-    width: FOLDER_WIDTH,
-    backgroundColor: colors.white,
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    borderColor: colors.gray[100],
-    padding: spacing[3],
-    alignItems: 'center',
-    gap: spacing[1],
-    shadowColor: colors.black,
-    shadowOpacity: 0.04,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  folderIconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: borderRadius.lg,
-    backgroundColor: colors.primary[50],
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing[1],
-  },
-  folderName: {
-    fontSize: 11,
-    fontWeight: fontWeight.semibold,
-    color: colors.gray[900],
-    textAlign: 'center',
-    lineHeight: 14,
-  },
-  folderCount: { fontSize: 10, color: colors.gray[400], marginTop: 2 },
-  folderAnnotation: { fontSize: 9, fontWeight: fontWeight.medium, marginTop: 2, textAlign: 'center' },
+  chipText: { fontSize: 13, fontWeight: fontWeight.semibold, letterSpacing: -0.1 },
   // Products — visual mirror of ProductsScreen.productCard / productRow.
   // 56-pt photo (warehouse uses 42) for thumb-friendly cash hot-path taps.
   productCard: {
@@ -1005,7 +1061,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.gray[200],
   },
-  productCardPressed: { backgroundColor: colors.gray[50] },
   productRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
   productPhoto: { width: 56, height: 56, borderRadius: borderRadius.lg },
   productPhotoPlaceholder: {
@@ -1059,10 +1114,75 @@ const styles = StyleSheet.create({
   },
   cartBadgeText: { fontSize: 12, fontWeight: fontWeight.bold, color: colors.white },
   // List
-  listContent: { paddingBottom: spacing[12] },
+  body: { flex: 1, minHeight: 0 },
+  listContent: { paddingBottom: spacing[4] },
   skeletonWrap: { flex: 1, paddingTop: spacing[2] },
+  stateWrap: { flex: 1, justifyContent: 'center' },
   empty: { alignItems: 'center', paddingVertical: spacing[10] },
   emptyText: { color: colors.gray[400], marginTop: spacing[2], fontSize: fontSize.sm },
+  // Running-cart review panel + bar
+  cartPanel: { borderTopWidth: StyleSheet.hairlineWidth },
+  cartScroll: { maxHeight: SCREEN_HEIGHT * 0.28 },
+  cartRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  cartRowName: { flex: 1, fontSize: 14, fontWeight: fontWeight.semibold, letterSpacing: -0.1 },
+  cartRowMeta: { fontSize: 12 },
+  cartRowSum: { fontSize: 13, fontWeight: fontWeight.semibold, minWidth: 68, textAlign: 'right' },
+  cartRowPlus: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginLeft: spacing[1],
+  },
+  cartBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[2.5],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  cartSummary: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  cartIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartCountBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -6,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: colors.primary[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  cartCountBadgeText: { fontSize: 11, fontWeight: fontWeight.bold, color: colors.white },
+  cartTotalLabel: { fontSize: 11 },
+  cartTotalValue: { fontSize: 17, fontWeight: fontWeight.bold, letterSpacing: -0.3 },
+  cartEmptyHint: { fontSize: 13 },
+  doneBtn: {
+    backgroundColor: colors.primary[600],
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[6],
+    paddingVertical: spacing[3],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  doneBtnText: { color: colors.white, fontSize: 15, fontWeight: fontWeight.bold, letterSpacing: -0.1 },
   // Barcode scanner
   scannerContainer: { flex: 1, backgroundColor: '#000' },
   scannerOverlay: {
