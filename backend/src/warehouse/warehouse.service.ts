@@ -66,11 +66,13 @@ export class WarehouseService {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // A LIVE folder with this path already exists → return it (idempotent).
       const { rows: existing } = await client.query(
         `SELECT id, path, COALESCE(sort_order, 0) as sort_order
            FROM warehouse_categories
           WHERE tenant_id = $1
             AND path = $2
+            AND deleted_at IS NULL
             AND (warehouse_id = $3 OR ($3 IS NULL AND warehouse_id IS NULL))
           LIMIT 1`,
         [tenantID, path, resolvedWarehouseId],
@@ -78,6 +80,27 @@ export class WarehouseService {
       if (existing.length > 0) {
         await client.query('COMMIT');
         return existing[0];
+      }
+      // A soft-deleted folder with this path exists → REVIVE it instead of
+      // inserting a duplicate. This makes "re-create a trashed folder by name"
+      // behave as a restore (keeps its id + sort_order) and avoids the unique
+      // index (which after migration 105 covers live rows only).
+      const { rows: revived } = await client.query(
+        `UPDATE warehouse_categories SET deleted_at = NULL
+          WHERE id = (
+            SELECT id FROM warehouse_categories
+             WHERE tenant_id = $1
+               AND path = $2
+               AND deleted_at IS NOT NULL
+               AND (warehouse_id = $3 OR ($3 IS NULL AND warehouse_id IS NULL))
+             LIMIT 1
+          )
+         RETURNING id, path, COALESCE(sort_order, 0) as sort_order`,
+        [tenantID, path, resolvedWarehouseId],
+      );
+      if (revived.length > 0) {
+        await client.query('COMMIT');
+        return revived[0];
       }
       const { rows } = await client.query(
         `INSERT INTO warehouse_categories (path, tenant_id, warehouse_id)
@@ -95,10 +118,31 @@ export class WarehouseService {
     }
   }
 
+  /**
+   * Soft-delete a folder — EMPTY or FULL — reversibly (#60).
+   *
+   * The category row (and every subfolder row) is stamped with `deleted_at`
+   * instead of being physically removed, so a folder delete is never a
+   * hard-delete and can be undone. Product handling depends on the caller's
+   * intent, and NOTHING is ever hard-deleted here:
+   *
+   *   • deleteContents=true → cascade soft-delete every live product in the
+   *     folder/subfolders to the Корзина. Folder + products go to trash TOGETHER
+   *     (same transaction timestamp). Reversible: restoring the products from
+   *     the trash brings the folder back too (the picker derives folders from
+   *     each product's `category` path), and re-creating the folder by name
+   *     revives its row (see createCategory). No product is lost.
+   *   • moveProductsTo provided → move the live products to that folder (or to
+   *     root when empty), then soft-delete the now-empty folder row.
+   *   • neither → move the live products to root, then soft-delete the folder row.
+   *
+   * Empty folders simply have their row soft-deleted (nothing to cascade).
+   */
   async removeCategory(id: string, tenantID: string, moveProductsTo?: string, deleteContents?: boolean) {
-    // Find the path of the category being deleted
+    // Find the path of the (live) category being deleted. An already-trashed
+    // folder is a no-op — keeps the endpoint idempotent.
     const { rows: catRows } = await this.pool.query(
-      'SELECT path FROM warehouse_categories WHERE id=$1 AND tenant_id=$2',
+      'SELECT path FROM warehouse_categories WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
       [id, tenantID],
     );
     if (catRows.length === 0) return { message: 'Не найдено' };
@@ -124,23 +168,25 @@ export class WarehouseService {
         const target = moveProductsTo || null;
         await client.query(
           `UPDATE products SET category=$3
-           WHERE tenant_id=$1 AND (category=$2 OR category LIKE $2 || '/%')`,
+           WHERE tenant_id=$1 AND deleted_at IS NULL AND (category=$2 OR category LIKE $2 || '/%')`,
           [tenantID, deletedPath, target],
         );
       } else {
         // Default: clear category (move to root)
         await client.query(
           `UPDATE products SET category=NULL
-           WHERE tenant_id=$1 AND (category=$2 OR category LIKE $2 || '/%')`,
+           WHERE tenant_id=$1 AND deleted_at IS NULL AND (category=$2 OR category LIKE $2 || '/%')`,
           [tenantID, deletedPath],
         );
       }
 
-      // Delete the category and all subcategories
-      await client.query(`DELETE FROM warehouse_categories WHERE tenant_id=$1 AND (path=$2 OR path LIKE $2 || '/%')`, [
-        tenantID,
-        deletedPath,
-      ]);
+      // Soft-delete the folder and all subfolders (reversible — never a hard
+      // DELETE). Only touches live rows so a re-run stays a no-op.
+      await client.query(
+        `UPDATE warehouse_categories SET deleted_at = NOW()
+         WHERE tenant_id=$1 AND deleted_at IS NULL AND (path=$2 OR path LIKE $2 || '/%')`,
+        [tenantID, deletedPath],
+      );
 
       await client.query('COMMIT');
     } catch (err) {
@@ -175,8 +221,10 @@ export class WarehouseService {
   }
 
   async renameCategory(id: string, tenantID: string, newPath: string) {
+    // Only a live folder can be renamed (trashed rows now exist after #60's
+    // soft-delete and must not be reachable through rename).
     const { rows: catRows } = await this.pool.query(
-      'SELECT path FROM warehouse_categories WHERE id=$1 AND tenant_id=$2',
+      'SELECT path FROM warehouse_categories WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
       [id, tenantID],
     );
     if (catRows.length === 0) throw new BadRequestException({ message: 'Категория не найдена' });

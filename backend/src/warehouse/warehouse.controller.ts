@@ -2,9 +2,10 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards, Query } f
 import { WarehouseService } from './warehouse.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('warehouse')
 export class WarehouseController {
   constructor(private warehouseService: WarehouseService) {}
@@ -32,7 +33,12 @@ export class WarehouseController {
     return this.warehouseService.createCategory(user.tenantID, path, warehouseId);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  // Delete a folder — EMPTY or FULL. Soft-delete only (reversible): the category
+  // row is stamped with deleted_at (never hard-deleted), and with
+  // `deleteContents=true` the products inside cascade to the Корзина. Gated by
+  // the grantable `warehouse_delete` permission (#60): owner-class always
+  // allowed; a master only if the owner granted it.
+  @RequirePermission('warehouse_delete')
   @Delete('categories/:id')
   removeCategory(
     @Param('id') id: string,

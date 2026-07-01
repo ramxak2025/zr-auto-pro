@@ -9,9 +9,10 @@ export class CreateProductDto {
   @IsOptional()
   category?: string;
 
+  // #63 — nullable for parity with UpdateProductDto; null / '' store no photo.
   @IsString()
   @IsOptional()
-  photo?: string;
+  photo?: string | null;
 
   @IsNumber()
   @IsOptional()

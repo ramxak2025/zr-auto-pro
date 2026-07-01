@@ -496,6 +496,23 @@ export interface UserPermissions {
    * Server-enforced in ChecksService.create; rejected otherwise.
    */
   sell_installment?: boolean;
+  /**
+   * «Удаление на складе» (#60) — may soft-delete products and folders/categories
+   * (a full folder cascades its products to the Корзина; everything is reversible).
+   * OFF by default — the owner grants it explicitly. Owner-class roles
+   * (director/admin/superadmin) always allowed. Server-enforced via
+   * @RequirePermission('warehouse_delete') on the delete endpoints; the backend
+   * default mirror lives in PermissionsGuard.MASTER_PERMISSION_DEFAULTS.
+   *
+   * NOTE: intentionally added here (typed, grantable via PATCH
+   * /users/:id/permissions) but NOT yet in the PermissionKey union /
+   * PERMISSION_GROUPS UI catalog. Surfacing the toggle in the permissions editor
+   * is part of the warehouse delete-UI client wave — that wave adds
+   * 'warehouse_delete' to PermissionKey + PERMISSION_GROUPS.Склад +
+   * ROLE_PERMISSION_DEFAULTS[master] and the web/mobile PERMISSION_LABELS maps
+   * together (the mobile map is an exhaustive Record<PermissionKey, string>).
+   */
+  warehouse_delete?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════

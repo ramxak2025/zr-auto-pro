@@ -58,6 +58,9 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   salary_view: false,
   // Склад — access flags off by default (reads are open elsewhere; mutations are role-gated).
   warehouse_access: false,
+  // Удаление товаров/папок (#60) — off by default; owner grants explicitly. Gates
+  // DELETE /products/:id (soft) and DELETE /warehouse/categories/:id (soft, cascades).
+  warehouse_delete: false,
   suppliers_access: false,
   // CRM — own clients/cars + own schedule; broad editing/marketing/calls off.
   clients_view: true,

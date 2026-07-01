@@ -242,7 +242,7 @@ export class ProductsService {
       [
         dto.name,
         dto.category,
-        dto.photo,
+        this.normalizePhoto(dto.photo),
         dto.costPrice || 0,
         dto.sellPrice || 0,
         dto.stock || 0,
@@ -266,6 +266,19 @@ export class ProductsService {
     if (!Number.isFinite(n)) return null;
     if (n <= 0) return null;
     return Math.min(n, 36500); // ~100 years guard
+  }
+
+  /**
+   * Normalize a `photo` value from a create/update request (#63). A product has
+   * exactly ONE `photo` column, so a write always REPLACES it — it never merges
+   * with the previous value. An explicit null / '' / whitespace-only means
+   * "remove the photo" and is stored as NULL, so a deleted photo is actually
+   * gone. A real URL is trimmed and stored as-is.
+   */
+  private normalizePhoto(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    const s = String(value).trim();
+    return s.length > 0 ? s : null;
   }
 
   private async assertSupplierInTenant(supplierId: string, tenantID: string): Promise<void> {
@@ -302,8 +315,11 @@ export class ProductsService {
       vals.push(dto.category);
     }
     if (dto.photo !== undefined) {
+      // #63 — REPLACE the photo with exactly what the client sent. An explicit
+      // null / '' / blank clears it to NULL (a removed photo is gone); a URL is
+      // stored as-is. Omitting `photo` leaves the current value untouched.
       sets.push(`photo=$${idx++}`);
-      vals.push(dto.photo);
+      vals.push(this.normalizePhoto(dto.photo));
     }
     if (dto.costPrice !== undefined) {
       sets.push(`cost_price=$${idx++}`);

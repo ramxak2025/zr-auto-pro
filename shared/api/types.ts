@@ -188,7 +188,8 @@ export interface UpdateCarRequest {
 export interface CreateProductRequest {
   name: string;
   category?: string;
-  photo?: string;
+  /** Photo URL. Send `null` or `''` to store no photo. */
+  photo?: string | null;
   costPrice: number;
   sellPrice: number;
   stock: number;
@@ -204,7 +205,12 @@ export interface CreateProductRequest {
 export interface UpdateProductRequest {
   name?: string;
   category?: string;
-  photo?: string;
+  /**
+   * Photo URL. To REMOVE an existing photo send `null` or `''` — the server
+   * replaces the stored value exactly (clears it to NULL), it does not merge
+   * with the previous photo. Omitting the field leaves the photo unchanged (#63).
+   */
+  photo?: string | null;
   costPrice?: number;
   sellPrice?: number;
   stock?: number;

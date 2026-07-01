@@ -9,9 +9,12 @@ export class UpdateProductDto {
   @IsOptional()
   category?: string;
 
+  // #63 — nullable so the client can send `photo: null` (or '') to REMOVE the
+  // photo. @IsOptional() skips validation for null/undefined; a non-null value
+  // must still be a string. The service clears null/'' to NULL.
   @IsString()
   @IsOptional()
-  photo?: string;
+  photo?: string | null;
 
   @IsNumber()
   @IsOptional()

@@ -3,6 +3,7 @@ import { Response } from 'express';
 import { ProductsService } from './products.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
@@ -13,7 +14,7 @@ import { StockUpdateDto } from './dto/stock-update.dto';
 // director/admin/superadmin via @Roles below — a master must not be able to
 // delete products, rewrite prices, adjust stock, empty the trash or bulk-import
 // by hitting the API directly (the UI hiding those is not a security boundary).
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('products')
 export class ProductsController {
   constructor(private productsService: ProductsService) {}
@@ -116,7 +117,12 @@ export class ProductsController {
     return this.productsService.setSellPrice(id, user.tenantID, body?.sellPrice, user.userID);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  // Soft-delete (move to Корзина). Gated by the grantable `warehouse_delete`
+  // permission (#60) instead of a flat role check: owner-class (director/admin/
+  // superadmin) always allowed via PermissionsGuard bypass; a master may delete
+  // only if the owner explicitly granted the right. Restore / hard-delete /
+  // empty-trash below stay owner-only (`@Roles`).
+  @RequirePermission('warehouse_delete')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.productsService.remove(id, user.tenantID);
