@@ -199,13 +199,13 @@ export class ProductsService {
 
     const { rows: mcRows } = await this.pool.query(
       `SELECT COALESCE(SUM(product_cost_total), 0) as month_cost
-       FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false`,
+       FROM checks WHERE tenant_id=$1 AND date >= $2 AND is_deferred=false AND deleted_at IS NULL`,
       [tenantID, monthStart],
     );
 
     const { rows: lmcRows } = await this.pool.query(
       `SELECT COALESCE(SUM(product_cost_total), 0) as last_month_cost
-       FROM checks WHERE tenant_id=$1 AND date >= $2 AND date < $3 AND is_deferred=false`,
+       FROM checks WHERE tenant_id=$1 AND date >= $2 AND date < $3 AND is_deferred=false AND deleted_at IS NULL`,
       [tenantID, lastMonthStart, lastMonthEnd],
     );
 

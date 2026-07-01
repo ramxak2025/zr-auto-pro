@@ -220,13 +220,13 @@ export class TenantsService {
          (SELECT COUNT(*) FROM users
             WHERE tenant_id = $1 AND is_active = true AND dismissed_at IS NULL AND purged_at IS NULL)
             AS active_users_count,
-         (SELECT COUNT(*) FROM checks WHERE tenant_id = $1) AS checks_total,
+         (SELECT COUNT(*) FROM checks WHERE tenant_id = $1 AND deleted_at IS NULL) AS checks_total,
          (SELECT COUNT(*) FROM checks
-            WHERE tenant_id = $1 AND created_at >= now() - interval '30 days') AS checks_last_30d,
-         (SELECT COALESCE(SUM(total_revenue), 0) FROM checks WHERE tenant_id = $1) AS revenue_total,
+            WHERE tenant_id = $1 AND deleted_at IS NULL AND created_at >= now() - interval '30 days') AS checks_last_30d,
+         (SELECT COALESCE(SUM(total_revenue), 0) FROM checks WHERE tenant_id = $1 AND deleted_at IS NULL) AS revenue_total,
          (SELECT COALESCE(SUM(total_revenue), 0) FROM checks
-            WHERE tenant_id = $1 AND created_at >= now() - interval '30 days') AS revenue_last_30d,
-         (SELECT MAX(created_at) FROM checks WHERE tenant_id = $1) AS last_activity_at,
+            WHERE tenant_id = $1 AND deleted_at IS NULL AND created_at >= now() - interval '30 days') AS revenue_last_30d,
+         (SELECT MAX(created_at) FROM checks WHERE tenant_id = $1 AND deleted_at IS NULL) AS last_activity_at,
          (SELECT COUNT(*) FROM products WHERE tenant_id = $1) AS products_count`,
       [id],
     );

@@ -30,6 +30,7 @@ import type {
   ProductPriceHistoryEntry,
   Service,
   Check,
+  TrashedCheck,
   ChecksBoard,
   WorkBoardColumn,
   PosSettings,
@@ -530,7 +531,25 @@ export function createChecksApi(api: HttpClient) {
     getById: (id: string) => api.get<Check>(`/checks/${id}`),
     create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),
     update: (id: string, data: UpdateCheckRequest) => api.patch<Check>(`/checks/${id}`, data),
+    /**
+     * Корзина (106): DELETE is now a REVERSIBLE soft-delete — it reverses the
+     * check's footprint (stock / salary / motivation / warranty / cash-flow) and
+     * moves it to the trash instead of hard-deleting. Owner-class only (server-
+     * enforced). Signature unchanged, so existing callers keep working.
+     */
     remove: (id: string) => api.delete(`/checks/${id}`),
+    /**
+     * List the Корзина (soft-deleted checks within the last 30 days), owner-only,
+     * newest-deleted-first. Server-enforced role gate. Additive.
+     */
+    trash: () => api.get<TrashedCheck[]>('/checks/trash'),
+    /**
+     * Restore a trashed check (106), owner-only. Re-applies the full footprint
+     * (re-deducts stock, re-accrues motivation, re-derives warranty) and clears
+     * the trash mark, making the check effect-identical to before deletion.
+     * Refuses (400) if stock is now insufficient to re-deduct. Additive.
+     */
+    restore: (id: string) => api.post<Check>(`/checks/${id}/restore`, {}),
     /**
      * Kanban board (091): owner-configurable columns + checks grouped by column
      * key, tenant-scoped, newest-first per column. Shape is now

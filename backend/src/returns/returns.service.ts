@@ -81,7 +81,7 @@ export class ReturnsService {
 
       // Verify the check belongs to this tenant + grab basic data.
       const { rows: checkRows } = await client.query(
-        `SELECT id, total_revenue, is_returned FROM checks WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+        `SELECT id, total_revenue, is_returned FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL LIMIT 1`,
         [checkId, tenantID],
       );
       if (checkRows.length === 0) {

@@ -54,7 +54,7 @@ export class SalaryService {
                 COALESCE(SUM(COALESCE(sl.salary_amount, 0)), 0) AS service_earnings
            FROM checks ch
            JOIN check_service_lines sl ON sl.check_id = ch.id
-          WHERE ch.tenant_id = $1 AND ch.is_deferred = false
+          WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
             AND ch.date >= $2 AND ch.date <= ($3::date + 1)::timestamptz
           GROUP BY COALESCE(sl.master_id, ch.master_id)
        ),
@@ -66,7 +66,7 @@ export class SalaryService {
                 COALESCE(SUM(ch.total_revenue), 0) AS total_revenue,
                 COUNT(ch.id) AS check_count
            FROM checks ch
-          WHERE ch.tenant_id = $1 AND ch.is_deferred = false
+          WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
             AND ch.date >= $2 AND ch.date <= ($3::date + 1)::timestamptz
           GROUP BY ch.master_id
        )
@@ -653,7 +653,7 @@ export class SalaryService {
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IN ('card','cash_card') THEN card_amount END), 0) as today_card,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method = 'warranty' THEN total_revenue END), 0) as today_warranty
        FROM checks
-       WHERE master_id = $1 AND is_deferred = false AND tenant_id = $5`,
+       WHERE master_id = $1 AND is_deferred = false AND tenant_id = $5 AND deleted_at IS NULL`,
       [userID, todayStart, weekStart, monthStart, tenantID],
     );
 
@@ -667,7 +667,8 @@ export class SalaryService {
          COALESCE(SUM(COALESCE(sl.salary_amount, 0)), 0) as total_service
        FROM checks ch
        JOIN check_service_lines sl ON sl.check_id = ch.id
-       WHERE COALESCE(sl.master_id, ch.master_id) = $1 AND ch.is_deferred = false AND ch.tenant_id = $5`,
+       WHERE COALESCE(sl.master_id, ch.master_id) = $1 AND ch.is_deferred = false AND ch.tenant_id = $5
+         AND ch.deleted_at IS NULL`,
       [userID, todayStart, weekStart, monthStart, tenantID],
     );
 
@@ -1024,6 +1025,7 @@ export class SalaryService {
               COUNT(id) AS check_count
          FROM checks
         WHERE master_id = $1 AND tenant_id = $2 AND is_deferred = false
+          AND deleted_at IS NULL
           AND date >= $3 AND date < $4`,
       [employeeId, tenantID, monthStart, nextMonthStart],
     );
@@ -1035,6 +1037,7 @@ export class SalaryService {
          FROM checks ch
          JOIN check_service_lines sl ON sl.check_id = ch.id
         WHERE COALESCE(sl.master_id, ch.master_id) = $1 AND ch.tenant_id = $2 AND ch.is_deferred = false
+          AND ch.deleted_at IS NULL
           AND ch.date >= $3 AND ch.date < $4`,
       [employeeId, tenantID, monthStart, nextMonthStart],
     );

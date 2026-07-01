@@ -93,10 +93,10 @@ export class LoyaltyService {
    * auto-accrual basis and the per-check redeem cap. Read-only.
    */
   private async requireCheckTotal(tenantID: string, checkId: string): Promise<number> {
-    const { rows } = await this.pool.query('SELECT total_revenue FROM checks WHERE id = $1 AND tenant_id = $2', [
-      checkId,
-      tenantID,
-    ]);
+    const { rows } = await this.pool.query(
+      'SELECT total_revenue FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+      [checkId, tenantID],
+    );
     if (rows.length === 0) throw new BadRequestException({ message: 'Чек не найден' });
     return num(rows[0].total_revenue);
   }

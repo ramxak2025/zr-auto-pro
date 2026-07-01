@@ -915,6 +915,16 @@ export interface Check {
   returnDestination?: 'warehouse' | 'defect' | null;
   returnScope?: 'full' | 'partial' | null;
   /**
+   * Корзина (106). Set (ISO timestamp) when the check has been soft-deleted and
+   * moved to the trash; NULL / absent for a live check. A trashed check is
+   * excluded from every list / report / salary / cash-flow until it is restored
+   * (owner-only) or permanently purged after 30 days. Additive & optional —
+   * existing consumers safely ignore it.
+   */
+  deletedAt?: string | null;
+  /** users.id of the actor who moved the check to the trash (106). */
+  deletedBy?: string | null;
+  /**
    * Канбан work-status (082 + 091). The KEY of an owner-configured board column
    * (or one of the legacy CheckWorkStatus keys). NULL = не на доске. Additive &
    * orthogonal to payment — existing consumers safely ignore it. Loosened from
@@ -931,6 +941,28 @@ export interface Check {
    */
   isExecutor?: boolean;
   createdAt: string;
+}
+
+/**
+ * One row of the Корзина (trash) list — GET /checks/trash (106), owner-only.
+ * A slim summary of a soft-deleted check: enough to identify it and show who
+ * trashed it + when. Only checks trashed within the last 30 days are returned
+ * (older ones are purged). Restoring is a separate POST /checks/:id/restore.
+ */
+export interface TrashedCheck {
+  id: string;
+  number: number;
+  /** The check's own date (sale date), NOT the deletion time. */
+  date: string;
+  clientName: string | null;
+  totalRevenue: number;
+  isDeferred: boolean;
+  /** When it was moved to the trash (ISO). */
+  deletedAt: string;
+  /** users.id of the actor who trashed it (may be null on legacy rows). */
+  deletedBy: string | null;
+  /** Display name of the actor who trashed it, resolved server-side. */
+  deletedByName: string | null;
 }
 
 /**

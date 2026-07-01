@@ -469,7 +469,7 @@ export class UsersService {
            FROM checks c, users u
           WHERE sl.check_id = c.id
             AND u.id = $2 AND u.tenant_id = $1
-            AND c.tenant_id = $1 AND c.is_deferred = false
+            AND c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
             AND c.date >= $3 AND c.date < $4
             AND COALESCE(sl.master_id, c.master_id) = $2
             AND NOT EXISTS (
@@ -490,12 +490,12 @@ export class UsersService {
              SELECT sl.check_id, COALESCE(SUM(COALESCE(sl.salary_amount, 0)), 0)::numeric AS svc
                FROM check_service_lines sl
                JOIN checks cc ON cc.id = sl.check_id
-              WHERE cc.tenant_id = $1 AND cc.is_deferred = false
+              WHERE cc.tenant_id = $1 AND cc.is_deferred = false AND cc.deleted_at IS NULL
                 AND cc.date >= $3 AND cc.date < $4
               GROUP BY sl.check_id
            ) agg
           WHERE c.id = agg.check_id
-            AND c.tenant_id = $1 AND c.is_deferred = false
+            AND c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
             AND c.date >= $3 AND c.date < $4
             AND EXISTS (
               SELECT 1 FROM check_service_lines sl2
@@ -526,6 +526,7 @@ export class UsersService {
                FROM check_product_lines pl
                JOIN checks cc ON cc.id = pl.check_id
                     AND cc.master_id = $2 AND cc.tenant_id = $1 AND cc.is_deferred = false
+                    AND cc.deleted_at IS NULL
                     AND cc.date >= $3 AND cc.date < $4
                JOIN users u ON u.id = cc.master_id AND u.tenant_id = cc.tenant_id
                LEFT JOIN product_commissions pc
@@ -533,7 +534,7 @@ export class UsersService {
               GROUP BY pl.check_id
            ) agg
           WHERE c.id = agg.check_id
-            AND c.tenant_id = $1 AND c.is_deferred = false
+            AND c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
             AND c.date >= $3 AND c.date < $4`,
         [tenantID, userId, monthStart, nextMonthStart],
       );

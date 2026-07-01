@@ -101,10 +101,10 @@ export class WarehouseAnalyticsService {
    */
   private async assertWarehouseInTenant(tenantID: string, warehouseId?: string): Promise<string | null> {
     if (!warehouseId || warehouseId === 'all') return null;
-    const { rows } = await this.pool.query(
-      'SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1',
-      [warehouseId, tenantID],
-    );
+    const { rows } = await this.pool.query('SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
+      warehouseId,
+      tenantID,
+    ]);
     if (rows.length === 0) {
       throw new BadRequestException({ message: 'Склад не найден' });
     }
@@ -169,10 +169,7 @@ export class WarehouseAnalyticsService {
 
   // ── /summary ──────────────────────────────────────────────────────────────
 
-  async getSummary(
-    tenantID: string,
-    params: { warehouseId?: string; period?: Period },
-  ): Promise<WarehouseSummary> {
+  async getSummary(tenantID: string, params: { warehouseId?: string; period?: Period }): Promise<WarehouseSummary> {
     const warehouseId = await this.assertWarehouseInTenant(tenantID, params.warehouseId);
     const period = params.period ?? 'month';
     const days = periodDays(period);
@@ -180,9 +177,7 @@ export class WarehouseAnalyticsService {
     const periodStartIso = periodStart.toISOString();
     const periodStartDate = periodStartIso.slice(0, 10);
 
-    const productFilter = warehouseId
-      ? 'AND p.warehouse_id = $2'
-      : '';
+    const productFilter = warehouseId ? 'AND p.warehouse_id = $2' : '';
     const productParams: any[] = [tenantID];
     if (warehouseId) productParams.push(warehouseId);
 
@@ -214,8 +209,7 @@ export class WarehouseAnalyticsService {
         ORDER BY snapshot_date DESC LIMIT 1`,
       snapshotParams,
     );
-    const stockValueStart =
-      histRows.length > 0 ? parseFloat(histRows[0].total_cost_value) || 0 : stockValueCurrent;
+    const stockValueStart = histRows.length > 0 ? parseFloat(histRows[0].total_cost_value) || 0 : stockValueCurrent;
     const stockValueDelta = stockValueCurrent - stockValueStart;
     const deltaPct = stockValueStart > 0 ? (stockValueDelta / stockValueStart) * 100 : 0;
 
@@ -238,7 +232,7 @@ export class WarehouseAnalyticsService {
          MAX(ch.date) as last_sold_at
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
-       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.date >= $2
+       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL ${salesFilter}
        GROUP BY p.id, p.name, p.stock, p.cost_price`,
       salesParams,
@@ -262,7 +256,7 @@ export class WarehouseAnalyticsService {
       `SELECT p.id, p.stock, p.cost_price, MAX(ch.date) as last_sold_at
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
-       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false
+       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL ${lastSaleFilter}
        GROUP BY p.id, p.stock, p.cost_price`,
       lastSaleParams,
@@ -373,10 +367,7 @@ export class WarehouseAnalyticsService {
 
   // ── /velocity ─────────────────────────────────────────────────────────────
 
-  async getVelocity(
-    tenantID: string,
-    params: { warehouseId?: string; period?: Period },
-  ): Promise<VelocityRow[]> {
+  async getVelocity(tenantID: string, params: { warehouseId?: string; period?: Period }): Promise<VelocityRow[]> {
     const warehouseId = await this.assertWarehouseInTenant(tenantID, params.warehouseId);
     const period = params.period ?? 'month';
     const days = periodDays(period);
@@ -397,7 +388,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.quantity), 0) as sold_qty
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
-       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.date >= $2
+       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
        WHERE ${conds.join(' AND ')}
        GROUP BY p.id, p.name, p.stock
        ORDER BY sold_qty DESC NULLS LAST, p.name`,
@@ -422,10 +413,7 @@ export class WarehouseAnalyticsService {
 
   // ── /reorder-forecast ─────────────────────────────────────────────────────
 
-  async getReorderForecast(
-    tenantID: string,
-    params: { warehouseId?: string },
-  ): Promise<ReorderItem[]> {
+  async getReorderForecast(tenantID: string, params: { warehouseId?: string }): Promise<ReorderItem[]> {
     const warehouseId = await this.assertWarehouseInTenant(tenantID, params.warehouseId);
     const conds: string[] = ['p.tenant_id = $1', 'p.deleted_at IS NULL'];
     const sqlParams: any[] = [tenantID];
@@ -453,7 +441,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(CASE WHEN ch.date >= $${days90Idx} THEN cpl.quantity ELSE 0 END), 0) as sold_90
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
-       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false
+       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
        WHERE ${conds.join(' AND ')}
        GROUP BY p.id, p.name, p.stock`,
       sqlParams,
@@ -500,10 +488,7 @@ export class WarehouseAnalyticsService {
 
   // ── /category-margin ──────────────────────────────────────────────────────
 
-  async getCategoryMargin(
-    tenantID: string,
-    params: { period?: Period },
-  ): Promise<CategoryMarginRow[]> {
+  async getCategoryMargin(tenantID: string, params: { period?: Period }): Promise<CategoryMarginRow[]> {
     const period = params.period ?? 'month';
     const periodStartIso = new Date(Date.now() - periodDays(period) * DAY_MS).toISOString();
 
@@ -513,7 +498,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.total_sell), 0) as revenue,
          COALESCE(SUM(cpl.total_cost), 0) as cost
        FROM check_product_lines cpl
-       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.date >= $2
+       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
        JOIN products p ON p.id = cpl.product_id
        GROUP BY p.category
        ORDER BY revenue DESC`,
@@ -531,10 +516,7 @@ export class WarehouseAnalyticsService {
 
   // ── /top-moving ───────────────────────────────────────────────────────────
 
-  async getTopMoving(
-    tenantID: string,
-    params: { period?: Period; limit?: number },
-  ): Promise<TopProductRow[]> {
+  async getTopMoving(tenantID: string, params: { period?: Period; limit?: number }): Promise<TopProductRow[]> {
     const period = params.period ?? 'month';
     const limit = Math.max(1, Math.min(parseInt(String(params.limit ?? 10), 10) || 10, 100));
     const periodStartIso = new Date(Date.now() - periodDays(period) * DAY_MS).toISOString();
@@ -547,7 +529,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.total_sell), 0) as revenue,
          COALESCE(SUM(cpl.total_sell - cpl.total_cost), 0) as profit
        FROM check_product_lines cpl
-       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.date >= $2
+       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
        JOIN products p ON p.id = cpl.product_id
        GROUP BY p.id, p.name
        ORDER BY sold_qty DESC
@@ -566,10 +548,7 @@ export class WarehouseAnalyticsService {
 
   // ── /top-margin ───────────────────────────────────────────────────────────
 
-  async getTopMargin(
-    tenantID: string,
-    params: { period?: Period; limit?: number },
-  ): Promise<TopProductRow[]> {
+  async getTopMargin(tenantID: string, params: { period?: Period; limit?: number }): Promise<TopProductRow[]> {
     const period = params.period ?? 'month';
     const limit = Math.max(1, Math.min(parseInt(String(params.limit ?? 10), 10) || 10, 100));
     const periodStartIso = new Date(Date.now() - periodDays(period) * DAY_MS).toISOString();
@@ -582,7 +561,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.total_sell), 0) as revenue,
          COALESCE(SUM(cpl.total_sell - cpl.total_cost), 0) as profit
        FROM check_product_lines cpl
-       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.date >= $2
+       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
        JOIN products p ON p.id = cpl.product_id
        GROUP BY p.id, p.name
        ORDER BY profit DESC

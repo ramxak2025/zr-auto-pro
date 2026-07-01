@@ -50,7 +50,8 @@ export class ReportsService {
          COALESCE(SUM(service_salary_total) + SUM(COALESCE(product_salary_total, 0)), 0) as salaries,
          COUNT(*) as check_count
        FROM checks
-       WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false`,
+       WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false
+         AND deleted_at IS NULL`,
       [tenantID, dateFrom, dateTo],
     );
 
@@ -175,6 +176,7 @@ export class ReportsService {
        JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = $1
        WHERE ch.tenant_id = $1
          AND ch.is_deferred = false
+         AND ch.deleted_at IS NULL
          AND ch.date::date BETWEEN $2::date AND $3::date
          AND cl.phone IN (
            SELECT DISTINCT phone FROM sms_history
@@ -191,6 +193,7 @@ export class ReportsService {
          SELECT client_id, COUNT(*) AS check_count
          FROM checks
          WHERE tenant_id = $1 AND is_deferred = false AND client_id IS NOT NULL
+           AND deleted_at IS NULL
          GROUP BY client_id
          HAVING COUNT(*) > 1
        ) sub`,
@@ -251,7 +254,8 @@ export class ReportsService {
               COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN total_revenue ELSE 0 END), 0) as warranty,
               COALESCE(SUM(total_revenue), 0) as total
        FROM checks
-       WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false${masterFilter}
+       WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false
+         AND deleted_at IS NULL${masterFilter}
        GROUP BY date::date
        ORDER BY day`,
       params,
@@ -306,7 +310,7 @@ export class ReportsService {
          COALESCE(SUM(CASE WHEN date >= $2 THEN card_amount END), 0) AS card_today,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN total_revenue END), 0) AS warranty_today
        FROM checks
-       WHERE tenant_id=$1 AND is_deferred=false`,
+       WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL`,
       [tenantID, todayStart, monthStart],
     );
     const base = baseRows[0];
@@ -349,7 +353,7 @@ export class ReportsService {
     const { rows: prevRows } = await this.pool.query(
       `SELECT COALESCE(SUM(total_revenue), 0) AS revenue, COALESCE(SUM(profit), 0) AS profit
          FROM checks
-        WHERE tenant_id=$1 AND is_deferred=false
+        WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
           AND date >= $2 AND date < $3`,
       [tenantID, prevMonthStart, monthStart],
     );
@@ -369,7 +373,7 @@ export class ReportsService {
          LEFT JOIN (
            SELECT date::date AS day, SUM(profit) AS profit
              FROM checks
-            WHERE tenant_id=$1 AND is_deferred=false
+            WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
               AND date >= now() - interval '30 days'
             GROUP BY day
          ) ch USING (day)
@@ -399,7 +403,7 @@ export class ReportsService {
     // Deferred sum: open drafts (is_deferred=true) totals.
     const { rows: defRows } = await this.pool.query(
       `SELECT COUNT(*) AS cnt, COALESCE(SUM(total_revenue), 0) AS sum
-         FROM checks WHERE tenant_id=$1 AND is_deferred=true`,
+         FROM checks WHERE tenant_id=$1 AND is_deferred=true AND deleted_at IS NULL`,
       [tenantID],
     );
     const deferredSum = {
@@ -410,13 +414,13 @@ export class ReportsService {
     // Personal record: best day + best month all time.
     const { rows: bestDayRows } = await this.pool.query(
       `SELECT date::date AS day, SUM(total_revenue) AS revenue
-         FROM checks WHERE tenant_id=$1 AND is_deferred=false
+         FROM checks WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
          GROUP BY day ORDER BY revenue DESC LIMIT 1`,
       [tenantID],
     );
     const { rows: bestMonthRows } = await this.pool.query(
       `SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS ym, SUM(total_revenue) AS revenue
-         FROM checks WHERE tenant_id=$1 AND is_deferred=false
+         FROM checks WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
          GROUP BY ym ORDER BY revenue DESC LIMIT 1`,
       [tenantID],
     );
@@ -484,6 +488,7 @@ export class ReportsService {
          SELECT client_id, MIN(date) AS first_date
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
+            AND deleted_at IS NULL
           GROUP BY client_id
        ),
        window_checks AS (
@@ -491,6 +496,7 @@ export class ReportsService {
            FROM checks ch
            LEFT JOIN first_visits fv ON fv.client_id = ch.client_id
           WHERE ch.tenant_id=$1 AND ch.is_deferred=false
+            AND ch.deleted_at IS NULL
             AND ch.client_id IS NOT NULL
             AND ch.date::date BETWEEN $2::date AND $3::date
        )
@@ -642,7 +648,7 @@ export class ReportsService {
               COALESCE(SUM(total_revenue), 0) AS revenue,
               COUNT(*) AS cnt
          FROM checks
-        WHERE tenant_id=$1 AND is_deferred=false
+        WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
           AND date::date BETWEEN $2::date AND $3::date
         GROUP BY weekday
         ORDER BY weekday`,
@@ -709,12 +715,14 @@ export class ReportsService {
                 MIN(date) AS first_date, MAX(date) AS last_date
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
+            AND deleted_at IS NULL
           GROUP BY client_id
        ),
        window_clients AS (
          SELECT DISTINCT client_id
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false
+            AND deleted_at IS NULL
             AND date >= now() - interval '${interval}'
             AND client_id IS NOT NULL
        )

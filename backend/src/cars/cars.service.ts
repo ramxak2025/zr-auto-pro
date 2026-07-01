@@ -263,7 +263,7 @@ export class CarsService {
        LEFT JOIN users m ON m.id = ch.master_id
        LEFT JOIN cars ca ON ca.id = ch.car_id
        LEFT JOIN clients cl ON cl.id = ch.client_id
-       WHERE ch.tenant_id=$1 AND ch.car_id=$2
+       WHERE ch.tenant_id=$1 AND ch.car_id=$2 AND ch.deleted_at IS NULL
        ORDER BY ch.date DESC
        LIMIT $3`,
       [tenantID, id, limit],

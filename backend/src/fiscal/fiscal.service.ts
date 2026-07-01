@@ -205,7 +205,7 @@ export class FiscalService {
       `SELECT ch.*, cl.phone AS client_phone
          FROM checks ch
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
-        WHERE ch.id = $1 AND ch.tenant_id = $2`,
+        WHERE ch.id = $1 AND ch.tenant_id = $2 AND ch.deleted_at IS NULL`,
       [dto.checkId, tenantId],
     );
     if (checkRows.length === 0) {

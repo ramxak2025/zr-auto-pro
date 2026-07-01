@@ -8,9 +8,11 @@ import {
   Logger,
   Optional,
 } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
 import { randomUUID } from 'crypto';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { WarrantyService } from '../warranty/warranty.service';
 import { PushService } from '../push/push.service';
 import { MarketingService } from '../marketing/marketing.service';
@@ -508,6 +510,12 @@ export class ChecksService {
       // tracking flag — orthogonal to payment/cash/stock. NULL on historical
       // rows (not tracked on the board). Additive; existing consumers ignore it.
       workStatus: row.work_status ?? null,
+      // Корзина (106): NULL on every live check. A trashed check never reaches
+      // the normal list/detail responses (they filter deleted_at IS NULL), so
+      // these are effectively always null there — carried through for the trash
+      // list + any future detail view. Additive; existing consumers ignore them.
+      deletedAt: row.deleted_at ?? null,
+      deletedBy: row.deleted_by ?? null,
       createdAt: row.created_at,
     };
   }
@@ -535,7 +543,9 @@ export class ChecksService {
     // false for every row via the NULL-safe comparison below).
     const meId = actor?.userID ?? null;
 
-    let where = 'ch.tenant_id = $1';
+    // Корзина (106): a soft-deleted check is out of the journal entirely — this
+    // filter flows into BOTH the COUNT and the page query (offset + keyset).
+    let where = 'ch.tenant_id = $1 AND ch.deleted_at IS NULL';
     const params: any[] = [tenantID];
     let idx = 2;
 
@@ -708,7 +718,7 @@ export class ChecksService {
        LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
        LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
        LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
-       WHERE ch.id=$1 AND ch.tenant_id=$2`,
+       WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL`,
       [id, tenantID],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
@@ -801,11 +811,11 @@ export class ChecksService {
     // getById below.
     const { rows } = await this.pool.query(
       `WITH before AS (
-         SELECT work_status FROM checks WHERE id=$2 AND tenant_id=$3
+         SELECT work_status FROM checks WHERE id=$2 AND tenant_id=$3 AND deleted_at IS NULL
        )
        UPDATE checks SET work_status=$1
        FROM before
-       WHERE checks.id=$2 AND checks.tenant_id=$3
+       WHERE checks.id=$2 AND checks.tenant_id=$3 AND checks.deleted_at IS NULL
        RETURNING checks.id AS id, before.work_status AS old_status`,
       [workStatus, id, tenantID],
     );
@@ -889,7 +899,9 @@ export class ChecksService {
     // No active columns → nothing to group; return the (possibly empty) columns.
     if (activeKeys.length === 0) return { columns, groups, accepted: [], in_progress: [], ready: [], delivered: [] };
 
-    let where = 'ch.tenant_id = $1 AND ch.work_status = ANY($2)';
+    // Корзина (106): a trashed check is off the board too (its work_status is
+    // irrelevant once deleted).
+    let where = 'ch.tenant_id = $1 AND ch.work_status = ANY($2) AND ch.deleted_at IS NULL';
     const params: any[] = [tenantID, activeKeys];
     let idx = 3;
 
@@ -1604,7 +1616,7 @@ export class ChecksService {
 
     vals.push(id, tenantID);
     const { rows } = await this.pool.query(
-      `UPDATE checks SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING id, number, total_revenue, payment_status`,
+      `UPDATE checks SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} AND deleted_at IS NULL RETURNING id, number, total_revenue, payment_status`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
@@ -1675,11 +1687,12 @@ export class ChecksService {
       await client.query('BEGIN');
 
       // Lock the row so two concurrent closes can't both observe
-      // is_deferred=true and both decrement stock / create warranties.
-      const { rows: checkRows } = await client.query('SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
-        id,
-        tenantID,
-      ]);
+      // is_deferred=true and both decrement stock / create warranties. A trashed
+      // draft (Корзина, 106) is excluded — it can't be closed until restored.
+      const { rows: checkRows } = await client.query(
+        'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE',
+        [id, tenantID],
+      );
       if (checkRows.length === 0) {
         await client.query('ROLLBACK');
         throw new NotFoundException({ message: 'Заказ-наряд не найден' });
@@ -1790,11 +1803,12 @@ export class ChecksService {
     // POS shift-mode (092): read once up front so the cashier close-gate below
     // adds no nested connection. OFF → false → the gate is a no-op.
     const shiftMode = await this.isShiftModeEnabled(tenantID);
-    // Verify check exists and is deferred
-    const { rows: checkRows } = await this.pool.query('SELECT * FROM checks WHERE id=$1 AND tenant_id=$2', [
-      id,
-      tenantID,
-    ]);
+    // Verify check exists and is deferred. A trashed check (Корзина, 106) is
+    // treated as gone — you can't edit / close one; restore it first.
+    const { rows: checkRows } = await this.pool.query(
+      'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
+      [id, tenantID],
+    );
     if (checkRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
     // Prior persisted state — the authority for the true→false transition.
     const wasDeferred: boolean = checkRows[0].is_deferred === true;
@@ -1870,7 +1884,7 @@ export class ChecksService {
       // can't BOTH see is_deferred=true and both decrement stock. The locked
       // value is the authority for whether to fire activation effects below.
       const { rows: lockedRows } = await client.query(
-        'SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+        'SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE',
         [id, tenantID],
       );
       if (lockedRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
@@ -2440,11 +2454,12 @@ export class ChecksService {
 
       // Lock the check row for the whole edit so a concurrent edit/return/delete
       // can't race the reverse+reapply. This locked row is the authority for the
-      // prior state (stock reversal basis, money before-image, guards).
-      const { rows: lockRows } = await client.query('SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
-        id,
-        tenantID,
-      ]);
+      // prior state (stock reversal basis, money before-image, guards). A trashed
+      // check (Корзина, 106) is excluded — restore it before editing.
+      const { rows: lockRows } = await client.query(
+        'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE',
+        [id, tenantID],
+      );
       if (lockRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
       const prior = lockRows[0];
 
@@ -2800,55 +2815,320 @@ export class ChecksService {
     );
   }
 
-  async remove(id: string, tenantID: string, userRole: string) {
+  /**
+   * SOFT-DELETE a check → move it to the Корзина (106). Reversible for 30 days.
+   *
+   * Historically this HARD-deleted the row (stock added back, `DELETE FROM
+   * checks`, FK CASCADE cleaned up the rest). Now, in ONE transaction:
+   *   (a) FULLY REVERSE the materialised footprint — return product stock, drop
+   *       this check's motivation accruals, remove its unused warranty claims
+   *       (reverseCheckFootprintTx); the DERIVED money (revenue / salary /
+   *       cash-flow / dashboard / ratings) disappears automatically because every
+   *       accounting query now filters `deleted_at IS NULL`. The baked money
+   *       columns (service_salary_total / product_salary_total / per-line
+   *       salary_amount / total_revenue / cash_amount / …) are deliberately LEFT
+   *       INTACT so a later restore is bit-identical — even if a rate changed.
+   *   (b) stamp `deleted_at = now()`, `deleted_by = <actor>`.
+   *
+   * REFUSED (their reverse is ambiguous — mirror editClosedCheck): a RETURNED
+   * check (money already reversed by the returns flow) and a check sold in
+   * РАССРОЧКУ (installment ledger). The caller (controller) gates the role to
+   * owner-class exactly as the old delete did.
+   */
+  async remove(id: string, tenantID: string, userRole: string, actorUserId: string | null = null) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
-      // Lock the check row for the lifetime of the delete so a concurrent
-      // edit/return/delete can't race the stock restore below.
+      // Lock the LIVE check row for the lifetime of the delete so a concurrent
+      // edit/return/restore can't race the footprint reverse below. A row that is
+      // already in the trash is excluded → a double-delete is a clean 404 no-op.
       const { rows } = await client.query(
-        'SELECT is_deferred, is_returned FROM checks WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+        'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE',
         [id, tenantID],
       );
       if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
-      if (userRole === 'master' && !rows[0].is_deferred) {
+      const prior = rows[0];
+      if (userRole === 'master' && !prior.is_deferred) {
         throw new ForbiddenException({ message: 'Мастер не может удалить закрытый заказ-наряд' });
       }
-
-      // Restore stock for a sale that ACTUALLY took stock and hasn't already
-      // been reversed. A deferred draft never decremented stock; a returned
-      // check already had its stock added back (warehouse return) or sent to
-      // defect (defect return) — restoring again would double-count. So we
-      // only add back when the check is a live, non-returned sale. The
-      // `stock = stock + qty` is an atomic row update (no read-then-write
-      // race). Deleting the check itself reverses its revenue (the row is
-      // gone), so no financial unwind is needed here.
-      if (!rows[0].is_deferred && !rows[0].is_returned) {
-        const { rows: lines } = await client.query(
-          'SELECT product_id, quantity FROM check_product_lines WHERE check_id=$1 AND product_id IS NOT NULL',
-          [id],
-        );
-        for (const ln of lines) {
-          const qty = parseFloat(ln.quantity) || 0;
-          if (qty <= 0) continue;
-          await client.query('UPDATE products SET stock = stock + $1 WHERE id=$2 AND tenant_id=$3', [
-            qty,
-            ln.product_id,
-            tenantID,
-          ]);
-        }
+      // A RETURNED check already had its money reversed + stock restored by the
+      // returns flow — reversing again here would double-count. STOP.
+      if (prior.is_returned === true) {
+        throw new BadRequestException({
+          message: 'Возвращённый заказ-наряд нельзя удалить — сначала отмените возврат',
+        });
+      }
+      // A check sold in installment carries a debt ledger that can't be cleanly
+      // unwound by a soft-delete. STOP — mirror editClosedCheck's refusal.
+      const hasInstallment = this.installments
+        ? await this.installments.hasPlanForCheckTx(client, tenantID, id)
+        : (
+            await client.query(`SELECT 1 FROM installment_plans WHERE tenant_id=$1 AND check_id=$2 LIMIT 1`, [
+              tenantID,
+              id,
+            ])
+          ).rows.length > 0;
+      if (hasInstallment) {
+        throw new BadRequestException({
+          message: 'Заказ-наряд продан в рассрочку — удалить нельзя, сначала измените рассрочку',
+        });
       }
 
-      await client.query('DELETE FROM checks WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+      // (a) reverse the materialised footprint (stock / motivation / warranty).
+      await this.reverseCheckFootprintTx(client, tenantID, id, prior);
+
+      // (b) stamp the trash mark. The row stays; the deleted_at IS NULL filters
+      // on every accounting read hide its derived money instantly.
+      await client.query('UPDATE checks SET deleted_at = now(), deleted_by = $3 WHERE id=$1 AND tenant_id=$2', [
+        id,
+        tenantID,
+        actorUserId,
+      ]);
+
       await client.query('COMMIT');
     } catch (err) {
-      await client.query('ROLLBACK');
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
       throw err;
     } finally {
       client.release();
     }
     this.invalidateReports(tenantID);
-    return { message: 'Удалено' };
+    this.emitCashChanged(tenantID, actorUserId);
+    return { message: 'Перемещено в корзину' };
+  }
+
+  /**
+   * Reverse the MATERIALISED (non-derived) footprint of a check, INSIDE the
+   * caller's transaction. Used by soft-delete (remove). Derived money is NOT
+   * touched here — it vanishes from reports via the `deleted_at IS NULL` filters.
+   *   • STOCK — add back exactly what a live, non-returned SALE deducted. A
+   *             deferred draft never took stock; a returned check was already
+   *             restored by the returns flow — both skip (gated on the flags).
+   *   • MOTIVATION — drop this check's promo accruals. SalaryService reads
+   *             motivation_accruals STANDALONE (no checks join), so a filter
+   *             wouldn't hide them — they must physically go (mirrors
+   *             accrueMotivationPromos' own DELETE half).
+   *   • WARRANTY — remove the reversible (unused) claims so they leave the
+   *             warranty lists/alerts; a REDEEMED claim is honoured history and
+   *             is preserved (same rule as recomputeWarrantyForClosedEdit).
+   */
+  private async reverseCheckFootprintTx(client: PoolClient, tenantID: string, id: string, prior: any): Promise<void> {
+    if (!prior.is_deferred && !prior.is_returned) {
+      const { rows: lines } = await client.query(
+        'SELECT product_id, quantity FROM check_product_lines WHERE check_id=$1 AND product_id IS NOT NULL',
+        [id],
+      );
+      for (const ln of lines) {
+        const qty = parseFloat(ln.quantity) || 0;
+        if (qty <= 0) continue;
+        await client.query('UPDATE products SET stock = stock + $1 WHERE id=$2 AND tenant_id=$3', [
+          qty,
+          ln.product_id,
+          tenantID,
+        ]);
+      }
+    }
+    await client.query('DELETE FROM motivation_accruals WHERE tenant_id=$1 AND check_id=$2', [tenantID, id]);
+    await client.query('DELETE FROM warranty_claims WHERE tenant_id=$1 AND check_id=$2 AND used_at IS NULL', [
+      tenantID,
+      id,
+    ]);
+  }
+
+  /**
+   * RE-APPLY the materialised footprint of a check being restored, INSIDE the
+   * caller's transaction — the exact inverse of reverseCheckFootprintTx:
+   *   • STOCK — RE-DEDUCT the (preserved) product-line quantities. Unlike a fresh
+   *             sale (which allows overselling), a RESTORE REFUSES when current
+   *             stock is insufficient — better to block than silently drive stock
+   *             negative for a check someone re-sold in the meantime.
+   *   • MOTIVATION — re-accrue via accrueMotivationPromos (idempotent DELETE+
+   *             INSERT), re-crediting the same master from the same lines.
+   *   • WARRANTY — re-derive the unused claims from the preserved lines with the
+   *             ORIGINAL sale date (recomputeWarrantyForClosedEdit), preserving
+   *             any redeemed claim — identical windows to before the delete.
+   * Salary / revenue / cash-flow need NO action: their columns were never touched
+   * by the delete, so they reappear identical the moment deleted_at clears.
+   */
+  private async reapplyCheckFootprintTx(client: PoolClient, tenantID: string, id: string, prior: any): Promise<void> {
+    if (prior.is_deferred || prior.is_returned) return; // a draft / returned check took no footprint
+
+    // Aggregate the NEW deduction per product from the preserved lines.
+    const { rows: agg } = await client.query(
+      `SELECT product_id, COALESCE(SUM(quantity), 0) AS qty
+         FROM check_product_lines
+        WHERE check_id=$1 AND product_id IS NOT NULL
+        GROUP BY product_id`,
+      [id],
+    );
+    const toDeduct = agg
+      .map((r) => ({ productId: r.product_id as string, qty: parseFloat(r.qty) || 0 }))
+      .filter((x) => x.qty > 0);
+
+    if (toDeduct.length > 0) {
+      // Sufficiency check FIRST — refuse the whole restore if any product can't
+      // cover its re-deduction (restore-specific: never go negative).
+      const productIds = toDeduct.map((x) => x.productId);
+      const { rows: stockRows } = await client.query(
+        'SELECT id, name, stock FROM products WHERE id = ANY($1) AND tenant_id=$2',
+        [productIds, tenantID],
+      );
+      const stockMap: Record<string, number> = {};
+      const nameMap: Record<string, string> = {};
+      for (const s of stockRows) {
+        stockMap[s.id] = parseFloat(s.stock) || 0;
+        nameMap[s.id] = s.name;
+      }
+      const insufficient = toDeduct.filter((x) => (stockMap[x.productId] ?? 0) < x.qty);
+      if (insufficient.length > 0) {
+        const detail = insufficient
+          .map((x) => `${nameMap[x.productId] ?? x.productId} (нужно ${x.qty}, есть ${stockMap[x.productId] ?? 0})`)
+          .join(', ');
+        throw new BadRequestException({
+          message: `Недостаточно товара на складе для восстановления: ${detail}`,
+        });
+      }
+      for (const x of toDeduct) {
+        await client.query('UPDATE products SET stock = stock - $1 WHERE id=$2 AND tenant_id=$3', [
+          x.qty,
+          x.productId,
+          tenantID,
+        ]);
+      }
+    }
+
+    // Motivation — idempotent re-accrual from the preserved lines + master.
+    await this.accrueMotivationPromos(client, tenantID, id);
+
+    // Warranty — re-derive unused claims from the preserved lines, keyed on the
+    // ORIGINAL sale date so windows match exactly; redeemed claims are preserved.
+    const { rows: svcRows } = await client.query('SELECT service_id, name FROM check_service_lines WHERE check_id=$1', [
+      id,
+    ]);
+    const { rows: prodRows } = await client.query(
+      'SELECT product_id, name FROM check_product_lines WHERE check_id=$1',
+      [id],
+    );
+    const serviceLines = svcRows.map((r) => ({ serviceId: r.service_id, name: r.name }));
+    const productLines = prodRows.map((r) => ({ productId: r.product_id, name: r.name }));
+    await this.recomputeWarrantyForClosedEdit(
+      client,
+      tenantID,
+      id,
+      prior.date instanceof Date ? prior.date.toISOString() : String(prior.date),
+      prior.client_id ?? null,
+      prior.car_id ?? null,
+      serviceLines,
+      productLines,
+    );
+  }
+
+  /**
+   * RESTORE a trashed check (106) — owner-only (gated in the controller). In ONE
+   * transaction: re-apply the full footprint (reapplyCheckFootprintTx) and clear
+   * `deleted_at`/`deleted_by`. After this the check is effect-identical to before
+   * the delete: same id / created_at / date / number, same per-line salary
+   * attribution, same stock deltas. Refuses (400) if stock is now insufficient to
+   * re-deduct. Idempotent: a check that is NOT in the trash is a clean 404 no-op.
+   */
+  async restore(id: string, tenantID: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Lock the TRASHED row (deleted_at IS NOT NULL). A live check → 404 no-op,
+      // so a double-restore can never re-apply the footprint twice.
+      const { rows } = await client.query(
+        'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NOT NULL FOR UPDATE',
+        [id, tenantID],
+      );
+      if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден в корзине' });
+      const prior = rows[0];
+
+      // Re-apply first (may throw on insufficient stock → whole restore rolls back
+      // and the check stays safely in the trash).
+      await this.reapplyCheckFootprintTx(client, tenantID, id, prior);
+
+      // Clear the trash mark — the derived money reappears identical at once.
+      await client.query('UPDATE checks SET deleted_at = NULL, deleted_by = NULL WHERE id=$1 AND tenant_id=$2', [
+        id,
+        tenantID,
+      ]);
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+    this.invalidateReports(tenantID);
+    this.emitCashChanged(tenantID, null);
+    return this.getById(id, tenantID);
+  }
+
+  /**
+   * The Корзина list (106) — owner-only (gated in the controller). Every check
+   * trashed within the last 30 days, tenant-scoped, newest-deleted-first. Older
+   * trashed checks are hidden here (they are purged by purgeExpiredTrash). Slim
+   * summary: number / date / client name / total / deleted_at / deleted_by(name).
+   */
+  async listTrash(tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT ch.id, ch.number, ch.date, ch.total_revenue, ch.is_deferred,
+              ch.deleted_at, ch.deleted_by,
+              cl.full_name AS client_name,
+              du.full_name AS deleted_by_name
+         FROM checks ch
+         LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+         LEFT JOIN users du ON du.id = ch.deleted_by AND du.tenant_id = ch.tenant_id
+        WHERE ch.tenant_id = $1
+          AND ch.deleted_at IS NOT NULL
+          AND ch.deleted_at > now() - interval '30 days'
+        ORDER BY ch.deleted_at DESC`,
+      [tenantID],
+    );
+    return rows.map((r) => ({
+      id: r.id as string,
+      number: r.number as number,
+      date: r.date as string,
+      clientName: (r.client_name as string) ?? null,
+      totalRevenue: parseFloat(r.total_revenue) || 0,
+      isDeferred: !!r.is_deferred,
+      deletedAt: r.deleted_at as string,
+      deletedBy: (r.deleted_by as string) ?? null,
+      deletedByName: (r.deleted_by_name as string) ?? null,
+    }));
+  }
+
+  /**
+   * 30-day purge (106). A check trashed more than 30 days ago is permanently
+   * removed with a plain hard DELETE — identical to the pre-Корзина delete: its
+   * footprint was already reversed at trash time, and FK CASCADE / SET NULL clean
+   * up lines / warranty / motivation / returns / photos exactly as before. Gated
+   * on RUN_BACKGROUND_JOBS so it fires on exactly one replica (mirrors
+   * AuthService.cleanExpiredTokens). Never throws into the scheduler.
+   */
+  @Cron('23 3 * * *', { timeZone: 'Europe/Moscow' })
+  async purgeExpiredTrash(): Promise<void> {
+    if (!RUN_BACKGROUND_JOBS) return;
+    try {
+      const { rowCount } = await this.pool.query(
+        `DELETE FROM checks WHERE deleted_at IS NOT NULL AND deleted_at < now() - interval '30 days'`,
+      );
+      if (rowCount && rowCount > 0) {
+        this.logger.log(`Purged ${rowCount} expired trashed checks (>30d in Корзина)`);
+      }
+    } catch (err) {
+      this.logger.error(`purgeExpiredTrash failed: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   async getDashboard(tenantID: string) {
@@ -2866,7 +3146,7 @@ export class ChecksService {
          COALESCE(SUM(CASE WHEN date >= $2 THEN profit END), 0) as today_profit,
          COALESCE(SUM(CASE WHEN date >= $4 THEN profit END), 0) as month_profit
        FROM checks
-       WHERE tenant_id=$1 AND is_deferred=false`,
+       WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL`,
       [tenantID, todayStart, weekStart, monthStart],
     );
 
@@ -2937,7 +3217,7 @@ export class ChecksService {
               COALESCE(SUM(profit), 0) as profit,
               COUNT(*) as check_count
        FROM checks
-       WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false
+       WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false AND deleted_at IS NULL
        GROUP BY date::date
        ORDER BY day`,
       [tenantID, dateFrom.toISOString(), dateTo.toISOString()],
@@ -2976,7 +3256,7 @@ export class ChecksService {
                 COALESCE(SUM(profit), 0) as profit,
                 COUNT(*) as check_count
          FROM checks
-         WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false
+         WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false AND deleted_at IS NULL
          GROUP BY EXTRACT(HOUR FROM date)
          ORDER BY hour`,
         [tenantID, dateFrom.toISOString(), dateTo.toISOString()],
@@ -3042,7 +3322,7 @@ export class ChecksService {
     carPlate: string | null;
     carMakeModel: string | null;
   } | null> {
-    const conds: string[] = ['ch.tenant_id = $1'];
+    const conds: string[] = ['ch.tenant_id = $1', 'ch.deleted_at IS NULL'];
     const params: unknown[] = [tenantID];
     let idx = 2;
     if (filters.clientId) {
@@ -3100,7 +3380,7 @@ export class ChecksService {
               COALESCE(SUM(ch.total_revenue), 0) as revenue,
               COUNT(*) as check_count
        FROM checks ch JOIN users u ON u.id = ch.master_id
-       WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false
+       WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false AND ch.deleted_at IS NULL
        GROUP BY ch.master_id, u.full_name
        ORDER BY revenue DESC`,
       [tenantID, todayStart],
@@ -3111,7 +3391,7 @@ export class ChecksService {
               COALESCE(SUM(ch.total_revenue), 0) as revenue,
               COUNT(*) as check_count
        FROM checks ch JOIN users u ON u.id = ch.master_id
-       WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false
+       WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false AND ch.deleted_at IS NULL
        GROUP BY ch.master_id, u.full_name
        ORDER BY revenue DESC`,
       [tenantID, monthStart],

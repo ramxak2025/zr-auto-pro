@@ -340,11 +340,11 @@ export class BookingsService {
       throw new ForbiddenException({ message: 'Можно проводить только свои записи' });
     }
 
-    // The check must belong to this tenant.
-    const { rows: checkRows } = await this.pool.query(`SELECT id FROM checks WHERE id = $1 AND tenant_id = $2`, [
-      checkId,
-      tenantId,
-    ]);
+    // The check must belong to this tenant and not be in the trash (106).
+    const { rows: checkRows } = await this.pool.query(
+      `SELECT id FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+      [checkId, tenantId],
+    );
     if (checkRows.length === 0) throw new BadRequestException({ message: 'Чек не найден' });
 
     // Atomic, status-gated claim: only a still-`scheduled` booking with NO

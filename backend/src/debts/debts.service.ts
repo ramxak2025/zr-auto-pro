@@ -93,7 +93,7 @@ export class DebtsService {
     const { rows: deferredRows } = await this.pool.query(
       `SELECT id, number, date, total_revenue
          FROM checks
-        WHERE tenant_id = $1 AND client_id = $2 AND is_deferred = true
+        WHERE tenant_id = $1 AND client_id = $2 AND is_deferred = true AND deleted_at IS NULL
         ORDER BY date DESC`,
       [tenantID, clientId],
     );
@@ -148,10 +148,10 @@ export class DebtsService {
 
     let checkId: string | null = null;
     if (dto.checkId) {
-      const { rows } = await this.pool.query('SELECT 1 FROM checks WHERE id = $1 AND tenant_id = $2', [
-        dto.checkId,
-        user.tenantID,
-      ]);
+      const { rows } = await this.pool.query(
+        'SELECT 1 FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL',
+        [dto.checkId, user.tenantID],
+      );
       if (rows.length === 0) throw new BadRequestException({ message: 'Чек не найден' });
       checkId = dto.checkId;
     }

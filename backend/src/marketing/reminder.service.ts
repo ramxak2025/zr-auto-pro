@@ -112,7 +112,7 @@ export class ReminderService implements OnModuleInit, OnModuleDestroy {
               EXTRACT(MONTH FROM AGE(now(), MAX(ch.date))) +
                 EXTRACT(YEAR FROM AGE(now(), MAX(ch.date))) * 12 AS months_ago
        FROM clients cl
-       JOIN checks ch ON ch.client_id = cl.id AND ch.tenant_id = $1 AND ch.is_deferred = false
+       JOIN checks ch ON ch.client_id = cl.id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
        WHERE cl.tenant_id = $1 AND cl.phone IS NOT NULL AND cl.phone != ''
        GROUP BY cl.id, cl.full_name, cl.phone
        HAVING MAX(ch.date) <= now() - ($2 * interval '1 month')

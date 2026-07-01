@@ -140,7 +140,7 @@ export class CashShiftsService {
               COALESCE(SUM(total_revenue), 0)  AS total_revenue,
               COUNT(*)                         AS checks_count
          FROM checks
-        WHERE tenant_id = $1 AND is_deferred = false
+        WHERE tenant_id = $1 AND is_deferred = false AND deleted_at IS NULL
           AND date >= $2 AND date <= $3`,
       [tenantID, openedAt, windowEnd],
     );

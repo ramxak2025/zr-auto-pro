@@ -126,6 +126,17 @@ export class ChecksController {
     return this.checksService.updatePosSettings(user.tenantID, dto);
   }
 
+  /**
+   * Корзина (106): list soft-deleted checks trashed within the last 30 days.
+   * Owner-class only (same set that may delete). Declared BEFORE `:id` so the
+   * literal `trash` path isn't swallowed by the param route.
+   */
+  @Roles('director', 'admin', 'superadmin')
+  @Get('trash')
+  listTrash(@CurrentUser() user: JwtPayload) {
+    return this.checksService.listTrash(user.tenantID);
+  }
+
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.checksService.getById(id, user.tenantID);
@@ -154,9 +165,23 @@ export class ChecksController {
     return this.checksService.update(id, user.tenantID, user.role, dto, user.userID, user);
   }
 
+  /**
+   * Корзина (106): restore a trashed check — re-applies its full footprint
+   * (stock / salary / motivation / warranty / cash-flow) and clears the trash
+   * mark, making it effect-identical to before deletion. Owner-class only. POST
+   * with a two-segment path so it never collides with `@Patch(':id')`.
+   */
+  @Roles('director', 'admin', 'superadmin')
+  @Post(':id/restore')
+  restore(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.checksService.restore(id, user.tenantID);
+  }
+
   @Roles('director', 'admin', 'superadmin')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.checksService.remove(id, user.tenantID, user.role);
+    // Корзина (106): now a reversible soft-delete. `user.userID` is recorded as
+    // deleted_by so the trash list can show who moved it there.
+    return this.checksService.remove(id, user.tenantID, user.role, user.userID);
   }
 }

@@ -487,7 +487,7 @@ export class EmployeesService {
       `WITH month_checks AS (
          SELECT *
            FROM checks
-          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
             AND date >= now() - interval '30 days'
        )
        SELECT
@@ -542,7 +542,7 @@ export class EmployeesService {
       const { rows: heat } = await this.pool.query(
         `SELECT date::date AS day, COUNT(*) AS checks, COALESCE(SUM(total_revenue), 0) AS revenue
            FROM checks
-          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
             AND date >= now() - interval '365 days'
           GROUP BY date::date
           ORDER BY day`,
@@ -573,7 +573,7 @@ export class EmployeesService {
          FROM check_service_lines csl
          JOIN services s ON s.id = csl.service_id
          JOIN checks c ON c.id = csl.check_id
-        WHERE c.tenant_id=$1 AND csl.master_id=$2
+        WHERE c.tenant_id=$1 AND csl.master_id=$2 AND c.deleted_at IS NULL
         GROUP BY s.id, s.name
         ORDER BY cnt DESC
         LIMIT 5`,
@@ -616,7 +616,7 @@ export class EmployeesService {
         `SELECT to_char(date_trunc('month', date), 'YYYY-MM-01') AS ym,
                 SUM(total_revenue) AS revenue
            FROM checks
-          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+          WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
           GROUP BY ym
           ORDER BY revenue DESC
           LIMIT 3`,
@@ -664,7 +664,7 @@ export class EmployeesService {
     const { rows: dayRows } = await this.pool.query(
       `SELECT date::date AS day, COUNT(*) AS checks
          FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
           AND date >= now() - interval '120 days'
         GROUP BY date::date
         ORDER BY day DESC`,
@@ -709,7 +709,7 @@ export class EmployeesService {
       `SELECT rr.rating
          FROM review_responses rr
          JOIN checks ch ON ch.id = rr.check_id
-        WHERE rr.tenant_id=$1 AND ch.master_id=$2
+        WHERE rr.tenant_id=$1 AND ch.master_id=$2 AND ch.deleted_at IS NULL
         ORDER BY rr.created_at DESC
         LIMIT 50`,
       [tenantID, employeeId],
@@ -729,13 +729,13 @@ export class EmployeesService {
               COUNT(*) AS check_count,
               COUNT(DISTINCT client_id) AS clients
          FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false`,
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL`,
       [tenantID, employeeId],
     );
     const { rows: bestDayRows } = await this.pool.query(
       `SELECT date::date AS day, COALESCE(SUM(total_revenue), 0) AS revenue
          FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
         GROUP BY date::date
         ORDER BY revenue DESC
         LIMIT 1`,
@@ -745,7 +745,7 @@ export class EmployeesService {
       `SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS ym,
               COALESCE(SUM(total_revenue), 0) AS revenue
          FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
         GROUP BY ym
         ORDER BY revenue DESC
         LIMIT 1`,
@@ -755,7 +755,7 @@ export class EmployeesService {
       `SELECT split_part(coalesce(ca.make_model, ''), ' ', 1) AS brand, COUNT(*) AS cnt
          FROM checks ch
          JOIN cars ca ON ca.id = ch.car_id
-        WHERE ch.tenant_id=$1 AND ch.master_id=$2 AND ch.is_deferred=false
+        WHERE ch.tenant_id=$1 AND ch.master_id=$2 AND ch.is_deferred=false AND ch.deleted_at IS NULL
         GROUP BY brand
         HAVING split_part(coalesce(ca.make_model, ''), ' ', 1) <> ''
         ORDER BY cnt DESC
@@ -773,7 +773,7 @@ export class EmployeesService {
          FROM check_product_lines cpl
          JOIN checks ch ON ch.id = cpl.check_id
          JOIN products p ON p.id = cpl.product_id
-        WHERE ch.tenant_id=$1 AND ch.master_id=$2 AND ch.is_deferred=false
+        WHERE ch.tenant_id=$1 AND ch.master_id=$2 AND ch.is_deferred=false AND ch.deleted_at IS NULL
         GROUP BY p.id, p.name, p.photo
         ORDER BY cnt DESC, p.name ASC
         LIMIT 3`,
@@ -854,7 +854,7 @@ export class EmployeesService {
     const { rows: byDay } = await this.pool.query(
       `SELECT date::date AS day, COUNT(*) AS checks_count
          FROM checks
-        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false
+        WHERE tenant_id=$1 AND master_id=$2 AND is_deferred=false AND deleted_at IS NULL
         GROUP BY date::date
         ORDER BY checks_count DESC, day DESC`,
       [tenantID, employeeId],
@@ -875,7 +875,7 @@ export class EmployeesService {
       `WITH agg AS (
          SELECT master_id, COALESCE(SUM(total_revenue), 0) AS revenue
            FROM checks
-          WHERE tenant_id=$1 AND is_deferred=false
+          WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
             AND date >= (date_trunc('month', now()) - interval '1 month')
             AND date < date_trunc('month', now())
           GROUP BY master_id
@@ -902,7 +902,7 @@ export class EmployeesService {
          SELECT ch.master_id, AVG(rr.rating) AS avg_rating
            FROM review_responses rr
            JOIN checks ch ON ch.id = rr.check_id
-          WHERE ch.tenant_id=$1
+          WHERE ch.tenant_id=$1 AND ch.deleted_at IS NULL
           GROUP BY ch.master_id
        )
        SELECT master_id, RANK() OVER (ORDER BY avg_rating DESC NULLS LAST) AS rnk FROM agg`,

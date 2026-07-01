@@ -361,7 +361,7 @@ export class ClientsService {
        FROM checks ch
        LEFT JOIN users m ON m.id = ch.master_id
        LEFT JOIN cars ca ON ca.id = ch.car_id
-       WHERE ch.tenant_id=$1 AND ch.client_id=$2
+       WHERE ch.tenant_id=$1 AND ch.client_id=$2 AND ch.deleted_at IS NULL
        ORDER BY ch.date DESC
        LIMIT $3 OFFSET $4`,
       [tenantID, id, limit, offset],

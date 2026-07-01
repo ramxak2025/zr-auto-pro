@@ -404,7 +404,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
        FROM checks ch
        LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
        LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
-       WHERE ch.id=$1 AND ch.tenant_id=$2`,
+       WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL`,
       [checkId, tenantId],
     );
     if (rows.length === 0) return { sent: false, reason: 'not_found' };
@@ -692,7 +692,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     // 2. Churn risk: rating <= 3 + customer has > 2 visits
     if (clientId && rating <= 3) {
       const { rows } = await this.pool.query(
-        `SELECT COUNT(*) as visits FROM checks WHERE client_id=$1 AND tenant_id=$2`,
+        `SELECT COUNT(*) as visits FROM checks WHERE client_id=$1 AND tenant_id=$2 AND deleted_at IS NULL`,
         [clientId, tenantId],
       );
       if (parseInt(rows[0].visits) > 2) {
@@ -880,6 +880,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
          ON ch.client_id = cl.id
         AND ch.tenant_id = $1
         AND ch.is_deferred = false
+        AND ch.deleted_at IS NULL
        WHERE cl.tenant_id = $1
          AND cl.is_retail = false
          AND cl.phone IS NOT NULL
@@ -948,6 +949,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
          FROM checks c
          LEFT JOIN clients cl ON cl.id = c.client_id
          WHERE c.is_deferred = false
+           AND c.deleted_at IS NULL
            AND c.created_at > now() - interval '7 days'
            AND c.client_id IS NOT NULL
            AND NOT EXISTS (SELECT 1 FROM review_jobs rj WHERE rj.check_id = c.id)
