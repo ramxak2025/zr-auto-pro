@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/subtle"
 	"fmt"
 	"log"
 	"net/http"
@@ -17,9 +18,12 @@ var (
 )
 
 func main() {
+	// No hardcoded fallback: a guessable default secret on an endpoint that
+	// runs deploys is an RCE-grade hole. docker-compose.yml already enforces
+	// DEPLOY_SECRET via ${DEPLOY_SECRET:?...}, this is defense in depth.
 	secret := os.Getenv("DEPLOY_SECRET")
 	if secret == "" {
-		secret = "zr-auto-deploy-secret-change-me"
+		log.Fatal("DEPLOY_SECRET is not set — refusing to start (no insecure default)")
 	}
 
 	port := os.Getenv("WEBHOOK_PORT")
@@ -38,7 +42,9 @@ func main() {
 		if token == "" {
 			token = strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
 		}
-		if token != secret {
+		// Constant-time comparison — a plain != leaks secret length/prefix
+		// via response timing.
+		if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) != 1 {
 			log.Printf("[DENIED] Unauthorized deploy attempt from %s", r.RemoteAddr)
 			http.Error(w, `{"error":"unauthorized"}`, http.StatusForbidden)
 			return

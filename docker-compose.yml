@@ -2,6 +2,11 @@ services:
   postgres:
     image: postgres:16-alpine
     restart: unless-stopped
+    # Потолок памяти (resilience): один контейнер не может съесть весь VDS.
+    # ВАЖНО: НЕ ставить 1g — shared_buffers в infra/postgres/postgresql.conf
+    # равен 1536MB, под лимитом 1g постгрес не стартует / уходит в OOM-kill.
+    # 3g = shm 1.5g + connections/work_mem + page-cache (последний reclaimable).
+    mem_limit: 3g
     environment:
       POSTGRES_DB: zr_auto_pro
       POSTGRES_USER: postgres
@@ -56,6 +61,9 @@ services:
     # через app.enableShutdownHooks) до того как Docker пришлёт SIGKILL —
     # это убирает 504 на запросе «в полёте» во время --force-recreate.
     stop_grace_period: 30s
+    # Потолок памяти (ceiling, не reservation): обычный RSS ~250МБ, лимит лишь
+    # страхует VDS от разгона утечки. Симметрично backend2 (см. ниже).
+    mem_limit: 1g
     depends_on:
       postgres:
         condition: service_healthy
@@ -72,6 +80,9 @@ services:
       # LEADER: фоновые джобы (напоминания, аналитика, авто-закрытие смен)
       # выполняются ТОЛЬКО на этой реплике. На backend2 — "false".
       RUN_BACKGROUND_JOBS: "true"
+      # Server-side Sentry: пусто = выключен (backend/src/common/sentry.ts).
+      # Раньше переменная не пробрасывалась вовсе — Sentry молча не работал.
+      SENTRY_DSN: ${SENTRY_DSN:-}
     expose:
       - "3000"
     volumes:
@@ -101,7 +112,7 @@ services:
     # Потолок памяти для ОПЦИОНАЛЬНОЙ реплики: если RAM на VDS окажется тесным,
     # backend2 упрётся в СВОЙ cgroup-лимит и его убьёт первым — kernel НЕ выберет
     # жертвой postgres. Это ceiling (не reservation): обычный RSS ~250МБ, лимит
-    # лишь ограничивает разгон. Основной `backend` остаётся без лимита (стабилен).
+    # лишь ограничивает разгон. У основного `backend` такой же потолок 1g.
     # nginx-фейловер означает: даже если backend2 не поднимется — /api жив на backend.
     mem_limit: 1g
     depends_on:
@@ -115,6 +126,8 @@ services:
       REDIS_URL: redis://redis:6379
       PORT: 3000
       RUN_BACKGROUND_JOBS: "false"
+      # Server-side Sentry: пусто = выключен (backend/src/common/sentry.ts).
+      SENTRY_DSN: ${SENTRY_DSN:-}
     expose:
       - "3000"
     volumes:
@@ -151,6 +164,13 @@ services:
     volumes:
       - uploads:/app/uploads:ro
       - ./downloads:/app/downloads:ro
+    healthcheck:
+      # nginx:alpine → busybox wget доступен. Проверяем, что nginx реально
+      # отдаёт контент на / (listen 80), а не просто «процесс жив».
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
   webhook:
     build:

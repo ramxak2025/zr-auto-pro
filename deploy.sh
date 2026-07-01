@@ -23,6 +23,26 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"
 }
 
+# ── Deploy lock (защита от ПАРАЛЛЕЛЬНЫХ деплоев) ─────────────────────────────
+# cron (scripts/auto-pull.sh на хосте) и webhook-контейнер могут вызвать этот
+# скрипт ОДНОВРЕМЕННО — два параллельных `docker compose build/up` портят
+# образы и гоняют recreate друг против друга. Лок-файл лежит в корне репо:
+# репо bind-mounted в webhook-контейнер как /deploy/repo, поэтому хост и
+# контейнер контендятся на ОДНОМ и том же inode. flock -n: второй деплой не
+# ждёт, а тихо выходит (exit 0) — cron всё равно повторит через минуту, когда
+# текущий деплой завершится. Fd 200 держит лок до конца процесса.
+exec 200>"$REPO_DIR/.deploy.lock"
+if command -v flock >/dev/null 2>&1; then
+    flock -n 200 || {
+        log "Another deploy is already in progress (lock: $REPO_DIR/.deploy.lock) — skipping."
+        exit 0
+    }
+else
+    # flock отсутствует (нестандартное окружение) — НЕ блокируем деплой,
+    # иначе деплои перестали бы выполняться вовсе. Просто предупреждаем.
+    log "WARNING: flock not available — proceeding WITHOUT deploy lock."
+fi
+
 # ── recreate_and_wait <service> [timeout_s] ──────────────────────────────────
 # Force-recreate ONE service and block until its container is healthy (or
 # timeout). Used for the rolling, one-replica-at-a-time backend recreate so the
@@ -79,9 +99,13 @@ log "=== Freeing disk before deploy (prune unused images + build cache, rotate b
 df -h / 2>&1 | tail -1 || true
 docker image prune -af 2>&1 || true
 docker builder prune -af 2>&1 || true
-# Держим только 10 самых свежих дампов в backups/ (по времени модификации).
+# Держим только 10 самых свежих файлов КАЖДОГО типа в backups/ (по mtime).
+# Раздельные паттерны: большие uploads-архивы не должны вытеснять SQL-дампы
+# из окна хранения (и наоборот).
 if [ -d "$REPO_DIR/backups" ]; then
-    ls -t "$REPO_DIR"/backups/* 2>/dev/null | tail -n +11 | xargs -r rm -f 2>&1 || true
+    ls -t "$REPO_DIR"/backups/*.sql.gz 2>/dev/null | tail -n +11 | xargs -r rm -f 2>&1 || true
+    ls -t "$REPO_DIR"/backups/*.sql 2>/dev/null | tail -n +11 | xargs -r rm -f 2>&1 || true
+    ls -t "$REPO_DIR"/backups/uploads_*.tar.gz 2>/dev/null | tail -n +11 | xargs -r rm -f 2>&1 || true
 fi
 df -h / 2>&1 | tail -1 || true
 
@@ -135,18 +159,25 @@ fi
 # Volume pgdata is NEVER touched — data is safe.
 #
 # Два backend-реплики (backend + backend2) за nginx-апстримом + idempotent
-# proxy_next_upstream фейловер. Порядок критичен: сначала поднимаем ВТОРУЮ
-# реплику и проверяем НОВЫЙ nginx-конфиг В СЕТИ, и только потом по очереди
-# пересоздаём реплики — в каждый момент ≥1 живой backend отвечает на /api.
+# proxy_next_upstream фейловер. Порядок критичен:
+#   build → backend2 (recreate + ЖДЁМ healthy) → nginx -t гейт → frontend →
+#   → лидер backend (recreate + ЖДЁМ healthy).
+# Лидера трогаем ТОЛЬКО после того, как backend2 реально прошёл health-гейт.
+# Раньше здесь был голый `up -d backend2` без ожидания — лидер убивался, пока
+# backend2 ещё бутился/мигрировал → окно «обе реплики мертвы» (502/504).
 # ═══════════════════════════════════════════════════════
 log "Rebuilding backend + frontend images (no cache)..."
 docker compose build --no-cache backend frontend 2>&1
 
-# Поднять вторую реплику (HTTP-only, переиспользует образ backend). Безвредно,
-# если уже запущена. Делает второй статический upstream живым ДО того, как мы
-# тронем основную реплику — чтобы фейловеру было куда уходить.
-log "Ensuring second backend replica (backend2) is up..."
-docker compose up -d --no-deps backend2 2>&1
+# Пересоздать ВТОРУЮ реплику (HTTP-only) на новом образе и ДОЖДАТЬСЯ health.
+# Пока backend2 бутится/мигрирует — лидер продолжает отдавать /api на старом
+# коде. Если backend2 не поднялся — ABORT: лидер и старый frontend не тронуты,
+# прод продолжает работать на старом коде.
+if ! recreate_and_wait backend2; then
+    log "=== Deploy FAILED (backend2 unhealthy after recreate — leader untouched, old code still serving) ==="
+    docker compose ps 2>&1 || true
+    exit 1
+fi
 
 # ── ГЛАВНЫЙ предохранитель против аварии «битый nginx уронил /api» ──────────
 # Проверяем НОВЫЙ frontend-образ `nginx -t` во ВРЕМЕННОМ контейнере, прицепленном
@@ -165,15 +196,11 @@ log "nginx config OK."
 log "Recreating frontend (new nginx with failover)..."
 docker compose up -d --no-deps --force-recreate frontend 2>&1
 
-# Катящееся пересоздание backend-реплик ПО ОДНОЙ. Пока пересоздаётся одна —
-# nginx фейловерит на другую, пользователь не видит 502/504.
+# Пересоздать ЛИДЕРА. backend2 уже здоров на новом коде (гейт выше) — nginx
+# фейловерит на него, пока лидер пересоздаётся: пользователь не видит 502/504.
+# Повторный recreate backend2 здесь НЕ нужен — он уже на новом образе.
 if ! recreate_and_wait backend; then
     log "=== Deploy FAILED (backend unhealthy after recreate) ==="
-    docker compose ps 2>&1 || true
-    exit 1
-fi
-if ! recreate_and_wait backend2; then
-    log "=== Deploy FAILED (backend2 unhealthy after recreate) ==="
     docker compose ps 2>&1 || true
     exit 1
 fi

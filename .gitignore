@@ -21,3 +21,4 @@ downloads/*.apk
 Autexa-*.apk
 .backups/
 .claude/scheduled_tasks.lock
+.deploy.lock

@@ -49,7 +49,7 @@ jobs:
         run: cd frontend && npm run build
 
   mobile:
-    name: Mobile (typecheck + lint)
+    name: Mobile (typecheck + lint + tests)
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -64,3 +64,5 @@ jobs:
       - run: npm ci --legacy-peer-deps
       - run: npm run typecheck
       - run: npm run lint
+      - name: Tests
+        run: npx jest --ci
