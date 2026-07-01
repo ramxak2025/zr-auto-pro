@@ -32,7 +32,7 @@ import {
 } from '../theme';
 import { buildShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
-import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
+import { UserRole, type Check, type PaginatedResponse, type User, type JournalDoc } from '../../../shared/types';
 
 const paymentLabels: Record<string, string> = {
   cash: 'Наличные',
@@ -479,9 +479,13 @@ export default function ChecksScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
-  const { hasPermission } = useAuth();
+  const { hasPermission, isRole } = useAuth();
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
+  // «Корзина» — owner-class только (director/admin/superadmin): бэкенд гейтит
+  // GET /checks/trash и POST /checks/:id/restore той же ролью. Тот же паттерн,
+  // что isOwnerClass в BookingCreateScreen / InstallmentsScreen.
+  const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('checks');
   const [search, setSearch] = useState('');
@@ -771,12 +775,17 @@ export default function ChecksScreen() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
       queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      // Корзина (106): удалённый чек тут же должен появиться в списке
+      // CheckTrashScreen, если owner откроет его следом.
+      queryClient.invalidateQueries({ queryKey: ['checks-trash'] });
     },
   });
 
   const handleDelete = useCallback(
     (checkId: string, checkNumber: number) => {
-      Alert.alert('Удалить чек', `Удалить чек #${checkNumber}? Это действие необратимо.`, [
+      // Формулировка честная про корзину (106): DELETE — это софт-удаление,
+      // «Это действие необратимо» больше неправда. 30 дней на восстановление.
+      Alert.alert('Удалить чек', `Заказ-наряд #${checkNumber} будет перемещён в корзину (хранится 30 дней).`, [
         { text: 'Отмена', style: 'cancel' },
         { text: 'Удалить', style: 'destructive', onPress: () => deleteMutation.mutate(checkId) },
       ]);
@@ -917,19 +926,41 @@ export default function ChecksScreen() {
             готов → выдан). Живёт в ChecksStack, поэтому плавающий таб-бар
             остаётся виден, а back возвращает в Журнал. Доска — другой ракурс
             тех же чеков, поэтому вход логично рядом с журналом. */}
-        <TouchableOpacity
-          style={[styles.boardEntryBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-          onPress={() => {
-            haptic('tap');
-            navigation.navigate('WorkBoard');
-          }}
-          activeOpacity={0.7}
-          accessibilityRole="button"
-          accessibilityLabel="Открыть доску заказ-нарядов"
-        >
-          <Ionicons name="albums-outline" size={15} color={colors.primary[600]} />
-          <Text style={styles.boardEntryText}>Доска</Text>
-        </TouchableOpacity>
+        <View style={styles.entryBtnRow}>
+          <TouchableOpacity
+            style={[styles.boardEntryBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            onPress={() => {
+              haptic('tap');
+              navigation.navigate('WorkBoard');
+            }}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Открыть доску заказ-нарядов"
+          >
+            <Ionicons name="albums-outline" size={15} color={colors.primary[600]} />
+            <Text style={styles.boardEntryText}>Доска</Text>
+          </TouchableOpacity>
+          {/* «Корзина» (106) — рядом с Доской, тот же pill-паттерн (owner
+              brief: «корзина должна быть в разделе журнал рядом с доской»).
+              Только owner-class: бэкенд гейтит trash/restore той же ролью,
+              мастеру кнопку не показываем. Тоже пуш внутри ChecksStack —
+              таб-бар остаётся, back возвращает в Журнал. */}
+          {isOwnerClass && (
+            <TouchableOpacity
+              style={[styles.boardEntryBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+              onPress={() => {
+                haptic('tap');
+                navigation.navigate('CheckTrash');
+              }}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Открыть корзину удалённых заказ-нарядов"
+            >
+              <Ionicons name="trash-outline" size={15} color={colors.primary[600]} />
+              <Text style={styles.boardEntryText}>Корзина</Text>
+            </TouchableOpacity>
+          )}
+        </View>
         <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
       </View>
 
@@ -1670,6 +1701,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[4],
     marginBottom: spacing[1],
     minHeight: 28,
+  },
+  // Группа входов слева («Доска» + owner-only «Корзина») — pills в ряд,
+  // FreshnessBadge остаётся прижат вправо через space-between родителя.
+  entryBtnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
   },
   boardEntryBtn: {
     flexDirection: 'row',

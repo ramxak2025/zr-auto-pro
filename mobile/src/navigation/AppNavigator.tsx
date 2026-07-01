@@ -18,6 +18,7 @@ import CheckCreateScreen from '../screens/CheckCreateScreen';
 import CheckDetailScreen from '../screens/CheckDetailScreen';
 import WorkBoardScreen from '../screens/WorkBoardScreen';
 import WorkBoardSettingsScreen from '../screens/WorkBoardSettingsScreen';
+import CheckTrashScreen from '../screens/CheckTrashScreen';
 import ClientsScreen from '../screens/ClientsScreen';
 import ClientDetailScreen from '../screens/ClientDetailScreen';
 import CarDetailScreen from '../screens/CarDetailScreen';
@@ -454,6 +455,10 @@ function ChecksStackNavigator() {
       {/* «Настройка колонок» (091) — owner-class экран, открывается шестерёнкой
           из WorkBoard. Внутри ChecksStack → floating tab bar остаётся виден. */}
       <ChecksStack.Screen name="WorkBoardSettings" component={WorkBoardSettingsScreen} />
+      {/* «Корзина» (106) — owner-class список soft-удалённых чеков с
+          восстановлением (30 дней). Вход — кнопка «Корзина» рядом с «Доской»
+          в Журнале. Внутри ChecksStack → floating tab bar остаётся виден. */}
+      <ChecksStack.Screen name="CheckTrash" component={CheckTrashScreen} />
     </ChecksStack.Navigator>
   );
 }

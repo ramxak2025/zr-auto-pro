@@ -261,6 +261,9 @@ export default function CheckDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
       queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      // Корзина (106): чек ушёл в trash — список CheckTrashScreen должен
+      // показать его сразу, если owner откроет корзину следом.
+      queryClient.invalidateQueries({ queryKey: ['checks-trash'] });
       // Чека больше нет — выкидываем его деталку из кеша, чтобы повторное
       // открытие по stale-ссылке не отрисовало удалённые данные.
       queryClient.removeQueries({ queryKey: ['check', id] });
@@ -470,7 +473,8 @@ export default function CheckDetailScreen() {
   const handleDeleteDraft = () => {
     if (!check) return;
     haptic('warning');
-    Alert.alert('Удалить черновик?', `Отложенный чек #${check.number} будет удалён. Это действие необратимо.`, [
+    // Черновик тоже уходит в корзину (106) — DELETE один и тот же endpoint.
+    Alert.alert('Удалить черновик?', `Отложенный чек #${check.number} будет перемещён в корзину (хранится 30 дней).`, [
       { text: 'Отмена', style: 'cancel' },
       { text: 'Удалить', style: 'destructive', onPress: () => deleteMutation.mutate() },
     ]);
@@ -790,7 +794,10 @@ export default function CheckDetailScreen() {
           {canDelete && (
             <TouchableOpacity
               onPress={() => {
-                Alert.alert('Удалить?', 'Это действие необратимо', [
+                // Корзина (106): DELETE — софт-удаление, чек можно вернуть
+                // 30 дней (Журнал → Корзина, owner-class). Старое «Это
+                // действие необратимо» стало неправдой.
+                Alert.alert('Удалить?', 'Заказ-наряд будет перемещён в корзину (хранится 30 дней).', [
                   { text: 'Отмена', style: 'cancel' },
                   {
                     text: 'Удалить',
