@@ -236,6 +236,11 @@ export default function ClientDetailScreen() {
   const [deleteCarId, setDeleteCarId] = useState<string | null>(null);
   // Notes editor (owner-only) — draft state lives inside <NotesEditorModal/>.
   const [notesModalOpen, setNotesModalOpen] = useState(false);
+  // «Изменить данные клиента» (имя / телефон / комментарий) — R7-9. Раньше
+  // имя и телефон правились ТОЛЬКО из списка клиентов, и с карточки — там,
+  // куда все смотрят — редактирование было не найти. Draft state живёт внутри
+  // <ClientEditModal/> (RNPERF-6): клавиатура перерисовывает модалку, не экран.
+  const [editClientOpen, setEditClientOpen] = useState(false);
   // Source picker visibility.
   const [sourceOpen, setSourceOpen] = useState(false);
   const [duplicateCar, setDuplicateCar] = useState<{
@@ -514,6 +519,63 @@ export default function ClientDetailScreen() {
       haptic('success');
     },
     onError: () => Alert.alert('Ошибка', 'Не удалось сохранить источник'),
+  });
+
+  // Имя / телефон / комментарий — полный PATCH /clients/:id (в отличие от
+  // узких updateNotes/updateSource выше). Гейт — тот же canEditMeta, что и у
+  // notes/source. Комментарий шлём ВСЕГДА (в т.ч. пустую строку) — иначе его
+  // нельзя было бы стереть с карточки. При коллизии номера бэкенд (уникальный
+  // индекс 108) возвращает 409 CLIENT_PHONE_EXISTS с владельцем номера —
+  // предлагаем открыть его карточку вместо глухой «Ошибки».
+  const updateClientMutation = useMutation({
+    mutationFn: (data: { fullName: string; phone: string; comment: string }) => clientsApi.update(id, data),
+    onSuccess: () => {
+      // Detail-ключ этого экрана + все списочные ключи людей — тот же набор,
+      // что инвалидирует ClientsScreen.updateMutation, чтобы список, поиск по
+      // номеру и подбор в кассе не показывали старое имя/телефон.
+      queryClient.invalidateQueries({ queryKey: ['client', id] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
+      setEditClientOpen(false);
+      haptic('success');
+    },
+    onError: (err: any) => {
+      const status = err?.response?.status;
+      const data = err?.response?.data;
+      if (status === 409 && data?.code === 'CLIENT_PHONE_EXISTS' && data?.clientId) {
+        const conflictId = String(data.clientId);
+        const conflictName =
+          (data?.client && typeof data.client.fullName === 'string' && data.client.fullName) || 'Клиент';
+        haptic('warning');
+        // Свой номер сам с собой не конфликтует (индекс бьёт только по ЧУЖОЙ
+        // строке), но защищаемся: на самих себя не «переходим».
+        if (conflictId === id) {
+          Alert.alert('Клиент уже есть', `Клиент с этим номером уже есть: ${conflictName}`);
+          return;
+        }
+        Alert.alert('Клиент уже есть', `Клиент с этим номером уже есть: ${conflictName}`, [
+          { text: 'Отмена', style: 'cancel' },
+          {
+            text: 'Открыть его карточку',
+            onPress: () => {
+              setEditClientOpen(false);
+              // push, не navigate: мы УЖЕ на ClientDetail, navigate лишь
+              // подменил бы params текущего экрана вместе с его локальным
+              // состоянием. Свежий push = чистая карточка, back вернёт сюда.
+              (navigation as any).push('ClientDetail', { id: conflictId });
+            },
+          },
+        ]);
+        return;
+      }
+      haptic('error');
+      const friendly =
+        (data && typeof data.message === 'string' && data.message) ||
+        (data && Array.isArray(data.message) && typeof data.message[0] === 'string' && data.message[0]) ||
+        'Не удалось сохранить изменения';
+      Alert.alert('Ошибка', friendly);
+    },
   });
 
   const closeCarModal = () => {
@@ -897,6 +959,26 @@ export default function ClientDetailScreen() {
           style={[styles.heroCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           index={0}
         >
+          {/* «Изменить» — редактирование имени/телефона/комментария (R7-9).
+              Лейбл, а не голый карандаш: владелец «не мог найти, как изменить
+              клиента» — подписанная кнопка в правом верхнем углу карточки,
+              визуально идентичная пилюле «Добавить» у секции «Гараж». */}
+          {canEditMeta ? (
+            <TouchableOpacity
+              style={[styles.heroEditBtn, { backgroundColor: palette.accent.primarySoft }]}
+              onPress={() => {
+                haptic('tap');
+                setEditClientOpen(true);
+              }}
+              activeOpacity={0.7}
+              hitSlop={6}
+              accessibilityRole="button"
+              accessibilityLabel="Изменить данные клиента"
+            >
+              <Ionicons name="create-outline" size={13} color={palette.accent.primaryText} />
+              <Text style={[styles.heroEditBtnText, { color: palette.accent.primaryText }]}>Изменить</Text>
+            </TouchableOpacity>
+          ) : null}
           <View style={[styles.avatarLg, { backgroundColor: avatarColor }]}>
             <Text style={styles.avatarLgText}>{initials}</Text>
           </View>
@@ -1417,6 +1499,17 @@ export default function ClientDetailScreen() {
         onSave={(text) => notesMutation.mutate(text.trim() ? text.trim() : null)}
       />
 
+      {/* «Изменить данные клиента» — имя / телефон / комментарий (R7-9).
+          Draft state lives INSIDE (RNPERF-6). */}
+      <ClientEditModal
+        visible={editClientOpen}
+        client={client}
+        palette={palette}
+        saving={updateClientMutation.isPending}
+        onClose={() => setEditClientOpen(false)}
+        onSave={(values) => updateClientMutation.mutate(values)}
+      />
+
       {/* Source picker */}
       <SourcePickerSheet
         visible={sourceOpen}
@@ -1895,6 +1988,121 @@ function NotesEditorModal({ visible, initialValue, palette, saving, onClose, onS
           style={[styles.submitBtn, { backgroundColor: palette.accent.primary }]}
           onPress={() => onSave(draft)}
           disabled={saving}
+        >
+          {saving ? (
+            <ActivityIndicator color={colors.white} size="small" />
+          ) : (
+            <Text style={styles.submitBtnText}>Сохранить</Text>
+          )}
+        </TouchableOpacity>
+      </View>
+    </Modal>
+  );
+}
+
+// ── ClientEditModal (имя / телефон / комментарий — R7-9) ─────────────
+// Редактирование ОСНОВНЫХ данных клиента прямо с его карточки. Раньше это
+// умел только модал списка клиентов — с карточки, куда все смотрят, правились
+// лишь заметки/источник. Поля живут внутри модалки (RNPERF-6): каждое нажатие
+// клавиши перерисовывает только это поддерево, а не экран с историей чеков.
+// Телефон: тот же live-mask паттерн, что в модале ClientsScreen —
+// formatPhone(digits) на каждый keystroke; сидируем СЫРЫМ сохранённым
+// значением (не переформатируем), чтобы нетронутый иностранный номер при
+// сохранении не обрезался 11-значной русской маской.
+interface ClientEditModalProps {
+  visible: boolean;
+  /** Загруженный клиент — сидирует черновик при каждом открытии. */
+  client: Client;
+  palette: ReturnType<typeof useColors>;
+  saving: boolean;
+  onClose: () => void;
+  onSave: (values: { fullName: string; phone: string; comment: string }) => void;
+}
+
+function ClientEditModal({ visible, client, palette, saving, onClose, onSave }: ClientEditModalProps) {
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
+  const [comment, setComment] = useState('');
+
+  // Re-seed от сохранённого клиента на каждое открытие — отменённая правка
+  // не должна протечь в следующую сессию.
+  useEffect(() => {
+    if (!visible) return;
+    setFullName(client.fullName);
+    setPhone(client.phone || '');
+    setComment(client.comment || '');
+  }, [visible, client]);
+
+  const nameValid = fullName.trim().length > 0;
+  const phoneValid = phone.replace(/\D/g, '').length >= 6;
+  const canSave = nameValid && phoneValid && !saving;
+
+  return (
+    <Modal visible={visible} onClose={onClose} title="Данные клиента">
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Имя *</Text>
+        <TextInput
+          value={fullName}
+          onChangeText={setFullName}
+          style={[
+            styles.formInput,
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+          ]}
+          placeholder="Введите ФИО клиента"
+          placeholderTextColor={palette.text.tertiary}
+          autoComplete="name"
+        />
+      </View>
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон *</Text>
+        <TextInput
+          value={phone}
+          onChangeText={(t) => setPhone(formatPhone(t.replace(/\D/g, '')))}
+          style={[
+            styles.formInput,
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+          ]}
+          placeholder="+7 (___) ___-__-__"
+          keyboardType="phone-pad"
+          autoComplete="tel"
+          placeholderTextColor={palette.text.tertiary}
+        />
+      </View>
+      <View style={styles.formField}>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
+        <TextInput
+          value={comment}
+          onChangeText={setComment}
+          style={[
+            styles.formInput,
+            {
+              height: 80,
+              textAlignVertical: 'top',
+              backgroundColor: palette.bg.muted,
+              borderColor: palette.border.subtle,
+              color: palette.text.primary,
+            },
+          ]}
+          multiline
+          placeholder="Необязательно"
+          placeholderTextColor={palette.text.tertiary}
+        />
+      </View>
+      <View style={[styles.formActions, { borderTopColor: palette.border.subtle }]}>
+        <TouchableOpacity
+          style={[styles.cancelBtn, { borderColor: palette.border.strong }]}
+          onPress={onClose}
+          disabled={saving}
+        >
+          <Text style={[styles.cancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.submitBtn, { backgroundColor: palette.accent.primary }, !canSave && { opacity: 0.5 }]}
+          onPress={() => {
+            if (!canSave) return;
+            onSave({ fullName: fullName.trim(), phone: phone.trim(), comment: comment.trim() });
+          }}
+          disabled={!canSave}
         >
           {saving ? (
             <ActivityIndicator color={colors.white} size="small" />
@@ -2612,6 +2820,22 @@ const styles = StyleSheet.create({
   },
   heroDate: { fontSize: 11, fontWeight: '500' },
   heroPhone: { fontSize: 14, fontWeight: '500', marginTop: spacing[1], fontVariant: ['tabular-nums'] },
+  // «Изменить» — подписанная пилюля в правом верхнем углу hero-карточки
+  // (R7-9). Те же метрики, что у addBtn («Добавить» в шапке «Гаража»), чтобы
+  // обе edit-аффордансы экрана читались как один визуальный род.
+  heroEditBtn: {
+    position: 'absolute',
+    top: spacing[3],
+    right: spacing[3],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    zIndex: 1,
+  },
+  heroEditBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
   sourceBadge: {
     flexDirection: 'row',
     alignItems: 'center',
