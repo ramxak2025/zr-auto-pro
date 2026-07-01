@@ -864,6 +864,15 @@ export default function CheckCreateScreen() {
   // (бэк сам списывает склад/гарантии при этом переходе).
   const isEditingDeferred = !!editId && !!editCheck?.isDeferred;
 
+  // Редактируем ПРОВЕДЁННЫЙ (закрытый) чек (#61): пользователь пришёл сюда по
+  // «Редактировать» из деталки закрытого чека. Право (edit_closed_check /
+  // owner-class) уже проверено на кнопке в CheckDetailScreen — здесь мы лишь
+  // адаптируем UI: показываем хинт о каскадном пересчёте и прячем тоггл
+  // «Отложить» (закрытый чек не возвращают в черновик — бэк editClosedCheck
+  // не трогает is_deferred, чек остаётся закрытым). Возврат сюда не попадает
+  // (кнопка правки на него скрыта), но на всякий случай его исключаем.
+  const isEditingClosed = !!editId && !!editCheck && !editCheck.isDeferred && !editCheck.isReturned;
+
   // #12: активные гарантии выбранного клиента — переиспользуем ТОТ ЖЕ ключ
   // и endpoint, что и <ActiveWarrantiesSection/> (['warranty-active-client',
   // clientId, undefined]), так что отдельного сетевого запроса не возникает:
@@ -1292,7 +1301,18 @@ export default function CheckCreateScreen() {
         // обычный pop приземлил бы на меню «Ещё», а не на список записей.
         navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Bookings' } });
       } else if (isStackScreen) {
-        navigation.goBack();
+        if (isEditingClosed) {
+          // #61: правка ПРОВЕДЁННОГО чека — сервер выполнил каскадный пересчёт
+          // (склад/зарплата/касса/прибыль) в одной транзакции, чек остался
+          // закрытым. Явно подтверждаем это владельцу, затем возвращаемся в
+          // деталку (она перезапросит свежие итоги на mount). Отложенный/
+          // обычный edit — тихий goBack, как прежде (draft-поток не трогаем).
+          Alert.alert('Чек обновлён', 'Изменения сохранены, всё пересчитано.', [
+            { text: 'OK', onPress: () => navigation.goBack() },
+          ]);
+        } else {
+          navigation.goBack();
+        }
       } else {
         resetForm();
         Alert.alert('Готово', 'Чек успешно создан');
@@ -1746,6 +1766,28 @@ export default function CheckCreateScreen() {
                 <Ionicons name="pause-circle" size={16} color={colors.amber[600]} />
                 <Text style={[styles.deferredEditHintText, isDark && { color: colors.amber[200] }]}>
                   Редактируется отложенный чек
+                </Text>
+              </View>
+            )}
+
+            {/* Хинт «Редактируется проведённый чек» (#61) — виден только когда
+                открыли ЗАКРЫТЫЙ чек по «Редактировать» из деталки. Предупреждает,
+                что при сохранении сервер пересчитает склад, зарплату, кассу и
+                прибыль (каскадный editClosedCheck); чек остаётся проведённым.
+                Синий info-тон, чтобы не путать с янтарным «отложен». */}
+            {isEditingClosed && (
+              <View
+                style={[
+                  styles.deferredEditHint,
+                  {
+                    backgroundColor: isDark ? softTint(colors.blue[600], 'dark') : colors.blue[50],
+                    borderColor: isDark ? 'rgba(37, 99, 235, 0.32)' : colors.blue[200],
+                  },
+                ]}
+              >
+                <Ionicons name="sync-circle" size={16} color={colors.blue[600]} />
+                <Text style={[styles.deferredEditHintText, { color: isDark ? colors.blue[200] : colors.blue[600] }]}>
+                  Редактируется проведённый чек — при сохранении всё пересчитается
                 </Text>
               </View>
             )}
@@ -2727,39 +2769,43 @@ export default function CheckCreateScreen() {
                     </TouchableOpacity>
                   )}
 
-                  {/* Deferred toggle */}
-                  <TouchableOpacity
-                    style={[
-                      styles.deferToggle,
-                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                      isDeferred &&
-                        (isDark
-                          ? {
-                              backgroundColor: softTint(colors.amber[600], 'dark'),
-                              borderColor: 'rgba(217, 119, 6, 0.4)',
-                            }
-                          : styles.deferToggleActive),
-                    ]}
-                    onPress={() => setIsDeferred(!isDeferred)}
-                  >
-                    <Ionicons
-                      name={isDeferred ? 'checkbox' : 'square-outline'}
-                      size={20}
-                      color={isDeferred ? colors.amber[600] : palette.text.tertiary}
-                    />
-                    <View style={{ flex: 1 }}>
-                      <Text
-                        style={[
-                          styles.deferLabel,
-                          { color: palette.text.secondary },
-                          isDeferred && { color: colors.amber[600] },
-                        ]}
-                      >
-                        Отложить чек
-                      </Text>
-                      <Text style={[styles.deferHint, { color: palette.text.tertiary }]}>Сохранить как черновик</Text>
-                    </View>
-                  </TouchableOpacity>
+                  {/* Deferred toggle — скрыт при правке ПРОВЕДЁННОГО чека (#61):
+                      закрытый чек не возвращают в черновик (бэк editClosedCheck
+                      не трогает is_deferred). Для нового/отложенного — как раньше. */}
+                  {!isEditingClosed && (
+                    <TouchableOpacity
+                      style={[
+                        styles.deferToggle,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                        isDeferred &&
+                          (isDark
+                            ? {
+                                backgroundColor: softTint(colors.amber[600], 'dark'),
+                                borderColor: 'rgba(217, 119, 6, 0.4)',
+                              }
+                            : styles.deferToggleActive),
+                      ]}
+                      onPress={() => setIsDeferred(!isDeferred)}
+                    >
+                      <Ionicons
+                        name={isDeferred ? 'checkbox' : 'square-outline'}
+                        size={20}
+                        color={isDeferred ? colors.amber[600] : palette.text.tertiary}
+                      />
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[
+                            styles.deferLabel,
+                            { color: palette.text.secondary },
+                            isDeferred && { color: colors.amber[600] },
+                          ]}
+                        >
+                          Отложить чек
+                        </Text>
+                        <Text style={[styles.deferHint, { color: palette.text.tertiary }]}>Сохранить как черновик</Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
                 </>
               )}
             </View>

@@ -680,7 +680,24 @@ export default function CheckDetailScreen() {
   // защищает от случайной операции и совпадает с состоянием бэка
   // (PATCH /checks/:id вернёт 409 на returned-чек).
   const isReturned = !!check.isReturned;
-  const canEdit = hasPermission('checks_edit') && !isReturned;
+  const isDeferred = !!check.isDeferred;
+  // Рассрочка (093): у чека есть долговой план (installment_plans). Бэкенд
+  // отказывает в его правке (рассрочку меняют отдельно) — кнопку прячем.
+  const isInstallment = check.paymentMethod === 'installment';
+  // Owner-class (директор/админ/superadmin) на бэке всегда обходит проверку
+  // прав (userHasPermission) — зеркалим здесь явно: мобильный hasPermission
+  // обходит только director/superadmin, поэтому admin проверяем по роли, иначе
+  // спрятали бы доступное ему действие.
+  const isOwnerClass = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  // «Редактирование проведённого чека» (#61): закрытый чек — финансово
+  // ответственная правка. Бэкенд проводит её через editClosedCheck (каскадный
+  // пересчёт склада/зарплаты/кассы/прибыли) и гейтит правом edit_closed_check
+  // (owner-class обходит). Возврат и рассрочку бэкенд редактировать
+  // отказывается (403/400) → для них кнопку прячем, чтобы не завести в ошибку.
+  const canEditClosedCheck = isOwnerClass || hasPermission('edit_closed_check');
+  // Отложенный черновик правится по-старому (checks_edit). Закрытый — только с
+  // edit_closed_check/owner-class. Возврат заморожен, рассрочка — отдельно.
+  const canEdit = isReturned ? false : isDeferred ? hasPermission('checks_edit') : !isInstallment && canEditClosedCheck;
   const canDelete = hasPermission('checks_delete') && !isReturned;
   const canViewProfit = hasPermission('profit_view');
   // Фискализация — кассовые роли (те же, что работают кассу/закрывают чеки).
@@ -689,7 +706,6 @@ export default function CheckDetailScreen() {
     user?.role === 'director' || user?.role === 'admin' || user?.role === 'master' || user?.role === 'superadmin';
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   const badge = getBadgeColors(palette.mode)[badgeKey];
-  const isDeferred = !!check.isDeferred;
   // Work-status (board) — отдельный флаг. Менять может тот, кто
   // редактирует чеки (то же право, что и кнопка «Изменить»).
   const canSetWorkStatus = hasPermission('checks_edit');

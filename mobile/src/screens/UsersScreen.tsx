@@ -84,6 +84,7 @@ const PERMISSION_LABELS: Record<PermissionKey, string> = {
   payment_edit: 'Меняет оплату чека',
   accept_payment: 'Кассир смены (принимает оплату)',
   sell_installment: 'Продаёт в рассрочку',
+  edit_closed_check: 'Редактирование проведённого чека',
   // Финансы
   profit_view: 'Видит прибыль',
   financial_reports: 'Финансовые отчёты',
@@ -111,6 +112,8 @@ const PERMISSION_HINTS: Partial<Record<PermissionKey, string>> = {
   checks_view_all: 'Без этого права мастер видит только свои чеки.',
   user_management: 'Даёт доступ к этому экрану — правам и сотрудникам.',
   warehouse_delete: 'Разрешает удалять товары и папки склада. Удалённое попадает в Корзину — можно восстановить.',
+  edit_closed_check:
+    'Разрешает менять уже проведённый (закрытый) чек. При сохранении склад, зарплата и касса пересчитываются автоматически.',
 };
 
 // Per-group SF-style icon + display order. Keys of PERMISSION_GROUPS drive the

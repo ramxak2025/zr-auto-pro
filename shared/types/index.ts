@@ -558,6 +558,7 @@ export type PermissionKey =
   | 'payment_edit'
   | 'accept_payment'
   | 'sell_installment'
+  | 'edit_closed_check'
   | 'profit_view'
   | 'financial_reports'
   | 'export_data'
@@ -591,6 +592,7 @@ export const PERMISSION_GROUPS = {
     'payment_edit',
     'accept_payment',
     'sell_installment',
+    'edit_closed_check',
   ],
   Финансы: ['profit_view', 'financial_reports', 'export_data', 'can_add_expenses', 'salary_view'],
   Склад: ['warehouse_access', 'suppliers_access', 'warehouse_delete'],
@@ -638,6 +640,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     payment_edit: false,
     accept_payment: false, // not a cashier by default — owner grants it explicitly
     sell_installment: false, // продажа в рассрочку — owner grants it explicitly
+    edit_closed_check: false, // #61 — редактирование проведённого чека выключено по умолчанию; владелец выдаёт явно
     // Финансы — NONE by default.
     profit_view: false,
     financial_reports: false,
