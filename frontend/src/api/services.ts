@@ -2,6 +2,7 @@ import api from './axios';
 import {
   createAuthApi,
   createUsersApi,
+  createRolesApi,
   createTenantsApi,
   createMyCompanyApi,
   createPlansApi,
@@ -87,6 +88,7 @@ export type {
 
 export const authApi = createAuthApi(api);
 export const usersApi = createUsersApi(api);
+export const rolesApi = createRolesApi(api);
 export const tenantsApi = createTenantsApi(api);
 export const myCompanyApi = createMyCompanyApi(api);
 export const plansApi = createPlansApi(api);

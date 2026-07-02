@@ -13,19 +13,21 @@ import {
   Archive,
   RotateCcw,
   UserX,
+  KeyRound,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { usersApi, productsApi } from '../api/services';
+import { usersApi, productsApi, rolesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { User, UserRole, UserPermissions, Product, PaginatedResponse } from '../types';
 import { ROLE_PERMISSION_DEFAULTS, PERMISSION_KEYS } from '../types';
-import type { PermissionKey } from '../types';
+import type { PermissionKey, Role } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
+import RolesManagement from '../components/RolesManagement';
 import { roleLabels } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -100,6 +102,8 @@ interface UserFormData {
   phone: string;
   password: string;
   role: UserRole;
+  /** 114 — назначенная роль (Bitrix24-style). null → без роли (легаси-права). */
+  roleId: string | null;
   salaryPercent: number;
   isActive: boolean;
   permissions: UserPermissions;
@@ -127,6 +131,7 @@ const emptyForm: UserFormData = {
   phone: '',
   password: '',
   role: UserRole.MASTER,
+  roleId: null,
   salaryPercent: 0,
   isActive: true,
   permissions: permissionsFromRoleDefaults(UserRole.MASTER),
@@ -136,7 +141,15 @@ export default function UsersPage() {
   const { hasPermission, user: currentUser } = useAuth();
   const queryClient = useQueryClient();
 
+  // Роли (Bitrix24-style, 114): backend routes director/admin/superadmin-gated,
+  // поэтому и кнопка «Роли», и select назначения видны только owner-class.
+  const isOwnerClass =
+    currentUser?.role === UserRole.SUPERADMIN ||
+    currentUser?.role === UserRole.DIRECTOR ||
+    currentUser?.role === UserRole.ADMIN;
+
   const [modalOpen, setModalOpen] = useState(false);
+  const [rolesOpen, setRolesOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserFormData>({ ...emptyForm });
   // Матрица прав: пока авторитетная карта тянется с выделенного endpoint'а,
@@ -158,6 +171,18 @@ export default function UsersPage() {
     queryFn: () => usersApi.getAll(),
     select: (res) => res.data as User[],
   });
+
+  // Список ролей — для select'а «Роль (набор прав)» в карточке сотрудника и для
+  // модалки управления. Инвалидация ['roles'] в RolesManagement обновляет оба.
+  const { data: rolesData, isLoading: rolesLoading } = useQuery({
+    queryKey: ['roles'],
+    queryFn: () => rolesApi.list(),
+    select: (res) => res.data as Role[],
+    enabled: isOwnerClass,
+  });
+  const roles = rolesData ?? [];
+  const systemRoles = roles.filter((r) => r.isSystem);
+  const customRoles = roles.filter((r) => !r.isSystem);
 
   // Defensive: the backend already excludes dismissed/purged employees from the
   // active list, but if a stale persisted cache ever serves one, never show it.
@@ -231,6 +256,7 @@ export default function UsersPage() {
       phone: user.phone || '',
       password: '',
       role: user.role,
+      roleId: user.roleId ?? null,
       salaryPercent: user.salaryPercent,
       isActive: user.isActive,
       // Seed: ролевые эффективные дефолты + карта из строки списка (list может
@@ -299,6 +325,12 @@ export default function UsersPage() {
       if (form.password) {
         payload.password = form.password;
       }
+      // 114 — назначение роли. Только owner-class (select виден только ему) и
+      // только в edit-режиме: CreateUserRequest roleId не принимает. null
+      // снимает роль (возврат к легаси-дефолтам строковой роли).
+      if (isOwnerClass) {
+        payload.roleId = form.roleId;
+      }
       // Self-lockout net (как на mobile): редактируя СВОЙ аккаунт, нельзя снять
       // с себя user_management — иначе потеряешь доступ к этому же экрану.
       const editsOwnAccount = editingUser.id === currentUser?.id;
@@ -332,7 +364,13 @@ export default function UsersPage() {
       {/* Header */}
       <div className="page-header">
         <h1 className="page-title">Сотрудники</h1>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {isOwnerClass && (
+            <button onClick={() => setRolesOpen(true)} className="btn-secondary">
+              <KeyRound className="w-4 h-4" />
+              Роли
+            </button>
+          )}
           <button onClick={() => setDismissedOpen(true)} className="btn-secondary">
             <Archive className="w-4 h-4" />
             Уволенные
@@ -527,6 +565,42 @@ export default function UsersPage() {
             </select>
           </div>
 
+          {/* Назначенная роль прав (114, Bitrix24-style) — только edit-режим:
+              создание её не принимает (роль назначается после создания). */}
+          {editingUser && isOwnerClass && (
+            <div>
+              <label className="label">Роль (набор прав)</label>
+              <select
+                className="input"
+                value={form.roleId ?? ''}
+                onChange={(e) => setForm({ ...form, roleId: e.target.value || null })}
+              >
+                <option value="">Без роли — только индивидуальные права</option>
+                {systemRoles.length > 0 && (
+                  <optgroup label="Системные">
+                    {systemRoles.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {customRoles.length > 0 && (
+                  <optgroup label="Мои роли">
+                    {customRoles.map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              <p className="text-xs text-gray-400 mt-1">
+                Роль задаёт базовый набор прав. Изменение применяется в течение ~30 секунд.
+              </p>
+            </div>
+          )}
+
           {/* Salary Percent */}
           <div>
             <label className="label">% ставка от услуг</label>
@@ -584,9 +658,18 @@ export default function UsersPage() {
             <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активен' : 'Неактивен'}</span>
           </div>
 
-          {/* Permissions */}
+          {/* Permissions. С назначенной ролью галочки — персональные overrides
+              ПОВЕРХ матрицы роли (effective = flatten(matrix) ⊕ permissions). */}
           <div>
-            <label className="label">Права доступа</label>
+            <label className="label">
+              {editingUser && form.roleId ? 'Индивидуальные исключения (поверх роли)' : 'Права доступа'}
+            </label>
+            {editingUser && form.roleId && (
+              <p className="text-xs text-gray-400 mt-1">
+                База прав — роль «{roles.find((r) => r.id === form.roleId)?.name ?? '…'}». Отмеченные ниже галочки
+                действуют поверх неё.
+              </p>
+            )}
             {permsLoading && <p className="text-xs text-gray-400 mt-1">Загружаем сохранённые права…</p>}
             {permsLoadFailed && !permsLoading && (
               <p className="text-xs text-red-500 mt-1">
@@ -660,6 +743,17 @@ export default function UsersPage() {
 
       {/* «Уволенные» (dismissed employees) Modal */}
       <DismissedModal isOpen={dismissedOpen} onClose={() => setDismissedOpen(false)} />
+
+      {/* Роли и права (Bitrix24-style) — только owner-class */}
+      {isOwnerClass && (
+        <RolesManagement
+          isOpen={rolesOpen}
+          onClose={() => setRolesOpen(false)}
+          roles={roles}
+          rolesLoading={rolesLoading}
+          users={users}
+        />
+      )}
     </div>
   );
 }
