@@ -31,6 +31,7 @@ import { checksApi, myCompanyApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import ConfirmDialog from '../components/ConfirmDialog';
+import Modal from '../components/Modal';
 import { WorkStatusBadge, WorkStatusPicker, resolveColumn } from '../components/WorkStatusPicker';
 import type { Check, Tenant, WorkBoardColumn } from '../types';
 import { generateReceiptPdf } from '../utils/generateReceiptPdf';
@@ -66,6 +67,8 @@ export default function CheckDetailPage() {
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [servicesOpen, setServicesOpen] = useState(true);
   const [productsOpen, setProductsOpen] = useState(true);
+  const [commentModalOpen, setCommentModalOpen] = useState(false);
+  const [commentDraft, setCommentDraft] = useState('');
 
   const { data: check, isLoading } = useQuery<Check>({
     queryKey: ['check', id],
@@ -116,6 +119,32 @@ export default function CheckDetailPage() {
     },
   });
 
+  // «Комментарий своего чека — день в день» (parity с mobile, round 7 item 10).
+  // PATCH /checks/:id/comment: узкое послабление — ЛЮБОЙ сотрудник без
+  // edit-permissions правит ТОЛЬКО комментарий СВОЕГО сегодняшнего чека
+  // (включая проведённые). Сервер — единственный настоящий страж (свой +
+  // сегодня по МСК); UI лишь прячет карандаш там, где заведомо откажут.
+  // Комментарий не двигает деньги — инвалидируем только деталь + журнал.
+  const commentMutation = useMutation({
+    mutationFn: (comment: string) => checksApi.updateComment(id!, comment),
+    onSuccess: () => {
+      setCommentModalOpen(false);
+      queryClient.invalidateQueries({ queryKey: ['check', id] });
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      toast.success('Комментарий сохранён');
+    },
+    onError: (err: any) => {
+      // 403 «только в день создания» / 404 «не найден» — текст бэкенда
+      // дословно: он точнее любого локального угадывания.
+      toast.error(err?.response?.data?.message ?? 'Не удалось сохранить комментарий');
+    },
+  });
+
+  const openCommentEditor = () => {
+    setCommentDraft(check?.comment ?? '');
+    setCommentModalOpen(true);
+  };
+
   const deleteMutation = useMutation({
     mutationFn: () => checksApi.remove(id!),
     onSuccess: () => {
@@ -145,6 +174,18 @@ export default function CheckDetailPage() {
   }
 
   const PaymentIcon = paymentMethodIcons[check.paymentMethod] ?? CreditCard;
+
+  // Гейт карандаша комментария: свой чек + сегодня (по локальному календарю —
+  // сервер проверяет по МСК и на пограничных случаях вежливо откажет своим
+  // 403-текстом) + не возвращённый. Права редактирования НЕ требуются.
+  const isOwnCheck = !!user?.id && check.masterId === user.id;
+  const checkDay = new Date(check.date);
+  const today = new Date();
+  const isCheckToday =
+    checkDay.getFullYear() === today.getFullYear() &&
+    checkDay.getMonth() === today.getMonth() &&
+    checkDay.getDate() === today.getDate();
+  const canQuickEditComment = isOwnCheck && isCheckToday && !check.isReturned;
 
   return (
     <div className="space-y-5 pb-6">
@@ -659,18 +700,43 @@ export default function CheckDetailPage() {
             </div>
           )}
 
-          {/* Comment */}
-          {check.comment && (
+          {/* Comment. Карандаш — «день в день» правка комментария СВОЕГО чека:
+              виден и без edit-permissions, и на проведённых чеках (сервер
+              принуждает «свой + сегодня»). Когда комментария нет, а правка
+              доступна — ghost-строка «Добавить комментарий» на том же месте. */}
+          {check.comment ? (
             <div className="mt-4 pt-4 border-t border-gray-100">
               <div className="flex items-center gap-2 mb-2">
                 <MessageSquare className="w-4 h-4 text-amber-400" />
                 <span className="text-sm font-medium text-gray-700">{'Комментарий'}</span>
+                {canQuickEditComment && (
+                  <button
+                    type="button"
+                    onClick={openCommentEditor}
+                    className="p-1 rounded-lg text-gray-400 hover:text-primary-600 hover:bg-primary-50 transition-colors"
+                    title="Изменить комментарий"
+                    aria-label="Изменить комментарий"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               <p className="text-sm text-amber-700 whitespace-pre-wrap bg-amber-50 rounded-lg p-3 border border-amber-100">
                 {check.comment}
               </p>
             </div>
-          )}
+          ) : canQuickEditComment ? (
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <button
+                type="button"
+                onClick={openCommentEditor}
+                className="flex items-center gap-2 text-sm font-medium text-gray-400 hover:text-primary-600 transition-colors"
+              >
+                <MessageSquare className="w-4 h-4" />
+                {'Добавить комментарий'}
+              </button>
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -681,6 +747,38 @@ export default function CheckDetailPage() {
           {'Назад к чекам'}
         </button>
       </div>
+
+      {/* Comment quick-edit — «день в день» правка комментария своего чека */}
+      <Modal
+        isOpen={commentModalOpen}
+        onClose={() => setCommentModalOpen(false)}
+        title={check.comment ? 'Изменить комментарий' : 'Добавить комментарий'}
+        size="md"
+      >
+        <textarea
+          value={commentDraft}
+          onChange={(e) => setCommentDraft(e.target.value)}
+          rows={4}
+          maxLength={2000}
+          autoFocus
+          placeholder="Комментарий к чеку..."
+          className="input w-full text-sm"
+        />
+        <p className="text-xs text-gray-400 mt-2">Комментарий своего чека можно менять только в день его создания.</p>
+        <div className="flex gap-2 mt-4">
+          <button type="button" onClick={() => setCommentModalOpen(false)} className="btn-secondary flex-1">
+            {'Отмена'}
+          </button>
+          <button
+            type="button"
+            onClick={() => commentMutation.mutate(commentDraft.trim())}
+            disabled={commentMutation.isPending}
+            className="btn-primary flex-1 disabled:opacity-50"
+          >
+            {commentMutation.isPending ? 'Сохранение...' : 'Сохранить'}
+          </button>
+        </div>
+      </Modal>
 
       {/* Delete confirmation */}
       <ConfirmDialog

@@ -11,6 +11,7 @@ import {
   createProductsApi,
   createServicesApi,
   createChecksApi,
+  createCheckTemplatesApi,
   createSuppliersApi,
   createSalaryApi,
   createReportsApi,
@@ -95,6 +96,7 @@ export const carsApi = createCarsApi(api);
 export const productsApi = createProductsApi(api);
 export const servicesApi = createServicesApi(api);
 export const checksApi = createChecksApi(api);
+export const checkTemplatesApi = createCheckTemplatesApi(api);
 export const suppliersApi = createSuppliersApi(api);
 export const salaryApi = createSalaryApi(api);
 export const reportsApi = createReportsApi(api);

@@ -24,6 +24,8 @@ import {
   ShieldCheck,
   ChevronDown as ChevronDownIcon,
   Warehouse as WarehouseIcon,
+  LayoutTemplate,
+  BookmarkPlus,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru as ruLocale } from 'date-fns/locale';
@@ -38,6 +40,7 @@ import type {
   Product,
   CheckServiceLine,
   CheckProductLine,
+  CheckTemplate,
   WarrantyClaim,
   Warehouse,
   PosSettings,
@@ -45,6 +48,7 @@ import type {
 import { UserRole } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
+import { TemplatePickerModal, SaveTemplateModal } from '../components/CheckTemplatesModals';
 
 const formatCurrency = (value: number): string => {
   return value.toLocaleString('ru-RU') + ' \u20BD';
@@ -415,6 +419,10 @@ export default function CheckCreatePage() {
 
   // Product picker modal
   const [showProductPicker, setShowProductPicker] = useState(false);
+
+  // Шаблоны чеков (parity с mobile): пикер + «Сохранить как шаблон»
+  const [showTemplatesPicker, setShowTemplatesPicker] = useState(false);
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
 
   // Warehouse filter for product picker (defaults to main warehouse)
   const [pickerWarehouseId, setPickerWarehouseId] = useState<string>('');
@@ -797,6 +805,61 @@ export default function CheckCreatePage() {
     setProductLines((prev) => prev.filter((_, i) => i !== index));
   };
 
+  // ── Шаблоны чеков ─────────────────────────────────────────────────────
+  // Применение ЗАМЕЩАЕТ строки формы (semantics mobile applyTemplate):
+  // услуги получают мастером текущего пользователя, товары подтягивают
+  // unit из каталога (шаг количества на web зависит от единицы измерения).
+  const applyTemplate = (template: CheckTemplate) => {
+    setServiceLines(
+      template.services.map((s) => ({
+        serviceId: s.serviceId || '',
+        masterId: user?.id || '',
+        name: s.name,
+        price: s.price,
+        quantity: s.quantity,
+      })),
+    );
+    setProductLines(
+      template.products.map((p) => {
+        const catalogProduct = (allProducts ?? []).find((ap) => ap.id === p.productId);
+        return {
+          productId: p.productId || '',
+          name: p.name,
+          sellPrice: p.sellPrice,
+          costPrice: p.costPrice,
+          quantity: p.quantity,
+          unit: catalogProduct?.unit || 'pcs',
+        };
+      }),
+    );
+    setShowTemplatesPicker(false);
+    toast.success(`Шаблон «${template.name}» применён`);
+  };
+
+  // В шаблон уходят только строки с catalog-id (как на mobile): произвольная
+  // строка без привязки к справочнику в шаблоне бесполезна.
+  const templateServices = useMemo(
+    () =>
+      serviceLines
+        .filter((l) => !!l.serviceId)
+        .map((l) => ({ serviceId: l.serviceId, name: l.name, price: Number(l.price), quantity: Number(l.quantity) })),
+    [serviceLines],
+  );
+  const templateProducts = useMemo(
+    () =>
+      productLines
+        .filter((l) => !!l.productId)
+        .map((l) => ({
+          productId: l.productId,
+          name: l.name,
+          sellPrice: Number(l.sellPrice),
+          costPrice: Number(l.costPrice),
+          quantity: Number(l.quantity),
+        })),
+    [productLines],
+  );
+  const canSaveTemplate = templateServices.length + templateProducts.length > 0;
+
   // Submit
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -884,6 +947,16 @@ export default function CheckCreatePage() {
             <h1 className="page-title">{isEditMode ? 'Редактировать чек' : 'Новый чек'}</h1>
           </div>
         </div>
+        {/* Шаблоны чеков — быстрое заполнение формы (parity с mobile) */}
+        <button
+          type="button"
+          onClick={() => setShowTemplatesPicker(true)}
+          className="flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-600 hover:text-primary-600 hover:border-primary-200 hover:bg-primary-50 transition-colors flex-shrink-0"
+          title="Заполнить чек из шаблона"
+        >
+          <LayoutTemplate className="w-4 h-4" />
+          <span className="hidden sm:inline">Шаблоны</span>
+        </button>
       </div>
 
       <form onSubmit={handleSubmit}>
@@ -1620,6 +1693,19 @@ export default function CheckCreatePage() {
                 </span>
               )}
             </button>
+            {/* \u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u0441\u043E\u0441\u0442\u0430\u0432 \u0447\u0435\u043A\u0430 \u043A\u0430\u043A \u0448\u0430\u0431\u043B\u043E\u043D (\u0442\u043E\u043B\u044C\u043A\u043E \u0441\u0442\u0440\u043E\u043A\u0438 \u0441\u043E \u0441\u0432\u044F\u0437\u044C\u044E \u0441 \u043A\u0430\u0442\u0430\u043B\u043E\u0433\u043E\u043C) */}
+            {canSaveTemplate && (
+              <button
+                type="button"
+                onClick={() => setShowSaveTemplate(true)}
+                className="w-full mt-2 flex items-center justify-center gap-1.5 py-2 text-xs font-medium text-gray-400 hover:text-primary-600 transition-colors"
+              >
+                <BookmarkPlus className="w-3.5 h-3.5" />
+                {
+                  '\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u043A\u0430\u043A \u0448\u0430\u0431\u043B\u043E\u043D'
+                }
+              </button>
+            )}
             <button
               type="button"
               onClick={() => navigate(-1)}
@@ -1640,6 +1726,19 @@ export default function CheckCreatePage() {
         warehouses={warehouses}
         selectedWarehouseId={pickerWarehouseId}
         onSelectWarehouse={setPickerWarehouseId}
+      />
+
+      {/* Шаблоны чеков: выбор + управление и «Сохранить как шаблон» */}
+      <TemplatePickerModal
+        isOpen={showTemplatesPicker}
+        onClose={() => setShowTemplatesPicker(false)}
+        onApply={applyTemplate}
+      />
+      <SaveTemplateModal
+        isOpen={showSaveTemplate}
+        onClose={() => setShowSaveTemplate(false)}
+        services={templateServices}
+        products={templateProducts}
       />
     </div>
   );
