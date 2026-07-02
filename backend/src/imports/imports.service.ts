@@ -1,11 +1,13 @@
 import { Inject, Injectable, Logger, BadRequestException, InternalServerErrorException } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
-import { normalizePhone } from '../common/normalize-phone';
+import { normalizePhone, phoneSearchKey } from '../common/normalize-phone';
 import { normalizePlate } from './normalize-plate';
 import { ImportRowInputDto } from './dto/import-clients-cars.dto';
 
 // ─── Issue codes (kept in sync with shared/api/types.ts ImportIssueKind) ────
+// `duplicate_phone` is backend-additive: older web bundles render unknown
+// kinds via the `ISSUE_LABELS[kind] || kind` fallback, so it is safe to emit.
 type ImportIssueKind =
   | 'no_phone'
   | 'invalid_phone'
@@ -17,7 +19,8 @@ type ImportIssueKind =
   | 'plate_belongs_to_other_client'
   | 'duplicate_in_file'
   | 'multiple_name_candidates'
-  | 'name_conflict_same_phone';
+  | 'name_conflict_same_phone'
+  | 'duplicate_phone';
 
 export interface RowIssue {
   sourceRow: number;
@@ -39,9 +42,22 @@ export interface PlannedCar {
 }
 
 export interface ClientGroup {
+  /**
+   * Group identity = last-10-digit national phone key (mirrors
+   * `phoneSearchKey` / migration 104/108). Decisions reference this key.
+   */
   phoneKey: string;
+  /** Canonical phone as it will be stored: «+7 (988) 444-44-85». */
+  phoneDisplay: string;
   fullName: string;
+  /** 'duplicatePhone' when a client with the same phone key already exists. */
+  kind: 'new' | 'duplicatePhone';
   existingClientId: string | null;
+  existingClientName: string | null;
+  existingClientPhone: string | null;
+  /** Name/comment as provided by the FILE (used by «Заменить»). */
+  fileFullName: string | null;
+  fileComment: string | null;
   candidateNames: string[];
   sourceRows: number[];
   cars: PlannedCar[];
@@ -63,6 +79,10 @@ export interface PreviewSummary {
   rowsSkipped: number;
   errors: number;
   warnings: number;
+  /** Confirm-only: duplicates updated in place («Заменить»). */
+  clientsReplaced?: number;
+  /** Confirm-only: duplicates left untouched («Пропустить»). */
+  duplicatesSkipped?: number;
 }
 
 export interface PlanResult {
@@ -78,7 +98,15 @@ export interface ConfirmResult {
   createdClientIds: string[];
   createdCarIds: string[];
   reusedClientIds: string[];
+  /** Clients updated in place by a «Заменить» decision. */
+  replacedClientIds: string[];
   skipped: SkippedRow[];
+}
+
+export interface DuplicateDecisions {
+  /** Fallback for duplicate groups without an explicit decision. */
+  defaultAction?: 'replace' | 'skip';
+  decisions?: Array<{ phoneKey: string; action: 'replace' | 'skip' }>;
 }
 
 const UNCLEAR_NOTE_MARKERS = ['unclear_car_model', 'no_car_model', 'unclear'];
@@ -137,6 +165,31 @@ function isValidNormalizedPhone(phone: string): boolean {
   // Canonical Russian-style number: '+' followed by 10–15 digits.
   // Russian numbers normalize to "+7" + 10 digits = 12 chars total.
   return /^\+\d{10,15}$/.test(phone);
+}
+
+// Format-agnostic phone key expression — the SAME expression the rest of the
+// app dedups/searches on (clients.service, migrations 104 + 108's
+// uq_clients_tenant_phone_key). Mirrors `phoneSearchKey` in JS.
+const PHONE_KEY_SQL = `right(regexp_replace(phone, '[^0-9]', '', 'g'), 10)`;
+
+/**
+ * Canonical STORED phone form — mirrors what the rest of the app writes:
+ * the web/mobile client forms run the number through formatPhone
+ * (shared/validation/phone.ts) and ClientsService.create stores that string
+ * verbatim, i.e. «+7 (988) 444-44-85». Russian numbers (11 digits starting
+ * with 7 after the 8→7 conversion, or bare 10-digit nationals) get that
+ * exact shape; anything else (foreign / unusual length) is stored compact:
+ * «+995555111222». Matching is key-based either way — this only makes the
+ * stored form uniform.
+ */
+function canonicalStoredPhone(raw: string): string {
+  const normalized = normalizePhone(raw || ''); // '+' + digits, 8→7 for 11-digit RU
+  const digits = normalized.replace(/\D/g, '');
+  const national = digits.length === 11 && digits[0] === '7' ? digits.slice(1) : digits.length === 10 ? digits : null;
+  if (national) {
+    return `+7 (${national.slice(0, 3)}) ${national.slice(3, 6)}-${national.slice(6, 8)}-${national.slice(8, 10)}`;
+  }
+  return normalized;
 }
 
 @Injectable()
@@ -205,6 +258,7 @@ export class ImportsService {
     userId: string | undefined,
     rows: ImportRowInputDto[],
     options: { allowForeignPlates: boolean },
+    duplicates?: DuplicateDecisions,
   ): Promise<ConfirmResult> {
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new BadRequestException({ message: 'Нет строк для импорта' });
@@ -213,8 +267,26 @@ export class ImportsService {
     // Re-plan from scratch — never trust client-side preview.
     const plan = await this.planImport(tenantID, rows, options);
 
+    // Duplicate handling mode:
+    //  - legacy (no decisions at all): old behaviour — reuse the existing
+    //    client silently and attach its new cars (keeps an already-open older
+    //    web bundle working);
+    //  - decisions: per-group «replace» (update-in-place) / «skip» (untouched)
+    //    with `duplicateDefault` as the fallback.
+    const legacyMode = !duplicates || (duplicates.defaultAction === undefined && duplicates.decisions === undefined);
+    const defaultAction: 'replace' | 'skip' = duplicates?.defaultAction ?? 'skip';
+    // When an explicit decisions array is provided (the web UI always sends
+    // one entry per duplicate it SHOWED), it is authoritative: a duplicate
+    // that is NOT in the list appeared between dry-run and apply — the user
+    // never reviewed it, so it must never be overwritten (skip + count),
+    // even when duplicateDefault = 'replace'.
+    const hasExplicitDecisions = Array.isArray(duplicates?.decisions);
+    const decisionByKey = new Map<string, 'replace' | 'skip'>();
+    for (const d of duplicates?.decisions ?? []) decisionByKey.set(d.phoneKey, d.action);
+
     const createdClientIds: string[] = [];
     const reusedClientIds: string[] = [];
+    const replacedClientIds: string[] = [];
     const createdCarIds: string[] = [];
     const skippedAtConfirm: SkippedRow[] = [];
 
@@ -225,26 +297,88 @@ export class ImportsService {
       for (const group of plan.groups) {
         let clientId = group.existingClientId;
 
+        if (clientId) {
+          // Duplicate detected by the confirm-time re-plan.
+          if (legacyMode) {
+            reusedClientIds.push(clientId);
+          } else {
+            const explicit = decisionByKey.get(group.phoneKey);
+            const unseen = hasExplicitDecisions && explicit === undefined;
+            const action = explicit ?? (unseen ? 'skip' : defaultAction);
+            if (action === 'skip') {
+              skippedAtConfirm.push({
+                sourceRow: group.sourceRows[0],
+                reason: 'duplicate_phone',
+                message: unseen
+                  ? `Клиент с телефоном ${group.phoneDisplay} появился в базе во время импорта — пропущен`
+                  : `Клиент «${group.existingClientName || ''}» (${group.phoneDisplay}) уже есть в базе — пропущен по вашему выбору`,
+              });
+              continue; // fully untouched: no field updates, no cars
+            }
+            // «Заменить» = UPDATE-IN-PLACE. Same id — checks / долги / бонусы
+            // keep pointing at the client. Only overwrite what the file
+            // actually provides; also canonicalize the stored phone (same
+            // last-10 key, so uq_clients_tenant_phone_key is unaffected).
+            const { rowCount } = await dbClient.query(
+              `UPDATE clients
+                  SET full_name = COALESCE(NULLIF($1, ''), full_name),
+                      comment   = COALESCE(NULLIF($2, ''), comment),
+                      phone     = $3
+                WHERE id = $4 AND tenant_id = $5`,
+              [group.fileFullName || '', group.fileComment || '', group.phoneDisplay, clientId, tenantID],
+            );
+            if (rowCount === 0) {
+              // Client vanished between plan and txn — recreate it below.
+              clientId = null;
+            } else {
+              replacedClientIds.push(clientId);
+            }
+          }
+        }
+
         if (!clientId) {
           // Re-check inside the transaction — concurrent inserts could exist.
+          // Key-based (mig 104/108): a client stored as «+7 (988) 444-44-85»
+          // must be found for the file's «89884444485».
           const { rows: existing } = await dbClient.query(
-            'SELECT id, full_name FROM clients WHERE tenant_id = $1 AND phone = $2 LIMIT 1',
+            `SELECT id, full_name, phone FROM clients
+             WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2 LIMIT 1`,
             [tenantID, group.phoneKey],
           );
           if (existing.length > 0) {
-            clientId = existing[0].id as string;
-            reusedClientIds.push(clientId);
+            // Appeared after the dry-run — the user never reviewed this
+            // duplicate, so never overwrite it: count as a duplicate-skip.
+            if (legacyMode) {
+              clientId = existing[0].id as string;
+              reusedClientIds.push(clientId);
+            } else {
+              skippedAtConfirm.push({
+                sourceRow: group.sourceRows[0],
+                reason: 'duplicate_phone',
+                message: `Клиент с телефоном ${group.phoneDisplay} появился в базе во время импорта — пропущен`,
+              });
+              continue;
+            }
           } else {
-            const { rows: ins } = await dbClient.query(
-              `INSERT INTO clients (full_name, phone, comment, tenant_id)
-               VALUES ($1, $2, $3, $4) RETURNING id`,
-              [group.fullName || 'Клиент', group.phoneKey, null, tenantID],
-            );
-            clientId = ins[0].id as string;
+            const inserted = await this.insertClientWithSavepoint(dbClient, {
+              tenantID,
+              fullName: group.fullName || 'Клиент',
+              phone: group.phoneDisplay,
+              comment: group.fileComment,
+            });
+            if (!inserted) {
+              // Race between dry-run and apply: uq_clients_tenant_phone_key
+              // fired (23505). Graceful: count as duplicate-skip, keep going.
+              skippedAtConfirm.push({
+                sourceRow: group.sourceRows[0],
+                reason: 'duplicate_phone',
+                message: `Клиент с телефоном ${group.phoneDisplay} появился в базе во время импорта — пропущен`,
+              });
+              continue;
+            }
+            clientId = inserted;
             createdClientIds.push(clientId);
           }
-        } else {
-          reusedClientIds.push(clientId);
         }
 
         for (const car of group.cars) {
@@ -325,10 +459,20 @@ export class ImportsService {
 
       // Audit row.
       const skippedCount = plan.skippedRows.length + skippedAtConfirm.length;
+      const duplicatesSkipped = skippedAtConfirm.filter((s) => s.reason === 'duplicate_phone').length;
       const auditPayload = {
         skipped: [...plan.skippedRows, ...skippedAtConfirm],
         issues: plan.issues,
         options,
+        duplicates: legacyMode
+          ? { mode: 'legacy' }
+          : {
+              mode: 'decisions',
+              defaultAction,
+              explicitDecisions: decisionByKey.size,
+              replaced: replacedClientIds.length,
+              skipped: duplicatesSkipped,
+            },
       };
       const { rows: runRows } = await dbClient.query(
         `INSERT INTO import_runs
@@ -340,7 +484,9 @@ export class ImportsService {
           userId || null,
           rows.length,
           createdClientIds.length,
-          reusedClientIds.length,
+          // The audit column counts every existing client the run touched or
+          // deliberately attached to — reused (legacy) + replaced.
+          reusedClientIds.length + replacedClientIds.length,
           createdCarIds.length,
           skippedCount,
           JSON.stringify(auditPayload),
@@ -353,9 +499,11 @@ export class ImportsService {
       const summary: PreviewSummary = {
         ...plan.summary,
         clientsWillCreate: createdClientIds.length,
-        clientsWillReuse: reusedClientIds.length,
+        clientsWillReuse: reusedClientIds.length + replacedClientIds.length,
         carsWillCreate: createdCarIds.length,
         rowsSkipped: skippedCount,
+        clientsReplaced: replacedClientIds.length,
+        duplicatesSkipped,
       };
 
       return {
@@ -364,6 +512,7 @@ export class ImportsService {
         createdClientIds,
         createdCarIds,
         reusedClientIds,
+        replacedClientIds,
         skipped: [...plan.skippedRows, ...skippedAtConfirm],
       };
     } catch (err) {
@@ -372,6 +521,35 @@ export class ImportsService {
       throw new InternalServerErrorException({ message: 'Ошибка импорта. Изменения отменены.' });
     } finally {
       dbClient.release();
+    }
+  }
+
+  /**
+   * INSERT a client behind a SAVEPOINT so a unique-violation on
+   * uq_clients_tenant_phone_key (a dry-run → apply race) rolls back just this
+   * statement instead of poisoning the whole import transaction.
+   * Returns the new client id, or null when the phone key already exists.
+   */
+  private async insertClientWithSavepoint(
+    db: PoolClient,
+    params: { tenantID: string; fullName: string; phone: string; comment: string | null },
+  ): Promise<string | null> {
+    await db.query('SAVEPOINT sp_import_client');
+    try {
+      const { rows } = await db.query(
+        `INSERT INTO clients (full_name, phone, comment, tenant_id)
+         VALUES ($1, $2, $3, $4) RETURNING id`,
+        [params.fullName, params.phone, params.comment, params.tenantID],
+      );
+      await db.query('RELEASE SAVEPOINT sp_import_client');
+      return rows[0].id as string;
+    } catch (err) {
+      await db.query('ROLLBACK TO SAVEPOINT sp_import_client');
+      const e = err as { code?: string; constraint?: string };
+      if (e?.code === '23505' && e?.constraint === 'uq_clients_tenant_phone_key') {
+        return null;
+      }
+      throw err;
     }
   }
 
@@ -387,8 +565,12 @@ export class ImportsService {
     // Step 1: per-row classification.
     interface ClassifiedRow {
       sourceRow: number;
+      /** Last-10-digit national key — group identity + DB dedup key. */
       phoneKey: string;
+      /** Canonical stored form: «+7 (988) 444-44-85». */
+      phoneCanonical: string;
       clientName: string;
+      clientComment: string | null;
       plate: ReturnType<typeof normalizePlate>;
       rawCarModel: string | null;
       makeModel: string;
@@ -492,8 +674,15 @@ export class ImportsService {
 
       classified.push({
         sourceRow: row.sourceRow,
-        phoneKey: normalized,
+        // Group by the last-10 key so «79884444485», «89884444485» and
+        // «9884444485» collapse into ONE group — the same identity the DB
+        // unique index (migration 108) enforces. Grouping by the full
+        // normalized string used to split those into separate groups and
+        // the second INSERT then blew up the whole transaction with 23505.
+        phoneKey: phoneSearchKey(phoneInput),
+        phoneCanonical: canonicalStoredPhone(phoneInput),
         clientName: normalizeClientName(row.clientName),
+        clientComment: (row.clientComment || '').trim() || null,
         plate,
         rawCarModel,
         makeModel,
@@ -531,14 +720,24 @@ export class ImportsService {
     }
 
     // Step 3: pre-fetch existing clients/cars for these phones.
+    // Match by the last-10-digit key — clients created through the web form
+    // are stored as «+7 (988) 444-44-85», so the old exact `phone = '+7…'`
+    // compare missed them (and the INSERT then collided with
+    // uq_clients_tenant_phone_key). Uses idx_clients_phone_core (mig 104).
     const phoneKeys = Array.from(byPhone.keys());
-    const { rows: existingClients } = await this.pool.query<{ id: string; full_name: string; phone: string }>(
-      `SELECT id, full_name, phone FROM clients WHERE tenant_id = $1 AND phone = ANY($2::text[])`,
+    const { rows: existingClients } = await this.pool.query<{
+      id: string;
+      full_name: string;
+      phone: string;
+      key: string;
+    }>(
+      `SELECT id, full_name, phone, ${PHONE_KEY_SQL} AS key
+       FROM clients WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = ANY($2::text[])`,
       [tenantID, phoneKeys],
     );
-    const existingClientByPhone = new Map<string, { id: string; fullName: string }>();
+    const existingClientByPhone = new Map<string, { id: string; fullName: string; phone: string }>();
     for (const ec of existingClients) {
-      existingClientByPhone.set(ec.phone, { id: ec.id, fullName: ec.full_name });
+      existingClientByPhone.set(ec.key, { id: ec.id, fullName: ec.full_name, phone: ec.phone });
     }
 
     // For plates: collect every plate key we plan to write, then look them up.
@@ -584,6 +783,8 @@ export class ImportsService {
       const { name: pickedName, multiple } = pickClientName(allNames);
       const existing = existingClientByPhone.get(phoneKey);
       const finalName = existing?.fullName || pickedName || 'Клиент';
+      const phoneCanonical = rowsForPhone[0].phoneCanonical;
+      const fileComment = rowsForPhone.map((r) => r.clientComment).find((c) => !!c) || null;
 
       if (multiple) {
         const distinctNames = Array.from(new Set(allNames));
@@ -676,8 +877,14 @@ export class ImportsService {
 
       groups.push({
         phoneKey,
+        phoneDisplay: phoneCanonical,
         fullName: finalName,
+        kind: existing ? 'duplicatePhone' : 'new',
         existingClientId: existing?.id || null,
+        existingClientName: existing?.fullName || null,
+        existingClientPhone: existing?.phone || null,
+        fileFullName: pickedName || null,
+        fileComment,
         candidateNames: Array.from(new Set(allNames)),
         sourceRows: rowsForPhone.map((r) => r.sourceRow),
         cars,

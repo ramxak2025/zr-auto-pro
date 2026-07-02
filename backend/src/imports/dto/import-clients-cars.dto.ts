@@ -1,4 +1,14 @@
-import { IsArray, IsInt, IsOptional, IsString, ValidateNested, IsBoolean, ArrayMaxSize, Min } from 'class-validator';
+import {
+  IsArray,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  ValidateNested,
+  IsBoolean,
+  ArrayMaxSize,
+  Min,
+} from 'class-validator';
 import { Type } from 'class-transformer';
 
 export class ImportRowInputDto {
@@ -25,6 +35,11 @@ export class ImportRowInputDto {
   @IsString()
   @IsOptional()
   carModel?: string | null;
+
+  /** Client comment («Комментарий» column) — stored on the client card. */
+  @IsString()
+  @IsOptional()
+  clientComment?: string | null;
 
   @IsString()
   @IsOptional()
@@ -56,4 +71,34 @@ export class ImportPreviewDto {
   options?: ImportOptionsDto;
 }
 
-export class ImportConfirmDto extends ImportPreviewDto {}
+/**
+ * Per-duplicate decision. `phoneKey` is the group key from the preview
+ * response (last-10-digit national phone key — same key the whole app
+ * dedups on, see migration 104/108).
+ */
+export class ImportDecisionDto {
+  @IsString()
+  phoneKey!: string;
+
+  @IsIn(['replace', 'skip'])
+  action!: 'replace' | 'skip';
+}
+
+export class ImportConfirmDto extends ImportPreviewDto {
+  /**
+   * Global choice for duplicate-phone groups without an explicit decision.
+   * When BOTH `duplicateDefault` and `decisions` are absent the endpoint
+   * keeps its legacy behaviour (reuse existing client + attach new cars),
+   * so an already-open older web bundle keeps working mid-deploy.
+   */
+  @IsOptional()
+  @IsIn(['replace', 'skip'])
+  duplicateDefault?: 'replace' | 'skip';
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(MAX_ROWS)
+  @ValidateNested({ each: true })
+  @Type(() => ImportDecisionDto)
+  decisions?: ImportDecisionDto[];
+}

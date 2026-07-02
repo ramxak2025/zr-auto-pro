@@ -16,15 +16,56 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { importsApi } from '../api/services';
+import { formatPhone } from '../../../shared/validation/phone';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import type {
   ImportRowInput,
   ImportPreviewResponse,
   ImportConfirmResponse,
+  ImportConfirmRequest,
+  ImportClientGroup,
   ImportRowIssue,
   ImportIssueKind,
 } from '../../../shared/api/types';
+
+// ── Local additive API types (замена/пропуск дублей) ─────────────────────
+// The backend physically returns/accepts these extra fields; they are typed
+// locally instead of in shared/api/types.ts to keep this change page-scoped
+// (shared/ is being edited concurrently by another workstream).
+type DuplicateAction = 'replace' | 'skip';
+
+interface ImportRowInputV2 extends ImportRowInput {
+  /** «Комментарий» column — stored on the client card. */
+  clientComment?: string | null;
+}
+
+interface ImportClientGroupV2 extends ImportClientGroup {
+  /** Canonical phone as it will be stored: «+7 (988) 444-44-85». */
+  phoneDisplay?: string;
+  kind?: 'new' | 'duplicatePhone';
+  existingClientName?: string | null;
+  existingClientPhone?: string | null;
+  fileFullName?: string | null;
+  fileComment?: string | null;
+}
+
+interface ImportPreviewResponseV2 extends Omit<ImportPreviewResponse, 'groups'> {
+  groups: ImportClientGroupV2[];
+}
+
+interface ImportConfirmRequestV2 extends ImportConfirmRequest {
+  duplicateDefault?: DuplicateAction;
+  decisions?: Array<{ phoneKey: string; action: DuplicateAction }>;
+}
+
+interface ImportConfirmResponseV2 extends ImportConfirmResponse {
+  replacedClientIds?: string[];
+  summary: ImportConfirmResponse['summary'] & {
+    clientsReplaced?: number;
+    duplicatesSkipped?: number;
+  };
+}
 
 // ── Field keys we'll feed to the backend ─────────────────────────────────
 type CanonicalField =
@@ -34,6 +75,7 @@ type CanonicalField =
   | 'phoneRaw'
   | 'carPlate'
   | 'carModel'
+  | 'clientComment'
   | 'notes'
   | 'originalClientText';
 
@@ -44,6 +86,7 @@ const FIELD_LABELS: Record<CanonicalField, string> = {
   phoneRaw: 'Телефон (как в файле)',
   carPlate: 'Госномер',
   carModel: 'Марка/модель авто',
+  clientComment: 'Комментарий клиента',
   notes: 'Пометки качества данных',
   originalClientText: 'Исходный текст клиента',
 };
@@ -55,13 +98,18 @@ const FIELD_ORDER: CanonicalField[] = [
   'phoneRaw',
   'carPlate',
   'carModel',
+  'clientComment',
   'notes',
   'originalClientText',
 ];
 
 // Auto-detect a column index for each canonical field by header keyword.
 function detectColumnMapping(headers: string[]): Record<CanonicalField, number> {
-  const lower = headers.map((h) => String(h ?? '').trim().toLowerCase());
+  const lower = headers.map((h) =>
+    String(h ?? '')
+      .trim()
+      .toLowerCase(),
+  );
   const map: Record<CanonicalField, number> = {
     sourceRow: -1,
     clientName: -1,
@@ -69,6 +117,7 @@ function detectColumnMapping(headers: string[]): Record<CanonicalField, number> 
     phoneRaw: -1,
     carPlate: -1,
     carModel: -1,
+    clientComment: -1,
     notes: -1,
     originalClientText: -1,
   };
@@ -79,7 +128,11 @@ function detectColumnMapping(headers: string[]): Record<CanonicalField, number> 
       map.originalClientText = i;
     } else if (map.clientName < 0 && /(client.?name|client_name|^name$|имя|клиент|фио|fio|full.?name)/.test(h)) {
       map.clientName = i;
-    } else if (map.phone < 0 && /(^phone$|phone_(?:n|norm)|телефон.?норм|phone$|телефон)/.test(h) && !/raw|^источн/.test(h)) {
+    } else if (
+      map.phone < 0 &&
+      /(^phone$|phone_(?:n|norm)|телефон.?норм|phone$|телефон)/.test(h) &&
+      !/raw|^источн/.test(h)
+    ) {
       map.phone = i;
     } else if (map.phoneRaw < 0 && /(phone_raw|phone.?raw|phoneraw|телефон.?сыр|raw.?phone)/.test(h)) {
       map.phoneRaw = i;
@@ -87,6 +140,9 @@ function detectColumnMapping(headers: string[]): Record<CanonicalField, number> 
       map.carPlate = i;
     } else if (map.carModel < 0 && /(model|марк|car_model|car.?make|модель|авто)/.test(h)) {
       map.carModel = i;
+    } else if (map.clientComment < 0 && /(коммент|^comment|client.?comment)/.test(h)) {
+      // Must run before `notes` — its /комм/ would swallow «Комментарий».
+      map.clientComment = i;
     } else if (map.notes < 0 && /(note|пометк|комм|warn|issue|качеств)/.test(h)) {
       map.notes = i;
     }
@@ -113,6 +169,23 @@ const ISSUE_LABELS: Record<ImportIssueKind, string> = {
   multiple_name_candidates: 'Несколько имён на один телефон',
   name_conflict_same_phone: 'Конфликт имени',
 };
+
+// `duplicate_phone` is emitted by the backend for duplicate-skips — it is not
+// part of the shared ImportIssueKind union (kept page-local, see header note).
+const EXTRA_ISSUE_LABELS: Record<string, string> = {
+  duplicate_phone: 'Дубль по телефону (пропущен)',
+};
+function issueLabel(kind: string): string {
+  return ISSUE_LABELS[kind as ImportIssueKind] || EXTRA_ISSUE_LABELS[kind] || kind;
+}
+
+// Pretty-print an already-stored phone; leaves foreign / unusual numbers as is
+// (formatPhone assumes the RU 11-digit shape).
+function displayPhone(p?: string | null): string {
+  if (!p) return '';
+  const digits = p.replace(/\D/g, '');
+  return digits.length === 11 && (digits[0] === '7' || digits[0] === '8') ? formatPhone(p) : p;
+}
 
 const SEVERITY: Record<ImportIssueKind, 'error' | 'warning'> = {
   no_phone: 'error',
@@ -146,15 +219,20 @@ export default function ImportClientsCarsPage() {
     phoneRaw: -1,
     carPlate: -1,
     carModel: -1,
+    clientComment: -1,
     notes: -1,
     originalClientText: -1,
   }));
   const [allowForeignPlates, setAllowForeignPlates] = useState(true);
 
   const [previewing, setPreviewing] = useState(false);
-  const [preview, setPreview] = useState<ImportPreviewResponse | null>(null);
+  const [preview, setPreview] = useState<ImportPreviewResponseV2 | null>(null);
   const [confirming, setConfirming] = useState(false);
-  const [result, setResult] = useState<ImportConfirmResponse | null>(null);
+  const [result, setResult] = useState<ImportConfirmResponseV2 | null>(null);
+
+  // Duplicate decisions: global default + per-group overrides (key = phoneKey).
+  const [dupDefault, setDupDefault] = useState<DuplicateAction>('skip');
+  const [dupOverrides, setDupOverrides] = useState<Record<string, DuplicateAction>>({});
 
   // ─── Permission gate ──────────────────────────────────────────────────────
   const canImport = !!user && (user.role === 'director' || user.role === 'admin' || user.role === 'superadmin');
@@ -248,7 +326,7 @@ export default function ImportClientsCarsPage() {
   }
 
   // ─── Build payload from columnMap ─────────────────────────────────────────
-  function buildPayload(): ImportRowInput[] {
+  function buildPayload(): ImportRowInputV2[] {
     return rawRows.map((row, idx) => {
       const cell = (i: number) => (i >= 0 ? String(row[i] ?? '').trim() : '');
       const sourceRowFromCol = cell(columnMap.sourceRow);
@@ -260,6 +338,7 @@ export default function ImportClientsCarsPage() {
         phoneRaw: cell(columnMap.phoneRaw) || null,
         carPlate: cell(columnMap.carPlate) || null,
         carModel: cell(columnMap.carModel) || null,
+        clientComment: cell(columnMap.clientComment) || null,
         notes: cell(columnMap.notes) || null,
         originalClientText: cell(columnMap.originalClientText) || null,
       };
@@ -279,7 +358,9 @@ export default function ImportClientsCarsPage() {
     try {
       const rows = buildPayload();
       const res = await importsApi.previewClientsCars({ rows, options: { allowForeignPlates } });
-      setPreview(res.data);
+      setPreview(res.data as ImportPreviewResponseV2);
+      setDupOverrides({});
+      setDupDefault('skip');
       setStep('preview');
     } catch (err: unknown) {
       const msg =
@@ -299,11 +380,26 @@ export default function ImportClientsCarsPage() {
     setConfirming(true);
     try {
       const rows = buildPayload();
-      const res = await importsApi.confirmClientsCars({ rows, options: { allowForeignPlates } });
-      setResult(res.data);
+      // Explicit decision for every duplicate group: override ?? global default.
+      const decisions = duplicateGroups.map((g) => ({
+        phoneKey: g.phoneKey,
+        action: dupOverrides[g.phoneKey] ?? dupDefault,
+      }));
+      const payload: ImportConfirmRequestV2 = {
+        rows,
+        options: { allowForeignPlates },
+        duplicateDefault: dupDefault,
+        decisions,
+      };
+      const res = await importsApi.confirmClientsCars(payload);
+      const data = res.data as ImportConfirmResponseV2;
+      setResult(data);
       setStep('done');
+      const replaced = data.summary.clientsReplaced ?? 0;
       toast.success(
-        `Импорт завершён: создано ${res.data.summary.clientsWillCreate} клиентов, ${res.data.summary.carsWillCreate} авто.`,
+        `Импорт завершён: создано ${data.summary.clientsWillCreate} клиентов` +
+          (replaced > 0 ? `, обновлено ${replaced}` : '') +
+          `, авто: ${data.summary.carsWillCreate}.`,
       );
     } catch (err: unknown) {
       const msg =
@@ -315,19 +411,25 @@ export default function ImportClientsCarsPage() {
     }
   }
 
-  async function downloadTemplate() {
+  // Real Excel (.xlsx) template, generated client-side with SheetJS.
+  // Headers match what detectColumnMapping() auto-detects, so a filled
+  // template maps 1:1 without manual column matching. The legacy CSV
+  // endpoint (GET /imports/clients-cars/template) still works untouched.
+  function downloadTemplate() {
     try {
-      const res = await importsApi.getClientsCarsTemplate();
-      const csv = (typeof res.data === 'string' ? res.data : '') as string;
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'clients_cars_template.csv';
-      a.click();
-      URL.revokeObjectURL(url);
+      const headers = ['Имя клиента*', 'Телефон*', 'Госномер', 'Марка и модель', 'Комментарий'];
+      const examples = [
+        ['Иванов Иван', '+7 (999) 123-45-67', 'А123ВС77', 'Toyota Camry', 'Постоянный клиент'],
+        ['Магомедов Магомед', '89887654321', 'В456ЕК05', 'Lada Priora', ''],
+        ['Петров Пётр', '9001112233', '', '', 'Клиент без авто — можно оставить госномер пустым'],
+      ];
+      const ws = XLSX.utils.aoa_to_sheet([headers, ...examples]);
+      ws['!cols'] = [{ wch: 28 }, { wch: 20 }, { wch: 14 }, { wch: 24 }, { wch: 44 }];
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Клиенты');
+      XLSX.writeFile(wb, 'Шаблон импорта клиентов Autexa.xlsx');
     } catch {
-      toast.error('Не удалось скачать шаблон');
+      toast.error('Не удалось сформировать шаблон');
     }
   }
 
@@ -338,6 +440,8 @@ export default function ImportClientsCarsPage() {
     setPreview(null);
     setResult(null);
     setFileName('');
+    setDupOverrides({});
+    setDupDefault('skip');
   }
 
   // ─── Derived: issue grouping ──────────────────────────────────────────────
@@ -363,6 +467,28 @@ export default function ImportClientsCarsPage() {
     return map;
   }, [preview]);
 
+  // Duplicate-phone groups — the user chooses «Заменить» / «Пропустить» per row.
+  const duplicateGroups = useMemo(() => (preview?.groups || []).filter((g) => !!g.existingClientId), [preview]);
+
+  // Plate conflicts (car already belongs to ANOTHER client) — informational:
+  // such cars are never re-attached or duplicated, they are always skipped.
+  const plateConflicts = useMemo(() => {
+    const out: Array<{ sourceRow: number; plate: string; owner: string; groupName: string }> = [];
+    for (const g of preview?.groups || []) {
+      for (const c of g.cars) {
+        if (c.conflictsWithClientId) {
+          out.push({
+            sourceRow: c.sourceRow,
+            plate: c.plateDisplay,
+            owner: c.conflictsWithClientName || 'другой клиент',
+            groupName: g.fullName,
+          });
+        }
+      }
+    }
+    return out;
+  }, [preview]);
+
   if (!canImport) {
     return (
       <div className="max-w-2xl mx-auto py-12 text-center">
@@ -380,8 +506,8 @@ export default function ImportClientsCarsPage() {
         </div>
         <h1 className="text-xl font-semibold text-gray-900 mb-2">Откройте на компьютере</h1>
         <p className="text-sm text-gray-500 mb-6">
-          Импорт больших Excel/CSV-файлов с сопоставлением колонок неудобен на телефоне. Откройте Autexa на ноутбуке
-          или ПК — там этот раздел появится в «Клиентах».
+          Импорт больших Excel/CSV-файлов с сопоставлением колонок неудобен на телефоне. Откройте Autexa на ноутбуке или
+          ПК — там этот раздел появится в «Клиентах».
         </p>
         <button onClick={() => navigate('/clients')} className="btn-primary inline-flex">
           <ArrowLeft className="w-4 h-4" />
@@ -409,9 +535,13 @@ export default function ImportClientsCarsPage() {
             <p className="text-sm text-gray-500">Excel/CSV → клиенты и их автомобили</p>
           </div>
         </div>
-        <button onClick={downloadTemplate} className="btn-secondary">
+        <button
+          onClick={downloadTemplate}
+          className="btn-secondary"
+          title="Excel-файл с колонками: имя, телефон, госномер, марка и модель, комментарий"
+        >
           <Download className="w-4 h-4" />
-          Шаблон CSV
+          Скачать шаблон (Excel)
         </button>
       </div>
 
@@ -426,9 +556,7 @@ export default function ImportClientsCarsPage() {
           };
           const isCurrent = step === s;
           const isPast =
-            (step === 'mapping' && i === 0) ||
-            (step === 'preview' && i <= 1) ||
-            (step === 'done' && i <= 2);
+            (step === 'mapping' && i === 0) || (step === 'preview' && i <= 1) || (step === 'done' && i <= 2);
           return (
             <div
               key={s}
@@ -436,8 +564,8 @@ export default function ImportClientsCarsPage() {
                 isCurrent
                   ? 'bg-primary-600 text-white border-primary-600'
                   : isPast
-                  ? 'bg-primary-50 text-primary-700 border-primary-200'
-                  : 'bg-gray-50 text-gray-400 border-gray-100'
+                    ? 'bg-primary-50 text-primary-700 border-primary-200'
+                    : 'bg-gray-50 text-gray-400 border-gray-100'
               }`}
             >
               {labels[s]}
@@ -464,16 +592,13 @@ export default function ImportClientsCarsPage() {
             className="hidden"
             onChange={handleFileChange}
           />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            className="btn-primary inline-flex"
-          >
+          <button onClick={() => fileInputRef.current?.click()} className="btn-primary inline-flex">
             <Upload className="w-4 h-4" />
             Выбрать файл
           </button>
           <div className="mt-6 text-xs text-gray-400">
-            Поддерживаемые колонки: source_row, client_name, phone, phone_raw, car_plate, car_model, notes,
-            original_client_text. Если названия другие — на следующем шаге сопоставите вручную.
+            Проще всего — скачать шаблон Excel (кнопка сверху) и вставить данные в колонки: имя, телефон, госномер,
+            марка и модель, комментарий. Если названия колонок другие — на следующем шаге сопоставите вручную.
           </div>
         </div>
       )}
@@ -505,9 +630,7 @@ export default function ImportClientsCarsPage() {
                   <div className="md:col-span-2">
                     <select
                       value={columnMap[field]}
-                      onChange={(e) =>
-                        setColumnMap((prev) => ({ ...prev, [field]: parseInt(e.target.value, 10) }))
-                      }
+                      onChange={(e) => setColumnMap((prev) => ({ ...prev, [field]: parseInt(e.target.value, 10) }))}
                       className="input"
                     >
                       <option value={-1}>— не использовать —</option>
@@ -566,12 +689,7 @@ export default function ImportClientsCarsPage() {
               />
               Импортировать иностранные/нестандартные номера (с предупреждением)
             </label>
-            <button
-              type="button"
-              onClick={runPreview}
-              disabled={previewing}
-              className="btn-primary"
-            >
+            <button type="button" onClick={runPreview} disabled={previewing} className="btn-primary">
               {previewing ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
               {previewing ? 'Проверяем…' : 'Проверить и показать предпросмотр'}
             </button>
@@ -610,6 +728,128 @@ export default function ImportClientsCarsPage() {
               value={`${preview.summary.rowsSkipped} (ошибки: ${preview.summary.errors})`}
             />
           </div>
+
+          {/* Duplicates: «Заменить» / «Пропустить» decisions */}
+          {duplicateGroups.length > 0 && (
+            <div className="bg-white rounded-2xl border border-amber-200 shadow-sm p-5">
+              <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-4">
+                <div>
+                  <h3 className="text-base font-semibold text-gray-900">
+                    Уже есть в базе: {duplicateGroups.length} {duplicateGroups.length === 1 ? 'клиент' : 'клиентов'}
+                  </h3>
+                  <p className="text-sm text-gray-500 max-w-2xl">
+                    «Заменить» — обновить имя и комментарий существующего клиента данными из файла и добавить его новые
+                    авто. Клиент не удаляется: история (заказ-наряды, долги, бонусы) сохраняется. «Пропустить» —
+                    оставить запись в базе без изменений.
+                  </p>
+                </div>
+                <div
+                  className="flex rounded-xl border border-gray-200 overflow-hidden shrink-0"
+                  role="group"
+                  aria-label="Действие для всех дублей"
+                >
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDupDefault('replace');
+                      setDupOverrides({});
+                    }}
+                    className={`px-3 py-2 text-xs font-semibold ${
+                      dupDefault === 'replace' ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    Заменить все
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDupDefault('skip');
+                      setDupOverrides({});
+                    }}
+                    className={`px-3 py-2 text-xs font-semibold border-l border-gray-200 ${
+                      dupDefault === 'skip' ? 'bg-primary-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+                    }`}
+                  >
+                    Пропустить все
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto rounded-xl border border-gray-100 max-h-96 overflow-y-auto">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-700">В файле</th>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-700">Уже в базе</th>
+                      <th className="text-left px-3 py-2 font-semibold text-gray-700">Новых авто</th>
+                      <th className="text-right px-3 py-2 font-semibold text-gray-700">Действие</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {duplicateGroups.map((g) => {
+                      const effective = dupOverrides[g.phoneKey] ?? dupDefault;
+                      const newCars = g.cars.filter(
+                        (c) => !c.existsForCurrentClient && !c.conflictsWithClientId,
+                      ).length;
+                      return (
+                        <tr key={g.phoneKey} className={effective === 'replace' ? 'bg-primary-50/40' : undefined}>
+                          <td className="px-3 py-2">
+                            <div className="font-medium text-gray-900">
+                              {g.fileFullName || <span className="text-gray-400">без имени</span>}
+                            </div>
+                            <div className="font-mono text-xs text-gray-500">{g.phoneDisplay || g.phoneKey}</div>
+                          </td>
+                          <td className="px-3 py-2">
+                            <div className="font-medium text-gray-900">{g.existingClientName || 'Клиент'}</div>
+                            <div className="font-mono text-xs text-gray-500">
+                              {displayPhone(g.existingClientPhone) || g.phoneDisplay || g.phoneKey}
+                            </div>
+                          </td>
+                          <td className="px-3 py-2 text-gray-600">{newCars > 0 ? `+${newCars}` : '—'}</td>
+                          <td className="px-3 py-2 text-right">
+                            <select
+                              value={effective}
+                              onChange={(e) =>
+                                setDupOverrides((prev) => ({
+                                  ...prev,
+                                  [g.phoneKey]: e.target.value as DuplicateAction,
+                                }))
+                              }
+                              className="input !w-auto text-xs py-1"
+                              aria-label={`Действие для ${g.existingClientName || g.phoneKey}`}
+                            >
+                              <option value="replace">Заменить</option>
+                              <option value="skip">Пропустить</option>
+                            </select>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* Plate conflicts — cars owned by ANOTHER client are never re-attached */}
+          {plateConflicts.length > 0 && (
+            <div className="bg-white rounded-2xl border border-rose-200 shadow-sm p-5">
+              <h3 className="text-base font-semibold text-gray-900 mb-1">
+                Госномер уже у другого клиента: {plateConflicts.length}
+              </h3>
+              <p className="text-sm text-gray-500 mb-3">
+                Эти авто прикреплены к другим клиентам и не будут перенесены или продублированы — строки пропускаются.
+              </p>
+              <div className="max-h-48 overflow-auto rounded-lg bg-gray-50 px-3 py-2 space-y-1 text-xs">
+                {plateConflicts.map((p, i) => (
+                  <div key={i} className="text-gray-600">
+                    <span className="font-mono text-gray-400">#{p.sourceRow}</span> · Госномер{' '}
+                    <span className="font-mono">{p.plate}</span> (в файле — {p.groupName}) уже у клиента «{p.owner}»
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Issue groups */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-100">
@@ -655,7 +895,7 @@ export default function ImportClientsCarsPage() {
                   {preview.groups.slice(0, 20).map((g) => (
                     <tr key={g.phoneKey}>
                       <td className="px-3 py-2 font-medium text-gray-900">{g.fullName}</td>
-                      <td className="px-3 py-2 text-gray-600 font-mono text-xs">{g.phoneKey}</td>
+                      <td className="px-3 py-2 text-gray-600 font-mono text-xs">{g.phoneDisplay || g.phoneKey}</td>
                       <td className="px-3 py-2 text-xs">
                         {g.existingClientId ? (
                           <span className="inline-block px-2 py-0.5 rounded-full bg-amber-50 text-amber-700">
@@ -679,10 +919,10 @@ export default function ImportClientsCarsPage() {
                                   c.conflictsWithClientId
                                     ? 'bg-rose-50 text-rose-700'
                                     : c.existsForCurrentClient
-                                    ? 'bg-amber-50 text-amber-700'
-                                    : c.isForeign
-                                    ? 'bg-violet-50 text-violet-700'
-                                    : 'bg-emerald-50 text-emerald-700'
+                                      ? 'bg-amber-50 text-amber-700'
+                                      : c.isForeign
+                                        ? 'bg-violet-50 text-violet-700'
+                                        : 'bg-emerald-50 text-emerald-700'
                                 }`}
                                 title={`${c.makeModel}${c.rawModel ? ` (raw: ${c.rawModel})` : ''}`}
                               >
@@ -705,7 +945,9 @@ export default function ImportClientsCarsPage() {
           {/* Actions */}
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
             <div className="text-sm text-gray-600">
-              Проверьте предупреждения. После «Подтвердить импорт» данные будут записаны в базу. Дубликаты не создаются.
+              Проверьте предупреждения{duplicateGroups.length > 0 ? ' и решения по дублям выше' : ''}. После
+              «Подтвердить импорт» данные будут записаны в базу. Дубликаты не создаются
+              {duplicateGroups.length > 0 ? ' — по каждому сработает выбранное действие' : ''}.
             </div>
             <div className="flex gap-2">
               <button onClick={() => setStep('mapping')} className="btn-secondary">
@@ -730,7 +972,7 @@ export default function ImportClientsCarsPage() {
           <h2 className="text-xl font-semibold text-gray-900 mb-2">Импорт завершён</h2>
           <p className="text-sm text-gray-500 mb-6">Запись в журнал импорта: {result.importRunId}</p>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 max-w-3xl mx-auto mb-6">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3 max-w-4xl mx-auto mb-6">
             <SummaryCard
               icon={<Users className="w-5 h-5" />}
               color="bg-emerald-50 text-emerald-700"
@@ -738,10 +980,16 @@ export default function ImportClientsCarsPage() {
               value={result.summary.clientsWillCreate}
             />
             <SummaryCard
+              icon={<RefreshCw className="w-5 h-5" />}
+              color="bg-blue-50 text-blue-700"
+              label="Заменено (обновлено)"
+              value={result.summary.clientsReplaced ?? 0}
+            />
+            <SummaryCard
               icon={<Users className="w-5 h-5" />}
               color="bg-amber-50 text-amber-700"
-              label="Привязано к существующим"
-              value={result.summary.clientsWillReuse}
+              label="Дублей пропущено"
+              value={result.summary.duplicatesSkipped ?? 0}
             />
             <SummaryCard
               icon={<CarIcon className="w-5 h-5" />}
@@ -752,7 +1000,7 @@ export default function ImportClientsCarsPage() {
             <SummaryCard
               icon={<XCircle className="w-5 h-5" />}
               color="bg-rose-50 text-rose-700"
-              label="Пропущено"
+              label="Пропущено строк"
               value={result.summary.rowsSkipped}
             />
           </div>
@@ -765,7 +1013,7 @@ export default function ImportClientsCarsPage() {
               <div className="mt-3 max-h-72 overflow-auto text-xs space-y-1">
                 {result.skipped.map((s, i) => (
                   <div key={i} className="text-gray-600">
-                    <span className="font-mono text-gray-400">#{s.sourceRow}</span> · [{ISSUE_LABELS[s.reason] || s.reason}]{' '}
+                    <span className="font-mono text-gray-400">#{s.sourceRow}</span> · [{issueLabel(s.reason)}]{' '}
                     {s.message}
                   </div>
                 ))}
@@ -822,7 +1070,10 @@ function IssueGroup({
   title: string;
   icon: React.ReactNode;
   total: number;
-  by: Map<ImportIssueKind, Array<{ sourceRow: number; message: string; kind?: ImportIssueKind; reason?: ImportIssueKind }>>;
+  by: Map<
+    ImportIssueKind,
+    Array<{ sourceRow: number; message: string; kind?: ImportIssueKind; reason?: ImportIssueKind }>
+  >;
   filter?: (k: ImportIssueKind) => boolean;
   tone: 'error' | 'warning';
 }) {
@@ -851,7 +1102,7 @@ function IssueGroup({
         {entries.map(([kind, items]) => (
           <div key={kind} className="text-xs">
             <div className="font-semibold text-gray-700 mb-1">
-              {ISSUE_LABELS[kind] || kind} <span className="text-gray-400">({items.length})</span>
+              {issueLabel(kind)} <span className="text-gray-400">({items.length})</span>
             </div>
             <div className="max-h-48 overflow-auto rounded-lg bg-gray-50 px-3 py-2 space-y-1">
               {items.slice(0, 50).map((it, i) => (

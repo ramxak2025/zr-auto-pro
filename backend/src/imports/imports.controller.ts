@@ -32,6 +32,12 @@ export class ImportsController {
   @Post('clients-cars/confirm')
   confirm(@CurrentUser() user: JwtPayload, @Body() body: ImportConfirmDto) {
     const allowForeignPlates = body.options?.allowForeignPlates !== false;
-    return this.imports.confirm(user.tenantID, user.userID, body.rows, { allowForeignPlates });
+    return this.imports.confirm(
+      user.tenantID,
+      user.userID,
+      body.rows,
+      { allowForeignPlates },
+      { defaultAction: body.duplicateDefault, decisions: body.decisions },
+    );
   }
 }
