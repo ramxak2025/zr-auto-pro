@@ -1,6 +1,6 @@
 import axios, { AxiosError } from 'axios';
 import { clearPersistentCache } from '../utils/persistentCache';
-import { purgeApiCache } from '../utils/swCache';
+import { purgeApiCache, purgeOfflineQueues } from '../utils/swCache';
 
 const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
@@ -36,6 +36,11 @@ function hardLogoutRedirect(): void {
     lastRedirectTime = now;
     void clearPersistentCache();
     void purgeApiCache();
+    // Сессия мертва → её недоигранная SW-очередь мутаций тоже: replay берёт
+    // токен ТЕКУЩЕЙ сессии, и очередь пользователя A нельзя доигрывать под
+    // пользователем B. Двухканальная очистка (SW message + прямой IndexedDB);
+    // SW-часть доработает через waitUntil даже после redirect'а.
+    void purgeOfflineQueues();
     // Give the purge a brief head start, then redirect regardless — never hang
     // the user on a stuck SW. The direct caches.delete() resolves in a few ms.
     setTimeout(() => {

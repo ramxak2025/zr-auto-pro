@@ -54,6 +54,25 @@ const formatCurrency = (value: number): string => {
   return value.toLocaleString('ru-RU') + ' \u20BD';
 };
 
+/**
+ * clientRequestId \u2014 \u043A\u043B\u044E\u0447 \u0438\u0434\u0435\u043C\u043F\u043E\u0442\u0435\u043D\u0442\u043D\u043E\u0441\u0442\u0438 \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u044F \u0447\u0435\u043A\u0430 (\u0431\u044D\u043A\u0435\u043D\u0434, \u043C\u0438\u0433\u0440\u0430\u0446\u0438\u044F 111:
+ * \u043C\u0430\u043A\u0441\u0438\u043C\u0443\u043C \u043E\u0434\u0438\u043D \u0447\u0435\u043A \u043D\u0430 (tenant, clientRequestId)). \u0413\u0435\u043D\u0435\u0440\u0438\u0440\u0443\u0435\u0442\u0441\u044F \u041E\u0414\u0418\u041D \u0440\u0430\u0437 \u043D\u0430
+ * \u043B\u043E\u0433\u0438\u0447\u0435\u0441\u043A\u0438\u0439 \u0441\u0430\u0431\u043C\u0438\u0442 \u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u044F\u0435\u0442\u0441\u044F \u043F\u0440\u0438 \u0440\u0435\u0442\u0440\u0430\u0435 \u0442\u043E\u0433\u043E \u0436\u0435 \u0441\u0430\u0431\u043C\u0438\u0442\u0430 (\u0440\u0443\u0447\u043D\u043E\u0439 \u043F\u043E\u0432\u0442\u043E\u0440
+ * \u043F\u043E\u0441\u043B\u0435 \u043E\u0448\u0438\u0431\u043A\u0438, replay \u0438\u0437 SW-\u043E\u0444\u043B\u0430\u0439\u043D-\u043E\u0447\u0435\u0440\u0435\u0434\u0438) \u2014 \u043F\u043E\u0432\u0442\u043E\u0440\u043D\u044B\u0439 POST \u0432\u0435\u0440\u043D\u0451\u0442 \u0423\u0416\u0415
+ * \u0441\u043E\u0437\u0434\u0430\u043D\u043D\u044B\u0439 \u0447\u0435\u043A \u0432\u043C\u0435\u0441\u0442\u043E \u0434\u0443\u0431\u043B\u044F. \u0411\u044D\u043A\u0435\u043D\u0434 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 hex-UUID \u0444\u043E\u0440\u043C\u0443 (\u0438\u043D\u0430\u0447\u0435 400).
+ */
+function generateClientRequestId(): string {
+  const cryptoObj = typeof crypto !== 'undefined' ? (crypto as { randomUUID?: () => string }) : undefined;
+  if (typeof cryptoObj?.randomUUID === 'function') return cryptoObj.randomUUID();
+  // \u0424\u043E\u043B\u0431\u044D\u043A \u0434\u043B\u044F \u0441\u0442\u0430\u0440\u044B\u0445 WebView \u0431\u0435\u0437 randomUUID \u2014 \u043A\u043E\u0440\u0440\u0435\u043A\u0442\u043D\u0430\u044F UUID v4-\u0444\u043E\u0440\u043C\u0430
+  // (\u0437\u0435\u0440\u043A\u0430\u043B\u0438\u0442 mobile/src/utils/offlineCheckQueue.ts::uuidV4FromRandom).
+  const bytes = Array.from({ length: 16 }, () => Math.floor(Math.random() * 256));
+  bytes[6] = (bytes[6] & 0x0f) | 0x40; // version 4
+  bytes[8] = (bytes[8] & 0x3f) | 0x80; // variant 10xx
+  const hex = bytes.map((b) => b.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
 interface ServiceLineForm {
   serviceId: string;
   masterId: string;
@@ -391,6 +410,11 @@ export default function CheckCreatePage() {
   const [selectedCarId, setSelectedCarId] = useState('');
   const plateInputRef = useRef<HTMLInputElement>(null);
 
+  // Ключ идемпотентности текущего логического сабмита (create-режим).
+  // Живёт от первой попытки до успеха: ретрай после ошибки шлёт ТОТ ЖЕ id,
+  // и сервер не создаст дубль чека. Сбрасывается в onSuccess.
+  const clientRequestIdRef = useRef<string | null>(null);
+
   // Form fields (no top-level master — current user is the default)
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [editingDate, setEditingDate] = useState(false);
@@ -602,6 +626,8 @@ export default function CheckCreatePage() {
   const createMutation = useMutation({
     mutationFn: (data: any) => checksApi.create(data),
     onSuccess: (res: any) => {
+      // Чек создан — следующий сабмит это уже НОВЫЙ логический чек.
+      clientRequestIdRef.current = null;
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
@@ -928,7 +954,13 @@ export default function CheckCreatePage() {
     if (isEditMode) {
       updateMutation.mutate(payload);
     } else {
-      createMutation.mutate(payload);
+      // Один id на логический сабмит: генерируется до первого POST и
+      // переиспользуется при ретрае (в т.ч. при replay из SW-офлайн-очереди) —
+      // бэкенд дедуплицирует по (tenant, clientRequestId), дубль не возникнет.
+      if (!clientRequestIdRef.current) {
+        clientRequestIdRef.current = generateClientRequestId();
+      }
+      createMutation.mutate({ ...payload, clientRequestId: clientRequestIdRef.current });
     }
   };
 

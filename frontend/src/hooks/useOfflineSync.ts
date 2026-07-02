@@ -8,6 +8,10 @@ import toast from 'react-hot-toast';
  * When mutations are replayed after coming back online,
  * invalidate all queries so the UI shows fresh data.
  * Also notify SW when we go online so it can start replaying.
+ *
+ * SW v14: этот хук — ещё и источник СВЕЖЕГО токена для replay офлайн-очереди.
+ * SW не хранит Authorization в записях (утечка + протухание), а спрашивает
+ * его у живой вкладки сообщением GET_AUTH_TOKEN в момент отправки.
  */
 export function useOfflineSync() {
   const queryClient = useQueryClient();
@@ -17,6 +21,14 @@ export function useOfflineSync() {
 
     const handleMessage = (event: MessageEvent) => {
       const { data } = event;
+
+      // SW запрашивает свежий токен для replay офлайн-очереди. Отвечаем в
+      // переданный порт. Разлогинены (нет токена) → отвечаем null, SW отложит
+      // очередь до следующей живой авторизованной вкладки.
+      if (data?.type === 'GET_AUTH_TOKEN') {
+        event.ports?.[0]?.postMessage({ token: localStorage.getItem('token') });
+        return;
+      }
 
       if (data?.type === 'MUTATION_QUEUED') {
         toast('Нет сети. Данные сохранены и отправятся автоматически', {
@@ -33,7 +45,13 @@ export function useOfflineSync() {
           queryClient.invalidateQueries();
         }
         if (failed > 0) {
-          toast.error(`${failed} операций не удалось отправить`);
+          // Сервер отклонил эти операции (или исчерпаны попытки) — на сервер
+          // они НЕ попали. Честно и заметно: пользователь должен ввести данные
+          // заново. Сами записи сохранены в IndexedDB autexa-sw →
+          // autexa-offline-failed (для разбора/поддержки, не удаляются молча).
+          toast.error(`Не отправлено операций: ${failed}. Сервер их отклонил — проверьте данные и введите заново.`, {
+            duration: 10000,
+          });
         }
       }
     };

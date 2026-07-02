@@ -12,7 +12,7 @@ import {
 } from '../api/services';
 import { User, UserPermissions, UserRole } from '../types';
 import { clearPersistentCache } from '../utils/persistentCache';
-import { purgeApiCache } from '../utils/swCache';
+import { purgeApiCache, purgeOfflineQueues } from '../utils/swCache';
 
 /**
  * Warm the React Query cache with data the user is likely to open next.
@@ -155,6 +155,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryClient.clear();
     await clearPersistentCache();
     await purgeApiCache();
+    // Ту же логику — офлайн-очереди мутаций SW: недоигранные POST'ы прошлой
+    // сессии (после краша/убитой вкладки) нельзя переиграть под токеном
+    // нового пользователя — это запись в чужой тенант.
+    await purgeOfflineQueues();
 
     localStorage.setItem('token', t);
     setToken(t);
@@ -192,14 +196,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     //   4. purgeApiCache() — drop the service worker's `autexa-api-*` Cache
     //      Storage, which is keyed by URL only (ignores Authorization) and
     //      would otherwise serve tenant A's `/api` payloads to tenant B.
+    //   5. purgeOfflineQueues() — drop the SW offline-mutation queue AND the
+    //      failed-mutation archive in IndexedDB `autexa-sw`. Queued records
+    //      carry no Authorization (SW v14): replay uses the CURRENT session's
+    //      token, so a leftover queue would post this user's mutations into
+    //      the NEXT user's tenant.
     //
     // Steps 1–2 are synchronous and run before we clear the token, so nothing
-    // stale is in memory by the time the redirect to /login fires. Steps 3–4
+    // stale is in memory by the time the redirect to /login fires. Steps 3–5
     // are async best-effort; we run them but don't block the redirect.
     void queryClient.cancelQueries().catch(() => {});
     queryClient.clear();
     void clearPersistentCache();
     void purgeApiCache();
+    void purgeOfflineQueues();
 
     localStorage.removeItem('token');
     localStorage.removeItem('user');
