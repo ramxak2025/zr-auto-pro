@@ -552,13 +552,20 @@ export class ChecksService {
 
     // ── checks_view_all ──────────────────────────────────────────────────
     // A master who does NOT hold `checks_view_all` may only see their own
-    // checks. Owner-class roles (and a master who DOES hold the permission)
-    // see every check in the tenant. This is layered ON TOP of the tenant
-    // scope above — it never widens visibility, only narrows it, and it
-    // doesn't touch tenant_id. Applied to `where` so it flows into both the
-    // COUNT and the page query (offset and keyset alike).
+    // checks — PLUS any check where a colleague added HIM as a service-line
+    // executor (owner, 2026-07-02: «даже если в правах только свои — всё
+    // равно видит чеки тех, кто добавил его работу»). Without the EXISTS arm
+    // the #59 executor tint could never fire for restricted masters: the
+    // narrowing filtered those checks out before the flag was computed.
+    // Owner-class roles (and a master who DOES hold the permission) see every
+    // check in the tenant. Layered ON TOP of the tenant scope above — never
+    // widens beyond the tenant. Flows into COUNT + page query (offset/keyset).
     if (actor && actor.role === 'master' && !userHasPermission(actor, 'checks_view_all')) {
-      where += ` AND ch.master_id = $${idx++}`;
+      where += ` AND (ch.master_id = $${idx} OR EXISTS (
+        SELECT 1 FROM check_service_lines sl
+         WHERE sl.check_id = ch.id AND sl.master_id = $${idx}
+      ))`;
+      idx++;
       params.push(actor.userID);
     }
 
@@ -959,10 +966,15 @@ export class ChecksService {
     const params: any[] = [tenantID, activeKeys];
     let idx = 3;
 
-    // Same narrowing as getAll: a master without checks_view_all sees only their
-    // own checks. Never widens visibility, never touches tenant scope.
+    // Same narrowing as getAll: a master without checks_view_all sees their
+    // own checks + checks where he is a line EXECUTOR (доска должна совпадать
+    // с журналом — см. комментарий в getAll). Never widens beyond the tenant.
     if (actor && actor.role === 'master' && !userHasPermission(actor, 'checks_view_all')) {
-      where += ` AND ch.master_id = $${idx++}`;
+      where += ` AND (ch.master_id = $${idx} OR EXISTS (
+        SELECT 1 FROM check_service_lines sl
+         WHERE sl.check_id = ch.id AND sl.master_id = $${idx}
+      ))`;
+      idx++;
       params.push(actor.userID);
     }
 
@@ -1244,6 +1256,40 @@ export class ChecksService {
   async create(tenantID: string, userID: string, userRole: string, dto: any, actor?: ChecksActor) {
     if (!dto.masterId) throw new BadRequestException({ message: 'Мастер обязателен' });
 
+    // ── Идемпотентность создания (111, офлайн-очередь) ───────────────────
+    // clientRequestId — UUID, который клиент генерирует ОДИН раз на логический
+    // чек и повторяет с каждым ретраем. Колонка checks.client_request_id имеет
+    // тип UUID — проверяем форму здесь, чтобы сломанный клиент получил чистый
+    // 400 (а не 22P02→500) и чтобы dedup-SELECT ниже не упал на кривом литерале.
+    // Нормализуем в lowercase (каноничный вывод PG) — сравнение стабильно.
+    const rawClientRequestId = typeof dto.clientRequestId === 'string' ? dto.clientRequestId.trim() : '';
+    let clientRequestId: string | null = null;
+    if (rawClientRequestId.length > 0) {
+      if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(rawClientRequestId)) {
+        throw new BadRequestException({ message: 'Некорректный идентификатор запроса (clientRequestId)' });
+      }
+      clientRequestId = rawClientRequestId.toLowerCase();
+    }
+
+    // Быстрый pre-check ДО открытия тяжёлой транзакции: если чек с этим ключом
+    // уже создан (ретрай после потерянного ответа), возвращаем ЕГО — тем же
+    // getById, которым заканчивается обычный успешный create(), так что клиент
+    // не отличит повтор от первичного успеха. НИКАКИХ побочных эффектов: сток,
+    // зарплата, касса, счётчик номеров не трогаются — только чтение.
+    // Намеренно БЕЗ фильтра deleted_at: индекс uq_checks_client_request тоже
+    // его не имеет, и «создан, затем удалён в корзину» — это обработанный
+    // запрос (повторное создание = самовоскрешение денег), а не повод создать
+    // дубль. getById на таком чеке отдаст 404 — честный ответ для ретрая.
+    if (clientRequestId) {
+      const { rows: dupRows } = await this.pool.query(
+        `SELECT id FROM checks WHERE tenant_id = $1 AND client_request_id = $2`,
+        [tenantID, clientRequestId],
+      );
+      if (dupRows.length > 0) {
+        return this.getById(dupRows[0].id, tenantID);
+      }
+    }
+
     const services = dto.services || [];
     const products = dto.products || [];
 
@@ -1477,8 +1523,8 @@ export class ChecksService {
         `INSERT INTO checks (number, date, master_id, client_id, car_id, mileage, comment, discount,
          is_deferred, payment_method, cash_amount, card_amount,
          service_total, product_total, total_revenue, product_cost_total,
-         service_salary_total, product_salary_total, total_cost, profit, tenant_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+         service_salary_total, product_salary_total, total_cost, profit, tenant_id, client_request_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
          RETURNING *`,
         [
           checkNumber,
@@ -1502,6 +1548,9 @@ export class ChecksService {
           totalCost,
           profit,
           tenantID,
+          // Идемпотентность (111): NULL без ключа — путь без clientRequestId
+          // байт-в-байт прежний (частичный индекс NULL-строки не ограничивает).
+          clientRequestId,
         ],
       );
 
@@ -1648,6 +1697,30 @@ export class ChecksService {
       return savedCheck;
     } catch (err) {
       await client.query('ROLLBACK');
+      // ── Идемпотентность (111): гонка двух КОНКУРЕНТНЫХ ретраев ──────────
+      // Оба прошли pre-check до того, как первый закоммитился; проигравший
+      // ловит 23505 на uq_checks_client_request (INSERT видит конфликт только
+      // с уже закоммиченным победителем — конкурентные создания одного тенанта
+      // сериализуются раньше, на row lock счётчика tenant_counters). Наш
+      // ROLLBACK выше уже отменил ВСЕ побочные эффекты проигравшего (сток,
+      // зарплату, строки, инкремент счётчика) — дальше ТОЛЬКО чтение: находим
+      // чек победителя по ключу и возвращаем его тем же getById, что и обычный
+      // успех. «Fetch решает»: если 23505 пришёл с другого индекса (например,
+      // uq_checks_tenant_number) — строки с нашим ключом нет, проваливаемся в
+      // прежнюю обработку ошибок.
+      if (clientRequestId && (err as { code?: string })?.code === '23505') {
+        try {
+          const { rows: winnerRows } = await this.pool.query(
+            `SELECT id FROM checks WHERE tenant_id = $1 AND client_request_id = $2`,
+            [tenantID, clientRequestId],
+          );
+          if (winnerRows.length > 0) {
+            return await this.getById(winnerRows[0].id, tenantID);
+          }
+        } catch (recoveryErr) {
+          this.logger.error(`Check create idempotent-recovery error: ${recoveryErr}`);
+        }
+      }
       if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
       // Log the full reason server-side (pino + Sentry) for diagnosis; return a
       // generic message to the client so raw SQL/internals are never exposed.
