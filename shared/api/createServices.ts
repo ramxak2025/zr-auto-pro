@@ -68,6 +68,7 @@ import type {
   WarrantyClaim,
   CheckPhoto,
   CheckTemplate,
+  CheckTemplateFolder,
   CallFunnel,
   ReminderSettings,
   WinbackClient,
@@ -1102,11 +1103,33 @@ export function createCheckPhotosApi(api: HttpClient) {
 export function createCheckTemplatesApi(api: HttpClient) {
   return {
     list: () => api.get<CheckTemplate[]>('/check-templates'),
-    create: (data: { name: string; services: CheckTemplate['services']; products: CheckTemplate['products'] }) =>
-      api.post<CheckTemplate>('/check-templates', data),
-    update: (id: string, data: Partial<Pick<CheckTemplate, 'name' | 'services' | 'products'>>) =>
-      api.put<CheckTemplate>(`/check-templates/${id}`, data),
+    /**
+     * `folderId` — put the new template into one of the actor's personal
+     * folders. `shared: true` — publish as общий template (owner-class only;
+     * for everyone else the backend creates a personal template).
+     */
+    create: (data: {
+      name: string;
+      services: CheckTemplate['services'];
+      products: CheckTemplate['products'];
+      folderId?: string | null;
+      shared?: boolean;
+    }) => api.post<CheckTemplate>('/check-templates', data),
+    /** `folderId: null` moves the template back to the root (no folder). */
+    update: (
+      id: string,
+      data: Partial<Pick<CheckTemplate, 'name' | 'services' | 'products'>> & { folderId?: string | null },
+    ) => api.put<CheckTemplate>(`/check-templates/${id}`, data),
     remove: (id: string) => api.delete(`/check-templates/${id}`),
+    /** Personal folders of the current employee (flat list, hierarchy via parentId). */
+    folders: {
+      list: () => api.get<CheckTemplateFolder[]>('/check-templates/folders'),
+      create: (data: { name: string; parentId?: string | null; sort?: number }) =>
+        api.post<CheckTemplateFolder>('/check-templates/folders', data),
+      update: (id: string, data: { name?: string; parentId?: string | null; sort?: number }) =>
+        api.patch<CheckTemplateFolder>(`/check-templates/folders/${id}`, data),
+      remove: (id: string) => api.delete(`/check-templates/folders/${id}`),
+    },
   };
 }
 

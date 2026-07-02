@@ -1920,6 +1920,29 @@ export interface CheckTemplate {
   services: Array<{ serviceId?: string; name: string; price: number; quantity: number }>;
   products: Array<{ productId?: string; name: string; sellPrice: number; costPrice: number; quantity: number }>;
   createdAt: string;
+  /**
+   * Personal templates (round 8, migration 110). `userId` NULL/undefined =
+   * общий шаблон (legacy or owner-published), visible to every employee of
+   * the tenant; otherwise the template is personal and visible only to its
+   * author. `isShared` mirrors `userId == null` for convenience.
+   */
+  userId?: string | null;
+  /** Personal folder the template lives in; общие templates are folder-less. */
+  folderId?: string | null;
+  isShared?: boolean;
+}
+
+/**
+ * Personal folder for check templates (`check_template_folders`). Folders
+ * are strictly per-employee: the API returns only the actor's own tree as a
+ * flat list — build hierarchy client-side via `parentId`.
+ */
+export interface CheckTemplateFolder {
+  id: string;
+  name: string;
+  parentId: string | null;
+  sort: number;
+  createdAt?: string;
 }
 
 export interface PushToken {
