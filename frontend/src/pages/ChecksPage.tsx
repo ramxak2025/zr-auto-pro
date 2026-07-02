@@ -107,7 +107,11 @@ const MobileCheckCard = memo(function MobileCheckCard({
     <div
       onClick={() => onNavigate(check.id)}
       className={`rounded-2xl border shadow-sm overflow-hidden active:scale-[0.99] transition-all cursor-pointer ${
-        check.isDeferred ? 'bg-red-50/50 border-red-200' : 'bg-white border-gray-100'
+        check.isDeferred
+          ? 'bg-red-50/50 border-red-200'
+          : check.isExecutor
+            ? 'bg-violet-50/60 border-violet-200'
+            : 'bg-white border-gray-100'
       }`}
     >
       <div className="px-4 pt-3.5 pb-2.5">
@@ -117,6 +121,14 @@ const MobileCheckCard = memo(function MobileCheckCard({
             {check.isDeferred && (
               <span className="text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
                 Отложен
+              </span>
+            )}
+            {/* Паритет с мобилкой (R6 #59): чек, где я исполнитель строки, а
+                пробил другой сотрудник — фиолетовый оттенок + бейдж, чтобы
+                отличать от своих. Отложен-красный приоритетнее. */}
+            {!check.isDeferred && check.isExecutor && (
+              <span className="text-[9px] font-bold bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-full flex-shrink-0">
+                Исполнитель
               </span>
             )}
             <span className={`flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
@@ -705,13 +717,20 @@ export default function ChecksPage() {
                   <tr
                     key={check.id}
                     onClick={() => navigate(`/checks/${check.id}`)}
-                    className={`cursor-pointer ${check.isDeferred ? 'bg-red-50' : ''}`}
+                    className={`cursor-pointer ${
+                      check.isDeferred ? 'bg-red-50' : check.isExecutor ? 'bg-violet-50/60' : ''
+                    }`}
                   >
                     <td className="font-medium">
                       <span>{check.number}</span>
                       {check.isDeferred && (
                         <span className="ml-1.5 text-[9px] font-bold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">
                           Отложен
+                        </span>
+                      )}
+                      {!check.isDeferred && check.isExecutor && (
+                        <span className="ml-1.5 text-[9px] font-bold bg-violet-100 text-violet-700 px-1.5 py-0.5 rounded-full">
+                          Исполнитель
                         </span>
                       )}
                     </td>
