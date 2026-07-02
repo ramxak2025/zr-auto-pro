@@ -53,9 +53,13 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    # Tag the built image so the second replica (backend2) reuses it
-    # byte-for-byte instead of building the same image twice.
-    image: autexa-backend:latest
+    # Единое имя образа для ОБОИХ режимов деплоя (см. deploy.sh):
+    #  • локальная сборка (по умолчанию): `compose build` тегает собранный образ
+    #    этим именем, а backend2 (без build-секции) переиспользует его
+    #    byte-for-byte — вторая сборка не нужна;
+    #  • pull-режим (GHCR_READ_TOKEN в серверном .env): `compose pull` тянет
+    #    ЭТОТ ЖЕ тег из GHCR — его публикует .github/workflows/build-images.yml.
+    image: ghcr.io/ramxak2025/autexa-backend:latest
     restart: unless-stopped
     # Дать NestJS время слить запросы «в полёте» при деплое (graceful shutdown
     # через app.enableShutdownHooks) до того как Docker пришлёт SIGKILL —
@@ -101,12 +105,13 @@ services:
       start_period: 30s
 
   # ── backend2 — second replica (HTTP-only, NOT the job leader) ────────────
-  # Reuses the exact image built for `backend` (no second build). Exists purely
-  # so nginx always has ≥1 live upstream during a rolling deploy. Background
-  # jobs are DISABLED here (RUN_BACKGROUND_JOBS=false) so reminders / analytics
-  # / shift auto-close / review-SMS fire exactly once across the two replicas.
+  # Reuses the exact image built/pulled for `backend` (same tag, no second
+  # build and no separate pull). Exists purely so nginx always has ≥1 live
+  # upstream during a rolling deploy. Background jobs are DISABLED here
+  # (RUN_BACKGROUND_JOBS=false) so reminders / analytics / shift auto-close /
+  # review-SMS fire exactly once across the two replicas.
   backend2:
-    image: autexa-backend:latest
+    image: ghcr.io/ramxak2025/autexa-backend:latest
     restart: unless-stopped
     stop_grace_period: 30s
     # Потолок памяти для ОПЦИОНАЛЬНОЙ реплики: если RAM на VDS окажется тесным,
@@ -151,6 +156,9 @@ services:
       dockerfile: frontend/Dockerfile
       args:
         VITE_API_URL: ${VITE_API_URL:-/api}
+    # Тот же принцип, что у backend: локальная сборка тегает образ этим именем,
+    # pull-режим (GHCR_READ_TOKEN) тянет готовый из GHCR (build-images.yml).
+    image: ghcr.io/ramxak2025/autexa-frontend:latest
     restart: unless-stopped
     depends_on:
       # Wait for the LEADER to be truly healthy; backend2 only needs to be

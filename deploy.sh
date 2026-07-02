@@ -79,6 +79,325 @@ recreate_and_wait() {
     return 1
 }
 
+# ═════════════════════════════════════════════════════════════════════════════
+# GHCR pull-режим — деплой БЕЗ тяжёлой сборки на проде (опционально).
+# ═════════════════════════════════════════════════════════════════════════════
+# Если на сервере в .env (или в окружении) задан GHCR_READ_TOKEN — PAT с
+# ЕДИНСТВЕННЫМ scope read:packages — деплой НЕ собирает образы на VDS (раньше
+# каждая сборка давала ~300% CPU), а скачивает готовые из GitHub Container
+# Registry. Образы публикует .github/workflows/build-images.yml на каждый пуш
+# в деплой-ветку и помечает label'ом org.opencontainers.image.revision=<sha>.
+#
+# Гарантия свежести: ждём (до GHCR_PULL_WAIT_S секунд, по умолчанию 480), пока
+# label ОБОИХ образов совпадёт с git HEAD только что спуленного кода — иначе
+# cron-деплой, стартующий через минуту после пуша, утащил бы предыдущий
+# :latest и никогда бы не повторил попытку (нового коммита нет). CI не успел /
+# токен не работает / GHCR лежит → return 1, и деплой автоматически падает
+# обратно на ЛОКАЛЬНУЮ сборку с кэшем слоёв. Роллинг-рекреейт и все
+# health-гейты дальше ИДЕНТИЧНЫ в обоих режимах.
+GHCR_USER="ramxak2025"
+GHCR_BACKEND_IMAGE="ghcr.io/ramxak2025/autexa-backend:latest"
+GHCR_FRONTEND_IMAGE="ghcr.io/ramxak2025/autexa-frontend:latest"
+
+ghcr_pull_images() {
+    local token="${GHCR_READ_TOKEN:-}"
+    # Токен можно держать в $REPO_DIR/.env — compose в контейнеры его НЕ
+    # пробрасывает (используется только здесь). Значение НИКОГДА не логируем.
+    if [ -z "$token" ] && [ -f "$REPO_DIR/.env" ]; then
+        token="$(grep -E '^GHCR_READ_TOKEN=' "$REPO_DIR/.env" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d '"' | tr -d "'" | tr -d '[:space:]')" || token=""
+    fi
+    if [ -z "$token" ]; then
+        return 1  # pull-режим выключен → обычная локальная сборка
+    fi
+
+    log "[ghcr-pull] GHCR_READ_TOKEN задан — пробую готовые образы из GHCR (без сборки на проде)."
+    if ! printf '%s' "$token" | docker login ghcr.io -u "$GHCR_USER" --password-stdin >/dev/null 2>&1; then
+        log "[ghcr-pull] WARNING: docker login ghcr.io не удался (токен истёк / нет read:packages?) — локальная сборка."
+        return 1
+    fi
+
+    local want_sha=""
+    want_sha="$(git -C "$REPO_DIR" rev-parse HEAD 2>/dev/null)" || want_sha=""
+    if [ -z "$want_sha" ]; then
+        log "[ghcr-pull] WARNING: не смог определить git HEAD — локальная сборка."
+        return 1
+    fi
+
+    local wait_s="${GHCR_PULL_WAIT_S:-480}"
+    local deadline=$(( $(date +%s) + wait_s ))
+    local brev="" frev=""
+    while :; do
+        docker compose pull -q backend frontend 2>&1 || log "[ghcr-pull] pull не удался (образов может ещё не быть) — жду CI..."
+        brev="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$GHCR_BACKEND_IMAGE" 2>/dev/null)" || brev=""
+        frev="$(docker image inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "$GHCR_FRONTEND_IMAGE" 2>/dev/null)" || frev=""
+        if [ "$brev" = "$want_sha" ] && [ "$frev" = "$want_sha" ]; then
+            log "[ghcr-pull] Образы коммита $want_sha получены из GHCR — сборка на проде не нужна."
+            return 0
+        fi
+        if [ "$(date +%s)" -ge "$deadline" ]; then
+            log "[ghcr-pull] WARNING: за ${wait_s}с CI не опубликовал образы коммита $want_sha (backend=${brev:-нет} frontend=${frev:-нет}) — локальная сборка."
+            return 1
+        fi
+        log "[ghcr-pull] CI ещё собирает образы коммита $want_sha (backend=${brev:-нет} frontend=${frev:-нет}) — повтор через 20с..."
+        sleep 20
+    done
+}
+
+# ═════════════════════════════════════════════════════════════════════════════
+# domain-bootstrap — авто-подключение резервного домена autexa-cloud.ru.
+# ═════════════════════════════════════════════════════════════════════════════
+# TLS терминирует ХОСТОВОЙ nginx (пакет Ubuntu), он проксирует в докерный
+# frontend-nginx (host-порт 8080 → 80 внутри контейнера, см. docker-compose.yml
+# frontend.ports). Докерный nginx отдаёт ЛЮБОЙ Host (server_name _), поэтому
+# для нового домена нужны только: site-конфиг на хосте + сертификат certbot.
+#
+# Шаг вызывается в САМОМ КОНЦЕ успешного деплоя и НИКОГДА его не роняет:
+# любой сбой → WARNING в лог + return 0. Идемпотентен: маркер
+# /etc/nginx/.autexa-cloud-ru.done = «уже подключено, мгновенный выход».
+# Пока DNS владельца не доехал до сервера — шаг тихо пропускается на каждом
+# деплое и сам сработает, когда A-записи станут видны с VDS.
+#
+# Безопасность боевого autexa.pw:
+#   • существующие конфиги НЕ редактируются — только НОВЫЙ файл + симлинк;
+#   • nginx -t перед reload; не прошёл → новый файл и симлинк удаляются;
+#   • reload не удался → новый конфиг откатывается, nginx перечитывается;
+#   • certbot вызывается только с -d autexa-cloud.ru (+www), после него
+#     конфиг подтверждаем повторным nginx -t.
+
+dblog() { log "[domain-bootstrap] $1"; }
+
+# Пропускаем только цели вида http(s)://host[:port] БЕЗ URI-пути — у таких
+# семантика «передать путь как есть», она безопасна под любым location.
+# Хвостовой "/" срезаем: proxy_pass с URI ("/") подменяет путь, без URI — нет.
+db_sanitize_target() {
+    local t="${1%/}"
+    case "$t" in
+        http://* | https://*) ;;
+        *)
+            echo ""
+            return 0
+            ;;
+    esac
+    local rest="${t#*://}"
+    case "$rest" in
+        */*)
+            echo ""
+            return 0
+            ;;
+    esac
+    echo "$t"
+}
+
+# Печатает location-блок с проксированием ($host и т.п. — литералы nginx).
+db_proxy_location() {
+    printf '    location %s {\n' "$1"
+    printf '        proxy_pass %s;\n' "$2"
+    printf '        proxy_http_version 1.1;\n'
+    printf '        proxy_set_header Host $host;\n'
+    printf '        proxy_set_header X-Real-IP $remote_addr;\n'
+    printf '        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;\n'
+    printf '        proxy_set_header X-Forwarded-Proto $scheme;\n'
+    printf '        proxy_read_timeout 90s;\n'
+    printf '        proxy_send_timeout 90s;\n'
+    printf '    }\n'
+}
+
+domain_bootstrap_autexa_cloud_ru() {
+    local marker="/etc/nginx/.autexa-cloud-ru.done"
+    local site_av="/etc/nginx/sites-available/autexa-cloud.ru"
+    local site_en="/etc/nginx/sites-enabled/autexa-cloud.ru"
+    local tout=""
+
+    # 1. Уже подключён? — мгновенный выход без логов.
+    if [ -f "$marker" ]; then
+        return 0
+    fi
+
+    # 2. Работаем только на хосте с nginx. Из webhook-контейнера (alpine, без
+    #    nginx и без /etc/nginx хоста) шаг тихо пропускается — его выполнит
+    #    cron-деплой, который идёт на самом хосте.
+    if ! command -v nginx >/dev/null 2>&1 || [ ! -d /etc/nginx/sites-available ] || [ ! -d /etc/nginx/sites-enabled ]; then
+        dblog "хостовой nginx недоступен из этого окружения (webhook-контейнер?) — пропускаю."
+        return 0
+    fi
+
+    # 2.5. Незавершённый прошлый прогон: certbot уже вписал TLS в наш конфиг,
+    #      но маркер не записался (например, упал reload). Доводим до конца и
+    #      НЕ перегенерируем файл — иначе стёрли бы TLS-блоки certbot'а.
+    if [ -f "$site_av" ] && grep -qs 'ssl_certificate' "$site_av"; then
+        ln -sfn "$site_av" "$site_en" 2>/dev/null || true
+        if tout="$(nginx -t 2>&1)"; then
+            nginx -s reload >/dev/null 2>&1 || systemctl reload nginx >/dev/null 2>&1 || true
+            touch "$marker" 2>/dev/null || dblog "WARNING: не смог записать маркер $marker."
+            dblog "autexa-cloud.ru подключён (TLS был выпущен ранее)."
+        else
+            dblog "WARNING: nginx -t не прошёл с ранее созданным TLS-конфигом — нужен взгляд вручную: $(echo "$tout" | tail -3 | tr '\n' ' ')"
+        fi
+        return 0
+    fi
+
+    # 3. DNS-guard: ОБА имени должны указывать на ЭТОТ сервер, иначе выходим.
+    if ! command -v getent >/dev/null 2>&1; then
+        dblog "WARNING: getent недоступен — не могу проверить DNS, пропускаю."
+        return 0
+    fi
+    local self_ips="" public_ip="" acceptable=""
+    self_ips="$(hostname -I 2>/dev/null | tr -s ' \t\n' '   ')" || self_ips=""
+    public_ip="$(curl -s --max-time 5 ifconfig.me 2>/dev/null)" || public_ip=""
+    # ifconfig.me мог вернуть мусор/HTML — принимаем только чистый IPv4.
+    echo "$public_ip" | grep -Eq '^([0-9]{1,3}\.){3}[0-9]{1,3}$' || public_ip=""
+    acceptable="212.8.229.254 $self_ips $public_ip"
+
+    local name="" resolved="" ip="" matched=""
+    for name in autexa-cloud.ru www.autexa-cloud.ru; do
+        resolved="$(getent hosts "$name" 2>/dev/null | awk '{print $1}' | sort -u | tr '\n' ' ')" || resolved=""
+        if [ -z "$(echo "$resolved" | tr -d ' ')" ]; then
+            dblog "$name не резолвится — домен ещё не указывает на сервер, пропускаю."
+            return 0
+        fi
+        matched=0
+        for ip in $resolved; do
+            case " $acceptable " in
+                *" $ip "*)
+                    matched=1
+                    break
+                    ;;
+            esac
+        done
+        if [ "$matched" != "1" ]; then
+            dblog "$name резолвится в [${resolved% }], IP сервера — [$acceptable] — домен ещё не указывает на сервер, пропускаю."
+            return 0
+        fi
+    done
+    dblog "DNS OK: autexa-cloud.ru и www.autexa-cloud.ru указывают на этот сервер."
+
+    # 4. Источник правды для proxy_pass — действующий конфиг autexa.pw
+    #    (предпочитаем файл, в котором есть и autexa.pw, и proxy_pass).
+    local src="" f=""
+    for f in $(grep -ls 'autexa\.pw' /etc/nginx/sites-enabled/* 2>/dev/null); do
+        case "$f" in *autexa-cloud.ru*) continue ;; esac # свой конфиг не парсим
+        if grep -qs 'proxy_pass' "$f"; then
+            src="$f"
+            break
+        fi
+    done
+    if [ -z "$src" ]; then
+        src="$(grep -ls 'autexa\.pw' /etc/nginx/sites-enabled/* 2>/dev/null | grep -v 'autexa-cloud\.ru' | head -1)" || src=""
+    fi
+
+    # Парсим proxy_pass ТОЛЬКО для location / и /api (модификаторы =, ~, ~*,
+    # ^~ учитываются). Остальные location сознательно НЕ копируем — задача
+    # резервного домена: PWA + /api, минимальный заведомо-рабочий конфиг.
+    local root_target="" api_target=""
+    if [ -n "$src" ]; then
+        root_target="$(awk '
+            /^[[:space:]]*location[[:space:]]/ {
+                cur = $2
+                if (cur == "=" || cur == "~" || cur == "~*" || cur == "^~") cur = $3
+            }
+            /^[[:space:]]*proxy_pass[[:space:]]/ {
+                t = $2; sub(/;.*/, "", t)
+                if (cur == "/" && root == "") root = t
+            }
+            END { print root }
+        ' "$src" 2>/dev/null)" || root_target=""
+        api_target="$(awk '
+            /^[[:space:]]*location[[:space:]]/ {
+                cur = $2
+                if (cur == "=" || cur == "~" || cur == "~*" || cur == "^~") cur = $3
+            }
+            /^[[:space:]]*proxy_pass[[:space:]]/ {
+                t = $2; sub(/;.*/, "", t)
+                if ((cur == "/api" || cur == "/api/") && api == "") api = t
+            }
+            END { print api }
+        ' "$src" 2>/dev/null)" || api_target=""
+    fi
+    root_target="$(db_sanitize_target "$root_target")"
+    api_target="$(db_sanitize_target "$api_target")"
+    if [ -z "$root_target" ]; then
+        # Fallback, известный из НАШЕГО docker-compose.yml: frontend публикует
+        # host-порт 8080 (ports: "8080:80") — докерный nginx примет любой Host.
+        root_target="http://127.0.0.1:8080"
+        dblog "proxy_pass из ${src:-<конфиг autexa.pw не найден>} не распарсился — беру заведомо-рабочий $root_target (host-порт докерного frontend)."
+    else
+        dblog "proxy_pass взят из $src: / → $root_target${api_target:+, /api → $api_target}."
+    fi
+
+    # 5. Генерируем НОВЫЙ минимальный port-80 конфиг (существующие не трогаем).
+    local tmp_cfg="${site_av}.tmp.$$"
+    {
+        echo "# Autexa: резервный домен autexa-cloud.ru — проксирует в тот же докерный frontend, что и основной домен."
+        echo "# Сгенерировано автоматически deploy.sh [domain-bootstrap]. HTTP-этап; TLS добавляет certbot --nginx."
+        echo "server {"
+        echo "    listen 80;"
+        echo "    server_name autexa-cloud.ru www.autexa-cloud.ru;"
+        echo ""
+        echo "    # Загрузка фото идёт через /api — лимит с запасом к backend'овским 50mb."
+        echo "    client_max_body_size 64m;"
+        echo ""
+        if [ -n "$api_target" ] && [ "$api_target" != "$root_target" ]; then
+            db_proxy_location "/api" "$api_target"
+            echo ""
+        fi
+        db_proxy_location "/" "$root_target"
+        echo "}"
+    } > "$tmp_cfg" 2>/dev/null || {
+        dblog "WARNING: не смог записать $tmp_cfg (права?) — пропускаю."
+        rm -f "$tmp_cfg" 2>/dev/null
+        return 0
+    }
+    if ! mv -f "$tmp_cfg" "$site_av" 2>/dev/null; then
+        dblog "WARNING: не смог записать $site_av (права?) — пропускаю."
+        rm -f "$tmp_cfg" 2>/dev/null
+        return 0
+    fi
+    if ! ln -sfn "$site_av" "$site_en" 2>/dev/null; then
+        dblog "WARNING: не смог создать симлинк $site_en — откатываю."
+        rm -f "$site_av" 2>/dev/null
+        return 0
+    fi
+
+    # 6. Гейт nginx -t: битый конфиг → полный откат, боевой autexa.pw не тронут.
+    if ! tout="$(nginx -t 2>&1)"; then
+        dblog "WARNING: nginx -t не прошёл с новым конфигом — откатываю (autexa.pw не тронут): $(echo "$tout" | tail -3 | tr '\n' ' ')"
+        rm -f "$site_en" "$site_av" 2>/dev/null
+        return 0
+    fi
+    if ! nginx -s reload >/dev/null 2>&1 && ! systemctl reload nginx >/dev/null 2>&1; then
+        dblog "WARNING: nginx reload не удался — откатываю новый конфиг."
+        rm -f "$site_en" "$site_av" 2>/dev/null
+        nginx -s reload >/dev/null 2>&1 || systemctl reload nginx >/dev/null 2>&1 || true
+        return 0
+    fi
+    dblog "HTTP-конфиг autexa-cloud.ru включён (порт 80). Выпускаю сертификат..."
+
+    # 7. certbot: обычный бинарь или snap. Нет ни того, ни другого → HTTP-конфиг
+    #    остаётся жить, TLS доделается на следующем деплое после установки certbot.
+    local certbot_bin=""
+    if command -v certbot >/dev/null 2>&1; then
+        certbot_bin="certbot"
+    elif [ -x /snap/bin/certbot ]; then
+        certbot_bin="/snap/bin/certbot"
+    else
+        dblog "WARNING: certbot не найден (ни в PATH, ни /snap/bin/certbot) — домен пока работает по HTTP, TLS добавим на следующем деплое."
+        return 0
+    fi
+    local cb_out=""
+    if ! cb_out="$("$certbot_bin" --nginx -d autexa-cloud.ru -d www.autexa-cloud.ru --non-interactive --agree-tos -m ramxak4@gmail.com --redirect 2>&1)"; then
+        dblog "WARNING: certbot не выпустил сертификат (DNS ещё не виден Let's Encrypt?) — HTTP-конфиг оставлен, повторим на следующем деплое: $(echo "$cb_out" | tail -4 | tr '\n' ' ')"
+        return 0
+    fi
+    if ! tout="$(nginx -t 2>&1)"; then
+        dblog "WARNING: nginx -t после certbot не прошёл — маркер не пишу, нужен взгляд вручную: $(echo "$tout" | tail -3 | tr '\n' ' ')"
+        return 0
+    fi
+    nginx -s reload >/dev/null 2>&1 || systemctl reload nginx >/dev/null 2>&1 || true
+    touch "$marker" 2>/dev/null || dblog "WARNING: не смог записать маркер $marker (шаг идемпотентен — просто повторится)."
+    dblog "autexa-cloud.ru подключён: сертификат выпущен, HTTPS и redirect активны."
+    return 0
+}
+
 log "=== Starting deploy ==="
 log "Repo: $REPO_DIR"
 log "Branch: $BRANCH"
@@ -87,18 +406,27 @@ cd "$REPO_DIR"
 
 # ═══════════════════════════════════════════════════════
 # STEP -1: Освобождаем диск ПЕРЕД бэкапом и сборкой.
-# Причина: `docker compose build --no-cache` ниже создаёт полный
-# набор слоёв образа на КАЖDOM деплое, а backup.sh пишет дамп БД
-# каждый раз. За день из нескольких деплоев диск забивается старыми
-# образами / build-cache / дампами → `docker build` падает на «no space»,
-# и старый контейнер продолжает отдавать устаревший код. Эта очистка
-# делает деплой самовосстанавливающимся и идемпотентна.
+# Причина: за день из нескольких деплоев диск забивается старыми
+# образами и дампами → `docker build` падает на «no space», и старый
+# контейнер продолжает отдавать устаревший код. Эта очистка делает
+# деплой самовосстанавливающимся и идемпотентна.
+#
+# ВАЖНО про порядок (кэш сборки НЕ трогаем перед сборкой):
+#   • `docker image prune -af` (здесь, ДО сборки) удаляет только неиспользуемые
+#     ОБРАЗЫ (dangling + без контейнеров); BuildKit-кэш СЛОЁВ живёт отдельно
+#     и этот prune переживает — сборка ниже переиспользует его;
+#   • `docker builder prune` переехал В КОНЕЦ успешного деплоя и работает с
+#     --keep-storage=4GB (LRU): свежие слои, которые сборка только что
+#     использовала, сохраняются, кэш жёстко ограничен 4GB — диск в
+#     безопасности, как и раньше.
+# Эффект: деплой с JS-only изменениями пересобирается за секунды по кэшу
+# (раньше `--no-cache` + полный сброс кэша давали полную пересборку с
+# ~300% CPU на каждый пуш).
 # pgdata НЕ трогаем: prune без --volumes, ротация только в backups/.
 # ═══════════════════════════════════════════════════════
-log "=== Freeing disk before deploy (prune unused images + build cache, rotate backups) ==="
+log "=== Freeing disk before deploy (prune unused images, rotate backups) ==="
 df -h / 2>&1 | tail -1 || true
 docker image prune -af 2>&1 || true
-docker builder prune -af 2>&1 || true
 # Держим только 10 самых свежих файлов КАЖДОГО типа в backups/ (по mtime).
 # Раздельные паттерны: большие uploads-архивы не должны вытеснять SQL-дампы
 # из окна хранения (и наоборот).
@@ -160,14 +488,26 @@ fi
 #
 # Два backend-реплики (backend + backend2) за nginx-апстримом + idempotent
 # proxy_next_upstream фейловер. Порядок критичен:
-#   build → backend2 (recreate + ЖДЁМ healthy) → nginx -t гейт → frontend →
-#   → лидер backend (recreate + ЖДЁМ healthy).
+#   образы (GHCR pull или локальная сборка) → backend2 (recreate + ЖДЁМ healthy)
+#   → nginx -t гейт → frontend → лидер backend (recreate + ЖДЁМ healthy).
 # Лидера трогаем ТОЛЬКО после того, как backend2 реально прошёл health-гейт.
 # Раньше здесь был голый `up -d backend2` без ожидания — лидер убивался, пока
 # backend2 ещё бутился/мигрировал → окно «обе реплики мертвы» (502/504).
 # ═══════════════════════════════════════════════════════
-log "Rebuilding backend + frontend images (no cache)..."
-docker compose build --no-cache backend frontend 2>&1
+# Получаем свежие образы: pull из GHCR (если задан GHCR_READ_TOKEN — см.
+# ghcr_pull_images выше) или локальная сборка С КЭШЕМ слоёв.
+# `--no-cache` убран сознательно: BuildKit сам инвалидирует слои по чек-суммам
+# COPY/ARG, а слой `npm install` переиспользуется, пока не менялись
+# package*.json → JS-only деплой собирается за секунды вместо полной
+# пересборки с ~300% CPU. Зависимости поменялись → слой пересоберётся сам.
+# (Свежесть базового node:20-alpine и раньше не обновлялась: --no-cache
+# не делает --pull — здесь ничего не деградировало.)
+if ghcr_pull_images; then
+    log "Images ready from GHCR — skipping on-prod build."
+else
+    log "Rebuilding backend + frontend images locally (layer cache ON)..."
+    docker compose build backend frontend 2>&1
+fi
 
 # Пересоздать ВТОРУЮ реплику (HTTP-only) на новом образе и ДОЖДАТЬСЯ health.
 # Пока backend2 бутится/мигрирует — лидер продолжает отдавать /api на старом
@@ -235,8 +575,28 @@ fi
 log "Container status:"
 docker compose ps 2>&1
 
-# Clean up old images
+# ═══════════════════════════════════════════════════════
+# STEP 3: Пост-деплойные шаги. НИКОГДА не роняют уже успешный деплой.
+# ═══════════════════════════════════════════════════════
+# 3a. Авто-подключение резервного домена autexa-cloud.ru: идемпотентно
+#     (маркер), тихо ждёт, пока DNS владельца доедет до сервера, затем само
+#     включает host-nginx-конфиг + certbot TLS. Любой сбой → WARNING + продолжаем.
+domain_bootstrap_autexa_cloud_ru || true
+
+# 3b. Уборка диска ПОСЛЕ успешного деплоя.
+# Dangling-образы (старые слои, с которых съехали теги) — безопасно удалить.
 docker image prune -f 2>&1 || true
+# BuildKit-кэш подрезаем ИМЕННО ЗДЕСЬ (после сборки, не перед ней) и НЕ
+# подчистую: --keep-storage=4GB выселяет кэш по LRU, СОХРАНЯЯ свежие слои,
+# которые только что использовала сборка (npm install и т.д.). Следующий
+# JS-only деплой соберётся за секунды. Диск в безопасности: кэш жёстко
+# ограничен 4GB. --max-used-space — новое имя того же флага в свежих docker;
+# последний fallback чистит хотя бы dangling-кэш, но НИКОГДА не сносит кэш
+# целиком (это вернуло бы полные пересборки с ~300% CPU).
+docker builder prune -af --keep-storage=4GB 2>&1 \
+    || docker builder prune -af --max-used-space=4GB 2>&1 \
+    || docker builder prune -f 2>&1 \
+    || true
 
 log "=== Deploy complete ==="
 log ""
@@ -244,3 +604,4 @@ log "IMPORTANT: Data is safe. Backups are in: $REPO_DIR/backups/"
 log "To restore: ./restore.sh"
 
 # deploy trigger: 2026-06-19 (rolling 2-replica zero-downtime + in-network nginx -t gate)
+# deploy trigger: 2026-07-02 (cached builds + GHCR pull-mode + autexa-cloud.ru domain bootstrap)

@@ -1,0 +1,95 @@
+name: Build Images (GHCR)
+
+# Собирает прод-образы backend/frontend и публикует их в GitHub Container
+# Registry на каждый пуш в деплой-ветки. Зачем: deploy.sh на VDS в pull-режиме
+# (включается строкой GHCR_READ_TOKEN=<PAT read:packages> в серверном .env)
+# скачивает эти готовые образы вместо тяжёлой сборки на проде (~300% CPU).
+# Пока GHCR_READ_TOKEN на сервере не задан, workflow просто наполняет реестр —
+# деплой продолжает собирать локально (с кэшем слоёв) и ничего не ломается.
+#
+# Контексты/докерфайлы 1:1 повторяют build-секции docker-compose.yml:
+#   backend  → context ./backend, dockerfile backend/Dockerfile
+#   frontend → context .  (корень репо: сборке нужен shared/),
+#              dockerfile frontend/Dockerfile, build-arg VITE_API_URL=/api
+#              (тот же default, что у compose: ${VITE_API_URL:-/api})
+#
+# Маркировка: label org.opencontainers.image.revision=<sha>. deploy.sh по нему
+# проверяет, что :latest соответствует деплоящемуся коммиту (иначе ждёт CI
+# или падает обратно на локальную сборку) — это закрывает гонку
+# «cron-деплой стартовал раньше, чем CI дособирал образ».
+
+on:
+  push:
+    branches: [refactor/full-audit-2026, master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+# Новый пуш обгоняет старый: проду нужен только самый свежий образ.
+concurrency:
+  group: build-images-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BACKEND_IMAGE: ghcr.io/ramxak2025/autexa-backend
+  FRONTEND_IMAGE: ghcr.io/ramxak2025/autexa-frontend
+
+jobs:
+  backend-image:
+    name: Backend image → GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          # Как в docker-compose.yml: context ./backend, dockerfile Dockerfile.
+          context: backend
+          file: backend/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.BACKEND_IMAGE }}:latest
+            ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=backend
+          cache-to: type=gha,mode=max,scope=backend
+
+  frontend-image:
+    name: Frontend image → GHCR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          # Как в docker-compose.yml: context . (нужен shared/), dockerfile
+          # frontend/Dockerfile, VITE_API_URL — тот же default `/api`.
+          context: .
+          file: frontend/Dockerfile
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            VITE_API_URL=/api
+          tags: |
+            ${{ env.FRONTEND_IMAGE }}:latest
+            ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
+          labels: |
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha,scope=frontend
+          cache-to: type=gha,mode=max,scope=frontend
