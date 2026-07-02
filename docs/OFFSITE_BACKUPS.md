@@ -188,3 +188,18 @@ S3_BACKUP_RETENTION_DAYS=30
   `.env.example` — шаблон).
 - Ретенция offsite (по возрасту, дни) и локальная ротация (по количеству файлов)
   — независимые механизмы; менять одну не значит менять другую.
+
+## Проверка бакета с рабочей машины (без сервера)
+
+```bash
+docker run --rm \
+  -e RCLONE_CONFIG_OFFSITE_TYPE=s3 \
+  -e RCLONE_CONFIG_OFFSITE_PROVIDER=Other \
+  -e RCLONE_CONFIG_OFFSITE_ENDPOINT=$S3_BACKUP_ENDPOINT \
+  -e RCLONE_CONFIG_OFFSITE_ACCESS_KEY_ID=$S3_BACKUP_ACCESS_KEY \
+  -e RCLONE_CONFIG_OFFSITE_SECRET_ACCESS_KEY=$S3_BACKUP_SECRET_KEY \
+  rclone/rclone:latest lsl offsite:$S3_BACKUP_BUCKET/autexa/
+```
+
+Ожидание: список файлов `db_*.sql.gz` и `uploads_*.tar.gz` со временем последнего
+деплоя. Пустой вывод при свежеподключённом бакете — норма до первого деплоя.
