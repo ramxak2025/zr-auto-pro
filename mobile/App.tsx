@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Alert, StatusBar } from 'react-native';
+import { Alert, AppState, StatusBar } from 'react-native';
 import { CommonActions, NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -21,8 +21,14 @@ import { haptic } from './src/platform/haptics';
 import { hydrateCache, hydratePriorityCache, attachPersistence } from './src/utils/persistentCache';
 import { attachForegroundRevalidation } from './src/utils/foregroundRevalidation';
 import { attachBackendRecovery } from './src/utils/backendRecovery';
+import {
+  attachOfflineCheckQueue,
+  kickOfflineCheckQueueOnNetworkSuccess,
+  type QueuedCheck,
+} from './src/utils/offlineCheckQueue';
 import { shouldRetryTransient, transientRetryDelay } from './src/utils/queryRetry';
-import { API_URL } from './src/api/axios';
+import { API_URL, onRequestSucceeded } from './src/api/axios';
+import { checksApi } from './src/api/services';
 
 // Wire TanStack Query's onlineManager to the real device connectivity
 // (NetInfo). Without this RN has no `online`/`offline` browser events, so
@@ -144,6 +150,71 @@ for (const prefix of HOT_QUERY_PREFIXES) {
   queryClient.setQueryDefaults(prefix, { staleTime: 30_000 });
 }
 
+// ── Офлайн-очередь чеков: wiring (Round 9) ───────────────────────────────────
+// Сам движок — utils/offlineCheckQueue.ts (см. его шапку). Здесь только
+// приложение-специфичная обвязка: чем отправлять, что инвалидировать после
+// успешной досылки и как уведомить пользователя.
+
+/**
+ * После досылки отложенного чека бустим ТОТ ЖЕ набор ключей, что и обычное
+ * создание чека (CheckCreateScreen → createMutation.onSuccess; при изменении
+ * списка там — синхронизировать здесь): Журнал и Склад refetch'ем, тяжёлые
+ * ключи — только пометка stale (`refetchType: 'none'`), гарантии/последний
+ * визит — сброс по префиксу.
+ */
+function invalidateAfterQueuedCheckSent(): void {
+  queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+  queryClient.invalidateQueries({ queryKey: ['products'] });
+  const heavyKeys: string[][] = [
+    ['checks'],
+    ['checks-dashboard'],
+    ['dashboard-v2'],
+    ['dashboard-chart'],
+    ['cashflow'],
+    ['low-stock'],
+    ['all-products-check'],
+    ['warehouse-analytics'],
+  ];
+  for (const queryKey of heavyKeys) {
+    queryClient.invalidateQueries({ queryKey, refetchType: 'none' });
+  }
+  queryClient.invalidateQueries({ queryKey: ['warranty-active-client'] });
+  queryClient.invalidateQueries({ queryKey: ['last-visit'] });
+}
+
+/**
+ * Тихое подтверждение досылки — локальная нотификация (foreground-handler
+ * выше уже показывает баннер), НЕ Alert: досылка фоновая, блокировать
+ * пользователя посреди другого экрана нельзя. Без прав на нотификации —
+ * молча ничего: бейдж «Ожидают отправки» в Журнале сам исчезнет.
+ */
+function notifyQueuedCheckSent(entry: QueuedCheck, result: unknown): void {
+  const number = (result as { number?: number } | null | undefined)?.number;
+  const client = entry.meta?.clientName;
+  Notifications.scheduleNotificationAsync({
+    content: {
+      title: 'Отложенный чек отправлен',
+      body: `${number ? `Чек №${number}` : 'Чек'}${client ? ` · ${client}` : ''} записан в журнал`,
+      sound: false,
+    },
+    trigger: null,
+  }).catch(() => {});
+}
+
+/**
+ * Сервер детерминированно отклонил отложенный чек (4xx) — единожды показываем
+ * его русское сообщение. Данные НЕ пропадают: запись лежит в bucket'е
+ * «Отклонён» шита «Ожидают отправки» (Журнал) с «Повторить» / «Удалить».
+ */
+function alertQueuedCheckRejected(entry: QueuedCheck, message: string): void {
+  const total = entry.meta?.total;
+  const label = total ? `Чек на ${Math.round(total)} ₽` : 'Отложенный чек';
+  Alert.alert(
+    'Отложенный чек не принят',
+    `${label} отклонён сервером:\n${message}\n\nОн остался в Журнале в списке «Ожидают отправки» — можно повторить отправку или удалить.`,
+  );
+}
+
 // ── Push-tap navigation ──────────────────────────────────────────────────────
 // Root navigation ref lets the notification-response listener (which lives
 // OUTSIDE the navigator tree) deep-link into the app. `CheckDetail` is NOT
@@ -196,6 +267,8 @@ export default function App() {
   const persistenceCleanup = useRef<(() => void) | null>(null);
   const foregroundCleanup = useRef<(() => void) | null>(null);
   const recoveryCleanup = useRef<(() => void) | null>(null);
+  const offlineQueueCleanup = useRef<(() => void) | null>(null);
+  const netSuccessCleanup = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -215,6 +288,22 @@ export default function App() {
     // any mounted query is errored and refetches them the moment the backend
     // returns — no manual «Повторить» needed. See utils/backendRecovery.ts.
     recoveryCleanup.current = attachBackendRecovery(queryClient, API_URL);
+    // Офлайн-очередь чеков (Round 9): гидратация + досылка хвоста прошлой
+    // сессии + триггеры (foreground / 60s-таймер пока непуста). Отправка —
+    // живой checksApi.create: payload несёт clientRequestId, поэтому досылка
+    // «полудоставленного» чека вернёт уже созданный, а не задвоит его.
+    offlineQueueCleanup.current = attachOfflineCheckQueue({
+      send: (payload) => checksApi.create(payload as never).then((res) => res.data),
+      onSent: (entry, result) => {
+        invalidateAfterQueuedCheckSent();
+        notifyQueuedCheckSent(entry, result);
+      },
+      onRejected: alertQueuedCheckRejected,
+      appState: AppState,
+    });
+    // Третий flush-триггер: ЛЮБОЙ успешный ответ axios — сеть доказуемо
+    // вернулась (дебаунс внутри очереди, пустая очередь — мгновенный no-op).
+    netSuccessCleanup.current = onRequestSucceeded(kickOfflineCheckQueueOnNetworkSuccess);
     // Audit #8.7 — cold-start hydrate race. Step 1: synchronously hydrate
     // ONLY the priority first-screen keys (Dashboard / Журнал / Склад),
     // bounded to ~80ms. The splash stays up until this resolves so a fast
@@ -242,6 +331,10 @@ export default function App() {
       foregroundCleanup.current = null;
       recoveryCleanup.current?.();
       recoveryCleanup.current = null;
+      offlineQueueCleanup.current?.();
+      offlineQueueCleanup.current = null;
+      netSuccessCleanup.current?.();
+      netSuccessCleanup.current = null;
     };
   }, []);
 

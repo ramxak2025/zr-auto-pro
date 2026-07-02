@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert, ScrollView, Platform } from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { ActivityIndicator } from 'react-native';
@@ -32,6 +32,13 @@ import {
 } from '../theme';
 import { buildShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
+import {
+  useOfflineCheckQueue,
+  flushOfflineCheckQueue,
+  removeOfflineCheck,
+  retryOfflineCheck,
+  type QueuedCheck,
+} from '../utils/offlineCheckQueue';
 import { UserRole, type Check, type PaginatedResponse, type User, type JournalDoc } from '../../../shared/types';
 
 const paymentLabels: Record<string, string> = {
@@ -486,6 +493,62 @@ export default function ChecksScreen() {
   // GET /checks/trash и POST /checks/:id/restore той же ролью. Тот же паттерн,
   // что isOwnerClass в BookingCreateScreen / InstallmentsScreen.
   const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+
+  // ── Офлайн-очередь чеков (Round 9) ────────────────────────────────────
+  // Бейдж «Ожидают отправки: N» над поиском (виден только при N > 0) + шит
+  // со списком отложенных чеков, ручной отправкой и удалением. Сами данные
+  // живут в utils/offlineCheckQueue.ts; здесь — чистое представление.
+  const queuedChecks = useOfflineCheckQueue();
+  const queuedPendingCount = useMemo(() => queuedChecks.filter((e) => e.status === 'pending').length, [queuedChecks]);
+  const queuedFailedCount = queuedChecks.length - queuedPendingCount;
+  const [showPendingSheet, setShowPendingSheet] = useState(false);
+  const [sendingQueueNow, setSendingQueueNow] = useState(false);
+
+  // Очередь опустела (всё улетело / удалено) — закрываем шит сами.
+  useEffect(() => {
+    if (showPendingSheet && queuedChecks.length === 0) setShowPendingSheet(false);
+  }, [showPendingSheet, queuedChecks.length]);
+
+  const handleSendQueueNow = async () => {
+    if (sendingQueueNow) return;
+    haptic('tap');
+    const hadPending = queuedPendingCount > 0;
+    setSendingQueueNow(true);
+    try {
+      const result = await flushOfflineCheckQueue();
+      if (hadPending && result.sent === 0 && result.rejected === 0) {
+        Alert.alert(
+          'Сервер пока недоступен',
+          'Отправить не удалось — чеки остаются на телефоне и уйдут автоматически, когда появится связь.',
+        );
+      }
+    } finally {
+      setSendingQueueNow(false);
+    }
+  };
+
+  const confirmDeleteQueued = (entry: QueuedCheck) => {
+    Alert.alert(
+      'Удалить отложенный чек?',
+      'Этот чек НЕ был отправлен на сервер — после удаления он исчезнет безвозвратно.',
+      [
+        { text: 'Отмена', style: 'cancel' },
+        {
+          text: 'Удалить',
+          style: 'destructive',
+          onPress: () => {
+            haptic('warning');
+            void removeOfflineCheck(entry.clientRequestId);
+          },
+        },
+      ],
+    );
+  };
+
+  const retryQueued = (entry: QueuedCheck) => {
+    haptic('tap');
+    void retryOfflineCheck(entry.clientRequestId);
+  };
 
   const [activeTab, setActiveTab] = useState<ActiveTab>('checks');
   const [search, setSearch] = useState('');
@@ -963,6 +1026,34 @@ export default function ChecksScreen() {
         </View>
         <FreshnessBadge query={{ isFetching, isLoading, dataUpdatedAt }} />
       </View>
+
+      {/* «Ожидают отправки» — офлайн-очередь чеков (Round 9). Узкая пилюля в
+          визуальном языке «Доски» выше; видна ТОЛЬКО когда очередь непуста.
+          Красная точка-алерт — есть отклонённые сервером записи. */}
+      {queuedChecks.length > 0 && (
+        <View style={styles.pendingQueueRow}>
+          <TouchableOpacity
+            style={[
+              styles.pendingQueuePill,
+              {
+                backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
+                borderColor: palette.mode === 'dark' ? 'rgba(217, 119, 6, 0.35)' : colors.amber[100],
+              },
+            ]}
+            onPress={() => {
+              haptic('tap');
+              setShowPendingSheet(true);
+            }}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={`Чеки, ожидающие отправки: ${queuedChecks.length}. Открыть список`}
+          >
+            <Ionicons name="cloud-upload-outline" size={14} color={colors.amber[600]} />
+            <Text style={styles.pendingQueueText}>Ожидают отправки: {queuedChecks.length}</Text>
+            {queuedFailedCount > 0 && <Ionicons name="alert-circle" size={14} color={colors.red[600]} />}
+          </TouchableOpacity>
+        </View>
+      )}
 
       {/* Search + Filter */}
       <View style={styles.searchRow}>
@@ -1647,6 +1738,113 @@ export default function ChecksScreen() {
             );
           })()}
       </Modal>
+
+      {/* Шит офлайн-очереди (Round 9): список отложенных чеков — сумма /
+          клиент / время, глобальная «Отправить сейчас», per-item удаление с
+          подтверждением; отклонённые сервером — с сообщением и «Повторить». */}
+      <Modal visible={showPendingSheet} onClose={() => setShowPendingSheet(false)} title="Ожидают отправки">
+        <View style={{ gap: spacing[3] }}>
+          <Text style={[styles.queueSheetIntro, { color: palette.text.secondary }]}>
+            Эти чеки сохранены на телефоне и отправятся автоматически, когда появится связь с сервером.
+          </Text>
+
+          {queuedChecks.map((entry) => {
+            const failed = entry.status === 'failed';
+            return (
+              <View
+                key={entry.clientRequestId}
+                style={[
+                  styles.queueEntryCard,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                ]}
+              >
+                <View style={styles.queueEntryTop}>
+                  <Text style={[styles.queueEntrySum, { color: palette.text.primary }]}>
+                    {typeof entry.meta?.total === 'number' ? formatMoney(entry.meta.total) : 'Чек'}
+                  </Text>
+                  <Text style={[styles.queueEntryTime, { color: palette.text.tertiary }]}>
+                    {formatDate(new Date(entry.createdAt).toISOString())}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => confirmDeleteQueued(entry)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Удалить отложенный чек"
+                  >
+                    <Ionicons name="trash-outline" size={18} color={palette.text.tertiary} />
+                  </TouchableOpacity>
+                </View>
+
+                {(entry.meta?.clientName || entry.meta?.carInfo) && (
+                  <Text style={[styles.queueEntryClient, { color: palette.text.secondary }]} numberOfLines={1}>
+                    {[entry.meta?.clientName, entry.meta?.carInfo].filter(Boolean).join(' · ')}
+                  </Text>
+                )}
+
+                {failed ? (
+                  <>
+                    <View style={styles.queueEntryFailedRow}>
+                      <Ionicons name="alert-circle" size={14} color={colors.red[600]} />
+                      <Text style={[styles.queueEntryFailedText, { color: colors.red[600] }]} numberOfLines={3}>
+                        {entry.failedMessage || 'Сервер отклонил чек'}
+                      </Text>
+                    </View>
+                    <TouchableOpacity
+                      style={[
+                        styles.queueRetryBtn,
+                        {
+                          backgroundColor:
+                            palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+                        },
+                      ]}
+                      onPress={() => retryQueued(entry)}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Повторить отправку чека"
+                    >
+                      <Ionicons
+                        name="refresh"
+                        size={14}
+                        color={palette.mode === 'dark' ? colors.primary[300] : colors.primary[600]}
+                      />
+                      <Text
+                        style={[
+                          styles.queueRetryText,
+                          { color: palette.mode === 'dark' ? colors.primary[300] : colors.primary[600] },
+                        ]}
+                      >
+                        Повторить
+                      </Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <Text style={[styles.queueEntryStatus, { color: palette.text.tertiary }]}>
+                    Ожидает сети{entry.attempts > 0 ? ` · попыток: ${entry.attempts}` : ''}
+                  </Text>
+                )}
+              </View>
+            );
+          })}
+
+          <TouchableOpacity
+            style={[styles.queueSendAllBtn, (sendingQueueNow || queuedPendingCount === 0) && { opacity: 0.55 }]}
+            onPress={handleSendQueueNow}
+            disabled={sendingQueueNow || queuedPendingCount === 0}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel="Отправить все отложенные чеки сейчас"
+          >
+            {sendingQueueNow ? (
+              <ActivityIndicator size="small" color={colors.white} />
+            ) : (
+              <>
+                <Ionicons name="cloud-upload" size={16} color={colors.white} />
+                <Text style={styles.queueSendAllText}>Отправить сейчас</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1719,6 +1917,69 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   boardEntryText: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.primary[600] },
+  // ── Офлайн-очередь чеков (Round 9) ──────────────────────────────
+  // Пилюля «Ожидают отправки: N» — тот же pill-язык, что «Доска» выше,
+  // но амберный (внимание без паники); видна только при N > 0.
+  pendingQueueRow: {
+    paddingHorizontal: spacing[4],
+    marginBottom: spacing[1],
+    flexDirection: 'row',
+  },
+  pendingQueuePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+  },
+  pendingQueueText: { fontSize: 13, fontWeight: fontWeight.semibold, color: colors.amber[600] },
+  // Шит «Ожидают отправки»
+  queueSheetIntro: { fontSize: fontSize.sm, lineHeight: 19 },
+  queueEntryCard: {
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    padding: spacing[3],
+    gap: spacing[1.5],
+  },
+  queueEntryTop: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+  },
+  queueEntrySum: { flex: 1, fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  queueEntryTime: { fontSize: fontSize.xs },
+  queueEntryClient: { fontSize: fontSize.sm },
+  queueEntryStatus: { fontSize: fontSize.xs },
+  queueEntryFailedRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[1.5],
+  },
+  queueEntryFailedText: { flex: 1, fontSize: fontSize.xs, lineHeight: 16 },
+  queueRetryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    alignSelf: 'flex-start',
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+  },
+  queueRetryText: { fontSize: 13, fontWeight: fontWeight.semibold },
+  queueSendAllBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.primary[600],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3],
+    minHeight: 44,
+  },
+  queueSendAllText: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.white },
   // ── Search + Filter row ─────────────────────────────────────────
   searchRow: {
     flexDirection: 'row',

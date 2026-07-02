@@ -65,6 +65,7 @@ import {
   releaseProductPickerSession,
   type ProductPickerBridge,
 } from '../utils/productPickerSession';
+import { enqueueOfflineCheck, generateClientRequestId, isNetworkClassCheckError } from '../utils/offlineCheckQueue';
 import type {
   Client,
   Car,
@@ -1602,28 +1603,87 @@ export default function CheckCreateScreen() {
         Alert.alert('Готово', 'Чек успешно создан');
       }
     },
-    onError: (err: any) => {
+    onError: (err: any, variables: any) => {
       submittingRef.current = false;
-      // Surface the real reason — owners report "ничего не происходит" in
-      // production; without the raw payload we can't tell whether it's a
-      // missing master, a stock conflict, or a backend 500. Always show
-      // SOMETHING, fall back to JSON when the server didn't give a
-      // friendly string. Mobile logs (Console.app on Mac, sentry on
-      // server) keep the full breadcrumb.
-      // eslint-disable-next-line no-console
-      console.error('[CheckCreate] submit error', err?.response?.status, err?.response?.data, err?.message);
-      const status = err?.response?.status;
-      const data = err?.response?.data;
-      const friendly =
-        data?.message ||
-        data?.error ||
-        (typeof data === 'string' ? data : null) ||
-        err?.message ||
-        (data ? JSON.stringify(data) : null) ||
-        (status ? `Сервер вернул код ${status}` : 'Не удалось сохранить чек');
-      Alert.alert('Ошибка', String(friendly));
+      // ── Офлайн-очередь (Round 9): сетевой отказ СОЗДАНИЯ не теряет чек ──
+      // Только create (у edit нет идемпотентного ключа) и только сетевой
+      // класс: нет ответа вовсе (timeout / DNS / offline) или шлюзовые
+      // 502/503/504. Детерминированные 400/401/403/409/422 — НЕ сюда: они
+      // всплывают пользователю как раньше (ветка ниже). `variables` — тот
+      // самый payload с уже сгенерированным clientRequestId (см. proceed),
+      // поэтому досылка «полудоставленного» запроса не задвоит чек.
+      if (!editId && isNetworkClassCheckError(err)) {
+        void stashCheckOffline(variables, err);
+        return;
+      }
+      showSubmitError(err);
     },
   });
+
+  // Surface the real reason — owners report "ничего не происходит" in
+  // production; without the raw payload we can't tell whether it's a
+  // missing master, a stock conflict, or a backend 500. Always show
+  // SOMETHING, fall back to JSON when the server didn't give a
+  // friendly string. Mobile logs (Console.app on Mac, sentry on
+  // server) keep the full breadcrumb.
+  const showSubmitError = (err: any) => {
+    // eslint-disable-next-line no-console
+    console.error('[CheckCreate] submit error', err?.response?.status, err?.response?.data, err?.message);
+    const status = err?.response?.status;
+    const data = err?.response?.data;
+    const friendly =
+      data?.message ||
+      data?.error ||
+      (typeof data === 'string' ? data : null) ||
+      err?.message ||
+      (data ? JSON.stringify(data) : null) ||
+      (status ? `Сервер вернул код ${status}` : 'Не удалось сохранить чек');
+    Alert.alert('Ошибка', String(friendly));
+  };
+
+  /**
+   * Сетевой отказ сабмита → чек в офлайн-очередь (AsyncStorage) и мастер
+   * продолжает работать, как будто чек проведён: форма сбрасывается /
+   * экран закрывается, а очередь дошлёт payload с тем же clientRequestId,
+   * когда сеть вернётся (триггеры — foreground / таймер / успех сети).
+   * Если даже ЗАПИСЬ НА ТЕЛЕФОН не удалась — честная ошибка, как раньше
+   * (притворяться, что чек сохранён, нельзя).
+   */
+  const stashCheckOffline = async (payload: any, err: any) => {
+    try {
+      await enqueueOfflineCheck(payload, {
+        total,
+        clientName: selectedClient?.fullName,
+        carInfo: selectedCar
+          ? `${selectedCar.makeModel}${selectedCar.plateNumber ? ` · ${selectedCar.plateNumber}` : ''}`
+          : undefined,
+      });
+    } catch {
+      showSubmitError(err);
+      return;
+    }
+    haptic('warning');
+    // Навигация «как при успехе» — ДО алерта, чтобы мастер сразу вернулся к
+    // работе (алерт глобальный, показывается поверх целевого экрана).
+    // Server-side эффекты успеха (фото, лояльность, конверсия записи,
+    // work-status) здесь невозможны — чека на сервере ещё нет; запись из
+    // «прихода» остаётся в Предстоящих (документированный fallback конверсии).
+    if (isFromBooking) {
+      navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Bookings' } });
+    } else if (isStackScreen) {
+      navigation.goBack();
+    } else {
+      resetForm();
+    }
+    const photoNote =
+      pendingPhotos.length > 0
+        ? '\n\nФото не отправятся автоматически — добавьте их в чек после отправки (Журнал → чек).'
+        : '';
+    Alert.alert(
+      'Нет связи — чек сохранён',
+      `Чек сохранён на телефоне и отправится автоматически, как только появится сеть. Следить за ним можно в Журнале («Ожидают отправки»).${photoNote}`,
+    );
+  };
 
   // Calculations (MOB-02) — mirror the backend/web formula EXACTLY:
   // the discount applies to PRODUCTS only and the product part floors at
@@ -1887,6 +1947,13 @@ export default function CheckCreateScreen() {
       }
 
       const payload = {
+        // Идемпотентность офлайн-очереди (Round 9): UUID генерится ОДИН раз
+        // ДО первого живого POST и уезжает вместе с ним. Если запрос
+        // «полудоставился» (сервер записал чек, ответ потерялся в сети),
+        // досылка из очереди с тем же ключом вернёт УЖЕ созданный чек — без
+        // повторного списания склада/зарплаты/выручки. Только для create:
+        // у PATCH-обновления ключа нет (whitelist DTO его бы не принял).
+        ...(editId ? {} : { clientRequestId: generateClientRequestId() }),
         clientId: clientId || undefined,
         carId: carId || undefined,
         masterId: resolvedMasterId,
