@@ -16,6 +16,7 @@ import InventoryScreen from '../screens/InventoryScreen';
 import ChecksScreen from '../screens/ChecksScreen';
 import CheckCreateScreen from '../screens/CheckCreateScreen';
 import CheckDetailScreen from '../screens/CheckDetailScreen';
+import ProductPickerScreen from '../screens/ProductPickerScreen';
 import WorkBoardScreen from '../screens/WorkBoardScreen';
 import WorkBoardSettingsScreen from '../screens/WorkBoardSettingsScreen';
 import CheckTrashScreen from '../screens/CheckTrashScreen';
@@ -183,6 +184,18 @@ export type RootStackParamList = {
         prefillComment?: string;
       }
     | undefined;
+  /**
+   * Полноэкранный пикер товаров Кассы (Round 8 #2) — Склад-паттерн: каждый
+   * уровень папки пушится НОВЫМ инстансом этого же роута с удлинённым
+   * `folderPath`, поэтому iOS edge-swipe pop = подъём на один уровень.
+   * Корневой уровень (folderPath пуст) регистрируется с gestureEnabled:false —
+   * случайный свайп не закрывает пикер; выход только «Готово»/«X» (они
+   * разматывают все уровни разом через pop(depth+1)). Корзина живёт в
+   * CheckCreateScreen и передаётся через module-level session store
+   * (`utils/productPickerSession.ts`), НЕ через route.params — функции в
+   * params дают non-serializable warning и ломают state-restoration.
+   */
+  ProductPicker: { folderPath?: string[] } | undefined;
   CheckDetail: { id: string };
   /**
    * `focusCarId` — set when the caller (typically the Clients screen
@@ -788,6 +801,25 @@ export default function AppNavigator() {
         <>
           <Stack.Screen name="Main" component={MainShell} />
           <Stack.Screen name="CheckCreate" component={CheckCreateScreen} options={{ animation: 'slide_from_bottom' }} />
+          {/* Пикер товаров Кассы — на КОРНЕВОМ стеке (Касса — и таб NewCheck,
+              и пушнутый CheckCreate — живёт под ним; пикер перекрывает таб-бар,
+              как CheckDetail). Один роут для всех уровней папок: глубина
+              задаётся params.folderPath. Корень (depth 0) открывается снизу
+              как модальная поверхность и с ВЫКЛЮЧЕННЫМ жестом — edge-swipe
+              никогда не закрывает пикер (явное требование владельца); папки
+              (depth > 0) пушатся вправо со штатным edge-swipe-pop на уровень
+              выше — байт-в-байт поведение Склада. */}
+          <Stack.Screen
+            name="ProductPicker"
+            component={ProductPickerScreen}
+            options={({ route }) => {
+              const pickerDepth = route.params?.folderPath?.length ?? 0;
+              return {
+                gestureEnabled: pickerDepth > 0,
+                animation: pickerDepth === 0 ? 'slide_from_bottom' : 'slide_from_right',
+              };
+            }}
+          />
           <Stack.Screen name="ClientDetail" component={ClientDetailScreen} />
           <Stack.Screen name="CarDetail" component={CarDetailScreen} />
           <Stack.Screen name="SupplierDetail" component={SupplierDetailScreen} />

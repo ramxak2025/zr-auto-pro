@@ -41,7 +41,6 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import Modal from '../components/Modal';
-import ProductPickerModal from '../components/ProductPickerModal';
 import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
 import DateTimePickerModal from '../components/DateTimePickerModal';
@@ -59,6 +58,12 @@ import { PressableScale } from '../platform/PressableScale';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { useDebouncedValue } from '../hooks/useDebouncedValue';
 import { usePosSettings } from '../hooks/usePosSettings';
+import {
+  claimProductPickerSession,
+  notifyProductPickerSession,
+  releaseProductPickerSession,
+  type ProductPickerBridge,
+} from '../utils/productPickerSession';
 import type {
   Client,
   Car,
@@ -84,7 +89,7 @@ const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
 /**
  * Full-warehouse limit for the shared ['all-products-check', { warehouseId }]
- * cache slot. MUST mirror `PICKER_PRODUCT_LIMIT` in `ProductPickerModal.tsx`
+ * cache slot. MUST mirror `PICKER_PRODUCT_LIMIT` in `ProductPickerScreen.tsx`
  * (module-private there): both observers share one query key, so a smaller
  * limit here would re-introduce the "bundle component beyond position 500 is
  * silently dropped" bug the Round 7 audit closed. Effectively "no limit" —
@@ -499,7 +504,9 @@ export default function CheckCreateScreen() {
   }, []);
   const [showPlatePicker, setShowPlatePicker] = useState(false);
   const [showServicePicker, setShowServicePicker] = useState(false);
-  const [showProductPicker, setShowProductPicker] = useState(false);
+  // Пикер товаров — теперь ПОЛНОЭКРАННЫЙ роут `ProductPicker` на корневом
+  // стеке (Round 8 #2, Склад-паттерн с папками), а не модалка: локального
+  // show-state больше нет, открытие — openProductPicker() ниже.
   const [showMasterPicker, setShowMasterPicker] = useState<number | null>(null);
   const [showTemplatesPicker, setShowTemplatesPicker] = useState(false);
   // Warehouse selection for the in-cash product picker. Null on first
@@ -654,17 +661,18 @@ export default function CheckCreateScreen() {
   // only, first 500 by name). On tenants with >500 products a bundle
   // component beyond position 500 was SILENTLY dropped from the check and
   // the oversell guard went blind for those products. Now we observe the
-  // exact scoped key ProductPickerModal itself populates
-  // (['all-products-check', { warehouseId }], FULL list — same
-  // PICKER_CACHE_PRODUCT_LIMIT, no 500 cap), so both consumers read the
-  // same complete list the user sees in the picker. While `warehouses` is
-  // still resolving the key falls back to the legacy un-scoped slot warmed
-  // by the login prefetch — a transient window before any interaction is
-  // possible. `enabled: showProductPicker` keeps the fetch discipline
-  // identical to before (fresh fetch on every picker open; React Query
-  // dedupes with the picker's own observer since the key is shared), while
-  // a disabled observer still reads whatever the mount prefetch below /
-  // the picker already cached.
+  // exact scoped key the picker populates (['all-products-check',
+  // { warehouseId }], FULL list — same PICKER_CACHE_PRODUCT_LIMIT, no 500
+  // cap), so both consumers read the same complete list the user sees in
+  // the picker. While `warehouses` is still resolving the key falls back to
+  // the legacy un-scoped slot warmed by the login prefetch.
+  //
+  // Round 8 #2: пикер стал полноэкранным роутом `ProductPicker`
+  // (ProductPickerScreen) и САМ владеет fetch-дисциплиной — ревалидация при
+  // каждом открытии + pull-to-refresh; mount-prefetch ниже греет слот заранее.
+  // Этот observer — ПАССИВНЫЙ читатель кеша (`enabled: false` никогда не
+  // фетчит, но продолжает получать все обновления слота), ровно для комплектов
+  // и oversell-guard'а.
   const { data: allProducts } = useQuery<Product[]>({
     queryKey: pickerWarehouseId ? ['all-products-check', { warehouseId: pickerWarehouseId }] : ['all-products-check'],
     queryFn: async () => {
@@ -673,10 +681,7 @@ export default function CheckCreateScreen() {
       const res = await productsApi.getAll(params);
       return res.data.data || res.data;
     },
-    enabled: showProductPicker,
-    placeholderData: undefined,
-    refetchOnMount: 'always',
-    staleTime: 0,
+    enabled: false,
   });
 
   // Warehouses for the in-cash picker switcher. Cached separately —
@@ -703,9 +708,8 @@ export default function CheckCreateScreen() {
     if (main) setPickerWarehouseId(main.id);
   }, [warehouses, pickerWarehouseId]);
 
-  // Build a stable label for the warehouse switcher chip. While the
-  // default is still being resolved we show the main name from the
-  // list so the pill never collapses to an empty width.
+  // Активный склад пикера — питает mount-prefetch ниже (лейбл свитчера
+  // теперь считает сам ProductPickerScreen из session.warehouses).
   const activeWarehouse = useMemo(
     () =>
       pickerWarehouseId
@@ -713,7 +717,6 @@ export default function CheckCreateScreen() {
         : (warehouses || []).find((w) => w.kind === 'main'),
     [warehouses, pickerWarehouseId],
   );
-  const warehouseChipLabel = activeWarehouse?.name || 'Основной склад';
 
   // Pre-warm the products + categories cache as soon as the screen
   // mounts (rather than waiting for the picker to open). Net effect on
@@ -725,7 +728,7 @@ export default function CheckCreateScreen() {
     // Warm the SAME scoped slot the picker + bundle expansion + oversell
     // guard read (full list, no 500 cap). Until warehouses resolve, fall
     // back to the legacy un-scoped slot — it stays useful as the picker's
-    // placeholder seed (see ProductPickerModal.placeholderData).
+    // placeholder seed (see ProductPickerScreen.placeholderData).
     queryClient.prefetchQuery({
       queryKey: wid ? ['all-products-check', { warehouseId: wid }] : ['all-products-check'],
       queryFn: async () => {
@@ -1048,6 +1051,17 @@ export default function CheckCreateScreen() {
     },
     [animateClientToggle],
   );
+
+  /** Round 8 #1 — «Сменить» на карточке выбранного авто: осознанная смена
+   *  машины через существующий ClientCarPickerSheet (тот же sheet, что и в
+   *  phone-режиме; onPick идёт тем же setClientId/setCarId путём). Постоянный
+   *  ряд «пилюль» под карточкой владелец убрал — он показывается только пока
+   *  машина ЕЩЁ не выбрана (первичный выбор). */
+  const openCarSwitch = React.useCallback(() => {
+    if (!clientData) return;
+    haptic('select');
+    setCarPickerClient(clientData);
+  }, [clientData]);
 
   // Редактируем отложенный (черновик) чек: пользователь пришёл сюда по
   // «Продолжить» из деталки. Берём флаг из ЗАГРУЖЕННОГО серверного чека, а не
@@ -1706,6 +1720,23 @@ export default function CheckCreateScreen() {
 
   const removeProductLine = (idx: number) => setProductLines((prev) => prev.filter((_, i) => i !== idx));
 
+  /** Round 8 #2 — «кнопка убрать возле количества» в пикере: снять ОДНУ
+   *  единицу товара; при quantity → 0 строка удаляется из чека. Функциональный
+   *  апдейтер — степпер пикера может тапаться быстро, счёт не должен терять
+   *  промежуточные состояния. */
+  const decrementProductLine = (productId: string) => {
+    setProductLines((prev) => {
+      const idx = prev.findIndex((l) => l.productId === productId);
+      if (idx < 0) return prev;
+      const line = prev[idx];
+      if (line.quantity <= 1) return prev.filter((_, i) => i !== idx);
+      const nextQty = line.quantity - 1;
+      return prev.map((l, i) =>
+        i === idx ? { ...l, quantity: nextQty, totalSell: l.sellPrice * nextQty, totalCost: l.costPrice * nextQty } : l,
+      );
+    });
+  };
+
   const updateProductLine = (idx: number, field: string, value: any) => {
     setProductLines((prev) =>
       prev.map((line, i) => {
@@ -1931,9 +1962,46 @@ export default function CheckCreateScreen() {
     return m?.fullName?.split(' ')[0] || 'Мастер';
   };
 
-  const getProductCartQty = (productId: string) => {
-    const line = productLines.find((l) => l.productId === productId);
-    return line?.quantity || 0;
+  // ── Мост Касса ⇄ ProductPickerScreen (Round 8 #2) ─────────────────────────
+  // Корзина остаётся здесь (productLines / addProductLine / decrement…), а
+  // полноэкранный пикер на корневом стеке читает её через module-level
+  // session store — НЕ через route.params (функции в params дают
+  // non-serializable warning и ломают state-restoration). Ref обновляется
+  // на каждом рендере (нулевая стоимость), notify будит экраны пикера только
+  // когда реально изменилась корзина / склад / права.
+  const pickerBridgeRef = useRef<ProductPickerBridge>({
+    productLines: [],
+    addProduct: () => {},
+    decrementProduct: () => {},
+    showCostPrice: false,
+    warrantyNames: new Set<string>(),
+    warehouseId: null,
+    setWarehouseId: () => {},
+    warehouses: [],
+  });
+  pickerBridgeRef.current = {
+    productLines,
+    addProduct: addProductLine,
+    decrementProduct: decrementProductLine,
+    showCostPrice: canSeeCostPrice,
+    warrantyNames: warrantyProductNames,
+    warehouseId: pickerWarehouseId,
+    setWarehouseId: setPickerWarehouseId,
+    warehouses: warehouses || [],
+  };
+  useEffect(() => {
+    notifyProductPickerSession(pickerBridgeRef);
+  }, [productLines, pickerWarehouseId, warehouses, warrantyProductNames, canSeeCostPrice]);
+  useEffect(() => () => releaseProductPickerSession(pickerBridgeRef), []);
+
+  /** Открыть полноэкранный пикер товаров: клеймим сессию за ЭТИМ инстансом
+   *  Кассы (таб и пушнутый edit-CheckCreate живут одновременно — владеет тот,
+   *  кто открыл) и пушим корневой уровень роута. Пикер ложится ПОВЕРХ Кассы
+   *  на корневом стеке; «Готово» разматывает все его уровни назад сюда. */
+  const openProductPicker = () => {
+    haptic('tap');
+    claimProductPickerSession(pickerBridgeRef);
+    navigation.navigate('ProductPicker', {});
   };
 
   return (
@@ -2142,6 +2210,26 @@ export default function CheckCreateScreen() {
                       <Text style={[styles.selectedCarComment, { color: palette.text.tertiary }]} numberOfLines={1}>
                         {selectedCar.comment}
                       </Text>
+                    )}
+                    {/* Round 8 #1 — машина выбрана: показываем ТОЛЬКО её, без
+                        постоянного ряда «пилюль». Смена — осознанный тап по
+                        «Сменить» → ClientCarPickerSheet со всеми авто клиента.
+                        Чип виден только когда выбор явный (carId) и машин ≥2. */}
+                    {!!carId && clientCars && clientCars.length > 1 && (
+                      <TouchableOpacity
+                        onPress={openCarSwitch}
+                        style={[
+                          styles.changeCarChip,
+                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                        ]}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel="Сменить автомобиль"
+                      >
+                        <Ionicons name="swap-horizontal" size={13} color={palette.text.secondary} />
+                        <Text style={[styles.changeCarChipText, { color: palette.text.secondary }]}>Сменить</Text>
+                      </TouchableOpacity>
                     )}
                   </View>
                 )}
@@ -2384,10 +2472,11 @@ export default function CheckCreateScreen() {
               </>
             )}
 
-            {/* Car picker — only when client has more than one car. The big
-                card above already shows the active car; here the user can
-                switch between siblings. */}
-            {clientId && clientCars && clientCars.length > 1 && (
+            {/* Car picker — ТОЛЬКО пока машина ещё НЕ выбрана (carId пуст) и
+                у клиента ≥2 авто: первичный выбор. Round 8 #1 — после выбора
+                ряд исчезает (карточка выше показывает только выбранную
+                машину), смена — через чип «Сменить» → ClientCarPickerSheet. */}
+            {clientId && !carId && clientCars && clientCars.length > 1 && (
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -2720,7 +2809,7 @@ export default function CheckCreateScreen() {
                 </View>
                 <TouchableOpacity
                   style={[styles.addLineBtn, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
-                  onPress={() => setShowProductPicker(true)}
+                  onPress={openProductPicker}
                 >
                   <Ionicons name="add" size={16} color={colors.primary[600]} />
                 </TouchableOpacity>
@@ -2797,7 +2886,7 @@ export default function CheckCreateScreen() {
               {productLines.length === 0 && (
                 <TouchableOpacity
                   style={[styles.emptyAddBtn, { borderColor: palette.border.subtle }]}
-                  onPress={() => setShowProductPicker(true)}
+                  onPress={openProductPicker}
                 >
                   <Ionicons name="add-circle-outline" size={18} color={palette.text.tertiary} />
                   <Text style={[styles.emptyAddText, { color: palette.text.tertiary }]}>Добавить товар</Text>
@@ -3290,28 +3379,14 @@ export default function CheckCreateScreen() {
         </ScrollView>
       </Modal>
 
-      {/* Product Picker — extracted into <ProductPickerModal/>. Visual rows
-          mirror the warehouse list (`ProductsScreen.tsx`); the modal is
-          virtualised via FlashList and reads from the same scoped
-          `['all-products-check', { warehouseId }]` cache key this screen
-          prefetches on mount (and login warms the un-scoped fallback slot),
-          so opening the picker is a cache-hit, no flash. */}
-      <ProductPickerModal
-        visible={showProductPicker}
-        onClose={() => setShowProductPicker(false)}
-        onSelectProduct={addProductLine}
-        getCartQty={getProductCartQty}
-        title={'Товары'}
-        showCostPrice={canSeeCostPrice}
-        warehouseId={pickerWarehouseId}
-        warrantyNames={warrantyProductNames}
-        warehouseSwitcher={{
-          value: pickerWarehouseId,
-          label: warehouseChipLabel,
-          options: (warehouses || []).map((w) => ({ id: w.id, name: w.name, kind: w.kind })),
-          onChange: (id) => setPickerWarehouseId(id),
-        }}
-      />
+      {/* Product Picker — Round 8 #2: полноэкранный роут `ProductPicker`
+          (ProductPickerScreen) на корневом стеке, Склад-паттерн с папками и
+          edge-swipe на уровень выше. Открывается через openProductPicker();
+          корзина/склад/права уходят туда через productPickerSession, данные —
+          те же ключи ['all-products-check', { warehouseId }] +
+          ['warehouse-categories', { warehouseId }], которые этот экран греет
+          prefetch'ем на mount. Модалка ProductPickerModal здесь больше не
+          используется (жива для Склада/Поставщиков/Заказов/Мотивации). */}
 
       {/* Templates Picker */}
       <Modal visible={showTemplatesPicker} onClose={() => setShowTemplatesPicker(false)} title="Шаблоны чеков">
@@ -3726,6 +3801,19 @@ const styles = StyleSheet.create({
     color: colors.gray[500],
     textAlign: 'center' as const,
   },
+  // Round 8 #1 — сдержанный чип «Сменить» под выбранным авто: вторичная
+  // аффорданс-кнопка (muted fill + hairline), не конкурирует с номером.
+  changeCarChip: {
+    flexDirection: 'row' as const,
+    alignItems: 'center' as const,
+    gap: 4,
+    paddingHorizontal: spacing[3],
+    paddingVertical: 5,
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: 2,
+  },
+  changeCarChipText: { fontSize: 12, fontWeight: '600' as const, letterSpacing: -0.1 },
   sectionSubLabel: {
     fontSize: 11,
     fontWeight: '700',
