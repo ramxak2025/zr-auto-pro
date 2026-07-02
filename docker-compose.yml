@@ -86,7 +86,7 @@ services:
       RUN_BACKGROUND_JOBS: "true"
       # Server-side Sentry: пусто = выключен (backend/src/common/sentry.ts).
       # Раньше переменная не пробрасывалась вовсе — Sentry молча не работал.
-      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_DSN: ${SENTRY_DSN:-https://e186f0538b275163dbac41b712dc30be@o4511507149291520.ingest.us.sentry.io/4511667267960832}
     expose:
       - "3000"
     volumes:
@@ -132,7 +132,7 @@ services:
       PORT: 3000
       RUN_BACKGROUND_JOBS: "false"
       # Server-side Sentry: пусто = выключен (backend/src/common/sentry.ts).
-      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_DSN: ${SENTRY_DSN:-https://e186f0538b275163dbac41b712dc30be@o4511507149291520.ingest.us.sentry.io/4511667267960832}
     expose:
       - "3000"
     volumes:
