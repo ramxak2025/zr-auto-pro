@@ -12,6 +12,8 @@ import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthUser } from '../common/auth-cache';
+import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
+import { userHasPermission } from '../common/guards/permissions.guard';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 import { SECTION_KEYS, SectionKey } from './dto/section-visibility.dto';
 import { ALL_ITEM_KEYS, OWNER_PROTECTED_ITEM_KEYS } from './dto/item-visibility.dto';
@@ -59,6 +61,8 @@ export class UsersService {
       username: row.username,
       avatar: row.avatar,
       role: row.role,
+      // 114 — назначенная роль (Bitrix24-style). NULL = легаси-дефолты строковой роли.
+      roleId: row.role_id ?? null,
       salaryPercent: parseFloat(row.salary_percent) || 0,
       productSalaryPercent: parseFloat(row.product_salary_percent) || 0,
       permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions || {},
@@ -98,7 +102,7 @@ export class UsersService {
               daily_expense_limit,
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
-              dismissed_at, purged_at,
+              dismissed_at, purged_at, role_id,
               tenant_id, created_at
        FROM users
        WHERE tenant_id = $1 AND dismissed_at IS NULL AND purged_at IS NULL
@@ -132,7 +136,7 @@ export class UsersService {
               daily_expense_limit,
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
-              dismissed_at, purged_at,
+              dismissed_at, purged_at, role_id,
               tenant_id, created_at
        FROM users
        WHERE tenant_id = $1 AND is_active = true AND role IN ('master','admin')
@@ -155,7 +159,7 @@ export class UsersService {
               daily_expense_limit,
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
-              dismissed_at, purged_at,
+              dismissed_at, purged_at, role_id,
               tenant_id, created_at
        FROM users WHERE id = $1 AND tenant_id = $2`,
       [id, tenantID],
@@ -199,7 +203,7 @@ export class UsersService {
       const { rows } = await this.pool.query(
         `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
          VALUES ($1, $2, $3, $4, $5, $6::jsonb, true, $7)
-         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, tenant_id, created_at`,
+         RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, role_id, tenant_id, created_at`,
         [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, perms, tenantID],
       );
       return this.mapUser(rows[0]);
@@ -227,7 +231,8 @@ export class UsersService {
     // we'd still leak existence via different error paths.
     const { rows: targetRows } = await this.pool.query(
       `SELECT role, COALESCE(salary_percent, 0) AS salary_percent,
-              COALESCE(product_salary_percent, 0) AS product_salary_percent
+              COALESCE(product_salary_percent, 0) AS product_salary_percent,
+              COALESCE(permissions, '{}') AS permissions
          FROM users WHERE id=$1 AND tenant_id=$2`,
       [id, tenantID],
     );
@@ -279,6 +284,38 @@ export class UsersService {
       dto.permissions.user_management !== true
     ) {
       throw new BadRequestException({ message: 'Нельзя снять у себя право «Управление пользователями»' });
+    }
+
+    // ── 114 — назначение роли (roleId) ──────────────────────────────────
+    // undefined → поле не трогаем; null → снять роль (возврат к легаси-дефолтам
+    // строковой роли — сегодняшнее поведение); uuid → роль обязана быть ВИДИМОЙ
+    // тенанту: системная (tenant_id IS NULL) или своя. Чужая → 400, id другого
+    // тенанта не различим от несуществующего.
+    if (dto.roleId !== undefined && dto.roleId !== null) {
+      const { rows: roleRows } = await this.pool.query(
+        `SELECT COALESCE(matrix, '{}') AS matrix FROM roles WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
+        [dto.roleId, tenantID],
+      );
+      if (roleRows.length === 0) throw new BadRequestException({ message: 'Роль не найдена' });
+
+      // Самолокаут-guard (зеркало правила для dto.permissions выше, но по
+      // ЭФФЕКТИВНОМУ результату): назначая роль СЕБЕ, нельзя получить
+      // user_management=false после «flatten(матрицы) ⊕ персональные overrides».
+      // superadmin/director исключены по той же причине, что и выше — их
+      // клиентский обход безусловный, самолокаут для них невозможен.
+      if (id === actorID && actorRole !== 'superadmin' && actorRole !== 'director') {
+        const roleMatrix = typeof roleRows[0].matrix === 'string' ? JSON.parse(roleRows[0].matrix) : roleRows[0].matrix;
+        const storedPermsRaw = targetRows[0].permissions;
+        const storedPerms = (
+          typeof storedPermsRaw === 'string' ? JSON.parse(storedPermsRaw) : storedPermsRaw || {}
+        ) as Record<string, boolean>;
+        const resultingOwnPerms =
+          dto.permissions !== undefined ? (dto.permissions as Record<string, boolean>) : storedPerms;
+        const effective = mergeEffectivePermissions(roleMatrix, resultingOwnPerms);
+        if (effective.user_management !== true) {
+          throw new BadRequestException({ message: 'Нельзя снять у себя право «Управление пользователями»' });
+        }
+      }
     }
 
     const sets: string[] = [];
@@ -339,6 +376,11 @@ export class UsersService {
       sets.push(`hidden_everywhere=$${idx++}`);
       vals.push(!!dto.hiddenEverywhere);
     }
+    if (dto.roleId !== undefined) {
+      // null снимает роль; uuid уже провалидирован выше (видимость тенанту).
+      sets.push(`role_id=$${idx++}`);
+      vals.push(dto.roleId);
+    }
     if (dto.password) {
       const hash = await bcrypt.hash(dto.password, 10);
       sets.push(`password=$${idx++}`);
@@ -360,7 +402,7 @@ export class UsersService {
     vals.push(id, tenantID);
 
     const updateSql = `UPDATE users SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}
-       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, tenant_id, created_at`;
+       RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, role_id, tenant_id, created_at`;
 
     let updatedRow: any;
     if (pctChanged) {
@@ -600,7 +642,7 @@ export class UsersService {
               daily_expense_limit,
               COALESCE(hidden_from_schedule, false) as hidden_from_schedule,
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
-              dismissed_at, purged_at,
+              dismissed_at, purged_at, role_id,
               tenant_id, created_at
        FROM users
        WHERE tenant_id = $1 AND dismissed_at IS NOT NULL AND purged_at IS NULL
@@ -981,6 +1023,48 @@ export class UsersService {
     const raw = rows[0].permissions;
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     return (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, boolean>;
+  }
+
+  /**
+   * 114 — ЭФФЕКТИВНЫЕ права пользователя (плоский результат для UI волны 2):
+   * ровно то, что ответит userHasPermission на каждый канонический ключ для
+   * этого аккаунта. Считается из тех же примитивов, что и enforcement
+   * (flatten(матрицы роли) ⊕ персональные overrides → userHasPermission), —
+   * ответ физически не может разойтись с реальными решениями guard'ов:
+   * owner-class → всё true; master без role_id → сегодняшние дефолты; с
+   * role_id → база из матрицы. Явные НЕканонические ключи из users.permissions
+   * тоже включаются (их guard видит теми же глазами).
+   */
+  async getEffectivePermissions(
+    userId: string,
+    tenantID: string,
+  ): Promise<{ role: string; roleId: string | null; permissions: Record<string, boolean> }> {
+    const { rows } = await this.pool.query(
+      `SELECT u.role, u.role_id, COALESCE(u.permissions, '{}') AS permissions, r.matrix AS role_matrix
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+       WHERE u.id = $1 AND u.tenant_id = $2`,
+      [userId, tenantID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+
+    const rawPerms = rows[0].permissions;
+    const ownPerms = (typeof rawPerms === 'string' ? JSON.parse(rawPerms) : rawPerms || {}) as Record<string, boolean>;
+    let roleMatrix = rows[0].role_matrix ?? null;
+    if (typeof roleMatrix === 'string') {
+      try {
+        roleMatrix = JSON.parse(roleMatrix);
+      } catch {
+        roleMatrix = null;
+      }
+    }
+
+    const actor = { role: rows[0].role as string, permissions: mergeEffectivePermissions(roleMatrix, ownPerms) };
+    const keys = new Set<string>([...CANONICAL_PERMISSION_KEYS, ...Object.keys(actor.permissions)]);
+    const permissions: Record<string, boolean> = {};
+    for (const key of keys) permissions[key] = userHasPermission(actor, key);
+
+    return { role: actor.role, roleId: rows[0].role_id ?? null, permissions };
   }
 
   // ─── Product Commissions ────────────────────────────────────────────

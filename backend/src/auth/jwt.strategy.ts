@@ -5,6 +5,7 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
 import { authCacheKey, AUTH_CACHE_TTL_MS, ValidatedUser } from '../common/auth-cache';
+import { mergeEffectivePermissions } from '../common/role-matrix';
 
 @Injectable()
 export class JwtStrategy extends PassportStrategy(Strategy) {
@@ -62,10 +63,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       }
     }
 
+    // 114 — LEFT JOIN подтягивает матрицу назначенной роли тем же запросом
+    // (нулевой дополнительный DB-hop). role_id NULL (все существующие
+    // пользователи) → role_matrix NULL → путь байт-в-байт как до 114.
     const { rows } = await this.pool.query(
-      `SELECT is_active, COALESCE(tenant_id::text, '') as tenant_id, role, dismissed_at, purged_at,
-              COALESCE(permissions, '{}') as permissions
-       FROM users WHERE id=$1`,
+      `SELECT u.is_active, COALESCE(u.tenant_id::text, '') as tenant_id, u.role, u.dismissed_at, u.purged_at,
+              COALESCE(u.permissions, '{}') as permissions,
+              r.matrix as role_matrix
+       FROM users u
+       LEFT JOIN roles r ON r.id = u.role_id
+       WHERE u.id=$1`,
       [userID],
     );
 
@@ -98,6 +105,23 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         permissions = {};
       }
     }
+
+    // ── 114 — мост совместимости ролей ───────────────────────────────────
+    // Назначена роль (role_id → матрица) → база actor.permissions строится из
+    // flatten(матрицы), персональные users.permissions действуют ПОВЕРХ. Все
+    // guards/сервисы по-прежнему спрашивают userHasPermission(actor, key) — ни
+    // один enforcement-путь не меняется, меняется только источник карты.
+    // Матрицы нет (role_id NULL — все существующие пользователи) →
+    // mergeEffectivePermissions возвращает карту как есть: поведение прежнее.
+    let roleMatrix = rows[0].role_matrix ?? null;
+    if (typeof roleMatrix === 'string') {
+      try {
+        roleMatrix = JSON.parse(roleMatrix);
+      } catch {
+        roleMatrix = null; // fail-closed до легаси-пути, а не 500 на каждый запрос
+      }
+    }
+    permissions = mergeEffectivePermissions(roleMatrix, permissions);
 
     return {
       userID,

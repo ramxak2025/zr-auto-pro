@@ -147,6 +147,13 @@ export interface UpdateUserRequest {
   hiddenFromSchedule?: boolean;
   /** 055 — hide everywhere (lists + cannot be chosen as master on a new check). */
   hiddenEverywhere?: boolean;
+  /**
+   * 114 — назначенная роль (Bitrix24-style): uuid системной роли или роли
+   * своего тенанта; null снимает роль (возврат к легаси-дефолтам строковой
+   * роли). Сервер валидирует видимость роли и самолокаут (нельзя эффективно
+   * снять с себя user_management).
+   */
+  roleId?: string | null;
 }
 
 export interface CreateClientRequest {

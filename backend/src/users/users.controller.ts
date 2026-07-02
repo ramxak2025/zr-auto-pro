@@ -137,6 +137,15 @@ export class UsersController {
     return this.usersService.updatePermissions(id, user.tenantID, user.userID, dto.permissions);
   }
 
+  // 114 — ЭФФЕКТИВНЫЕ права (плоско): flatten(матрицы назначенной роли) ⊕
+  // персональные overrides, прогнанные через ту же userHasPermission, что и
+  // enforcement. Для UI волны 2 (экран роли / карточка сотрудника).
+  @Roles(...MANAGER_ROLES)
+  @Get(':id/effective-permissions')
+  getEffectivePermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.usersService.getEffectivePermissions(id, user.tenantID);
+  }
+
   // ─── Product Commissions ────────────────────────────────────────────
 
   @Roles(...MANAGER_ROLES)

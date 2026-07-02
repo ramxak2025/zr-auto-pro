@@ -20,6 +20,9 @@ import type {
   User,
   UserPermissions,
   PermissionTemplate,
+  Role,
+  RoleMatrix,
+  EffectivePermissionsResult,
   SectionVisibility,
   ItemVisibility,
   Tenant,
@@ -1426,6 +1429,34 @@ export function createPermissionTemplatesApi(api: HttpClient) {
       api.patch<PermissionTemplate>(`/permission-templates/${id}`, data),
     remove: (id: string) => api.delete<{ success: true }>(`/permission-templates/${id}`),
     apply: (id: string, userId: string) => api.post<UserPermissions>(`/permission-templates/${id}/apply/${userId}`),
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Роли (Bitrix24-style, миграция 114) — матрица «право × охват». В отличие
+//  от permission-templates (одноразовая копия карты в пользователя) роль —
+//  живая база: сервер строит эффективные права назначенного пользователя как
+//  «flatten(matrix) ⊕ персональные overrides». Все маршруты
+//  director/admin/superadmin-gated; системные роли read-only (403 — создайте
+//  копию: create c copyFromRoleId). remove роли с сотрудниками → 400 с count.
+//  Назначение роли пользователю — существующий usersApi.update(id, { roleId }).
+// ───────────────────────────────────────────────────────────────────────
+
+export function createRolesApi(api: HttpClient) {
+  return {
+    /** Системные + свои роли (is_system DESC, sort). */
+    list: () => api.get<Role[]>('/roles'),
+    /** Создать роль; copyFromRoleId — база-копия, matrix сливается поверх. */
+    create: (data: { name: string; description?: string; matrix?: RoleMatrix; copyFromRoleId?: string; sort?: number }) =>
+      api.post<Role>('/roles', data),
+    /** Обновить СВОЮ роль (matrix заменяется целиком). Системная → 403. */
+    update: (id: string, data: { name?: string; description?: string; matrix?: RoleMatrix; sort?: number }) =>
+      api.patch<Role>(`/roles/${id}`, data),
+    /** Удалить свою роль. С назначенными сотрудниками → 400 { count }. */
+    remove: (id: string) => api.delete<{ success: true }>(`/roles/${id}`),
+    /** Плоские ЭФФЕКТИВНЫЕ права пользователя (роль ⊕ overrides) — UI волны 2. */
+    effectivePermissions: (userId: string) =>
+      api.get<EffectivePermissionsResult>(`/users/${userId}/effective-permissions`),
   };
 }
 

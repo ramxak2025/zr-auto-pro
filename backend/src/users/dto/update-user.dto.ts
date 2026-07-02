@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsObject, IsBoolean, IsArray, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsObject, IsBoolean, IsArray, IsUUID, MinLength } from 'class-validator';
 
 export class UpdateUserDto {
   @IsString()
@@ -57,4 +57,14 @@ export class UpdateUserDto {
   @IsBoolean()
   @IsOptional()
   hiddenEverywhere?: boolean;
+
+  /**
+   * 114 — назначенная роль (Bitrix24-style). uuid — системная роль или роль
+   * своего тенанта (сервис валидирует); null — снять роль (возврат к
+   * легаси-дефолтам строковой роли). @IsOptional пропускает и null, и
+   * undefined — @IsUUID проверяет только реально присланную строку.
+   */
+  @IsUUID()
+  @IsOptional()
+  roleId?: string | null;
 }

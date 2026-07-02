@@ -39,6 +39,7 @@ import { KnowledgeModule } from './knowledge/knowledge.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { BookingsModule } from './bookings/bookings.module';
 import { PermissionTemplatesModule } from './permission-templates/permission-templates.module';
+import { RolesModule } from './roles/roles.module';
 import { CashShiftsModule } from './cash-shifts/cash-shifts.module';
 import { DebtsModule } from './debts/debts.module';
 import { LoyaltyModule } from './loyalty/loyalty.module';
@@ -93,6 +94,7 @@ import { ProfileModule } from './profile/profile.module';
     NotificationsModule,
     BookingsModule,
     PermissionTemplatesModule,
+    RolesModule,
     CashShiftsModule,
     DebtsModule,
     LoyaltyModule,

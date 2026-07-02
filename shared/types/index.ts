@@ -394,6 +394,13 @@ export interface User {
   phone: string;
   fullName: string;
   role: UserRole;
+  /**
+   * 114 — назначенная роль (Bitrix24-style, см. {@link Role}). null/absent →
+   * легаси-дефолты строковой роли (поведение до 114, у всех существующих
+   * пользователей). Задана → база эффективных прав берётся из матрицы роли,
+   * персональные {@link User.permissions} действуют поверх.
+   */
+  roleId?: string | null;
   salaryPercent: number;
   productSalaryPercent?: number;
   permissions: UserPermissions;
@@ -679,6 +686,90 @@ export interface PermissionTemplate {
   permissions: Record<string, boolean>;
   createdAt?: string;
   updatedAt?: string;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  Роли (Bitrix24-style, миграция 114) — матрица «право × охват»
+//
+//  Роль — это НЕ шаблон-копия (как PermissionTemplate), а живая база прав:
+//  назначенному пользователю (User.roleId) сервер строит эффективные права как
+//  «flatten(Role.matrix) ⊕ User.permissions» (персональные overrides поверх).
+//  Enforcement не меняется — guards по-прежнему смотрят плоские ключи
+//  PermissionKey; таблица соответствия «ключ → ячейка матрицы» зафиксирована
+//  в backend/src/common/role-matrix.ts.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Охват действия в матрице роли: нет / только своё / всё по автосервису. */
+export type RoleScope = 'none' | 'own' | 'all';
+
+/**
+ * Матрица роли: секции × действия. Scope-действия ('none'|'own'|'all') —
+ * checks.view, checks.edit, salary.view; остальные — boolean-тумблеры.
+ * Отсутствующее действие читается сервером как 'none'/false (fail-closed).
+ * Каждая ячейка соответствует ровно одному сегодняшнему {@link PermissionKey}:
+ *   checks.view→checks_view(+checks_view_all при 'all'), checks.create→checks_create,
+ *   checks.edit→checks_edit, checks.delete→checks_delete,
+ *   checks.changeDatetime→checks_change_datetime, checks.editClosed→edit_closed_check,
+ *   checks.editPayment→payment_edit, checks.acceptPayment→accept_payment,
+ *   checks.sellInstallment→sell_installment, warehouse.view→warehouse_access,
+ *   warehouse.delete→warehouse_delete, suppliers.view→suppliers_access,
+ *   clients.view→clients_view, clients.edit→clients_edit, schedule.view→schedule_view,
+ *   bookings.view→bookings_access, salary.view→salary_view, reports.view→financial_reports,
+ *   reports.profit→profit_view, reports.export→export_data, expenses.add→can_add_expenses,
+ *   marketing.view→marketing_access, calls.view→calls_view, calls.listen→calls_listen,
+ *   employees.manage→user_management.
+ */
+export interface RoleMatrix {
+  checks?: {
+    view?: RoleScope;
+    create?: boolean;
+    edit?: RoleScope;
+    delete?: boolean;
+    changeDatetime?: boolean;
+    editClosed?: boolean;
+    editPayment?: boolean;
+    acceptPayment?: boolean;
+    sellInstallment?: boolean;
+  };
+  warehouse?: { view?: boolean; delete?: boolean };
+  suppliers?: { view?: boolean };
+  clients?: { view?: boolean; edit?: boolean };
+  schedule?: { view?: boolean };
+  bookings?: { view?: boolean };
+  salary?: { view?: RoleScope };
+  reports?: { view?: boolean; profit?: boolean; export?: boolean };
+  expenses?: { add?: boolean };
+  marketing?: { view?: boolean };
+  calls?: { view?: boolean; listen?: boolean };
+  employees?: { manage?: boolean };
+}
+
+/**
+ * Роль. Системные (`isSystem: true` — «Мастер», «Администратор», «Директор»)
+ * видны каждому тенанту, read-only (403 на PATCH/DELETE — создайте копию через
+ * POST /roles c copyFromRoleId). Кастомные — тенантные, редактируемые.
+ * Backend: roles/ (миграция 114); API: createRolesApi.
+ */
+export interface Role {
+  id: string;
+  name: string;
+  description?: string | null;
+  isSystem: boolean;
+  matrix: RoleMatrix;
+  sort: number;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/**
+ * Ответ GET /users/:id/effective-permissions — плоские ЭФФЕКТИВНЫЕ права
+ * (flatten(матрицы роли) ⊕ персональные overrides, через ту же
+ * userHasPermission, что и серверный enforcement). Для UI волны 2.
+ */
+export interface EffectivePermissionsResult {
+  role: UserRole;
+  roleId: string | null;
+  permissions: Record<string, boolean>;
 }
 
 export interface Client {
