@@ -18,8 +18,10 @@ import SplashOverlay from './src/components/SplashOverlay';
 import OfflineBanner from './src/components/OfflineBanner';
 import { colors } from './src/theme';
 import { haptic } from './src/platform/haptics';
+import UpdateGate from './src/components/UpdateGate';
 import { hydrateCache, hydratePriorityCache, attachPersistence } from './src/utils/persistentCache';
 import { attachForegroundRevalidation } from './src/utils/foregroundRevalidation';
+import { attachOtaUpdates } from './src/utils/otaUpdates';
 import { attachBackendRecovery } from './src/utils/backendRecovery';
 import {
   attachOfflineCheckQueue,
@@ -338,6 +340,11 @@ export default function App() {
     };
   }, []);
 
+  // EAS Updates (OTA): тихая догрузка свежего JS-бандла при возврате в
+  // foreground — применяется на следующем холодном старте, никаких reload
+  // посреди работы мастера. No-op в dev / Expo Go (см. utils/otaUpdates.ts).
+  useEffect(() => attachOtaUpdates(), []);
+
   // Pre-load icon fonts even though icons render as SVG. This stays
   // as a no-op safety net for any legacy code path that still emits
   // a Text-based glyph — they won't render as empty boxes.
@@ -499,6 +506,12 @@ function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: Theme
           </SalaryNotificationProvider>
         </AuthProvider>
       </QueryClientProvider>
+      {/* Kill-switch «минимальная версия клиента» — ПОВЕРХ всего дерева,
+          включая сплеш и навигацию. Рендерит null, пока сервер не выставил
+          минимум выше текущей сборки (см. components/UpdateGate.tsx). Живёт
+          вне QueryClientProvider сознательно: обычный fetch + локальный
+          state, никаких зависимостей от auth/query. */}
+      <UpdateGate />
     </SafeAreaProvider>
   );
 }
