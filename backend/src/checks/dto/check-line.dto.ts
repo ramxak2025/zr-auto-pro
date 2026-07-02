@@ -18,10 +18,20 @@ import { IsBoolean, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from '
  *   • IDs are plain strings (web legitimately sends '' for "no client" —
  *     @IsUUID would reject it); required-ness of masterId/lines stays enforced
  *     in ChecksService with its existing friendly Russian messages.
+ *   • Every message is RUSSIAN — HttpExceptionFilter flattens class-validator
+ *     arrays to msg[0] and shows it to the master verbatim (a live master hit
+ *     the raw English «mileage must not be greater than 10000000»).
  */
 
 /** Upper bound for any single money/quantity/mileage value: 10 million. */
 export const MONEY_MAX = 10_000_000;
+const MAX_TXT = '10 000 000';
+
+/** Decorator option packs — one Russian message per (label, rule). */
+const num = (label: string) => ({ message: `${label}: введите число` });
+const min0 = (label: string) => ({ message: `${label}: значение не может быть отрицательным` });
+const maxM = (label: string) => ({ message: `${label}: не больше ${MAX_TXT}` });
+const maxLen = (label: string, n: number) => ({ message: `${label}: слишком длинный текст (максимум ${n} символов)` });
 
 export class CheckServiceLineDto {
   @IsOptional()
@@ -34,21 +44,21 @@ export class CheckServiceLineDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(2000, maxLen('Название услуги', 2000))
   name?: string;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsNumber({}, num('Цена услуги'))
+  @Min(0, min0('Цена услуги'))
+  @Max(MONEY_MAX, maxM('Цена услуги'))
   price?: number;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsNumber({}, num('Количество услуги'))
+  @Min(0, min0('Количество услуги'))
+  @Max(MONEY_MAX, maxM('Количество услуги'))
   quantity?: number;
 }
 
@@ -59,28 +69,28 @@ export class CheckProductLineDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(2000, maxLen('Название товара', 2000))
   name?: string;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsNumber({}, num('Цена товара'))
+  @Min(0, min0('Цена товара'))
+  @Max(MONEY_MAX, maxM('Цена товара'))
   sellPrice?: number;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsNumber({}, num('Закупочная цена'))
+  @Min(0, min0('Закупочная цена'))
+  @Max(MONEY_MAX, maxM('Закупочная цена'))
   costPrice?: number;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsNumber({}, num('Количество товара'))
+  @Min(0, min0('Количество товара'))
+  @Max(MONEY_MAX, maxM('Количество товара'))
   quantity?: number;
 }
 
@@ -88,12 +98,12 @@ export class CheckProductLineDto {
 export class CheckInstallmentDto {
   @IsOptional()
   @IsString()
-  @MaxLength(64)
+  @MaxLength(64, maxLen('Дата платежа рассрочки', 64))
   nextPaymentDate?: string;
 
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(2000, maxLen('Комментарий рассрочки', 2000))
   comment?: string;
 }
 
@@ -105,7 +115,7 @@ export class CheckInstallmentDto {
 export class BaseCheckDto {
   @IsOptional()
   @IsString()
-  @MaxLength(64)
+  @MaxLength(64, maxLen('Дата', 64))
   date?: string;
 
   @IsOptional()
@@ -122,21 +132,21 @@ export class BaseCheckDto {
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsNumber({}, num('Пробег'))
+  @Min(0, min0('Пробег'))
+  @Max(MONEY_MAX, { message: `Пробег: не больше ${MAX_TXT} км — проверьте, нет ли лишних цифр` })
   mileage?: number;
 
   @IsOptional()
   @IsString()
-  @MaxLength(2000)
+  @MaxLength(2000, maxLen('Комментарий', 2000))
   comment?: string;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsNumber({}, num('Скидка'))
+  @Min(0, min0('Скидка'))
+  @Max(MONEY_MAX, maxM('Скидка'))
   discount?: number;
 
   @IsOptional()
@@ -150,15 +160,15 @@ export class BaseCheckDto {
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsNumber({}, num('Сумма наличными'))
+  @Min(0, min0('Сумма наличными'))
+  @Max(MONEY_MAX, maxM('Сумма наличными'))
   cashAmount?: number;
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber()
-  @Min(0)
-  @Max(MONEY_MAX)
+  @IsNumber({}, num('Сумма картой'))
+  @Min(0, min0('Сумма картой'))
+  @Max(MONEY_MAX, maxM('Сумма картой'))
   cardAmount?: number;
 }

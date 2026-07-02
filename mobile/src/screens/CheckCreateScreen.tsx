@@ -2582,7 +2582,12 @@ export default function CheckCreateScreen() {
               <Ionicons name="speedometer-outline" size={16} color={colors.blue[400]} />
               <TextInput
                 value={mileage}
-                onChangeText={setMileage}
+                // Только цифры и максимум 7 знаков (< 10 000 000) — сервер
+                // отбивает пробег больше 10 млн (DTO @Max), а живой мастер уже
+                // напоролся на это, случайно набрав лишние цифры. Клампим на
+                // вводе, чтобы до ошибки просто не доходило.
+                onChangeText={(v) => setMileage(v.replace(/\D/g, '').slice(0, 7))}
+                maxLength={7}
                 style={[styles.mileageInput, { color: palette.text.primary }]}
                 keyboardType="numeric"
                 placeholder="Пробег, км"
