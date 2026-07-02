@@ -111,11 +111,74 @@ export class MigrationRunner implements OnModuleInit {
         await client.query('INSERT INTO _migrations (name) VALUES ($1)', [file]);
         this.logger.log(`Migration ${file} applied`);
       }
+
+      // Бутстрап RLS-роли — внутри того же advisory lock (вторая реплика ждёт
+      // и затем сходится к тому же состоянию) и ПОСЛЕ миграций (GRANT ON ALL
+      // TABLES должен видеть только что созданные таблицы).
+      await this.bootstrapAppRole(client);
     } finally {
       await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY]).catch(() => {});
       client.release();
       await this.pool.end();
     }
+  }
+
+  /**
+   * Бутстрап не-суперпользовательской роли autexa_app (волна B, RLS).
+   *
+   * Выполняется В КОДЕ, а не в SQL-миграции, потому что пароль приходит из env
+   * (DB_APP_PASSWORD) и не должен попадать в git. Не задан → no-op, прод живёт
+   * одним суперпользовательским пулом как раньше.
+   *
+   * Идемпотентно и сходяще на каждом старте:
+   *   • CREATE ROLE через DO-блок с проверкой pg_roles (роль уже есть → skip);
+   *   • ALTER ROLE каждый раз — подхватывает смену пароля и жёстко фиксирует
+   *     атрибуты: LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS
+   *     NOREPLICATION. NOBYPASSRLS — суть всей волны: роль ОБЯЗАНА проходить
+   *     через политики tenant_isolation (миграция 112);
+   *   • GRANT ON ALL TABLES/SEQUENCES — покрывает существующие объекты
+   *     (включая созданные только что миграциями выше);
+   *   • ALTER DEFAULT PRIVILEGES — будущие таблицы/сиквенсы, создаваемые этим
+   *     же admin-пользователем в следующих миграциях, доступны autexa_app сразу,
+   *     даже до следующего перезапуска;
+   *   • REVOKE на _migrations — app-роли там делать нечего (её использует только
+   *     MigrationRunner через собственный admin-пул).
+   *
+   * Пароль эскейпится удвоением кавычек ('' — штатный SQL-эскейп при включённом
+   * standard_conforming_strings, дефолт с PG 9.1); параметризовать DDL Postgres
+   * не умеет. NUL-байт отвергается явно.
+   */
+  private async bootstrapAppRole(client: PoolClient): Promise<void> {
+    const password = process.env.DB_APP_PASSWORD;
+    if (!password) return;
+    if (password.includes('\0')) {
+      throw new Error('DB_APP_PASSWORD must not contain NUL bytes');
+    }
+    const escaped = password.replace(/'/g, "''");
+
+    await client.query(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'autexa_app') THEN
+          CREATE ROLE autexa_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION;
+        END IF;
+      END
+      $$;
+    `);
+    await client.query(
+      `ALTER ROLE autexa_app LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOBYPASSRLS NOREPLICATION PASSWORD '${escaped}'`,
+    );
+    await client.query(`GRANT USAGE ON SCHEMA public TO autexa_app`);
+    await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO autexa_app`);
+    await client.query(`GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO autexa_app`);
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO autexa_app`,
+    );
+    await client.query(
+      `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT, UPDATE ON SEQUENCES TO autexa_app`,
+    );
+    await client.query(`REVOKE ALL ON TABLE _migrations FROM autexa_app`);
+    this.logger.log('App role autexa_app bootstrapped (RLS dual-pool mode ready)');
   }
 
   /**

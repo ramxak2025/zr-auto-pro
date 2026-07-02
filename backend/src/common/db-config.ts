@@ -43,3 +43,50 @@ export function getDbConfig(opts: { statementTimeout?: number | null } = {}): Po
     database: process.env.DB_NAME || 'zr_auto_pro',
   };
 }
+
+/**
+ * Имя не-суперпользовательской роли для тенантного трафика (волна B, RLS).
+ * Создаётся/актуализируется MigrationRunner'ом при старте, если задан
+ * DB_APP_PASSWORD. Константа, не env: роль зашита в бутстрап-SQL и политики
+ * не зависят от имени, а лишний конфиг — лишняя поверхность ошибок.
+ */
+export const APP_DB_ROLE = 'autexa_app';
+
+/**
+ * Конфиг app-пула (роль autexa_app под RLS) или null, если режим выключен.
+ *
+ * Dual-mode рубильник: DB_APP_PASSWORD не задан → null → TenantAwarePool
+ * работает одним admin-пулом, код полностью инертен (как GHCR_READ_TOKEN).
+ *
+ * Почему DATABASE_URL разбирается вручную: pg при наличии connectionString
+ * СЛИВАЕТ распарсенные из URL поля ПОВЕРХ явных (Object.assign(config,
+ * parse(connectionString)) в lib/connection-parameters.js) — передать
+ * { connectionString, user: 'autexa_app' } нельзя, user из URL победит.
+ * Поэтому строим дискретный конфиг: host/port/database из URL, user/password —
+ * роли autexa_app. new URL() покрывает наш формат postgres://user:pass@host:port/db
+ * (docker-compose и локалка); ssl-параметры в query URL не используются в этом
+ * проекте (PG живёт в приватной docker-сети).
+ */
+export function getAppDbConfig(opts: { statementTimeout?: number | null } = {}): PoolConfig | null {
+  const appPassword = process.env.DB_APP_PASSWORD;
+  if (!appPassword) {
+    return null;
+  }
+
+  const base = getDbConfig(opts);
+  const databaseUrl = process.env.DATABASE_URL;
+  if (databaseUrl) {
+    const parsed = new URL(databaseUrl);
+    const { connectionString: _dropped, ...tuning } = base;
+    void _dropped;
+    return {
+      ...tuning,
+      host: parsed.hostname || 'postgres',
+      port: parsed.port ? parseInt(parsed.port, 10) : 5432,
+      database: decodeURIComponent(parsed.pathname.replace(/^\//, '')) || 'zr_auto_pro',
+      user: APP_DB_ROLE,
+      password: appPassword,
+    };
+  }
+  return { ...base, user: APP_DB_ROLE, password: appPassword };
+}
