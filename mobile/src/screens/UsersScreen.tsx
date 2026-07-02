@@ -17,6 +17,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { usersApi, productsApi, uploadsApi, permissionTemplatesApi } from '../api/services';
+import { useRoles } from '../hooks/useRoles';
+import { PERMISSION_LABELS } from '../utils/roleMatrixEditor';
 import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
@@ -70,42 +72,10 @@ const roleLabels: Record<string, string> = {
 // The vocabulary (keys + grouping) is the canonical PERMISSION_GROUPS contract
 // from shared/types — backend's PermissionsGuard enforces the exact same keys.
 //
-// Owner-friendly Russian labels for every canonical PermissionKey. Phrased as a
-// capability ("Видит…", "Меняет…", "Доступ к…") so a non-technical owner reads
-// each row as a plain sentence about what the employee can do.
-const PERMISSION_LABELS: Record<PermissionKey, string> = {
-  // Касса
-  checks_view: 'Видит чеки',
-  checks_create: 'Создаёт чеки',
-  checks_edit: 'Редактирует чеки',
-  checks_delete: 'Удаляет чеки',
-  checks_change_datetime: 'Меняет дату и время чека',
-  checks_view_all: 'Видит чеки всех мастеров',
-  payment_edit: 'Меняет оплату чека',
-  accept_payment: 'Кассир смены (принимает оплату)',
-  sell_installment: 'Продаёт в рассрочку',
-  edit_closed_check: 'Редактирование проведённого чека',
-  // Финансы
-  profit_view: 'Видит прибыль',
-  financial_reports: 'Финансовые отчёты',
-  export_data: 'Экспорт данных',
-  can_add_expenses: 'Вносит расходы',
-  salary_view: 'Видит зарплаты',
-  // Склад
-  warehouse_access: 'Доступ к складу',
-  suppliers_access: 'Доступ к поставщикам',
-  warehouse_delete: 'Удаление на складе',
-  // CRM
-  clients_view: 'Видит клиентов',
-  clients_edit: 'Редактирует клиентов',
-  schedule_view: 'Доступ к расписанию',
-  bookings_access: 'Доступ к записям',
-  marketing_access: 'Доступ к маркетингу',
-  calls_view: 'Видит звонки',
-  calls_listen: 'Слушает записи звонков',
-  // Управление
-  user_management: 'Управление пользователями',
-};
+// Owner-friendly Russian labels for every canonical PermissionKey now live in
+// utils/roleMatrixEditor.ts (PERMISSION_LABELS) — one source for THIS matrix
+// and the role editor (RoleEditorScreen), so the same право never has two
+// разных названий in the app.
 
 // Subtitle for the two keys whose names hide a subtlety the owner should know.
 const PERMISSION_HINTS: Partial<Record<PermissionKey, string>> = {
@@ -309,6 +279,14 @@ interface UserForm {
   phone: string;
   password: string;
   role: UserRole;
+  /**
+   * 114 — назначенная роль (Bitrix24-style). null → «Без роли (как раньше)»,
+   * легаси-дефолты строковой роли. Задана → база эффективных прав из матрицы
+   * роли, персональная матрица тумблеров ниже — исключения ПОВЕРХ. Уходит в
+   * PATCH /users/:id только если владелец трогал поле (roleTouched — та же
+   * touched-семантика, что у __permissions).
+   */
+  roleId: string | null;
   salaryPercent: number;
   productSalaryPercent: number;
   isActive: boolean;
@@ -432,6 +410,9 @@ const emptyForm: UserForm = {
   phone: '',
   password: '',
   role: UserRole.MASTER,
+  // Назначение роли доступно только в режиме редактирования (create-DTO на
+  // сервере не принимает roleId) — новый сотрудник стартует «Без роли».
+  roleId: null,
   salaryPercent: 0,
   productSalaryPercent: 0,
   isActive: true,
@@ -497,6 +478,14 @@ export default function UsersScreen() {
   const [templateNameDraft, setTemplateNameDraft] = useState('');
   const [renamingTemplate, setRenamingTemplate] = useState<PermissionTemplate | null>(null);
   const [deleteTemplateId, setDeleteTemplateId] = useState<string | null>(null);
+
+  // ── Роль (Bitrix24-style, 114) ─────────────────────────────────────────────
+  // `roleSheetOpen` — шит выбора роли из поля «Роль» в edit-форме. `roleTouched`
+  // — владелец РЕАЛЬНО менял роль в этой сессии редактирования; иначе roleId
+  // вообще не отправляется (та же touched-семантика, что у __permissions:
+  // сохранение имени/% физически не способно снять или сменить роль).
+  const [roleSheetOpen, setRoleSheetOpen] = useState(false);
+  const [roleTouched, setRoleTouched] = useState(false);
 
   // Commission modal
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
@@ -656,6 +645,15 @@ export default function UsersScreen() {
     enabled: canManageTemplates && templatesSheetOpen,
   });
 
+  // Роли (114) — для пилюли «Роль» в edit-форме и шита выбора. Ленивая: грузится
+  // только пока открыта форма сотрудника (нужна, чтобы отрисовать ИМЯ уже
+  // назначенной роли, а не только список в шите). Канонический хук useRoles —
+  // тот же слот ['roles'], что у RolesScreen/RoleEditorScreen (единая форма
+  // `Role[]`, см. hooks/useRoles.ts). Server-gate GET /roles — director/admin/
+  // superadmin, поэтому и здесь canManageTemplates.
+  const { data: rolesData } = useRoles(canManageTemplates && modalOpen);
+  const roles = Array.isArray(rolesData) ? rolesData : [];
+
   // Save the CURRENT matrix as a named template. Sparse-friendly: persists the
   // full canonical map (every key) so applying it later is deterministic.
   const createTemplateMutation = useMutation({
@@ -733,11 +731,16 @@ export default function UsersScreen() {
     setPermissionsLoading(true);
     setPermissionsTouched(false);
     setPermissionsLoadFailed(false);
+    setRoleTouched(false);
+    setRoleSheetOpen(false);
     setForm({
       fullName: user.fullName,
       phone: user.phone ? formatPhone(user.phone) : '',
       password: '',
       role: user.role,
+      // 114 — назначенная роль из строки списка (users.getAll отдаёт role_id).
+      // Не трогали → не отправляется, поэтому чуть устаревший seed безопасен.
+      roleId: user.roleId ?? null,
       salaryPercent: user.salaryPercent,
       productSalaryPercent: user.productSalaryPercent || 0,
       isActive: user.isActive,
@@ -853,6 +856,8 @@ export default function UsersScreen() {
     setPermissionsLoading(false);
     setPermissionsTouched(false);
     setPermissionsLoadFailed(false);
+    setRoleTouched(false);
+    setRoleSheetOpen(false);
     setForm({ ...emptyForm, itemVisibility: defaultItemVisibility() });
     setModalOpen(true);
   };
@@ -865,6 +870,8 @@ export default function UsersScreen() {
     setPermissionsLoading(false);
     setPermissionsTouched(false);
     setPermissionsLoadFailed(false);
+    setRoleTouched(false);
+    setRoleSheetOpen(false);
     setForm({ ...emptyForm, itemVisibility: defaultItemVisibility() });
   };
 
@@ -928,6 +935,14 @@ export default function UsersScreen() {
           : editsOwnAccount
             ? { ...form.permissions, user_management: true }
             : form.permissions;
+      // 114 — роль уходит в generic-body PATCH /users/:id (contract:
+      // UpdateUserRequest.roleId; null снимает роль), но ТОЛЬКО если владелец
+      // реально менял поле в этой сессии (roleTouched). Нетронутое поле →
+      // undefined → сервер роль не трогает: сохранение имени/%/пароля
+      // физически не способно сменить или снять роль (та же семантика, что
+      // у __permissions). Самолокаут (роль себе без user_management) отбивает
+      // сервер — 400 покажется алертом onError.
+      if (roleTouched) payload.roleId = form.roleId;
       updateMutation.mutate({
         id: editingUser.id,
         data: payload,
@@ -946,6 +961,20 @@ export default function UsersScreen() {
   // server bypasses the permission map entirely. The matrix renders a read-only
   // note instead of toggles for these.
   const editedIsOwnerClass = OWNER_CLASS_ROLES.has(form.role);
+
+  // 114 — имя назначенной роли для пилюли «Роль». Список ['roles'] грузится,
+  // пока форма открыта; до его прихода честное «Загрузка…», не ложное «Без роли».
+  const assignedRole = form.roleId ? roles.find((r) => r.id === form.roleId) : undefined;
+  const assignedRoleName = form.roleId ? (assignedRole?.name ?? 'Загрузка…') : 'Без роли (как раньше)';
+
+  // Выбор роли в шите: локально в форму + touched. Уходит на сервер только по
+  // «Сохранить» (как все остальные поля формы).
+  const pickRole = (roleId: string | null) => {
+    haptic('select');
+    setRoleTouched(true);
+    setForm((prev) => ({ ...prev, roleId }));
+    setRoleSheetOpen(false);
+  };
 
   // Toggle one action permission. `user_management` is pinned ON when editing
   // your own account (self-lockout). No-op for owner-class users (read-only).
@@ -1131,9 +1160,27 @@ export default function UsersScreen() {
         subtitle={users.length ? `Всего: ${users.length}` : undefined}
         onBack={() => navigation.goBack()}
         trailing={
-          <TouchableOpacity onPress={openCreate} style={styles.addBtn}>
-            <Ionicons name="add" size={20} color={colors.white} />
-          </TouchableOpacity>
+          <View style={styles.headerActions}>
+            {/* Роли (114) — управление ролями-базами прав. Виден только
+                owner-class (director/admin/superadmin) — тот же серверный гейт,
+                что у GET /roles и permission-templates. */}
+            {canManageTemplates && (
+              <TouchableOpacity
+                onPress={() => {
+                  haptic('tap');
+                  navigation.navigate('Roles');
+                }}
+                style={[styles.rolesBtn, { backgroundColor: palette.bg.muted }]}
+                accessibilityRole="button"
+                accessibilityLabel="Роли"
+              >
+                <Ionicons name="key-outline" size={18} color={colors.primary[600]} />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity onPress={openCreate} style={styles.addBtn}>
+              <Ionicons name="add" size={20} color={colors.white} />
+            </TouchableOpacity>
+          </View>
         }
       />
 
@@ -1512,6 +1559,58 @@ export default function UsersScreen() {
               </View>
             ) : (
               <>
+                {/* ── Роль (Bitrix24-style, 114) — НАД матрицей исключений ──
+                    База прав сотрудника. Только в режиме редактирования:
+                    create-DTO на сервере roleId не принимает. Гейт
+                    canManageTemplates — тот же owner-class, что у GET /roles
+                    (мастеру с user_management шит вернул бы 403). */}
+                {!!editingUser && canManageTemplates && (
+                  <View
+                    style={[
+                      styles.roleFieldCard,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    ]}
+                  >
+                    <View style={styles.roleFieldRow}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={[styles.visibilityTitle, { color: palette.text.primary }]}>Роль</Text>
+                        <Text style={[styles.visibilitySub, { color: palette.text.tertiary }]}>
+                          База прав сотрудника. Применится в течение ~30 секунд.
+                        </Text>
+                      </View>
+                      <TouchableOpacity
+                        style={[
+                          styles.rolePill,
+                          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                        ]}
+                        onPress={() => {
+                          haptic('tap');
+                          setRoleSheetOpen(true);
+                        }}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Роль: ${assignedRoleName}. Изменить`}
+                      >
+                        <Ionicons
+                          name={form.roleId ? 'key' : 'key-outline'}
+                          size={13}
+                          color={form.roleId ? colors.primary[600] : palette.text.tertiary}
+                        />
+                        <Text
+                          style={[
+                            styles.rolePillText,
+                            { color: form.roleId ? colors.primary[700] : palette.text.secondary },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {assignedRoleName}
+                        </Text>
+                        <Ionicons name="chevron-expand-outline" size={13} color={palette.text.tertiary} />
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                )}
+
                 {/* Role presets — fill the toggles from a role's defaults. */}
                 <View style={styles.presetRow}>
                   {PERMISSION_PRESETS.map((preset) => (
@@ -1577,6 +1676,21 @@ export default function UsersScreen() {
                     Не удалось загрузить сохранённые права — показаны последние известные значения. Потяните список вниз
                     и откройте сотрудника заново, прежде чем менять тумблеры.
                   </Text>
+                )}
+                {/* Роль назначена → тумблеры ниже больше не «вся правда», а
+                    персональные ИСКЛЮЧЕНИЯ поверх матрицы роли. Подпись, чтобы
+                    владелец не удивлялся, почему выключенный тумблер не
+                    отнимает право, которое даёт роль (и наоборот). */}
+                {!!editingUser && !!form.roleId && (
+                  <View style={styles.overridesCaptionWrap}>
+                    <Text style={[styles.overridesCaption, { color: palette.text.primary }]}>
+                      Индивидуальные исключения (поверх роли)
+                    </Text>
+                    <Text style={[styles.sectionVisHint, { color: palette.text.tertiary }]}>
+                      Базу задаёт роль «{assignedRole?.name ?? '…'}». Тумблеры ниже — персональные исключения этого
+                      сотрудника поверх неё.
+                    </Text>
+                  </View>
                 )}
                 {permissionsLoading ? (
                   <View style={styles.permLoading}>
@@ -1736,6 +1850,90 @@ export default function UsersScreen() {
               })}
             </View>
           )}
+        </Modal>
+
+        {/* ── Выбор роли (114) ───────────────────────────────────────────────
+            Открывается пилюлей «Роль». Системные + свои роли с бейджами, плюс
+            «Без роли (как раньше)». Выбор пишется локально в форму (touched);
+            на сервер уходит по «Сохранить». Nested в edit-Modal, как шит
+            шаблонов. */}
+        <Modal visible={roleSheetOpen} onClose={() => setRoleSheetOpen(false)} title="Роль сотрудника">
+          <View style={{ gap: spacing[2] }}>
+            <Text style={[styles.sectionVisHint, { color: palette.text.tertiary, marginBottom: spacing[1] }]}>
+              Роль — живая база прав: её изменения применяются ко всем сотрудникам на ней. Индивидуальные тумблеры
+              действуют поверх. Управление ролями — в шапке списка сотрудников.
+            </Text>
+
+            {/* «Без роли» — легаси-поведение до 114. */}
+            <TouchableOpacity
+              style={[styles.roleOptionRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+              onPress={() => pickRole(null)}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Без роли (как раньше)"
+            >
+              <View style={[styles.roleOptionIcon, { backgroundColor: palette.bg.card }]}>
+                <Ionicons name="remove-circle-outline" size={16} color={palette.text.tertiary} />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.roleOptionName, { color: palette.text.primary }]}>Без роли (как раньше)</Text>
+                <Text style={[styles.roleOptionSub, { color: palette.text.tertiary }]}>
+                  Права — только индивидуальные тумблеры ниже
+                </Text>
+              </View>
+              {form.roleId === null && <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />}
+            </TouchableOpacity>
+
+            {roles.map((role) => (
+              <TouchableOpacity
+                key={role.id}
+                style={[
+                  styles.roleOptionRow,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                ]}
+                onPress={() => pickRole(role.id)}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel={`Назначить роль ${role.name}`}
+              >
+                <View style={[styles.roleOptionIcon, { backgroundColor: palette.bg.card }]}>
+                  <Ionicons
+                    name={role.isSystem ? 'shield-checkmark-outline' : 'key-outline'}
+                    size={16}
+                    color={colors.primary[600]}
+                  />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                    <Text style={[styles.roleOptionName, { color: palette.text.primary }]} numberOfLines={1}>
+                      {role.name}
+                    </Text>
+                    {role.isSystem && (
+                      <View style={[styles.roleOptionBadge, { backgroundColor: palette.bg.card }]}>
+                        <Text style={[styles.roleOptionBadgeText, { color: palette.text.secondary }]}>Системная</Text>
+                      </View>
+                    )}
+                  </View>
+                  {!!role.description && (
+                    <Text style={[styles.roleOptionSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                      {role.description}
+                    </Text>
+                  )}
+                </View>
+                {form.roleId === role.id && <Ionicons name="checkmark-circle" size={20} color={colors.primary[600]} />}
+              </TouchableOpacity>
+            ))}
+
+            {roles.length === 0 && (
+              <View style={styles.templatesStateWrap}>
+                <Ionicons name="key-outline" size={28} color={palette.text.tertiary} />
+                <Text style={[styles.templatesStateText, { color: palette.text.secondary }]}>Роли ещё загружаются</Text>
+                <Text style={[styles.templatesStateHint, { color: palette.text.tertiary }]}>
+                  Если список не появился — проверьте соединение и откройте шит заново.
+                </Text>
+              </View>
+            )}
+          </View>
         </Modal>
 
         {/* ── Name prompt (create / rename) ─────────────────────────────────
@@ -2005,6 +2203,14 @@ export default function UsersScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  rolesBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   addBtn: {
     width: 36,
     height: 36,
@@ -2184,6 +2390,43 @@ const styles = StyleSheet.create({
   },
   permSwitchTextWrap: { flex: 1, minWidth: 0 },
   permRowHint: { fontSize: 11, lineHeight: 15, marginTop: 2 },
+  // Роль (114): карточка поля, пилюля значения, строки шита выбора, подпись
+  // «Индивидуальные исключения (поверх роли)».
+  roleFieldCard: {
+    marginTop: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+  },
+  roleFieldRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  rolePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    maxWidth: '55%',
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+  },
+  rolePillText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, flexShrink: 1 },
+  overridesCaptionWrap: { marginTop: spacing[2], marginBottom: spacing[2], gap: 2 },
+  overridesCaption: { fontSize: fontSize.xs, fontWeight: fontWeight.bold },
+  roleOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[3],
+  },
+  roleOptionIcon: { width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+  roleOptionName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, flexShrink: 1 },
+  roleOptionSub: { fontSize: 11, marginTop: 2 },
+  roleOptionBadge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.full },
+  roleOptionBadgeText: { fontSize: 10, fontWeight: fontWeight.medium },
   presetRow: { flexDirection: 'row', gap: spacing[2], marginTop: spacing[3], marginBottom: spacing[1] },
   presetChip: {
     flex: 1,

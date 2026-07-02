@@ -41,6 +41,8 @@ import InstallmentDetailScreen from '../screens/InstallmentDetailScreen';
 import InstallmentReminderSettingsScreen from '../screens/InstallmentReminderSettingsScreen';
 import ExpensesScreen from '../screens/ExpensesScreen';
 import UsersScreen from '../screens/UsersScreen';
+import RolesScreen from '../screens/RolesScreen';
+import RoleEditorScreen from '../screens/RoleEditorScreen';
 import ScheduleScreen from '../screens/ScheduleScreen';
 import MoreScreen from '../screens/MoreScreen';
 import ProfileScreen from '../screens/ProfileScreen';
@@ -163,6 +165,11 @@ const GatedCashFlow = gated('cashflow_view', CashFlowScreen);
 const GatedSalary = gated('salary_view', SalaryScreen);
 const GatedReports = gated('reports_view', ReportsScreen);
 const GatedUsers = gated('users_manage', UsersScreen);
+// Роли (Bitrix24-style, 114) — часть управления пользователями, поэтому тот же
+// subscription-gate 'users_manage'. Module-scope identity — как у остальных
+// gated-экранов выше (иначе MoreStack перемонтирует экран mid-push).
+const GatedRoles = gated('users_manage', RolesScreen);
+const GatedRoleEditor = gated('users_manage', RoleEditorScreen);
 
 export type RootStackParamList = {
   Login: undefined;
@@ -462,6 +469,16 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="WarehouseAnalytics" component={WarehouseAnalyticsScreen} />
       <MoreStack.Screen name="Equipment" component={EquipmentStackNavigator} />
       <MoreStack.Screen name="Users" component={GatedUsers} />
+      {/* Роли (Bitrix24-style, 114) — список ролей + редактор матрицы прав.
+          Живут в MoreStack рядом с Users: вход — кнопка «Роли» в шапке экрана
+          Пользователи, back идёт RoleEditor → Roles → Users → Ещё, floating
+          tab bar остаётся виден. Экраны дополнительно самогейтятся до
+          director/admin/superadmin (серверный гейт всех маршрутов /roles).
+          RoleEditor params: { roleId? } — существующая роль (системная →
+          read-only), { copyFromRoleId? } — создание копией, без params —
+          создание с нуля. */}
+      <MoreStack.Screen name="Roles" component={GatedRoles} />
+      <MoreStack.Screen name="RoleEditor" component={GatedRoleEditor} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
       {/* Приём оплат (эквайринг) + онлайн-касса 54-ФЗ. Owner-class; lives in
           MoreStack so the floating tab bar stays visible (like CompanySettings).

@@ -41,6 +41,7 @@ import {
   createNotificationsApi,
   createBookingsApi,
   createPermissionTemplatesApi,
+  createRolesApi,
   createCashShiftsApi,
   createDebtsApi,
   createInstallmentsApi,
@@ -108,6 +109,13 @@ export const bookingsApi = createBookingsApi(api);
 // director/admin/superadmin server-side; consumed by UsersScreen's permission
 // matrix («Сохранить как роль» / «Применить роль»).
 export const permissionTemplatesApi = createPermissionTemplatesApi(api);
+// Роли (Bitrix24-style, миграция 114) — живая база прав: сервер строит
+// эффективные права назначенного пользователя как «flatten(матрицы роли) ⊕
+// персональные overrides». Все маршруты director/admin/superadmin-gated
+// server-side; системные роли read-only (копия через create c copyFromRoleId).
+// Consumed by RolesScreen / RoleEditorScreen + назначение роли в UsersScreen
+// (само назначение — существующий usersApi.update(id, { roleId })).
+export const rolesApi = createRolesApi(api);
 // Кассовая смена / Z-отчёт / Инкассация — backend cash-shifts/ (migration 080).
 // open/close/collect owner-gated server-side; current/report/list readable by
 // any tenant user. Every response carries a recomputed Z-report.
