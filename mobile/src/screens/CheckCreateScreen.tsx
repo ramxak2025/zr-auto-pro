@@ -13,6 +13,7 @@ import {
   Dimensions,
   LayoutAnimation,
   AccessibilityInfo,
+  Switch,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -76,11 +77,16 @@ import type {
   PaymentMethod,
   Warehouse,
   CheckTemplate,
+  CheckTemplateFolder,
   CheckPhoto,
   SubscriptionInfo,
   ActiveWarranty,
   ChecksBoard,
 } from '../../../shared/types';
+// Домен шаблонов (round 8 #3): помощники и инлайн-пикер папок живут в
+// TemplatesScreen — единый источник правил «что общий / как строить дерево»
+// для этого пикера, редактора и раздела «Ещё → Шаблоны».
+import { FolderPickerList, isSharedTemplate, templateSummary, pluralRu } from './TemplatesScreen';
 import { formatPhone, phoneSearchKey, phoneSearchVariants } from '../../../shared/validation/phone';
 import LastVisitBadge from '../components/LastVisitBadge';
 import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
@@ -509,6 +515,18 @@ export default function CheckCreateScreen() {
   // show-state больше нет, открытие — openProductPicker() ниже.
   const [showMasterPicker, setShowMasterPicker] = useState<number | null>(null);
   const [showTemplatesPicker, setShowTemplatesPicker] = useState(false);
+  // Пикер шаблонов с папками (round 8 #3): текущий уровень личного дерева
+  // (null = корень). Сбрасывается на корень при каждом открытии пикера.
+  const [templatesPickerFolderId, setTemplatesPickerFolderId] = useState<string | null>(null);
+  // «Сохранить как шаблон» — свой шит вместо Alert.prompt (на Android prompt
+  // отсутствовал и имя подставлялось датой): имя + папка + «общий» для
+  // owner-class.
+  const [showSaveTemplate, setShowSaveTemplate] = useState(false);
+  const [saveTplName, setSaveTplName] = useState('');
+  const [saveTplFolderId, setSaveTplFolderId] = useState<string | null>(null);
+  const [saveTplShared, setSaveTplShared] = useState(false);
+  const [saveTplFolderOpen, setSaveTplFolderOpen] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
   // Warehouse selection for the in-cash product picker. Null on first
   // mount, resolved to the tenant's "main" warehouse as soon as the
   // warehouses list arrives (see effect below). Owner ask: "не
@@ -856,6 +874,53 @@ export default function CheckCreateScreen() {
     queryFn: async () => (await checkTemplatesApi.list()).data,
     staleTime: 60_000,
   });
+  // Личные папки шаблонов (round 8 #3) — ключ общий с TemplatesScreen и web,
+  // поэтому мутации в разделе «Ещё → Шаблоны» мгновенно видны здесь.
+  const { data: templateFolders = [] } = useQuery<CheckTemplateFolder[]>({
+    queryKey: ['check-template-folders'],
+    queryFn: async () => (await checkTemplatesApi.folders.list()).data,
+    staleTime: 60_000,
+  });
+
+  // Группировка пикера: мои шаблоны по папкам текущего уровня + «Общие»
+  // отдельной плоской секцией на корне.
+  const myTemplates = useMemo(() => templates.filter((t) => !isSharedTemplate(t)), [templates]);
+  const sharedTemplates = useMemo(() => templates.filter((t) => isSharedTemplate(t)), [templates]);
+  const pickerFolders = useMemo(
+    () =>
+      templateFolders
+        .filter((f) => (f.parentId ?? null) === templatesPickerFolderId)
+        .sort((a, b) => a.sort - b.sort || a.name.localeCompare(b.name, 'ru')),
+    [templateFolders, templatesPickerFolderId],
+  );
+  const pickerTemplates = useMemo(
+    () => myTemplates.filter((t) => (t.folderId ?? null) === templatesPickerFolderId),
+    [myTemplates, templatesPickerFolderId],
+  );
+  const pickerCurrentFolder = useMemo(
+    () => (templatesPickerFolderId ? templateFolders.find((f) => f.id === templatesPickerFolderId) : undefined),
+    [templateFolders, templatesPickerFolderId],
+  );
+  // Счётчик прямых шаблонов в папке — подпись строки папки в пикере.
+  const pickerFolderTplCount = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const t of myTemplates) {
+      if (t.folderId) counts.set(t.folderId, (counts.get(t.folderId) ?? 0) + 1);
+    }
+    return counts;
+  }, [myTemplates]);
+
+  // Owner-class (director/admin/superadmin) — зеркало backend
+  // OWNER_CLASS_ROLES: правка/удаление ОБЩИХ шаблонов и публикация общих.
+  // Отдельный вызов useAuth(): основной деструктур (`authUser`) объявлен ниже
+  // по файлу, ссылаться на него отсюда — temporal dead zone.
+  const { user: templatesActor } = useAuth();
+  const isOwnerClassRole = !!templatesActor?.role && ['superadmin', 'director', 'admin'].includes(templatesActor.role);
+
+  const openTemplatesPicker = () => {
+    setTemplatesPickerFolderId(null);
+    setShowTemplatesPicker(true);
+  };
 
   const applyTemplate = (template: CheckTemplate) => {
     setServiceLines(
@@ -883,28 +948,22 @@ export default function CheckCreateScreen() {
     setShowTemplatesPicker(false);
   };
 
-  const promptTemplateName = (): Promise<string | null> =>
-    new Promise((resolve) => {
-      if (Platform.OS === 'ios') {
-        Alert.prompt(
-          'Имя шаблона',
-          'Введите название шаблона',
-          [
-            { text: 'Отмена', onPress: () => resolve(null), style: 'cancel' },
-            { text: 'Сохранить', onPress: (text?: string) => resolve(text || null) },
-          ],
-          'plain-text',
-        );
-      } else {
-        // Android: use a fallback name based on timestamp
-        resolve(`Шаблон ${new Date().toLocaleDateString('ru-RU')}`);
-      }
-    });
-
-  const saveAsTemplate = async () => {
+  // «Сохранить как шаблон» — шит с именем + папкой (+ «общий» у owner-class)
+  // вместо старого Alert.prompt: на Android prompt отсутствует и имя молча
+  // подставлялось датой.
+  const openSaveTemplate = () => {
     if (serviceLines.length === 0 && productLines.length === 0) return;
-    const name = await promptTemplateName();
-    if (!name) return;
+    setSaveTplName('');
+    setSaveTplFolderId(null);
+    setSaveTplShared(false);
+    setSaveTplFolderOpen(false);
+    setShowSaveTemplate(true);
+  };
+
+  const submitSaveTemplate = async () => {
+    const name = saveTplName.trim();
+    if (!name || savingTemplate) return;
+    setSavingTemplate(true);
     try {
       await checkTemplatesApi.create({
         name,
@@ -925,11 +984,18 @@ export default function CheckCreateScreen() {
             costPrice: l.costPrice,
             quantity: l.quantity,
           })),
+        // Общий шаблон живёт вне личных папок (сервер вернул бы 400).
+        folderId: saveTplShared ? null : saveTplFolderId,
+        shared: saveTplShared || undefined,
       });
       queryClient.invalidateQueries({ queryKey: ['check-templates'] });
+      haptic('success');
+      setShowSaveTemplate(false);
       Alert.alert('Готово', 'Шаблон сохранён');
-    } catch {
-      Alert.alert('Ошибка', 'Не удалось сохранить шаблон');
+    } catch (err: any) {
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить шаблон');
+    } finally {
+      setSavingTemplate(false);
     }
   };
 
@@ -2655,7 +2721,7 @@ export default function CheckCreateScreen() {
                       }
                     : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
                 ]}
-                onPress={() => setShowTemplatesPicker(true)}
+                onPress={openTemplatesPicker}
                 hitSlop={8}
               >
                 <Ionicons name="copy-outline" size={13} color={colors.primary[600]} />
@@ -2898,7 +2964,7 @@ export default function CheckCreateScreen() {
             {(serviceLines.length > 0 || productLines.length > 0) && (
               <TouchableOpacity
                 style={[styles.saveTemplateBtn, { borderColor: palette.border.subtle }]}
-                onPress={saveAsTemplate}
+                onPress={openSaveTemplate}
               >
                 <Ionicons name="bookmark-outline" size={14} color={palette.text.tertiary} />
                 <Text style={[styles.saveTemplateBtnText, { color: palette.text.tertiary }]}>Сохранить как шаблон</Text>
@@ -3388,69 +3454,313 @@ export default function CheckCreateScreen() {
           prefetch'ем на mount. Модалка ProductPickerModal здесь больше не
           используется (жива для Склада/Поставщиков/Заказов/Мотивации). */}
 
-      {/* Templates Picker */}
+      {/* Templates Picker — round 8 #3: мои шаблоны сгруппированы по личным
+          папкам (drill-down внутри модалки, как Склад), «Общие» — отдельной
+          плоской секцией на корне. Тап по шаблону применяет как раньше
+          (applyTemplate без изменений); «Управлять» уводит в раздел
+          «Шаблоны» (корневой стек — Касса и так перекрывает таб-бар). */}
       <Modal visible={showTemplatesPicker} onClose={() => setShowTemplatesPicker(false)} title="Шаблоны чеков">
-        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }} keyboardShouldPersistTaps="handled">
-          {templates.length === 0 ? (
-            <View style={{ alignItems: 'center', paddingVertical: spacing[6] }}>
-              <Ionicons name="copy-outline" size={32} color={colors.gray[300]} />
-              <Text style={{ color: colors.gray[400], marginTop: spacing[2], fontSize: 14 }}>
-                Нет сохранённых шаблонов
-              </Text>
-              <Text style={{ color: colors.gray[400], fontSize: 12, textAlign: 'center', marginTop: spacing[1] }}>
-                Добавьте услуги и товары, затем нажмите «Сохранить как шаблон»
-              </Text>
-            </View>
-          ) : (
-            templates.map((tpl) => (
-              <View
-                key={tpl.id}
-                style={[styles.pickerItem, { borderBottomColor: isDark ? palette.border.subtle : colors.gray[100] }]}
+        {/* Верхняя строка: назад-по-папке слева, «Управлять» справа */}
+        <View style={styles.tplPickerTopRow}>
+          {templatesPickerFolderId ? (
+            <TouchableOpacity
+              style={styles.tplPickerBackBtn}
+              onPress={() => {
+                haptic('tap');
+                setTemplatesPickerFolderId(pickerCurrentFolder?.parentId ?? null);
+              }}
+              hitSlop={8}
+            >
+              <Ionicons name="chevron-back" size={16} color={isDark ? colors.primary[300] : colors.primary[600]} />
+              <Text
+                style={[styles.tplPickerBackText, { color: isDark ? colors.primary[300] : colors.primary[600] }]}
+                numberOfLines={1}
               >
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.pickerName, { color: palette.text.primary }]}>{tpl.name}</Text>
-                  <Text style={{ fontSize: 11, color: colors.gray[400], marginTop: 2 }}>
-                    {tpl.services.length > 0 ? `${tpl.services.length} усл.` : ''}
-                    {tpl.services.length > 0 && tpl.products.length > 0 ? ' · ' : ''}
-                    {tpl.products.length > 0 ? `${tpl.products.length} тов.` : ''}
-                  </Text>
+                {pickerCurrentFolder?.name ?? 'Назад'}
+              </Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={{ flex: 1 }} />
+          )}
+          <TouchableOpacity
+            style={styles.tplManageBtn}
+            onPress={() => {
+              haptic('tap');
+              setShowTemplatesPicker(false);
+              navigation.navigate('Templates');
+            }}
+            hitSlop={8}
+          >
+            <Ionicons name="options-outline" size={14} color={palette.text.secondary} />
+            <Text style={[styles.tplManageText, { color: palette.text.secondary }]}>Управлять</Text>
+          </TouchableOpacity>
+        </View>
+
+        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.5 }} keyboardShouldPersistTaps="handled">
+          {/* Папки текущего уровня */}
+          {pickerFolders.map((folder) => {
+            const count = pickerFolderTplCount.get(folder.id) ?? 0;
+            return (
+              <TouchableOpacity
+                key={folder.id}
+                style={[styles.pickerItem, { borderBottomColor: isDark ? palette.border.subtle : colors.gray[100] }]}
+                onPress={() => {
+                  haptic('tap');
+                  setTemplatesPickerFolderId(folder.id);
+                }}
+                activeOpacity={0.6}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], flex: 1, minWidth: 0 }}>
+                  <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[styles.pickerName, { color: palette.text.primary }]} numberOfLines={1}>
+                      {folder.name}
+                    </Text>
+                    <Text style={{ fontSize: 11, color: colors.gray[400], marginTop: 2 }}>
+                      {count > 0 ? `${count} ${pluralRu(count, 'шаблон', 'шаблона', 'шаблонов')}` : 'Папка'}
+                    </Text>
+                  </View>
                 </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                  <TouchableOpacity
-                    onPress={() => applyTemplate(tpl)}
+                <Ionicons name="chevron-forward" size={15} color={palette.text.tertiary} />
+              </TouchableOpacity>
+            );
+          })}
+
+          {/* Мои шаблоны текущего уровня */}
+          {pickerTemplates.map((tpl) => (
+            <View
+              key={tpl.id}
+              style={[styles.pickerItem, { borderBottomColor: isDark ? palette.border.subtle : colors.gray[100] }]}
+            >
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.pickerName, { color: palette.text.primary }]} numberOfLines={1}>
+                  {tpl.name}
+                </Text>
+                <Text style={{ fontSize: 11, color: colors.gray[400], marginTop: 2 }}>{templateSummary(tpl)}</Text>
+              </View>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <TouchableOpacity
+                  onPress={() => applyTemplate(tpl)}
+                  style={{
+                    backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+                    borderRadius: 8,
+                    paddingHorizontal: spacing[3],
+                    paddingVertical: 6,
+                  }}
+                >
+                  <Text
                     style={{
-                      backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
-                      borderRadius: 8,
-                      paddingHorizontal: spacing[3],
-                      paddingVertical: 6,
+                      fontSize: 13,
+                      color: isDark ? colors.primary[300] : colors.primary[600],
+                      fontWeight: '600',
                     }}
                   >
-                    <Text
+                    Применить
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() =>
+                    Alert.alert('Удалить шаблон?', tpl.name, [
+                      { text: 'Отмена', style: 'cancel' },
+                      { text: 'Удалить', style: 'destructive', onPress: () => deleteTemplate(tpl.id) },
+                    ])
+                  }
+                  hitSlop={8}
+                >
+                  <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+
+          {/* Пустые состояния уровня */}
+          {templatesPickerFolderId !== null && pickerFolders.length === 0 && pickerTemplates.length === 0 && (
+            <View style={{ alignItems: 'center', paddingVertical: spacing[5] }}>
+              <Ionicons name="folder-open-outline" size={28} color={colors.gray[300]} />
+              <Text style={{ color: colors.gray[400], marginTop: spacing[2], fontSize: 13 }}>Папка пуста</Text>
+            </View>
+          )}
+          {templatesPickerFolderId === null &&
+            templateFolders.length === 0 &&
+            myTemplates.length === 0 &&
+            sharedTemplates.length === 0 && (
+              <View style={{ alignItems: 'center', paddingVertical: spacing[6] }}>
+                <Ionicons name="copy-outline" size={32} color={colors.gray[300]} />
+                <Text style={{ color: colors.gray[400], marginTop: spacing[2], fontSize: 14 }}>
+                  Нет сохранённых шаблонов
+                </Text>
+                <Text style={{ color: colors.gray[400], fontSize: 12, textAlign: 'center', marginTop: spacing[1] }}>
+                  Добавьте услуги и товары, затем нажмите «Сохранить как шаблон»
+                </Text>
+              </View>
+            )}
+
+          {/* Общие шаблоны — только на корне, отдельной секцией */}
+          {templatesPickerFolderId === null && sharedTemplates.length > 0 && (
+            <>
+              <Text style={[styles.tplSectionLabel, { color: palette.text.tertiary }]}>Общие</Text>
+              {sharedTemplates.map((tpl) => (
+                <View
+                  key={tpl.id}
+                  style={[styles.pickerItem, { borderBottomColor: isDark ? palette.border.subtle : colors.gray[100] }]}
+                >
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                      <Text
+                        style={[styles.pickerName, { color: palette.text.primary, flexShrink: 1 }]}
+                        numberOfLines={1}
+                      >
+                        {tpl.name}
+                      </Text>
+                      <View
+                        style={{
+                          backgroundColor: isDark ? softTint(colors.blue[500], 'dark') : colors.blue[50],
+                          borderRadius: borderRadius.full,
+                          paddingHorizontal: spacing[1.5],
+                          paddingVertical: 1,
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 10,
+                            fontWeight: '600',
+                            color: isDark ? colors.blue[300] : colors.blue[600],
+                          }}
+                        >
+                          Общий
+                        </Text>
+                      </View>
+                    </View>
+                    <Text style={{ fontSize: 11, color: colors.gray[400], marginTop: 2 }}>{templateSummary(tpl)}</Text>
+                  </View>
+                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                    <TouchableOpacity
+                      onPress={() => applyTemplate(tpl)}
                       style={{
-                        fontSize: 13,
-                        color: isDark ? colors.primary[300] : colors.primary[600],
-                        fontWeight: '600',
+                        backgroundColor: isDark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+                        borderRadius: 8,
+                        paddingHorizontal: spacing[3],
+                        paddingVertical: 6,
                       }}
                     >
-                      Применить
-                    </Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() =>
-                      Alert.alert('Удалить шаблон?', tpl.name, [
-                        { text: 'Отмена', style: 'cancel' },
-                        { text: 'Удалить', style: 'destructive', onPress: () => deleteTemplate(tpl.id) },
-                      ])
-                    }
-                    hitSlop={8}
-                  >
-                    <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
-                  </TouchableOpacity>
+                      <Text
+                        style={{
+                          fontSize: 13,
+                          color: isDark ? colors.primary[300] : colors.primary[600],
+                          fontWeight: '600',
+                        }}
+                      >
+                        Применить
+                      </Text>
+                    </TouchableOpacity>
+                    {/* Удаление общего — только owner-class (сервер всё равно 403). */}
+                    {isOwnerClassRole && (
+                      <TouchableOpacity
+                        onPress={() =>
+                          Alert.alert('Удалить шаблон?', tpl.name, [
+                            { text: 'Отмена', style: 'cancel' },
+                            { text: 'Удалить', style: 'destructive', onPress: () => deleteTemplate(tpl.id) },
+                          ])
+                        }
+                        hitSlop={8}
+                      >
+                        <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
+                      </TouchableOpacity>
+                    )}
+                  </View>
                 </View>
-              </View>
-            ))
+              ))}
+            </>
           )}
         </ScrollView>
+      </Modal>
+
+      {/* «Сохранить как шаблон» — имя + папка (+ «общий» у owner-class). */}
+      <Modal visible={showSaveTemplate} onClose={() => setShowSaveTemplate(false)} title="Сохранить как шаблон">
+        <View style={{ gap: spacing[3] }}>
+          <TextInput
+            value={saveTplName}
+            onChangeText={setSaveTplName}
+            placeholder="Название шаблона"
+            placeholderTextColor={palette.text.tertiary}
+            style={[
+              styles.tplNameInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
+            autoFocus
+            returnKeyType="done"
+            onSubmitEditing={submitSaveTemplate}
+          />
+
+          {isOwnerClassRole && (
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
+              <View style={{ flex: 1, gap: 2 }}>
+                <Text style={{ fontSize: 14, fontWeight: '600', color: palette.text.primary }}>Общий шаблон</Text>
+                <Text style={{ fontSize: 11, color: palette.text.tertiary }}>
+                  Виден всем сотрудникам, живёт вне личных папок
+                </Text>
+              </View>
+              <Switch
+                value={saveTplShared}
+                onValueChange={(v) => {
+                  haptic('select');
+                  setSaveTplShared(v);
+                }}
+                trackColor={{ true: colors.primary[500] }}
+              />
+            </View>
+          )}
+
+          {!saveTplShared && (
+            <View>
+              <TouchableOpacity
+                style={[styles.tplFolderRow, { borderColor: palette.border.subtle }]}
+                onPress={() => {
+                  haptic('tap');
+                  setSaveTplFolderOpen((o) => !o);
+                }}
+                activeOpacity={0.6}
+              >
+                <Ionicons name="folder-open-outline" size={16} color={colors.primary[500]} />
+                <Text style={{ flex: 1, fontSize: 14, color: palette.text.primary }} numberOfLines={1}>
+                  {saveTplFolderId
+                    ? (templateFolders.find((f) => f.id === saveTplFolderId)?.name ?? 'Папка')
+                    : 'Без папки'}
+                </Text>
+                <Ionicons
+                  name={saveTplFolderOpen ? 'chevron-up' : 'chevron-down'}
+                  size={15}
+                  color={palette.text.tertiary}
+                />
+              </TouchableOpacity>
+              {/* Инлайн-список вместо второй модалки: вложенные RN Modal на
+                  iOS ведут себя непредсказуемо. */}
+              {saveTplFolderOpen && (
+                <FolderPickerList
+                  folders={templateFolders}
+                  selectedId={saveTplFolderId}
+                  onSelect={(id) => {
+                    setSaveTplFolderId(id);
+                    setSaveTplFolderOpen(false);
+                  }}
+                />
+              )}
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={[styles.tplSaveBtn, { opacity: saveTplName.trim() && !savingTemplate ? 1 : 0.5 }]}
+            disabled={!saveTplName.trim() || savingTemplate}
+            onPress={submitSaveTemplate}
+            activeOpacity={0.8}
+          >
+            {savingTemplate ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.tplSaveBtnText}>Сохранить</Text>
+            )}
+          </TouchableOpacity>
+        </View>
       </Modal>
 
       {/* M2: быстрый клиент из «Клиент не найден». Создание (или выбор
@@ -3694,6 +4004,63 @@ const styles = StyleSheet.create({
     borderTopWidth: StyleSheet.hairlineWidth,
   },
   saveTemplateBtnText: { fontSize: 12, fontWeight: fontWeight.medium },
+
+  // Пикер шаблонов с папками + шит «Сохранить как шаблон» (round 8 #3)
+  tplPickerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+    marginBottom: spacing[2],
+  },
+  tplPickerBackBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    minWidth: 0,
+  },
+  tplPickerBackText: { fontSize: 13, fontWeight: fontWeight.semibold, flexShrink: 1 },
+  tplManageBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 4,
+  },
+  tplManageText: { fontSize: 12, fontWeight: fontWeight.semibold },
+  tplSectionLabel: {
+    fontSize: 11,
+    fontWeight: fontWeight.semibold,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginTop: spacing[3],
+    marginBottom: spacing[1],
+  },
+  tplNameInput: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+    fontSize: fontSize.base,
+  },
+  tplFolderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+  },
+  tplSaveBtn: {
+    backgroundColor: colors.primary[600],
+    borderRadius: borderRadius.xl,
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tplSaveBtnText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.semibold },
 
   // Date/Time
   dateTimeCard: { flexDirection: 'row', gap: spacing[2] },

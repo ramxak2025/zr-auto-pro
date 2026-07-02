@@ -151,6 +151,22 @@ const menuSections: MenuSection[] = [
         iconBg: colors.cyan[50],
         iconColor: colors.cyan[600],
       },
+      {
+        // Шаблоны чеков (round 8 #3) — личные шаблоны с папками «под себя» +
+        // общие. Доступ любому сотруднику: каждый управляет СВОИМИ шаблонами
+        // (общие правит только owner-class, это гейтится внутри экрана И на
+        // сервере). Переиспользуем item-key 'knowledge-base' — шаблоны, как и
+        // база знаний, «рабочие заготовки»; новый ключ сломал бы ITEM_KEYS
+        // drift-guard (как у «Рассрочки» с 'cashflow'). Даже если владелец
+        // скроет эту строку, шаблоны в пикере Кассы остаются доступны.
+        label: 'Шаблоны',
+        description: 'Шаблоны чеков: услуги и товары',
+        screen: 'Templates',
+        itemKey: 'knowledge-base',
+        icon: 'copy-outline',
+        iconBg: colors.violet[50],
+        iconColor: colors.violet[600],
+      },
     ],
   },
   {

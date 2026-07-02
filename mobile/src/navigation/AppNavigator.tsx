@@ -75,6 +75,8 @@ import BookingsScreen from '../screens/BookingsScreen';
 import BookingDetailScreen from '../screens/BookingDetailScreen';
 import BookingCreateScreen from '../screens/BookingCreateScreen';
 import BookingSettingsScreen from '../screens/BookingSettingsScreen';
+import TemplatesScreen from '../screens/TemplatesScreen';
+import TemplateEditorScreen from '../screens/TemplateEditorScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
 import { screenErrorBoundaryLayout } from '../components/ErrorBoundary';
 import FeatureGate from '../components/FeatureGate';
@@ -240,6 +242,19 @@ export type RootStackParamList = {
    * стеке (для SupplierDetail, который перекрывает таб-бар).
    */
   SupplyReceive: { orderId: string; po?: PurchaseOrder };
+  /**
+   * Шаблоны чеков (round 8 #3) — управление личными шаблонами с папками +
+   * общими. Зарегистрирован и в MoreStack (вход из «Ещё → Работа», таб-бар
+   * остаётся виден), и на корневом стеке — для «Управлять» из пикера
+   * шаблонов Кассы (CheckCreate живёт на корневом стеке и перекрывает
+   * таб-бар, как ClientDetail / SupplyReceive).
+   */
+  Templates: undefined;
+  /**
+   * Редактор шаблона. `templateId` отсутствует → создание; `initialFolderId`
+   * — папка, в которой создаём (текущий уровень TemplatesScreen).
+   */
+  TemplateEditor: { templateId?: string; initialFolderId?: string | null } | undefined;
 };
 
 export type TabParamList = {
@@ -356,6 +371,15 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="BookingDetail" component={BookingDetailScreen} />
       <MoreStack.Screen name="BookingCreate" component={BookingCreateScreen} />
       <MoreStack.Screen name="BookingSettings" component={BookingSettingsScreen} />
+      {/*
+        Шаблоны чеков (round 8 #3) — list + editor live in MoreStack so the
+        floating tab bar stays visible and back-nav steps in-section
+        (TemplateEditor → Templates → Ещё), like Записи. Duplicate
+        registrations on the ROOT stack below serve the «Управлять» link in
+        the Касса templates picker (CheckCreate covers the tab bar there).
+      */}
+      <MoreStack.Screen name="Templates" component={TemplatesScreen} />
+      <MoreStack.Screen name="TemplateEditor" component={TemplateEditorScreen} />
       <MoreStack.Screen name="Clients" component={GatedClients} />
       <MoreStack.Screen name="KnowledgeBase" component={KnowledgeBaseScreen} />
       <MoreStack.Screen name="KnowledgeCategory" component={KnowledgeCategoryScreen} />
@@ -828,6 +852,12 @@ export default function AppNavigator() {
               «Новая поставка». MoreStack has its own copy above for the
               in-section SupplierDetail / PurchaseOrderDetail callers. */}
           <Stack.Screen name="SupplyReceive" component={SupplyReceiveScreen} />
+          {/* Шаблоны чеков на КОРНЕВОМ стеке — для «Управлять» из пикера
+              шаблонов Кассы (CheckCreate перекрывает таб-бар, значит и
+              Templates/TemplateEditor из этого контекста тоже). Вход из
+              «Ещё» идёт через копии в MoreStack выше (таб-бар виден). */}
+          <Stack.Screen name="Templates" component={TemplatesScreen} />
+          <Stack.Screen name="TemplateEditor" component={TemplateEditorScreen} />
         </>
       )}
     </Stack.Navigator>
