@@ -41,12 +41,20 @@ interface Props {
 export default function PlateModeSwitcher({ value, onChange, phoneActive = false, onPhoneSelect }: Props) {
   const palette = useOptionalColors();
   const dark = palette.mode === 'dark';
+  // Три сегмента (Касса, RU|INT|ТЕЛ) на узких iPhone (SE/mini) не влезали в
+  // строку с подписью секции и неаккуратно уезжали вправо: 3 × minWidth 64 +
+  // отступы ≈ 210pt. В компактном режиме сегменты уже (minWidth 50, паддинг
+  // меньше) и весь переключатель может ужиматься. Классические двухсегментные
+  // потребители (Клиенты, QuickClientCreateSheet, CarPlateField) рендерятся
+  // байт-в-байт как раньше.
+  const compact = !!onPhoneSelect;
   return (
-    <View style={[styles.wrap, dark && { backgroundColor: palette.bg.muted }]}>
+    <View style={[styles.wrap, compact && styles.wrapCompact, dark && { backgroundColor: palette.bg.muted }]}>
       <Segment
         active={!phoneActive && value === 'ru'}
         label="RU"
         flag="🇷🇺"
+        compact={compact}
         onPress={() => {
           if (value !== 'ru' || phoneActive) {
             haptic('select');
@@ -58,6 +66,7 @@ export default function PlateModeSwitcher({ value, onChange, phoneActive = false
         active={!phoneActive && value === 'foreign'}
         label="INT"
         icon="globe-outline"
+        compact={compact}
         onPress={() => {
           if (value !== 'foreign' || phoneActive) {
             haptic('select');
@@ -70,6 +79,7 @@ export default function PlateModeSwitcher({ value, onChange, phoneActive = false
           active={phoneActive}
           label="ТЕЛ"
           icon="call-outline"
+          compact={compact}
           onPress={() => {
             if (!phoneActive) {
               haptic('select');
@@ -87,16 +97,22 @@ interface SegmentProps {
   label: string;
   flag?: string;
   icon?: keyof typeof Ionicons.glyphMap;
+  compact?: boolean;
   onPress: () => void;
 }
 
-function Segment({ active, label, flag, icon, onPress }: SegmentProps) {
+function Segment({ active, label, flag, icon, compact = false, onPress }: SegmentProps) {
   const palette = useOptionalColors();
   const dark = palette.mode === 'dark';
   return (
     <Pressable
       onPress={onPress}
-      style={[styles.segment, active && styles.segmentActive, active && dark && { backgroundColor: palette.bg.card }]}
+      style={[
+        styles.segment,
+        compact && styles.segmentCompact,
+        active && styles.segmentActive,
+        active && dark && { backgroundColor: palette.bg.card },
+      ]}
       hitSlop={{ top: 8, bottom: 8, left: 4, right: 4 }}
     >
       {flag ? (
@@ -138,6 +154,11 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
     gap: 2,
   },
+  // Трёхсегментный режим: контейнер может ужиматься внутри строки с подписью
+  // (сегменты сожмутся раньше, чем переключатель уедет за экран).
+  wrapCompact: {
+    flexShrink: 1,
+  },
   segment: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -147,6 +168,12 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.md,
     minWidth: 64,
     justifyContent: 'center',
+  },
+  segmentCompact: {
+    minWidth: 50,
+    paddingHorizontal: spacing[2],
+    gap: 4,
+    flexShrink: 1,
   },
   segmentActive: {
     backgroundColor: colors.white,

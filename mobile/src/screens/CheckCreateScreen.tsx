@@ -431,6 +431,9 @@ export default function CheckCreateScreen() {
   const [mileage, setMileage] = useState('');
   const [comment, setComment] = useState('');
   const [discount, setDiscount] = useState('');
+  // Тап в ЛЮБОЕ место поля «Скидка» (иконка/надпись/₽) фокусирует ввод —
+  // владелец: «даже на саму надпись активировала ввод размера скидки».
+  const discountInputRef = useRef<TextInput>(null);
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('cash' as PaymentMethod);
   const [cashAmount, setCashAmount] = useState('');
   const [cashGiven, setCashGiven] = useState('');
@@ -2320,7 +2323,14 @@ export default function CheckCreateScreen() {
               <>
                 {/* ═══ ПОИСК ПО ГОСНОМЕРУ / ПО ТЕЛЕФОНУ (Round 7 #8) ═══ */}
                 <View style={styles.plateLabelRow}>
-                  <Text style={[styles.sectionSubLabel, { color: palette.text.secondary }]}>
+                  {/* flexShrink + numberOfLines: на узких iPhone (SE/mini)
+                      подпись ужимается, а трёхсекционный переключатель
+                      (RU|INT|ТЕЛ) остаётся целиком на экране, не уезжая
+                      вправо. */}
+                  <Text
+                    style={[styles.sectionSubLabel, styles.plateLabelShrink, { color: palette.text.secondary }]}
+                    numberOfLines={1}
+                  >
                     {isPhoneMode ? 'ПОИСК ПО ТЕЛЕФОНУ' : 'ПОИСК ПО ГОСНОМЕРУ'}
                   </Text>
                   <PlateModeSwitcher
@@ -2976,13 +2986,16 @@ export default function CheckCreateScreen() {
               </TouchableOpacity>
             )}
 
-            {/* Discount */}
-            <View
+            {/* Discount — вся строка (иконка/надпись/валюта) фокусирует ввод */}
+            <TouchableOpacity
+              activeOpacity={1}
+              onPress={() => discountInputRef.current?.focus()}
               style={[styles.discountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
             >
               <Ionicons name="pricetag-outline" size={16} color={colors.orange[500]} />
               <Text style={[styles.discountLabel, { color: palette.text.secondary }]}>Скидка</Text>
               <TextInput
+                ref={discountInputRef}
                 value={discount}
                 onChangeText={setDiscount}
                 style={[styles.discountInput, { color: palette.text.primary }]}
@@ -2991,7 +3004,7 @@ export default function CheckCreateScreen() {
                 placeholderTextColor={palette.text.tertiary}
               />
               <Text style={[styles.discountCurrency, { color: palette.text.tertiary }]}>₽</Text>
-            </View>
+            </TouchableOpacity>
             {/* MOB-02: та же семантика, что на сервере и в вебе. */}
             <Text style={[styles.discountHint, { color: palette.text.tertiary }]}>Скидка применяется к товарам</Text>
           </View>
@@ -4247,6 +4260,11 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     marginBottom: spacing[1.5],
+    gap: spacing[2],
+  },
+  // Подпись секции ужимается первой — переключатель RU|INT|ТЕЛ всегда целиком.
+  plateLabelShrink: {
+    flexShrink: 1,
   },
   // ── Явный поиск по телефону (Round 7 #8) ──────────────────────────────
   // Отдельная строка-инпут МИМО маски номера: та же «primary» роль, что и
