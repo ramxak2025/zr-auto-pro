@@ -9,6 +9,20 @@ import { BaseCheckDto, CheckInstallmentDto, CheckProductLineDto, CheckServiceLin
  * payload and every `dto.*` read in ChecksService.create().
  */
 export class CreateCheckDto extends BaseCheckDto {
+  /**
+   * Идемпотентность (офлайн-очередь, round 9): UUID, сгенерированный клиентом
+   * один раз на логический чек и повторяемый с каждым ретраем. Сервер держит
+   * максимум один чек на (tenant_id, clientRequestId) — уникальный индекс
+   * uq_checks_client_request (миграция 111); повтор возвращает уже созданный
+   * чек без побочных эффектов. Машинное поле (мастер его не вводит), поэтому
+   * без русского сообщения; UUID-форма проверяется в ChecksService.create()
+   * с дружелюбным 400.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  clientRequestId?: string;
+
   /** Рассрочка (mobile shape): `installment: { nextPaymentDate, comment }`. */
   @IsOptional()
   @ValidateNested()

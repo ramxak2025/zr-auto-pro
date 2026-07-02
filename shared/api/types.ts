@@ -248,6 +248,14 @@ export interface UpdateServiceRequest {
 }
 
 export interface CreateCheckRequest {
+  /**
+   * Идемпотентность (офлайн-очередь): UUID, сгенерированный клиентом один раз
+   * на логический чек и повторяемый с каждым ретраем. Сервер гарантирует
+   * максимум один чек на (tenant, clientRequestId): повторный POST возвращает
+   * УЖЕ созданный чек (тот же id/number) без повторного списания стока /
+   * зарплаты / выручки. Опционально — без него поведение прежнее.
+   */
+  clientRequestId?: string;
   date?: string;
   masterId: string;
   clientId: string;
