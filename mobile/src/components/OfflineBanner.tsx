@@ -40,6 +40,7 @@ import { onlineManager } from '@tanstack/react-query';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
 import { getActiveApiBaseUrl, onNetworkClassFailure, onRequestSucceeded } from '../api/axios';
+import { isHtmlApiPayload } from '../api/apiHosts';
 import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
 
 type BannerStatus = 'hidden' | 'no-internet' | 'server-unreachable';
@@ -61,12 +62,21 @@ const RECHECK_INTERVAL_MS = 20_000;
 const NEUTRAL_PROBE_URLS = ['https://captive.apple.com/hotspot-detect.html', 'https://www.gstatic.com/generate_204'];
 
 /** GET с таймаутом; никогда не бросает — только true/false. */
-async function probeUrl(url: string, timeoutMs: number): Promise<boolean> {
+async function probeUrl(url: string, timeoutMs: number, rejectHtml = false): Promise<boolean> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
   try {
     const res = await fetch(url, { method: 'GET', signal: abort.signal });
-    return res.ok;
+    if (!res.ok) return false;
+    if (rejectHtml) {
+      // Находка ревью 05.07: HTML-заглушка со статусом 200 (captive-portal,
+      // чужой апстрим) «оздоравливала» пробу /health и прятала баннер. Для
+      // API-проб валидируем тело тем же стражем, что и axios.
+      const ct = res.headers.get('content-type');
+      const body = await res.text().catch(() => '');
+      return !isHtmlApiPayload(body, ct);
+    }
+    return true;
   } catch {
     return false;
   } finally {
@@ -126,7 +136,7 @@ export default function OfflineBanner() {
     if (manual) setChecking(true);
     try {
       // 1) Сервер доступен? Пробуем АКТИВНУЮ базу (с учётом failover-резерва).
-      const apiOk = await probeUrl(`${getActiveApiBaseUrl()}/health`, API_PROBE_TIMEOUT_MS);
+      const apiOk = await probeUrl(`${getActiveApiBaseUrl()}/health`, API_PROBE_TIMEOUT_MS, true);
       if (!mountedRef.current || seq !== probeSeq.current) return;
       if (apiOk) {
         setStatus('hidden');

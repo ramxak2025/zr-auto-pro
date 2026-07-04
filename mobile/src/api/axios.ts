@@ -324,27 +324,36 @@ function fireAuthExpired() {
   });
 }
 
+// ── HTML-страж (инцидент 05.07) — ОТДЕЛЬНЫЙ интерсептор, зарегистрирован ДО
+// основной пары. КРИТИЧНО (находка ревью): reject из success-хендлера НЕ
+// попадает в error-хендлер ТОЙ ЖЕ пары (axios ловит только ошибки более
+// ранних звеньев цепочки) — поэтому страж живёт первым звеном, и его reject
+// честно проваливается в error-хендлер основной пары ниже → срабатывает
+// failover на следующий хост кольца и сигнал баннеру.
+// Суть: HTML вместо JSON от нашего /api = чужой апстрим (битая база кольца,
+// captive-portal оператора, страница ошибки хостинга). Такой «успех» раньше
+// уезжал в React Query как данные и ронял экраны (count/length/id of
+// undefined). Ошибка без .response = сетевой класс; ERR_HTML_RESPONSE
+// дополнительно разрешает failover-ретрай даже для POST — статика nginx
+// обработала запрос сама, до API он не дошёл, дублей быть не может.
+api.interceptors.response.use((res) => {
+  if (isHtmlApiPayload(res.data, res.headers?.['content-type'])) {
+    const e = new Error(
+      `Сервер вернул HTML вместо данных (чужой апстрим/портал оператора)\nURL: ${res.config?.baseURL || activeBaseUrl}`,
+    ) as Error & { isAxiosError: boolean; code: string; config: unknown };
+    e.isAxiosError = true;
+    e.code = 'ERR_HTML_RESPONSE';
+    e.config = res.config;
+    return Promise.reject(e);
+  }
+  return res;
+});
+
 api.interceptors.response.use(
   // Success path: почти pass-through (no 304 substitution, no ETag
   // bookkeeping — see the "ETag … REMOVED" note above for why). Единственное
   // дополнение — сигнал «сеть жива» для офлайн-очереди чеков и баннера.
   (res) => {
-    // ── HTML-страж (инцидент 05.07) ─────────────────────────────────────────
-    // HTML вместо JSON от нашего /api = чужой апстрим: битая база кольца,
-    // captive-portal оператора, страница ошибки хостинга. До этого стража
-    // такой «успех» уезжал в React Query как данные и ронял экраны на
-    // count/length/id of undefined. Классифицируем как СЕТЕВОЙ сбой (без
-    // .response) — ниже сработает failover на следующий хост кольца, баннер
-    // получит сигнал, и HTML никогда не кэшируется как данные.
-    if (isHtmlApiPayload(res.data, res.headers?.['content-type'])) {
-      const e = new Error(
-        `Сервер вернул HTML вместо данных (чужой апстрим/портал оператора)\nURL: ${res.config?.baseURL || activeBaseUrl}`,
-      ) as Error & { isAxiosError: boolean; code: string; config: unknown };
-      e.isAxiosError = true;
-      e.code = 'ERR_HTML_RESPONSE';
-      e.config = res.config;
-      return Promise.reject(e);
-    }
     fireNetworkListeners(requestSuccessListeners);
     return res;
   },
@@ -358,7 +367,16 @@ api.interceptors.response.use(
       // мертва и поведение прежнее.
       if (API_HOSTS.length > 1) {
         const cfg = error.config as FailoverAwareConfig | undefined;
-        if (cfg && !cfg._failoverAttempted) {
+        // Находка ревью 05.07: слепой ретрай задваивал НЕ-идемпотентные POST
+        // (расход/клиент/зарплата) на таймауте — сервер мог уже обработать
+        // запрос (ECONNABORTED ничего не гарантирует). Правило: GET/HEAD/
+        // OPTIONS ретраим всегда; мутации — ТОЛЬКО при ERR_HTML_RESPONSE
+        // (статика nginx ответила сама, API запрос не видел → дубль
+        // невозможен). Чеки дополнительно защищены clientRequestId.
+        const method = (cfg?.method || 'get').toLowerCase();
+        const idempotent = method === 'get' || method === 'head' || method === 'options';
+        const safeForMutation = (error as { code?: string }).code === 'ERR_HTML_RESPONSE';
+        if (cfg && !cfg._failoverAttempted && (idempotent || safeForMutation)) {
           const failedBase =
             typeof cfg.baseURL === 'string' && API_HOSTS.includes(cfg.baseURL) ? cfg.baseURL : activeBaseUrl;
           const nextBase = API_HOSTS[(API_HOSTS.indexOf(failedBase) + 1) % API_HOSTS.length];

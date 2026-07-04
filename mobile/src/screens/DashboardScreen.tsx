@@ -1575,10 +1575,10 @@ function CashPositionCard() {
     refetchInterval: pollEnabled ? 30_000 : false,
   });
 
-  const cash = data?.cashPosition.cash ?? 0;
-  const card = data?.cashPosition.card ?? 0;
-  const warranty = data?.cashPosition.warranty ?? 0;
-  const total = data?.cashPosition.total ?? 0;
+  const cash = data?.cashPosition?.cash ?? 0;
+  const card = data?.cashPosition?.card ?? 0;
+  const warranty = data?.cashPosition?.warranty ?? 0;
+  const total = data?.cashPosition?.total ?? 0;
 
   const rows: {
     key: 'cash' | 'card' | 'warranty';
@@ -1891,8 +1891,8 @@ function WarehouseAnalyticsWidget() {
   // Dead-stock 90d красный, если он съедает >5% капитала склада. Иначе —
   // нейтральный текст, чтобы виджет не «кричал» без повода.
   const totalValue = summary?.stockValueCurrent ?? 0;
-  const deadValue = summary?.deadStock90.value ?? 0;
-  const deadCount = summary?.deadStock90.count ?? 0;
+  const deadValue = summary?.deadStock90?.value ?? 0;
+  const deadCount = summary?.deadStock90?.count ?? 0;
   const deadPct = totalValue > 0 ? deadValue / totalValue : 0;
   const deadIsHot = deadPct > 0.05;
   const deadColor = deadIsHot ? colors.red[600] : palette.text.primary;
@@ -2784,8 +2784,8 @@ function PersonalRecordCard() {
     placeholderData: (prev) => prev,
   });
 
-  const bestDay = data?.personalRecord.bestDay;
-  const bestMonth = data?.personalRecord.bestMonth;
+  const bestDay = data?.personalRecord?.bestDay;
+  const bestMonth = data?.personalRecord?.bestMonth;
   if (!bestDay && !bestMonth) return null;
 
   const todayRevenue = data?.revenueToday ?? 0;

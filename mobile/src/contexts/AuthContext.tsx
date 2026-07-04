@@ -28,6 +28,7 @@ import { onAuthExpired, setAuthToken } from '../api/axios';
 import { captureException } from '../sentry';
 import { clearWidgetData } from '../utils/widgetBridge';
 import { clearPersistentCache } from '../utils/persistentCache';
+import { clearOfflineCheckQueue } from '../utils/offlineCheckQueue';
 import { toLocalISODate } from '../utils/dates';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
 import type { User, UserPermissions, UserRole, SectionVisibility } from '../../../shared/types';
@@ -620,6 +621,9 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
       // Clear persistent cache so the next login starts fresh
       clearPersistentCache().catch(() => {});
+      // Ревью 05.07: офлайн-очередь чеков не должна пережить пользователя —
+      // иначе отложенный чек мастера A дослался бы под токеном B (чужой тенант).
+      clearOfflineCheckQueue().catch(() => {});
       // Session died — the widget must not keep showing the dead session's
       // numbers (same privacy contract as the cached-user wipe above).
       clearWidgetData();
@@ -645,6 +649,8 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       queryClient?.cancelQueries().catch(() => {});
       queryClient?.clear();
       await clearPersistentCache().catch(() => {});
+      await clearOfflineCheckQueue().catch(() => {});
+      await clearOfflineCheckQueue().catch(() => {});
       // Same cross-tenant/-role isolation for the home-screen widget: the
       // App Group payload may still hold user A's numbers (e.g. the owner's
       // прибыль). Wipe it BEFORE B's session starts — B's own dashboard
@@ -705,6 +711,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     await AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
     await AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
     await clearPersistentCache().catch(() => {});
+    await clearOfflineCheckQueue().catch(() => {});
     // Round 7 audit #4: the expo-image disk/memory cache (product photos,
     // avatars — see CachedImage's `cachePolicy="memory-disk"`) survived
     // logout, so user B on the same device could still be served user A's
@@ -741,6 +748,8 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       queryClient?.cancelQueries().catch(() => {});
       queryClient?.clear();
       await clearPersistentCache().catch(() => {});
+      await clearOfflineCheckQueue().catch(() => {});
+      await clearOfflineCheckQueue().catch(() => {});
       // Round 7 audit #4: same image-cache isolation as logout() — the
       // superadmin's cached bitmaps must not bleed into the impersonated
       // tenant's session (fire-and-forget, errors swallowed).

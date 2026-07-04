@@ -147,10 +147,18 @@ export default function VoiceCommentSheet({ visible, onClose, onInsert, remainin
   const spinStyle = useAnimatedStyle(() => ({ transform: [{ rotate: `${spin.value * 360}deg` }] }));
 
   // ── Actions ──────────────────────────────────────────────────────────────
+  // Отмена сессии распознавания (находка ревью 05.07): закрытие шита во время
+  // «Распознаю…» раньше НЕ отменяло полёт transcribe — текст вставлялся в поле
+  // спустя секунды «сам», при повторной записи задваивался. Флаг помечает
+  // сессию брошенной; долетевший ответ тогда молча выбрасывается (квота уже
+  // списана — честно, Яндекс работу выполнил).
+  const cancelledRef = useRef(false);
+
   const handleStart = useCallback(async () => {
     try {
       haptic('tap');
       setErrorMsg('');
+      cancelledRef.current = false;
       await rec.start();
       setPhase('recording');
     } catch (err) {
@@ -158,7 +166,18 @@ export default function VoiceCommentSheet({ visible, onClose, onInsert, remainin
         setDeniedCanAskAgain(err.canAskAgain);
         setPhase('denied');
       } else {
-        setErrorMsg('Не удалось получить доступ к микрофону.');
+        // Находка ревью 05.07: interop-фейл нативного рекордера (Android New
+        // Arch) раньше маскировался под «нет доступа к микрофону» и нигде не
+        // логировался — диагностика врала. Честное сообщение + след в Sentry.
+        console.warn('[voice] start failed (не permission):', err);
+        try {
+          // eslint-disable-next-line @typescript-eslint/no-var-requires
+          const Sentry = require('@sentry/react-native');
+          Sentry.captureException?.(err);
+        } catch {
+          /* Sentry недоступен — не мешаем работе */
+        }
+        setErrorMsg('Голосовой ввод недоступен на этом устройстве. Введите комментарий вручную.');
         setPhase('error');
       }
     }
@@ -193,6 +212,10 @@ export default function VoiceCommentSheet({ visible, onClose, onInsert, remainin
       const res = await voiceApi.transcribe(fd);
       queryClient.invalidateQueries({ queryKey: ['voice', 'usage'] });
 
+      // Сессию бросили (закрыли шит во время «Распознаю…») — долетевший ответ
+      // не вставляем: неожиданный текст «сам по себе» хуже потерянного.
+      if (cancelledRef.current) return;
+
       const text = (res.data?.text ?? '').trim();
       if (!text) {
         setErrorMsg('Речь не распознана. Попробуйте ещё раз или введите вручную.');
@@ -203,7 +226,9 @@ export default function VoiceCommentSheet({ visible, onClose, onInsert, remainin
       onInsert(text);
       onClose();
     } catch (err) {
+      if (cancelledRef.current) return;
       haptic('error');
+      console.warn('[voice] transcribe failed:', err);
       setErrorMsg(mapVoiceError(err).message);
       setPhase('error');
     } finally {
@@ -219,6 +244,7 @@ export default function VoiceCommentSheet({ visible, onClose, onInsert, remainin
   }, [phase, rec.durationMs, handleStop]);
 
   const handleClose = useCallback(() => {
+    cancelledRef.current = true; // бросаем возможный полёт «Распознаю…»
     if (rec.isRecording) rec.cancel();
     onClose();
   }, [rec, onClose]);

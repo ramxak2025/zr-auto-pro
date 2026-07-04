@@ -272,6 +272,8 @@ export interface OfflineCheckQueueCore {
    * вызывающий экран обязан показать честную ошибку (чек в очередь НЕ попал).
    */
   enqueue(payload: QueuedCheckPayload, meta?: QueuedCheckMeta): Promise<QueuedCheck>;
+  /** Полная очистка (logout/смена аккаунта — очередь не переживает пользователя). */
+  clearAll(): Promise<void>;
   remove(clientRequestId: string): Promise<void>;
   /** failed → pending + немедленная попытка отправки. */
   retry(clientRequestId: string): Promise<void>;
@@ -489,6 +491,14 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
       };
     },
     pendingCount: () => entries.reduce((n, e) => (e.status === 'pending' ? n + 1 : n), 0),
+    // Ревью 05.07: очередь НЕ должна переживать смену аккаунта — иначе
+    // отложенный чек мастера A дослался бы под токеном мастера B (чужой
+    // тенант!). Вызывается из logout; зеркалит решение web (purgeOfflineQueues).
+    clearAll: async () => {
+      entries = [];
+      await persist();
+      notify();
+    },
     enqueue,
     remove,
     retry,
@@ -532,6 +542,11 @@ export function enqueueOfflineCheck(payload: QueuedCheckPayload, meta?: QueuedCh
 /** Ручная досылка («Отправить сейчас» в Журнале). */
 export function flushOfflineCheckQueue(): Promise<FlushResult> {
   return getQueue().flush();
+}
+
+/** Полная очистка очереди — вызывается из logout (см. clearAll в core). */
+export function clearOfflineCheckQueue(): Promise<void> {
+  return getQueue().clearAll();
 }
 
 export function removeOfflineCheck(clientRequestId: string): Promise<void> {

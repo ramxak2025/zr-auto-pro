@@ -438,6 +438,10 @@ export function classifyStoredPair(raw: string | null, now: number): StoredPairR
     return { status: 'corrupt' };
   }
   if (!parsed?.queryKey || parsed.data === undefined) return { status: 'corrupt' };
+  // Ревью 05.07: во время HTML-инцидента на телефонах МОГ закэшироваться
+  // HTML-текст как data снапшота — гидратация подняла бы яд обратно в экраны.
+  // Все whitelisted-ключи по контракту хранят объект/массив; примитив = отрава.
+  if (parsed.data === null || typeof parsed.data !== 'object') return { status: 'corrupt' };
   const storedAt = parsed.storedAt ?? 0;
   if (now - storedAt > MAX_STALE_MS) return { status: 'stale' };
   const f = firstKey(parsed.queryKey);

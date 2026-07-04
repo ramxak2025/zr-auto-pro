@@ -2180,19 +2180,23 @@ export default function CheckDetailScreen() {
             )}
           </TouchableOpacity>
         </View>
-      </Modal>
 
-      {/* Голосовой ввод для того же комментария. Рендерится поверх comment-шита;
-          распознанный текст добавляется в конец черновика, дальше правится
-          руками. Условный рендер гарантирует освобождение микрофона. */}
-      {voiceSheetOpen && (
-        <VoiceCommentSheet
-          visible={voiceSheetOpen}
-          onClose={() => setVoiceSheetOpen(false)}
-          remainingSeconds={voiceUsage?.remainingSeconds}
-          onInsert={(text) => setCommentDraft((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))}
-        />
-      )}
+        {/* Голосовой ввод — ВНУТРИ comment-модалки (находка ревью 05.07):
+            сиблинг-Modal на iOS Fabric не презентуется поверх уже открытой
+            модалки того же экрана (UIKit отклоняет второй present) — кнопка
+            «Надиктовать» выглядела мёртвой, а невидимый zombie-шит висел до
+            ухода с экрана. Вложенный Modal презентуется от VC внешней модалки
+            и работает на обеих платформах. Условный рендер гарантирует
+            освобождение микрофона. */}
+        {voiceSheetOpen && (
+          <VoiceCommentSheet
+            visible={voiceSheetOpen}
+            onClose={() => setVoiceSheetOpen(false)}
+            remainingSeconds={voiceUsage?.remainingSeconds}
+            onInsert={(text) => setCommentDraft((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))}
+          />
+        )}
+      </Modal>
     </SafeAreaView>
   );
 }
