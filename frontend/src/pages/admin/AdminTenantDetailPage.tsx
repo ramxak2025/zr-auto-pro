@@ -83,6 +83,7 @@ interface TenantFormData {
   email: string;
   description: string;
   maxUsers: number;
+  voiceMinutesExtra: number;
   isActive: boolean;
   subscriptionEnd: string;
   subscriptionNote: string;
@@ -134,6 +135,7 @@ export default function AdminTenantDetailPage() {
     email: '',
     description: '',
     maxUsers: 5,
+    voiceMinutesExtra: 0,
     isActive: true,
     subscriptionEnd: '',
     subscriptionNote: '',
@@ -319,6 +321,7 @@ export default function AdminTenantDetailPage() {
       email: tenant.email || '',
       description: tenant.description || '',
       maxUsers: tenant.maxUsers,
+      voiceMinutesExtra: tenant.voiceMinutesExtra ?? 0,
       isActive: tenant.isActive,
       subscriptionEnd: tenant.subscriptionEnd ? tenant.subscriptionEnd.slice(0, 10) : '',
       subscriptionNote: tenant.subscriptionNote || '',
@@ -349,6 +352,7 @@ export default function AdminTenantDetailPage() {
       email: tenantForm.email || undefined,
       description: tenantForm.description || undefined,
       maxUsers: Number(tenantForm.maxUsers),
+      voiceMinutesExtra: Number(tenantForm.voiceMinutesExtra),
       isActive: tenantForm.isActive,
       subscriptionEnd: tenantForm.subscriptionEnd || null,
       subscriptionNote: tenantForm.subscriptionNote || null,
@@ -840,6 +844,20 @@ export default function AdminTenantDetailPage() {
               value={tenantForm.subscriptionNote}
               onChange={(e) => setTenantForm({ ...tenantForm, subscriptionNote: e.target.value })}
             />
+          </div>
+          <div>
+            <label className="label">Доп. минуты голоса (надбавка)</label>
+            <input
+              type="number"
+              className="input"
+              value={tenantForm.voiceMinutesExtra}
+              onChange={(e) => setTenantForm({ ...tenantForm, voiceMinutesExtra: Number(e.target.value) })}
+              min={0}
+              step={1}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              Прибавляется к пакету минут голосового ввода из тарифа. 0 = без надбавки.
+            </p>
           </div>
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
             <button type="button" onClick={() => setTenantModalOpen(false)} className="btn-secondary">

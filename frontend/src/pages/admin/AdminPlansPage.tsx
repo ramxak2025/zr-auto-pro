@@ -1,10 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, CreditCard, Loader2, Check, X } from 'lucide-react';
+import { Plus, Pencil, Trash2, CreditCard, Loader2, Check, X, Mic } from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { plansApi } from '../../api/services';
-import { Plan } from '../../types';
+import { plansApi, adminApi } from '../../api/services';
+import { Plan, PlatformSettings } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
@@ -20,6 +20,7 @@ interface PlanFormData {
   description: string;
   features: string[];
   maxUsers: number;
+  voiceMinutes: number;
   isActive: boolean;
   sortOrder: number;
 }
@@ -30,6 +31,7 @@ const emptyForm: PlanFormData = {
   description: '',
   features: [],
   maxUsers: 5,
+  voiceMinutes: 0,
   isActive: true,
   sortOrder: 0,
 };
@@ -41,6 +43,7 @@ export default function AdminPlansPage() {
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [form, setForm] = useState<PlanFormData>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [freeMinutes, setFreeMinutes] = useState('');
 
   const { data, isLoading } = useQuery({
     queryKey: ['plans'],
@@ -49,6 +52,20 @@ export default function AdminPlansPage() {
   });
 
   const plans = data ?? [];
+
+  // Платформенная настройка (superadmin): бесплатные минуты голосового ввода,
+  // которые получает КАЖДЫЙ автосервис ежемесячно. Держим здесь же, чтобы весь
+  // расчёт минут голоса (пакет тарифа + бесплатный тир платформы) настраивался
+  // на одном экране.
+  const { data: settings } = useQuery({
+    queryKey: ['admin-settings'],
+    queryFn: () => adminApi.getSettings(),
+    select: (res) => res.data as PlatformSettings,
+  });
+
+  useEffect(() => {
+    if (settings) setFreeMinutes(String(settings.globalFreeVoiceMinutes ?? 0));
+  }, [settings?.globalFreeVoiceMinutes]);
 
   const createMutation = useMutation({
     mutationFn: (data: any) => plansApi.create(data),
@@ -87,6 +104,15 @@ export default function AdminPlansPage() {
     onError: () => toast.error('Ошибка удаления'),
   });
 
+  const settingsMutation = useMutation({
+    mutationFn: (globalFreeVoiceMinutes: number) => adminApi.updateSettings({ globalFreeVoiceMinutes }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['admin-settings'] });
+      toast.success('Настройки платформы сохранены');
+    },
+    onError: () => toast.error('Не удалось сохранить настройки'),
+  });
+
   const openCreate = () => {
     setEditingPlan(null);
     setForm({ ...emptyForm });
@@ -102,6 +128,7 @@ export default function AdminPlansPage() {
       description: plan.description || '',
       features: [...features],
       maxUsers: plan.maxUsers,
+      voiceMinutes: plan.voiceMinutes ?? 0,
       isActive: plan.isActive,
       sortOrder: plan.sortOrder,
     });
@@ -138,6 +165,7 @@ export default function AdminPlansPage() {
       monthlyPrice: Number(form.monthlyPrice),
       description: form.description || undefined,
       maxUsers: Number(form.maxUsers),
+      voiceMinutes: Number(form.voiceMinutes),
       isActive: form.isActive,
       sortOrder: Number(form.sortOrder),
     };
@@ -151,6 +179,19 @@ export default function AdminPlansPage() {
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
 
+  const freeMinutesNum = Number(freeMinutes);
+  const freeMinutesValid = freeMinutes.trim() !== '' && Number.isFinite(freeMinutesNum) && freeMinutesNum >= 0;
+  const freeMinutesDirty =
+    !!settings && freeMinutesValid && Math.round(freeMinutesNum) !== (settings.globalFreeVoiceMinutes ?? 0);
+
+  const saveFreeMinutes = () => {
+    if (!freeMinutesValid) {
+      toast.error('Введите число не меньше 0');
+      return;
+    }
+    settingsMutation.mutate(Math.round(freeMinutesNum));
+  };
+
   if (isLoading) return <LoadingSpinner />;
 
   return (
@@ -161,6 +202,51 @@ export default function AdminPlansPage() {
           <Plus className="w-4 h-4" />
           Новый тариф
         </button>
+      </div>
+
+      {/* Платформенная настройка: бесплатные минуты голосового ввода всем автосервисам */}
+      <div className="card card-body mb-6">
+        <div className="flex items-start gap-3">
+          <div className="p-2 bg-primary-50 rounded-lg flex-shrink-0">
+            <Mic className="w-5 h-5 text-primary-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <h2 className="font-semibold text-gray-900">Голосовой ввод — лимит платформы</h2>
+            <p className="text-sm text-gray-500 mt-0.5">
+              Бесплатные минуты голоса, которые ежемесячно получает каждый автосервис. Итоговый лимит автосервиса —
+              максимум из пакета его тарифа и этого значения, плюс индивидуальная надбавка.
+            </p>
+            <div className="mt-3 flex flex-wrap items-end gap-3">
+              <div>
+                <label className="label">Бесплатных минут голоса всем автосервисам / мес</label>
+                <input
+                  type="number"
+                  className="input w-64"
+                  value={freeMinutes}
+                  onChange={(e) => setFreeMinutes(e.target.value)}
+                  min={0}
+                  step={1}
+                  disabled={!settings}
+                />
+              </div>
+              <button
+                type="button"
+                onClick={saveFreeMinutes}
+                disabled={settingsMutation.isPending || !freeMinutesDirty}
+                className="btn-primary"
+              >
+                {settingsMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Сохранение...
+                  </>
+                ) : (
+                  'Сохранить'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
 
       {plans.length === 0 ? (
@@ -322,6 +408,21 @@ export default function AdminPlansPage() {
                 </div>
               ))}
             </div>
+          </div>
+
+          <div>
+            <label className="label">Минуты голосового ввода / мес</label>
+            <input
+              type="number"
+              className="input"
+              value={form.voiceMinutes}
+              onChange={(e) => setForm({ ...form, voiceMinutes: Number(e.target.value) })}
+              min={0}
+              step={1}
+            />
+            <p className="mt-1 text-xs text-gray-500">
+              0 = только бесплатный лимит платформы. Работает при включённой функции «Голосовой ввод (пакет минут)».
+            </p>
           </div>
 
           <div>
