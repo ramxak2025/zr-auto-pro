@@ -15,6 +15,14 @@ export class WarehouseService {
    *     that pre-date the per-warehouse split keep their old folders).
    */
   private async resolveWarehouseId(tenantID: string, warehouseId?: string | null): Promise<string | null> {
+    // Мусор от битых клиентов (' ', 'undefined', 'null', '' после trim) раньше
+    // проходил truthy-проверку и падал в pg 22P02 «invalid input syntax for
+    // type uuid» → 500 в Sentry (AUTEXA-BACKEND-2..7, 04.07). Не-UUID теперь
+    // трактуем как «склад не указан» → мягкий фолбэк на основной склад.
+    const isUuid =
+      typeof warehouseId === 'string' &&
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(warehouseId.trim());
+    warehouseId = isUuid ? warehouseId!.trim() : null;
     if (warehouseId) {
       const { rows } = await this.pool.query('SELECT id FROM warehouses WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
         warehouseId,
