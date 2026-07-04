@@ -11,6 +11,13 @@ export interface Plan {
   maxUsers: number;
   isActive: boolean;
   sortOrder: number;
+  /**
+   * 115 — пакет минут голосового ввода в месяц, входящий в тариф (0 = не
+   * входит). Сама фича гейтится ключом 'voice_input' в `features`; поверх
+   * пакета возможна индивидуальная надбавка {@link Tenant.voiceMinutesExtra}.
+   * Optional: старые payload'ы поля не имеют → трактовать как 0.
+   */
+  voiceMinutes?: number;
   createdAt: string;
 }
 
@@ -88,6 +95,12 @@ export interface Tenant {
   suspendedAt?: string | null;
   /** 102 — optional human note for the suspension. */
   suspendedReason?: string | null;
+  /**
+   * 115 — индивидуальная надбавка минут голосового ввода ПОВЕРХ пакета тарифа
+   * (задаёт суперадмин через PATCH /tenants/:id). Optional: старые payload'ы
+   * поля не имеют → трактовать как 0.
+   */
+  voiceMinutesExtra?: number;
   users?: User[];
   userCount?: number;
   createdAt: string;
@@ -139,6 +152,51 @@ export interface SubscriptionInfo {
   maxUsers: number;
   currentUsers: number;
   plans: Plan[];
+}
+
+// ─── Голосовой ввод комментария (115_voice_input) ───────────────────────────
+
+/**
+ * GET /voice/usage — остаток помесячного пакета минут голосового ввода.
+ * Период — календарный месяц ПО МСК ('YYYY-MM'). Списание идёт блоками по
+ * 15 секунд (зеркало биллинга Яндекса), поэтому минуты имеют шаг 0.25.
+ * Доступно любой роли тенанта — мастеру полезно видеть остаток при записи.
+ */
+export interface VoiceUsage {
+  /** 'YYYY-MM' текущего месяца по МСК. */
+  period: string;
+  /** Полный лимит месяца: пакет тарифа + индивидуальная надбавка. */
+  limitMinutes: number;
+  usedMinutes: number;
+  remainingMinutes: number;
+  /** Пакет тарифа (Plan.voiceMinutes). */
+  planMinutes: number;
+  /** Индивидуальная надбавка тенанта (Tenant.voiceMinutesExtra). */
+  extraMinutes: number;
+  /** Точный остаток в секундах — для таймера на экране записи. */
+  remainingSeconds: number;
+  /** Ключ 'voice_input' входит в тариф тенанта. */
+  featureEnabled: boolean;
+  /** На сервере заданы ключи Яндекса (иначе transcribe ответит 503). */
+  configured: boolean;
+}
+
+/**
+ * POST /voice/transcribe — результат распознавания + полировки.
+ * `text` — итог для подстановки в комментарий (полированный YandexGPT или,
+ * при сбое полировки, сырой STT); `rawText` — всегда сырой SpeechKit-текст
+ * (пустая строка = речь не распознана; блоки при этом СПИСАНЫ — Яндекс биллит
+ * и тишину). Ошибки контрактные: 402 {code:'VOICE_QUOTA_EXCEEDED',
+ * remainingSeconds}, 403 {code:'VOICE_FEATURE_NOT_IN_PLAN'},
+ * 503 {code:'VOICE_NOT_CONFIGURED'}.
+ */
+export interface VoiceTranscribeResult {
+  text: string;
+  rawText: string;
+  /** Списано из квоты этим запросом (кратно 15 сек). */
+  billedSeconds: number;
+  /** Остаток квоты после списания, сек. */
+  remainingSeconds: number;
 }
 
 // ─── Notifications (066_notification_preferences + 067_notification_broadcasts) ─

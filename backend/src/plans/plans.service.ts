@@ -26,8 +26,15 @@ export class PlansService {
       maxUsers: row.max_users,
       isActive: row.is_active,
       sortOrder: row.sort_order,
+      // 115 — пакет минут голосового ввода в месяц (0 = не входит в тариф).
+      voiceMinutes: parseInt(row.voice_minutes, 10) || 0,
       createdAt: row.created_at,
     };
+  }
+
+  /** Целое ≥ 0 для счётчиков минут — суперадмин-редактор не должен уметь записать мусор. */
+  private toNonNegInt(v: unknown): number {
+    return Math.max(0, Math.trunc(Number(v) || 0));
   }
 
   async getAll() {
@@ -37,8 +44,8 @@ export class PlansService {
 
   async create(dto: any) {
     const { rows } = await this.pool.query(
-      `INSERT INTO plans (name, monthly_price, description, features, max_users, sort_order)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      `INSERT INTO plans (name, monthly_price, description, features, max_users, sort_order, voice_minutes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
       [
         dto.name,
         dto.monthlyPrice || 0,
@@ -46,6 +53,7 @@ export class PlansService {
         JSON.stringify(dto.features || []),
         dto.maxUsers || 5,
         dto.sortOrder || 0,
+        this.toNonNegInt(dto.voiceMinutes),
       ],
     );
     return this.mapPlan(rows[0]);
@@ -83,6 +91,11 @@ export class PlansService {
     if (dto.sortOrder !== undefined) {
       sets.push(`sort_order=$${idx++}`);
       vals.push(dto.sortOrder);
+    }
+    // 115 — пакет минут голосового ввода в месяц.
+    if (dto.voiceMinutes !== undefined) {
+      sets.push(`voice_minutes=$${idx++}`);
+      vals.push(this.toNonNegInt(dto.voiceMinutes));
     }
 
     if (sets.length === 0) throw new NotFoundException({ message: 'Нечего обновлять' });

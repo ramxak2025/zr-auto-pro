@@ -68,6 +68,8 @@ export class TenantsService {
       shiftModeEnabled: row.shift_mode_enabled === true,
       suspendedAt: row.suspended_at ?? null,
       suspendedReason: row.suspended_reason ?? null,
+      // 115 — индивидуальная надбавка минут голосового ввода поверх тарифа.
+      voiceMinutesExtra: parseInt(row.voice_minutes_extra, 10) || 0,
       userCount: row.user_count !== undefined ? parseInt(row.user_count) : undefined,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -693,6 +695,11 @@ export class TenantsService {
     if (dto.receiptFooter !== undefined) {
       sets.push(`receipt_footer=$${idx++}`);
       vals.push(dto.receiptFooter);
+    }
+    // 115 — индивидуальная надбавка минут голосового ввода (суперадмин).
+    if (dto.voiceMinutesExtra !== undefined) {
+      sets.push(`voice_minutes_extra=$${idx++}`);
+      vals.push(Math.max(0, Math.trunc(Number(dto.voiceMinutesExtra) || 0)));
     }
 
     if (sets.length === 0) return this.getById(id);

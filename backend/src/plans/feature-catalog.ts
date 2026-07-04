@@ -60,6 +60,11 @@ export const ALL_FEATURES: readonly FeatureDef[] = [
   { key: 'knowledge_view', label: 'База знаний', gated: true, group: 'section' },
   { key: 'purchase_orders_view', label: 'Заказы поставщикам', gated: true, group: 'section' },
   { key: 'loyalty_view', label: 'Программа лояльности', gated: true, group: 'section' },
+  // 115 — голосовой ввод комментария (SpeechKit + YandexGPT). Продаётся пакетами
+  // минут (plans.voice_minutes + tenants.voice_minutes_extra); НЕ бэкфиллится на
+  // существующие тарифы — суперадмин включает сознательно. Гейтится и на бэке:
+  // POST /voice/transcribe отвечает 403, если ключа нет в тарифе тенанта.
+  { key: 'voice_input', label: 'Голосовой ввод (пакет минут)', gated: true, group: 'section' },
 
   // ── Marketing integrations ────────────────────────────────────────────────
   { key: 'integration_fiscal', label: 'Фискализация (АТОЛ / ОФД)', gated: true, group: 'integration' },

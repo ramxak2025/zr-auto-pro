@@ -156,6 +156,8 @@ import type {
   TelephonyProviderName,
   WalletSettings,
   ProfileChangeRequest,
+  VoiceUsage,
+  VoiceTranscribeResult,
 } from '../types';
 import type {
   LoginRequest,
@@ -1838,5 +1840,44 @@ export function createWalletApi(api: HttpClient) {
     getPass: (clientId: string) => api.get(`/wallet/pass/${clientId}`, { responseType: 'blob' }),
     /** Raw authenticated path of the .pkpass endpoint (for custom fetch / download flows). */
     passPath: (clientId: string) => `/wallet/pass/${clientId}`,
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Голосовой ввод комментария. Backend: voice/ (migration 115).
+//  SpeechKit STT + YandexGPT-полировка, помесячные пакеты минут по тарифам
+//  (Plan.voiceMinutes + Tenant.voiceMinutesExtra), списание 15-сек блоками.
+//
+//  Контракт multipart для transcribe (ДОГОВОРНОЙ с mobile-волной):
+//    audio           — файл записи (байты уходят в SpeechKit БЕЗ конвертации,
+//                      ffmpeg на сервере нет: формат записи обязан быть
+//                      SpeechKit-совместимым — oggopus | lpcm);
+//    durationSeconds — длительность записи, сек (потолок 60; сервер дополнительно
+//                      страхуется байтовой оценкой, занизить счёт нельзя);
+//    format?         — SpeechKit-формат ('oggopus' | 'lpcm' | …); не прислан →
+//                      серверный дефолт YC_STT_FORMAT / эвристика по имени файла;
+//    sampleRateHertz?— обязателен при format=lpcm (8000 | 16000 | 48000).
+//
+//  Гейты сервера: 403 {code:'VOICE_FEATURE_NOT_IN_PLAN'} — ключа 'voice_input'
+//  нет в тарифе; 402 {code:'VOICE_QUOTA_EXCEEDED', remainingSeconds} — пакет
+//  месяца исчерпан (Яндекс при этом НЕ вызывается); 503
+//  {code:'VOICE_NOT_CONFIGURED'} — на сервере нет ключей Яндекса (dual-mode).
+//  UI-гейт — FeatureGate по ключу 'voice_input' + VoiceUsage.configured.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createVoiceApi(api: HttpClient) {
+  return {
+    /**
+     * Распознать запись и вернуть полированный текст комментария.
+     * STT (до 15 с) + полировка (до 12 с) — таймаут запроса поднят до 45 с,
+     * чтобы дефолтный таймаут axios-инстанса клиента не обрывал ответ.
+     */
+    transcribe: (formData: unknown) =>
+      api.post<VoiceTranscribeResult>('/voice/transcribe', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 45_000,
+      } as unknown),
+    /** Остаток пакета минут за текущий месяц (МСК). Доступно любой роли тенанта. */
+    usage: () => api.get<VoiceUsage>('/voice/usage'),
   };
 }

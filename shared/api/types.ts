@@ -416,6 +416,8 @@ export interface UpdateTenantRequest {
   shiftsEnabled?: boolean;
   /** 092 — flip POS «Кассовая смена + роли» mode on/off for the tenant. */
   shiftModeEnabled?: boolean;
+  /** 115 — индивидуальная надбавка минут голосового ввода поверх тарифа (суперадмин). */
+  voiceMinutesExtra?: number;
 }
 
 /** POST /tenants/:id/extend — extend the tenant's subscription by N days. */
@@ -449,6 +451,8 @@ export interface CreatePlanRequest {
   features?: string[];
   maxUsers?: number;
   sortOrder?: number;
+  /** 115 — пакет минут голосового ввода в месяц (0 = не входит в тариф). */
+  voiceMinutes?: number;
 }
 
 export interface UpdatePlanRequest {
@@ -459,6 +463,8 @@ export interface UpdatePlanRequest {
   maxUsers?: number;
   isActive?: boolean;
   sortOrder?: number;
+  /** 115 — пакет минут голосового ввода в месяц (0 = не входит в тариф). */
+  voiceMinutes?: number;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
