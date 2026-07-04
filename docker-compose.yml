@@ -87,6 +87,11 @@ services:
       # Server-side Sentry: пусто = выключен (backend/src/common/sentry.ts).
       # Раньше переменная не пробрасывалась вовсе — Sentry молча не работал.
       SENTRY_DSN: ${SENTRY_DSN:-https://e186f0538b275163dbac41b712dc30be@o4511507149291520.ingest.us.sentry.io/4511667267960832}
+      # Голосовой ввод (Яндекс SpeechKit + YandexGPT). Пусто = фича спит (503).
+      # Ключи в серверном .env (не в git); без проброса контейнер их не видит.
+      YC_API_KEY: ${YC_API_KEY:-}
+      YC_FOLDER_ID: ${YC_FOLDER_ID:-}
+      GLOBAL_FREE_VOICE_MINUTES: ${GLOBAL_FREE_VOICE_MINUTES:-10}
     expose:
       - "3000"
     volumes:
@@ -133,6 +138,11 @@ services:
       RUN_BACKGROUND_JOBS: "false"
       # Server-side Sentry: пусто = выключен (backend/src/common/sentry.ts).
       SENTRY_DSN: ${SENTRY_DSN:-https://e186f0538b275163dbac41b712dc30be@o4511507149291520.ingest.us.sentry.io/4511667267960832}
+      # Голосовой ввод (Яндекс SpeechKit + YandexGPT). Пусто = фича спит (503).
+      # Ключи в серверном .env (не в git); без проброса контейнер их не видит.
+      YC_API_KEY: ${YC_API_KEY:-}
+      YC_FOLDER_ID: ${YC_FOLDER_ID:-}
+      GLOBAL_FREE_VOICE_MINUTES: ${GLOBAL_FREE_VOICE_MINUTES:-10}
     expose:
       - "3000"
     volumes:

@@ -277,7 +277,14 @@ export class VoiceService {
         message: 'Запись слишком длинная (максимум 60 секунд)',
       });
     }
-    const byteFloorSeconds = input.audio.length / MAX_BYTES_PER_SECOND;
+    // Анти-обман по размеру: клиент не может занизить длительность — байты
+    // делятся на МАКСИМАЛЬНЫЙ правдоподобный байт-рейт формата, давая нижнюю
+    // границу секунд. Для lpcm рейт ДЕТЕРМИНИРОВАН (частота × 2 байта × моно) —
+    // это ТОЧНАЯ длительность, обмануть нельзя, и она НЕ должна раздувать счёт
+    // (raw PCM 16кГц = 32000 Б/с, а не 16000 — иначе списывали бы вдвое).
+    const isLpcm = (input.format || '').toLowerCase() === 'lpcm';
+    const bytesPerSecond = isLpcm ? Math.max(1, input.sampleRateHertz || 16_000) * 2 : MAX_BYTES_PER_SECOND;
+    const byteFloorSeconds = input.audio.length / bytesPerSecond;
     const effectiveSeconds = Math.min(VOICE_MAX_DURATION_SECONDS, Math.max(1, claimed, byteFloorSeconds));
     const billedSeconds = Math.ceil(effectiveSeconds / VOICE_BLOCK_SECONDS) * VOICE_BLOCK_SECONDS;
 
