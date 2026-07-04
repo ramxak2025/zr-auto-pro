@@ -68,7 +68,11 @@ async function bootstrap() {
   app.enableCors({
     origin: process.env.CORS_ORIGIN
       ? process.env.CORS_ORIGIN.split(',').map((s) => s.trim())
-      : ['https://autexa.pw', 'https://www.autexa.pw'],
+      : // Оба домена: autexa-cloud.ru — основной для RU-клиентов (операторы
+        // фильтруют зону .pw), autexa.pw — резерв/легаси. Same-origin запросы
+        // web-PWA под CORS не попадают (фронт и API за одним nginx) — список
+        // страхует только явные cross-origin сценарии.
+        ['https://autexa-cloud.ru', 'https://www.autexa-cloud.ru', 'https://autexa.pw', 'https://www.autexa.pw'],
     credentials: true,
   });
 
