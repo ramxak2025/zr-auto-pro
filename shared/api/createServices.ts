@@ -158,6 +158,7 @@ import type {
   ProfileChangeRequest,
   VoiceUsage,
   VoiceTranscribeResult,
+  PlatformSettings,
 } from '../types';
 import type {
   LoginRequest,
@@ -346,6 +347,14 @@ export function createAdminApi(api: HttpClient) {
      */
     getMrrTrends: (months?: number) =>
       api.get<MrrTrendPoint[]>('/admin/mrr-trends', { params: months !== undefined ? { months } : undefined }),
+    /**
+     * Глобальные настройки платформы (116). superadmin-only. Сейчас единственный
+     * ключ — globalFreeVoiceMinutes (бесплатные минуты голосового ввода для всех
+     * тенантов). PATCH принимает частичный объект; поля валидируются на сервере
+     * (целое ≥ 0).
+     */
+    getSettings: () => api.get<PlatformSettings>('/admin/settings'),
+    updateSettings: (data: Partial<PlatformSettings>) => api.patch<PlatformSettings>('/admin/settings', data),
   };
 }
 
@@ -1845,8 +1854,10 @@ export function createWalletApi(api: HttpClient) {
 
 // ───────────────────────────────────────────────────────────────────────
 //  Голосовой ввод комментария. Backend: voice/ (migration 115).
-//  SpeechKit STT + YandexGPT-полировка, помесячные пакеты минут по тарифам
-//  (Plan.voiceMinutes + Tenant.voiceMinutesExtra), списание 15-сек блоками.
+//  SpeechKit STT + YandexGPT-полировка, помесячные пакеты минут по тарифам.
+//  Лимит месяца = max(Plan.voiceMinutes, PlatformSettings.globalFreeVoiceMinutes)
+//  + Tenant.voiceMinutesExtra (миграция 116: бесплатные минуты для ВСЕХ
+//  тенантов, тест-доступ), списание 15-сек блоками.
 //
 //  Контракт multipart для transcribe (ДОГОВОРНОЙ с mobile-волной):
 //    audio           — файл записи (байты уходят в SpeechKit БЕЗ конвертации,
@@ -1858,11 +1869,14 @@ export function createWalletApi(api: HttpClient) {
 //                      серверный дефолт YC_STT_FORMAT / эвристика по имени файла;
 //    sampleRateHertz?— обязателен при format=lpcm (8000 | 16000 | 48000).
 //
-//  Гейты сервера: 403 {code:'VOICE_FEATURE_NOT_IN_PLAN'} — ключа 'voice_input'
-//  нет в тарифе; 402 {code:'VOICE_QUOTA_EXCEEDED', remainingSeconds} — пакет
-//  месяца исчерпан (Яндекс при этом НЕ вызывается); 503
-//  {code:'VOICE_NOT_CONFIGURED'} — на сервере нет ключей Яндекса (dual-mode).
-//  UI-гейт — FeatureGate по ключу 'voice_input' + VoiceUsage.configured.
+//  Гейты сервера: 403 {code:'VOICE_FEATURE_NOT_IN_PLAN'} — фичи нет НИ в тарифе
+//  (ключ 'voice_input'), НИ через бесплатный/надбавочный лимит (limitMinutes=0);
+//  402 {code:'VOICE_QUOTA_EXCEEDED', remainingSeconds} — лимит месяца исчерпан
+//  (Яндекс при этом НЕ вызывается); 503 {code:'VOICE_NOT_CONFIGURED'} — на
+//  сервере нет ключей Яндекса (dual-mode).
+//  UI-гейт: показывать голосовой ввод при VoiceUsage.configured И
+//  (ключ 'voice_input' в тарифе ИЛИ VoiceUsage.limitMinutes>0) — иначе
+//  бесплатный тир (limitMinutes>0 без ключа) останется невидимым в UI.
 // ───────────────────────────────────────────────────────────────────────
 
 export function createVoiceApi(api: HttpClient) {

@@ -165,12 +165,22 @@ export interface SubscriptionInfo {
 export interface VoiceUsage {
   /** 'YYYY-MM' текущего месяца по МСК. */
   period: string;
-  /** Полный лимит месяца: пакет тарифа + индивидуальная надбавка. */
+  /**
+   * Полный лимит месяца = max(planMinutes, freeMinutes) + extraMinutes.
+   * Бесплатный лимит перекрывается пакетом тарифа (не суммируется), надбавка —
+   * сверху.
+   */
   limitMinutes: number;
   usedMinutes: number;
   remainingMinutes: number;
   /** Пакет тарифа (Plan.voiceMinutes). */
   planMinutes: number;
+  /**
+   * Глобальный бесплатный лимит платформы — по нему бесплатные минуты получают
+   * ВСЕ тенанты (тест-доступ). Правит супер-админ (PATCH /admin/settings,
+   * PlatformSettings.globalFreeVoiceMinutes). Входит в limitMinutes через max().
+   */
+  freeMinutes: number;
   /** Индивидуальная надбавка тенанта (Tenant.voiceMinutesExtra). */
   extraMinutes: number;
   /** Точный остаток в секундах — для таймера на экране записи. */
@@ -197,6 +207,22 @@ export interface VoiceTranscribeResult {
   billedSeconds: number;
   /** Остаток квоты после списания, сек. */
   remainingSeconds: number;
+}
+
+// ─── Глобальные настройки платформы (116_platform_settings, superadmin) ──────
+
+/**
+ * GET/PATCH /admin/settings — глобальные (без-тенантные) настройки платформы,
+ * редактируемые ТОЛЬКО супер-админом (RolesGuard @Roles('superadmin')).
+ * Синглтон в БД (миграция 116). Все поля добавляются аддитивно.
+ */
+export interface PlatformSettings {
+  /**
+   * Бесплатные минуты голосового ввода в месяц для КАЖДОГО тенанта (тест-доступ,
+   * дефолт 10). Формула лимита тенанта — max(planMinutes, globalFree) + extra,
+   * см. {@link VoiceUsage}. Целое ≥ 0; 0 — глобально выключить бесплатный тир.
+   */
+  globalFreeVoiceMinutes: number;
 }
 
 // ─── Notifications (066_notification_preferences + 067_notification_broadcasts) ─

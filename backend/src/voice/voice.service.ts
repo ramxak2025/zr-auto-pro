@@ -13,6 +13,7 @@ import { PG_POOL } from '../database.module';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { YandexSttAdapter } from './yandex-stt.adapter';
 import { YandexGptAdapter } from './yandex-gpt.adapter';
+import { PlatformSettingsService } from '../settings/platform-settings.service';
 
 /** Блок списания = блок биллинга Яндекса (0.1626 ₽ за каждые начатые 15 сек). */
 export const VOICE_BLOCK_SECONDS = 15;
@@ -40,6 +41,8 @@ export function currentPeriodMsk(now: Date = new Date()): string {
 interface TenantVoiceLimits {
   featureEnabled: boolean;
   planMinutes: number;
+  /** Глобальный бесплатный лимит платформы (platform_settings), минуты. */
+  freeMinutes: number;
   extraMinutes: number;
   limitSeconds: number;
 }
@@ -65,9 +68,13 @@ export interface TranscribeInput {
  * STT (сбой → рефанд блоков) → YandexGPT-полировка (best-effort, сбой → сырой
  * текст) → { text, rawText, billedSeconds, remainingSeconds }.
  *
- * Лимит месяца = plans.voice_minutes × 60 + tenants.voice_minutes_extra × 60.
- * Пустой результат распознавания НЕ рефандится — Яндекс биллит и тишину,
- * квота зеркалит их счётчик.
+ * Лимит месяца = (max(planMinutes, globalFreeMinutes) + extraMinutes) × 60, где
+ * globalFreeMinutes — глобальный бесплатный лимит платформы (миграция 116,
+ * platform_settings, правит супер-админ; дефолт 10). Т.е. бесплатные минуты
+ * получают ВСЕ тенанты (тест-доступ); тариф с пакетом (Легенда=1000) даёт
+ * бОльшую базу ВМЕСТО free (max, не сумма); индивидуальная надбавка тенанта
+ * плюсуется сверху. Пустой результат распознавания НЕ рефандится — Яндекс
+ * биллит и тишину, квота зеркалит их счётчик.
  */
 @Injectable()
 export class VoiceService {
@@ -77,33 +84,45 @@ export class VoiceService {
     @Inject(PG_POOL) private pool: Pool,
     private readonly stt: YandexSttAdapter,
     private readonly gpt: YandexGptAdapter,
+    private readonly settings: PlatformSettingsService,
   ) {}
 
   // ─── Квота ─────────────────────────────────────────────────────────────────
 
   private async loadLimits(tenantId: string): Promise<TenantVoiceLimits> {
-    const { rows } = await this.pool.query(
-      `SELECT COALESCE(t.voice_minutes_extra, 0) AS extra_minutes,
-              COALESCE(p.voice_minutes, 0)       AS plan_minutes,
-              COALESCE(p.features, '[]'::jsonb)  AS plan_features
-         FROM tenants t
-         LEFT JOIN plans p ON p.id = t.plan_id
-        WHERE t.id = $1`,
-      [tenantId],
-    );
+    // Глобальный бесплатный лимит читаем параллельно с тарифом тенанта — он
+    // без-тенантный (platform_settings), общий для всех.
+    const [{ rows }, freeMinutes] = await Promise.all([
+      this.pool.query(
+        `SELECT COALESCE(t.voice_minutes_extra, 0) AS extra_minutes,
+                COALESCE(p.voice_minutes, 0)       AS plan_minutes,
+                COALESCE(p.features, '[]'::jsonb)  AS plan_features
+           FROM tenants t
+           LEFT JOIN plans p ON p.id = t.plan_id
+          WHERE t.id = $1`,
+        [tenantId],
+      ),
+      this.settings.getGlobalFreeVoiceMinutes(),
+    ]);
     if (rows.length === 0) {
       // Тенант исчез из-под живого токена — отвечаем как «фичи нет», без 500.
-      return { featureEnabled: false, planMinutes: 0, extraMinutes: 0, limitSeconds: 0 };
+      // Лимит 0 (free к несуществующему тенанту не применяем: FK всё равно
+      // не даст списать).
+      return { featureEnabled: false, planMinutes: 0, freeMinutes: 0, extraMinutes: 0, limitSeconds: 0 };
     }
     const r = rows[0];
     const planMinutes = parseInt(r.plan_minutes, 10) || 0;
     const extraMinutes = parseInt(r.extra_minutes, 10) || 0;
     const features: unknown = r.plan_features;
+    // База = бОльшее из тарифного пакета и бесплатного лимита (не сумма):
+    // пакет ≥ free перекрывает free, пакет < free даёт минимум free.
+    const baseMinutes = Math.max(planMinutes, freeMinutes);
     return {
       featureEnabled: Array.isArray(features) && features.includes('voice_input'),
       planMinutes,
+      freeMinutes,
       extraMinutes,
-      limitSeconds: (planMinutes + extraMinutes) * 60,
+      limitSeconds: (baseMinutes + extraMinutes) * 60,
     };
   }
 
@@ -185,6 +204,7 @@ export class VoiceService {
         usedMinutes: 0,
         remainingMinutes: 0,
         planMinutes: 0,
+        freeMinutes: 0,
         extraMinutes: 0,
         remainingSeconds: 0,
         featureEnabled: false,
@@ -197,10 +217,12 @@ export class VoiceService {
     const toMinutes = (s: number) => Math.round((s / 60) * 100) / 100;
     return {
       period,
-      limitMinutes: limits.planMinutes + limits.extraMinutes,
+      // Итог = max(тариф, бесплатный лимит) + надбавка (см. loadLimits).
+      limitMinutes: Math.max(limits.planMinutes, limits.freeMinutes) + limits.extraMinutes,
       usedMinutes: toMinutes(usedSeconds),
       remainingMinutes: toMinutes(remainingSeconds),
       planMinutes: limits.planMinutes,
+      freeMinutes: limits.freeMinutes,
       extraMinutes: limits.extraMinutes,
       remainingSeconds,
       featureEnabled: limits.featureEnabled,
@@ -225,10 +247,13 @@ export class VoiceService {
       });
     }
 
-    // (a) Тариф-гейт. superadmin обходит гейт (как FeatureGate на клиентах),
-    // но квоту не обходит — лимит без пакета будет 0.
+    // (a) Гейт доступа. Пускаем, если фича в тарифе (ключ voice_input) ИЛИ есть
+    // положительный лимит (глобальные бесплатные минуты / надбавка супер-админа)
+    // — иначе 403. Так «бесплатные N минут для ВСЕХ» реально работают даже на
+    // тарифе без ключа; при free=0 и без пакета/надбавки лимит 0 ⇒ фича честно
+    // закрыта. superadmin обходит гейт (как FeatureGate на клиентах).
     const limits = await this.loadLimits(tenantId);
-    if (!limits.featureEnabled && user.role !== 'superadmin') {
+    if (!limits.featureEnabled && limits.limitSeconds <= 0 && user.role !== 'superadmin') {
       throw new ForbiddenException({
         code: 'VOICE_FEATURE_NOT_IN_PLAN',
         message: 'Голосовой ввод не входит в ваш тариф',

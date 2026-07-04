@@ -53,6 +53,7 @@ import { AccountModule } from './account/account.module';
 import { MotivationModule } from './motivation/motivation.module';
 import { ProfileModule } from './profile/profile.module';
 import { VoiceModule } from './voice/voice.module';
+import { SettingsModule } from './settings/settings.module';
 
 @Module({
   imports: [
@@ -109,6 +110,7 @@ import { VoiceModule } from './voice/voice.module';
     MotivationModule,
     ProfileModule,
     VoiceModule,
+    SettingsModule,
   ],
   providers: [MigrationRunner],
 })
