@@ -30,6 +30,32 @@ import { extractPcmFromWav } from './wavPcm';
 
 /** Yandex SpeechKit v1 lpcm sample rate (its valid set is 8000|16000|48000). */
 export const VOICE_SAMPLE_RATE = 16000;
+
+/**
+ * ПРЕДОХРАНИТЕЛЬ ПРОТИВ OTA-КРАША (инцидент 2026-07-05).
+ *
+ * Разрешение микрофона ЗАШИВАЕТСЯ в бинарник при сборке: iOS ≥ 37 несёт
+ * NSMicrophoneUsageDescription, Android ≥ 68 — разблокированный RECORD_AUDIO.
+ * НО OTA-бандл (runtimeVersion 3.0.0) прилетает и на СТАРЫЕ сборки — а iOS
+ * УБИВАЕТ приложение (TCC) за обращение к микрофону без plist-ключа. Manifest
+ * OTA-обновления врёт про бинарник (несёт НОВЫЙ app.json), поэтому единственный
+ * честный источник — нативный номер сборки из бинарника (expo-application).
+ * Кнопка голоса рендерится только там, где разрешение реально зашито.
+ */
+const VOICE_MIN_NATIVE_BUILD_IOS = 37;
+const VOICE_MIN_NATIVE_BUILD_ANDROID = 68;
+
+export function isVoiceNativeReady(): boolean {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const Application = require('expo-application') as { nativeBuildVersion?: string | null };
+    const build = parseInt(Application.nativeBuildVersion || '0', 10);
+    if (!Number.isFinite(build) || build <= 0) return false;
+    return build >= (Platform.OS === 'ios' ? VOICE_MIN_NATIVE_BUILD_IOS : VOICE_MIN_NATIVE_BUILD_ANDROID);
+  } catch {
+    return false; // fail-closed: нет данных о бинарнике — микрофон не показываем
+  }
+}
 /**
  * Soft record cap. Yandex v1 *sync* recognition officially accepts ≤30 s / 1 МБ;
  * raw 16 kHz mono 16-bit PCM is 32000 B/s, so 30 s ≈ 960 КБ — safely under both

@@ -40,6 +40,7 @@ import QueryErrorState from '../components/QueryErrorState';
 import FeatureGate from '../components/FeatureGate';
 import Modal from '../components/Modal';
 import { haptic } from '../platform/haptics';
+import { PressableScale } from '../platform/PressableScale';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import {
@@ -55,6 +56,7 @@ import {
 import { buildShadow } from '../platform/iosSurface';
 import { columnVisual, workStatusVisual } from '../constants/workStatus';
 import VoiceCommentSheet from '../components/VoiceCommentSheet';
+import { isVoiceNativeReady } from '../utils/voiceRecorder';
 import type { Check, Tenant, FiscalReceipt, SubscriptionInfo, VoiceUsage } from '../../../shared/types';
 
 type ReturnDestination = 'warehouse' | 'defect';
@@ -408,7 +410,9 @@ export default function CheckDetailScreen() {
     enabled: voiceFeature,
     staleTime: 5 * 60 * 1000,
   });
-  const voiceReady = voiceFeature && voiceUsage?.configured === true;
+  // isVoiceNativeReady: микрофонное разрешение есть только в сборках iOS≥37 /
+  // Android≥68 — на старых бинарниках кнопку не рендерим (OTA-краш-предохранитель).
+  const voiceReady = voiceFeature && voiceUsage?.configured === true && isVoiceNativeReady();
 
   // ── Фискализация чека (онлайн-касса 54-ФЗ, АТОЛ) ──────────────────────
   // ADDITIVE, не блокирует экран. Никак НЕ касается оплаты/итогов/возврата
@@ -2120,18 +2124,28 @@ export default function CheckDetailScreen() {
           Комментарий своего чека можно изменить только в день его создания
         </Text>
         {voiceReady && (
-          <TouchableOpacity
+          <PressableScale
             onPress={() => {
               haptic('tap');
               setVoiceSheetOpen(true);
             }}
-            style={[styles.voiceDictateBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            hapticIntent={null}
+            scaleTo={0.97}
+            style={[
+              styles.voiceDictateBtn,
+              {
+                backgroundColor: softTint(colors.purple[600], palette.mode),
+                borderColor: isDark ? palette.border.subtle : colors.purple[200],
+              },
+            ]}
             accessibilityRole="button"
             accessibilityLabel="Голосовой ввод комментария"
           >
-            <Ionicons name="mic" size={15} color={palette.accent.primary} />
-            <Text style={[styles.voiceDictateText, { color: palette.accent.primary }]}>Надиктовать голосом</Text>
-          </TouchableOpacity>
+            <Ionicons name="mic" size={15} color={isDark ? colors.purple[300] : colors.purple[600]} />
+            <Text style={[styles.voiceDictateText, { color: isDark ? colors.purple[300] : colors.purple[600] }]}>
+              Надиктовать голосом
+            </Text>
+          </PressableScale>
         )}
         <TextInput
           value={commentDraft}

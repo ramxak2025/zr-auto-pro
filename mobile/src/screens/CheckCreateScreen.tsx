@@ -94,6 +94,7 @@ import { formatPhone, phoneSearchKey, phoneSearchVariants } from '../../../share
 import LastVisitBadge from '../components/LastVisitBadge';
 import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 import VoiceCommentSheet from '../components/VoiceCommentSheet';
+import { isVoiceNativeReady } from '../utils/voiceRecorder';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -1224,7 +1225,10 @@ export default function CheckCreateScreen() {
     enabled: voiceFeature,
     staleTime: 5 * 60 * 1000,
   });
-  const voiceReady = voiceFeature && voiceUsage?.configured === true;
+  // isVoiceNativeReady: разрешение микрофона зашито только в сборки iOS≥37 /
+  // Android≥68 — на старых бинарниках (OTA прилетает и им) кнопку не рендерим,
+  // иначе iOS убивает приложение при обращении к микрофону (инцидент 05.07).
+  const voiceReady = voiceFeature && voiceUsage?.configured === true && isVoiceNativeReady();
 
   // ── Existing photos in edit mode ──────────────────────────────────────────
   // Cached separately from `pendingPhotos` so the edit flow doesn't fight the
@@ -2712,18 +2716,26 @@ export default function CheckCreateScreen() {
               {voiceReady && (
                 <>
                   <View style={{ flex: 1 }} />
-                  <TouchableOpacity
+                  <PressableScale
                     onPress={() => {
                       haptic('tap');
                       setVoiceSheetOpen(true);
                     }}
+                    hapticIntent={null}
                     hitSlop={8}
-                    style={[styles.voiceMicBtn, { backgroundColor: palette.bg.muted }]}
+                    scaleTo={0.9}
+                    style={[
+                      styles.voiceMicBtn,
+                      {
+                        backgroundColor: softTint(colors.purple[600], palette.mode),
+                        borderColor: isDark ? palette.border.subtle : colors.purple[200],
+                      },
+                    ]}
                     accessibilityRole="button"
                     accessibilityLabel="Голосовой ввод комментария"
                   >
-                    <Ionicons name="mic" size={16} color={colors.purple[600]} />
-                  </TouchableOpacity>
+                    <Ionicons name="mic" size={17} color={isDark ? colors.purple[300] : colors.purple[600]} />
+                  </PressableScale>
                 </>
               )}
             </View>
@@ -4600,7 +4612,14 @@ const styles = StyleSheet.create({
     marginTop: -spacing[1.5],
   },
   // Comment
-  voiceMicBtn: { width: 30, height: 30, borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  voiceMicBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: borderRadius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   commentInput: {
     fontSize: fontSize.sm,
     color: colors.gray[900],
