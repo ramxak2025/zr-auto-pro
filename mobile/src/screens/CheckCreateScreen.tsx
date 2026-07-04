@@ -1210,25 +1210,22 @@ export default function CheckCreateScreen() {
   }, [authUser?.role, subInfo]);
 
   // ── Голосовой ввод комментария (фича voice_input, backend voice/) ─────────
-  // Микрофон в блоке «Комментарий» показываем ТОЛЬКО когда фича в тарифе (или
-  // superadmin) И сервер настроен (VoiceUsage.configured; иначе transcribe даёт
-  // 503). Гейт по features зеркалит canAttachPhotos/FeatureGate. usage-запрос
-  // включаем лишь при наличии фичи — тенантам без неё /voice/usage не дёргаем.
+  // Микрофон показываем по ПРАВДЕ СЕРВЕРА, а не по фиче тарифа: /voice/usage
+  // уже учитывает формулу max(минуты тарифа, бесплатный лимит платформы) +
+  // надбавка — «всем по 10 бесплатных минут» работает и на тарифах БЕЗ ключа
+  // voice_input (иначе кнопка была невидима у живого тенанта — баг 05.07).
+  // Гейт: сервер настроен && есть минуты (limit>0; free=0 = kill-switch)
+  // && бинарник несёт разрешение микрофона (iOS≥37/Android≥68 — OTA прилетает
+  // и на старые сборки, где обращение к микрофону = краш TCC).
   const [voiceSheetOpen, setVoiceSheetOpen] = useState(false);
-  const voiceFeature = useMemo(() => {
-    if (authUser?.role === 'superadmin') return true;
-    return Array.isArray(subInfo?.features) && subInfo.features.includes('voice_input');
-  }, [authUser?.role, subInfo]);
+  const voiceNativeReady = isVoiceNativeReady();
   const { data: voiceUsage } = useQuery<VoiceUsage>({
     queryKey: ['voice', 'usage'],
     queryFn: async () => (await voiceApi.usage()).data,
-    enabled: voiceFeature,
+    enabled: voiceNativeReady && !!authUser,
     staleTime: 5 * 60 * 1000,
   });
-  // isVoiceNativeReady: разрешение микрофона зашито только в сборки iOS≥37 /
-  // Android≥68 — на старых бинарниках (OTA прилетает и им) кнопку не рендерим,
-  // иначе iOS убивает приложение при обращении к микрофону (инцидент 05.07).
-  const voiceReady = voiceFeature && voiceUsage?.configured === true && isVoiceNativeReady();
+  const voiceReady = voiceNativeReady && voiceUsage?.configured === true && (voiceUsage?.limitMinutes ?? 0) > 0;
 
   // ── Existing photos in edit mode ──────────────────────────────────────────
   // Cached separately from `pendingPhotos` so the edit flow doesn't fight the

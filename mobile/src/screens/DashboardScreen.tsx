@@ -245,7 +245,7 @@ function OwnerHero({ name }: { name: string }) {
   // считает is_deferred=true (reports.service.ts) — это незакрытые заказ-наряды,
   // тот же показатель, что владелец видит в карточке «Отложенные». Источник уже
   // загружен ЭТИМ же v2-запросом → никакого нового сетевого запроса ради виджета.
-  const openOrders = v2.data?.deferredSum.count ?? 0;
+  const openOrders = v2.data?.deferredSum?.count ?? 0;
   const ydayProfit = yday.data?.totalProfit ?? 0;
   const delta = useMemo(() => formatDeltaPct(profitToday, ydayProfit), [profitToday, ydayProfit]);
   const isLoading = v2.data === undefined && v2.isLoading;
@@ -1759,8 +1759,8 @@ function DeferredCard() {
     placeholderData: (prev) => prev,
   });
 
-  const count = data?.deferredSum.count ?? 0;
-  const sum = data?.deferredSum.sum ?? 0;
+  const count = data?.deferredSum?.count ?? 0;
+  const sum = data?.deferredSum?.sum ?? 0;
   if (!data) {
     if (isLoading)
       return (

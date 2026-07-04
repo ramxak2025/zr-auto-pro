@@ -1,6 +1,7 @@
 import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import { buildApiHosts, isHtmlApiPayload } from './apiHosts';
 
 // API URL: hardcoded production server, fallback to dev server
 function getApiBaseUrl(): string {
@@ -40,30 +41,11 @@ export const API_URL = API_BASE_URL;
 // failover-ретрай, ни подмена baseURL, ни проба возврата не выполняются
 // вовсе; activeBaseUrl навсегда равен API_BASE_URL.
 
-function normalizeBaseUrl(value: unknown): string | null {
-  if (typeof value !== 'string') return null;
-  const trimmed = value.trim().replace(/\/+$/, '');
-  if (!/^https?:\/\/\S+$/i.test(trimmed)) return null;
-  return trimmed;
-}
-
-const RESERVE_BASE_URLS: string[] = (() => {
-  const raw = Constants.expoConfig?.extra?.apiFallbackUrls;
-  if (!Array.isArray(raw)) return [];
-  const seen = new Set<string>([API_BASE_URL]);
-  const out: string[] = [];
-  for (const item of raw) {
-    const normalized = normalizeBaseUrl(item);
-    if (normalized && !seen.has(normalized)) {
-      seen.add(normalized);
-      out.push(normalized);
-    }
-  }
-  return out;
-})();
-
-/** Кольцо хостов: primary всегда первый. */
-const API_HOSTS: readonly string[] = [API_BASE_URL, ...RESERVE_BASE_URLS];
+// Нормализация кольца вынесена в чистый модуль apiHosts.ts (jest-тесты там же).
+// КРИТИЧНО (инцидент 05.07): резерв без пути наследует «/api» primary —
+// «https://autexa.pw» → «https://autexa.pw/api». Уже раскатанные конфиги с
+// голым origin (embedded 36/38 + старые OTA) самолечатся этим кодом.
+const API_HOSTS: readonly string[] = buildApiHosts(API_BASE_URL, Constants.expoConfig?.extra?.apiFallbackUrls);
 
 /** Активная база всех последующих запросов (module state). */
 let activeBaseUrl = API_BASE_URL;
@@ -128,6 +110,11 @@ if (API_HOSTS.length > 1) {
       if (stored && stored !== API_BASE_URL && API_HOSTS.includes(stored)) {
         activeBaseUrl = stored;
         ensurePrimaryReturnProbe();
+      } else if (stored && !API_HOSTS.includes(stored)) {
+        // Инцидент 05.07: у части телефонов в AsyncStorage застряла БИТАЯ база
+        // («https://autexa.pw» без /api). Она больше не входит в нормализованное
+        // кольцо — вычищаем, телефон возвращается на primary и самолечится.
+        AsyncStorage.removeItem(ACTIVE_BASE_STORAGE_KEY).catch(() => {});
       }
     })
     .catch(() => {});
@@ -342,6 +329,22 @@ api.interceptors.response.use(
   // bookkeeping — see the "ETag … REMOVED" note above for why). Единственное
   // дополнение — сигнал «сеть жива» для офлайн-очереди чеков и баннера.
   (res) => {
+    // ── HTML-страж (инцидент 05.07) ─────────────────────────────────────────
+    // HTML вместо JSON от нашего /api = чужой апстрим: битая база кольца,
+    // captive-portal оператора, страница ошибки хостинга. До этого стража
+    // такой «успех» уезжал в React Query как данные и ронял экраны на
+    // count/length/id of undefined. Классифицируем как СЕТЕВОЙ сбой (без
+    // .response) — ниже сработает failover на следующий хост кольца, баннер
+    // получит сигнал, и HTML никогда не кэшируется как данные.
+    if (isHtmlApiPayload(res.data, res.headers?.['content-type'])) {
+      const e = new Error(
+        `Сервер вернул HTML вместо данных (чужой апстрим/портал оператора)\nURL: ${res.config?.baseURL || activeBaseUrl}`,
+      ) as Error & { isAxiosError: boolean; code: string; config: unknown };
+      e.isAxiosError = true;
+      e.code = 'ERR_HTML_RESPONSE';
+      e.config = res.config;
+      return Promise.reject(e);
+    }
     fireNetworkListeners(requestSuccessListeners);
     return res;
   },

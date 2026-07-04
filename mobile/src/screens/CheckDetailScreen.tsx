@@ -27,7 +27,6 @@ import {
   returnsApi,
   knowledgeApi,
   fiscalApi,
-  subscriptionApi,
   voiceApi,
 } from '../api/services';
 import { shareOrderPdf } from '../utils/orderPdf';
@@ -57,7 +56,7 @@ import { buildShadow } from '../platform/iosSurface';
 import { columnVisual, workStatusVisual } from '../constants/workStatus';
 import VoiceCommentSheet from '../components/VoiceCommentSheet';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
-import type { Check, Tenant, FiscalReceipt, SubscriptionInfo, VoiceUsage } from '../../../shared/types';
+import type { Check, Tenant, FiscalReceipt, VoiceUsage } from '../../../shared/types';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -394,25 +393,18 @@ export default function CheckDetailScreen() {
   };
 
   // ── Голосовой ввод для комментария «день в день» ──────────────────────────
-  // Тот же гейт, что в Кассе: voice_input в тарифе (или superadmin) И сервер
-  // настроен (VoiceUsage.configured). Микрофон живёт внутри comment-шита.
+  // Гейт по правде сервера (/voice/usage: настроено && limitMinutes>0 — free-
+  // минуты работают и без фичи в тарифе) && бинарник с разрешением микрофона
+  // (iOS≥37/Android≥68). Зеркалит Кассу — см. комментарий там (баг 05.07).
   const [voiceSheetOpen, setVoiceSheetOpen] = useState(false);
-  const { data: voiceSub } = useQuery<SubscriptionInfo>({
-    queryKey: ['subscription'],
-    queryFn: async () => (await subscriptionApi.get()).data,
-    staleTime: 5 * 60 * 1000,
-  });
-  const voiceFeature =
-    user?.role === 'superadmin' || (Array.isArray(voiceSub?.features) && voiceSub.features.includes('voice_input'));
+  const voiceNativeReady = isVoiceNativeReady();
   const { data: voiceUsage } = useQuery<VoiceUsage>({
     queryKey: ['voice', 'usage'],
     queryFn: async () => (await voiceApi.usage()).data,
-    enabled: voiceFeature,
+    enabled: voiceNativeReady && !!user,
     staleTime: 5 * 60 * 1000,
   });
-  // isVoiceNativeReady: микрофонное разрешение есть только в сборках iOS≥37 /
-  // Android≥68 — на старых бинарниках кнопку не рендерим (OTA-краш-предохранитель).
-  const voiceReady = voiceFeature && voiceUsage?.configured === true && isVoiceNativeReady();
+  const voiceReady = voiceNativeReady && voiceUsage?.configured === true && (voiceUsage?.limitMinutes ?? 0) > 0;
 
   // ── Фискализация чека (онлайн-касса 54-ФЗ, АТОЛ) ──────────────────────
   // ADDITIVE, не блокирует экран. Никак НЕ касается оплаты/итогов/возврата
