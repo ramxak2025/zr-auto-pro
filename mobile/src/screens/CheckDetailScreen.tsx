@@ -20,7 +20,16 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
-import { checksApi, myCompanyApi, checkPhotosApi, returnsApi, knowledgeApi, fiscalApi } from '../api/services';
+import {
+  checksApi,
+  myCompanyApi,
+  checkPhotosApi,
+  returnsApi,
+  knowledgeApi,
+  fiscalApi,
+  subscriptionApi,
+  voiceApi,
+} from '../api/services';
 import { shareOrderPdf } from '../utils/orderPdf';
 import { resolveCheckDetailState } from './checkDetailViewState';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
@@ -45,7 +54,8 @@ import {
 } from '../theme';
 import { buildShadow } from '../platform/iosSurface';
 import { columnVisual, workStatusVisual } from '../constants/workStatus';
-import type { Check, Tenant, FiscalReceipt } from '../../../shared/types';
+import VoiceCommentSheet from '../components/VoiceCommentSheet';
+import type { Check, Tenant, FiscalReceipt, SubscriptionInfo, VoiceUsage } from '../../../shared/types';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -380,6 +390,25 @@ export default function CheckDetailScreen() {
     setCommentDraft(check?.comment ?? '');
     setCommentModalOpen(true);
   };
+
+  // ── Голосовой ввод для комментария «день в день» ──────────────────────────
+  // Тот же гейт, что в Кассе: voice_input в тарифе (или superadmin) И сервер
+  // настроен (VoiceUsage.configured). Микрофон живёт внутри comment-шита.
+  const [voiceSheetOpen, setVoiceSheetOpen] = useState(false);
+  const { data: voiceSub } = useQuery<SubscriptionInfo>({
+    queryKey: ['subscription'],
+    queryFn: async () => (await subscriptionApi.get()).data,
+    staleTime: 5 * 60 * 1000,
+  });
+  const voiceFeature =
+    user?.role === 'superadmin' || (Array.isArray(voiceSub?.features) && voiceSub.features.includes('voice_input'));
+  const { data: voiceUsage } = useQuery<VoiceUsage>({
+    queryKey: ['voice', 'usage'],
+    queryFn: async () => (await voiceApi.usage()).data,
+    enabled: voiceFeature,
+    staleTime: 5 * 60 * 1000,
+  });
+  const voiceReady = voiceFeature && voiceUsage?.configured === true;
 
   // ── Фискализация чека (онлайн-касса 54-ФЗ, АТОЛ) ──────────────────────
   // ADDITIVE, не блокирует экран. Никак НЕ касается оплаты/итогов/возврата
@@ -2090,6 +2119,20 @@ export default function CheckDetailScreen() {
         <Text style={[styles.commentSheetHint, { color: palette.text.tertiary }]}>
           Комментарий своего чека можно изменить только в день его создания
         </Text>
+        {voiceReady && (
+          <TouchableOpacity
+            onPress={() => {
+              haptic('tap');
+              setVoiceSheetOpen(true);
+            }}
+            style={[styles.voiceDictateBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            accessibilityRole="button"
+            accessibilityLabel="Голосовой ввод комментария"
+          >
+            <Ionicons name="mic" size={15} color={palette.accent.primary} />
+            <Text style={[styles.voiceDictateText, { color: palette.accent.primary }]}>Надиктовать голосом</Text>
+          </TouchableOpacity>
+        )}
         <TextInput
           value={commentDraft}
           onChangeText={setCommentDraft}
@@ -2132,6 +2175,18 @@ export default function CheckDetailScreen() {
           </TouchableOpacity>
         </View>
       </Modal>
+
+      {/* Голосовой ввод для того же комментария. Рендерится поверх comment-шита;
+          распознанный текст добавляется в конец черновика, дальше правится
+          руками. Условный рендер гарантирует освобождение микрофона. */}
+      {voiceSheetOpen && (
+        <VoiceCommentSheet
+          visible={voiceSheetOpen}
+          onClose={() => setVoiceSheetOpen(false)}
+          remainingSeconds={voiceUsage?.remainingSeconds}
+          onInsert={(text) => setCommentDraft((prev) => (prev.trim() ? `${prev.trimEnd()} ${text}` : text))}
+        />
+      )}
     </SafeAreaView>
   );
 }
@@ -2370,6 +2425,18 @@ const styles = StyleSheet.create({
   commentAddText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   // Sheet редактирования комментария (день в день)
   commentSheetHint: { fontSize: 12, lineHeight: 17, marginBottom: spacing[3] },
+  voiceDictateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2],
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    marginBottom: spacing[2.5],
+  },
+  voiceDictateText: { fontSize: 13, fontWeight: fontWeight.semibold },
   commentSheetInput: {
     borderWidth: 1,
     borderRadius: borderRadius.lg,

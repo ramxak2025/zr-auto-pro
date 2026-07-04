@@ -51,6 +51,7 @@ import {
   createFiscalApi,
   createTelephonyApi,
   createWalletApi,
+  createVoiceApi,
 } from '../../../shared/api/createServices';
 
 export const authApi = createAuthApi(api);
@@ -67,6 +68,11 @@ export const adminApi = createAdminApi(api);
 export const myCompanyApi = createMyCompanyApi(api);
 export const plansApi = createPlansApi(api);
 export const subscriptionApi = createSubscriptionApi(api);
+// Голосовой ввод комментария (backend voice/, migration 115). transcribe шлёт
+// multipart (raw LPCM 16k mono 16-bit + format=lpcm + sampleRateHertz=16000);
+// usage — остаток помесячного пакета минут. Гейт кнопки — voice_input в тарифе
+// (subscription.features) + VoiceUsage.configured. См. utils/voiceRecorder.ts.
+export const voiceApi = createVoiceApi(api);
 export const clientsApi = createClientsApi(api);
 export const carsApi = createCarsApi(api);
 export const productsApi = createProductsApi(api);

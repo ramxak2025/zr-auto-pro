@@ -25,6 +25,7 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Приложению нужен доступ к камере для фотографирования документов и автомобилей",
         "NSPhotoLibraryUsageDescription": "Приложению нужен доступ к галерее для выбора фотографий",
+        "NSMicrophoneUsageDescription": "Autexa использует микрофон для голосового ввода комментария к заказ-наряду",
         "ITSAppUsesNonExemptEncryption": false,
         "LSApplicationQueriesSchemes": ["tel", "telprompt"],
         "NSSupportsLiveActivities": true
@@ -53,7 +54,7 @@
         "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
         "android.permission.RECORD_AUDIO"
       ],
-      "blockedPermissions": ["android.permission.RECORD_AUDIO"],
+      "blockedPermissions": [],
       "splash": {
         "image": "./assets/splash-blank.png",
         "resizeMode": "cover",
