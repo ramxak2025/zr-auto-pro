@@ -55,11 +55,18 @@ const PROBE_DEBOUNCE_MS = 8_000;
 const RECHECK_INTERVAL_MS = 20_000;
 
 /**
- * Нейтральные endpoint'ы «интернет вообще есть?». Первым — Apple captive
- * probe (его дёргает каждый iPhone планеты — в РФ гарантированно не
- * фильтруется), gstatic — резерв. Достаточно ЛЮБОГО успеха.
+ * Нейтральные endpoint'ы «интернет вообще есть?». Достаточно ЛЮБОГО успеха.
+ * Первым — Яндекс: в регионах с «белыми списками» (Дагестан и т. п.)
+ * операторы в жёсткие окна режут ВСЁ иностранное — Apple/Google молчат, и
+ * баннер врал «нет соединения», хотя российский интернет работал. Российская
+ * проба обязана стоять в списке, иначе диагноз в этих окнах всегда ложный.
+ * Apple captive probe и gstatic — резервы (вне РФ и на «чистых» сетях).
  */
-const NEUTRAL_PROBE_URLS = ['https://captive.apple.com/hotspot-detect.html', 'https://www.gstatic.com/generate_204'];
+const NEUTRAL_PROBE_URLS = [
+  'https://ya.ru/robots.txt',
+  'https://captive.apple.com/hotspot-detect.html',
+  'https://www.gstatic.com/generate_204',
+];
 
 /** GET с таймаутом; никогда не бросает — только true/false. */
 async function probeUrl(url: string, timeoutMs: number, rejectHtml = false): Promise<boolean> {
