@@ -408,7 +408,7 @@ export default function VoiceCommentSheet({ visible, onClose, onInsert, remainin
           <>
             <Text style={[styles.statusText, { color: palette.text.primary }]}>Нажмите и продиктуйте</Text>
             <Text style={[styles.hintText, { color: palette.text.tertiary }]}>
-              Голосом — быстрее, чем печатать. Текст можно поправить.
+              Голосом — быстрее, чем печатать.{'\n'}Текст можно поправить.
             </Text>
           </>
         )}
