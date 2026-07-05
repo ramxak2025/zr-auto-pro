@@ -1,7 +1,15 @@
+import { MessageCircle, Send } from 'lucide-react';
 import Reveal from './Reveal';
 import CtaButton from './CtaButton';
+import { getTelegramUrl, getWhatsAppUrl } from '../config';
+
+const BIG_BTN =
+  'inline-flex min-h-[56px] w-full items-center justify-center gap-2.5 rounded-2xl px-8 text-base font-semibold text-white transition-colors sm:w-auto sm:text-lg';
 
 export default function CtaSection() {
+  const whatsapp = getWhatsAppUrl();
+  const telegram = getTelegramUrl();
+
   return (
     <section>
       <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-24">
@@ -17,9 +25,37 @@ export default function CtaSection() {
               <p className="mx-auto mt-4 max-w-md text-lg text-white/60">
                 Первые возможности — бесплатно: касса, склад и журнал доступны сразу.
               </p>
-              <div className="mt-8">
-                <CtaButton />
-              </div>
+              {whatsapp || telegram ? (
+                <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
+                  {whatsapp && (
+                    <a
+                      href={whatsapp}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${BIG_BTN} bg-green-500 shadow-lg shadow-green-500/25 hover:bg-green-400 active:bg-green-600`}
+                    >
+                      <MessageCircle className="h-5 w-5" />
+                      Написать в WhatsApp
+                    </a>
+                  )}
+                  {telegram && (
+                    <a
+                      href={telegram}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`${BIG_BTN} bg-sky-500 shadow-lg shadow-sky-500/25 hover:bg-sky-400 active:bg-sky-600`}
+                    >
+                      <Send className="h-5 w-5" />
+                      Написать в Telegram
+                    </a>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-8">
+                  <CtaButton />
+                </div>
+              )}
+              <p className="mt-4 text-sm text-white/40">Отвечаем быстро — поможем подключиться за несколько минут.</p>
             </div>
           </div>
         </Reveal>

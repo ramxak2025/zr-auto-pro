@@ -25,6 +25,11 @@
     overflow-x: hidden;
     position: relative;
     width: 100%;
+    /* viewport-fit=cover (index.html) растягивает вьюпорт под вырез в
+       ландшафте на iPhone — не даём контенту заходить под него.
+       В портрете и на устройствах без выреза оба значения = 0. */
+    padding-left: env(safe-area-inset-left, 0px);
+    padding-right: env(safe-area-inset-right, 0px);
   }
 
   /* <main> is the sole scroll container — clip horizontal overflow */

@@ -81,7 +81,7 @@ export default function Hero() {
         <Reveal>
           <div className="text-center lg:text-left">
             <span className="inline-flex items-center gap-2 rounded-full border border-white/10 bg-white/[0.04] px-4 py-1.5 text-xs font-medium text-white/60">
-              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              <img src="/logo-icon.png" alt="" width={16} height={16} decoding="async" className="h-4 w-4 rounded" />
               Для автосервисов России
             </span>
 

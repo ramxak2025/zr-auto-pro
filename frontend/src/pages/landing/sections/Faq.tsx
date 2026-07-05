@@ -1,7 +1,14 @@
+import { ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import Reveal from './Reveal';
+import { getTelegramUrl, getWhatsAppUrl, WHATSAPP_INSTALL_MESSAGE } from '../config';
 
-const QA = [
+const LINK_CLS = 'font-medium text-primary-400 transition-colors hover:text-primary-300';
+
+const WA_INSTALL_URL = getWhatsAppUrl(WHATSAPP_INSTALL_MESSAGE);
+const TG_URL = getTelegramUrl();
+
+const QA: { q: string; a: ReactNode }[] = [
   {
     q: 'Сколько это стоит?',
     a: 'Тарифы подбираются под размер сервиса — от одиночного бокса до сети. Старт бесплатный: первые возможности доступны без оплаты.',
@@ -17,6 +24,31 @@ const QA = [
   {
     q: 'Сложно ли обучить мастеров?',
     a: 'Нет. Интерфейс как у обычного мобильного приложения, а комментарий к заказ-наряду можно просто надиктовать голосом.',
+  },
+  {
+    q: 'Где скачать приложение?',
+    a: (
+      <>
+        Публикация в App Store и Google Play уже в процессе. Сейчас приложение устанавливается через поддержку —
+        напишите в{' '}
+        {WA_INSTALL_URL ? (
+          <a href={WA_INSTALL_URL} target="_blank" rel="noopener noreferrer" className={LINK_CLS}>
+            WhatsApp
+          </a>
+        ) : (
+          'WhatsApp'
+        )}{' '}
+        или{' '}
+        {TG_URL ? (
+          <a href={TG_URL} target="_blank" rel="noopener noreferrer" className={LINK_CLS}>
+            Telegram
+          </a>
+        ) : (
+          'Telegram'
+        )}
+        , поможем за несколько минут. Веб-версия работает в браузере без установки.
+      </>
+    ),
   },
   {
     q: 'Есть ли веб-версия?',

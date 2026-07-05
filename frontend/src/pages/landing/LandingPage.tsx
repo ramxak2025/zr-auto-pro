@@ -7,6 +7,7 @@ import Platforms from './sections/Platforms';
 import CtaSection from './sections/CtaSection';
 import Faq from './sections/Faq';
 import Footer from './sections/Footer';
+import GlassTabBar from './sections/GlassTabBar';
 
 /**
  * Публичный лендинг на корне autexa.pw для неавторизованных.
@@ -31,7 +32,10 @@ export default function LandingPage() {
   }, []);
 
   return (
-    <div id="top" className="min-h-screen bg-[#0A0A0B] text-white antialiased selection:bg-primary-500/30">
+    <div
+      id="top"
+      className="min-h-screen bg-[#0A0A0B] pb-28 text-white antialiased selection:bg-primary-500/30 md:pb-0"
+    >
       <Header />
       <Hero />
       <Features />
@@ -40,6 +44,8 @@ export default function LandingPage() {
       <CtaSection />
       <Faq />
       <Footer />
+      {/* Liquid-glass нижнее меню — только мобилка; pb-28 выше даёт футеру место под баром */}
+      <GlassTabBar />
     </div>
   );
 }

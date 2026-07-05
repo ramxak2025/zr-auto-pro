@@ -10,8 +10,20 @@ export default function Header() {
   return (
     <header className="sticky top-0 z-50 border-b border-white/[0.06] bg-[#0A0A0B]/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
-        <a href="#top" className="flex min-h-[44px] items-center text-lg font-bold tracking-tight text-white">
-          Autexa<span className="text-primary-500">.</span>
+        <a href="#top" className="flex min-h-[44px] items-center gap-2.5 text-lg font-bold tracking-tight text-white">
+          {/* logo.png (wordmark) на тёмном фоне нечитаем (тёмно-синие буквы) — берём иконку + белый текст */}
+          <img
+            src="/logo-icon.png"
+            alt="Autexa"
+            width={30}
+            height={30}
+            loading="eager"
+            decoding="async"
+            className="h-[30px] w-[30px] rounded-lg"
+          />
+          <span aria-hidden>
+            Autexa<span className="text-primary-500">.</span>
+          </span>
         </a>
 
         {/* Якоря — только на desktop */}

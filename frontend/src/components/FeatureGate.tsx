@@ -7,6 +7,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../types';
 import type { SubscriptionInfo, Plan } from '../types';
 import { featureLabel } from '../../../shared/constants/features';
+import { getWhatsAppChatUrl } from '../config/contacts';
 
 interface FeatureGateProps {
   featureKey: string;
@@ -15,8 +16,6 @@ interface FeatureGateProps {
   benefits: string[];
   children: ReactNode;
 }
-
-const WHATSAPP_PHONE = '79884444436';
 
 /**
  * Resolve the cheapest ACTIVE plan whose feature set includes `featureKey`.
@@ -70,8 +69,7 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
 
   const openWhatsApp = (planName?: string) => {
     const what = planName ? `тариф «${planName}» (функция «${title}»)` : `функцию «${title}»`;
-    const msg = encodeURIComponent(`Здравствуйте! Хочу подключить ${what}.`);
-    window.open(`https://wa.me/${WHATSAPP_PHONE}?text=${msg}`, '_blank');
+    window.open(getWhatsAppChatUrl(`Здравствуйте! Хочу подключить ${what}.`), '_blank');
   };
 
   const unlockingPlan = findUnlockingPlan(sub.plans, featureKey);

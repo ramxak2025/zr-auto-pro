@@ -9,8 +9,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 // Feature rows bucketed by `group` (core / section / integration) so each plan
 // card lists the 23 keys under section headings. Wraps the shared registry.
 import { FEATURE_GROUPS } from '../utils/featureGroups';
-
-const WHATSAPP_PHONE = '79884444436';
+import { getWhatsAppChatUrl } from '../config/contacts';
 
 export default function TariffPage() {
   const { data: sub, isLoading } = useQuery({
@@ -24,7 +23,7 @@ export default function TariffPage() {
   const subscriptionEnd = sub?.subscriptionEnd ? parseISO(sub.subscriptionEnd) : null;
   const isExpired = subscriptionEnd ? isPast(subscriptionEnd) : false;
 
-  const whatsappUrl = `https://wa.me/${WHATSAPP_PHONE}?text=${encodeURIComponent('Здравствуйте! Хочу оплатить подписку.')}`;
+  const whatsappUrl = getWhatsAppChatUrl('Здравствуйте! Хочу оплатить подписку.');
 
   return (
     <div>
