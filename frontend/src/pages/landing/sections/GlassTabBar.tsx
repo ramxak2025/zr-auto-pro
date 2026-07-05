@@ -136,7 +136,7 @@ export default function GlassTabBar() {
       style={{ bottom: 'max(16px, env(safe-area-inset-bottom))' }}
       aria-label="Разделы лендинга"
     >
-      <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-white/15 bg-white/10 p-1.5 shadow-xl shadow-black/40 backdrop-blur-2xl backdrop-saturate-150">
+      <div className="pointer-events-auto flex items-center gap-0.5 rounded-full border border-slate-200/70 bg-white/70 p-1.5 shadow-xl shadow-slate-900/10 backdrop-blur-2xl backdrop-saturate-150">
         {TABS.map((tab) => {
           const isActive = active === tab.id;
           return (
@@ -151,17 +151,17 @@ export default function GlassTabBar() {
                 <motion.span
                   layoutId="landing-glass-tab-drop"
                   aria-hidden
-                  className="absolute inset-0 rounded-full bg-white/[0.14] ring-1 ring-white/10"
+                  className="absolute inset-0 rounded-full bg-primary-100 ring-1 ring-primary-200/60"
                   transition={
                     reduceMotion || !dropArmed ? { duration: 0 } : { type: 'spring', stiffness: 350, damping: 32 }
                   }
                 />
               )}
               <tab.icon
-                className={`relative h-[18px] w-[18px] transition-colors duration-200 ${isActive ? 'text-white' : 'text-white/55'}`}
+                className={`relative h-[18px] w-[18px] transition-colors duration-200 ${isActive ? 'text-primary-700' : 'text-slate-500'}`}
               />
               <span
-                className={`relative mt-0.5 text-[10px] font-medium leading-tight transition-colors duration-200 ${isActive ? 'text-white' : 'text-white/55'}`}
+                className={`relative mt-0.5 text-[10px] font-medium leading-tight transition-colors duration-200 ${isActive ? 'text-primary-700' : 'text-slate-500'}`}
               >
                 {tab.label}
               </span>

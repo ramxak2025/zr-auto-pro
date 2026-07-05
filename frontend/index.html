@@ -7,6 +7,9 @@
          env(safe-area-inset-*) всегда 0 — GlassTabBar, Modal и InstallPrompt
          прижимались бы в зону home indicator. -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- Базовый цвет хрома — синий приложения (совпадает с manifest.json).
+         Лендинг и /f/:slug ставят себе светлый #FAFAFA в useEffect и
+         восстанавливают этот при уходе. -->
     <meta name="theme-color" content="#2563eb" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />

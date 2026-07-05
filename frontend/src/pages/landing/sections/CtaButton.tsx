@@ -50,7 +50,7 @@ export default function CtaButton({ className = '' }: { className?: string }) {
           rel="noopener noreferrer"
           aria-label="Написать в Telegram"
           title="Написать в Telegram"
-          className="inline-flex min-h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border border-white/10 text-sky-400 transition-colors hover:border-sky-400/40 hover:text-sky-300"
+          className="inline-flex min-h-[52px] w-[52px] shrink-0 items-center justify-center rounded-2xl border border-slate-200 bg-white text-sky-500 shadow-sm transition-colors hover:border-sky-300 hover:text-sky-600"
         >
           <Send className="h-5 w-5" />
         </a>

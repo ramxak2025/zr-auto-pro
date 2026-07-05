@@ -48,6 +48,7 @@ function lazyWithRetry<T extends ComponentType<any>>(
 // lazyWithRetry adds retry logic to handle stale-cache chunk load failures.
 
 const LandingPage = lazyWithRetry(() => import('./pages/landing/LandingPage'));
+const FeatureDetailPage = lazyWithRetry(() => import('./pages/landing/FeatureDetailPage'));
 const LoginPage = lazyWithRetry(() => import('./pages/LoginPage'));
 const SubscriptionBlockedPage = lazyWithRetry(() => import('./pages/SubscriptionBlockedPage'));
 const DashboardPage = lazyWithRetry(() => import('./pages/DashboardPage'));
@@ -215,6 +216,10 @@ export default function App() {
               )
             }
           />
+
+          {/* Public: страницы-разделы лендинга /f/:slug. Доступны всем — залогиненных
+              НЕ редиректим: пусть изучают возможности из-под своего аккаунта. */}
+          <Route path="/f/:slug" element={<FeatureDetailPage />} />
 
           {/* Public: Login */}
           <Route
