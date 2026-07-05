@@ -375,7 +375,11 @@ export default function VoiceCommentSheet({ visible, onClose, onInsert, remainin
               end={{ x: 1, y: 1 }}
               style={styles.micGradient}
             >
-              <Ionicons name={isRecording ? 'stop' : 'mic'} size={38} color={colors.white} />
+              {isRecording ? (
+                <View style={styles.stopSquare} />
+              ) : (
+                <Ionicons name="mic" size={38} color={colors.white} />
+              )}
             </LinearGradient>
           </PressableScale>
         </View>
@@ -478,7 +482,19 @@ const styles = StyleSheet.create({
       android: { elevation: 8 },
     }),
   },
-  timer: { fontSize: 36, fontWeight: '700', letterSpacing: 1, fontVariant: ['tabular-nums'] },
+  timer: {
+    fontSize: 36,
+    // Явная высота строки: без неё глиф-бокс 36pt обрезался сверху на части
+    // устройств (скрин владельца 05.07 — «0:01» без верхней половины).
+    lineHeight: 44,
+    includeFontPadding: false,
+    fontWeight: '700',
+    letterSpacing: 1,
+    fontVariant: ['tabular-nums'],
+  },
+  // Однозначная иконка «стоп» — белый скруглённый квадрат (глиф 'stop' на
+  // градиенте читался как «ноль», скрин владельца 05.07).
+  stopSquare: { width: 30, height: 30, borderRadius: 8, backgroundColor: colors.white },
   bars: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], height: 56 },
   bar: { width: 5, borderRadius: 3, minHeight: 8 },
   statusText: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, textAlign: 'center' },
