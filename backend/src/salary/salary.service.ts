@@ -641,6 +641,9 @@ export class SalaryService {
     // Product salary + cash/card/warranty + check counts stay attributed to the
     // check creator (master_id = $1). Service salary is summed separately by the
     // line executor (#56) below, then folded into today/week/month/total.
+    // Рассрочка ('installment') участвует в нал/карта: первый взнос лежит в
+    // cash_amount/card_amount (мобилка кладёт весь взнос в наличные, web может
+    // разбить нал+карта) — иначе касса мастера теряла принятые живые деньги.
     const { rows: prodRows } = await this.pool.query(
       `SELECT
          COALESCE(SUM(CASE WHEN date >= $2 THEN COALESCE(product_salary_total, 0) END), 0) as today_product,
@@ -649,8 +652,8 @@ export class SalaryService {
          COALESCE(SUM(COALESCE(product_salary_total, 0)), 0) as total_product,
          COUNT(CASE WHEN date >= $2 THEN 1 END) as today_checks,
          COUNT(CASE WHEN date >= $4 THEN 1 END) as month_checks,
-         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IN ('cash','cash_card') THEN cash_amount END), 0) as today_cash,
-         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IN ('card','cash_card') THEN card_amount END), 0) as today_card,
+         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IN ('cash','cash_card','installment') THEN cash_amount END), 0) as today_cash,
+         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IN ('card','cash_card','installment') THEN card_amount END), 0) as today_card,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method = 'warranty' THEN total_revenue END), 0) as today_warranty
        FROM checks
        WHERE master_id = $1 AND is_deferred = false AND tenant_id = $5 AND deleted_at IS NULL`,

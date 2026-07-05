@@ -2310,7 +2310,20 @@ export interface DashboardV2 {
   checksToday: number;
   netProfitToday: number;
   netProfitMonth: number;
-  cashPosition: { cash: number; card: number; warranty: number; total: number };
+  /**
+   * total = cash + card + warranty (как раньше). installmentDebt — долг по
+   * сегодняшним чекам в рассрочку; installmentPaid — сегодняшние погашения
+   * рассрочки (по дате платежа, деньги за прошлые продажи). Оба опциональны —
+   * старый бэкенд их не шлёт, клиенты показывают строки только по числу.
+   */
+  cashPosition: {
+    cash: number;
+    card: number;
+    warranty: number;
+    total: number;
+    installmentDebt?: number;
+    installmentPaid?: number;
+  };
   marginPct: number;
   marginPctChange: number;
   marginSpark: number[];

@@ -237,7 +237,10 @@ export class ReportsService {
     const masterId = typeof rawMaster === 'string' && UUID_RE.test(rawMaster) ? rawMaster : null;
     const masterInvalid = !!rawMaster && masterId === null;
     if (masterInvalid) {
-      return { days: [], totals: { cash: 0, card: 0, warranty: 0, total: 0 } };
+      return {
+        days: [],
+        totals: { cash: 0, card: 0, warranty: 0, total: 0, installmentDebt: 0, installmentPaid: 0 },
+      };
     }
 
     const params: any[] = [tenantID, dateFrom, dateTo];
@@ -247,11 +250,17 @@ export class ReportsService {
       masterFilter = ` AND master_id = $${params.length}`;
     }
 
+    // Разбивка оборота на 4 корзины: наличные + карта + гарантия + долг по
+    // рассрочке. Чек в рассрочку пишет total_revenue полностью (начисление), а
+    // в cash_amount/card_amount — только первый взнос; остаток долга раньше не
+    // попадал ни в одну корзину и «оборот ≠ нал+карта+гарантия» не сходился.
+    // Тождество: cash + card + warranty + installmentDebt = total.
     const { rows } = await this.pool.query(
       `SELECT date::date as day,
               COALESCE(SUM(cash_amount), 0) as cash,
               COALESCE(SUM(card_amount), 0) as card,
               COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN total_revenue ELSE 0 END), 0) as warranty,
+              COALESCE(SUM(CASE WHEN payment_method = 'installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) ELSE 0 END), 0) as installment_debt,
               COALESCE(SUM(total_revenue), 0) as total
        FROM checks
        WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false
@@ -261,19 +270,78 @@ export class ReportsService {
       params,
     );
 
+    // Погашения рассрочки за период — по ДАТЕ ПЛАТЕЖА (installment_payments,
+    // 093). Информационное поле: это деньги за ПРОШЛЫЕ продажи, в оборот
+    // (total, по начислению) они НЕ входят. Фильтр по мастеру — через чек,
+    // из которого родился план (check_id может быть NULL после удаления чека —
+    // такие платежи при фильтре по мастеру не атрибутируются никому).
+    // ch.deleted_at IS NULL — симметрия с корзиной installmentDebt (основная
+    // выборка выше считает только неудалённые чеки): погашение не должно
+    // атрибутироваться мастеру, если долга-источника в этом же отчёте нет.
+    // На практике чек с планом в корзину не попадает (softDelete отказывает),
+    // так что это страховка на будущее, а не изменение цифр.
+    let paidMasterFilter = '';
+    if (masterId) {
+      // masterId уже лежит в params под тем же индексом, что и в masterFilter.
+      paidMasterFilter = ` AND ch.master_id = $${params.length}`;
+    }
+    const { rows: paidRows } = await this.pool.query(
+      `SELECT p.paid_at::date as day,
+              COALESCE(SUM(p.amount), 0) as paid
+       FROM installment_payments p
+       JOIN installment_plans pl ON pl.id = p.plan_id AND pl.tenant_id = $1
+       ${masterId ? 'JOIN checks ch ON ch.id = pl.check_id AND ch.deleted_at IS NULL' : ''}
+       WHERE p.tenant_id = $1 AND p.paid_at >= $2 AND p.paid_at < ($3::date + 1)::timestamptz${paidMasterFilter}
+       GROUP BY p.paid_at::date
+       ORDER BY day`,
+      params,
+    );
+
+    const dayKey = (d: any): string => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
+
     const days = rows.map((r) => ({
       date: r.day,
       cash: parseFloat(r.cash) || 0,
       card: parseFloat(r.card) || 0,
       warranty: parseFloat(r.warranty) || 0,
+      installmentDebt: parseFloat(r.installment_debt) || 0,
+      installmentPaid: 0,
       total: parseFloat(r.total) || 0,
     }));
 
-    const totals = { cash: 0, card: 0, warranty: 0, total: 0 };
+    // Вливаем погашения в дни: совпавший день дополняем, день без чеков (было
+    // только погашение) добавляем нулевой строкой, затем восстанавливаем
+    // хронологию.
+    const byKey = new Map(days.map((d) => [dayKey(d.date), d]));
+    for (const r of paidRows) {
+      const key = dayKey(r.day);
+      const existing = byKey.get(key);
+      const paid = parseFloat(r.paid) || 0;
+      if (existing) {
+        existing.installmentPaid += paid;
+      } else {
+        const row = {
+          date: r.day,
+          cash: 0,
+          card: 0,
+          warranty: 0,
+          installmentDebt: 0,
+          installmentPaid: paid,
+          total: 0,
+        };
+        byKey.set(key, row);
+        days.push(row);
+      }
+    }
+    days.sort((a, b) => dayKey(a.date).localeCompare(dayKey(b.date)));
+
+    const totals = { cash: 0, card: 0, warranty: 0, total: 0, installmentDebt: 0, installmentPaid: 0 };
     for (const d of days) {
       totals.cash += d.cash;
       totals.card += d.card;
       totals.warranty += d.warranty;
+      totals.installmentDebt += d.installmentDebt;
+      totals.installmentPaid += d.installmentPaid;
       totals.total += d.total;
     }
 
@@ -308,7 +376,8 @@ export class ReportsService {
          COALESCE(SUM(CASE WHEN date >= $3 THEN profit END), 0) AS profit_month,
          COALESCE(SUM(CASE WHEN date >= $2 THEN cash_amount END), 0) AS cash_today,
          COALESCE(SUM(CASE WHEN date >= $2 THEN card_amount END), 0) AS card_today,
-         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN total_revenue END), 0) AS warranty_today
+         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN total_revenue END), 0) AS warranty_today,
+         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) END), 0) AS installment_debt_today
        FROM checks
        WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL`,
       [tenantID, todayStart, monthStart],
@@ -345,6 +414,7 @@ export class ReportsService {
     const cashToday = parseFloat(base.cash_today) || 0;
     const cardToday = parseFloat(base.card_today) || 0;
     const warrantyToday = parseFloat(base.warranty_today) || 0;
+    const installmentDebtToday = parseFloat(base.installment_debt_today) || 0;
 
     const netProfitToday = profitToday - expToday;
     const netProfitMonth = profitMonth - expMonth;
@@ -391,13 +461,28 @@ export class ReportsService {
     );
     const marginSpark = sparkRows.map((r) => (parseFloat(r.profit) || 0) - (parseFloat(r.expense) || 0));
 
+    // Погашения рассрочки за сегодня — по дате платежа (installment_payments,
+    // 093). Информационно: деньги за прошлые продажи, в revenueToday не входят.
+    const { rows: instPaidRows } = await this.pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS paid
+         FROM installment_payments
+        WHERE tenant_id=$1 AND paid_at >= $2`,
+      [tenantID, todayStart],
+    );
+    const installmentPaidToday = parseFloat(instPaidRows[0]?.paid) || 0;
+
     // Cash position: simple — cumulative cash + card on paid checks.
     // We use today's amount; richer interpretation can be wired later.
+    // `total` намеренно остаётся cash+card+warranty (реально принятые сегодня
+    // деньги + гарантия); installmentDebt/installmentPaid — отдельные строки,
+    // клиенты показывают их сами, когда поле пришло числом.
     const cashPosition = {
       cash: cashToday,
       card: cardToday,
       warranty: warrantyToday,
       total: cashToday + cardToday + warrantyToday,
+      installmentDebt: installmentDebtToday,
+      installmentPaid: installmentPaidToday,
     };
 
     // Deferred sum: open drafts (is_deferred=true) totals.

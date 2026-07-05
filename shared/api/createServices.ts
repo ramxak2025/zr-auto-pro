@@ -779,8 +779,28 @@ export function createReportsApi(api: HttpClient) {
     getFinancial: (params: DateRangeParams) => api.get<FinancialReport>('/reports/financial', { params }),
     getCashFlow: (params: CashFlowParams) =>
       api.get<{
-        days: Array<{ date: string; cash: number; card: number; warranty: number; total: number }>;
-        totals: { cash: number; card: number; warranty: number; total: number };
+        // installmentDebt — долг по чекам в рассрочку за день (входит в total:
+        // cash + card + warranty + installmentDebt = total). installmentPaid —
+        // погашения рассрочки по дате платежа, в total НЕ входят (деньги за
+        // прошлые продажи). Оба поля опциональны — старый бэкенд их не шлёт,
+        // клиенты рендерят строки только когда поле пришло числом.
+        days: Array<{
+          date: string;
+          cash: number;
+          card: number;
+          warranty: number;
+          total: number;
+          installmentDebt?: number;
+          installmentPaid?: number;
+        }>;
+        totals: {
+          cash: number;
+          card: number;
+          warranty: number;
+          total: number;
+          installmentDebt?: number;
+          installmentPaid?: number;
+        };
       }>('/reports/cashflow', { params }),
     /**
      * Defect + writeoff aggregates for the period. Owners use this to see

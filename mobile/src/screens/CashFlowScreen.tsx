@@ -803,6 +803,53 @@ export default function CashFlowScreen() {
                   total={totals.total}
                   palette={palette}
                 />
+                {/* 4-я корзина: непогашенный долг по чекам в рассрочку. Вместе
+                    с нал/картой/гарантией сходится к обороту копейка в копейку
+                    (поле опциональное — старый бэк его не шлёт, строку прячем). */}
+                {typeof totals.installmentDebt === 'number' && totals.installmentDebt > 0 && (
+                  <>
+                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
+                    <ChannelRow
+                      iconName="time-outline"
+                      iconBg={colors.purple[50]}
+                      iconColor={colors.purple[600]}
+                      label="Рассрочка (долг)"
+                      amount={totals.installmentDebt}
+                      total={totals.total}
+                      palette={palette}
+                    />
+                  </>
+                )}
+                {/* Информационная строка: погашения рассрочки за период по дате
+                    платежа. Это деньги за ПРОШЛЫЕ продажи — в оборот (Итого) не
+                    входят, поэтому без «% от итого» и с плюсом. */}
+                {typeof totals.installmentPaid === 'number' && totals.installmentPaid > 0 && (
+                  <>
+                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
+                    <View style={styles.channelRow}>
+                      <View
+                        style={[
+                          styles.channelIcon,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark' ? softTint(colors.teal[600], 'dark') : colors.teal[50],
+                          },
+                        ]}
+                      >
+                        <Ionicons name="checkmark-done-outline" size={16} color={colors.teal[600]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>Погашения рассрочки</Text>
+                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
+                          Деньги за прошлые продажи — в оборот не входят
+                        </Text>
+                      </View>
+                      <Text style={[styles.channelAmount, { color: colors.teal[600] }]}>
+                        +{formatMoney(totals.installmentPaid)}
+                      </Text>
+                    </View>
+                  </>
+                )}
               </View>
             </AnimatedCard>
 
@@ -868,6 +915,25 @@ export default function CashFlowScreen() {
                           <View style={[styles.dayDot, { backgroundColor: colors.yellow[500] }]} />
                           <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
                             Гарант: {formatMoney(day.warranty)}
+                          </Text>
+                        </View>
+                      )}
+                      {typeof day.installmentDebt === 'number' && day.installmentDebt > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.purple[600] }]} />
+                          <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                            Рассрочка: {formatMoney(day.installmentDebt)}
+                          </Text>
+                        </View>
+                      )}
+                      {/* Погашение по дате платежа — без него день, где было
+                          только погашение (бэк добавляет его нулевой строкой),
+                          выглядел бы пустой карточкой с «0 ₽». */}
+                      {typeof day.installmentPaid === 'number' && day.installmentPaid > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.teal[600] }]} />
+                          <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                            Погашение: +{formatMoney(day.installmentPaid)}
                           </Text>
                         </View>
                       )}
@@ -1072,16 +1138,31 @@ function CheckRow({
 }) {
   const masterName: string = check?.master?.fullName || '—';
   const carPlate: string | undefined = check?.car?.plateNumber;
+  // Щит — ТОЛЬКО гарантия. Раньше он был fallback'ом и доставался также
+  // cash_card и рассрочке, что путало владельца при сверке кассы.
+  const method: string | undefined = check?.paymentMethod;
   const channelIcon: keyof typeof Ionicons.glyphMap =
-    check?.paymentMethod === 'cash'
+    method === 'cash'
       ? 'cash-outline'
-      : check?.paymentMethod === 'card'
+      : method === 'card'
         ? 'card-outline'
-        : 'shield-checkmark-outline';
+        : method === 'installment'
+          ? 'time-outline' // рассрочка: «оплата растянута во времени»
+          : method === 'warranty'
+            ? 'shield-checkmark-outline'
+            : 'receipt-outline';
   return (
     <TouchableOpacity activeOpacity={0.7} onPress={onPress} style={styles.checkRow}>
       <View style={[styles.checkIcon, { backgroundColor: palette.bg.muted }]}>
-        <Ionicons name={channelIcon} size={14} color={palette.text.secondary} />
+        {method === 'cash_card' ? (
+          // Смешанная оплата: банкнота + карта в одном бейдже.
+          <View style={styles.checkIconPair}>
+            <Ionicons name="cash-outline" size={11} color={palette.text.secondary} />
+            <Ionicons name="card-outline" size={11} color={palette.text.secondary} />
+          </View>
+        ) : (
+          <Ionicons name={channelIcon} size={14} color={palette.text.secondary} />
+        )}
       </View>
       <View style={{ flex: 1 }}>
         <Text style={[styles.checkPrimary, { color: palette.text.primary }]} numberOfLines={1}>
@@ -1379,6 +1460,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // cash_card: два мини-глифа (банкнота+карта) в одном 28px-бейдже.
+  checkIconPair: { flexDirection: 'row', alignItems: 'center', gap: 1 },
   checkPrimary: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
   checkSecondary: { fontSize: 11, color: colors.gray[500], marginTop: 1 },
   checkAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.gray[900] },

@@ -99,6 +99,24 @@ export class ReturnsService {
         throw new BadRequestException({ message: 'Заказ-наряд уже возвращён' });
       }
 
+      // Чек, проданный в рассрочку, возвращать нельзя, пока у него есть план:
+      // реверс денег ниже занулил бы оборот/ноги (корзина «Рассрочка (долг)»
+      // в отчётах упала бы до нуля), а installment_plans остался бы open с
+      // remaining>0 — экран «Рассрочка» продолжил бы требовать долг за
+      // возвращённую продажу, слал напоминания, а будущие платежи по нему
+      // честно падали бы в installmentPaid. Два источника долга (чеки vs
+      // планы) разошлись бы навсегда. Зеркально отказам editClosedCheck /
+      // softDelete: сначала закрыть/изменить рассрочку, затем возврат.
+      const { rows: planRows } = await client.query(
+        `SELECT 1 FROM installment_plans WHERE tenant_id = $1 AND check_id = $2 LIMIT 1`,
+        [tenantID, checkId],
+      );
+      if (planRows.length > 0) {
+        throw new BadRequestException({
+          message: 'Заказ-наряд продан в рассрочку — сначала закройте или измените рассрочку, затем оформляйте возврат',
+        });
+      }
+
       const totalRevenue = parseFloat(checkRows[0].total_revenue) || 0;
       const requestedRefund =
         dto.refundAmount !== undefined && dto.refundAmount !== null

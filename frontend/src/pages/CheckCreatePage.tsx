@@ -402,6 +402,11 @@ export default function CheckCreatePage() {
   const { user, isRole, hasPermission } = useAuth();
   const canEditDate = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
   const canSellInstallment = hasPermission('sell_installment');
+  // Рассрочка — только на НОВОМ чеке (parity с mobile: canOfferInstallment).
+  // План создаётся сервером в create(); правка чека план создать не умеет,
+  // бэк смену способа на 'installment' отклоняет — иначе остаток чека навсегда
+  // повис бы в корзине «Рассрочка (долг)» без возможности погашения.
+  const canOfferInstallment = canSellInstallment && !isEditMode;
 
   // Plate number search state
   const [plateSearch, setPlateSearch] = useState('');
@@ -918,12 +923,17 @@ export default function CheckCreatePage() {
     } else if (paymentMethod === 'card') {
       finalCard = totalRevenue;
     } else if (paymentMethod === 'cash_card') {
-      finalCash = cashAmount;
-      finalCard = Math.max(totalRevenue - cashAmount, 0);
+      // Кламп к «К оплате» (parity с mobile): атрибут max у input не блокирует
+      // ручной ввод/вставку — без клампа «наличными 100 000» при чеке 30 000
+      // дал бы ноги > оборота, и разбивка «Движения денег» превышала бы оборот.
+      finalCash = Math.min(cashAmount, totalRevenue);
+      finalCard = Math.max(totalRevenue - finalCash, 0);
     } else if (paymentMethod === 'installment') {
       // Первый взнос (down payment) — наличными + картой; остаток уйдёт в план.
-      finalCash = installmentCash;
-      finalCard = installmentCard;
+      // Кламп: взнос не может превышать сумму чека — иначе ноги чека разойдутся
+      // с down_payment плана (сервер клампит план, ноги должны совпадать).
+      finalCash = Math.min(installmentCash, totalRevenue);
+      finalCard = Math.min(installmentCard, Math.max(totalRevenue - finalCash, 0));
     }
 
     const isInstallment = paymentMethod === 'installment';
@@ -1475,7 +1485,7 @@ export default function CheckCreatePage() {
                 {'\u041E\u043F\u043B\u0430\u0442\u0430'}
               </h3>
 
-              <div className={`grid ${canSellInstallment ? 'grid-cols-5' : 'grid-cols-4'} gap-2 mb-4`}>
+              <div className={`grid ${canOfferInstallment ? 'grid-cols-5' : 'grid-cols-4'} gap-2 mb-4`}>
                 <button
                   type="button"
                   onClick={() => setPaymentMethod('cash')}
@@ -1524,7 +1534,7 @@ export default function CheckCreatePage() {
                   <Receipt className="w-5 h-5" />
                   <span className="text-[10px] font-semibold">{'\u0413\u0430\u0440.'}</span>
                 </button>
-                {canSellInstallment && (
+                {canOfferInstallment && (
                   <button
                     type="button"
                     onClick={() => setPaymentMethod('installment')}

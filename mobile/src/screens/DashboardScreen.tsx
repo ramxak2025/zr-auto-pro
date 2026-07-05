@@ -1579,9 +1579,15 @@ function CashPositionCard() {
   const card = data?.cashPosition?.card ?? 0;
   const warranty = data?.cashPosition?.warranty ?? 0;
   const total = data?.cashPosition?.total ?? 0;
+  // Рассрочка: долг по сегодняшним чекам и погашения за сегодня (по дате
+  // платежа). Поля опциональные — старый бэк их не шлёт, строки прячем.
+  // «Всего на руках» их НЕ включает: долг — ещё не деньги, погашения — деньги
+  // за прошлые продажи.
+  const installmentDebt = data?.cashPosition?.installmentDebt;
+  const installmentPaid = data?.cashPosition?.installmentPaid;
 
   const rows: {
-    key: 'cash' | 'card' | 'warranty';
+    key: 'cash' | 'card' | 'warranty' | 'installmentDebt';
     label: string;
     value: number;
     icon: keyof typeof Ionicons.glyphMap;
@@ -1613,6 +1619,16 @@ function CashPositionCard() {
       bg: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
     },
   ];
+  if (typeof installmentDebt === 'number' && installmentDebt > 0) {
+    rows.push({
+      key: 'installmentDebt',
+      label: 'Рассрочка (долг)',
+      value: installmentDebt,
+      icon: 'time-outline',
+      color: colors.purple[600],
+      bg: palette.mode === 'dark' ? softTint(colors.purple[600], 'dark') : colors.purple[50],
+    });
+  }
 
   return (
     <AnimatedCard
@@ -1655,6 +1671,27 @@ function CashPositionCard() {
             <Text style={[styles.cashRowValue, { color: palette.text.primary }]}>{formatMoney(r.value)}</Text>
           </View>
         ))}
+        {typeof installmentPaid === 'number' && installmentPaid > 0 && (
+          <View style={styles.cashRowItem}>
+            <View
+              style={[
+                styles.cashRowIcon,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.teal[600], 'dark') : colors.teal[50] },
+              ]}
+            >
+              <Ionicons name="checkmark-done-outline" size={14} color={colors.teal[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.cashRowLabel, { flex: undefined, color: palette.text.primary }]}>
+                Погашения рассрочки
+              </Text>
+              <Text style={[styles.cashRowNote, { color: palette.text.tertiary }]}>
+                За прошлые продажи — в оборот не входят
+              </Text>
+            </View>
+            <Text style={[styles.cashRowValue, { color: colors.teal[600] }]}>+{formatMoney(installmentPaid)}</Text>
+          </View>
+        )}
       </View>
     </AnimatedCard>
   );
@@ -4580,6 +4617,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   cashRowLabel: { flex: 1, fontSize: 14, fontWeight: '500' },
+  cashRowNote: { fontSize: 11, fontWeight: '400', marginTop: 1 },
   cashRowValue: { fontSize: 14, fontWeight: '700', fontVariant: ['tabular-nums'] },
 
   // Margin

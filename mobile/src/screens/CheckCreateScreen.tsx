@@ -1991,8 +1991,14 @@ export default function CheckCreateScreen() {
         comment: comment || undefined,
         discount: discountNum || undefined,
         paymentMethod: effectiveMethod,
-        cashAmount: finalCash || undefined,
-        cardAmount: finalCard || undefined,
+        // Ноги оплаты уходят ЯВНО числами — 0 тоже значение. Раньше было
+        // `finalCash || undefined`, и при ПРАВКЕ чека со сменой способа оплаты
+        // (напр. cash → card) бэк не перезаписывал обнулившуюся ногу
+        // (editClosedCheck пишет только dto.* !== undefined) — старая нога
+        // выживала в БД и разбивка «Движения денег» превышала оборот.
+        // DTO бэка: @IsOptional() + @Min(0) — ноль проходит валидацию.
+        cashAmount: finalCash,
+        cardAmount: finalCard,
         // Рассрочка: дата следующего платежа уходит в план (бэк создаёт его в
         // той же транзакции). Для остальных способов поле отсутствует.
         ...(effectiveMethod === ('installment' as PaymentMethod)

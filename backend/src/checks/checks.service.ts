@@ -1499,6 +1499,21 @@ export class ChecksService {
       const totalCost = round2(productCostTotal + serviceSalaryTotal + productSalaryTotal);
       const profit = round2(totalRevenue - totalCost);
 
+      // ── Кап ног оплаты (cash_card / installment): ноги ≤ оборота ──────────
+      // Мобилка клампит на клиенте (Math.min(cash, total)), web и сырой API —
+      // нет: «наличными 100 000» при чеке на 30 000 давал бы строку, где
+      // разбивка «Движения денег» навсегда превышает оборот (118 cash_card не
+      // чинит — раскладку из БД не восстановить). Лишнее срезаем с карты,
+      // потом с наличных. Для installment капнутые ноги ниже уходят и в
+      // down_payment плана — чек и план не расходятся. Одноканальные методы
+      // не трогаем: их ноги клиенты задают равными total.
+      let cashLeg = effectiveCashAmount;
+      let cardLeg = effectiveCardAmount;
+      if (dto.paymentMethod === 'cash_card' || dto.paymentMethod === 'installment') {
+        cashLeg = round2(Math.min(cashLeg, totalRevenue));
+        cardLeg = round2(Math.min(cardLeg, Math.max(totalRevenue - cashLeg, 0)));
+      }
+
       // Parse date
       let checkDate = dto.date || new Date().toISOString();
 
@@ -1537,8 +1552,8 @@ export class ChecksService {
           discount,
           effectiveIsDeferred,
           dto.paymentMethod || 'cash',
-          effectiveCashAmount,
-          effectiveCardAmount,
+          cashLeg,
+          cardLeg,
           serviceTotal,
           productTotal,
           totalRevenue,
@@ -1658,7 +1673,9 @@ export class ChecksService {
           checkId,
           clientId: dto.clientId,
           total: totalRevenue,
-          downPayment: (effectiveCashAmount || 0) + (effectiveCardAmount || 0),
+          // Капнутые ноги (см. выше) — down_payment плана совпадает с
+          // cash_amount+card_amount чека копейка в копейку.
+          downPayment: (cashLeg || 0) + (cardLeg || 0),
           nextPaymentDate: dto.installment?.nextPaymentDate ?? dto.installmentNextPaymentDate,
           comment: dto.installment?.comment ?? dto.installmentComment,
         });
@@ -1755,9 +1772,14 @@ export class ChecksService {
 
     // POS shift-mode (092): a NON-cashier may not record payment on the plain
     // path either. No-op when shift-mode is OFF (current behaviour). Only fires
-    // when this edit actually touches a money field (cash/card/paymentStatus).
+    // when this edit actually touches a money field (method/cash/card/
+    // paymentStatus) — смена способа оплаты тоже двигает кассу (нормализация
+    // ниже доводит ноги из total_revenue), поэтому она под тем же гейтом.
     const touchesPayment =
-      dto.cashAmount !== undefined || dto.cardAmount !== undefined || dto.paymentStatus !== undefined;
+      dto.paymentMethod !== undefined ||
+      dto.cashAmount !== undefined ||
+      dto.cardAmount !== undefined ||
+      dto.paymentStatus !== undefined;
     if (touchesPayment) {
       await this.assertCashierForPayment(tenantID, actor);
     }
@@ -1778,6 +1800,59 @@ export class ChecksService {
       if (ownRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
       if (!actorUserId || String(ownRows[0].master_id) !== String(actorUserId)) {
         throw new ForbiddenException({ message: 'Можно редактировать только свои заказ-наряды' });
+      }
+    }
+
+    // ── Деньги на плоском пути: гарды + нормализация ног (fix «разбивка >
+    // оборота», зеркально fullUpdate/editClosedCheck) ────────────────────────
+    // Ни один текущий клиент не шлёт paymentMethod/ноги без строк (mobile/web
+    // правят через fullUpdate, закрывают голым {isDeferred:false}), но API
+    // открыт: сырой PATCH не должен заново плодить класс строк, который 118
+    // чинит одноразово.
+    if (dto.paymentMethod !== undefined || dto.cashAmount !== undefined || dto.cardAmount !== undefined) {
+      // Чек с планом рассрочки: способ/ноги трогать нельзя — корзина
+      // «Рассрочка (долг)» разъедется с installment_plans (план живёт, долг из
+      // cashflow исчез). Зеркально editClosedCheck/softDelete.
+      const { rows: planRows } = await this.pool.query(
+        `SELECT 1 FROM installment_plans WHERE tenant_id=$1 AND check_id=$2 LIMIT 1`,
+        [tenantID, id],
+      );
+      if (planRows.length > 0) {
+        throw new BadRequestException({
+          message: 'Заказ-наряд продан в рассрочку — измените рассрочку отдельно, затем заказ-наряд',
+        });
+      }
+    }
+    // Перевод существующего чека В рассрочку запрещён: план создаётся только
+    // при создании чека (createPlanForCheckTx) — без плана остаток навсегда
+    // повис бы в корзине «Рассрочка (долг)» без возможности погашения.
+    if (dto.paymentMethod === 'installment') {
+      throw new BadRequestException({
+        message: 'Перевести существующий заказ-наряд в рассрочку нельзя — рассрочка оформляется при создании чека',
+      });
+    }
+    // Смена способа оплаты без явных ног не должна оставлять в БД ногу от
+    // прежнего способа: доводим из total_revenue строки. 'cash_card' без сумм
+    // не трогаем — раскладку знает только клиент.
+    if (
+      (dto.paymentMethod === 'cash' || dto.paymentMethod === 'card' || dto.paymentMethod === 'warranty') &&
+      (dto.cashAmount === undefined || dto.cardAmount === undefined)
+    ) {
+      const { rows: totRows } = await this.pool.query(
+        `SELECT total_revenue FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`,
+        [id, tenantID],
+      );
+      if (totRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      const rowTotal = parseFloat(totRows[0].total_revenue) || 0;
+      if (dto.paymentMethod === 'cash') {
+        if (dto.cashAmount === undefined) dto.cashAmount = rowTotal;
+        if (dto.cardAmount === undefined) dto.cardAmount = 0;
+      } else if (dto.paymentMethod === 'card') {
+        if (dto.cashAmount === undefined) dto.cashAmount = 0;
+        if (dto.cardAmount === undefined) dto.cardAmount = rowTotal;
+      } else {
+        if (dto.cashAmount === undefined) dto.cashAmount = 0;
+        if (dto.cardAmount === undefined) dto.cardAmount = 0;
       }
     }
 
@@ -1806,11 +1881,13 @@ export class ChecksService {
     }
     if (dto.cashAmount !== undefined) {
       sets.push(`cash_amount=$${idx++}`);
-      vals.push(dto.cashAmount);
+      // ||0: cashAmount:null проходит @IsOptional — NULL в ноге ломает SUM
+      // (тихий недобор разбивки). Зеркально editClosedCheck.
+      vals.push(dto.cashAmount || 0);
     }
     if (dto.cardAmount !== undefined) {
       sets.push(`card_amount=$${idx++}`);
-      vals.push(dto.cardAmount);
+      vals.push(dto.cardAmount || 0);
     }
     if (dto.paymentStatus !== undefined) {
       sets.push(`payment_status=$${idx++}`);
@@ -1925,6 +2002,60 @@ export class ChecksService {
         throw new ForbiddenException({ message: 'Принять оплату и закрыть заказ-наряд может только кассир смены' });
       }
 
+      // ── Рассрочка: гарды (зеркально editClosedCheck / плоскому пути) ───────
+      // План создаётся только в create(); закрытие/правка через этот путь не
+      // умеет его создать — installment-чек без плана навсегда повис бы в
+      // корзине «Рассрочка (долг)» без возможности погашения.
+      if (dto.paymentMethod === 'installment') {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({
+          message: 'Перевести существующий заказ-наряд в рассрочку нельзя — рассрочка оформляется при создании чека',
+        });
+      }
+      // Чек с существующим планом: способ/ноги оплаты трогать нельзя — иначе
+      // корзина «Рассрочка (долг)» разъедется с installment_plans.
+      if (dto.paymentMethod !== undefined || dto.cashAmount !== undefined || dto.cardAmount !== undefined) {
+        const hasInstallment = this.installments
+          ? await this.installments.hasPlanForCheckTx(client, tenantID, id)
+          : (
+              await client.query(`SELECT 1 FROM installment_plans WHERE tenant_id=$1 AND check_id=$2 LIMIT 1`, [
+                tenantID,
+                id,
+              ])
+            ).rows.length > 0;
+        if (hasInstallment) {
+          await client.query('ROLLBACK');
+          throw new BadRequestException({
+            message: 'Заказ-наряд продан в рассрочку — измените рассрочку отдельно, затем заказ-наряд',
+          });
+        }
+      }
+
+      // ── Нормализация ног оплаты при закрытии (fix «разбивка > оборота») ────
+      // Оба клиента закрывают отложенный чек ГОЛЫМ {isDeferred:false} — без
+      // способа и без ног. При POS-режиме смен (092) create() принудительно
+      // занулил обе ноги драфта (forceDeferred), поэтому без довода КАЖДЫЙ
+      // такой чек закрывался бы с cash=card=0: тождество cash + card +
+      // warranty + installmentDebt = total недобирает, «Касса сегодня» мастера
+      // теряет деньги. Доводим ноги из способа (пришедшего или персистентного)
+      // и total_revenue чека: 'cash' → (total, 0); 'card' → (0, total);
+      // 'warranty' → (0, 0). 'cash_card' без сумм не трогаем — раскладку знает
+      // только клиент ('installment' отсечён гардом выше).
+      if (isActivating) {
+        const effMethod = dto.paymentMethod !== undefined ? dto.paymentMethod : checkRows[0].payment_method;
+        const rowTotal = parseFloat(checkRows[0].total_revenue) || 0;
+        if (effMethod === 'cash') {
+          if (dto.cashAmount === undefined) dto.cashAmount = rowTotal;
+          if (dto.cardAmount === undefined) dto.cardAmount = 0;
+        } else if (effMethod === 'card') {
+          if (dto.cashAmount === undefined) dto.cashAmount = 0;
+          if (dto.cardAmount === undefined) dto.cardAmount = rowTotal;
+        } else if (effMethod === 'warranty') {
+          if (dto.cashAmount === undefined) dto.cashAmount = 0;
+          if (dto.cardAmount === undefined) dto.cardAmount = 0;
+        }
+      }
+
       // Build the field update (the same fields the plain path supports for a
       // close), always including is_deferred=false.
       const sets: string[] = ['is_deferred=false'];
@@ -1953,11 +2084,12 @@ export class ChecksService {
       }
       if (dto.cashAmount !== undefined) {
         sets.push(`cash_amount=$${ui++}`);
-        vals.push(dto.cashAmount);
+        // ||0: null проходит @IsOptional — NULL в ноге ломает SUM разбивки.
+        vals.push(dto.cashAmount || 0);
       }
       if (dto.cardAmount !== undefined) {
         sets.push(`card_amount=$${ui++}`);
-        vals.push(dto.cardAmount);
+        vals.push(dto.cardAmount || 0);
       }
       if (dto.paymentStatus !== undefined) {
         sets.push(`payment_status=$${ui++}`);
@@ -2044,6 +2176,17 @@ export class ChecksService {
     // `dto.isDeferred` is OPTIONAL: only an explicit `false` flips the flag; if
     // the caller omits it the draft stays a draft and no effects fire.
     const isActivating = wasDeferred && dto.isDeferred === false;
+
+    // ── Рассрочка: на отложенном пути запрещена (зеркально create()) ────────
+    // План создаётся ТОЛЬКО в create() (createPlanForCheckTx, в одной
+    // транзакции с чеком); правка/закрытие драфта план создать не умеет —
+    // installment-чек без плана навсегда повис бы в корзине «Рассрочка (долг)»
+    // без возможности погашения (экран «Рассрочка» его не видит).
+    if (dto.paymentMethod === 'installment') {
+      throw new BadRequestException({
+        message: 'Рассрочку нельзя оформить на отложенный заказ-наряд — создайте новый чек с рассрочкой',
+      });
+    }
 
     // PERMISSION: a master may only close (activate) THEIR OWN draft. Plain
     // re-edits of a still-deferred draft keep the existing rules; the extra
@@ -2263,6 +2406,35 @@ export class ChecksService {
       const totalRevenue = round2(serviceTotal + (discountedProductTotal > 0 ? discountedProductTotal : 0));
       const totalCost = round2(productCostTotal + serviceSalaryTotal + productSalaryTotal);
       const profit = round2(totalRevenue - totalCost);
+
+      // ── Нормализация ног оплаты (fix «разбивка > оборота») ────────────────
+      // Мобильный клиент шлёт `cashAmount: finalCash || undefined` — при смене
+      // способа оплаты пустая нога не приходит, и старое значение выживало в
+      // БД рядом с новым total_revenue (ноги ниже пишутся только при
+      // dto.* !== undefined). Когда способ оплаты пришёл, а нога — нет,
+      // доводим ноги из метода и НОВОГО total: 'cash' → (total, 0);
+      // 'card' → (0, total); 'warranty' → (0, 0). Для 'cash_card' с РОВНО
+      // одной пришедшей ногой вторая математически однозначна (ноги обязаны
+      // сходиться к total) — это не «угадывание раскладки»; старый (до-OTA)
+      // мобильный клиент с нулевой наличной частью шлёт только cardAmount.
+      // 'cash_card' совсем без сумм и 'installment' (первый взнос) не трогаем —
+      // раскладку знает только клиент.
+      if (dto.paymentMethod === 'cash') {
+        if (dto.cashAmount === undefined) dto.cashAmount = totalRevenue;
+        if (dto.cardAmount === undefined) dto.cardAmount = 0;
+      } else if (dto.paymentMethod === 'card') {
+        if (dto.cashAmount === undefined) dto.cashAmount = 0;
+        if (dto.cardAmount === undefined) dto.cardAmount = totalRevenue;
+      } else if (dto.paymentMethod === 'warranty') {
+        if (dto.cashAmount === undefined) dto.cashAmount = 0;
+        if (dto.cardAmount === undefined) dto.cardAmount = 0;
+      } else if (dto.paymentMethod === 'cash_card') {
+        if (dto.cashAmount !== undefined && dto.cardAmount === undefined) {
+          dto.cardAmount = round2(Math.max(totalRevenue - (dto.cashAmount || 0), 0));
+        } else if (dto.cardAmount !== undefined && dto.cashAmount === undefined) {
+          dto.cashAmount = round2(Math.max(totalRevenue - (dto.cardAmount || 0), 0));
+        }
+      }
 
       // Update check record
       const updateFields: string[] = [];
@@ -2759,6 +2931,16 @@ export class ChecksService {
           message: 'Заказ-наряд продан в рассрочку — измените рассрочку отдельно, затем заказ-наряд',
         });
       }
+      // Перевод существующего чека В рассрочку тоже запрещён (сюда доходят
+      // только чеки БЕЗ плана — гард выше): план создаётся только в create()
+      // (createPlanForCheckTx) — installment-чек без плана навсегда повис бы в
+      // корзине «Рассрочка (долг)» без возможности погашения. Владелец хочет
+      // «клиент не доплатил» → новый чек с рассрочкой, не правка старого.
+      if (dto.paymentMethod === 'installment') {
+        throw new BadRequestException({
+          message: 'Перевести существующий заказ-наряд в рассрочку нельзя — рассрочка оформляется при создании чека',
+        });
+      }
 
       // Cross-tenant integrity guards (same as create()/fullUpdate): every
       // client-supplied reference must belong to this tenant.
@@ -2803,6 +2985,31 @@ export class ChecksService {
           r.product_id,
           tenantID,
         ]);
+      }
+
+      // ── Нормализация ног оплаты (fix «разбивка > оборота», см. fullUpdate) ──
+      // Смена способа оплаты без явных сумм не должна оставлять в БД ногу от
+      // прежнего способа: 'cash' → (total, 0); 'card' → (0, total);
+      // 'warranty' → (0, 0). Для 'cash_card' с РОВНО одной пришедшей ногой
+      // вторая математически однозначна (ноги обязаны сходиться к total) —
+      // старый (до-OTA) мобильный клиент с нулевой наличной частью шлёт только
+      // cardAmount. 'cash_card' совсем без сумм — не трогаем ('installment'
+      // отсечён гардом выше).
+      if (dto.paymentMethod === 'cash') {
+        if (dto.cashAmount === undefined) dto.cashAmount = c.totalRevenue;
+        if (dto.cardAmount === undefined) dto.cardAmount = 0;
+      } else if (dto.paymentMethod === 'card') {
+        if (dto.cashAmount === undefined) dto.cashAmount = 0;
+        if (dto.cardAmount === undefined) dto.cardAmount = c.totalRevenue;
+      } else if (dto.paymentMethod === 'warranty') {
+        if (dto.cashAmount === undefined) dto.cashAmount = 0;
+        if (dto.cardAmount === undefined) dto.cardAmount = 0;
+      } else if (dto.paymentMethod === 'cash_card') {
+        if (dto.cashAmount !== undefined && dto.cardAmount === undefined) {
+          dto.cardAmount = round2(Math.max(c.totalRevenue - (dto.cashAmount || 0), 0));
+        } else if (dto.cardAmount !== undefined && dto.cashAmount === undefined) {
+          dto.cashAmount = round2(Math.max(c.totalRevenue - (dto.cardAmount || 0), 0));
+        }
       }
 
       // ── 2) Rewrite the check row — is_deferred/date/number/created_at stay ──

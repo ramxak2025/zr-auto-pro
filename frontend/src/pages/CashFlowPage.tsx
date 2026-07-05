@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Wallet, Banknote, CreditCard, Shield, Users } from 'lucide-react';
+import { Wallet, Banknote, CreditCard, Shield, Users, CalendarClock, Coins } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
@@ -18,6 +18,12 @@ interface CashFlowDay {
   card: number;
   warranty: number;
   total: number;
+  // Долг по чекам в рассрочку (входит в оборот: cash + card + warranty +
+  // installmentDebt = total) и погашения рассрочки по дате платежа (в оборот
+  // НЕ входят — деньги за прошлые продажи). Опциональны: старый бэкенд их не
+  // шлёт, рендерим только когда поле пришло числом.
+  installmentDebt?: number;
+  installmentPaid?: number;
 }
 
 interface CashFlowData {
@@ -27,6 +33,8 @@ interface CashFlowData {
     card: number;
     warranty: number;
     total: number;
+    installmentDebt?: number;
+    installmentPaid?: number;
   };
 }
 
@@ -56,7 +64,12 @@ export default function CashFlowPage() {
   });
 
   const days = cashFlow?.days || [];
-  const totals = cashFlow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 };
+  const totals: CashFlowData['totals'] = cashFlow?.totals || { cash: 0, card: 0, warranty: 0, total: 0 };
+
+  // Показываем корзину рассрочки только когда бэкенд её прислал и она ненулевая —
+  // у сервисов без рассрочки страница выглядит как раньше.
+  const hasInstallmentDebt = typeof totals.installmentDebt === 'number' && totals.installmentDebt > 0;
+  const hasInstallmentPaid = typeof totals.installmentPaid === 'number' && totals.installmentPaid > 0;
 
   return (
     <div className="space-y-6">
@@ -120,6 +133,15 @@ export default function CashFlowPage() {
           </div>
           <div className="stat-value text-orange-600">{formatMoney(totals.warranty)}</div>
         </div>
+        {hasInstallmentDebt && (
+          <div className="stat-card">
+            <div className="flex items-center gap-2 mb-1">
+              <CalendarClock className="w-4 h-4 text-violet-500" />
+              <div className="stat-label">Рассрочка (долг)</div>
+            </div>
+            <div className="stat-value text-violet-600">{formatMoney(totals.installmentDebt ?? 0)}</div>
+          </div>
+        )}
         <div className="stat-card">
           <div className="flex items-center gap-2 mb-1">
             <Wallet className="w-4 h-4 text-gray-700" />
@@ -127,6 +149,16 @@ export default function CashFlowPage() {
           </div>
           <div className="stat-value text-gray-900">{formatMoney(totals.total)}</div>
         </div>
+        {hasInstallmentPaid && (
+          <div className="stat-card">
+            <div className="flex items-center gap-2 mb-1">
+              <Coins className="w-4 h-4 text-teal-500" />
+              <div className="stat-label">Погашения рассрочки</div>
+            </div>
+            <div className="stat-value text-teal-600">+{formatMoney(totals.installmentPaid ?? 0)}</div>
+            <p className="text-[11px] text-gray-400 mt-0.5">Не входит в оборот — оплата прошлых продаж</p>
+          </div>
+        )}
       </div>
 
       {/* Table */}
@@ -165,6 +197,17 @@ export default function CashFlowPage() {
                       {formatMoney(day.warranty)}
                     </span>
                   )}
+                  {(day.installmentDebt ?? 0) > 0 && (
+                    <span className="text-violet-600">
+                      <CalendarClock className="w-3 h-3 inline mr-0.5" />
+                      {formatMoney(day.installmentDebt ?? 0)}
+                    </span>
+                  )}
+                  {(day.installmentPaid ?? 0) > 0 && (
+                    <span className="text-teal-600">
+                      <Coins className="w-3 h-3 inline mr-0.5" />+{formatMoney(day.installmentPaid ?? 0)}
+                    </span>
+                  )}
                 </div>
               </div>
             ))}
@@ -180,7 +223,9 @@ export default function CashFlowPage() {
                   <th className="text-right">Наличные</th>
                   <th className="text-right">Карта</th>
                   <th className="text-right">Гарантия</th>
+                  {hasInstallmentDebt && <th className="text-right">Рассрочка (долг)</th>}
                   <th className="text-right">Итого</th>
+                  {hasInstallmentPaid && <th className="text-right">Погашено</th>}
                   <th className="w-[22%]">Доля периода</th>
                 </tr>
               </thead>
@@ -198,7 +243,17 @@ export default function CashFlowPage() {
                     <td className="text-right text-orange-600">
                       {day.warranty > 0 ? formatMoney(day.warranty) : '\u2014'}
                     </td>
+                    {hasInstallmentDebt && (
+                      <td className="text-right text-violet-600">
+                        {(day.installmentDebt ?? 0) > 0 ? formatMoney(day.installmentDebt ?? 0) : '\u2014'}
+                      </td>
+                    )}
                     <td className="text-right font-semibold text-gray-900">{formatMoney(day.total)}</td>
+                    {hasInstallmentPaid && (
+                      <td className="text-right text-teal-600">
+                        {(day.installmentPaid ?? 0) > 0 ? `+${formatMoney(day.installmentPaid ?? 0)}` : '\u2014'}
+                      </td>
+                    )}
                     <td>
                       <div className="flex items-center gap-2">
                         <div className="h-2 flex-1 rounded-full bg-gray-100 overflow-hidden">
@@ -228,7 +283,13 @@ export default function CashFlowPage() {
                   <td className="text-right font-bold text-green-600">{formatMoney(totals.cash)}</td>
                   <td className="text-right font-bold text-blue-600">{formatMoney(totals.card)}</td>
                   <td className="text-right font-bold text-orange-600">{formatMoney(totals.warranty)}</td>
+                  {hasInstallmentDebt && (
+                    <td className="text-right font-bold text-violet-600">{formatMoney(totals.installmentDebt ?? 0)}</td>
+                  )}
                   <td className="text-right font-bold text-gray-900">{formatMoney(totals.total)}</td>
+                  {hasInstallmentPaid && (
+                    <td className="text-right font-bold text-teal-600">+{formatMoney(totals.installmentPaid ?? 0)}</td>
+                  )}
                   <td className="text-right font-bold text-gray-900">100%</td>
                 </tr>
               </tfoot>

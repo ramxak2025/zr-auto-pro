@@ -22,3 +22,6 @@ Autexa-*.apk
 .backups/
 .claude/scheduled_tasks.lock
 .deploy.lock
+# Локальные артефакты ручной выгрузки IPA (xcodebuild -exportArchive) —
+# содержат teamID/опции загрузки, к репо отношения не имеют.
+mobile/export*.plist
