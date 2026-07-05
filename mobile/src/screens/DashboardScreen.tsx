@@ -516,7 +516,8 @@ function KpiStrip() {
             } else if (target.screen) {
               navigation.navigate('Main', {
                 screen: target.stack,
-                params: { screen: target.screen },
+                // initial: false — меню «Ещё» остаётся под разделом (см. AppNavigator).
+                params: { screen: target.screen, initial: false },
               });
             }
           };
@@ -1238,7 +1239,7 @@ function OnShiftSnapshot() {
     <AnimatedCard
       index={3}
       style={[styles.snapshotCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-      onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule' } })}
+      onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule', initial: false } })}
     >
       <View style={styles.snapshotHeaderRow}>
         <View
@@ -1333,7 +1334,7 @@ function CallsSnapshot() {
     <AnimatedCard
       index={4}
       style={[styles.snapshotCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-      onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Calls' } })}
+      onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Calls', initial: false } })}
     >
       <View style={styles.snapshotHeaderRow}>
         <View
@@ -1645,7 +1646,7 @@ function CashPositionCard() {
       style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       onPress={() => {
         haptic('tap');
-        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'CashFlow' } });
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'CashFlow', initial: false } });
       }}
     >
       <View style={styles.ownerCardHeader}>
@@ -1954,7 +1955,7 @@ function WarehouseAnalyticsWidget() {
     // navigation logs a warning and noop's — we don't crash the dashboard.
     navigation.navigate('Main', {
       screen: 'MoreTab',
-      params: { screen: 'WarehouseAnalytics' },
+      params: { screen: 'WarehouseAnalytics', initial: false },
     });
   };
 
@@ -2189,7 +2190,7 @@ function InstallmentsWidget() {
       style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       onPress={() => {
         haptic('tap');
-        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Installments' } });
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Installments', initial: false } });
       }}
     >
       <View style={styles.ownerCardHeader}>
@@ -2337,7 +2338,7 @@ function ClientsNewVsReturningCard() {
 
   const openClients = () => {
     haptic('tap');
-    navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Clients' } });
+    navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Clients', initial: false } });
   };
 
   return (
@@ -2726,7 +2727,7 @@ function RecentReviewsCard() {
       style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       onPress={() => {
         haptic('tap');
-        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Marketing' } });
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Marketing', initial: false } });
       }}
     >
       <View style={styles.ownerCardHeader}>
@@ -3413,7 +3414,7 @@ function MasterRecentChecks() {
             onPress={() =>
               navigation.navigate('Main', {
                 screen: 'Checks',
-                params: { screen: 'CheckDetail', params: { id: check.id } },
+                params: { screen: 'CheckDetail', initial: false, params: { id: check.id } },
               })
             }
           >
@@ -3518,7 +3519,9 @@ function MyAttendanceRankWidget({ userId }: { userId?: string }) {
   return (
     <AnimatedCard index={6}>
       <TouchableOpacity
-        onPress={() => navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule' } })}
+        onPress={() =>
+          navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule', initial: false } })
+        }
         activeOpacity={0.8}
         style={{
           backgroundColor: palette.bg.card,

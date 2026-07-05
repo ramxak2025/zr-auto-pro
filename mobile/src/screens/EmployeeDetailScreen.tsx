@@ -451,11 +451,11 @@ export default function EmployeeDetailScreen() {
   };
   const goSchedule = () => {
     haptic('tap');
-    navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule' } });
+    navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Schedule', initial: false } });
   };
   const goSalary = () => {
     haptic('tap');
-    navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Salary' } });
+    navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Salary', initial: false } });
   };
 
   // ── Period totals for salary (computed locally from year heatmap) ────

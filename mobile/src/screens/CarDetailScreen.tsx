@@ -170,7 +170,7 @@ export default function CarDetailScreen() {
   const openCheck = (checkId: string) => {
     navigation.navigate('Main', {
       screen: 'Checks',
-      params: { screen: 'CheckDetail', params: { id: checkId } },
+      params: { screen: 'CheckDetail', initial: false, params: { id: checkId } },
     });
   };
 

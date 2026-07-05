@@ -647,6 +647,16 @@ function TabNavigator() {
            loses focus, WITHOUT re-focusing MoreTab (addresses the inner
            stack by key so the outer tab focus is left where the user
            actually tapped).
+
+        ВЫРОЖДЕННЫЙ СТЕК (баг владельца 05.07): если nested navigate успел
+        сделать раздел ЕДИНСТВЕННЫМ роутом (`[Schedule]`, index 0 — v7 не
+        всегда доносит финальный `state`-эвент до слушателя №1), то проверки
+        `index > 0` в №2/№3 молчали: меню «Ещё» становилось недостижимым —
+        ни назад, ни повторным тапом по табу. Теперь оба слушателя дополнительно
+        чинят `routes[0] !== 'MoreHome'` жёстким reset'ом в [MoreHome], а все
+        точки входа в разделы «Ещё» (Dashboard/CheckCreate/EmployeeDetail)
+        передают `initial: false` — документированный способ держать
+        initialRouteName под целевым экраном, без гонок со слушателями.
       */}
       <Tab.Screen
         name="MoreTab"
@@ -667,19 +677,40 @@ function TabNavigator() {
             });
           },
           tabPress: (e) => {
-            // Only intercept when «Ещё» is the already-active tab. If the
-            // user is arriving from another tab, let the default switch
-            // happen (blur on the previous tab already reset MoreStack).
-            if (navigation.getState().routes[navigation.getState().index]?.name !== 'MoreTab') return;
             const inner = readMoreStackState(navigation);
-            if (inner && inner.index > 0) {
-              e.preventDefault();
-              navigation.dispatch({ ...StackActions.popToTop(), target: inner.key });
+            if (!inner) return;
+            const rootIsHome = inner.routes[0]?.name === 'MoreHome';
+            const focusedNow = navigation.getState().routes[navigation.getState().index]?.name === 'MoreTab';
+            if (focusedNow) {
+              if (inner.index > 0) {
+                e.preventDefault();
+                navigation.dispatch({ ...StackActions.popToTop(), target: inner.key });
+              } else if (!rootIsHome) {
+                // Вырожденный стек [Section]: popToTop некуда — жёсткий reset в меню.
+                e.preventDefault();
+                navigation.dispatch({
+                  ...CommonActions.reset({ index: 0, routes: [{ name: 'MoreHome' }] }),
+                  target: inner.key,
+                });
+              }
+            } else if (!rootIsHome) {
+              // Переключаемся на «Ещё» с застрявшим [Section]: чиним стек, дефолтный
+              // switch не отменяем — пользователь ждёт меню, а не застрявший раздел.
+              navigation.dispatch({
+                ...CommonActions.reset({ index: 0, routes: [{ name: 'MoreHome' }] }),
+                target: inner.key,
+              });
             }
           },
           blur: () => {
             const inner = readMoreStackState(navigation);
-            if (inner && inner.index > 0) {
+            if (!inner) return;
+            if (inner.routes[0]?.name !== 'MoreHome') {
+              navigation.dispatch({
+                ...CommonActions.reset({ index: 0, routes: [{ name: 'MoreHome' }] }),
+                target: inner.key,
+              });
+            } else if (inner.index > 0) {
               navigation.dispatch({ ...StackActions.popToTop(), target: inner.key });
             }
           },
@@ -711,7 +742,7 @@ function SiriIntentRouter() {
         navigation.navigate('Main', { screen: 'NewCheck' });
       } else if (pending.action === 'open_cash') {
         // «Открыть кассу» → экран кассовой смены.
-        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'CashShift' } });
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'CashShift', initial: false } });
       }
     };
     // App launch (cold/warm): consume whatever Siri queued before mount.

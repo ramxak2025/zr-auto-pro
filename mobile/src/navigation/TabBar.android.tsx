@@ -220,7 +220,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
                         // Master без права оплаты: центральная кнопка ведёт на
                         // «Доску» (внутри Checks-стека), а не на кассу. Cast to any
                         // for the nested 2-arg navigate overload.
-                        (navigation as any).navigate('Checks', { screen: 'WorkBoard' });
+                        (navigation as any).navigate('Checks', { screen: 'WorkBoard', initial: false });
                       } else {
                         navigation.navigate(tab.routeName as never);
                       }

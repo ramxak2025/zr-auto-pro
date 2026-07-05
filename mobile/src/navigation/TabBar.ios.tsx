@@ -83,7 +83,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const openBoard = React.useCallback(() => {
     // Nested navigate (tab → stack screen) — cast to any for the 2-arg overload,
     // same convention as the screens' useNavigation<any>() callers.
-    (navigation as any).navigate('Checks', { screen: 'WorkBoard' });
+    (navigation as any).navigate('Checks', { screen: 'WorkBoard', initial: false });
   }, [navigation]);
 
   const navigateToTab = React.useCallback(

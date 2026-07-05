@@ -1678,7 +1678,7 @@ export default function CheckCreateScreen() {
         // теперь в «Прошедших» со ссылкой на чек). Явная навигация надёжнее
         // goBack(): root-push кассы сбросил вложенный MoreStack, так что
         // обычный pop приземлил бы на меню «Ещё», а не на список записей.
-        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Bookings' } });
+        navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Bookings', initial: false } });
       } else if (isStackScreen) {
         if (isEditingClosed) {
           // #61: правка ПРОВЕДЁННОГО чека — сервер выполнил каскадный пересчёт
@@ -1763,7 +1763,7 @@ export default function CheckCreateScreen() {
     // work-status) здесь невозможны — чека на сервере ещё нет; запись из
     // «прихода» остаётся в Предстоящих (документированный fallback конверсии).
     if (isFromBooking) {
-      navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Bookings' } });
+      navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Bookings', initial: false } });
     } else if (isStackScreen) {
       navigation.goBack();
     } else {
