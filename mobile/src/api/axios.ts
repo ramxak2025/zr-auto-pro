@@ -126,7 +126,20 @@ if (API_HOSTS.length > 1) {
 type FailoverAwareConfig = InternalAxiosRequestConfig & {
   _failoverAttempted?: boolean;
   _failoverBaseUrl?: string;
+  /** Одиночный прозрачный ретрай логина — отдельный флаг, чтобы не
+   *  зациклиться и не пересечься с _failoverAttempted (HTML-ретраем). */
+  _loginRetryAttempted?: boolean;
 };
+
+/**
+ * Это POST /auth/login? baseURL уже содержит «/api», поэтому матчим по хвосту
+ * `config.url` (обычно '/auth/login'; допускаем абсолютный URL и trailing
+ * slash, но НЕ '/auth/login-history' и т. п. — якорь по концу строки).
+ */
+function isLoginRequest(cfg: InternalAxiosRequestConfig): boolean {
+  if ((cfg.method || 'get').toLowerCase() !== 'post') return false;
+  return /(^|\/)auth\/login\/?$/.test(cfg.url || '');
+}
 
 // Derive server origin for image URLs (strip /api suffix)
 export const SERVER_URL = API_BASE_URL.replace(/\/api\/?$/, '');
@@ -391,6 +404,45 @@ api.interceptors.response.use(
             adoptActiveBase(nextBase);
             return retried;
           }
+        }
+      }
+
+      // ── Одиночный прозрачный ретрай ЛОГИНА (сеть с потерей пакетов) ─────
+      // POST /auth/login — единственная мутация БЕЗ побочных эффектов
+      // (проверка пароля + выдача токена), дубль безопасен. Поэтому для неё
+      // узкое исключение из правила «мутации не ретраим»: один повтор при
+      // сетевом отказе класса «ответ не пришёл вовсе» (ERR_NETWORK /
+      // ECONNABORTED). Ответ сервера (401/400 и т. д.) сюда не попадает —
+      // у него есть .response, ветка выше по нему не выполняется.
+      // Механизм смены хоста тот же, что у failover: в кольце >1 хоста —
+      // следующий хост (+ adoptActiveBase на успехе), один хост — повтор на
+      // тот же. Флаг _loginRetryAttempted гарантирует не больше одной такой
+      // попытки и не пересекается с _failoverAttempted (ERR_HTML_RESPONSE-
+      // ретрай выше остаётся независимым). Остальные мутации (например
+      // POST /expenses) НЕ затронуты — для них правило прежнее.
+      {
+        const loginCfg = error.config as FailoverAwareConfig | undefined;
+        const netCode = (error as { code?: string }).code;
+        if (
+          loginCfg &&
+          !loginCfg._loginRetryAttempted &&
+          (netCode === 'ERR_NETWORK' || netCode === 'ECONNABORTED') &&
+          isLoginRequest(loginCfg)
+        ) {
+          loginCfg._loginRetryAttempted = true;
+          const failedBase =
+            typeof loginCfg.baseURL === 'string' && API_HOSTS.includes(loginCfg.baseURL)
+              ? loginCfg.baseURL
+              : activeBaseUrl;
+          const nextBase = API_HOSTS[(API_HOSTS.indexOf(failedBase) + 1) % API_HOSTS.length];
+          if (API_HOSTS.length > 1 && nextBase && nextBase !== failedBase) {
+            loginCfg._failoverBaseUrl = nextBase;
+            const retried = await api.request(loginCfg);
+            adoptActiveBase(nextBase);
+            return retried;
+          }
+          // Кольцо из одного хоста — повтор на тот же хост (baseURL инстанса).
+          return api.request(loginCfg);
         }
       }
 

@@ -174,4 +174,26 @@ describe('classifyStoredPair', () => {
     const raw = JSON.stringify({ queryKey: ['products'], data: [{ id: 1 }] });
     expect(classifyStoredPair(raw, NOW).status).toBe('stale');
   });
+
+  // ── Голосовой usage — last-known state гейта микрофона (2026-07-05) ─────
+  it("returns ok for the persisted ['voice','usage'] gate snapshot (mic button survives offline)", () => {
+    const storedAt = NOW - 10_000;
+    const data = { period: '2026-07', limitMinutes: 10, usedMinutes: 2, remainingMinutes: 8, configured: true };
+    const raw = serialise({ queryKey: ['voice', 'usage'], data, storedAt });
+    const res = classifyStoredPair(raw, NOW);
+    expect(res.status).toBe('ok');
+    if (res.status === 'ok') {
+      expect(res.first).toBe('voice');
+      expect(res.storedAt).toBe(storedAt);
+      // Объект-гейт — не коллекция: empty-collection guard его не выкидывает,
+      // даже когда лимит 0 (это ЯВНЫЙ ответ сервера, он должен пережить рестарт
+      // и честно спрятать кнопку — а не «неизвестность»).
+      expect(
+        classifyStoredPair(
+          serialise({ queryKey: ['voice', 'usage'], data: { ...data, limitMinutes: 0 }, storedAt }),
+          NOW,
+        ).status,
+      ).toBe('ok');
+    }
+  });
 });

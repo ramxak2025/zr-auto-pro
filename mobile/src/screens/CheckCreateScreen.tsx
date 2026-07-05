@@ -1217,6 +1217,12 @@ export default function CheckCreateScreen() {
   // Гейт: сервер настроен && есть минуты (limit>0; free=0 = kill-switch)
   // && бинарник несёт разрешение микрофона (iOS≥37/Android≥68 — OTA прилетает
   // и на старые сборки, где обращение к микрофону = краш TCC).
+  // Last-known state (рваная сеть, 2026-07-05): ['voice','usage'] в whitelist
+  // persistentCache — после первого успешного ответа гейт живёт на кеше через
+  // рестарты/офлайн, кнопка не «мигает» из-за упавшего/висящего GET. Явный
+  // отрицательный ответ (configured:false / limit 0) по-прежнему прячет её.
+  // gcTime сутки: дефолтные 30 мин выкидывали слот из памяти посреди смены —
+  // экран, открытый оффлайн после часа работы, снова терял кнопку.
   const [voiceSheetOpen, setVoiceSheetOpen] = useState(false);
   const voiceNativeReady = isVoiceNativeReady();
   const { data: voiceUsage } = useQuery<VoiceUsage>({
@@ -1224,6 +1230,7 @@ export default function CheckCreateScreen() {
     queryFn: async () => (await voiceApi.usage()).data,
     enabled: voiceNativeReady && !!authUser,
     staleTime: 5 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
   const voiceReady = voiceNativeReady && voiceUsage?.configured === true && (voiceUsage?.limitMinutes ?? 0) > 0;
 

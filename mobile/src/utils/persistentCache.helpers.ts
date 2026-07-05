@@ -212,6 +212,16 @@ export const PERSISTED_KEYS = [
   'supplier-defect-returns',
   'check',
   'car-checks',
+  // ── Голосовой ввод — «последнее известное состояние» (2026-07-05) ─────
+  // ['voice', 'usage'] — гейт кнопки микрофона в Кассе / CheckDetail
+  // (configured && limitMinutes > 0). На рваной сети владельца GET
+  // /voice/usage не успевал ответить → voiceUsage === undefined → кнопка
+  // «иногда» пропадала. Персистим единственный фиксированный слот (не
+  // search-volatile, объект — не пустая коллекция): после первого успешного
+  // ответа гейт живёт на last-known state через рестарты и офлайн, а явный
+  // отрицательный ответ сервера (configured:false / limitMinutes:0)
+  // по-прежнему прячет кнопку.
+  'voice',
 ] as const;
 
 export type PersistedKey = (typeof PERSISTED_KEYS)[number];

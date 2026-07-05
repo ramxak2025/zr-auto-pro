@@ -396,6 +396,9 @@ export default function CheckDetailScreen() {
   // Гейт по правде сервера (/voice/usage: настроено && limitMinutes>0 — free-
   // минуты работают и без фичи в тарифе) && бинарник с разрешением микрофона
   // (iOS≥37/Android≥68). Зеркалит Кассу — см. комментарий там (баг 05.07).
+  // Last-known state: ['voice','usage'] персистится (см. Кассу) — на рваной
+  // сети кнопка живёт на кеше, а не пропадает; gcTime сутки против выселения
+  // слота из памяти посреди смены.
   const [voiceSheetOpen, setVoiceSheetOpen] = useState(false);
   const voiceNativeReady = isVoiceNativeReady();
   const { data: voiceUsage } = useQuery<VoiceUsage>({
@@ -403,6 +406,7 @@ export default function CheckDetailScreen() {
     queryFn: async () => (await voiceApi.usage()).data,
     enabled: voiceNativeReady && !!user,
     staleTime: 5 * 60 * 1000,
+    gcTime: 24 * 60 * 60 * 1000,
   });
   const voiceReady = voiceNativeReady && voiceUsage?.configured === true && (voiceUsage?.limitMinutes ?? 0) > 0;
 
