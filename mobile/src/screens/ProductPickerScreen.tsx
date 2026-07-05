@@ -59,6 +59,7 @@ import {
   getProductPickerSessionVersion,
   subscribeProductPickerSession,
 } from '../utils/productPickerSession';
+import { formatQty, unitLabel } from '../utils/units';
 import type { Product } from '../../../shared/types';
 
 /** Окно дребезга: повторный тап по ТОЙ ЖЕ строке в этом окне игнорируется
@@ -195,7 +196,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
             <View style={styles.stockInline}>
               {lowStock ? <Ionicons name="alert-circle" size={12} color={colors.red[500]} /> : null}
               <Text style={[styles.stockInlineText, { color: lowStock ? colors.red[500] : palette.text.tertiary }]}>
-                {product.stock} шт
+                {formatQty(product.stock)} {unitLabel(product.unit)}
               </Text>
             </View>
             <View style={styles.stepperRow}>
@@ -208,7 +209,7 @@ const PickerProductRow = React.memo(function PickerProductRow({
                 <Ionicons name="remove" size={18} color={colors.red[500]} />
               </TouchableOpacity>
               <View style={styles.qtyBadge}>
-                <Text style={styles.qtyBadgeText}>{cartQty}</Text>
+                <Text style={styles.qtyBadgeText}>{formatQty(cartQty)}</Text>
               </View>
               <TouchableOpacity
                 onPress={() => onIncrement(product)}
@@ -734,7 +735,7 @@ export default function ProductPickerScreen() {
             <View style={[styles.cartIconWrap, { backgroundColor: palette.accent.primarySoft }]}>
               <Ionicons name="cart" size={18} color={palette.accent.primaryText} />
               <View style={styles.cartCountBadge}>
-                <Text style={styles.cartCountBadgeText}>{cartTotals.qty}</Text>
+                <Text style={styles.cartCountBadgeText}>{formatQty(cartTotals.qty)}</Text>
               </View>
             </View>
             <View style={{ flex: 1 }}>

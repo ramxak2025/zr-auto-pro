@@ -1585,6 +1585,15 @@ function CashPositionCard() {
   // за прошлые продажи.
   const installmentDebt = data?.cashPosition?.installmentDebt;
   const installmentPaid = data?.cashPosition?.installmentPaid;
+  // Разбивка погашений по способу оплаты (119) — подпись «в т.ч. наличными /
+  // картой» показываем только когда бэк прислал поля и часть ненулевая.
+  const installmentPaidParts: string[] = [];
+  if (typeof data?.cashPosition?.installmentPaidCash === 'number' && data.cashPosition.installmentPaidCash > 0) {
+    installmentPaidParts.push(`наличными ${formatMoney(data.cashPosition.installmentPaidCash)}`);
+  }
+  if (typeof data?.cashPosition?.installmentPaidCard === 'number' && data.cashPosition.installmentPaidCard > 0) {
+    installmentPaidParts.push(`картой ${formatMoney(data.cashPosition.installmentPaidCard)}`);
+  }
 
   const rows: {
     key: 'cash' | 'card' | 'warranty' | 'installmentDebt';
@@ -1688,6 +1697,11 @@ function CashPositionCard() {
               <Text style={[styles.cashRowNote, { color: palette.text.tertiary }]}>
                 За прошлые продажи — в оборот не входят
               </Text>
+              {installmentPaidParts.length > 0 && (
+                <Text style={[styles.cashRowNote, { color: palette.text.tertiary }]}>
+                  в т.ч. {installmentPaidParts.join(' · ')}
+                </Text>
+              )}
             </View>
             <Text style={[styles.cashRowValue, { color: colors.teal[600] }]}>+{formatMoney(installmentPaid)}</Text>
           </View>

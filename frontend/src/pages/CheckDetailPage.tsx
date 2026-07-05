@@ -35,6 +35,7 @@ import Modal from '../components/Modal';
 import { WorkStatusBadge, WorkStatusPicker, resolveColumn } from '../components/WorkStatusPicker';
 import type { Check, Tenant, WorkBoardColumn } from '../types';
 import { generateReceiptPdf } from '../utils/generateReceiptPdf';
+import { formatQty, formatQtyUnit } from '../utils/units';
 import { generateOrderPdf } from '../utils/generateOrderPdf';
 import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -519,9 +520,14 @@ export default function CheckDetailPage() {
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-gray-900">{prod.name}</p>
-                        {prod.quantity > 1 && (
+                        {/* 120: дробные количества — «0.5 м x 1 200 ₽» видно и
+                            при quantity < 1, скрываем только ровно 1. Единица —
+                            ТОЛЬКО когда пришла: free-text строка без unit иначе
+                            получала бы ложное «0.5 шт». */}
+                        {prod.quantity !== 1 && (
                           <p className="text-xs text-gray-400 mt-0.5">
-                            {prod.quantity} x {formatMoney(prod.sellPrice)}
+                            {prod.unit ? formatQtyUnit(prod.quantity, prod.unit) : formatQty(prod.quantity)} x{' '}
+                            {formatMoney(prod.sellPrice)}
                           </p>
                         )}
                       </div>
@@ -548,7 +554,9 @@ export default function CheckDetailPage() {
                         <td className="text-gray-400">{idx + 1}</td>
                         <td className="font-medium">{prod.name}</td>
                         <td className="text-right text-gray-600">{formatMoney(prod.sellPrice)}</td>
-                        <td className="text-center text-gray-600">{prod.quantity}</td>
+                        <td className="text-center text-gray-600">
+                          {prod.unit ? formatQtyUnit(prod.quantity, prod.unit) : formatQty(prod.quantity)}
+                        </td>
                         <td className="text-right font-semibold">{formatMoney(prod.totalSell)}</td>
                       </tr>
                     ))}

@@ -675,6 +675,23 @@ export class SalaryService {
       [userID, todayStart, weekStart, monthStart, tenantID],
     );
 
+    // Погашения рассрочки, принятые СЕГОДНЯ этим пользователем (created_by =
+    // userID, 093/119): живые деньги у него на руках — раньше касса мастера их
+    // теряла вовсе («принял погашение наличными — нигде не видно»). Атрибуция
+    // по ПРИНЯВШЕМУ платёж, а не по мастеру исходного чека. Разбивка по
+    // payment_method (119): 'card' → today_card, всё остальное → today_cash
+    // (строки до миграции считаются налом — решение владельца). Tenant-scoped.
+    const { rows: instRows } = await this.pool.query(
+      `SELECT
+         COALESCE(SUM(CASE WHEN payment_method = 'card' THEN amount ELSE 0 END), 0) as today_inst_card,
+         COALESCE(SUM(CASE WHEN COALESCE(payment_method, 'cash') <> 'card' THEN amount ELSE 0 END), 0) as today_inst_cash
+       FROM installment_payments
+       WHERE tenant_id = $1 AND created_by = $2 AND paid_at >= $3`,
+      [tenantID, userID, todayStart],
+    );
+    const todayInstCash = parseFloat(instRows[0]?.today_inst_cash) || 0;
+    const todayInstCard = parseFloat(instRows[0]?.today_inst_card) || 0;
+
     const prodAgg = prodRows[0];
     const svcAgg = svcRows[0];
     const todayService = parseFloat(svcAgg.today_service) || 0;
@@ -736,8 +753,8 @@ export class SalaryService {
       productSalaryPercent: parseFloat(user.product_salary_percent) || 0,
       todayChecks: parseInt(prodAgg.today_checks) || 0,
       monthChecks: parseInt(prodAgg.month_checks) || 0,
-      todayCash: parseFloat(prodAgg.today_cash) || 0,
-      todayCard: parseFloat(prodAgg.today_card) || 0,
+      todayCash: (parseFloat(prodAgg.today_cash) || 0) + todayInstCash,
+      todayCard: (parseFloat(prodAgg.today_card) || 0) + todayInstCard,
       todayWarranty: parseFloat(prodAgg.today_warranty) || 0,
       productPromotions,
       motivationToday: parseFloat(mot.today) || 0,

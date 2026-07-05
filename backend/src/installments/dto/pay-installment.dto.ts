@@ -1,4 +1,4 @@
-import { IsNumber, IsOptional, IsString, MaxLength, Min, IsDateString } from 'class-validator';
+import { IsIn, IsNumber, IsOptional, IsString, MaxLength, Min, IsDateString } from 'class-validator';
 
 /** Write DTO for POST /installments/:planId/pay — record a partial repayment. */
 export class PayInstallmentDto {
@@ -6,6 +6,14 @@ export class PayInstallmentDto {
   @IsNumber({}, { message: 'Сумма должна быть числом' })
   @Min(0.01, { message: 'Сумма платежа должна быть положительной' })
   amount!: number;
+
+  /**
+   * Способ оплаты погашения (119). Опционален — старые клиенты его не шлют,
+   * тогда 'cash' (решение владельца: погашения почти всегда наличными).
+   */
+  @IsOptional()
+  @IsIn(['cash', 'card'], { message: 'Способ оплаты: cash или card' })
+  method?: 'cash' | 'card';
 
   @IsOptional()
   @IsString()

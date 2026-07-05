@@ -25,6 +25,7 @@ import { useQuery } from '@tanstack/react-query';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { stockMovementsApi } from '../api/services';
+import { formatQtyUnit } from '../utils/units';
 import { useColors } from '../contexts/ThemeContext';
 import { Text } from '../platform/Typography';
 import { borderRadius, colors, spacing } from '../theme';
@@ -109,11 +110,9 @@ export function formatMovementDateTime(iso: string): string {
   }
 }
 
-// Количество без хвостовых нулей: 5, 2.5, 0.75.
-export function formatQty(value: number): string {
-  if (!Number.isFinite(value)) return '0';
-  return String(Math.round(value * 1000) / 1000);
-}
+// Количество без хвостовых нулей — единая реализация в utils/units.ts (120,
+// дробные количества). Re-export сохраняет существующие импорты экранов.
+export { formatQty } from '../utils/units';
 
 export interface ProductMovementHistoryModalProps {
   visible: boolean;
@@ -121,11 +120,21 @@ export interface ProductMovementHistoryModalProps {
   /** Товар, для которого показываем журнал. null → запрос отключён. */
   productId: string | null;
   productName?: string;
+  /** Единица измерения товара ('шт','м','кг'…). Не передана → 'шт'. */
+  productUnit?: string;
   /** Опционально сузить журнал до конкретного склада. */
   warehouseId?: string;
 }
 
-function MovementRow({ item, palette }: { item: StockMovement; palette: ReturnType<typeof useColors> }) {
+function MovementRow({
+  item,
+  palette,
+  unit,
+}: {
+  item: StockMovement;
+  palette: ReturnType<typeof useColors>;
+  unit?: string;
+}) {
   const v = visualFor(item.type);
   const operator = item.user?.fullName?.trim();
 
@@ -142,7 +151,7 @@ function MovementRow({ item, palette }: { item: StockMovement; palette: ReturnTy
           </Text>
           <Text variant="bodyEmph" color={v.sign === '' ? palette.text.primary : v.color}>
             {v.sign}
-            {formatQty(item.quantity)} {'шт'}
+            {formatQtyUnit(item.quantity, unit)}
           </Text>
         </View>
 
@@ -152,7 +161,7 @@ function MovementRow({ item, palette }: { item: StockMovement; palette: ReturnTy
           </Text>
           <Text variant="caption" color={palette.text.tertiary}>
             {'Остаток: '}
-            {formatQty(item.stockAfter)} {'шт'}
+            {formatQtyUnit(item.stockAfter, unit)}
           </Text>
         </View>
 
@@ -183,6 +192,7 @@ export default function ProductMovementHistoryModal({
   onClose,
   productId,
   productName,
+  productUnit,
   warehouseId,
 }: ProductMovementHistoryModalProps) {
   const palette = useColors();
@@ -206,8 +216,8 @@ export default function ProductMovementHistoryModal({
   });
 
   const renderItem = useCallback(
-    ({ item }: { item: StockMovement }) => <MovementRow item={item} palette={palette} />,
-    [palette],
+    ({ item }: { item: StockMovement }) => <MovementRow item={item} palette={palette} unit={productUnit} />,
+    [palette, productUnit],
   );
 
   const keyExtractor = useCallback((m: StockMovement) => m.id, []);

@@ -14,6 +14,8 @@ import {
   LayoutAnimation,
   AccessibilityInfo,
   Switch,
+  StyleProp,
+  TextStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -42,6 +44,7 @@ import {
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
+import { MIN_QTY, formatQty, parseQtyInput, roundQty, unitLabel } from '../utils/units';
 import Modal from '../components/Modal';
 import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
@@ -127,6 +130,61 @@ function formatMoney(v: number) {
 function parseMoneyInput(v: string): number {
   const n = parseFloat(String(v).replace(',', '.'));
   return Number.isFinite(n) ? n : 0;
+}
+
+/**
+ * QtyInput — поле количества строки товара (120, дробные количества).
+ *
+ * Старый контролируемый инпут (`value={String(line.quantity)}` +
+ * пере-парс на каждом символе) физически не давал набрать дробь: «0.»
+ * парсился в 0 → `|| 1` → мгновенно перерисовывался как «1», точка
+ * съедалась. Здесь черновик текста живёт локально: коммитим наверх каждое
+ * валидное значение ≥ MIN_QTY (0.001), а на blur нормализуем отображение
+ * («2,» → «2», пусто → последнее валидное). Запятая = точка (RU decimal-pad),
+ * глубже 3 знаков не уходит (parseQtyInput округляет — ровно NUMERIC(12,3)).
+ * Степперы ±1 снаружи продолжают работать: пока поле не в фокусе, внешние
+ * изменения значения синхронизируются в черновик.
+ */
+function QtyInput({
+  value,
+  onCommit,
+  style,
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+  style?: StyleProp<TextStyle>;
+}) {
+  const [text, setText] = useState(() => formatQty(value));
+  const focusedRef = useRef(false);
+  useEffect(() => {
+    if (!focusedRef.current) setText(formatQty(value));
+  }, [value]);
+  return (
+    <TextInput
+      value={text}
+      onChangeText={(v) => {
+        setText(v);
+        const n = parseQtyInput(v);
+        if (n !== null && n >= MIN_QTY) onCommit(n);
+      }}
+      onFocus={() => {
+        focusedRef.current = true;
+      }}
+      onBlur={() => {
+        focusedRef.current = false;
+        const n = parseQtyInput(text);
+        if (n === null || n < MIN_QTY) {
+          setText(formatQty(value));
+        } else {
+          setText(formatQty(n));
+          onCommit(n);
+        }
+      }}
+      style={style}
+      keyboardType="decimal-pad"
+      selectTextOnFocus
+    />
+  );
 }
 
 /**
@@ -943,15 +1001,22 @@ export default function CheckCreateScreen() {
       })),
     );
     setProductLines(
-      template.products.map((p) => ({
-        productId: p.productId,
-        name: p.name,
-        sellPrice: p.sellPrice,
-        costPrice: p.costPrice,
-        quantity: p.quantity,
-        totalSell: p.sellPrice * p.quantity,
-        totalCost: p.costPrice * p.quantity,
-      })),
+      template.products.map((p) => {
+        // Шаблон unit не хранит — подтягиваем из кэша каталога (как web
+        // applyTemplate): иначе строка из шаблона теряла единицу измерения
+        // и «Кол. (м)» откатывался к дефолтным «шт».
+        const catalogProduct = (allProducts ?? []).find((ap) => ap.id === p.productId);
+        return {
+          productId: p.productId,
+          name: p.name,
+          sellPrice: p.sellPrice,
+          costPrice: p.costPrice,
+          quantity: p.quantity,
+          totalSell: p.sellPrice * p.quantity,
+          totalCost: p.costPrice * p.quantity,
+          unit: catalogProduct?.unit,
+        };
+      }),
     );
     setShowTemplatesPicker(false);
   };
@@ -1833,7 +1898,7 @@ export default function CheckCreateScreen() {
         for (const { qty, component: bundleProduct } of resolved) {
           const existIdx = updated.findIndex((l) => l.productId === bundleProduct.id);
           if (existIdx >= 0) {
-            const newQty = updated[existIdx].quantity + qty;
+            const newQty = roundQty(updated[existIdx].quantity + qty);
             updated[existIdx] = {
               ...updated[existIdx],
               quantity: newQty,
@@ -1849,6 +1914,7 @@ export default function CheckCreateScreen() {
               quantity: qty,
               totalSell: bundleProduct.sellPrice * qty,
               totalCost: bundleProduct.costPrice * qty,
+              unit: bundleProduct.unit,
             });
           }
         }
@@ -1859,7 +1925,7 @@ export default function CheckCreateScreen() {
 
     const existing = productLines.findIndex((l) => l.productId === product.id);
     if (existing >= 0) {
-      updateProductLine(existing, 'quantity', productLines[existing].quantity + 1);
+      updateProductLine(existing, 'quantity', roundQty(productLines[existing].quantity + 1));
     } else {
       setProductLines((prev) => [
         ...prev,
@@ -1871,6 +1937,7 @@ export default function CheckCreateScreen() {
           quantity: 1,
           totalSell: product.sellPrice,
           totalCost: product.costPrice,
+          unit: product.unit,
         },
       ]);
     }
@@ -1888,7 +1955,7 @@ export default function CheckCreateScreen() {
       if (idx < 0) return prev;
       const line = prev[idx];
       if (line.quantity <= 1) return prev.filter((_, i) => i !== idx);
-      const nextQty = line.quantity - 1;
+      const nextQty = roundQty(line.quantity - 1);
       return prev.map((l, i) =>
         i === idx ? { ...l, quantity: nextQty, totalSell: l.sellPrice * nextQty, totalCost: l.costPrice * nextQty } : l,
       );
@@ -3060,10 +3127,15 @@ export default function CheckCreateScreen() {
                       />
                     </View>
                     <View style={{ width: 60 }}>
-                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Кол.</Text>
-                      <TextInput
-                        value={String(line.quantity)}
-                        onChangeText={(v) => updateProductLine(idx, 'quantity', parseMoneyInput(v) || 1)}
+                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>
+                        {`Кол. (${unitLabel(line.unit)})`}
+                      </Text>
+                      {/* 120: дробное количество всегда разрешено — 0.5 м шланга.
+                          Черновик текста живёт в QtyInput, чтобы «0.» и «2,» не
+                          съедались контролируемым value на каждом символе. */}
+                      <QtyInput
+                        value={line.quantity}
+                        onCommit={(n) => updateProductLine(idx, 'quantity', n)}
                         style={[
                           styles.lineInput,
                           {
@@ -3072,8 +3144,6 @@ export default function CheckCreateScreen() {
                             color: palette.text.primary,
                           },
                         ]}
-                        keyboardType="numeric"
-                        selectTextOnFocus
                       />
                     </View>
                     <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
@@ -3085,7 +3155,8 @@ export default function CheckCreateScreen() {
                     <View style={styles.stockWarnRow}>
                       <Ionicons name="alert-circle-outline" size={13} color={colors.amber[600]} />
                       <Text style={styles.stockWarnText}>
-                        На складе только {Math.max(oversoldByProductId.get(line.productId)!.stock, 0)} шт
+                        На складе только {formatQty(Math.max(oversoldByProductId.get(line.productId)!.stock, 0))}{' '}
+                        {unitLabel(line.unit)}
                       </Text>
                     </View>
                   )}

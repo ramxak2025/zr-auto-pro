@@ -29,6 +29,7 @@
  */
 import { onlineManager } from '@tanstack/react-query';
 import type { Query, QueryClient } from '@tanstack/react-query';
+import { isHtmlApiPayload } from '../api/apiHosts';
 import { isDeterministicClientError } from './queryRetry';
 
 /** Capped backoff between health probes while a query is errored. */
@@ -50,7 +51,8 @@ export interface RecoveryDeps {
   hasErroredQueries: () => boolean;
   /** Refetch every active errored query. */
   refetchErrored: () => void;
-  /** Probe backend reachability — resolves true on a 2xx /health. */
+  /** Probe backend reachability — true on a 2xx NON-HTML /health (an HTML
+   *  200 is a captive portal / foreign upstream, not our backend). */
   probeHealth: () => Promise<boolean>;
   /** Device connectivity (onlineManager.isOnline()). */
   isOnline: () => boolean;
@@ -188,7 +190,12 @@ export function attachBackendRecovery(qc: QueryClient, apiUrl: string): () => vo
       const t = setTimeout(() => abort.abort(), PROBE_TIMEOUT_MS);
       try {
         const res = await fetch(`${apiUrl}/health`, { method: 'GET', signal: abort.signal });
-        return res.ok;
+        if (!res.ok) return false;
+        // Captive-portal / чужой апстрим отдаёт HTML-заглушку со статусом 200:
+        // без проверки тела проба решала бы «бэкенд ожил» и запускала шторм
+        // refetch'ей в сети, где API на самом деле недоступен. Тот же страж,
+        // что и в axios / OfflineBanner (probeUrl rejectHtml).
+        return !isHtmlApiPayload(await res.text(), res.headers.get('content-type'));
       } catch {
         return false;
       } finally {

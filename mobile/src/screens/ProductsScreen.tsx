@@ -46,6 +46,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
+import { DEFAULT_UNIT, UNIT_PRESETS, formatQty, parseQtyInput, unitLabel } from '../utils/units';
 import type { Product, PaginatedResponse, StockMovement, Warehouse } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -255,9 +256,9 @@ const ProductRow = React.memo(function ProductRow({
         <View style={styles.productStockWrap}>
           {lowStock && <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />}
           <Text style={[styles.productStock, { color: textPrimary }, lowStock && styles.productStockLow]}>
-            {item.stock}
+            {formatQty(item.stock)}
           </Text>
-          <Text style={[styles.productStockLabel, { color: textTertiary }]}>шт</Text>
+          <Text style={[styles.productStockLabel, { color: textTertiary }]}>{unitLabel(item.unit)}</Text>
         </View>
       </View>
     </AnimatedCard>
@@ -317,6 +318,8 @@ export default function ProductsScreen() {
   const [sellPrice, setSellPrice] = useState('');
   const [stock, setStock] = useState('');
   const [minStock, setMinStock] = useState('');
+  // 120 (дробные количества) — единица измерения товара, чипсы-пресеты.
+  const [unit, setUnit] = useState<string>(DEFAULT_UNIT);
   const [photoUri, setPhotoUri] = useState<string | null>(null); // local image URI or existing server path
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -355,6 +358,7 @@ export default function ProductsScreen() {
   const [writeoffProductId, setWriteoffProductId] = useState('');
   const [writeoffProductName, setWriteoffProductName] = useState('');
   const [writeoffProductStock, setWriteoffProductStock] = useState(0);
+  const [writeoffProductUnit, setWriteoffProductUnit] = useState<string | undefined>(undefined);
   const [writeoffProductCostPrice, setWriteoffProductCostPrice] = useState(0);
   const [writeoffQty, setWriteoffQty] = useState('');
   const [writeoffReason, setWriteoffReason] = useState('');
@@ -425,6 +429,7 @@ export default function ProductsScreen() {
   const [correctionProductId, setCorrectionProductId] = useState('');
   const [correctionProductName, setCorrectionProductName] = useState('');
   const [correctionProductStock, setCorrectionProductStock] = useState(0);
+  const [correctionProductUnit, setCorrectionProductUnit] = useState<string | undefined>(undefined);
   const [correctionProductCostPrice, setCorrectionProductCostPrice] = useState(0);
   const [correctionNewStock, setCorrectionNewStock] = useState('');
   const [correctionReason, setCorrectionReason] = useState('');
@@ -890,7 +895,7 @@ export default function ProductsScreen() {
     let shortageAmount = 0;
     let excessAmount = 0;
     for (const item of checked) {
-      const diff = (Number(item.actualStock) || 0) - item.currentStock;
+      const diff = (parseQtyInput(item.actualStock) ?? 0) - item.currentStock;
       const product = allProducts.find((p) => p.id === item.productId);
       const cost = product?.costPrice || 0;
       if (diff < 0) {
@@ -1088,6 +1093,7 @@ export default function ProductsScreen() {
     setSellPrice('');
     setStock('');
     setMinStock('');
+    setUnit(DEFAULT_UNIT);
     setPhotoUri(null);
     setModalOpen(true);
   };
@@ -1104,6 +1110,8 @@ export default function ProductsScreen() {
     setSellPrice(String(p.sellPrice));
     setStock(String(p.stock));
     setMinStock(String(p.minStock));
+    // Legacy-код ('pcs'→'шт') нормализуем сразу — чипсы подсветят значение.
+    setUnit(unitLabel(p.unit));
     setPhotoUri(p.photo ? (p.photo.startsWith('http') ? p.photo : p.photo) : null);
     setModalOpen(true);
   }, []);
@@ -1194,8 +1202,10 @@ export default function ProductsScreen() {
       category: category || undefined,
       costPrice: Number(costPrice) || 0,
       sellPrice: Number(sellPrice) || 0,
-      stock: Number(stock) || 0,
-      minStock: Number(minStock) || 0,
+      // 120: дробные остатки — запятая нормализуется, глубже 3 знаков не шлём.
+      stock: parseQtyInput(stock) ?? 0,
+      minStock: parseQtyInput(minStock) ?? 0,
+      unit: unit || DEFAULT_UNIT,
       photo: uploadedPhotoPath,
       // New products inherit the currently selected warehouse. On edit
       // we don't override warehouseId — moving between warehouses is
@@ -1256,14 +1266,14 @@ export default function ProductsScreen() {
         try {
           await productsApi.updateStock(item.productId, {
             type: 'inventory' as const,
-            quantity: Number(item.actualStock) || 0,
+            quantity: parseQtyInput(item.actualStock) ?? 0,
             reason: inventoryReason || undefined,
           });
           // The sheet now reflects the server: the row is no longer
           // «changed», so a retry pass won't re-send it.
           setInventoryItems((prev) =>
             prev.map((it) =>
-              it.productId === item.productId ? { ...it, currentStock: Number(item.actualStock) || 0 } : it,
+              it.productId === item.productId ? { ...it, currentStock: parseQtyInput(item.actualStock) ?? 0 } : it,
             ),
           );
         } catch (err: any) {
@@ -1316,7 +1326,7 @@ export default function ProductsScreen() {
     let shortageTotal = 0;
     let excessTotal = 0;
     for (const item of changed) {
-      const diff = (Number(item.actualStock) || 0) - item.currentStock;
+      const diff = (parseQtyInput(item.actualStock) ?? 0) - item.currentStock;
       const product = allProducts.find((p) => p.id === item.productId);
       const cost = product?.costPrice || 0;
       if (diff < 0) shortageTotal += Math.abs(diff) * cost;
@@ -1345,6 +1355,7 @@ export default function ProductsScreen() {
     setWriteoffProductId(p.id);
     setWriteoffProductName(p.name);
     setWriteoffProductStock(p.stock);
+    setWriteoffProductUnit(p.unit);
     setWriteoffProductCostPrice(p.costPrice || 0);
     setWriteoffQty('');
     setWriteoffReason('');
@@ -1354,7 +1365,8 @@ export default function ProductsScreen() {
   };
 
   const handleWriteoffSubmit = async () => {
-    const qty = Number(writeoffQty);
+    // 120: дробное списание («0,5 м») — запятая → точка, максимум 3 знака.
+    const qty = parseQtyInput(writeoffQty) ?? 0;
     if (!qty || qty <= 0) {
       Alert.alert(
         '\u041E\u0448\u0438\u0431\u043A\u0430',
@@ -1400,7 +1412,7 @@ export default function ProductsScreen() {
       setShowWriteoffModal(false);
       Alert.alert(
         '\u0413\u043E\u0442\u043E\u0432\u043E',
-        `\u0421\u043F\u0438\u0441\u0430\u043D\u043E ${qty} \u0448\u0442. "${writeoffProductName}"${writeoffMode === 'expense' ? ' (\u0441 \u0443\u0447\u0451\u0442\u043E\u043C \u0432 \u0440\u0430\u0441\u0445\u043E\u0434\u0430\u0445)' : ''}`,
+        `\u0421\u043F\u0438\u0441\u0430\u043D\u043E ${formatQty(qty)} ${unitLabel(writeoffProductUnit)} "${writeoffProductName}"${writeoffMode === 'expense' ? ' (\u0441 \u0443\u0447\u0451\u0442\u043E\u043C \u0432 \u0440\u0430\u0441\u0445\u043E\u0434\u0430\u0445)' : ''}`,
       );
     } catch (err: any) {
       Alert.alert(
@@ -1496,13 +1508,14 @@ export default function ProductsScreen() {
 
   const handleTransferSubmit = async () => {
     if (!transferProduct || !transferTarget) return;
-    const qty = Number(transferQty);
+    // 120: дробный перенос («0,5 м») — запятая → точка, максимум 3 знака.
+    const qty = parseQtyInput(transferQty) ?? 0;
     if (!qty || qty <= 0) {
       Alert.alert('Ошибка', 'Укажите количество');
       return;
     }
     if (qty > transferProduct.stock) {
-      Alert.alert('Ошибка', `Нельзя перенести больше чем есть на складе (${transferProduct.stock})`);
+      Alert.alert('Ошибка', `Нельзя перенести больше чем есть на складе (${formatQty(transferProduct.stock)})`);
       return;
     }
     if (!warehouses || warehouses.length === 0) {
@@ -1550,7 +1563,10 @@ export default function ProductsScreen() {
       const targetLabel = transferTarget === 'defect' ? 'брак' : 'Б/У';
       const productName = transferProduct.name;
       closeTransferDialog();
-      Alert.alert('Готово', `Перенесено ${qty} шт. "${productName}" в ${targetLabel}`);
+      Alert.alert(
+        'Готово',
+        `Перенесено ${formatQty(qty)} ${unitLabel(transferProduct.unit)} "${productName}" в ${targetLabel}`,
+      );
     } catch (err: any) {
       Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка при переносе');
     }
@@ -1572,15 +1588,17 @@ export default function ProductsScreen() {
     setCorrectionProductId(p.id);
     setCorrectionProductName(p.name);
     setCorrectionProductStock(p.stock);
+    setCorrectionProductUnit(p.unit);
     setCorrectionProductCostPrice(p.costPrice || 0);
-    setCorrectionNewStock(String(p.stock));
+    setCorrectionNewStock(formatQty(p.stock));
     setCorrectionReason('');
     setShowCorrectionPicker(false);
     setShowCorrectionModal(true);
   };
 
   const handleCorrectionSubmit = async () => {
-    const newQty = Number(correctionNewStock);
+    // 120: дробный остаток («12,5») — запятая → точка, максимум 3 знака.
+    const newQty = parseQtyInput(correctionNewStock) ?? NaN;
     if (isNaN(newQty) || newQty < 0) {
       Alert.alert('Ошибка', 'Укажите корректное количество');
       return;
@@ -1607,7 +1625,7 @@ export default function ProductsScreen() {
       const diff = newQty - correctionProductStock;
       Alert.alert(
         'Готово',
-        `Остаток "${correctionProductName}" скорректирован: ${correctionProductStock} → ${newQty} (${diff > 0 ? '+' : ''}${diff})`,
+        `Остаток "${correctionProductName}" скорректирован: ${formatQty(correctionProductStock)} → ${formatQty(newQty)} (${diff > 0 ? '+' : ''}${formatQty(diff)})`,
       );
     } catch (err: any) {
       Alert.alert('Ошибка', err?.response?.data?.message || 'Ошибка при корректировке');
@@ -2064,16 +2082,56 @@ export default function ProductsScreen() {
             />
           </View>
         </View>
+        {/* \u0415\u0434\u0438\u043D\u0438\u0446\u0430 \u0438\u0437\u043C\u0435\u0440\u0435\u043D\u0438\u044F \u2014 \u0447\u0438\u043F\u0441\u044B-\u043F\u0440\u0435\u0441\u0435\u0442\u044B (120, \u0434\u0440\u043E\u0431\u043D\u044B\u0435 \u043A\u043E\u043B\u0438\u0447\u0435\u0441\u0442\u0432\u0430).
+            \u041D\u0435\u0441\u0442\u0430\u043D\u0434\u0430\u0440\u0442\u043D\u0430\u044F legacy-\u0435\u0434\u0438\u043D\u0438\u0446\u0430 \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u0442\u0441\u044F \u0434\u043E\u043F\u043E\u043B\u043D\u0438\u0442\u0435\u043B\u044C\u043D\u044B\u043C \u0447\u0438\u043F\u043E\u043C. */}
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+            {'\u0415\u0434\u0438\u043D\u0438\u0446\u0430 \u0438\u0437\u043C\u0435\u0440\u0435\u043D\u0438\u044F'}
+          </Text>
+          <View style={styles.unitChipsRow}>
+            {(UNIT_PRESETS.includes(unit as (typeof UNIT_PRESETS)[number])
+              ? [...UNIT_PRESETS]
+              : [...UNIT_PRESETS, unit]
+            )
+              .filter(Boolean)
+              .map((u) => {
+                const active = unit === u;
+                return (
+                  <TouchableOpacity
+                    key={u}
+                    onPress={() => {
+                      haptic('tap');
+                      setUnit(u);
+                    }}
+                    style={[
+                      styles.unitChip,
+                      {
+                        backgroundColor: active ? palette.accent.primary : palette.bg.muted,
+                        borderColor: active ? palette.accent.primary : palette.border.subtle,
+                      },
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Text style={[styles.unitChipText, { color: active ? colors.white : palette.text.secondary }]}>
+                      {u}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+          </View>
+        </View>
         <View style={styles.formRowFields}>
           <View style={{ flex: 1 }}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
               {'\u041E\u0441\u0442\u0430\u0442\u043E\u043A'}
+              {unit !== DEFAULT_UNIT ? ` (${unit})` : ''}
             </Text>
             <TextInput
               value={stock}
               onChangeText={setStock}
               style={[styles.formInput, formInputThemed]}
-              keyboardType="numeric"
+              keyboardType="decimal-pad"
               placeholder="0"
               placeholderTextColor={palette.text.tertiary}
             />
@@ -2086,7 +2144,7 @@ export default function ProductsScreen() {
               value={minStock}
               onChangeText={setMinStock}
               style={[styles.formInput, formInputThemed]}
-              keyboardType="numeric"
+              keyboardType="decimal-pad"
               placeholder="0"
               placeholderTextColor={palette.text.tertiary}
             />
@@ -2463,7 +2521,7 @@ export default function ProductsScreen() {
             renderItem={({ item }) => {
               const invItem = inventoryItems.find((it) => it.productId === item.id);
               const actualStock = invItem?.actualStock ?? String(item.stock);
-              const diff = (Number(actualStock) || 0) - item.stock;
+              const diff = (parseQtyInput(actualStock) ?? 0) - item.stock;
               const countedInSession = isProductCountedInSession(item.id);
               const checked24h = isProductChecked24h(item.id);
               const lastDate = getProductLastInvDate(item.id);
@@ -2493,7 +2551,7 @@ export default function ProductsScreen() {
                   <View style={styles.invFullProductStock}>
                     <Text style={[styles.invFullProductStockLabel, { color: palette.text.tertiary }]}>{'Сист.'}</Text>
                     <Text style={[styles.invFullProductStockValue, { color: palette.text.secondary }]}>
-                      {item.stock}
+                      {formatQty(item.stock)}
                     </Text>
                   </View>
                   <TextInput
@@ -2527,8 +2585,8 @@ export default function ProductsScreen() {
                               : colors.red[50],
                       },
                     ]}
-                    keyboardType="numeric"
-                    placeholder={String(item.stock)}
+                    keyboardType="decimal-pad"
+                    placeholder={formatQty(item.stock)}
                     placeholderTextColor={palette.text.tertiary}
                   />
                   {diff !== 0 && (
@@ -2612,7 +2670,7 @@ export default function ProductsScreen() {
             <Text style={[styles.writeoffSelectedName, { color: palette.text.primary }]}>{writeoffProductName}</Text>
             <Text style={[styles.writeoffSelectedStock, { color: palette.text.secondary }]}>
               {'На складе: '}
-              {writeoffProductStock} {'шт'}
+              {formatQty(writeoffProductStock)} {unitLabel(writeoffProductUnit)}
             </Text>
           </View>
           <TouchableOpacity
@@ -2697,7 +2755,9 @@ export default function ProductsScreen() {
         </View>
 
         <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Количество к списанию'}</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+            {`Количество к списанию (${unitLabel(writeoffProductUnit)})`}
+          </Text>
           <TextInput
             value={writeoffQty}
             onChangeText={setWriteoffQty}
@@ -2705,8 +2765,8 @@ export default function ProductsScreen() {
               styles.formInput,
               { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
             ]}
-            keyboardType="numeric"
-            placeholder={`Макс: ${writeoffProductStock}`}
+            keyboardType="decimal-pad"
+            placeholder={`Макс: ${formatQty(writeoffProductStock)}`}
             placeholderTextColor={palette.text.tertiary}
             autoFocus
           />
@@ -2775,7 +2835,7 @@ export default function ProductsScreen() {
             <Text style={[styles.writeoffSelectedName, { color: palette.text.primary }]}>{correctionProductName}</Text>
             <Text style={[styles.writeoffSelectedStock, { color: palette.text.secondary }]}>
               {'На складе: '}
-              {correctionProductStock} {'шт'}
+              {formatQty(correctionProductStock)} {unitLabel(correctionProductUnit)}
             </Text>
           </View>
           <TouchableOpacity
@@ -2794,39 +2854,50 @@ export default function ProductsScreen() {
             style={[styles.formInput, formInputThemed, { backgroundColor: palette.bg.muted, justifyContent: 'center' }]}
           >
             <Text style={{ fontSize: fontSize.sm, color: palette.text.secondary }}>
-              {correctionProductStock} {'шт'}
+              {formatQty(correctionProductStock)} {unitLabel(correctionProductUnit)}
             </Text>
           </View>
         </View>
 
         <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{'Новый остаток'}</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+            {`Новый остаток (${unitLabel(correctionProductUnit)})`}
+          </Text>
           <TextInput
             value={correctionNewStock}
             onChangeText={setCorrectionNewStock}
             style={[styles.formInput, formInputThemed]}
-            keyboardType="numeric"
+            keyboardType="decimal-pad"
             placeholder="0"
             placeholderTextColor={palette.text.tertiary}
             autoFocus
           />
-          {correctionNewStock !== '' && Number(correctionNewStock) !== correctionProductStock && (
-            <View style={styles.correctionDiffRow}>
-              {Number(correctionNewStock) < correctionProductStock ? (
-                <Text style={{ fontSize: fontSize.xs, color: colors.red[600] }}>
-                  {'Недостача: '}
-                  {correctionProductStock - Number(correctionNewStock)} {'шт'} (
-                  {formatMoney((correctionProductStock - Number(correctionNewStock)) * correctionProductCostPrice)})
-                </Text>
-              ) : (
-                <Text style={{ fontSize: fontSize.xs, color: colors.green[600] }}>
-                  {'Излишек: +'}
-                  {Number(correctionNewStock) - correctionProductStock} {'шт'} (
-                  {formatMoney((Number(correctionNewStock) - correctionProductStock) * correctionProductCostPrice)})
-                </Text>
-              )}
-            </View>
-          )}
+          {correctionNewStock !== '' &&
+            (parseQtyInput(correctionNewStock) ?? correctionProductStock) !== correctionProductStock && (
+              <View style={styles.correctionDiffRow}>
+                {(parseQtyInput(correctionNewStock) ?? 0) < correctionProductStock ? (
+                  <Text style={{ fontSize: fontSize.xs, color: colors.red[600] }}>
+                    {'Недостача: '}
+                    {formatQty(correctionProductStock - (parseQtyInput(correctionNewStock) ?? 0))}{' '}
+                    {unitLabel(correctionProductUnit)} (
+                    {formatMoney(
+                      (correctionProductStock - (parseQtyInput(correctionNewStock) ?? 0)) * correctionProductCostPrice,
+                    )}
+                    )
+                  </Text>
+                ) : (
+                  <Text style={{ fontSize: fontSize.xs, color: colors.green[600] }}>
+                    {'Излишек: +'}
+                    {formatQty((parseQtyInput(correctionNewStock) ?? 0) - correctionProductStock)}{' '}
+                    {unitLabel(correctionProductUnit)} (
+                    {formatMoney(
+                      ((parseQtyInput(correctionNewStock) ?? 0) - correctionProductStock) * correctionProductCostPrice,
+                    )}
+                    )
+                  </Text>
+                )}
+              </View>
+            )}
         </View>
 
         <View style={styles.formField}>
@@ -3120,6 +3191,7 @@ export default function ProductsScreen() {
         onClose={() => setHistoryProduct(null)}
         productId={historyProduct?.id ?? null}
         productName={historyProduct?.name}
+        productUnit={historyProduct?.unit}
       />
 
       {/* «Перенести в папку» — folder picker scoped to the product's warehouse.
@@ -3152,7 +3224,7 @@ export default function ProductsScreen() {
                 </Text>
                 <Text style={[styles.writeoffSelectedStock, { color: palette.text.secondary }]}>
                   {'На основном складе: '}
-                  {transferProduct.stock} {'шт'}
+                  {formatQty(transferProduct.stock)} {unitLabel(transferProduct.unit)}
                 </Text>
               </View>
             </View>
@@ -3170,8 +3242,8 @@ export default function ProductsScreen() {
                     color: palette.text.primary,
                   },
                 ]}
-                keyboardType="numeric"
-                placeholder={`Макс: ${transferProduct.stock}`}
+                keyboardType="decimal-pad"
+                placeholder={`Макс: ${formatQty(transferProduct.stock)}`}
                 placeholderTextColor={palette.text.tertiary}
                 autoFocus
               />
@@ -3542,6 +3614,17 @@ const styles = StyleSheet.create({
   },
   formHint: { fontSize: 11, color: colors.gray[400], marginTop: 4 },
   formRowFields: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[4] },
+  // Чипсы единиц измерения (120, дробные количества).
+  unitChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  unitChip: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  unitChipText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   historyLink: {
     flexDirection: 'row',
     alignItems: 'center',

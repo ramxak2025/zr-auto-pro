@@ -65,6 +65,7 @@ import ProductMovementHistoryModal, {
   formatMovementDateTime,
   formatQty,
 } from '../components/ProductMovementHistoryModal';
+import { DEFAULT_UNIT, UNIT_PRESETS, parseQtyInput, unitLabel } from '../utils/units';
 import { Text } from '../platform/Typography';
 import { productsApi, stockMovementsApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
@@ -106,24 +107,9 @@ function formatMoney(v: number): string {
   );
 }
 
-// Backend stores a unit CODE ('pcs' default). Map the common ones to Russian
-// labels; anything unknown falls through to the raw value so we never show a
-// blank.
-const UNIT_LABELS: Record<string, string> = {
-  pcs: 'шт',
-  pc: 'шт',
-  l: 'л',
-  ml: 'мл',
-  kg: 'кг',
-  g: 'г',
-  m: 'м',
-  set: 'компл',
-  pack: 'упак',
-};
-function unitLabel(unit?: string): string {
-  if (!unit) return 'шт';
-  return UNIT_LABELS[unit.toLowerCase()] ?? unit;
-}
+// Единицы измерения — единый модуль utils/units.ts (120, дробные количества):
+// legacy-коды ('pcs','m','kg'…) маппятся на русские метки, новые значения
+// хранятся сразу русскими ('шт','м','кг','л','уп','компл').
 
 // Russian day pluralisation: 1 день, 2 дня, 5 дней.
 function pluralDays(n: number): string {
@@ -262,7 +248,9 @@ export default function ProductDetailScreen() {
     setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
     setStock(p.stock != null ? String(p.stock) : '');
     setMinStock(p.minStock != null ? String(p.minStock) : '');
-    setUnit(p.unit || '');
+    // Нормализуем legacy-код ('pcs'→'шт') сразу в русскую метку — чипсы
+    // подсветят актуальное значение, а сохранение перезапишет legacy-код.
+    setUnit(unitLabel(p.unit));
     setBarcode(p.barcode || '');
     setWarranty(p.warrantyDays != null ? String(p.warrantyDays) : '');
     setPhotoUri(p.photo || null);
@@ -392,9 +380,10 @@ export default function ProductDetailScreen() {
       name: name.trim(),
       category,
       sellPrice: Number(sellPrice) || 0,
-      stock: Number(stock) || 0,
-      minStock: Number(minStock) || 0,
-      unit: unit.trim() || undefined,
+      // 120: дробные остатки — запятая нормализуется, глубже 3 знаков не шлём.
+      stock: parseQtyInput(stock) ?? 0,
+      minStock: parseQtyInput(minStock) ?? 0,
+      unit: unit.trim() || DEFAULT_UNIT,
       warrantyDays: warranty.trim() === '' ? null : Math.max(0, Number(warranty) || 0),
       barcode: barcode.trim(),
       photo: uploadedPhotoPath,
@@ -606,12 +595,16 @@ export default function ProductDetailScreen() {
 
             {/* Stock */}
             <View style={styles.fieldRow}>
-              <EditField label="Остаток" palette={palette} style={{ flex: 1 }}>
+              <EditField
+                label={`Остаток${unit && unit !== DEFAULT_UNIT ? ` (${unit})` : ''}`}
+                palette={palette}
+                style={{ flex: 1 }}
+              >
                 <TextInput
                   value={stock}
                   onChangeText={setStock}
                   style={[styles.input, inputThemed]}
-                  keyboardType="numeric"
+                  keyboardType="decimal-pad"
                   placeholder="0"
                   placeholderTextColor={palette.text.tertiary}
                 />
@@ -621,36 +614,62 @@ export default function ProductDetailScreen() {
                   value={minStock}
                   onChangeText={setMinStock}
                   style={[styles.input, inputThemed]}
-                  keyboardType="numeric"
+                  keyboardType="decimal-pad"
                   placeholder="0"
                   placeholderTextColor={palette.text.tertiary}
                 />
               </EditField>
             </View>
 
-            {/* Unit + warranty */}
-            <View style={styles.fieldRow}>
-              <EditField label="Единица (шт, л, кг…)" palette={palette} style={{ flex: 1 }}>
-                <TextInput
-                  value={unit}
-                  onChangeText={setUnit}
-                  style={[styles.input, inputThemed]}
-                  placeholder="шт"
-                  placeholderTextColor={palette.text.tertiary}
-                  autoCapitalize="none"
-                />
-              </EditField>
-              <EditField label="Гарантия (дней)" palette={palette} style={{ flex: 1 }}>
-                <TextInput
-                  value={warranty}
-                  onChangeText={setWarranty}
-                  style={[styles.input, inputThemed]}
-                  keyboardType="numeric"
-                  placeholder="0"
-                  placeholderTextColor={palette.text.tertiary}
-                />
-              </EditField>
-            </View>
+            {/* Unit — чипсы-пресеты (120, дробные количества). Нестандартная
+                legacy-единица («мл», «г»…) показывается дополнительным чипом,
+                чтобы её можно было оставить, а не потерять при сохранении. */}
+            <EditField label="Единица измерения" palette={palette}>
+              <View style={styles.unitChipsRow}>
+                {(UNIT_PRESETS.includes(unit as (typeof UNIT_PRESETS)[number])
+                  ? [...UNIT_PRESETS]
+                  : [...UNIT_PRESETS, unit]
+                )
+                  .filter(Boolean)
+                  .map((u) => {
+                    const active = unit === u;
+                    return (
+                      <TouchableOpacity
+                        key={u}
+                        onPress={() => {
+                          haptic('tap');
+                          setUnit(u);
+                        }}
+                        style={[
+                          styles.unitChip,
+                          {
+                            backgroundColor: active ? palette.accent.primary : palette.bg.muted,
+                            borderColor: active ? palette.accent.primary : palette.border.subtle,
+                          },
+                        ]}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                      >
+                        <Text variant="bodyEmph" color={active ? colors.white : palette.text.secondary}>
+                          {u}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+              </View>
+            </EditField>
+
+            {/* Warranty */}
+            <EditField label="Гарантия (дней)" palette={palette}>
+              <TextInput
+                value={warranty}
+                onChangeText={setWarranty}
+                style={[styles.input, inputThemed]}
+                keyboardType="numeric"
+                placeholder="0"
+                placeholderTextColor={palette.text.tertiary}
+              />
+            </EditField>
 
             {/* Barcode */}
             <EditField label="Штрихкод" palette={palette}>
@@ -1010,6 +1029,7 @@ export default function ProductDetailScreen() {
         onClose={() => setHistoryOpen(false)}
         productId={historyOpen ? productId : null}
         productName={product.name}
+        productUnit={product.unit}
       />
 
       {/* Fullscreen photo preview — mirrors the warehouse list preview UX. */}
@@ -1207,6 +1227,16 @@ const styles = StyleSheet.create({
     fontSize: 15,
   },
   inputAsButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing[2] },
+  // Чипсы единиц измерения (120, дробные количества).
+  unitChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  unitChip: {
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   photoActions: { flexDirection: 'row', justifyContent: 'center', gap: spacing[5], marginTop: spacing[3] },
   photoActionBtn: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   editActions: { flexDirection: 'row', gap: spacing[3], marginTop: spacing[6] },

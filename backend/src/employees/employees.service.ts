@@ -809,7 +809,8 @@ export class EmployeesService {
       topProducts: topProductRows.map((r) => ({
         productId: r.id as string,
         name: r.name as string,
-        count: parseInt(r.cnt) || 0,
+        // 120: количества дробные (NUMERIC(12,3)) — parseInt съедал бы "2.500".
+        count: parseFloat(r.cnt) || 0,
         // `photo` is optional in the contract — only emit it when present so the
         // payload stays clean for products without an image.
         ...(r.photo ? { photo: r.photo as string } : {}),

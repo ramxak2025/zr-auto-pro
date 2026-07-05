@@ -37,6 +37,9 @@ export default function InstallmentPayModal({ visible, plan, onClose, onPaid }: 
   const queryClient = useQueryClient();
   const [amountText, setAmountText] = useState('');
   const [comment, setComment] = useState('');
+  // Способ оплаты (119): дефолт «Наличными» — в автосервисе погашения почти
+  // всегда нал. Уходит на бэкенд, чтобы деньги легли в кассу принявшего.
+  const [method, setMethod] = useState<'cash' | 'card'>('cash');
   const [rescheduleOn, setRescheduleOn] = useState(false);
   const [nextDate, setNextDate] = useState<Date>(new Date());
   const [showDatePicker, setShowDatePicker] = useState(false);
@@ -47,6 +50,7 @@ export default function InstallmentPayModal({ visible, plan, onClose, onPaid }: 
     if (visible && plan) {
       setAmountText('');
       setComment('');
+      setMethod('cash');
       setRescheduleOn(false);
       const base = plan.nextPaymentDate ? ymdToDate(plan.nextPaymentDate) : new Date(Date.now() + 30 * 86400000);
       setNextDate(base);
@@ -58,11 +62,18 @@ export default function InstallmentPayModal({ visible, plan, onClose, onPaid }: 
   const amountValid = Number.isFinite(parsed) && parsed > 0;
 
   const payMutation = useMutation({
-    mutationFn: (vars: { planId: string; amount: number; comment?: string; nextPaymentDate?: string }) =>
+    mutationFn: (vars: {
+      planId: string;
+      amount: number;
+      comment?: string;
+      nextPaymentDate?: string;
+      method: 'cash' | 'card';
+    }) =>
       installmentsApi.pay(vars.planId, {
         amount: vars.amount,
         comment: vars.comment,
         nextPaymentDate: vars.nextPaymentDate,
+        method: vars.method,
       }),
     onSuccess: (res) => {
       // Prefix-invalidate every installment query (list / client / widget / detail).
@@ -84,6 +95,7 @@ export default function InstallmentPayModal({ visible, plan, onClose, onPaid }: 
       amount: parsed,
       comment: comment.trim() ? comment.trim() : undefined,
       nextPaymentDate: rescheduleOn ? toYmd(nextDate) : undefined,
+      method,
     });
   };
 
@@ -126,6 +138,45 @@ export default function InstallmentPayModal({ visible, plan, onClose, onPaid }: 
               autoFocus
               returnKeyType="done"
             />
+
+            {/* Способ оплаты (119): сегмент «Наличными / Картой», дефолт нал. */}
+            <Text style={[styles.fieldLabel, { color: palette.text.secondary, marginTop: spacing[3] }]}>
+              Как приняты деньги
+            </Text>
+            <View style={styles.methodRow}>
+              {(
+                [
+                  { key: 'cash', label: 'Наличными', icon: 'cash-outline' },
+                  { key: 'card', label: 'Картой', icon: 'card-outline' },
+                ] as const
+              ).map((opt) => {
+                const active = method === opt.key;
+                return (
+                  <TouchableOpacity
+                    key={opt.key}
+                    style={[
+                      styles.methodBtn,
+                      {
+                        backgroundColor: active ? palette.accent.primary : palette.bg.muted,
+                        borderColor: active ? palette.accent.primary : palette.border.subtle,
+                      },
+                    ]}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      haptic('tap');
+                      setMethod(opt.key);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: active }}
+                  >
+                    <Ionicons name={opt.icon} size={17} color={active ? colors.white : palette.text.secondary} />
+                    <Text style={[styles.methodText, { color: active ? colors.white : palette.text.secondary }]}>
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
 
             <Text style={[styles.fieldLabel, { color: palette.text.secondary, marginTop: spacing[3] }]}>
               Комментарий (необязательно)
@@ -233,6 +284,19 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[3],
     fontSize: 16,
   },
+
+  methodRow: { flexDirection: 'row', gap: spacing[2] },
+  methodBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing[2.5],
+  },
+  methodText: { fontSize: 14, fontWeight: fontWeight.semibold },
 
   rescheduleToggle: {
     flexDirection: 'row',

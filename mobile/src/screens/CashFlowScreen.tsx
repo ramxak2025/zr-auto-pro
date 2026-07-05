@@ -843,6 +843,22 @@ export default function CashFlowScreen() {
                         <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
                           Деньги за прошлые продажи — в оборот не входят
                         </Text>
+                        {/* Разбивка по способу оплаты (119) — только когда бэк
+                            прислал поля и часть ненулевая. */}
+                        {(() => {
+                          const parts: string[] = [];
+                          if (typeof totals.installmentPaidCash === 'number' && totals.installmentPaidCash > 0) {
+                            parts.push(`наличными ${formatMoney(totals.installmentPaidCash)}`);
+                          }
+                          if (typeof totals.installmentPaidCard === 'number' && totals.installmentPaidCard > 0) {
+                            parts.push(`картой ${formatMoney(totals.installmentPaidCard)}`);
+                          }
+                          return parts.length > 0 ? (
+                            <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
+                              в т.ч. {parts.join(' · ')}
+                            </Text>
+                          ) : null;
+                        })()}
                       </View>
                       <Text style={[styles.channelAmount, { color: colors.teal[600] }]}>
                         +{formatMoney(totals.installmentPaid)}

@@ -24,7 +24,8 @@ class CreateStockMovementDto {
   @IsNotEmpty()
   productId!: string;
 
-  @IsNumber()
+  // Дробные количества (120): не глубже 3 знаков — как NUMERIC(12,3) в БД.
+  @IsNumber({ maxDecimalPlaces: 3 })
   quantity!: number;
 
   @IsOptional()

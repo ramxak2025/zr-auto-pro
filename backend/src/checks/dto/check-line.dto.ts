@@ -29,6 +29,15 @@ const MAX_TXT = '10 000 000';
 
 /** Decorator option packs — one Russian message per (label, rule). */
 const num = (label: string) => ({ message: `${label}: введите число` });
+/**
+ * Количество ТОВАРА: дробное разрешено (шланг метровый → 0.5), но не глубже
+ * 3 знаков после запятой — ровно как NUMERIC(12,3) в
+ * 120_fractional_quantities.sql. Старые клиенты шлют целые — проходят как
+ * раньше. Количество УСЛУГИ — только целое (см. CheckServiceLineDto):
+ * колонка check_service_lines.quantity осталась INT, дробь упала бы 500-кой
+ * на insert'е.
+ */
+const qty = (label: string) => ({ message: `${label}: введите число (до 3 знаков после запятой)` });
 const min0 = (label: string) => ({ message: `${label}: значение не может быть отрицательным` });
 const maxM = (label: string) => ({ message: `${label}: не больше ${MAX_TXT}` });
 const maxLen = (label: string, n: number) => ({ message: `${label}: слишком длинный текст (максимум ${n} символов)` });
@@ -56,7 +65,7 @@ export class CheckServiceLineDto {
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber({}, num('Количество услуги'))
+  @IsNumber({ maxDecimalPlaces: 0 }, { message: 'Количество услуги: введите целое число' })
   @Min(0, min0('Количество услуги'))
   @Max(MONEY_MAX, maxM('Количество услуги'))
   quantity?: number;
@@ -88,7 +97,7 @@ export class CheckProductLineDto {
 
   @IsOptional()
   @Type(() => Number)
-  @IsNumber({}, num('Количество товара'))
+  @IsNumber({ maxDecimalPlaces: 3 }, qty('Количество товара'))
   @Min(0, min0('Количество товара'))
   @Max(MONEY_MAX, maxM('Количество товара'))
   quantity?: number;

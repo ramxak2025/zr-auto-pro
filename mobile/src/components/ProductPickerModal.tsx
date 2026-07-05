@@ -25,6 +25,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { productsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { formatQty, unitLabel } from '../utils/units';
 import { useColors } from '../contexts/ThemeContext';
 import { buildShadow } from '../platform/iosSurface';
 import type { SemanticPalette } from '../theme/palette';
@@ -204,12 +205,12 @@ const PickerProductRow = React.memo(function PickerProductRow({
             <Ionicons name="alert-circle" size={14} color={colors.red[500]} style={{ marginBottom: 2 }} />
           ) : null}
           <Text style={[styles.productStock, { color: palette.text.primary }, lowStock && styles.productStockLow]}>
-            {product.stock}
+            {formatQty(product.stock)}
           </Text>
-          <Text style={[styles.productStockLabel, { color: palette.text.tertiary }]}>{'шт'}</Text>
+          <Text style={[styles.productStockLabel, { color: palette.text.tertiary }]}>{unitLabel(product.unit)}</Text>
           {cartQty > 0 ? (
             <View style={styles.cartBadge}>
-              <Text style={styles.cartBadgeText}>{cartQty}</Text>
+              <Text style={styles.cartBadgeText}>{formatQty(cartQty)}</Text>
             </View>
           ) : null}
         </View>

@@ -4,6 +4,7 @@ import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { InstallmentsService } from './installments.service';
 import { PayInstallmentDto } from './dto/pay-installment.dto';
+import { PayoffInstallmentDto } from './dto/payoff-installment.dto';
 import { UpdateInstallmentDto } from './dto/update-installment.dto';
 import { UpdateInstallmentReminderSettingsDto } from './dto/update-reminder-settings.dto';
 
@@ -74,11 +75,11 @@ export class InstallmentsController {
     return this.installments.pay(user, planId, dto);
   }
 
-  /** Pay off the whole remaining at once (close the plan). */
+  /** Pay off the whole remaining at once (close the plan). Body опционален — {method?} (119). */
   @Roles('director', 'admin', 'superadmin')
   @Post(':planId/payoff')
-  payoff(@CurrentUser() user: JwtPayload, @Param('planId') planId: string) {
-    return this.installments.payoff(user, planId);
+  payoff(@CurrentUser() user: JwtPayload, @Param('planId') planId: string, @Body() dto: PayoffInstallmentDto) {
+    return this.installments.payoff(user, planId, dto?.method);
   }
 
   /** Reschedule the next payment date and/or edit the comment. */

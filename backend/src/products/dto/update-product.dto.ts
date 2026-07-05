@@ -24,11 +24,12 @@ export class UpdateProductDto {
   @IsOptional()
   sellPrice?: number;
 
-  @IsNumber()
+  // Дробные остатки (120): 12.5 м / 0.75 кг; не глубже 3 знаков — NUMERIC(12,3).
+  @IsNumber({ maxDecimalPlaces: 3 })
   @IsOptional()
   stock?: number;
 
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 3 })
   @IsOptional()
   minStock?: number;
 

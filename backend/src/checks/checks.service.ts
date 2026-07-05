@@ -757,10 +757,14 @@ export class ChecksService {
       total: parseFloat(s.total) || 0,
     }));
 
-    // Load product lines (tenant-scoped via JOIN)
+    // Load product lines (tenant-scoped via JOIN). LEFT JOIN products даёт
+    // единицу измерения товара (120, дробные количества) — опциональное поле
+    // ответа: клиенты рендерят «12.5 м» только когда unit пришёл; free-text
+    // строки без product_id остаются без единицы.
     const { rows: prodRows } = await this.pool.query(
-      `SELECT pl.* FROM check_product_lines pl
+      `SELECT pl.*, pr.unit AS product_unit FROM check_product_lines pl
        JOIN checks c ON c.id = pl.check_id AND c.tenant_id = $2
+       LEFT JOIN products pr ON pr.id = pl.product_id AND pr.tenant_id = c.tenant_id
        WHERE pl.check_id=$1`,
       [id, tenantID],
     );
@@ -773,6 +777,7 @@ export class ChecksService {
       quantity: parseFloat(p.quantity) || 0,
       totalSell: parseFloat(p.total_sell) || 0,
       totalCost: parseFloat(p.total_cost) || 0,
+      ...(p.product_unit ? { unit: p.product_unit } : {}),
     }));
 
     // Warranty claims tied to this check (may be empty — only filled when

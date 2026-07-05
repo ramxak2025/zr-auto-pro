@@ -8,7 +8,9 @@ export class StockUpdateDto {
   @IsIn(['income', 'expense', 'writeoff', 'inventory'])
   type!: string;
 
-  @IsNumber()
+  // Дробные количества (120): 0.5 м шланга — валидно; не глубже 3 знаков,
+  // ровно как NUMERIC(12,3) у stock_movements.quantity.
+  @IsNumber({ maxDecimalPlaces: 3 })
   quantity!: number;
 
   @IsString()

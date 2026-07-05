@@ -32,6 +32,21 @@ import { shouldRetryTransient, transientRetryDelay } from './src/utils/queryRetr
 import { API_URL, onRequestSucceeded } from './src/api/axios';
 import { checksApi } from './src/api/services';
 
+// NetInfo's DEFAULT reachability probe hits clients3.google.com in the
+// background. The `isInternetReachable` verdict it produces is IGNORED
+// everywhere in this app (the listener below reads only `isConnected`, and
+// OfflineBanner runs its own dual probe) — so this configure() changes no
+// online/offline behavior at all. It exists ONLY so the system probe stops
+// hammering a Google host that RF carriers filter (wasted radio + endless
+// slow retries under VPN): point it at Яндекс with a VPN-tolerant timeout.
+// Must run BEFORE addEventListener below.
+NetInfo.configure({
+  reachabilityUrl: 'https://ya.ru/robots.txt',
+  reachabilityTest: async (response) => response.status === 200,
+  reachabilityRequestTimeout: 6_000,
+  reachabilityShouldRun: () => true,
+});
+
 // Wire TanStack Query's onlineManager to the real device connectivity
 // (NetInfo). Without this RN has no `online`/`offline` browser events, so
 // React Query would consider the app permanently online: offline queries
@@ -39,16 +54,18 @@ import { checksApi } from './src/api/services';
 // OfflineBanner below would have no source of truth.
 onlineManager.setEventListener((setOnline) =>
   NetInfo.addEventListener((state) => {
-    // Prefer `isInternetReachable` (the device can actually reach the
-    // internet) over `isConnected` (the link is merely up): a Wi-Fi with a
-    // dead upstream / captive portal is "connected" but useless, and treating
-    // it as online just burns query retries into an error card. NetInfo
-    // reports `isInternetReachable` as `null` until it probes, so fall back to
-    // `isConnected` while unknown to avoid a false-offline flash on cold
-    // start. A backend 502 keeps the internet reachable, so this never hides a
-    // real server outage behind the offline banner — that path is handled by
-    // the transient-retry policy + backendRecovery below.
-    setOnline(state.isInternetReachable ?? state.isConnected ?? false);
+    // Offline ONLY when the link itself is down (`isConnected === false`).
+    // We deliberately IGNORE `isInternetReachable` here: its false negatives
+    // (VPN latency, carrier whitelist windows filtering the probe host) used
+    // to pause EVERY React Query request and show a lying "Нет подключения"
+    // banner while the API was perfectly reachable — «через VPN не грузит».
+    // The opposite case — a captive portal / dead-upstream Wi-Fi that is
+    // "connected" but useless — is already covered elsewhere: the HTML guard
+    // (isHtmlApiPayload) rejects portal pages, the transparent retry +
+    // failover ring absorbs the failure, and the OfflineBanner runs its own
+    // dual probe to tell the user the truth. `isConnected === null` (unknown,
+    // cold start) counts as online to avoid a false-offline flash.
+    setOnline(state.isConnected !== false);
   }),
 );
 

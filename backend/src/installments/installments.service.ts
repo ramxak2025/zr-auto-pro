@@ -91,6 +91,9 @@ export class InstallmentsService {
       tenantId: r.tenant_id as string,
       planId: r.plan_id as string,
       amount: num(r.amount),
+      // Строки до миграции 119 не имели колонки → считаются налом (решение
+      // владельца: погашения почти всегда наличными).
+      paymentMethod: (r.payment_method === 'card' ? 'card' : 'cash') as 'cash' | 'card',
       comment: r.comment ?? null,
       createdBy: r.created_by ?? null,
       createdByName: r.created_by_name ?? null,
@@ -210,6 +213,9 @@ export class InstallmentsService {
   async pay(user: JwtPayload, planId: string, dto: PayInstallmentDto) {
     const amount = round2(num(dto.amount));
     if (amount <= 0) throw new BadRequestException({ message: 'Сумма платежа должна быть положительной' });
+    // Способ оплаты (119): дефолт 'cash' — старые клиенты поле не шлют, а
+    // погашения в автосервисе почти всегда наличными (решение владельца).
+    const method: 'cash' | 'card' = dto.method === 'card' ? 'card' : 'cash';
 
     const dbClient = await this.pool.connect();
     try {
@@ -235,9 +241,9 @@ export class InstallmentsService {
       const nextDate = dto.nextPaymentDate !== undefined ? toDateOrNull(dto.nextPaymentDate) : undefined;
 
       await dbClient.query(
-        `INSERT INTO installment_payments (tenant_id, plan_id, amount, comment, created_by)
-         VALUES ($1, $2, $3, $4, $5)`,
-        [user.tenantID, planId, amount, dto.comment?.trim() || null, user.userID],
+        `INSERT INTO installment_payments (tenant_id, plan_id, amount, payment_method, comment, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [user.tenantID, planId, amount, method, dto.comment?.trim() || null, user.userID],
       );
 
       await dbClient.query(
@@ -267,7 +273,7 @@ export class InstallmentsService {
   }
 
   /** Pay off the whole remaining at once (close the plan). */
-  async payoff(user: JwtPayload, planId: string) {
+  async payoff(user: JwtPayload, planId: string, method?: 'cash' | 'card') {
     const { rows } = await this.pool.query(
       `SELECT remaining, status FROM installment_plans WHERE id = $1 AND tenant_id = $2`,
       [planId, user.tenantID],
@@ -284,7 +290,8 @@ export class InstallmentsService {
       );
       return this.getPlanOrThrow(user.tenantID, planId);
     }
-    return this.pay(user, planId, { amount: remaining, comment: 'Погашение остатка' });
+    // method пробрасывается в pay() — там же дефолт 'cash' (119).
+    return this.pay(user, planId, { amount: remaining, comment: 'Погашение остатка', method });
   }
 
   /** Reschedule the next payment date and/or edit the comment. */

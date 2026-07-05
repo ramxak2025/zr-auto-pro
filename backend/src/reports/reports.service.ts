@@ -239,7 +239,16 @@ export class ReportsService {
     if (masterInvalid) {
       return {
         days: [],
-        totals: { cash: 0, card: 0, warranty: 0, total: 0, installmentDebt: 0, installmentPaid: 0 },
+        totals: {
+          cash: 0,
+          card: 0,
+          warranty: 0,
+          total: 0,
+          installmentDebt: 0,
+          installmentPaid: 0,
+          installmentPaidCash: 0,
+          installmentPaidCard: 0,
+        },
       };
     }
 
@@ -283,14 +292,24 @@ export class ReportsService {
     let paidMasterFilter = '';
     if (masterId) {
       // masterId уже лежит в params под тем же индексом, что и в masterFilter.
-      paidMasterFilter = ` AND ch.master_id = $${params.length}`;
+      // Атрибуция — по ПРИНЯВШЕМУ платёж (p.created_by, 093), а не по мастеру
+      // исходного чека: деньги на руках у того, кто их принял. Для старых
+      // строк без created_by — fallback на мастера чека (LEFT JOIN: чек
+      // удалён/отвязан → ch.master_id IS NULL → платёж не атрибутируется
+      // никому, симметрия с корзиной installmentDebt выше).
+      paidMasterFilter = ` AND COALESCE(p.created_by, ch.master_id) = $${params.length}`;
     }
+    // Разбивка по payment_method (119): 'card' → paid_card, остальное →
+    // paid_cash (строки до миграции считаются налом — решение владельца).
+    // paid = paid_cash + paid_card — поле остаётся суммой для совместимости.
     const { rows: paidRows } = await this.pool.query(
       `SELECT p.paid_at::date as day,
-              COALESCE(SUM(p.amount), 0) as paid
+              COALESCE(SUM(p.amount), 0) as paid,
+              COALESCE(SUM(CASE WHEN p.payment_method = 'card' THEN p.amount ELSE 0 END), 0) as paid_card,
+              COALESCE(SUM(CASE WHEN COALESCE(p.payment_method, 'cash') <> 'card' THEN p.amount ELSE 0 END), 0) as paid_cash
        FROM installment_payments p
        JOIN installment_plans pl ON pl.id = p.plan_id AND pl.tenant_id = $1
-       ${masterId ? 'JOIN checks ch ON ch.id = pl.check_id AND ch.deleted_at IS NULL' : ''}
+       ${masterId ? 'LEFT JOIN checks ch ON ch.id = pl.check_id AND ch.deleted_at IS NULL' : ''}
        WHERE p.tenant_id = $1 AND p.paid_at >= $2 AND p.paid_at < ($3::date + 1)::timestamptz${paidMasterFilter}
        GROUP BY p.paid_at::date
        ORDER BY day`,
@@ -306,6 +325,8 @@ export class ReportsService {
       warranty: parseFloat(r.warranty) || 0,
       installmentDebt: parseFloat(r.installment_debt) || 0,
       installmentPaid: 0,
+      installmentPaidCash: 0,
+      installmentPaidCard: 0,
       total: parseFloat(r.total) || 0,
     }));
 
@@ -317,8 +338,12 @@ export class ReportsService {
       const key = dayKey(r.day);
       const existing = byKey.get(key);
       const paid = parseFloat(r.paid) || 0;
+      const paidCash = parseFloat(r.paid_cash) || 0;
+      const paidCard = parseFloat(r.paid_card) || 0;
       if (existing) {
         existing.installmentPaid += paid;
+        existing.installmentPaidCash += paidCash;
+        existing.installmentPaidCard += paidCard;
       } else {
         const row = {
           date: r.day,
@@ -327,6 +352,8 @@ export class ReportsService {
           warranty: 0,
           installmentDebt: 0,
           installmentPaid: paid,
+          installmentPaidCash: paidCash,
+          installmentPaidCard: paidCard,
           total: 0,
         };
         byKey.set(key, row);
@@ -335,13 +362,24 @@ export class ReportsService {
     }
     days.sort((a, b) => dayKey(a.date).localeCompare(dayKey(b.date)));
 
-    const totals = { cash: 0, card: 0, warranty: 0, total: 0, installmentDebt: 0, installmentPaid: 0 };
+    const totals = {
+      cash: 0,
+      card: 0,
+      warranty: 0,
+      total: 0,
+      installmentDebt: 0,
+      installmentPaid: 0,
+      installmentPaidCash: 0,
+      installmentPaidCard: 0,
+    };
     for (const d of days) {
       totals.cash += d.cash;
       totals.card += d.card;
       totals.warranty += d.warranty;
       totals.installmentDebt += d.installmentDebt;
       totals.installmentPaid += d.installmentPaid;
+      totals.installmentPaidCash += d.installmentPaidCash;
+      totals.installmentPaidCard += d.installmentPaidCard;
       totals.total += d.total;
     }
 
@@ -463,13 +501,21 @@ export class ReportsService {
 
     // Погашения рассрочки за сегодня — по дате платежа (installment_payments,
     // 093). Информационно: деньги за прошлые продажи, в revenueToday не входят.
+    // Разбивка по payment_method (119): 'card' → card, остальное → cash
+    // (до-миграционные строки считаются налом — решение владельца).
+    // paid = paid_cash + paid_card; installmentPaid остаётся суммой для
+    // совместимости со старыми клиентами.
     const { rows: instPaidRows } = await this.pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS paid
+      `SELECT COALESCE(SUM(amount), 0) AS paid,
+              COALESCE(SUM(CASE WHEN payment_method = 'card' THEN amount ELSE 0 END), 0) AS paid_card,
+              COALESCE(SUM(CASE WHEN COALESCE(payment_method, 'cash') <> 'card' THEN amount ELSE 0 END), 0) AS paid_cash
          FROM installment_payments
         WHERE tenant_id=$1 AND paid_at >= $2`,
       [tenantID, todayStart],
     );
     const installmentPaidToday = parseFloat(instPaidRows[0]?.paid) || 0;
+    const installmentPaidCashToday = parseFloat(instPaidRows[0]?.paid_cash) || 0;
+    const installmentPaidCardToday = parseFloat(instPaidRows[0]?.paid_card) || 0;
 
     // Cash position: simple — cumulative cash + card on paid checks.
     // We use today's amount; richer interpretation can be wired later.
@@ -483,6 +529,8 @@ export class ReportsService {
       total: cashToday + cardToday + warrantyToday,
       installmentDebt: installmentDebtToday,
       installmentPaid: installmentPaidToday,
+      installmentPaidCash: installmentPaidCashToday,
+      installmentPaidCard: installmentPaidCardToday,
     };
 
     // Deferred sum: open drafts (is_deferred=true) totals.

@@ -162,10 +162,12 @@ export function getImageUrl(path?: string | null): string | undefined {
 // FIRST request after a cold launch also pays DNS + TLS handshake, and on a
 // flaky mobile network (or shaky DNS) that handshake alone can eat several
 // seconds. 8s was too aggressive — it turned a slow-but-fine first connection
-// into a hard error the user had to "Повторить" past. 12s tolerates the cold
-// handshake while still failing a genuinely dead connection; React Query's
-// network-error retries (App.tsx) + persistent cache cover the rest.
-const DEFAULT_TIMEOUT_MS = 12_000;
+// into a hard error the user had to "Повторить" past. 15s (was 12s) also
+// tolerates the slow VPN path many RF users are forced onto, while still
+// failing a genuinely dead connection — the host-failover ring bounds the
+// worst case anyway; React Query's network-error retries (App.tsx) +
+// persistent cache cover the rest.
+const DEFAULT_TIMEOUT_MS = 15_000;
 
 // Multipart uploads (photos) stream megabytes over LTE — the 8s budget that
 // suits JSON would abort them mid-flight. Applied per-request in the request

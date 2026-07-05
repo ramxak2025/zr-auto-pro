@@ -20,10 +20,14 @@ interface CashFlowDay {
   total: number;
   // Долг по чекам в рассрочку (входит в оборот: cash + card + warranty +
   // installmentDebt = total) и погашения рассрочки по дате платежа (в оборот
-  // НЕ входят — деньги за прошлые продажи). Опциональны: старый бэкенд их не
-  // шлёт, рендерим только когда поле пришло числом.
+  // НЕ входят — деньги за прошлые продажи). installmentPaidCash/Card (119) —
+  // разбивка погашений по способу оплаты (installmentPaid = Cash + Card).
+  // Опциональны: старый бэкенд их не шлёт, рендерим только когда поле пришло
+  // числом.
   installmentDebt?: number;
   installmentPaid?: number;
+  installmentPaidCash?: number;
+  installmentPaidCard?: number;
 }
 
 interface CashFlowData {
@@ -35,6 +39,8 @@ interface CashFlowData {
     total: number;
     installmentDebt?: number;
     installmentPaid?: number;
+    installmentPaidCash?: number;
+    installmentPaidCard?: number;
   };
 }
 
@@ -70,6 +76,16 @@ export default function CashFlowPage() {
   // у сервисов без рассрочки страница выглядит как раньше.
   const hasInstallmentDebt = typeof totals.installmentDebt === 'number' && totals.installmentDebt > 0;
   const hasInstallmentPaid = typeof totals.installmentPaid === 'number' && totals.installmentPaid > 0;
+
+  // Разбивка погашений по способу оплаты (119) — подпись «в т.ч. наличными /
+  // картой» только когда бэкенд прислал поля и часть ненулевая.
+  const installmentPaidParts: string[] = [];
+  if (typeof totals.installmentPaidCash === 'number' && totals.installmentPaidCash > 0) {
+    installmentPaidParts.push(`наличными ${formatMoney(totals.installmentPaidCash)}`);
+  }
+  if (typeof totals.installmentPaidCard === 'number' && totals.installmentPaidCard > 0) {
+    installmentPaidParts.push(`картой ${formatMoney(totals.installmentPaidCard)}`);
+  }
 
   return (
     <div className="space-y-6">
@@ -157,6 +173,9 @@ export default function CashFlowPage() {
             </div>
             <div className="stat-value text-teal-600">+{formatMoney(totals.installmentPaid ?? 0)}</div>
             <p className="text-[11px] text-gray-400 mt-0.5">Не входит в оборот — оплата прошлых продаж</p>
+            {installmentPaidParts.length > 0 && (
+              <p className="text-[11px] text-gray-400 mt-0.5">в т.ч. {installmentPaidParts.join(' · ')}</p>
+            )}
           </div>
         )}
       </div>

@@ -8,8 +8,8 @@
  * сломалось». Новый различает две ситуации дуальной пробой:
  *
  *   1. GET {активная база}/health (короткий таймаут) — сервер доступен?
- *   2. Нейтральная достижимость (captive.apple.com / gstatic generate_204,
- *      3 с) — интернет вообще есть?
+ *   2. Нейтральная достижимость (ya.ru / captive.apple.com / gstatic
+ *      generate_204, 6 с) — интернет вообще есть?
  *
  * Исходы:
  *   • API ok → баннер скрыт (это был кратковременный сбой);
@@ -45,45 +45,64 @@ import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
 
 type BannerStatus = 'hidden' | 'no-internet' | 'server-unreachable';
 
-/** Health-проба API — «дохлый» сервер может не слать RST, поэтому таймаут. */
-const API_PROBE_TIMEOUT_MS = 4_000;
-/** Нейтральная проба достижимости интернета. */
-const NEUTRAL_PROBE_TIMEOUT_MS = 3_000;
+/**
+ * Health-проба API — «дохлый» сервер может не слать RST, поэтому таймаут.
+ * 8 с (было 4): через VPN handshake+RTT легко съедают 4–6 с, и честно живой
+ * сервер записывался в недоступные — баннер врал «сервер недоступен».
+ */
+const API_PROBE_TIMEOUT_MS = 8_000;
+/** Нейтральная проба достижимости интернета. 6 с — тот же VPN-запас. */
+const NEUTRAL_PROBE_TIMEOUT_MS = 6_000;
 /** Мин. пауза между событийными пробами — волна ретраев не должна спамить. */
 const PROBE_DEBOUNCE_MS = 8_000;
 /** Автоперепроверка, пока баннер виден. */
 const RECHECK_INTERVAL_MS = 20_000;
 
+/** Проверка ответа пробы: сам решает, что считать успехом. Может читать тело. */
+type ProbeValidate = (res: Response) => Promise<boolean> | boolean;
+
 /**
- * Нейтральные endpoint'ы «интернет вообще есть?». Достаточно ЛЮБОГО успеха.
+ * Находка ревью 05.07: HTML-заглушка со статусом 200 (captive-portal, чужой
+ * апстрим) «оздоравливала» пробу /health и прятала баннер. Валидируем тело
+ * тем же стражем, что и axios.
+ */
+const notHtmlOk: ProbeValidate = async (res) => {
+  if (!res.ok) return false;
+  const body = await res.text().catch(() => '');
+  return !isHtmlApiPayload(body, res.headers.get('content-type'));
+};
+
+/**
+ * Нейтральные пробы «интернет вообще есть?». Достаточно ЛЮБОГО успеха.
  * Первым — Яндекс: в регионах с «белыми списками» (Дагестан и т. п.)
  * операторы в жёсткие окна режут ВСЁ иностранное — Apple/Google молчат, и
  * баннер врал «нет соединения», хотя российский интернет работал. Российская
  * проба обязана стоять в списке, иначе диагноз в этих окнах всегда ложный.
  * Apple captive probe и gstatic — резервы (вне РФ и на «чистых» сетях).
+ *
+ * У каждой пробы СВОЙ критерий успеха: captive-Wi-Fi подсовывает свою
+ * HTML-страницу со статусом 200 на любой URL — голый `res.ok` считал такую
+ * сеть «интернетом», и баннер вместо честного красного «нет интернета»
+ * показывал оранжевый «сервер недоступен». robots.txt Яндекса — не HTML;
+ * настоящий ответ Apple-пробы содержит слово Success; generate_204 обязан
+ * ответить именно 204.
  */
-const NEUTRAL_PROBE_URLS = [
-  'https://ya.ru/robots.txt',
-  'https://captive.apple.com/hotspot-detect.html',
-  'https://www.gstatic.com/generate_204',
+const NEUTRAL_PROBES: ReadonlyArray<{ url: string; validate: ProbeValidate }> = [
+  { url: 'https://ya.ru/robots.txt', validate: notHtmlOk },
+  {
+    url: 'https://captive.apple.com/hotspot-detect.html',
+    validate: async (res) => res.ok && (await res.text().catch(() => '')).includes('Success'),
+  },
+  { url: 'https://www.gstatic.com/generate_204', validate: (res) => res.status === 204 },
 ];
 
 /** GET с таймаутом; никогда не бросает — только true/false. */
-async function probeUrl(url: string, timeoutMs: number, rejectHtml = false): Promise<boolean> {
+async function probeUrl(url: string, timeoutMs: number, validate: ProbeValidate = (res) => res.ok): Promise<boolean> {
   const abort = new AbortController();
   const timer = setTimeout(() => abort.abort(), timeoutMs);
   try {
     const res = await fetch(url, { method: 'GET', signal: abort.signal });
-    if (!res.ok) return false;
-    if (rejectHtml) {
-      // Находка ревью 05.07: HTML-заглушка со статусом 200 (captive-portal,
-      // чужой апстрим) «оздоравливала» пробу /health и прятала баннер. Для
-      // API-проб валидируем тело тем же стражем, что и axios.
-      const ct = res.headers.get('content-type');
-      const body = await res.text().catch(() => '');
-      return !isHtmlApiPayload(body, ct);
-    }
-    return true;
+    return await validate(res);
   } catch {
     return false;
   } finally {
@@ -91,13 +110,16 @@ async function probeUrl(url: string, timeoutMs: number, rejectHtml = false): Pro
   }
 }
 
-/** true — первый же URL ответил 2xx; false — все недоступны. Не бросает. */
-function anyReachable(urls: readonly string[], timeoutMs: number): Promise<boolean> {
+/** true — первая же проба прошла свой критерий; false — все нет. Не бросает. */
+function anyReachable(
+  probes: ReadonlyArray<{ url: string; validate: ProbeValidate }>,
+  timeoutMs: number,
+): Promise<boolean> {
   return new Promise((resolve) => {
-    let remaining = urls.length;
+    let remaining = probes.length;
     let settled = false;
-    for (const url of urls) {
-      void probeUrl(url, timeoutMs).then((ok) => {
+    for (const probe of probes) {
+      void probeUrl(probe.url, timeoutMs, probe.validate).then((ok) => {
         if (settled) return;
         if (ok) {
           settled = true;
@@ -143,14 +165,15 @@ export default function OfflineBanner() {
     if (manual) setChecking(true);
     try {
       // 1) Сервер доступен? Пробуем АКТИВНУЮ базу (с учётом failover-резерва).
-      const apiOk = await probeUrl(`${getActiveApiBaseUrl()}/health`, API_PROBE_TIMEOUT_MS, true);
+      // notHtmlOk — HTML-200 (captive-portal / чужой апстрим) не «оздоравливает».
+      const apiOk = await probeUrl(`${getActiveApiBaseUrl()}/health`, API_PROBE_TIMEOUT_MS, notHtmlOk);
       if (!mountedRef.current || seq !== probeSeq.current) return;
       if (apiOk) {
         setStatus('hidden');
         return;
       }
       // 2) Сервер нет — а интернет вообще есть?
-      const internetOk = await anyReachable(NEUTRAL_PROBE_URLS, NEUTRAL_PROBE_TIMEOUT_MS);
+      const internetOk = await anyReachable(NEUTRAL_PROBES, NEUTRAL_PROBE_TIMEOUT_MS);
       if (!mountedRef.current || seq !== probeSeq.current) return;
       setStatus(internetOk ? 'server-unreachable' : 'no-internet');
     } finally {

@@ -301,7 +301,7 @@ export class SuppliersService {
           `INSERT INTO products
              (name, category, cost_price, sell_price, stock, min_stock, unit,
               tenant_id, warehouse_id)
-           VALUES ($1, $2, $3, $4, $5, 0, 'pcs', $6, $7)
+           VALUES ($1, $2, $3, $4, $5, 0, 'шт', $6, $7)
            RETURNING id`,
           [productName, category, purchasePrice, finalSellPrice, qty, tenantID, usedWarehouse.id],
         );

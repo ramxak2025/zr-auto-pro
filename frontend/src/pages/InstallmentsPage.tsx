@@ -6,6 +6,7 @@ import {
   Phone,
   ChevronRight,
   AlertTriangle,
+  Banknote,
   CalendarClock,
   Bell,
   CheckCircle2,
@@ -299,6 +300,9 @@ function InstallmentDetailModal({
   const queryClient = useQueryClient();
   const [amount, setAmount] = useState('');
   const [comment, setComment] = useState('');
+  // Способ оплаты (119): дефолт «Наличными» — погашения почти всегда нал.
+  // Уходит на бэкенд и в pay, и в payoff, чтобы деньги легли в кассу принявшего.
+  const [method, setMethod] = useState<'cash' | 'card'>('cash');
   const [nextDate, setNextDate] = useState('');
   const [payoffOpen, setPayoffOpen] = useState(false);
 
@@ -324,13 +328,14 @@ function InstallmentDetailModal({
   };
 
   const payMutation = useMutation({
-    mutationFn: (data: { amount: number; comment?: string; nextPaymentDate?: string }) =>
+    mutationFn: (data: { amount: number; comment?: string; nextPaymentDate?: string; method?: 'cash' | 'card' }) =>
       installmentsApi.pay(planId, data),
     onSuccess: () => {
       invalidate();
       toast.success('Оплата принята');
       setAmount('');
       setComment('');
+      setMethod('cash');
       onClose();
     },
     onError: () => toast.error('Не удалось принять оплату'),
@@ -347,7 +352,8 @@ function InstallmentDetailModal({
   });
 
   const payoffMutation = useMutation({
-    mutationFn: () => installmentsApi.payoff(planId),
+    // Финальное погашение уходит с тем же выбранным способом оплаты (119).
+    mutationFn: () => installmentsApi.payoff(planId, { method }),
     onSuccess: () => {
       invalidate();
       toast.success('Рассрочка погашена');
@@ -376,6 +382,7 @@ function InstallmentDetailModal({
       amount: value,
       comment: comment.trim() || undefined,
       nextPaymentDate: nextDate || undefined,
+      method,
     });
   };
 
@@ -473,6 +480,36 @@ function InstallmentDetailModal({
                 <input type="date" value={nextDate} onChange={(e) => setNextDate(e.target.value)} className="input" />
               </div>
             </div>
+            {/* Способ оплаты (119): сегмент «Наличными / Картой», дефолт нал. */}
+            <div>
+              <label className="label">Как приняты деньги</label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setMethod('cash')}
+                  className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                    method === 'cash'
+                      ? 'border-primary-600 bg-primary-600 text-white'
+                      : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <Banknote className="h-4 w-4" />
+                  Наличными
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setMethod('card')}
+                  className={`flex items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                    method === 'card'
+                      ? 'border-primary-600 bg-primary-600 text-white'
+                      : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+                  }`}
+                >
+                  <CreditCard className="h-4 w-4" />
+                  Картой
+                </button>
+              </div>
+            </div>
             <div>
               <label className="label">Комментарий</label>
               <input
@@ -541,7 +578,9 @@ function InstallmentDetailModal({
         onClose={() => setPayoffOpen(false)}
         onConfirm={() => payoffMutation.mutate()}
         title="Погасить полностью"
-        message={`Остаток ${formatMoney(plan.remaining)} будет внесён, рассрочка закроется. Продолжить?`}
+        message={`Остаток ${formatMoney(plan.remaining)} будет внесён (${
+          method === 'card' ? 'картой' : 'наличными'
+        }), рассрочка закроется. Продолжить?`}
         confirmText="Погасить"
       />
     </Modal>

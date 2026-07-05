@@ -1007,6 +1007,13 @@ export interface CheckProductLine {
   quantity: number;
   totalSell: number;
   totalCost: number;
+  /**
+   * 120 (дробные количества) — единица измерения товара из каталога
+   * ('шт','м','кг','л','уп','компл'). Опциональна: старый backend её не шлёт,
+   * free-text строки без productId — тоже. UI рендерит «12.5 м» только когда
+   * поле пришло.
+   */
+  unit?: string;
 }
 
 export enum PaymentMethod {
@@ -1413,6 +1420,11 @@ export interface InstallmentPayment {
   planId: string;
   /** Positive money amount of this payment. */
   amount: number;
+  /**
+   * Способ оплаты погашения (119). Опционален — старый бэкенд его не шлёт;
+   * до-миграционные платежи бэкенд отдаёт как 'cash'.
+   */
+  paymentMethod?: 'cash' | 'card';
   comment?: string | null;
   createdBy?: string | null;
   createdByName?: string | null;
@@ -2313,8 +2325,11 @@ export interface DashboardV2 {
   /**
    * total = cash + card + warranty (как раньше). installmentDebt — долг по
    * сегодняшним чекам в рассрочку; installmentPaid — сегодняшние погашения
-   * рассрочки (по дате платежа, деньги за прошлые продажи). Оба опциональны —
-   * старый бэкенд их не шлёт, клиенты показывают строки только по числу.
+   * рассрочки (по дате платежа, деньги за прошлые продажи).
+   * installmentPaidCash/Card (119) — разбивка погашений по способу оплаты
+   * (installmentPaid = Cash + Card; до-миграционные платежи считаются налом).
+   * Все опциональны — старый бэкенд их не шлёт, клиенты показывают строки
+   * только по числу.
    */
   cashPosition: {
     cash: number;
@@ -2323,6 +2338,8 @@ export interface DashboardV2 {
     total: number;
     installmentDebt?: number;
     installmentPaid?: number;
+    installmentPaidCash?: number;
+    installmentPaidCard?: number;
   };
   marginPct: number;
   marginPctChange: number;

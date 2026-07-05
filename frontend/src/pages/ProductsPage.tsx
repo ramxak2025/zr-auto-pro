@@ -36,6 +36,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import VirtualProductGrid from '../components/VirtualProductGrid';
 import VirtualList from '../components/VirtualList';
 import { formatMoney } from '../../../shared/utils/formatters';
+import { DEFAULT_UNIT, UNIT_PRESETS, formatQty, unitLabel } from '../utils/units';
 import * as XLSX from 'xlsx';
 
 // ---------------------------------------------------------------------------
@@ -47,17 +48,11 @@ function thumbUrl(url?: string): string | undefined {
   return url || undefined;
 }
 
-const UNIT_OPTIONS = [
-  { value: 'pcs', label: 'шт' },
-  { value: 'm', label: 'м' },
-  { value: 'l', label: 'л' },
-  { value: 'kg', label: 'кг' },
-];
-
-function unitLabel(unit?: string): string {
-  const found = UNIT_OPTIONS.find((u) => u.value === unit);
-  return found ? found.label : 'шт';
-}
+// 120 (дробные количества): значения единиц храним русскими метками
+// ('шт','м','кг','л','уп','компл'); legacy-коды ('pcs','m','l','kg')
+// разруливает unitLabel из utils/units. UNIT_OPTIONS оставлен в прежней
+// форме {value,label} — value теперь совпадает с label.
+const UNIT_OPTIONS = UNIT_PRESETS.map((u) => ({ value: u, label: u }));
 
 // Unified folder icons — all use the same clean icon style
 const CATEGORY_ICONS: Record<string, string> = {};
@@ -113,7 +108,9 @@ function ProductFormModal({
   const [sellPrice, setSellPrice] = useState(product?.sellPrice?.toString() || '0');
   const [stock, setStock] = useState(product?.stock?.toString() || '0');
   const [minStock, setMinStock] = useState(product?.minStock?.toString() || '0');
-  const [unit, setUnit] = useState(product?.unit || 'pcs');
+  // 120: legacy-код ('pcs'→'шт') нормализуем сразу — чипсы подсветят значение,
+  // сохранение перезапишет legacy-код русской меткой.
+  const [unit, setUnit] = useState(unitLabel(product?.unit) || DEFAULT_UNIT);
   const [isBundle, setIsBundle] = useState(product?.isBundle || false);
   const [bundleItems, setBundleItems] = useState<BundleItem[]>(product?.bundleItems || []);
   const [bundleSearch, setBundleSearch] = useState('');
@@ -322,19 +319,14 @@ function ProductFormModal({
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
-              Остаток{' '}
-              {unit !== 'pcs' && (
-                <span className="text-gray-400 font-normal">
-                  ({unit === 'm' ? 'м' : unit === 'l' ? 'л' : unit === 'kg' ? 'кг' : unit})
-                </span>
-              )}
+              Остаток {unit !== DEFAULT_UNIT && <span className="text-gray-400 font-normal">({unitLabel(unit)})</span>}
             </label>
             <input
               type="number"
               value={stock}
               onChange={(e) => setStock(e.target.value)}
               min="0"
-              step={unit === 'pcs' ? '1' : '0.01'}
+              step={unit === DEFAULT_UNIT ? '1' : '0.001'}
               className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
           </div>
@@ -345,7 +337,7 @@ function ProductFormModal({
               value={minStock}
               onChange={(e) => setMinStock(e.target.value)}
               min="0"
-              step={unit === 'pcs' ? '1' : '0.01'}
+              step={unit === DEFAULT_UNIT ? '1' : '0.001'}
               className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
           </div>
@@ -514,15 +506,19 @@ function WriteoffModal({ isOpen, onClose, product, onSubmit, isLoading }: Writeo
         <p className="text-sm text-gray-600">
           Товар: <span className="font-medium text-gray-900">{product.name}</span>
           <br />
-          Остаток: <span className="font-medium text-gray-900">{product.stock}</span>
+          Остаток: <span className="font-medium text-gray-900">{formatQty(product.stock)}</span>{' '}
+          {unitLabel(product.unit)}
         </p>
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Количество *</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">
+            Количество ({unitLabel(product.unit)}) *
+          </label>
           <input
             type="number"
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
-            min="1"
+            min="0.001"
+            step="0.001"
             max={product.stock}
             className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
           />
@@ -658,7 +654,8 @@ function TransferModal({
         <p className="text-sm text-gray-600">
           Товар: <span className="font-medium text-gray-900">{product.name}</span>
           <br />
-          Остаток на основном: <span className="font-medium text-gray-900">{product.stock}</span>
+          Остаток на основном: <span className="font-medium text-gray-900">{formatQty(product.stock)}</span>{' '}
+          {unitLabel(product.unit)}
         </p>
 
         <div>
@@ -694,12 +691,15 @@ function TransferModal({
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Количество *</label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">
+            Количество ({unitLabel(product.unit)}) *
+          </label>
           <input
             type="number"
             value={quantity}
             onChange={(e) => setQuantity(e.target.value)}
-            min="1"
+            min="0.001"
+            step="0.001"
             max={product.stock}
             className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
           />
@@ -798,7 +798,7 @@ function InventoryModal({ isOpen, onClose, product, onSubmit, isLoading }: Inven
                 className={`text-lg font-bold ${diff > 0 ? 'text-green-600' : diff < 0 ? 'text-red-600' : 'text-gray-400'}`}
               >
                 {diff > 0 ? '+' : ''}
-                {diff !== 0 ? diff.toFixed(product.unit === 'pcs' ? 0 : 2) : '—'}
+                {diff !== 0 ? formatQty(diff) : '—'}
               </p>
               <p className="text-[10px] text-gray-400 uppercase">Разница</p>
             </div>
@@ -2056,7 +2056,7 @@ export default function ProductsPage() {
         sellPrice: colMap.sellPrice >= 0 ? toNum(col(row, colMap.sellPrice)) : 0,
         stock: colMap.stock >= 0 ? toNum(col(row, colMap.stock)) : 0,
         minStock: colMap.minStock >= 0 ? toNum(col(row, colMap.minStock)) : 0,
-        unit: col(row, colMap.unit) || 'pcs',
+        unit: col(row, colMap.unit) || DEFAULT_UNIT,
       }))
       .filter((r) => r.name);
 
@@ -3071,7 +3071,9 @@ export default function ProductsPage() {
                     <tr key={idx} className="hover:bg-gray-50">
                       <td className="px-3 py-2 font-medium text-gray-900">{item.name}</td>
                       <td className="px-3 py-2 text-gray-500">{item.category || '—'}</td>
-                      <td className="px-3 py-2 text-center text-gray-500">{item.unit !== 'pcs' ? item.unit : '—'}</td>
+                      <td className="px-3 py-2 text-center text-gray-500">
+                        {unitLabel(item.unit) !== DEFAULT_UNIT ? unitLabel(item.unit) : '—'}
+                      </td>
                       <td className="px-3 py-2 text-right text-gray-700">{item.sellPrice || 0}</td>
                       <td className="px-3 py-2 text-right text-gray-700">{item.costPrice || 0}</td>
                       <td className="px-3 py-2 text-right text-gray-700">{item.stock || 0}</td>

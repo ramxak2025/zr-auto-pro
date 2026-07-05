@@ -104,7 +104,9 @@ export default function InstallmentDetailScreen() {
   });
 
   const payoffMutation = useMutation({
-    mutationFn: () => installmentsApi.payoff(planId),
+    // Способ оплаты (119) пробрасывается на бэкенд, чтобы погашение легло в
+    // кассу принявшего (нал/карта). Дефолта тут нет — выбор в самом алерте.
+    mutationFn: (method: 'cash' | 'card') => installmentsApi.payoff(planId, { method }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['installments'] });
       haptic('success');
@@ -119,10 +121,11 @@ export default function InstallmentDetailScreen() {
     haptic('tap');
     Alert.alert(
       'Погасить полностью?',
-      `Остаток ${formatInstallmentMoney(plan.remaining)} будет погашен, рассрочка закроется.`,
+      `Остаток ${formatInstallmentMoney(plan.remaining)} будет погашен, рассрочка закроется. Как приняты деньги?`,
       [
         { text: 'Отмена', style: 'cancel' },
-        { text: 'Погасить', style: 'default', onPress: () => payoffMutation.mutate() },
+        { text: 'Картой', style: 'default', onPress: () => payoffMutation.mutate('card') },
+        { text: 'Наличными', style: 'default', onPress: () => payoffMutation.mutate('cash') },
       ],
     );
   };

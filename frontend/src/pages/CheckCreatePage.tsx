@@ -47,6 +47,7 @@ import type {
 } from '../types';
 import { UserRole } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { DEFAULT_UNIT, MIN_QTY, formatQty, parseQtyInput, roundQty, unitLabel } from '../utils/units';
 import LastVisitBadge from '../components/LastVisitBadge';
 import { TemplatePickerModal, SaveTemplateModal } from '../components/CheckTemplatesModals';
 
@@ -73,6 +74,9 @@ function generateClientRequestId(): string {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
+/** Мерные единицы — только они получают дробный шаг 0.5 при добавлении. */
+const METERED_UNITS = new Set(['м', 'кг', 'л']);
+
 interface ServiceLineForm {
   serviceId: string;
   masterId: string;
@@ -88,6 +92,65 @@ interface ProductLineForm {
   costPrice: number;
   quantity: number;
   unit?: string;
+}
+
+/**
+ * QtyInput — поле количества строки товара (120, дробные количества).
+ * Зеркало QtyInput из mobile/CheckCreateScreen.
+ *
+ * Старый контролируемый number-input (`value={line.quantity}` + пере-парс
+ * на каждом символе) физически не давал набрать дробь: «0.» парсился в 0 →
+ * `|| 0` → clamp в MIN_QTY → поле мгновенно перерисовывалось как «0.001»,
+ * точка съедалась — и строка на ~0 ₽ могла тихо сохраниться. Здесь черновик
+ * текста живёт локально: наверх коммитим каждое валидное значение ≥ MIN_QTY
+ * (0.001), а на blur нормализуем отображение («2,» → «2», пусто/0 → откат к
+ * последнему валидному). Запятая = точка, глубже 3 знаков не уходит
+ * (parseQtyInput округляет — ровно NUMERIC(12,3)). Степперы ± снаружи
+ * продолжают работать: пока поле не в фокусе, внешние изменения значения
+ * синхронизируются в черновик.
+ */
+function QtyInput({
+  value,
+  onCommit,
+  className,
+}: {
+  value: number;
+  onCommit: (n: number) => void;
+  className?: string;
+}) {
+  const [text, setText] = useState(() => formatQty(value));
+  const focusedRef = useRef(false);
+  useEffect(() => {
+    if (!focusedRef.current) setText(formatQty(value));
+  }, [value]);
+  return (
+    <input
+      type="text"
+      inputMode="decimal"
+      value={text}
+      onChange={(e) => {
+        const v = e.target.value;
+        setText(v);
+        const n = parseQtyInput(v);
+        if (n !== null && n >= MIN_QTY) onCommit(n);
+      }}
+      onFocus={(e) => {
+        focusedRef.current = true;
+        e.target.select();
+      }}
+      onBlur={() => {
+        focusedRef.current = false;
+        const n = parseQtyInput(text);
+        if (n === null || n < MIN_QTY) {
+          setText(formatQty(value));
+        } else {
+          setText(formatQty(n));
+          onCommit(n);
+        }
+      }}
+      className={className}
+    />
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -621,7 +684,9 @@ export default function CheckCreatePage() {
           sellPrice: p.sellPrice,
           costPrice: p.costPrice,
           quantity: p.quantity,
-          unit: 'pcs',
+          // 120: backend отдаёт единицу строки (LEFT JOIN products). Старый
+          // backend поля не шлёт → undefined → UI покажет дефолт 'шт'.
+          unit: p.unit,
         })),
       );
     }
@@ -783,7 +848,7 @@ export default function CheckCreatePage() {
             const existing = updated.findIndex((l) => l.productId === bi.productId);
             if (existing !== -1) {
               updated = updated.map((line, i) =>
-                i === existing ? { ...line, quantity: line.quantity + bi.quantity } : line,
+                i === existing ? { ...line, quantity: roundQty(line.quantity + bi.quantity) } : line,
               );
             } else {
               updated.push({
@@ -802,10 +867,13 @@ export default function CheckCreatePage() {
       }
 
       setProductLines((prev) => {
-        const step = product.unit && product.unit !== 'pcs' ? 0.5 : 1;
+        // 120: русские метки единиц ('шт'…) + legacy-коды ('pcs') — сравниваем
+        // через unitLabel. Дробный шаг 0.5 — только у МЕРНЫХ единиц (м/кг/л);
+        // уп/компл/шт дискретны и шагают по 1 (паритет с мобилкой).
+        const step = METERED_UNITS.has(unitLabel(product.unit)) ? 0.5 : 1;
         const existing = prev.findIndex((l) => l.productId === product.id);
         if (existing !== -1) {
-          return prev.map((line, i) => (i === existing ? { ...line, quantity: line.quantity + step } : line));
+          return prev.map((line, i) => (i === existing ? { ...line, quantity: roundQty(line.quantity + step) } : line));
         }
         return [
           ...prev,
@@ -815,7 +883,7 @@ export default function CheckCreatePage() {
             sellPrice: product.sellPrice,
             costPrice: product.costPrice,
             quantity: step,
-            unit: product.unit || 'pcs',
+            unit: product.unit || DEFAULT_UNIT,
           },
         ];
       });
@@ -859,7 +927,7 @@ export default function CheckCreatePage() {
           sellPrice: p.sellPrice,
           costPrice: p.costPrice,
           quantity: p.quantity,
-          unit: catalogProduct?.unit || 'pcs',
+          unit: catalogProduct?.unit || DEFAULT_UNIT,
         };
       }),
     );
@@ -1346,45 +1414,35 @@ export default function CheckCreatePage() {
                     <div className="flex-1 min-w-0">
                       <div className="text-sm font-medium text-gray-900 truncate">{line.name}</div>
                       <div className="text-xs text-gray-500">
-                        {formatCurrency(line.sellPrice)} /{' '}
-                        {line.unit === 'm' ? 'м' : line.unit === 'l' ? 'л' : line.unit === 'kg' ? 'кг' : 'шт'}
+                        {formatCurrency(line.sellPrice)} / {unitLabel(line.unit)}
                       </div>
                     </div>
+                    {/* 120: дробный ввод количества разрешён ВСЕГДА (0.5 м
+                        шланга), степперы ±1 остаются рядом. */}
                     <div className="flex items-center gap-1 flex-shrink-0">
-                      {line.unit && line.unit !== 'pcs' ? (
-                        <input
-                          type="number"
-                          value={line.quantity}
-                          onChange={(e) =>
-                            updateProductLine(index, 'quantity', Math.max(0.01, parseFloat(e.target.value) || 0))
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (line.quantity > 1) {
+                            updateProductLine(index, 'quantity', roundQty(line.quantity - 1));
                           }
-                          step="0.1"
-                          min="0.01"
-                          className="w-16 text-center text-sm font-medium rounded border border-gray-200 py-1 px-1"
-                        />
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (line.quantity > 1) {
-                                updateProductLine(index, 'quantity', line.quantity - 1);
-                              }
-                            }}
-                            className="p-1 rounded hover:bg-gray-200 text-gray-400"
-                          >
-                            <Minus className="w-3.5 h-3.5" />
-                          </button>
-                          <span className="w-8 text-center text-sm font-medium">{line.quantity}</span>
-                          <button
-                            type="button"
-                            onClick={() => updateProductLine(index, 'quantity', line.quantity + 1)}
-                            className="p-1 rounded hover:bg-gray-200 text-gray-400"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      )}
+                        }}
+                        className="p-1 rounded hover:bg-gray-200 text-gray-400"
+                      >
+                        <Minus className="w-3.5 h-3.5" />
+                      </button>
+                      <QtyInput
+                        value={line.quantity}
+                        onCommit={(n) => updateProductLine(index, 'quantity', n)}
+                        className="w-16 text-center text-sm font-medium rounded border border-gray-200 py-1 px-1"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => updateProductLine(index, 'quantity', roundQty(line.quantity + 1))}
+                        className="p-1 rounded hover:bg-gray-200 text-gray-400"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                      </button>
                     </div>
                     <span className="text-sm font-semibold text-gray-700 flex-shrink-0 whitespace-nowrap">
                       {formatCurrency(line.sellPrice * line.quantity)}

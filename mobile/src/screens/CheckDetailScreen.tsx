@@ -30,6 +30,7 @@ import {
   voiceApi,
 } from '../api/services';
 import { shareOrderPdf } from '../utils/orderPdf';
+import { formatQty, formatQtyUnit } from '../utils/units';
 import { resolveCheckDetailState } from './checkDetailViewState';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
 import { useAuth } from '../contexts/AuthContext';
@@ -1386,10 +1387,15 @@ export default function CheckDetailScreen() {
               >
                 <View style={styles.lineItemLeft}>
                   <Text style={[styles.lineItemName, { color: palette.text.primary }]}>{line.name}</Text>
-                  {line.quantity > 1 && (
+                  {/* 120: дробные количества — «0.5 м x 1 200 ₽» показываем и
+                      при quantity < 1, скрываем только ровно 1. Единицу
+                      рендерим ТОЛЬКО когда она пришла: free-text строка без
+                      unit иначе получала бы ложное «0.5 шт». */}
+                  {line.quantity !== 1 && (
                     <View style={styles.lineItemMeta}>
                       <Text style={[styles.lineItemMetaText, { color: palette.text.tertiary }]}>
-                        {line.quantity} x {formatMoney(line.sellPrice)}
+                        {line.unit ? formatQtyUnit(line.quantity, line.unit) : formatQty(line.quantity)} x{' '}
+                        {formatMoney(line.sellPrice)}
                       </Text>
                     </View>
                   )}

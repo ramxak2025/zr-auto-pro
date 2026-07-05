@@ -782,8 +782,10 @@ export function createReportsApi(api: HttpClient) {
         // installmentDebt — долг по чекам в рассрочку за день (входит в total:
         // cash + card + warranty + installmentDebt = total). installmentPaid —
         // погашения рассрочки по дате платежа, в total НЕ входят (деньги за
-        // прошлые продажи). Оба поля опциональны — старый бэкенд их не шлёт,
-        // клиенты рендерят строки только когда поле пришло числом.
+        // прошлые продажи). installmentPaidCash/Card (119) — разбивка погашений
+        // по способу оплаты (installmentPaid = Cash + Card; до-миграционные
+        // платежи считаются налом). Все поля опциональны — старый бэкенд их не
+        // шлёт, клиенты рендерят строки только когда поле пришло числом.
         days: Array<{
           date: string;
           cash: number;
@@ -792,6 +794,8 @@ export function createReportsApi(api: HttpClient) {
           total: number;
           installmentDebt?: number;
           installmentPaid?: number;
+          installmentPaidCash?: number;
+          installmentPaidCard?: number;
         }>;
         totals: {
           cash: number;
@@ -800,6 +804,8 @@ export function createReportsApi(api: HttpClient) {
           total: number;
           installmentDebt?: number;
           installmentPaid?: number;
+          installmentPaidCash?: number;
+          installmentPaidCard?: number;
         };
       }>('/reports/cashflow', { params }),
     /**
@@ -1565,11 +1571,15 @@ export function createInstallmentsApi(api: HttpClient) {
     clientLedger: (clientId: string) => api.get<InstallmentClientLedger>(`/installments/client/${clientId}`),
     /** Главная widget: due-soon (next `days`) + overdue. Owner/admin only. */
     widget: (days?: number) => api.get<InstallmentWidget>('/installments/widget', { params: { days } }),
-    /** Record a partial payment; reduces remaining, optionally moves the next date. Returns the updated plan. */
-    pay: (planId: string, data: { amount: number; comment?: string; nextPaymentDate?: string }) =>
+    /**
+     * Record a partial payment; reduces remaining, optionally moves the next date. Returns the updated plan.
+     * method (119) — способ оплаты погашения; опционален, бэкенд по умолчанию пишет 'cash'.
+     */
+    pay: (planId: string, data: { amount: number; comment?: string; nextPaymentDate?: string; method?: 'cash' | 'card' }) =>
       api.post<InstallmentPlan>(`/installments/${planId}/pay`, data),
-    /** Pay off the whole remaining at once (close the plan). Returns the updated plan. */
-    payoff: (planId: string) => api.post<InstallmentPlan>(`/installments/${planId}/payoff`),
+    /** Pay off the whole remaining at once (close the plan). Returns the updated plan. Body опционален — {method?} (119). */
+    payoff: (planId: string, data?: { method?: 'cash' | 'card' }) =>
+      api.post<InstallmentPlan>(`/installments/${planId}/payoff`, data),
     /** Reschedule the next payment date and/or edit the comment. Returns the updated plan. */
     update: (planId: string, data: { nextPaymentDate?: string; comment?: string }) =>
       api.patch<InstallmentPlan>(`/installments/${planId}`, data),
