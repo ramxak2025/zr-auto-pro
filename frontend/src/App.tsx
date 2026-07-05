@@ -47,6 +47,7 @@ function lazyWithRetry<T extends ComponentType<any>>(
 // Each page loads only when the user navigates to its route.
 // lazyWithRetry adds retry logic to handle stale-cache chunk load failures.
 
+const LandingPage = lazyWithRetry(() => import('./pages/landing/LandingPage'));
 const LoginPage = lazyWithRetry(() => import('./pages/LoginPage'));
 const SubscriptionBlockedPage = lazyWithRetry(() => import('./pages/SubscriptionBlockedPage'));
 const DashboardPage = lazyWithRetry(() => import('./pages/DashboardPage'));
@@ -202,6 +203,19 @@ export default function App() {
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
 
+          {/* Public: Landing on the root for anonymous visitors.
+              Logged-in users are redirected exactly like on /login. */}
+          <Route
+            path="/"
+            element={
+              user ? (
+                <Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace />
+              ) : (
+                <LandingPage />
+              )
+            }
+          />
+
           {/* Public: Login */}
           <Route
             path="/login"
@@ -222,18 +236,10 @@ export default function App() {
                 <Route path="*" element={<SubscriptionBlockedPage />} />
               ) : (
                 <>
-                  {/* Main app routes inside Layout */}
+                  {/* Main app routes inside Layout.
+                      «/» здесь больше нет — корень обслуживает публичный роут выше
+                      (лендинг для гостей, Navigate в /dashboard для залогиненных). */}
                   <Route element={<Layout />}>
-                    <Route
-                      path="/"
-                      element={
-                        user.role === UserRole.SUPERADMIN ? (
-                          <Navigate to="/admin/dashboard" replace />
-                        ) : (
-                          <Navigate to="/dashboard" replace />
-                        )
-                      }
-                    />
                     <Route path="/dashboard" element={<DashboardPage />} />
                     <Route path="/checks" element={<ChecksPage />} />
                     <Route path="/work-board" element={<WorkBoardPage />} />

@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+import { memo, useEffect, useMemo } from 'react';
 import { NavLink, useLocation, Outlet } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import PageTransition from './PageTransition';
@@ -355,6 +355,16 @@ const MobileTabBar = memo(function MobileTabBar({ pathname }: MobileTabBarProps)
 export default function Layout() {
   const { user, logout, hasPermission } = useAuth();
   const location = useLocation();
+
+  // Внутри залогиненного приложения вкладка называется коротко «Autexa»;
+  // длинный SEO-title из index.html остаётся лендингу и странице логина.
+  useEffect(() => {
+    const seoTitle = document.title;
+    document.title = 'Autexa';
+    return () => {
+      document.title = seoTitle;
+    };
+  }, []);
 
   // Pull-to-refresh: invalidates all active React Query caches on pull down
   usePullToRefresh();
