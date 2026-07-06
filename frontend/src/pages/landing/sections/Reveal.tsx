@@ -10,6 +10,11 @@ interface RevealProps {
 /**
  * Появление секции/карточки при скролле: fade + rise, один раз (viewport once).
  * При prefers-reduced-motion анимация полностью отключается.
+ *
+ * margin инсетит root только по вертикали ('-60px 0px'): одиночное '-60px'
+ * резало root и по горизонтали — элементы правее (viewport − 60px), например
+ * peek-карточки горизонтальных каруселей, никогда не пересекали root и
+ * оставались с opacity:0.
  */
 export default function Reveal({ children, className, delay = 0 }: RevealProps) {
   const reduceMotion = useReducedMotion();
@@ -23,7 +28,7 @@ export default function Reveal({ children, className, delay = 0 }: RevealProps) 
       className={className}
       initial={{ opacity: 0, y: 24 }}
       whileInView={{ opacity: 1, y: 0 }}
-      viewport={{ once: true, margin: '-60px' }}
+      viewport={{ once: true, margin: '-60px 0px' }}
       transition={{ duration: 0.55, delay, ease: [0.22, 1, 0.36, 1] }}
     >
       {children}

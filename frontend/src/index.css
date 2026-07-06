@@ -244,6 +244,18 @@
   }
 }
 
+@layer utilities {
+  /* Скрыть полосу прокрутки у горизонтальных каруселей лендинга
+     (сам скролл и scroll-snap остаются нативными, без JS). */
+  .no-scrollbar {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .no-scrollbar::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 /* Onest — фирменный шрифт ЛЕНДИНГА (self-hosted: Google Fonts режется операторами РФ
    в «жёсткие окна» — грузить с CDN нельзя). Variable 400–800, сабсеты по unicode-range:
    браузер скачивает файл ТОЛЬКО при использовании font-family 'Onest', т.е. только на

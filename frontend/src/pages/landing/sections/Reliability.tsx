@@ -15,7 +15,9 @@ export default function Reliability() {
   if (!section) return null;
 
   return (
-    <section id="reliability" className="scroll-mt-24 border-t border-slate-200/60">
+    // На мобиле секция скрыта целиком: её роль выполняют TrustStrip под hero
+    // и чип «Надёжность» в сетке «Все возможности» (жалоба владельца на длинный скролл)
+    <section id="reliability" className="hidden scroll-mt-24 border-t border-slate-200/60 md:block">
       <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
         <Reveal className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">

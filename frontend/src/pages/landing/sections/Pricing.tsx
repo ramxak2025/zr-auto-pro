@@ -94,51 +94,63 @@ export default function Pricing() {
 
   return (
     <section id="pricing" className="scroll-mt-24 border-t border-slate-200/60">
-      <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
+      <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-28">
         <Reveal className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">{pricing.title}</h2>
           <p className="mt-4 text-lg text-slate-600">{pricing.subtitle}</p>
         </Reveal>
 
-        {/* Карточки планов; «Легенда» — primary-бордер, бейдж и подъём на desktop */}
-        <div className="mt-14 grid grid-cols-1 gap-4 md:grid-cols-3">
-          {pricing.plans.map((plan, i) => (
-            <Reveal key={plan.key} delay={Math.min(i * 0.07, 0.21)}>
+        {/* Карточки планов; «Легенда» — primary-бордер, бейдж и подъём на desktop.
+            < md — snap-карусель (~82vw + peek), «Легенда» через order-first идёт
+            ПЕРВОЙ (якорная цена — психология продаж); pt-3 даёт место бейджу
+            -top-3 внутри scroll-контейнера. md+ — прежняя сетка и порядок.
+            Reveal ОДИН на весь контейнер (как в Features): per-card Reveal рисовал
+            peek-карточку с opacity:0 и fade+rise посреди горизонтального свайпа. */}
+        <Reveal delay={0.05}>
+          <div className="no-scrollbar -mx-4 mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-4 px-4 pb-2 pt-3 [overscroll-behavior-x:contain] md:mx-0 md:mt-14 md:grid md:grid-cols-3 md:overflow-visible md:px-0 md:pb-0 md:pt-0">
+            {pricing.plans.map((plan) => (
               <div
-                className={`relative flex h-full flex-col rounded-3xl bg-white p-6 sm:p-7 ${
-                  plan.highlighted
-                    ? 'border border-primary-300 shadow-md ring-1 ring-primary-200/60 md:-translate-y-2'
-                    : 'border border-slate-200/60 shadow-sm'
+                key={plan.key}
+                className={`w-[82vw] max-w-sm shrink-0 snap-start md:w-auto md:max-w-none ${
+                  plan.highlighted ? 'order-first md:order-none' : ''
                 }`}
               >
-                {plan.badge && (
-                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-primary-600 px-3 py-1 text-[11px] font-semibold text-white shadow-md shadow-primary-600/25">
-                    {plan.badge}
-                  </span>
-                )}
-                <h3 className="text-lg font-bold text-slate-900">{plan.name}</h3>
-                <p className="mt-1 text-sm text-slate-500">{plan.description}</p>
-                <p className="mt-5 flex items-baseline gap-1.5">
-                  <span className="text-4xl font-extrabold tracking-tight text-slate-900">{plan.price} ₽</span>
-                  <span className="text-sm font-medium text-slate-400">/мес</span>
-                </p>
-                <p className="mt-1 text-sm font-medium text-slate-600">{plan.employees}</p>
-                <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-400">Что входит</p>
-                <ul className="mt-3 space-y-2.5">
-                  {plan.includes.map((item) => (
-                    <li key={item} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-600">
-                      <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-                <div className="mt-auto pt-6">
-                  <PlanCta plan={plan} />
+                <div
+                  className={`relative flex h-full flex-col rounded-3xl bg-white p-6 sm:p-7 ${
+                    plan.highlighted
+                      ? 'border border-primary-300 shadow-md ring-1 ring-primary-200/60 md:-translate-y-2'
+                      : 'border border-slate-200/60 shadow-sm'
+                  }`}
+                >
+                  {plan.badge && (
+                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-primary-600 px-3 py-1 text-[11px] font-semibold text-white shadow-md shadow-primary-600/25">
+                      {plan.badge}
+                    </span>
+                  )}
+                  <h3 className="text-lg font-bold text-slate-900">{plan.name}</h3>
+                  <p className="mt-1 text-sm text-slate-500">{plan.description}</p>
+                  <p className="mt-5 flex items-baseline gap-1.5">
+                    <span className="text-4xl font-extrabold tracking-tight text-slate-900">{plan.price} ₽</span>
+                    <span className="text-sm font-medium text-slate-400">/мес</span>
+                  </p>
+                  <p className="mt-1 text-sm font-medium text-slate-600">{plan.employees}</p>
+                  <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-400">Что входит</p>
+                  <ul className="mt-3 space-y-2.5">
+                    {plan.includes.map((item) => (
+                      <li key={item} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-600">
+                        <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="mt-auto pt-6">
+                    <PlanCta plan={plan} />
+                  </div>
                 </div>
               </div>
-            </Reveal>
-          ))}
-        </div>
+            ))}
+          </div>
+        </Reveal>
 
         {/* Честность — снимаем страх скрытых платежей (подписка помесячная) */}
         <Reveal delay={0.1}>
@@ -150,11 +162,11 @@ export default function Pricing() {
 
         {/* Внедрение под ключ — широкая карта под тарифами */}
         <Reveal delay={0.1}>
-          <div className="relative mt-10 overflow-hidden rounded-3xl border border-slate-200/60 bg-white p-6 shadow-sm sm:p-8">
+          <div className="relative mt-10 overflow-hidden rounded-3xl border border-slate-200/60 bg-white p-5 shadow-sm sm:p-8">
             <div aria-hidden className="pointer-events-none absolute inset-0">
               <div className="absolute -right-24 -top-24 h-56 w-[420px] rounded-full bg-primary-200/40 blur-[90px]" />
             </div>
-            <div className="relative flex flex-col gap-8 lg:flex-row lg:items-center lg:gap-12">
+            <div className="relative flex flex-col gap-5 md:gap-8 lg:flex-row lg:items-center lg:gap-12">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-3">
                   <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100">
@@ -162,12 +174,14 @@ export default function Pricing() {
                   </span>
                   <h3 className="text-xl font-bold text-slate-900">{impl.title}</h3>
                 </div>
-                <p className="mt-3 text-sm leading-relaxed text-slate-600">{impl.text}</p>
+                {/* Абзац-описание — только md+: на мобиле карта компактная
+                    (заголовок + пункты + цена + CTA) */}
+                <p className="mt-3 hidden text-sm leading-relaxed text-slate-600 md:block">{impl.text}</p>
                 <ul className="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
                   {impl.includes.map((item) => (
                     <li key={item} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-600">
                       <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                      {item}
+                      <span className="line-clamp-1 md:line-clamp-none">{item}</span>
                     </li>
                   ))}
                 </ul>

@@ -152,12 +152,19 @@ const MOCKS: Record<string, ReactNode> = {
   dengi: <CashFlowMock />,
 };
 
+/**
+ * Мобильная карусель «Главное»: 6 продающих разделов с реальными фото
+ * из public/img/landing/f-<slug>.webp (1200×900). Порядок — воронка ценности:
+ * касса → деньги → склад → голос → зарплата → рассрочка.
+ */
+const MOBILE_HIGHLIGHTS = ['kassa', 'dengi', 'sklad', 'golos', 'zarplata', 'rassrochka'];
+
 export default function Features() {
   const bySlug = new Map(features.map((f) => [f.slug, f]));
 
   return (
     <section id="features" className="scroll-mt-24 border-t border-slate-200/60">
-      <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
+      <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-28">
         <Reveal className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">Всё, что нужно сервису</h2>
           <p className="mt-4 text-lg text-slate-600">
@@ -165,7 +172,91 @@ export default function Features() {
           </p>
         </Reveal>
 
-        <div className="mt-14 grid grid-cols-1 gap-4 md:grid-cols-2 lg:auto-rows-[minmax(11rem,auto)] lg:grid-cols-12">
+        {/* < md: вместо 16 стековых карточек — фото-карусель «Главное» (6 rich-карточек)
+            + компактная сетка чипов «Все возможности». Скролл страницы короче в разы,
+            фото продают вместо простыней текста. md+ — прежний bento без изменений. */}
+        <div className="md:hidden">
+          <Reveal delay={0.05}>
+            <p className="mt-8 text-xs font-semibold uppercase tracking-wider text-slate-500">Главное</p>
+            {/* Чистый CSS scroll-snap: карточка ~78vw + peek следующей, без JS-слушателей */}
+            <div className="no-scrollbar -mx-4 mt-3 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-4 px-4 pb-2 [overscroll-behavior-x:contain]">
+              {MOBILE_HIGHLIGHTS.map((slug) => {
+                const section = bySlug.get(slug);
+                if (!section) return null;
+                const Icon = SECTION_ICONS[section.icon] ?? LayoutGrid;
+                const tint = SECTION_TINTS[slug] ?? DEFAULT_TINT;
+                return (
+                  <Link
+                    key={slug}
+                    to={`/f/${slug}`}
+                    className="flex w-[78vw] max-w-xs shrink-0 snap-start flex-col overflow-hidden rounded-3xl border border-slate-200/60 bg-white shadow-sm transition motion-safe:active:scale-[0.98]"
+                  >
+                    {/* alt="" — заголовок карточки уже называет раздел; width/height
+                        резервируют место (нет CLS). Все фото lazy: (а) eager-<img>
+                        внутри display:none (md+) всё равно скачивается — lazy без
+                        layout-бокса нет; (б) секция ~2 экрана ниже фолда, eager лишь
+                        конкурировал бы с критическим путём на LTE; префетч-дистанция
+                        браузера догружает фото задолго до доскролла. */}
+                    <img
+                      src={`/img/landing/f-${slug}.webp`}
+                      alt=""
+                      width={1200}
+                      height={900}
+                      loading="lazy"
+                      decoding="async"
+                      className="aspect-[4/3] w-full rounded-t-3xl object-cover"
+                    />
+                    <span className="flex flex-1 flex-col p-4">
+                      <span className="flex items-center gap-2.5">
+                        <span
+                          className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tint.chip}`}
+                        >
+                          <Icon className={`h-4 w-4 ${tint.icon}`} />
+                        </span>
+                        <span className="text-base font-semibold text-slate-900">{section.title}</span>
+                      </span>
+                      <span className="mt-2 line-clamp-2 text-sm leading-relaxed text-slate-600">
+                        {section.tagline}
+                      </span>
+                      <span className="mt-auto inline-flex items-center gap-1 pt-3 text-sm font-semibold text-primary-600">
+                        Подробнее
+                        <ArrowRight className="h-4 w-4" />
+                      </span>
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </Reveal>
+
+          <Reveal delay={0.05}>
+            <p className="mt-8 text-xs font-semibold uppercase tracking-wider text-slate-500">Все возможности</p>
+            <div className="mt-3 grid grid-cols-2 gap-2.5">
+              {features.map((f) => {
+                const Icon = SECTION_ICONS[f.icon] ?? LayoutGrid;
+                const tint = SECTION_TINTS[f.slug] ?? DEFAULT_TINT;
+                return (
+                  <Link
+                    key={f.slug}
+                    to={`/f/${f.slug}`}
+                    className="flex min-h-[56px] items-center gap-2.5 rounded-2xl border border-slate-200/60 bg-white px-3 py-2 shadow-sm transition motion-safe:active:scale-[0.98]"
+                  >
+                    <span
+                      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${tint.chip}`}
+                    >
+                      <Icon className={`h-[18px] w-[18px] ${tint.icon}`} />
+                    </span>
+                    <span className="line-clamp-2 min-w-0 text-[13px] font-medium leading-snug text-slate-800">
+                      {f.title}
+                    </span>
+                  </Link>
+                );
+              })}
+            </div>
+          </Reveal>
+        </div>
+
+        <div className="mt-14 hidden gap-4 md:grid md:grid-cols-2 lg:auto-rows-[minmax(11rem,auto)] lg:grid-cols-12">
           {LAYOUT.map(({ slug, className }, i) => {
             const section = bySlug.get(slug);
             if (!section) return null;

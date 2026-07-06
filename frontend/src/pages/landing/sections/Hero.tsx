@@ -36,7 +36,7 @@ const item: Variants = {
 /** CSS-мокап телефона с мини-дашбордом — без единой картинки, светлый UI. */
 function PhoneMock() {
   return (
-    <div className="relative mx-auto w-[280px]">
+    <div className="relative mx-auto w-[240px] md:w-[280px]">
       {/* Плавающий чип поверх телефона */}
       <div className="absolute -left-6 top-24 z-10 hidden items-center gap-2 rounded-2xl border border-slate-200/70 bg-white/95 px-3.5 py-2.5 shadow-xl shadow-slate-900/10 backdrop-blur sm:flex">
         <CheckCircle2 className="h-4 w-4 text-emerald-500" />
@@ -74,8 +74,9 @@ function PhoneMock() {
             </div>
           </div>
 
-          {/* Карточка «Оборот» с мини-графиком */}
-          <div className="mt-3 rounded-2xl border border-slate-200/70 bg-white p-3.5 shadow-sm">
+          {/* Карточка «Оборот» с мини-графиком — на мобиле скрыта: мокап короче,
+              CTA и первый контент ближе (жалоба владельца на длинный скролл) */}
+          <div className="mt-3 hidden rounded-2xl border border-slate-200/70 bg-white p-3.5 shadow-sm md:block">
             <div className="flex items-center gap-2">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-50">
                 <TrendingUp className="h-4 w-4 text-primary-600" />
@@ -124,7 +125,7 @@ export default function Hero() {
       {/* Оркестрованный вход: badge → заголовок → подзаголовок → буллеты → CTA →
           мокап, стаггер 70 мс; reduced-motion — контент сразу на месте. */}
       <motion.div
-        className="relative mx-auto grid max-w-6xl items-center gap-14 px-4 pb-20 pt-16 sm:px-6 sm:pt-24 lg:grid-cols-[1.15fr_0.85fr] lg:pb-28"
+        className="relative mx-auto grid max-w-6xl items-center gap-8 px-4 pb-10 pt-16 sm:px-6 sm:pt-24 md:gap-14 md:pb-20 lg:grid-cols-[1.15fr_0.85fr] lg:pb-28"
         variants={container}
         initial={reduceMotion ? false : 'hidden'}
         animate="visible"
