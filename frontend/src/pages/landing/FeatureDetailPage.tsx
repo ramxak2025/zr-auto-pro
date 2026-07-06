@@ -6,6 +6,7 @@ import { getTelegramUrl, getWhatsAppUrl, WHATSAPP_ACCESS_MESSAGE } from './confi
 import Reveal from './sections/Reveal';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
+import OptionalImage from './OptionalImage';
 import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS } from './icons';
 
 /**
@@ -183,17 +184,28 @@ export default function FeatureDetailPage() {
       </div>
 
       <main className="mx-auto max-w-6xl px-4 sm:px-6">
-        {/* Hero раздела */}
+        {/* Hero раздела: текст + опциональная иллюстрация — появится, когда
+            владелец положит /img/landing/f-<slug>.webp; до этого слот пуст
+            (OptionalImage прячется по onError, сетка остаётся одноколоночной) */}
         <section className="py-12 sm:py-16">
-          <Reveal className="max-w-3xl">
-            <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${tint.chip}`}>
-              <SectionIcon className={`h-6 w-6 ${tint.icon}`} />
-            </span>
-            <h1 className="mt-5 text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">
-              {detail.heroTitle}
-            </h1>
-            <p className="mt-4 text-lg leading-relaxed text-slate-600">{detail.heroSubtitle}</p>
-          </Reveal>
+          <div className="grid items-center gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-12">
+            <Reveal className="max-w-3xl">
+              <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${tint.chip}`}>
+                <SectionIcon className={`h-6 w-6 ${tint.icon}`} />
+              </span>
+              <h1 className="mt-5 text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">
+                {detail.heroTitle}
+              </h1>
+              <p className="mt-4 text-lg leading-relaxed text-slate-600">{detail.heroSubtitle}</p>
+            </Reveal>
+            <OptionalImage
+              src={`/img/landing/f-${section.slug}.webp`}
+              alt={`${section.title} в Autexa`}
+              width={800}
+              height={600}
+              className="w-full rounded-3xl border border-slate-200/60 object-cover shadow-sm"
+            />
+          </div>
 
           {/* «Знакомо?» — боли без продукта */}
           <Reveal delay={0.08}>

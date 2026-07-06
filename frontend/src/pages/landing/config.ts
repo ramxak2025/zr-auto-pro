@@ -29,6 +29,14 @@ export const WHATSAPP_ACCESS_MESSAGE = 'Здравствуйте! Хочу по�
 /** Текст первого сообщения в WhatsApp для «Скачать через поддержку». */
 export const WHATSAPP_INSTALL_MESSAGE = 'Здравствуйте! Хочу установить приложение Autexa';
 
+/** Текст первого сообщения в WhatsApp для CTA «Подключить» на карточке тарифа. */
+export function getPlanConnectMessage(planName: string): string {
+  return `Здравствуйте! Хочу подключить Autexa, тариф «${planName}»`;
+}
+
+/** Текст первого сообщения в WhatsApp для «Обсудить внедрение» (внедрение под ключ). */
+export const WHATSAPP_IMPLEMENTATION_MESSAGE = 'Здравствуйте! Хочу обсудить внедрение Autexa под ключ';
+
 /** Ссылка на WhatsApp с предзаполненным сообщением; null — номера нет. */
 export function getWhatsAppUrl(
   message: string = WHATSAPP_ACCESS_MESSAGE,

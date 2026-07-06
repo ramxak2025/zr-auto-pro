@@ -7,6 +7,7 @@ import Roles from './sections/Roles';
 import Features from './sections/Features';
 import Reliability from './sections/Reliability';
 import Platforms from './sections/Platforms';
+import Pricing from './sections/Pricing';
 import CtaSection from './sections/CtaSection';
 import Faq from './sections/Faq';
 import Footer from './sections/Footer';
@@ -75,6 +76,7 @@ export default function LandingPage() {
       <Features />
       <Reliability />
       <Platforms />
+      <Pricing />
       <CtaSection />
       <Faq />
       <Footer />

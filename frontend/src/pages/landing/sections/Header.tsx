@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 const ANCHORS = [
   { href: '#features', label: 'Возможности' },
   { href: '#reliability', label: 'Надёжность' },
+  { href: '#pricing', label: 'Тарифы' },
   { href: '#faq', label: 'Вопросы' },
 ];
 

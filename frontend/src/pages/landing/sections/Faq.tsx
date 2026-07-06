@@ -10,13 +10,22 @@ const WA_INSTALL_URL = getWhatsAppUrl(WHATSAPP_INSTALL_MESSAGE);
 const TG_URL = getTelegramUrl();
 
 /**
- * Упоминания WhatsApp/Telegram в ответах превращаем в живые ссылки —
- * текст остаётся ровно тем, что в content.ts, меняется только разметка.
+ * Упоминания WhatsApp/Telegram в ответах превращаем в живые ссылки, а
+ * «сравнение тарифов» — в якорь на секцию #pricing (FAQ живёт только на
+ * главной, где секция есть). Текст остаётся ровно тем, что в content.ts,
+ * меняется только разметка.
  */
 function linkifyContacts(text: string): ReactNode {
-  const parts = text.split(/(WhatsApp|Telegram)/g);
+  const parts = text.split(/(WhatsApp|Telegram|сравнение тарифов)/g);
   if (parts.length === 1) return text;
   return parts.map((part, i) => {
+    if (part === 'сравнение тарифов') {
+      return (
+        <a key={i} href="#pricing" className={LINK_CLS}>
+          {part}
+        </a>
+      );
+    }
     const url = part === 'WhatsApp' ? WA_INSTALL_URL : part === 'Telegram' ? TG_URL : null;
     if (!url) return part;
     return (
