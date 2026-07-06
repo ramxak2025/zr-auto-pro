@@ -58,3 +58,9 @@
 
 Просто пришли файлы в чат (можно пачкой) — переименую при необходимости, положу в
 `frontend/public/img/landing/`, задеплою. Формат: WebP или PNG/JPG (сконвертирую сам).
+
+## Соответствие номеров (страница с кнопками: https://autexa.pw/prompts-autexa.html)
+
+Владелец присылает НОМЕР + картинку; файлы кладутся так:
+№1 → og-cover.png (обрезать до 1200×630, центр по вертикали) · №2 → workshop.webp · №3 → f-kassa.webp · №4 → f-sklad.webp · №5 → f-dengi.webp · №6 → f-golos.webp · №7 → f-klienty.webp · №8 → f-nadezhnost.webp · №9 → f-zarplata.webp · №10 → f-raspisanie.webp · №11 → f-rassrochka.webp · №12 → f-zapisi.webp · №13 → f-otchety.webp · №14 → f-marketing.webp.
+ChatGPT генерит 1536×1024 — до 1200×900 (4:3) резать по бокам, до 1200×630 — сверху/снизу. Требование владельца: без лиц и без женщин (зашито в промты).
