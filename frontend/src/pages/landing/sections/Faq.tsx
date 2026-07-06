@@ -12,7 +12,9 @@ export default function Faq() {
     <section id="faq" className="scroll-mt-24 border-t border-slate-200/60">
       <div className="mx-auto max-w-3xl px-4 py-20 sm:px-6 sm:py-28">
         <Reveal className="text-center">
-          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">Частые вопросы</h2>
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
+            Частые вопросы
+          </h2>
         </Reveal>
 
         <div className="mt-12 space-y-3">

@@ -193,7 +193,7 @@ export default function FeatureDetailPage() {
               <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${tint.chip}`}>
                 <SectionIcon className={`h-6 w-6 ${tint.icon}`} />
               </span>
-              <h1 className="mt-5 text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">
+              <h1 className="mt-5 text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
                 {detail.heroTitle}
               </h1>
               <p className="mt-4 text-lg leading-relaxed text-slate-600">{detail.heroSubtitle}</p>
@@ -228,7 +228,7 @@ export default function FeatureDetailPage() {
         {/* Возможности */}
         <section className="pb-12 sm:pb-16">
           <Reveal>
-            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
               Как это работает в Autexa
             </h2>
           </Reveal>
@@ -250,7 +250,7 @@ export default function FeatureDetailPage() {
         {/* Кому это */}
         <section className="pb-12 sm:pb-16">
           <Reveal>
-            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Кому это</h2>
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">Кому это</h2>
           </Reveal>
           <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
             {roleCards.map(({ key, label }, i) => (
@@ -267,7 +267,9 @@ export default function FeatureDetailPage() {
         {/* Мини-FAQ */}
         <section className="pb-12 sm:pb-16">
           <Reveal>
-            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Частые вопросы</h2>
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
+              Частые вопросы
+            </h2>
           </Reveal>
           <div className="mt-8 space-y-3">
             {detail.faq.map((item, i) => (
@@ -300,7 +302,9 @@ export default function FeatureDetailPage() {
         {/* Смотрите также */}
         <section className="pb-16 sm:pb-20">
           <Reveal>
-            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Смотрите также</h2>
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
+              Смотрите также
+            </h2>
           </Reveal>
           <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
             {related.map((rel, i) => (

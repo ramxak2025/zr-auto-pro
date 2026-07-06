@@ -16,7 +16,9 @@ export default function Pricing() {
     <section id="pricing" className="scroll-mt-24 border-t border-slate-200/60">
       <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-24">
         <Reveal className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">{pricing.title}</h2>
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
+            {pricing.title}
+          </h2>
           <p className="mt-4 text-lg text-slate-600">{pricing.subtitle}</p>
         </Reveal>
 

@@ -235,9 +235,7 @@ function MobileHero() {
           {tail && (
             <>
               {' '}
-              <span className="bg-gradient-to-r from-primary-500 to-primary-700 bg-clip-text text-transparent">
-                {tail}
-              </span>
+              <span className="text-primary-600">{tail}</span>
             </>
           )}
         </motion.h1>
@@ -301,15 +299,13 @@ function DesktopHero() {
 
           <motion.h1
             variants={item}
-            className="mt-6 text-[clamp(40px,7vw,72px)] font-extrabold leading-[1.04] tracking-tight text-slate-900"
+            className="mt-6 text-[clamp(40px,7vw,72px)] font-extrabold leading-[1.04] tracking-tight text-slate-900 text-balance"
           >
             {head}
             {tail && (
               <>
                 {' '}
-                <span className="bg-gradient-to-r from-primary-500 to-primary-700 bg-clip-text text-transparent">
-                  {tail}
-                </span>
+                <span className="text-primary-600">{tail}</span>
               </>
             )}
           </motion.h1>

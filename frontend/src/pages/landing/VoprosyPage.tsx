@@ -211,7 +211,9 @@ export default function VoprosyPage() {
 
         {/* Hero-строка */}
         <Reveal className="pt-6 sm:pt-10">
-          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">Вопросы и ответы</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
+            Вопросы и ответы
+          </h1>
           <p className="mt-3 text-lg text-slate-600">Всё, что спрашивают владельцы автосервисов</p>
         </Reveal>
 
@@ -348,7 +350,9 @@ export default function VoprosyPage() {
               <div className="absolute -bottom-20 right-0 h-40 w-[300px] rounded-full bg-emerald-200/40 blur-[90px]" />
             </div>
             <div className="relative">
-              <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Не нашли ответ?</h2>
+              <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
+                Не нашли ответ?
+              </h2>
               <p className="mx-auto mt-3 max-w-md text-base text-slate-600">
                 Напишем за пару минут — живой человек, без «менеджер перезвонит».
               </p>

@@ -21,7 +21,9 @@ export default function Roles() {
     <section id="roles" className="scroll-mt-24 border-t border-slate-200/60">
       <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-28">
         <Reveal className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">Кому подходит Autexa</h2>
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
+            Кому подходит Autexa
+          </h2>
           <p className="mt-4 text-lg text-slate-600">
             Каждый в сервисе видит своё — и у каждого своя причина открыть приложение.
           </p>

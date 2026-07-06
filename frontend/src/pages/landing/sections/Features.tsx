@@ -166,7 +166,9 @@ export default function Features() {
     <section id="features" className="scroll-mt-24 border-t border-slate-200/60">
       <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-28">
         <Reveal className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">Всё, что нужно сервису</h2>
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
+            Всё, что нужно сервису
+          </h2>
           <p className="mt-4 text-lg text-slate-600">
             От первого звонка клиента до зарплаты мастера — один инструмент вместо тетради, Excel и калькулятора.
           </p>

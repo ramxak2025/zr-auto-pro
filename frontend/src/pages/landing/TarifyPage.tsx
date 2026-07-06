@@ -120,7 +120,9 @@ export default function TarifyPage() {
 
         {/* Hero-строка */}
         <Reveal className="max-w-3xl pt-6 sm:pt-10">
-          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">{tarifyHero.title}</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
+            {tarifyHero.title}
+          </h1>
           <p className="mt-3 text-lg text-slate-600">{tarifyHero.subtitle}</p>
         </Reveal>
 
@@ -154,7 +156,7 @@ export default function TarifyPage() {
 
         {/* Полное сравнение: desktop-таблица / mobile-details */}
         <Reveal delay={0.1} className="hidden md:block">
-          <h2 className="mt-16 text-center text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
+          <h2 className="mt-16 text-center text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
             {pricing.comparisonTitle}
           </h2>
           <ComparisonTable />
@@ -166,7 +168,9 @@ export default function TarifyPage() {
         {/* Mini-FAQ о ценах */}
         <section className="pt-14 sm:pt-20">
           <Reveal>
-            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Вопросы о цене</h2>
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
+              Вопросы о цене
+            </h2>
           </Reveal>
           <div className="mt-6 space-y-3">
             {pricingFaq.map((item, i) => (

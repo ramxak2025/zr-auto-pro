@@ -63,7 +63,7 @@ function MiniChip({ label, value }: { label: string; value: PlanCellValue }) {
   return (
     <span
       className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium ${
-        included ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'
+        included ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
       }`}
     >
       <span className="font-semibold">{label}</span>

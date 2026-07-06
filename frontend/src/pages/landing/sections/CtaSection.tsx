@@ -25,7 +25,7 @@ export default function CtaSection() {
 
             <div className="relative flex flex-col items-center gap-10 lg:flex-row lg:gap-12">
               <div className="min-w-0 flex-1">
-                <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">
+                <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
                   {ctaSection.title}
                 </h2>
                 <p className="mx-auto mt-4 max-w-md text-lg text-slate-600">{ctaSection.subtitle}</p>
