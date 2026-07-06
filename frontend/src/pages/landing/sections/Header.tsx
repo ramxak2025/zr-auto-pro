@@ -15,18 +15,17 @@ export default function Header() {
           href="#top"
           className="flex min-h-[44px] items-center gap-2.5 text-lg font-bold tracking-tight text-slate-900"
         >
+          {/* Полный wordmark: на светлой теме тёмно-синие буквы читаются отлично
+              (на тёмной v2 был нечитаем — потому стояла иконка+текст). 1502×363 ≈ 4.14:1. */}
           <img
-            src="/logo-icon.png"
+            src="/logo.png"
             alt="Autexa"
-            width={30}
-            height={30}
+            width={116}
+            height={28}
             loading="eager"
             decoding="async"
-            className="h-[30px] w-[30px] rounded-lg"
+            className="h-7 w-auto"
           />
-          <span aria-hidden>
-            Autexa<span className="text-primary-600">.</span>
-          </span>
         </a>
 
         {/* Якоря — только на desktop */}
