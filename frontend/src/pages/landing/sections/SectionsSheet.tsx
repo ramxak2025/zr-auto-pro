@@ -4,17 +4,23 @@ import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
 import { LayoutGrid, MessageCircle, X } from 'lucide-react';
 import { features } from '../content';
 import { getWhatsAppUrl } from '../config';
-import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS } from '../icons';
+import { DEFAULT_TINT, groupBySections, SECTION_ICONS, SECTION_TINTS } from '../icons';
 
 interface SectionsSheetProps {
   open: boolean;
   onClose: () => void;
 }
 
+/** Разделы по направлениям (единый источник — SECTION_GROUPS в icons.ts);
+    features статичен — считаем один раз на модуль. */
+const GROUPED_FEATURES = groupBySections(features);
+
 /**
  * Bottom-sheet «Возможности Autexa» — открывается из пункта «Разделы»
- * нижнего glass-бара (мобилка). Сетка 2 колонки всех 16 разделов,
- * тап по разделу → /f/<slug> и шторка закрывается.
+ * нижнего glass-бара (мобилка). Каталог по направлениям: компактный
+ * заголовок группы → сетка 2 колонки её разделов (карточки ужаты до
+ * min-h 44px против прежних 56, чтобы группировка почти не растила
+ * общую высоту), тап по разделу → /f/<slug> и шторка закрывается.
  *
  * Закрытие: крестик, тап по подложке, Escape. body scroll-lock пока открыта.
  * slide-up 250 мс (reduced-motion — мгновенно), z-[60] — выше бара (z-40)
@@ -143,30 +149,36 @@ export default function SectionsSheet({ open, onClose }: SectionsSheetProps) {
             </div>
 
             <div className="mt-2 min-h-0 overflow-y-auto px-4 pb-3 [overscroll-behavior-y:contain]">
-              <div className="grid grid-cols-2 gap-2.5">
-                {features.map((f, i) => {
-                  const Icon = SECTION_ICONS[f.icon] ?? LayoutGrid;
-                  const tint = SECTION_TINTS[f.slug] ?? DEFAULT_TINT;
-                  return (
-                    <Link
-                      key={f.slug}
-                      ref={i === 0 ? firstLinkRef : undefined}
-                      to={`/f/${f.slug}`}
-                      onClick={onClose}
-                      className="flex min-h-[56px] items-center gap-2.5 rounded-2xl border border-slate-200/60 bg-white px-3 py-2 shadow-sm transition motion-safe:active:scale-[0.98]"
-                    >
-                      <span
-                        className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${tint.chip}`}
-                      >
-                        <Icon className={`h-[18px] w-[18px] ${tint.icon}`} />
-                      </span>
-                      <span className="line-clamp-2 min-w-0 text-[13px] font-medium leading-snug text-slate-800">
-                        {f.shortTitle ?? f.title}
-                      </span>
-                    </Link>
-                  );
-                })}
-              </div>
+              {GROUPED_FEATURES.map((group, gi) => (
+                <div key={group.title} className={gi === 0 ? undefined : 'mt-4'}>
+                  {/* slate-500: 12px uppercase = «обычный» текст по WCAG, нужен AA 4.5:1 (slate-400 давал ~2.6:1) */}
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{group.title}</p>
+                  <div className="mt-1.5 grid grid-cols-2 gap-2">
+                    {group.items.map((f, i) => {
+                      const Icon = SECTION_ICONS[f.icon] ?? LayoutGrid;
+                      const tint = SECTION_TINTS[f.slug] ?? DEFAULT_TINT;
+                      return (
+                        <Link
+                          key={f.slug}
+                          ref={gi === 0 && i === 0 ? firstLinkRef : undefined}
+                          to={`/f/${f.slug}`}
+                          onClick={onClose}
+                          className="flex min-h-[44px] items-center gap-2.5 rounded-2xl border border-slate-200/60 bg-white px-3 py-1.5 shadow-sm transition motion-safe:active:scale-[0.98]"
+                        >
+                          <span
+                            className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-lg ${tint.chip}`}
+                          >
+                            <Icon className={`h-4 w-4 ${tint.icon}`} />
+                          </span>
+                          <span className="line-clamp-2 min-w-0 text-[13px] font-medium leading-snug text-slate-800">
+                            {f.shortTitle ?? f.title}
+                          </span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
             </div>
 
             {/* Закреплённая CTA — контакт по решению владельца живёт в шторке */}

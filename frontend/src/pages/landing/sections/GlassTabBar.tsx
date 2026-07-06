@@ -54,7 +54,12 @@ function BarShell({ children }: { children: ReactNode }) {
       style={{ bottom: 'max(16px, env(safe-area-inset-bottom))' }}
       aria-label="Меню сайта"
     >
-      <div className="pointer-events-auto flex w-full max-w-md items-center gap-0.5 rounded-full border border-slate-200/70 bg-white/70 p-1.5 shadow-xl shadow-slate-900/10 backdrop-blur-2xl backdrop-saturate-150">
+      {/* Тень сбалансирована вокруг пилюли (лёгкий ореол вверх + мягкая КОРОТКАЯ вниз,
+          максимум ~12px ниже бара): прежняя shadow-xl (0 20px 25px) была смещена вниз
+          на 20px и резалась краем вьюпорта — бар стоит всего в ~16px от низа, при
+          сжатии панелей Safari обрубленная кромка «гуляла». Ни один предок бара не
+          создаёт containing block (transform/filter) — fixed считается от вьюпорта. */}
+      <div className="pointer-events-auto flex w-full max-w-md items-center gap-0.5 rounded-full border border-slate-200/70 bg-white/70 p-1.5 shadow-[0_-1px_10px_rgba(15,23,42,0.05),0_6px_18px_-6px_rgba(15,23,42,0.18)] backdrop-blur-2xl backdrop-saturate-150">
         {children}
       </div>
     </nav>

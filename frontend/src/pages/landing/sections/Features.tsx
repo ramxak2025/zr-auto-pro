@@ -5,7 +5,7 @@ import type { LucideIcon } from 'lucide-react';
 import CarouselDots from './CarouselDots';
 import Reveal from './Reveal';
 import { features } from '../content';
-import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS, type SectionTint } from '../icons';
+import { DEFAULT_TINT, groupBySections, SECTION_ICONS, SECTION_TINTS, type SectionTint } from '../icons';
 
 /**
  * Фото карточки «Главное»-карусели: slow zoom при появлении — scale 1.04→1
@@ -198,6 +198,9 @@ const MOCKS: Record<string, ReactNode> = {
  */
 const MOBILE_HIGHLIGHTS = ['kassa', 'dengi', 'sklad', 'golos', 'zarplata', 'rassrochka'];
 
+/** «Все возможности» по направлениям — единый источник SECTION_GROUPS (icons.ts). */
+const GROUPED_FEATURES = groupBySections(features);
+
 export default function Features() {
   const bySlug = new Map(features.map((f) => [f.slug, f]));
   const scrollerRef = useRef<HTMLDivElement>(null);
@@ -219,7 +222,7 @@ export default function Features() {
             фото продают вместо простыней текста. md+ — прежний bento без изменений. */}
         <div className="md:hidden">
           <Reveal delay={0.05}>
-            <p className="mt-8 text-xs font-semibold uppercase tracking-wider text-slate-500">Главное</p>
+            <p className="mt-8 text-xs font-semibold uppercase tracking-wider text-slate-600">Главное</p>
             {/* CSS scroll-snap: карточка ~78vw + peek следующей; JS — только
                 passive-слушатель точек-индикаторов ниже, жесты не трогает */}
             <div
@@ -275,29 +278,37 @@ export default function Features() {
           </Reveal>
 
           <Reveal delay={0.05}>
-            <p className="mt-8 text-xs font-semibold uppercase tracking-wider text-slate-500">Все возможности</p>
-            <div className="mt-3 grid grid-cols-2 gap-2.5">
-              {features.map((f) => {
-                const Icon = SECTION_ICONS[f.icon] ?? LayoutGrid;
-                const tint = SECTION_TINTS[f.slug] ?? DEFAULT_TINT;
-                return (
-                  <Link
-                    key={f.slug}
-                    to={`/f/${f.slug}`}
-                    className="flex min-h-[56px] items-center gap-2.5 rounded-2xl border border-slate-200/60 bg-white px-3 py-2 shadow-sm transition motion-safe:active:scale-[0.98]"
-                  >
-                    <span
-                      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${tint.chip}`}
-                    >
-                      <Icon className={`h-[18px] w-[18px] ${tint.icon}`} />
-                    </span>
-                    <span className="line-clamp-2 min-w-0 text-[13px] font-medium leading-snug text-slate-800">
-                      {f.shortTitle ?? f.title}
-                    </span>
-                  </Link>
-                );
-              })}
-            </div>
+            <p className="mt-8 text-xs font-semibold uppercase tracking-wider text-slate-600">Все возможности</p>
+            {/* Группы направлений из SECTION_GROUPS (icons.ts) — те же, что в шторке
+                «Разделы». Заголовок группы — slate-500: тише лейбла секции (slate-600),
+                но не ниже AA 4.5:1 для 12px текста (slate-400 давал ~2.6:1) */}
+            {GROUPED_FEATURES.map((group) => (
+              <div key={group.title} className="mt-4">
+                <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{group.title}</p>
+                <div className="mt-2 grid grid-cols-2 gap-2.5">
+                  {group.items.map((f) => {
+                    const Icon = SECTION_ICONS[f.icon] ?? LayoutGrid;
+                    const tint = SECTION_TINTS[f.slug] ?? DEFAULT_TINT;
+                    return (
+                      <Link
+                        key={f.slug}
+                        to={`/f/${f.slug}`}
+                        className="flex min-h-[56px] items-center gap-2.5 rounded-2xl border border-slate-200/60 bg-white px-3 py-2 shadow-sm transition motion-safe:active:scale-[0.98]"
+                      >
+                        <span
+                          className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${tint.chip}`}
+                        >
+                          <Icon className={`h-[18px] w-[18px] ${tint.icon}`} />
+                        </span>
+                        <span className="line-clamp-2 min-w-0 text-[13px] font-medium leading-snug text-slate-800">
+                          {f.shortTitle ?? f.title}
+                        </span>
+                      </Link>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
           </Reveal>
         </div>
 

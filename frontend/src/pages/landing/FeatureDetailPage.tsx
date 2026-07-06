@@ -187,7 +187,9 @@ export default function FeatureDetailPage() {
         {/* Hero раздела: текст + опциональная иллюстрация — появится, когда
             владелец положит /img/landing/f-<slug>.webp; до этого слот пуст
             (OptionalImage прячется по onError, сетка остаётся одноколоночной) */}
-        <section className="py-12 sm:py-16">
+        {/* pt компактный (4/6, а не 12/16): крошки+заголовок начинаются сразу под
+            шапкой, без пустого экрана; нижний ритм секции сохранён */}
+        <section className="pb-12 pt-4 sm:pb-16 sm:pt-6">
           <div className="grid items-center gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-12">
             <Reveal className="max-w-3xl">
               <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${tint.chip}`}>

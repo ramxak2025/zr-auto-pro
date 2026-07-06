@@ -114,12 +114,12 @@ export default function TarifyPage() {
       <MiniHeader />
 
       <main className="mx-auto max-w-6xl px-4 sm:px-6">
-        <div className="pt-3">
+        <div className="pt-4">
           <Breadcrumbs />
         </div>
 
-        {/* Hero-строка */}
-        <Reveal className="max-w-3xl pt-6 sm:pt-10">
+        {/* Hero-строка: pt-4/6 — единый ритм публичных страниц (контент сразу под шапкой) */}
+        <Reveal className="max-w-3xl pt-4 sm:pt-6">
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
             {tarifyHero.title}
           </h1>

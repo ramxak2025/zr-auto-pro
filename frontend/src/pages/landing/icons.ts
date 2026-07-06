@@ -79,3 +79,48 @@ export const SECTION_TINTS: Record<string, SectionTint> = {
 };
 
 export const DEFAULT_TINT: SectionTint = { chip: 'bg-primary-50', icon: 'text-primary-600' };
+
+export interface SectionGroup {
+  /** Заголовок направления в каталогах разделов. */
+  title: string;
+  /** Слаги разделов из content.features в порядке показа внутри группы. */
+  slugs: string[];
+}
+
+/**
+ * Единственный источник группировки 16 разделов по направлениям бизнеса.
+ * Используется в шторке «Разделы» (SectionsSheet), сетке «Все возможности»
+ * (Features, mobile) и сетке категорий на /voprosy — правится в одном месте.
+ */
+export const SECTION_GROUPS: SectionGroup[] = [
+  { title: 'Работа сервиса', slugs: ['kassa', 'zhurnal', 'sklad', 'postavshchiki'] },
+  { title: 'Деньги', slugs: ['dengi', 'zarplata', 'rassrochka', 'otchety'] },
+  { title: 'Клиенты', slugs: ['klienty', 'zapisi', 'marketing'] },
+  { title: 'Команда', slugs: ['sotrudniki', 'raspisanie', 'golos'] },
+  { title: 'Система', slugs: ['nadezhnost', 'prochee'] },
+];
+
+/**
+ * Раскладывает элементы с `slug` по SECTION_GROUPS. Разделы, не попавшие
+ * ни в одну группу (новый slug в content.ts без обновления SECTION_GROUPS),
+ * не теряются — уходят в хвостовую группу «Другое», чтобы каталог никогда
+ * не «съедал» раздел молча.
+ */
+export function groupBySections<T extends { slug: string }>(items: T[]): { title: string; items: T[] }[] {
+  const bySlug = new Map(items.map((it) => [it.slug, it]));
+  const used = new Set<string>();
+  const groups = SECTION_GROUPS.map((g) => ({
+    title: g.title,
+    items: g.slugs.flatMap((slug) => {
+      const it = bySlug.get(slug);
+      // used.has: страж от слага, случайно попавшего в две группы, —
+      // карточка рендерится один раз, в первой встретившейся группе.
+      if (!it || used.has(slug)) return [];
+      used.add(slug);
+      return [it];
+    }),
+  })).filter((g) => g.items.length > 0);
+  const leftovers = items.filter((it) => !used.has(it.slug));
+  if (leftovers.length > 0) groups.push({ title: 'Другое', items: leftovers });
+  return groups;
+}

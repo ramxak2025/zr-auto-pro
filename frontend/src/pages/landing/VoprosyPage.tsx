@@ -19,7 +19,7 @@ import GlassTabBar from './sections/GlassTabBar';
 import { linkifyContacts } from './sections/linkify';
 import { faqMain, features, pricingFaq, type FaqItem } from './content';
 import { getTelegramUrl, getWhatsAppUrl } from './config';
-import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS, type SectionTint } from './icons';
+import { DEFAULT_TINT, groupBySections, SECTION_ICONS, SECTION_TINTS, type SectionTint } from './icons';
 
 /**
  * Страница /voprosy — ВСЕ вопросы и ответы лендинга в одном месте.
@@ -36,6 +36,9 @@ import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS, type SectionTint } from './
  * места, контент не подменяется рывком — только плавный скролл.
  * Sticky-строка чипов удалена: карточки-категории её заменяют, а двойная
  * механика навигации (чипы + карточки) только путала бы.
+ * v10 — сетка категорий сгруппирована по направлениям (SECTION_GROUPS в
+ * icons.ts — тот же источник, что у шторки «Разделы» и «Все возможности»):
+ * сверху сквозные «Общие» и «Цены», ниже — группы с компактными заголовками.
  *
  * Данные собираются из content.ts без дублирования текстов:
  *  - faqMain            → категория «Общие»;
@@ -84,6 +87,14 @@ const GROUPS: QaGroup[] = [
 ];
 
 const TOTAL_COUNT = GROUPS.reduce((n, g) => n + g.items.length, 0);
+
+/** Сквозные категории без раздела (Общие, Цены) — верхний ряд хаба без заголовка. */
+const META_GROUPS = GROUPS.filter((g) => g.slug === undefined);
+
+/** Категории-разделы по направлениям — единый источник SECTION_GROUPS (icons.ts). */
+const SECTION_CATEGORY_GROUPS = groupBySections(
+  GROUPS.filter((g): g is QaGroup & { slug: string } => g.slug !== undefined),
+);
 
 /** «1 вопрос / 2 вопроса / 5 вопросов» — русские плюралы для карточек. */
 function questionsLabel(n: number): string {
@@ -149,6 +160,35 @@ function QaItem({ item }: { item: FaqItem }) {
       </summary>
       <p className="px-5 pb-5 text-sm leading-relaxed text-slate-600">{linkifyContacts(item.a)}</p>
     </details>
+  );
+}
+
+/** Карточка категории хаба: тинт-иконка, название, число вопросов, active-подсветка. */
+function CategoryCard({ group, active, onPick }: { group: QaGroup; active: boolean; onPick: () => void }) {
+  const Icon = group.icon;
+  return (
+    <button
+      type="button"
+      aria-pressed={active}
+      onClick={onPick}
+      className={`flex min-h-[64px] items-center gap-2.5 rounded-2xl border px-3 py-2.5 text-left shadow-sm transition motion-safe:active:scale-[0.98] ${
+        active
+          ? 'border-primary-400 bg-primary-50/70 ring-1 ring-primary-400/40'
+          : 'border-slate-200/60 bg-white hover:border-slate-300'
+      }`}
+    >
+      <span className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${group.tint.chip}`}>
+        <Icon className={`h-[18px] w-[18px] ${group.tint.icon}`} />
+      </span>
+      <span className="min-w-0">
+        <span className="line-clamp-2 block text-[13px] font-semibold leading-snug text-slate-800">
+          {group.shortTitle ?? group.title}
+        </span>
+        <span className="mt-0.5 block text-[11px] font-medium text-slate-500">
+          {questionsLabel(group.items.length)}
+        </span>
+      </span>
+    </button>
   );
 }
 
@@ -270,12 +310,12 @@ export default function VoprosyPage() {
       <MiniHeader />
 
       <main className="mx-auto max-w-3xl px-4 sm:px-6">
-        <div className="pt-3">
+        <div className="pt-4">
           <Breadcrumbs />
         </div>
 
-        {/* Hero-строка */}
-        <Reveal className="pt-6 sm:pt-10">
+        {/* Hero-строка: pt-4/6 — единый ритм публичных страниц (контент сразу под шапкой) */}
+        <Reveal className="pt-4 sm:pt-6">
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
             Вопросы и ответы
           </h1>
@@ -368,38 +408,31 @@ export default function VoprosyPage() {
         ) : (
           /* Хаб: сетка категорий-карточек + вопросы выбранной категории под ней */
           <>
-            <div role="group" aria-label="Категории вопросов" className="mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
-              {GROUPS.map((g) => {
-                const Icon = g.icon;
-                const active = g.key === activeKey;
-                return (
-                  <button
-                    key={g.key}
-                    type="button"
-                    aria-pressed={active}
-                    onClick={() => pickCategory(g.key)}
-                    className={`flex min-h-[64px] items-center gap-2.5 rounded-2xl border px-3 py-2.5 text-left shadow-sm transition-colors motion-safe:active:scale-[0.98] ${
-                      active
-                        ? 'border-primary-400 bg-primary-50/70 ring-1 ring-primary-400/40'
-                        : 'border-slate-200/60 bg-white hover:border-slate-300'
-                    }`}
-                  >
-                    <span
-                      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${g.tint.chip}`}
-                    >
-                      <Icon className={`h-[18px] w-[18px] ${g.tint.icon}`} />
-                    </span>
-                    <span className="min-w-0">
-                      <span className="line-clamp-2 block text-[13px] font-semibold leading-snug text-slate-800">
-                        {g.shortTitle ?? g.title}
-                      </span>
-                      <span className="mt-0.5 block text-[11px] font-medium text-slate-500">
-                        {questionsLabel(g.items.length)}
-                      </span>
-                    </span>
-                  </button>
-                );
-              })}
+            <div role="group" aria-label="Категории вопросов" className="mt-6">
+              {/* Сквозные категории (Общие, Цены) — верхний ряд без заголовка */}
+              <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                {META_GROUPS.map((g) => (
+                  <CategoryCard key={g.key} group={g} active={g.key === activeKey} onPick={() => pickCategory(g.key)} />
+                ))}
+              </div>
+              {/* Разделы по направлениям — те же группы SECTION_GROUPS, что в шторке
+                  «Разделы» и «Все возможности» на главной */}
+              {SECTION_CATEGORY_GROUPS.map((sg) => (
+                <div key={sg.title} className="mt-4">
+                  {/* slate-500: 12px uppercase = «обычный» текст по WCAG, нужен AA 4.5:1 (slate-400 давал ~2.6:1) */}
+                  <p className="text-xs font-semibold uppercase tracking-wider text-slate-500">{sg.title}</p>
+                  <div className="mt-2 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+                    {sg.items.map((g) => (
+                      <CategoryCard
+                        key={g.key}
+                        group={g}
+                        active={g.key === activeKey}
+                        onPick={() => pickCategory(g.key)}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ))}
             </div>
 
             {/* Вопросы выбранной категории — аккордеон прямо под сеткой;
