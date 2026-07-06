@@ -1,8 +1,10 @@
-import type { CSSProperties } from 'react';
+import { useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { Link } from 'react-router-dom';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
-import { Banknote, CheckCircle2, TrendingUp } from 'lucide-react';
+import { ArrowRight, Banknote, CheckCircle2, TrendingUp } from 'lucide-react';
 import CtaButton from './CtaButton';
 import { hero } from '../content';
+import { getAccessContactUrl, getWhatsAppUrl } from '../config';
 
 /* ---------- Атмосфера: сетка + шум (только CSS/data-uri, ноль запросов) ---------- */
 
@@ -14,6 +16,16 @@ const GRID_STYLE: CSSProperties = {
   backgroundSize: '48px 48px',
   maskImage: 'radial-gradient(ellipse 90% 80% at 50% 35%, black 35%, transparent 78%)',
   WebkitMaskImage: 'radial-gradient(ellipse 90% 80% at 50% 35%, black 35%, transparent 78%)',
+};
+
+/** Та же инженерная сетка для тёмного мобильного hero — линии white/5. */
+const GRID_STYLE_DARK: CSSProperties = {
+  backgroundImage:
+    'linear-gradient(to right, rgb(255 255 255 / 0.05) 1px, transparent 1px), ' +
+    'linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px)',
+  backgroundSize: '48px 48px',
+  maskImage: 'radial-gradient(ellipse 110% 90% at 50% 40%, black 40%, transparent 85%)',
+  WebkitMaskImage: 'radial-gradient(ellipse 110% 90% at 50% 40%, black 40%, transparent 85%)',
 };
 
 /** Очень лёгкий SVG-noise (feTurbulence) поверх mesh — глубина без веса. */
@@ -74,8 +86,7 @@ function PhoneMock() {
             </div>
           </div>
 
-          {/* Карточка «Оборот» с мини-графиком — на мобиле скрыта: мокап короче,
-              CTA и первый контент ближе (жалоба владельца на длинный скролл) */}
+          {/* Карточка «Оборот» с мини-графиком */}
           <div className="mt-3 hidden rounded-2xl border border-slate-200/70 bg-white p-3.5 shadow-sm md:block">
             <div className="flex items-center gap-2">
               <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-50">
@@ -106,12 +117,180 @@ function splitTitle(title: string): { head: string; tail: string } {
   return { head: title.slice(0, idx + 1), tail: title.slice(idx + 2) };
 }
 
-export default function Hero() {
+/* ---------- Мобильный тёмный hero (< md): фон — герой ---------- */
+
+/**
+ * Гейт по вьюпорту, а не по CSS: MobileHero скрыт на md+ через `md:hidden`,
+ * но браузеры качают <img> и внутри display:none — без этого гейта каждый
+ * desktop-визит тянул бы мобильный hero.webp (а до выкладки файла — давал 404).
+ * matchMedia-порог 767px = tailwind `md` (768px). useSyncExternalStore реагирует
+ * и на ресайз через breakpoint.
+ */
+const MOBILE_QUERY = '(max-width: 767px)';
+const subscribeMobile = (cb: () => void) => {
+  const mql = window.matchMedia(MOBILE_QUERY);
+  mql.addEventListener('change', cb);
+  return () => mql.removeEventListener('change', cb);
+};
+const getIsMobile = () => window.matchMedia(MOBILE_QUERY).matches;
+
+/**
+ * Опциональное фото /img/landing/hero.webp (портрет 1024×1536): абсолютный слой
+ * поверх постоянного тёмного градиента. Паттерн OptionalImage: пока файла нет
+ * (onError) — слой убирается целиком, ни рамок, ни CLS (absolute, вне потока);
+ * появляется только после onLoad — мягким fade. Затемняющий градиент рендерится
+ * вместе с фото и ГАРАНТИРУЕТ читаемость при любом кадре: via-black/60 со стопом
+ * на 45% закрывает зону h1 (контент прижат к низу, заголовок стоит в средней
+ * трети секции — старый via-black/35 по центру оставлял там лишь ~black/30,
+ * на светлом участке фото это провал WCAG AA).
+ */
+function HeroPhoto() {
+  const isMobile = useSyncExternalStore(subscribeMobile, getIsMobile);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  if (failed || !isMobile) return null;
+  return (
+    <div
+      aria-hidden
+      className={`absolute inset-0 transition-opacity duration-700 motion-reduce:transition-none ${
+        loaded ? 'opacity-100' : 'opacity-0'
+      }`}
+    >
+      <img
+        src="/img/landing/hero.webp"
+        alt=""
+        decoding="async"
+        className="h-full w-full object-cover"
+        onLoad={() => setLoaded(true)}
+        onError={() => setFailed(true)}
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/60 via-45% to-black/25" />
+    </div>
+  );
+}
+
+/*
+ * ОСОЗНАННОЕ РЕШЕНИЕ по контрасту: белый текст на emerald-500 ≈ 2.3:1 —
+ * формально ниже WCAG AA (4.5:1 для 14–16px). Это бренд-паттерн
+ * «зелёный = WhatsApp» по всему лендингу (здесь, SectionsSheet, ImplementationCard
+ * в pricingShared) — кнопка распознаётся формой/иконкой и конвертирует лучше
+ * тёмной. Реальный AA дал бы только emerald-700 или тёмный текст на emerald-400;
+ * решено оставить как есть. Если владелец захочет строгий AA — менять все три места.
+ */
+const EMERALD_CTA =
+  'inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-8 text-base font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 motion-safe:active:scale-[0.98] active:bg-emerald-600';
+
+/** Primary-CTA мобильного hero: emerald «Получить доступ» → WhatsApp (как было); контактов нет → «Войти». */
+function MobileAccessCta() {
+  const url = getWhatsAppUrl() ?? getAccessContactUrl();
+  if (!url) {
+    return (
+      <Link to="/login" className={EMERALD_CTA}>
+        Войти
+        <ArrowRight className="h-5 w-5" aria-hidden />
+      </Link>
+    );
+  }
+  return (
+    <a
+      href={url}
+      target={url.startsWith('http') ? '_blank' : undefined}
+      rel="noopener noreferrer"
+      className={EMERALD_CTA}
+    >
+      Получить доступ
+      <ArrowRight className="h-5 w-5" aria-hidden />
+    </a>
+  );
+}
+
+/**
+ * < md: тёмный полноэкранный фото-hero. Слои: постоянный градиент
+ * slate-950 → primary-950 + сетка white/5 (премиально и БЕЗ фото) → опциональное
+ * фото → затемнение. Контент прижат к низу (justify-end), pb оставляет место
+ * glass-бару + safe-area. Мокап телефона на мобиле убран — фон теперь герой.
+ * Светлый Header на < md скрыт (см. Header.tsx), поэтому «Войти» продублирован
+ * прозрачной кнопкой в правом верхнем углу — путь входа с телефона сохранён.
+ * min-h-[92svh] — снизу виден намёк на контент (TrustStrip).
+ */
+function MobileHero() {
+  const reduceMotion = useReducedMotion();
+
+  return (
+    <section className="relative flex min-h-[92svh] flex-col justify-end overflow-hidden bg-slate-950 md:hidden">
+      {/* (а) Постоянный тёмный фон: градиент + инженерная сетка white/5 */}
+      <div aria-hidden className="pointer-events-none absolute inset-0">
+        <div className="absolute inset-0 bg-gradient-to-b from-slate-950 to-primary-950" />
+        <div className="absolute inset-0" style={GRID_STYLE_DARK} />
+      </div>
+
+      {/* (б) Фото, когда владелец положит файл + (в) затемнение поверх */}
+      <HeroPhoto />
+
+      {/* «Войти» поверх тёмного hero — вместо скрытого на мобиле светлого Header */}
+      <div
+        className="absolute inset-x-0 top-0 z-20 flex justify-end px-4"
+        style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}
+      >
+        <Link
+          to="/login"
+          // bg-black/30 (не white/10): верх hero — самая светлая зона оверлея
+          // (to-black/25), на ярком верхе фото белёсый чип терял контраст текста.
+          className="inline-flex min-h-[44px] items-center rounded-xl border border-white/30 bg-black/30 px-5 text-sm font-semibold text-white backdrop-blur transition motion-safe:active:scale-95"
+        >
+          Войти
+        </Link>
+      </div>
+
+      {/* Оркестрованный вход: badge → заголовок → подзаголовок → CTA (stagger 70 мс) */}
+      <motion.div
+        className="relative z-10 px-5"
+        style={{ paddingBottom: 'calc(max(16px, env(safe-area-inset-bottom)) + 92px)' }}
+        variants={container}
+        initial={reduceMotion ? false : 'hidden'}
+        animate="visible"
+      >
+        <motion.span
+          variants={item}
+          className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-1.5 text-xs font-medium text-white/90 backdrop-blur"
+        >
+          <img src="/logo-icon.png" alt="" width={16} height={16} decoding="async" className="h-4 w-4 rounded" />
+          {hero.badge}
+        </motion.span>
+
+        <motion.h1
+          variants={item}
+          className="mt-5 text-[clamp(38px,10.5vw,44px)] font-extrabold leading-[1.06] tracking-tight text-white"
+        >
+          {hero.title}
+        </motion.h1>
+
+        <motion.p variants={item} className="mt-4 max-w-md text-[17px] leading-relaxed text-white/80">
+          {hero.subtitle}
+        </motion.p>
+
+        <motion.div variants={item} className="mt-7 flex flex-col gap-3">
+          <MobileAccessCta />
+          <a
+            href="#features"
+            className="inline-flex min-h-[52px] w-full items-center justify-center rounded-2xl border border-white/25 bg-white/10 px-8 text-base font-semibold text-white backdrop-blur transition motion-safe:active:scale-[0.98]"
+          >
+            Смотреть возможности
+          </a>
+        </motion.div>
+      </motion.div>
+    </section>
+  );
+}
+
+/* ---------- Desktop / tablet hero (md+): светлый, как раньше ---------- */
+
+function DesktopHero() {
   const { head, tail } = splitTitle(hero.title);
   const reduceMotion = useReducedMotion();
 
   return (
-    <section className="relative overflow-hidden">
+    <section className="relative hidden overflow-hidden md:block">
       {/* Атмосфера: mesh-блобы (бренд-синий + sky + тёплый amber, без violet)
           → «чертёжная» сетка → лёгкий noise. Всё pointer-events-none. */}
       <div aria-hidden className="pointer-events-none absolute inset-0">
@@ -186,5 +365,14 @@ export default function Hero() {
         </motion.div>
       </motion.div>
     </section>
+  );
+}
+
+export default function Hero() {
+  return (
+    <>
+      <MobileHero />
+      <DesktopHero />
+    </>
   );
 }

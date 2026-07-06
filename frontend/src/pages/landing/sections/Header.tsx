@@ -1,15 +1,24 @@
 import { Link } from 'react-router-dom';
 
-const ANCHORS = [
-  { href: '#features', label: 'Возможности' },
-  { href: '#reliability', label: 'Надёжность' },
-  { href: '#pricing', label: 'Тарифы' },
-  { href: '#faq', label: 'Вопросы' },
-];
+/**
+ * Шапка главной. На < md скрыта: мобильный hero — тёмный полноэкранный
+ * (фон-герой), навигацию несёт нижний glass-бар, а «Войти» продублирован
+ * прозрачной кнопкой прямо в hero (Hero.tsx → MobileHero).
+ * «Тарифы» — Link на отдельную страницу /tarify, остальные пункты — якоря.
+ */
+const NAV = [
+  { label: 'Возможности', href: '#features' },
+  { label: 'Надёжность', href: '#reliability' },
+  { label: 'Тарифы', to: '/tarify' },
+  { label: 'Вопросы', href: '#faq' },
+] as const;
+
+const NAV_LINK =
+  'inline-flex min-h-[44px] items-center rounded-xl px-4 text-sm font-medium text-slate-500 transition-colors hover:text-slate-900';
 
 export default function Header() {
   return (
-    <header className="sticky top-0 z-50 border-b border-slate-200/70 bg-white/80 backdrop-blur-xl">
+    <header className="sticky top-0 z-50 hidden border-b border-slate-200/70 bg-white/80 backdrop-blur-xl md:block">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
         <a
           href="#top"
@@ -28,17 +37,19 @@ export default function Header() {
           />
         </a>
 
-        {/* Якоря — только на desktop */}
+        {/* Якоря + роут «Тарифы» — только на desktop */}
         <nav className="hidden items-center gap-1 md:flex" aria-label="Разделы лендинга">
-          {ANCHORS.map((a) => (
-            <a
-              key={a.href}
-              href={a.href}
-              className="inline-flex min-h-[44px] items-center rounded-xl px-4 text-sm font-medium text-slate-500 transition-colors hover:text-slate-900"
-            >
-              {a.label}
-            </a>
-          ))}
+          {NAV.map((a) =>
+            'to' in a ? (
+              <Link key={a.label} to={a.to} className={NAV_LINK}>
+                {a.label}
+              </Link>
+            ) : (
+              <a key={a.label} href={a.href} className={NAV_LINK}>
+                {a.label}
+              </a>
+            ),
+          )}
         </nav>
 
         <Link

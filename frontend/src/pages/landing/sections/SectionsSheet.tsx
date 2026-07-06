@@ -1,8 +1,9 @@
 import { useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'framer-motion';
-import { LayoutGrid, X } from 'lucide-react';
+import { LayoutGrid, MessageCircle, X } from 'lucide-react';
 import { features } from '../content';
+import { getWhatsAppUrl } from '../config';
 import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS } from '../icons';
 
 interface SectionsSheetProps {
@@ -19,11 +20,15 @@ interface SectionsSheetProps {
  * slide-up 250 мс (reduced-motion — мгновенно), z-[60] — выше бара (z-40)
  * и sticky-шапки (z-50), не полагаясь на порядок секций в DOM,
  * aria-modal + автофокус на первый раздел + focus-trap по Tab.
+ *
+ * Внизу шторки закреплена (вне scroll-области) зелёная кнопка
+ * «Написать в WhatsApp» — контакт переехал сюда из glass-бара v3.
  */
 export default function SectionsSheet({ open, onClose }: SectionsSheetProps) {
   const reduceMotion = useReducedMotion();
   const containerRef = useRef<HTMLDivElement>(null);
   const firstLinkRef = useRef<HTMLAnchorElement>(null);
+  const whatsappUrl = getWhatsAppUrl();
 
   // Скролл-лок страницы, пока шторка открыта; cleanup вернёт исходное значение
   // и при закрытии, и при unmount (уход на /f/<slug> с открытой шторкой).
@@ -112,9 +117,10 @@ export default function SectionsSheet({ open, onClose }: SectionsSheetProps) {
             transition={reduceMotion ? instant : { duration: 0.25 }}
           />
 
-          {/* Шторка */}
+          {/* Шторка: flex-колонка — заголовок и WhatsApp-кнопка закреплены,
+              скроллится только сетка разделов между ними */}
           <motion.div
-            className="absolute inset-x-0 bottom-0 max-h-[85dvh] overflow-y-auto rounded-t-3xl bg-white shadow-2xl [overscroll-behavior-y:contain]"
+            className="absolute inset-x-0 bottom-0 flex max-h-[85dvh] flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl"
             style={{ paddingBottom: 'max(16px, env(safe-area-inset-bottom))' }}
             initial={{ y: '100%' }}
             animate={{ y: 0 }}
@@ -136,30 +142,48 @@ export default function SectionsSheet({ open, onClose }: SectionsSheetProps) {
               </button>
             </div>
 
-            <div className="mt-2 grid grid-cols-2 gap-2.5 px-4">
-              {features.map((f, i) => {
-                const Icon = SECTION_ICONS[f.icon] ?? LayoutGrid;
-                const tint = SECTION_TINTS[f.slug] ?? DEFAULT_TINT;
-                return (
-                  <Link
-                    key={f.slug}
-                    ref={i === 0 ? firstLinkRef : undefined}
-                    to={`/f/${f.slug}`}
-                    onClick={onClose}
-                    className="flex min-h-[56px] items-center gap-2.5 rounded-2xl border border-slate-200/60 bg-white px-3 py-2 shadow-sm transition motion-safe:active:scale-[0.98]"
-                  >
-                    <span
-                      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${tint.chip}`}
+            <div className="mt-2 min-h-0 overflow-y-auto px-4 pb-3 [overscroll-behavior-y:contain]">
+              <div className="grid grid-cols-2 gap-2.5">
+                {features.map((f, i) => {
+                  const Icon = SECTION_ICONS[f.icon] ?? LayoutGrid;
+                  const tint = SECTION_TINTS[f.slug] ?? DEFAULT_TINT;
+                  return (
+                    <Link
+                      key={f.slug}
+                      ref={i === 0 ? firstLinkRef : undefined}
+                      to={`/f/${f.slug}`}
+                      onClick={onClose}
+                      className="flex min-h-[56px] items-center gap-2.5 rounded-2xl border border-slate-200/60 bg-white px-3 py-2 shadow-sm transition motion-safe:active:scale-[0.98]"
                     >
-                      <Icon className={`h-[18px] w-[18px] ${tint.icon}`} />
-                    </span>
-                    <span className="line-clamp-2 min-w-0 text-[13px] font-medium leading-snug text-slate-800">
-                      {f.title}
-                    </span>
-                  </Link>
-                );
-              })}
+                      <span
+                        className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${tint.chip}`}
+                      >
+                        <Icon className={`h-[18px] w-[18px] ${tint.icon}`} />
+                      </span>
+                      <span className="line-clamp-2 min-w-0 text-[13px] font-medium leading-snug text-slate-800">
+                        {f.title}
+                      </span>
+                    </Link>
+                  );
+                })}
+              </div>
             </div>
+
+            {/* Закреплённая CTA — контакт по решению владельца живёт в шторке */}
+            {whatsappUrl && (
+              <div className="shrink-0 border-t border-slate-100 px-4 pt-3">
+                <a
+                  href={whatsappUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={onClose}
+                  className="flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 text-base font-semibold text-white shadow-lg shadow-emerald-500/25 transition motion-safe:active:scale-[0.98]"
+                >
+                  <MessageCircle className="h-5 w-5" aria-hidden />
+                  Написать в WhatsApp
+                </a>
+              </div>
+            )}
           </motion.div>
         </motion.div>
       )}

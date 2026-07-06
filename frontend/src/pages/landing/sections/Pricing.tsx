@@ -1,318 +1,70 @@
 import { Link } from 'react-router-dom';
-import { Check, ChevronDown, MessageCircle, Minus, ShieldCheck, Wrench } from 'lucide-react';
+import { ArrowRight, ShieldCheck, Wrench } from 'lucide-react';
 import Reveal from './Reveal';
-import { pricing, type PlanCellValue, type PricingPlan } from '../content';
-import { getPlanConnectMessage, getWhatsAppUrl, WHATSAPP_IMPLEMENTATION_MESSAGE } from '../config';
+import { pricing } from '../content';
 
 /**
- * Секция «Тарифы» (id="pricing") — реальные тарифы с прод-API /api/plans.
- * Сверху три карточки планов («Легенда» выделена и приподнята на desktop),
- * под ними широкая карта «Внедрение под ключ», ниже — сравнение в стиле
- * Битрикс24: строки различий СВЕРХУ, блок «Во всех тарифах» ниже.
- * На мобильном таблица не скроллится горизонтально — вместо неё <details>
- * «Полное сравнение возможностей» с мини-чипами Л/Б/Лег.
+ * Компактный тизер тарифов на главной. id="pricing" сохранён — старые якоря
+ * /#pricing продолжают работать. Полные карточки планов, «Внедрение под ключ»
+ * и таблица сравнения переехали на отдельную страницу /tarify (TarifyPage +
+ * pricingShared.tsx) — главная стала короче, тяжёлая таблица/карусель ушла.
  */
-
-const CTA_BASE =
-  'inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl px-5 text-sm font-semibold transition motion-safe:active:scale-[0.98]';
-
-/** CTA «Подключить» → WhatsApp с тарифом в сообщении; контактов нет → «Войти». */
-function PlanCta({ plan }: { plan: PricingPlan }) {
-  const cls = `${CTA_BASE} ${
-    plan.highlighted
-      ? 'bg-primary-600 text-white shadow-lg shadow-primary-600/25 hover:bg-primary-500 active:bg-primary-700'
-      : 'border border-slate-200 bg-white text-slate-900 shadow-sm hover:border-primary-300 hover:text-primary-600'
-  }`;
-  const url = getWhatsAppUrl(getPlanConnectMessage(plan.name));
-  if (!url) {
-    return (
-      <Link to="/login" className={cls}>
-        Войти
-      </Link>
-    );
-  }
-  return (
-    <a href={url} target="_blank" rel="noopener noreferrer" className={cls}>
-      <MessageCircle className="h-4 w-4" />
-      Подключить
-    </a>
-  );
-}
-
-/** Ячейка сравнения: ✓ emerald / — slate-300 / текст («до 10», «1000 мин/мес»). */
-function CompareCell({ value }: { value: PlanCellValue }) {
-  if (value === true) {
-    return (
-      <>
-        <Check aria-hidden className="mx-auto h-5 w-5 text-emerald-500" />
-        <span className="sr-only">Входит</span>
-      </>
-    );
-  }
-  if (value === false) {
-    return (
-      <>
-        <Minus aria-hidden className="mx-auto h-4 w-4 text-slate-300" />
-        <span className="sr-only">Не входит</span>
-      </>
-    );
-  }
-  return <span className="text-sm font-semibold text-slate-900">{value}</span>;
-}
-
-/** Мини-чип мобильного сравнения: буква плана + ✓/—/значение. */
-function MiniChip({ label, value }: { label: string; value: PlanCellValue }) {
-  const included = value !== false;
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium ${
-        included ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-400'
-      }`}
-    >
-      <span className="font-semibold">{label}</span>
-      {value === true ? (
-        <>
-          <Check aria-hidden className="h-3 w-3" />
-          <span className="sr-only">входит</span>
-        </>
-      ) : value === false ? (
-        <>
-          <Minus aria-hidden className="h-3 w-3" />
-          <span className="sr-only">не входит</span>
-        </>
-      ) : (
-        value
-      )}
-    </span>
-  );
-}
-
 export default function Pricing() {
   const impl = pricing.implementation;
-  const implUrl = getWhatsAppUrl(WHATSAPP_IMPLEMENTATION_MESSAGE);
-  const highlightIdx = pricing.plans.findIndex((p) => p.highlighted);
 
   return (
     <section id="pricing" className="scroll-mt-24 border-t border-slate-200/60">
-      <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-28">
+      <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-24">
         <Reveal className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">{pricing.title}</h2>
           <p className="mt-4 text-lg text-slate-600">{pricing.subtitle}</p>
         </Reveal>
 
-        {/* Карточки планов; «Легенда» — primary-бордер, бейдж и подъём на desktop.
-            < md — snap-карусель (~82vw + peek), «Легенда» через order-first идёт
-            ПЕРВОЙ (якорная цена — психология продаж); pt-3 даёт место бейджу
-            -top-3 внутри scroll-контейнера. md+ — прежняя сетка и порядок.
-            Reveal ОДИН на весь контейнер (как в Features): per-card Reveal рисовал
-            peek-карточку с opacity:0 и fade+rise посреди горизонтального свайпа. */}
         <Reveal delay={0.05}>
-          <div className="no-scrollbar -mx-4 mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-4 px-4 pb-2 pt-3 [overscroll-behavior-x:contain] md:mx-0 md:mt-14 md:grid md:grid-cols-3 md:overflow-visible md:px-0 md:pb-0 md:pt-0">
-            {pricing.plans.map((plan) => (
-              <div
-                key={plan.key}
-                className={`w-[82vw] max-w-sm shrink-0 snap-start md:w-auto md:max-w-none ${
-                  plan.highlighted ? 'order-first md:order-none' : ''
-                }`}
-              >
-                <div
-                  className={`relative flex h-full flex-col rounded-3xl bg-white p-6 sm:p-7 ${
-                    plan.highlighted
-                      ? 'border border-primary-300 shadow-md ring-1 ring-primary-200/60 md:-translate-y-2'
-                      : 'border border-slate-200/60 shadow-sm'
-                  }`}
-                >
-                  {plan.badge && (
-                    <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-primary-600 px-3 py-1 text-[11px] font-semibold text-white shadow-md shadow-primary-600/25">
-                      {plan.badge}
+          <div className="mx-auto mt-8 max-w-2xl overflow-hidden rounded-3xl border border-slate-200/60 bg-white shadow-sm sm:mt-12">
+            {/* Три мини-строки планов одной карточкой */}
+            <ul className="divide-y divide-slate-100">
+              {pricing.plans.map((plan) => (
+                <li key={plan.key} className="flex items-center justify-between gap-3 px-5 py-4 sm:px-7">
+                  <span className="min-w-0">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="font-semibold text-slate-900">{plan.name}</span>
+                      {plan.badge && (
+                        <span className="rounded-full bg-primary-50 px-2 py-0.5 text-[11px] font-semibold text-primary-700">
+                          {plan.badge}
+                        </span>
+                      )}
                     </span>
-                  )}
-                  <h3 className="text-lg font-bold text-slate-900">{plan.name}</h3>
-                  <p className="mt-1 text-sm text-slate-500">{plan.description}</p>
-                  <p className="mt-5 flex items-baseline gap-1.5">
-                    <span className="text-4xl font-extrabold tracking-tight text-slate-900">{plan.price} ₽</span>
-                    <span className="text-sm font-medium text-slate-400">/мес</span>
-                  </p>
-                  <p className="mt-1 text-sm font-medium text-slate-600">{plan.employees}</p>
-                  <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-400">Что входит</p>
-                  <ul className="mt-3 space-y-2.5">
-                    {plan.includes.map((item) => (
-                      <li key={item} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-600">
-                        <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                        {item}
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="mt-auto pt-6">
-                    <PlanCta plan={plan} />
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Reveal>
-
-        {/* Честность — снимаем страх скрытых платежей (подписка помесячная) */}
-        <Reveal delay={0.1}>
-          <p className="mt-6 flex items-center justify-center gap-2 text-center text-sm text-slate-500">
-            <ShieldCheck aria-hidden className="h-4 w-4 shrink-0 text-emerald-500" />
-            {pricing.honestyNote}
-          </p>
-        </Reveal>
-
-        {/* Внедрение под ключ — широкая карта под тарифами */}
-        <Reveal delay={0.1}>
-          <div className="relative mt-10 overflow-hidden rounded-3xl border border-slate-200/60 bg-white p-5 shadow-sm sm:p-8">
-            <div aria-hidden className="pointer-events-none absolute inset-0">
-              <div className="absolute -right-24 -top-24 h-56 w-[420px] rounded-full bg-primary-200/40 blur-[90px]" />
-            </div>
-            <div className="relative flex flex-col gap-5 md:gap-8 lg:flex-row lg:items-center lg:gap-12">
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-3">
-                  <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-amber-100">
-                    <Wrench className="h-5 w-5 text-amber-700" />
+                    <span className="mt-0.5 block text-sm text-slate-500">{plan.employees}</span>
                   </span>
-                  <h3 className="text-xl font-bold text-slate-900">{impl.title}</h3>
-                </div>
-                {/* Абзац-описание — только md+: на мобиле карта компактная
-                    (заголовок + пункты + цена + CTA) */}
-                <p className="mt-3 hidden text-sm leading-relaxed text-slate-600 md:block">{impl.text}</p>
-                <ul className="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-                  {impl.includes.map((item) => (
-                    <li key={item} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-600">
-                      <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                      <span className="line-clamp-1 md:line-clamp-none">{item}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <div className="shrink-0 text-center lg:w-60 lg:text-right">
-                <p className="flex items-baseline justify-center gap-1.5 lg:justify-end">
-                  <span className="text-3xl font-extrabold tracking-tight text-slate-900">{impl.price}</span>
-                  <span className="text-sm font-medium text-slate-400">{impl.priceNote}</span>
-                </p>
-                <p className="mt-1 text-sm text-slate-500">{impl.duration}</p>
-                {implUrl && (
-                  <a
-                    href={implUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="mt-5 inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-6 text-sm font-semibold text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-400 motion-safe:active:scale-[0.98] active:bg-emerald-600 lg:w-auto"
-                  >
-                    <MessageCircle className="h-4 w-4" />
-                    {impl.ctaLabel}
-                  </a>
-                )}
-              </div>
-            </div>
-          </div>
-        </Reveal>
+                  <span className="shrink-0 whitespace-nowrap text-right">
+                    <span className="text-lg font-extrabold tracking-tight text-slate-900">{plan.price} ₽</span>
+                    <span className="text-sm font-medium text-slate-400">/мес</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
 
-        {/* Desktop (md+): полная таблица сравнения — различия сверху, общее ниже */}
-        <Reveal delay={0.1} className="hidden md:block">
-          <h3 className="mt-16 text-center text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
-            {pricing.comparisonTitle}
-          </h3>
-          <div className="mt-8 overflow-hidden rounded-3xl border border-slate-200/60 bg-white shadow-sm">
-            <table className="w-full border-collapse text-left">
-              <thead>
-                <tr className="border-b border-slate-200/60">
-                  <th scope="col" className="px-6 py-4 text-sm font-semibold text-slate-500">
-                    Возможность
-                  </th>
-                  {pricing.plans.map((p, i) => (
-                    <th
-                      key={p.key}
-                      scope="col"
-                      className={`w-[17%] px-4 py-4 text-center ${i === highlightIdx ? 'bg-primary-50/60' : ''}`}
-                    >
-                      <span
-                        className={`block text-sm font-bold ${p.highlighted ? 'text-primary-700' : 'text-slate-900'}`}
-                      >
-                        {p.name}
-                      </span>
-                      <span className="mt-0.5 block text-xs font-medium text-slate-400">{p.price} ₽/мес</span>
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pricing.differences.map((row, ri) => (
-                  <tr key={row.feature} className={`border-b border-slate-100 ${ri % 2 === 1 ? 'bg-slate-50/60' : ''}`}>
-                    <td className="px-6 py-3.5 text-sm text-slate-700">{row.feature}</td>
-                    {row.values.map((value, i) => (
-                      <td key={i} className={`px-4 py-3.5 text-center ${i === highlightIdx ? 'bg-primary-50/40' : ''}`}>
-                        <CompareCell value={value} />
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-              <tbody>
-                <tr className="border-b border-slate-100 bg-slate-100/70">
-                  <th
-                    scope="rowgroup"
-                    colSpan={pricing.plans.length + 1}
-                    className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500"
-                  >
-                    {pricing.commonLabel}
-                  </th>
-                </tr>
-                {pricing.commonFeatures.map((feature, ri) => (
-                  <tr
-                    key={feature}
-                    className={`border-b border-slate-100 last:border-0 ${ri % 2 === 1 ? 'bg-slate-50/60' : ''}`}
-                  >
-                    <td className="px-6 py-3 text-sm text-slate-700">{feature}</td>
-                    {pricing.plans.map((p, i) => (
-                      <td
-                        key={p.key}
-                        className={`px-4 py-3 text-center ${i === highlightIdx ? 'bg-primary-50/40' : ''}`}
-                      >
-                        <CompareCell value={true} />
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Reveal>
+            {/* Внедрение — одной строкой; подробности на /tarify */}
+            <p className="flex items-center gap-2.5 border-t border-slate-100 bg-slate-50/60 px-5 py-3.5 text-sm text-slate-600 sm:px-7">
+              <Wrench className="h-4 w-4 shrink-0 text-amber-600" aria-hidden />
+              {impl.title} — {impl.price} {impl.priceNote}
+            </p>
 
-        {/* Mobile: полное сравнение — свёрнутый details, без горизонтального скролла */}
-        <Reveal delay={0.1} className="md:hidden">
-          <details className="group mt-10 rounded-2xl border border-slate-200/60 bg-white shadow-sm">
-            <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left text-base font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
-              Полное сравнение возможностей
-              <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-300 group-open:rotate-180 motion-reduce:transition-none" />
-            </summary>
-            <div className="border-t border-slate-100 px-5 pb-5">
-              <p className="pt-4 text-xs text-slate-400">{pricing.planShortLegend}</p>
-              <ul className="mt-4 space-y-4">
-                {pricing.differences.map((row) => (
-                  <li key={row.feature}>
-                    <p className="text-sm font-medium text-slate-700">{row.feature}</p>
-                    <div className="mt-1.5 flex flex-wrap gap-1.5">
-                      {row.values.map((value, i) => (
-                        <MiniChip key={pricing.planShortNames[i]} label={pricing.planShortNames[i]} value={value} />
-                      ))}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-              <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-500">
-                {pricing.commonLabel}
+            <div className="px-5 pb-6 pt-4 sm:px-7">
+              <Link
+                to="/tarify"
+                className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-primary-600 px-6 text-base font-semibold text-white shadow-lg shadow-primary-600/25 transition hover:bg-primary-500 motion-safe:active:scale-[0.98] active:bg-primary-700"
+              >
+                Смотреть тарифы
+                <ArrowRight className="h-5 w-5" aria-hidden />
+              </Link>
+              <p className="mt-4 flex items-center justify-center gap-2 text-center text-sm text-slate-500">
+                <ShieldCheck aria-hidden className="h-4 w-4 shrink-0 text-emerald-500" />
+                {pricing.honestyNote}
               </p>
-              <ul className="mt-3 space-y-2">
-                {pricing.commonFeatures.map((feature) => (
-                  <li key={feature} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-600">
-                    <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                    {feature}
-                  </li>
-                ))}
-              </ul>
             </div>
-          </details>
+          </div>
         </Reveal>
       </div>
     </section>

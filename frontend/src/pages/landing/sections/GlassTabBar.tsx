@@ -1,23 +1,39 @@
 import { ReactNode, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router-dom';
-import { LayoutGrid, MessageCircle, Wallet } from 'lucide-react';
-import { getWhatsAppUrl } from '../config';
+import { HelpCircle, Home, LayoutGrid, Wallet, type LucideIcon } from 'lucide-react';
 import SectionsSheet from './SectionsSheet';
 
 /**
  * Плавающее liquid-glass меню внизу экрана — только мобилка (md:hidden),
- * общее для главной и страниц разделов /f/:slug.
+ * общее для главной, страниц разделов /f/:slug и страницы тарифов /tarify.
  *
- * Психология продаж: вместо навигации по секциям — три действия воронки:
- *  - «Разделы» → bottom-sheet со всеми 16 разделами (SectionsSheet);
- *  - «Тарифы» → #pricing (на главной — нативный hash-скролл; на /f/* — Link
- *    на /#pricing, hash обрабатывает mount-эффект LandingPage);
- *  - «Написать» — большая emerald-CTA (~45% ширины бара) → WhatsApp.
- * Scroll-spy с «каплей» убран сознательно: пункты теперь действия, не секции.
+ * v3 — четыре пункта как таб-бар приложения (равные ширины, тапы ≥44px):
+ *  - «Главная»: на «/» — скролл вверх (#top), иначе Link на /;
+ *  - «Разделы»: bottom-sheet со всеми 16 разделами (SectionsSheet);
+ *  - «Тарифы»: Link на /tarify (на самой /tarify — скролл вверх);
+ *  - «Вопросы»: на «/» — скролл #faq, иначе Link /#faq.
+ * «Написать» из бара убран — WhatsApp живёт закреплённой кнопкой внизу
+ * шторки «Разделы» и в CTA-секциях страниц.
+ *
+ * Active-подсветка по pathname: «/» → Главная, «/tarify» → Тарифы,
+ * «/f/*» → Разделы (страницы разделов открываются из шторки «Разделы» —
+ * подсвечиваем её как логичную зону, а не оставляем бар без активного пункта).
  */
 
-const ITEM_CLS =
-  'flex min-h-[48px] min-w-[64px] flex-1 flex-col items-center justify-center rounded-full px-2 py-1 text-slate-600 transition motion-safe:active:scale-95';
+function itemCls(active: boolean) {
+  return `flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center rounded-full px-1 py-1 transition motion-safe:active:scale-95 ${
+    active ? 'text-primary-600' : 'text-slate-600'
+  }`;
+}
+
+function ItemBody({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+  return (
+    <>
+      <Icon className="h-[18px] w-[18px]" aria-hidden />
+      <span className="mt-0.5 text-[10px] font-medium leading-tight">{label}</span>
+    </>
+  );
+}
 
 /** Пилюля на blur-стекле — оболочка бара. */
 function BarShell({ children }: { children: ReactNode }) {
@@ -40,9 +56,10 @@ function BarShell({ children }: { children: ReactNode }) {
 export default function GlassTabBar() {
   const { pathname } = useLocation();
   const onHome = pathname === '/';
+  const onTarify = pathname === '/tarify';
+  const onFeature = pathname.startsWith('/f/');
   const [sheetOpen, setSheetOpen] = useState(false);
   const sectionsBtnRef = useRef<HTMLButtonElement>(null);
-  const whatsappUrl = getWhatsAppUrl();
 
   // Закрытие шторки возвращает фокус триггеру (a11y: VoiceOver/клавиатура
   // не повисают на body); focus-ring на тапе не появится (:focus-visible).
@@ -51,49 +68,52 @@ export default function GlassTabBar() {
     sectionsBtnRef.current?.focus({ preventScroll: true });
   };
 
-  const pricingContent = (
-    <>
-      <Wallet className="h-[18px] w-[18px]" aria-hidden />
-      <span className="mt-0.5 text-[10px] font-medium leading-tight">Тарифы</span>
-    </>
-  );
-
   return (
     <>
       <BarShell>
+        {/* Главная: на «/» — нативный скролл к #top (smooth задаёт LandingPage) */}
+        {onHome ? (
+          <a href="#top" className={itemCls(true)} aria-current="page">
+            <ItemBody icon={Home} label="Главная" />
+          </a>
+        ) : (
+          <Link to="/" className={itemCls(false)}>
+            <ItemBody icon={Home} label="Главная" />
+          </Link>
+        )}
+
+        {/* Разделы: шторка; активен на /f/* */}
         <button
           ref={sectionsBtnRef}
           type="button"
           onClick={() => setSheetOpen(true)}
           aria-haspopup="dialog"
           aria-expanded={sheetOpen}
-          className={ITEM_CLS}
+          className={itemCls(onFeature)}
         >
-          <LayoutGrid className="h-[18px] w-[18px]" aria-hidden />
-          <span className="mt-0.5 text-[10px] font-medium leading-tight">Разделы</span>
+          <ItemBody icon={LayoutGrid} label="Разделы" />
         </button>
 
-        {onHome ? (
-          // Нативный hash-скролл (smooth задаёт LandingPage через scroll-behavior)
-          <a href="#pricing" className={ITEM_CLS}>
-            {pricingContent}
+        {/* Тарифы: отдельная страница; на ней самой — скролл вверх */}
+        {onTarify ? (
+          <a href="#top" className={itemCls(true)} aria-current="page">
+            <ItemBody icon={Wallet} label="Тарифы" />
           </a>
         ) : (
-          <Link to="/#pricing" className={ITEM_CLS}>
-            {pricingContent}
+          <Link to="/tarify" className={itemCls(false)}>
+            <ItemBody icon={Wallet} label="Тарифы" />
           </Link>
         )}
 
-        {whatsappUrl && (
-          <a
-            href={whatsappUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-1 flex min-h-[48px] flex-[1.6] items-center justify-center gap-2 rounded-full bg-emerald-500 px-4 text-sm font-semibold text-white shadow-md shadow-emerald-500/30 transition motion-safe:active:scale-95"
-          >
-            <MessageCircle className="h-[18px] w-[18px]" aria-hidden />
-            Написать
+        {/* Вопросы: FAQ живёт на главной */}
+        {onHome ? (
+          <a href="#faq" className={itemCls(false)}>
+            <ItemBody icon={HelpCircle} label="Вопросы" />
           </a>
+        ) : (
+          <Link to="/#faq" className={itemCls(false)}>
+            <ItemBody icon={HelpCircle} label="Вопросы" />
+          </Link>
         )}
       </BarShell>
 

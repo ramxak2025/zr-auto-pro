@@ -1,4 +1,5 @@
 import { ReactNode } from 'react';
+import { Link } from 'react-router-dom';
 import { ChevronDown } from 'lucide-react';
 import Reveal from './Reveal';
 import { faqMain } from '../content';
@@ -11,9 +12,9 @@ const TG_URL = getTelegramUrl();
 
 /**
  * Упоминания WhatsApp/Telegram в ответах превращаем в живые ссылки, а
- * «сравнение тарифов» — в якорь на секцию #pricing (FAQ живёт только на
- * главной, где секция есть). Текст остаётся ровно тем, что в content.ts,
- * меняется только разметка.
+ * «сравнение тарифов» — в Link на отдельную страницу /tarify (полное
+ * сравнение переехало с главной туда). Текст остаётся ровно тем, что
+ * в content.ts, меняется только разметка.
  */
 function linkifyContacts(text: string): ReactNode {
   const parts = text.split(/(WhatsApp|Telegram|сравнение тарифов)/g);
@@ -21,9 +22,9 @@ function linkifyContacts(text: string): ReactNode {
   return parts.map((part, i) => {
     if (part === 'сравнение тарифов') {
       return (
-        <a key={i} href="#pricing" className={LINK_CLS}>
+        <Link key={i} to="/tarify" className={LINK_CLS}>
           {part}
-        </a>
+        </Link>
       );
     }
     const url = part === 'WhatsApp' ? WA_INSTALL_URL : part === 'Telegram' ? TG_URL : null;
