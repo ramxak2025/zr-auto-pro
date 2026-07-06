@@ -175,7 +175,8 @@ export default function TarifyPage() {
           <div className="mt-6 space-y-3">
             {pricingFaq.map((item, i) => (
               <Reveal key={item.q} delay={Math.min(i * 0.05, 0.15)}>
-                <details className="group rounded-2xl border border-slate-200/60 bg-white shadow-sm transition-colors hover:border-slate-300">
+                {/* acc-details — плавное раскрытие (interpolate-size, см. index.css) */}
+                <details className="acc-details group rounded-2xl border border-slate-200/60 bg-white shadow-sm transition-colors hover:border-slate-300">
                   <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left text-base font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
                     {item.q}
                     <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-300 group-open:rotate-180 motion-reduce:transition-none" />

@@ -57,6 +57,14 @@ export default {
           '0%': { backgroundPosition: '-200% 0' },
           '100%': { backgroundPosition: '200% 0' },
         },
+        // Деликатная пульсация emerald-свечения бейджа-якоря в hero лендинга:
+        // shadow 0→6px, очень subtle. Только box-shadow маленького элемента —
+        // paint-область крошечная, 60fps не страдает. Использовать строго
+        // через motion-safe: (reduced-motion выключает).
+        'badge-glow': {
+          '0%, 100%': { boxShadow: '0 0 0 0 rgb(16 185 129 / 0)' },
+          '50%': { boxShadow: '0 0 6px 2px rgb(16 185 129 / 0.28)' },
+        },
       },
       animation: {
         'fade-in': 'fade-in 0.6s ease-out both',
@@ -66,6 +74,7 @@ export default {
         'slide-in-left': 'slide-in-left 0.5s ease-out both',
         float: 'float 3s ease-in-out infinite',
         shimmer: 'shimmer 2.5s ease-in-out infinite',
+        'badge-glow': 'badge-glow 3s ease-in-out infinite',
       },
     },
   },

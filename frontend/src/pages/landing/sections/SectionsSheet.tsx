@@ -161,7 +161,7 @@ export default function SectionsSheet({ open, onClose }: SectionsSheetProps) {
                         <Icon className={`h-[18px] w-[18px] ${tint.icon}`} />
                       </span>
                       <span className="line-clamp-2 min-w-0 text-[13px] font-medium leading-snug text-slate-800">
-                        {f.title}
+                        {f.shortTitle ?? f.title}
                       </span>
                     </Link>
                   );

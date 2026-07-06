@@ -4,10 +4,16 @@ import { WHATSAPP_ACCESS_MESSAGE, getTelegramUrl, getWhatsAppUrl } from '../conf
 import { features } from '../content';
 
 /**
- * Футер лендинга (общий для главной, /f/:slug и /tarify): бренд-блок +
- * три колонки ссылок + юридическая строка. На мобиле колонки 2×,
- * бренд сверху; тап-таргеты ≥44px. Светлая тема, слегка приподнятый
- * фон slate-50 — визуально закрывает страницу.
+ * Футер лендинга (общий для главной, /f/:slug, /tarify и /voprosy).
+ *
+ * < md — максимально минималистичный (решение владельца, v9): wordmark
+ * по центру → две икон-кнопки WhatsApp/Telegram (44px, тинты каналов) →
+ * одна строка «© Autexa 2026 · Конфиденциальность · Условия · Войти».
+ * Ссылки «Продукт»/«Разделы» на мобиле не нужны: та же навигация живёт
+ * в glass-баре и шторке «Разделы».
+ *
+ * md+ — прежний полный футер: бренд-блок + три колонки ссылок +
+ * юридическая строка. Тап-таргеты ≥44px, светлая тема, slate-50.
  */
 const COL_LINK = 'inline-flex min-h-[44px] items-center text-sm text-slate-500 transition-colors hover:text-slate-900';
 
@@ -30,7 +36,61 @@ export default function Footer() {
 
   return (
     <footer className="border-t border-slate-200/70 bg-slate-50">
-      <div className="mx-auto max-w-6xl px-4 pb-10 pt-12 sm:px-6">
+      {/* ── Мобильный минимализм (< md) ── */}
+      <div className="flex flex-col items-center px-4 pb-8 pt-10 md:hidden">
+        <img
+          src="/logo.png"
+          alt="Autexa"
+          width={99}
+          height={24}
+          loading="lazy"
+          decoding="async"
+          className="h-6 w-auto"
+        />
+        <div className="mt-5 flex items-center gap-3">
+          {whatsappUrl && (
+            <a
+              href={whatsappUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Написать в WhatsApp"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50 text-emerald-700 transition-colors hover:bg-emerald-100 motion-safe:active:scale-95"
+            >
+              <MessageCircle className="h-5 w-5" aria-hidden />
+            </a>
+          )}
+          {telegramUrl && (
+            <a
+              href={telegramUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Написать в Telegram"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-sky-200 bg-sky-50 text-sky-700 transition-colors hover:bg-sky-100 motion-safe:active:scale-95"
+            >
+              <Send className="h-5 w-5" aria-hidden />
+            </a>
+          )}
+        </div>
+        {/* Одна строка: © + inline-ссылки. py-3.5 даёт ссылкам ≈47px тап-высоты
+            (обещанные файлом ≥44px); строка остаётся одной — только чуть выше */}
+        <p className="mt-4 text-center text-xs leading-relaxed text-slate-500">
+          © Autexa 2026 ·{' '}
+          <Link to="/privacy" className="inline-block py-3.5 transition-colors hover:text-slate-700">
+            Конфиденциальность
+          </Link>{' '}
+          ·{' '}
+          <Link to="/terms" className="inline-block py-3.5 transition-colors hover:text-slate-700">
+            Условия
+          </Link>{' '}
+          ·{' '}
+          <Link to="/login" className="inline-block py-3.5 transition-colors hover:text-slate-700">
+            Войти
+          </Link>
+        </p>
+      </div>
+
+      {/* ── Полный футер (md+) ── */}
+      <div className="mx-auto hidden max-w-6xl px-4 pb-10 pt-12 sm:px-6 md:block">
         <div className="grid grid-cols-2 gap-x-6 gap-y-10 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
           {/* Бренд */}
           <div className="col-span-2 md:col-span-1">

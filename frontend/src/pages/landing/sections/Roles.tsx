@@ -1,5 +1,7 @@
+import { useRef } from 'react';
 import { CheckCircle2, Crown, Minus, PhoneCall, Wrench } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+import CarouselDots from './CarouselDots';
 import Reveal from './Reveal';
 import { roles } from '../content';
 import type { RoleKey } from '../content';
@@ -17,6 +19,8 @@ const ROLE_STYLE: Record<RoleKey, { icon: LucideIcon; iconCls: string; iconBg: s
  * узнаваемые боли без продукта → что человек получает с Autexa.
  */
 export default function Roles() {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+
   return (
     <section id="roles" className="scroll-mt-24 border-t border-slate-200/60">
       <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-28">
@@ -34,7 +38,10 @@ export default function Roles() {
             Reveal ОДИН на весь контейнер (как в Features): per-card Reveal рисовал
             peek-карточку с opacity:0 и fade+rise посреди горизонтального свайпа. */}
         <Reveal delay={0.05}>
-          <div className="no-scrollbar -mx-4 mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-4 px-4 pb-2 [overscroll-behavior-x:contain] md:mx-0 md:mt-14 md:grid md:grid-cols-3 md:overflow-visible md:px-0 md:pb-0">
+          <div
+            ref={scrollerRef}
+            className="no-scrollbar -mx-4 mt-8 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-4 px-4 pb-2 [overscroll-behavior-x:contain] md:mx-0 md:mt-14 md:grid md:grid-cols-3 md:overflow-visible md:px-0 md:pb-0"
+          >
             {roles.map((role) => {
               const style = ROLE_STYLE[role.key];
               return (
@@ -80,6 +87,8 @@ export default function Roles() {
               );
             })}
           </div>
+          {/* Точки-индикаторы карусели — только мобилка (md+ это сетка) */}
+          <CarouselDots scrollerRef={scrollerRef} count={roles.length} itemLabel="Роль" className="mt-1 md:hidden" />
         </Reveal>
       </div>
     </section>

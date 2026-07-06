@@ -1,49 +1,98 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigationType } from 'react-router-dom';
-import { ArrowRight, ChevronDown, ChevronRight, MessageCircle, Search, Send, X } from 'lucide-react';
+import {
+  ArrowRight,
+  ChevronDown,
+  ChevronRight,
+  HelpCircle,
+  LayoutGrid,
+  MessageCircle,
+  Search,
+  Send,
+  Wallet,
+  X,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import Reveal from './sections/Reveal';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
 import { linkifyContacts } from './sections/linkify';
 import { faqMain, features, pricingFaq, type FaqItem } from './content';
 import { getTelegramUrl, getWhatsAppUrl } from './config';
+import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS, type SectionTint } from './icons';
 
 /**
  * Страница /voprosy — ВСЕ вопросы и ответы лендинга в одном месте.
  * Публичная, по образцу /tarify (доступна и гостям, и залогиненным).
  *
+ * v9 — компактный ХАБ вместо простыни из ~50 вопросов (длинный скролл
+ * отвергнут владельцем): без поискового запроса — сетка категорий-карточек
+ * (Общие, Цены + 16 разделов с их тинт-иконками из SECTION_TINTS, на карточке
+ * название и число вопросов), тап по категории раскрывает её вопросы
+ * аккордеоном ПРЯМО ПОД сеткой (выбранная карточка подсвечена, к списку
+ * доводит авто-скролл). Дефолт — раскрыта «Общие». Выбран вариант «сетка
+ * остаётся + список под ней», а не «заменить сетку списком с кнопкой назад»:
+ * без второго уровня навигации категория переключается одним тапом из любого
+ * места, контент не подменяется рывком — только плавный скролл.
+ * Sticky-строка чипов удалена: карточки-категории её заменяют, а двойная
+ * механика навигации (чипы + карточки) только путала бы.
+ *
  * Данные собираются из content.ts без дублирования текстов:
  *  - faqMain            → категория «Общие»;
  *  - pricingFaq         → категория «Цены и подключение»;
- *  - features[].detail.faq → категория = title раздела, рядом с группой —
+ *  - features[].detail.faq → категория = title раздела, рядом со списком —
  *    ссылка «Подробнее о разделе →» на /f/<slug>.
  *
- * UX: MiniHeader → крошки → h1 + подзаголовок → поиск (клиентская фильтрация
- * по вопросу+ответу, счётчик, empty-state с WhatsApp) → категории-чипы
- * в горизонтальной скролл-строке (sticky под шапкой) → аккордеоны details,
- * сгруппированные подзаголовками → CTA-карточка WhatsApp/Telegram →
- * Footer + GlassTabBar. При активном поиске чипы игнорируются (ищем везде);
- * тап по чипу во время поиска очищает запрос и открывает категорию.
+ * Сохранено из прежней версии: клиентский поиск по вопросу+ответу
+ * (при непустом запросе хаб уступает место плоскому списку найденного),
+ * счётчик, empty-state с WhatsApp, linkify ответов, CTA «Не нашли ответ»,
+ * document.title / theme-color / скролл-паттерны, снап к началу списка.
  */
 
 interface QaGroup {
   key: string;
-  /** Заголовок группы в списке. */
+  /** Название категории над списком вопросов (полное). */
   title: string;
-  /** Короткая подпись чипа (по умолчанию = title). */
-  chipLabel?: string;
+  /** Короткое имя для узкой 2-колоночной карточки (текст ~89–97px, clamp-2). */
+  shortTitle?: string;
+  icon: LucideIcon;
+  tint: SectionTint;
   /** slug раздела /f/<slug> — даёт ссылку «Подробнее о разделе →». */
   slug?: string;
   items: FaqItem[];
 }
 
 const GROUPS: QaGroup[] = [
-  { key: 'general', title: 'Общие', items: faqMain },
-  { key: 'pricing', title: 'Цены и подключение', chipLabel: 'Цены', items: pricingFaq },
-  ...features.map((f) => ({ key: f.slug, title: f.title, slug: f.slug, items: f.detail.faq })),
+  { key: 'general', title: 'Общие', icon: HelpCircle, tint: DEFAULT_TINT, items: faqMain },
+  {
+    key: 'pricing',
+    title: 'Цены и подключение',
+    icon: Wallet,
+    // Emerald — «деньги» по визуальной системе лендинга (DESIGN.md)
+    tint: { chip: 'bg-emerald-100', icon: 'text-emerald-600' },
+    items: pricingFaq,
+  },
+  ...features.map((f) => ({
+    key: f.slug,
+    title: f.title,
+    shortTitle: f.shortTitle,
+    icon: SECTION_ICONS[f.icon] ?? LayoutGrid,
+    tint: SECTION_TINTS[f.slug] ?? DEFAULT_TINT,
+    slug: f.slug,
+    items: f.detail.faq,
+  })),
 ];
 
 const TOTAL_COUNT = GROUPS.reduce((n, g) => n + g.items.length, 0);
+
+/** «1 вопрос / 2 вопроса / 5 вопросов» — русские плюралы для карточек. */
+function questionsLabel(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return `${n} вопрос`;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${n} вопроса`;
+  return `${n} вопросов`;
+}
 
 /** Мини-шапка страницы: только лого (→ главная) и «Войти» — как на /tarify. */
 function MiniHeader() {
@@ -90,18 +139,10 @@ function Breadcrumbs() {
   );
 }
 
-function chipCls(active: boolean) {
-  return `inline-flex min-h-[44px] shrink-0 items-center whitespace-nowrap rounded-full border px-4 text-sm font-medium transition motion-safe:active:scale-95 ${
-    active
-      ? 'border-primary-600 bg-primary-600 text-white shadow-sm'
-      : 'border-slate-200 bg-white text-slate-600 hover:border-slate-300 hover:text-slate-900'
-  }`;
-}
-
-/** Один вопрос-аккордеон — тот же стиль, что FAQ главной. */
+/** Один вопрос-аккордеон — тот же стиль, что FAQ главной; acc-details — плавное раскрытие. */
 function QaItem({ item }: { item: FaqItem }) {
   return (
-    <details className="group rounded-2xl border border-slate-200/60 bg-white shadow-sm transition-colors hover:border-slate-300">
+    <details className="acc-details group rounded-2xl border border-slate-200/60 bg-white shadow-sm transition-colors hover:border-slate-300">
       <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left text-base font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
         {item.q}
         <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-300 group-open:rotate-180 motion-reduce:transition-none" />
@@ -111,13 +152,34 @@ function QaItem({ item }: { item: FaqItem }) {
   );
 }
 
+/** Заголовок группы вопросов + опциональная ссылка на страницу раздела. */
+function GroupHeading({ group }: { group: QaGroup }) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-4">
+      <h2 className="text-xl font-bold tracking-tight text-slate-900">{group.title}</h2>
+      {group.slug && (
+        <Link
+          to={`/f/${group.slug}`}
+          className="inline-flex min-h-[44px] items-center gap-1 text-sm font-medium text-primary-600 transition-colors hover:text-primary-700"
+        >
+          Подробнее о разделе
+          <ArrowRight className="h-4 w-4" aria-hidden />
+        </Link>
+      )}
+    </div>
+  );
+}
+
 export default function VoprosyPage() {
   const navigationType = useNavigationType();
   const [query, setQuery] = useState('');
-  const [activeKey, setActiveKey] = useState('all');
+  /** Выбранная категория хаба; дефолт — «Общие». */
+  const [activeKey, setActiveKey] = useState('general');
   const searchInputRef = useRef<HTMLInputElement>(null);
-  /** Невидимый якорь прямо над sticky-строкой чипов (сам sticky для offsetTop ненадёжен). */
+  /** Невидимый якорь над зоной результатов (снап при старте поиска глубоко в списке). */
   const listAnchorRef = useRef<HTMLDivElement>(null);
+  /** Заголовок раскрытой категории — цель авто-скролла после тапа по карточке. */
+  const qaTopRef = useRef<HTMLElement>(null);
 
   const whatsapp = getWhatsAppUrl();
   const telegram = getTelegramUrl();
@@ -132,7 +194,7 @@ export default function VoprosyPage() {
   }, []);
 
   // Светлая тема страницы: фон body (overscroll не мигает), светлый theme-color
-  // хрома браузера, плавный скролл для «Вопросы»-таба (#top) — с восстановлением.
+  // хрома браузера, плавный скролл — с восстановлением.
   useEffect(() => {
     const root = document.documentElement;
     const prevScroll = root.style.scrollBehavior;
@@ -162,39 +224,42 @@ export default function VoprosyPage() {
   const q = query.trim().toLowerCase();
   const searching = q.length > 0;
 
-  // Клиентская фильтрация: при поиске — по всем категориям (чипы игнорируются),
-  // без поиска — активная категория или все.
-  const visibleGroups = useMemo(() => {
-    if (searching) {
-      return GROUPS.map((g) => ({
-        ...g,
-        items: g.items.filter((it) => `${it.q} ${it.a}`.toLowerCase().includes(q)),
-      })).filter((g) => g.items.length > 0);
-    }
-    if (activeKey === 'all') return GROUPS;
-    return GROUPS.filter((g) => g.key === activeKey);
-  }, [q, searching, activeKey]);
+  // Поиск — по всем категориям сразу (хаб на время запроса уступает место
+  // плоскому списку найденного, сгруппированному подзаголовками).
+  const foundGroups = useMemo(() => {
+    if (!searching) return [];
+    return GROUPS.map((g) => ({
+      ...g,
+      items: g.items.filter((it) => `${it.q} ${it.a}`.toLowerCase().includes(q)),
+    })).filter((g) => g.items.length > 0);
+  }, [q, searching]);
 
-  const foundCount = useMemo(() => visibleGroups.reduce((n, g) => n + g.items.length, 0), [visibleGroups]);
+  const foundCount = useMemo(() => foundGroups.reduce((n, g) => n + g.items.length, 0), [foundGroups]);
 
-  // После смены фильтра глубоко в списке документ может резко укоротиться —
-  // браузер зажмёт scrollY у нового низа, и пользователь окажется на CTA-карточке
-  // («тап не сработал»). Возвращаем viewport к началу списка под sticky-чипы.
-  // Скроллим синхронно, до ре-рендера: якорь статичен, его позиция валидна всегда.
+  const activeGroup = GROUPS.find((g) => g.key === activeKey) ?? GROUPS[0];
+
+  // При старте поиска глубоко на странице документ может резко укоротиться —
+  // браузер зажмёт scrollY у нового низа, и пользователь окажется на CTA-карточке.
+  // Возвращаем viewport к началу зоны результатов под шапку. Скроллим синхронно,
+  // до ре-рендера: якорь статичен, его позиция валидна всегда.
   const snapToListTop = () => {
     const el = listAnchorRef.current;
-    // 64px = высота MiniHeader (h-16); якорь выше — значит чипы уже «прилипли».
+    // 64px = высота MiniHeader (h-16); якорь выше — значит зона уже под шапкой.
     if (el && el.getBoundingClientRect().top < 64) {
       el.scrollIntoView({ behavior: 'instant', block: 'start' });
     }
   };
 
-  // Тап по чипу во время поиска — очистить запрос и показать категорию:
-  // «мёртвые» чипы под активным поиском только путали бы.
-  const pickChip = (key: string) => {
-    snapToListTop();
+  // Тап по карточке категории: выбрать + довести вопросы под шапку.
+  // Сетка выше списка, и выбор в верхнем ряду без скролла «ничего не менял бы»
+  // на экране. Позиция заголовка списка не зависит от нового содержимого
+  // (сетка над ним статична) — скроллим сразу, плавно (reduced-motion — мгновенно).
+  const pickCategory = (key: string) => {
     setActiveKey(key);
-    if (searching) setQuery('');
+    qaTopRef.current?.scrollIntoView({
+      behavior: window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      block: 'start',
+    });
   };
 
   return (
@@ -229,8 +294,7 @@ export default function VoprosyPage() {
               type="search"
               value={query}
               onChange={(e) => {
-                // Старт поиска глубоко в списке — тот же эффект «зажатого» скролла,
-                // что у чипов: возвращаем к началу списка.
+                // Старт поиска глубоко в списке — «зажатый» скролл: возвращаем к началу.
                 if (!query.trim() && e.target.value.trim()) snapToListTop();
                 setQuery(e.target.value);
               }}
@@ -263,83 +327,92 @@ export default function VoprosyPage() {
           )}
         </Reveal>
 
-        {/* Якорь для snapToListTop: scroll-mt-16 ставит его ровно под MiniHeader,
-            чипы прилипают сразу под ним */}
+        {/* Якорь для snapToListTop: scroll-mt-16 ставит его ровно под MiniHeader */}
         <div ref={listAnchorRef} aria-hidden className="scroll-mt-16" />
 
-        {/* Категории-чипы: горизонтальный скролл, sticky под шапкой (h-16).
-            Это фильтры-переключатели, не табы: role=group + aria-pressed —
-            честная семантика без обещаний tabpanel/стрелочной навигации */}
-        <div className="sticky top-16 z-30 -mx-4 mt-4 border-b border-slate-200/60 bg-[#FAFAFA]/90 backdrop-blur-xl sm:-mx-6">
-          <div
-            role="group"
-            aria-label="Категории вопросов"
-            className="flex gap-2 overflow-x-auto px-4 py-3 sm:px-6 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-          >
-            <button
-              type="button"
-              aria-pressed={!searching && activeKey === 'all'}
-              onClick={() => pickChip('all')}
-              className={chipCls(!searching && activeKey === 'all')}
-            >
-              Все
-            </button>
-            {GROUPS.map((g) => (
-              <button
-                key={g.key}
-                type="button"
-                aria-pressed={!searching && activeKey === g.key}
-                onClick={() => pickChip(g.key)}
-                className={chipCls(!searching && activeKey === g.key)}
-              >
-                {g.chipLabel ?? g.title}
-              </button>
+        {searching ? (
+          /* Режим поиска: плоский список найденного, сгруппированный подзаголовками */
+          <>
+            {foundGroups.map((g) => (
+              <section key={g.key} className="pt-10">
+                <GroupHeading group={g} />
+                <div className="mt-4 space-y-3">
+                  {g.items.map((item) => (
+                    <QaItem key={item.q} item={item} />
+                  ))}
+                </div>
+              </section>
             ))}
-          </div>
-        </div>
 
-        {/* Список: группы с подзаголовками; у разделов — ссылка на /f/<slug> */}
-        {visibleGroups.map((g) => (
-          <section key={g.key} className="pt-10">
-            <div className="flex flex-wrap items-center justify-between gap-x-4">
-              <h2 className="text-xl font-bold tracking-tight text-slate-900">{g.title}</h2>
-              {g.slug && (
-                <Link
-                  to={`/f/${g.slug}`}
-                  className="inline-flex min-h-[44px] items-center gap-1 text-sm font-medium text-primary-600 transition-colors hover:text-primary-700"
-                >
-                  Подробнее о разделе
-                  <ArrowRight className="h-4 w-4" aria-hidden />
-                </Link>
-              )}
-            </div>
-            <div className="mt-4 space-y-3">
-              {g.items.map((item) => (
-                <QaItem key={item.q} item={item} />
-              ))}
-            </div>
-          </section>
-        ))}
-
-        {/* Ничего не нашлось — сразу мостик в WhatsApp */}
-        {searching && foundCount === 0 && (
-          <div className="mt-10 rounded-3xl border border-slate-200/60 bg-white px-6 py-10 text-center shadow-sm">
-            <p className="text-lg font-semibold text-slate-900">Ничего не нашлось</p>
-            <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-slate-600">
-              Спросите нас напрямую — отвечаем за пару минут.
-            </p>
-            {whatsapp && (
-              <a
-                href={whatsapp}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-6 inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-8 text-base font-semibold text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-400 motion-safe:active:scale-[0.98] active:bg-emerald-600"
-              >
-                <MessageCircle className="h-5 w-5" aria-hidden />
-                Написать в WhatsApp
-              </a>
+            {/* Ничего не нашлось — сразу мостик в WhatsApp */}
+            {foundCount === 0 && (
+              <div className="mt-10 rounded-3xl border border-slate-200/60 bg-white px-6 py-10 text-center shadow-sm">
+                <p className="text-lg font-semibold text-slate-900">Ничего не нашлось</p>
+                <p className="mx-auto mt-2 max-w-sm text-sm leading-relaxed text-slate-600">
+                  Спросите нас напрямую — отвечаем за пару минут.
+                </p>
+                {whatsapp && (
+                  <a
+                    href={whatsapp}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="mt-6 inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-8 text-base font-semibold text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-400 motion-safe:active:scale-[0.98] active:bg-emerald-600"
+                  >
+                    <MessageCircle className="h-5 w-5" aria-hidden />
+                    Написать в WhatsApp
+                  </a>
+                )}
+              </div>
             )}
-          </div>
+          </>
+        ) : (
+          /* Хаб: сетка категорий-карточек + вопросы выбранной категории под ней */
+          <>
+            <div role="group" aria-label="Категории вопросов" className="mt-6 grid grid-cols-2 gap-2.5 sm:grid-cols-3">
+              {GROUPS.map((g) => {
+                const Icon = g.icon;
+                const active = g.key === activeKey;
+                return (
+                  <button
+                    key={g.key}
+                    type="button"
+                    aria-pressed={active}
+                    onClick={() => pickCategory(g.key)}
+                    className={`flex min-h-[64px] items-center gap-2.5 rounded-2xl border px-3 py-2.5 text-left shadow-sm transition-colors motion-safe:active:scale-[0.98] ${
+                      active
+                        ? 'border-primary-400 bg-primary-50/70 ring-1 ring-primary-400/40'
+                        : 'border-slate-200/60 bg-white hover:border-slate-300'
+                    }`}
+                  >
+                    <span
+                      className={`inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${g.tint.chip}`}
+                    >
+                      <Icon className={`h-[18px] w-[18px] ${g.tint.icon}`} />
+                    </span>
+                    <span className="min-w-0">
+                      <span className="line-clamp-2 block text-[13px] font-semibold leading-snug text-slate-800">
+                        {g.shortTitle ?? g.title}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] font-medium text-slate-500">
+                        {questionsLabel(g.items.length)}
+                      </span>
+                    </span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Вопросы выбранной категории — аккордеон прямо под сеткой;
+                scroll-mt-20 = sticky MiniHeader (64px) + воздух */}
+            <section ref={qaTopRef} className="scroll-mt-20 pt-10" aria-live="polite">
+              <GroupHeading group={activeGroup} />
+              <div className="mt-4 space-y-3">
+                {activeGroup.items.map((item) => (
+                  <QaItem key={item.q} item={item} />
+                ))}
+              </div>
+            </section>
+          </>
         )}
 
         {/* CTA-карточка внизу */}

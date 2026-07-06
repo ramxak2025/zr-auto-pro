@@ -243,7 +243,8 @@ export function ComparisonTable() {
 /** Mobile: полное сравнение — свёрнутый details, без горизонтального скролла. */
 export function ComparisonDetails() {
   return (
-    <details className="group mt-10 rounded-2xl border border-slate-200/60 bg-white shadow-sm">
+    // acc-details — плавное раскрытие (interpolate-size, см. index.css)
+    <details className="acc-details group mt-10 rounded-2xl border border-slate-200/60 bg-white shadow-sm">
       <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left text-base font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
         Полное сравнение возможностей
         <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-300 group-open:rotate-180 motion-reduce:transition-none" />

@@ -22,15 +22,22 @@ import SectionsSheet from './SectionsSheet';
  */
 
 function itemCls(active: boolean) {
-  return `flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center rounded-full px-1 py-1 transition motion-safe:active:scale-95 ${
+  // color 200ms — мягкий переход тинта активного пункта; transform — для active:scale-95
+  return `flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center rounded-full px-1 py-1 transition-[color,transform] duration-200 motion-safe:active:scale-95 ${
     active ? 'text-primary-600' : 'text-slate-600'
   }`;
 }
 
-function ItemBody({ icon: Icon, label }: { icon: LucideIcon; label: string }) {
+function ItemBody({ icon: Icon, label, active }: { icon: LucideIcon; label: string; active: boolean }) {
   return (
     <>
-      <Icon className="h-[18px] w-[18px]" aria-hidden />
+      {/* Лёгкий scale иконки при активации — transform, 200ms, motion-safe */}
+      <Icon
+        className={`h-[18px] w-[18px] transition-transform duration-200 ease-out ${
+          active ? 'motion-safe:scale-110' : ''
+        }`}
+        aria-hidden
+      />
       <span className="mt-0.5 text-[10px] font-medium leading-tight">{label}</span>
     </>
   );
@@ -76,11 +83,11 @@ export default function GlassTabBar() {
         {/* Главная: на «/» — нативный скролл к #top (smooth задаёт LandingPage) */}
         {onHome ? (
           <a href="#top" className={itemCls(true)} aria-current="page">
-            <ItemBody icon={Home} label="Главная" />
+            <ItemBody icon={Home} label="Главная" active />
           </a>
         ) : (
           <Link to="/" className={itemCls(false)}>
-            <ItemBody icon={Home} label="Главная" />
+            <ItemBody icon={Home} label="Главная" active={false} />
           </Link>
         )}
 
@@ -93,28 +100,28 @@ export default function GlassTabBar() {
           aria-expanded={sheetOpen}
           className={itemCls(onFeature)}
         >
-          <ItemBody icon={LayoutGrid} label="Разделы" />
+          <ItemBody icon={LayoutGrid} label="Разделы" active={onFeature} />
         </button>
 
         {/* Тарифы: отдельная страница; на ней самой — скролл вверх */}
         {onTarify ? (
           <a href="#top" className={itemCls(true)} aria-current="page">
-            <ItemBody icon={Wallet} label="Тарифы" />
+            <ItemBody icon={Wallet} label="Тарифы" active />
           </a>
         ) : (
           <Link to="/tarify" className={itemCls(false)}>
-            <ItemBody icon={Wallet} label="Тарифы" />
+            <ItemBody icon={Wallet} label="Тарифы" active={false} />
           </Link>
         )}
 
         {/* Вопросы: отдельная страница /voprosy; на ней самой — скролл вверх */}
         {onVoprosy ? (
           <a href="#top" className={itemCls(true)} aria-current="page">
-            <ItemBody icon={HelpCircle} label="Вопросы" />
+            <ItemBody icon={HelpCircle} label="Вопросы" active />
           </a>
         ) : (
           <Link to="/voprosy" className={itemCls(false)}>
-            <ItemBody icon={HelpCircle} label="Вопросы" />
+            <ItemBody icon={HelpCircle} label="Вопросы" active={false} />
           </Link>
         )}
       </BarShell>

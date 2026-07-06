@@ -1,9 +1,48 @@
-import { ReactNode } from 'react';
+import { ReactNode, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, LayoutGrid, Mic } from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
+import CarouselDots from './CarouselDots';
 import Reveal from './Reveal';
 import { features } from '../content';
-import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS } from '../icons';
+import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS, type SectionTint } from '../icons';
+
+/**
+ * Фото карточки «Главное»-карусели: slow zoom при появлении — scale 1.04→1
+ * за 600 мс ease-out при onLoad, только motion-safe (motion-reduce показывает
+ * сразу). Анимируются transform/opacity; overflow-hidden у родительской
+ * карточки срезает зум по скруглению.
+ *
+ * onError (битая/оборванная загрузка на плохом LTE, у операторов РФ бывает) —
+ * вместо вечно невидимого opacity-0 прямоугольника показываем тинт-подложку
+ * раздела с его иконкой: шапка карточки остаётся оформленной, CLS нет
+ * (тот же aspect-[4/3] бокс).
+ */
+function HighlightPhoto({ slug, icon: Icon, tint }: { slug: string; icon: LucideIcon; tint: SectionTint }) {
+  const [state, setState] = useState<'loading' | 'loaded' | 'failed'>('loading');
+  if (state === 'failed') {
+    return (
+      <div aria-hidden className={`flex aspect-[4/3] w-full items-center justify-center rounded-t-3xl ${tint.chip}`}>
+        <Icon strokeWidth={1.5} className={`h-12 w-12 ${tint.icon} opacity-70`} />
+      </div>
+    );
+  }
+  return (
+    <img
+      src={`/img/landing/f-${slug}.webp`}
+      alt=""
+      width={1200}
+      height={900}
+      loading="lazy"
+      decoding="async"
+      onLoad={() => setState('loaded')}
+      onError={() => setState('failed')}
+      className={`aspect-[4/3] w-full rounded-t-3xl object-cover transition-[transform,opacity] duration-[600ms] ease-out motion-reduce:transition-none ${
+        state === 'loaded' ? 'scale-100 opacity-100' : 'scale-[1.04] opacity-0'
+      }`}
+    />
+  );
+}
 
 /** Российский госномер — CSS-мокап настоящей плашки: А 123 ВС | 05 RUS + флаг. */
 function PlateMock() {
@@ -161,6 +200,7 @@ const MOBILE_HIGHLIGHTS = ['kassa', 'dengi', 'sklad', 'golos', 'zarplata', 'rass
 
 export default function Features() {
   const bySlug = new Map(features.map((f) => [f.slug, f]));
+  const scrollerRef = useRef<HTMLDivElement>(null);
 
   return (
     <section id="features" className="scroll-mt-24 border-t border-slate-200/60">
@@ -180,8 +220,12 @@ export default function Features() {
         <div className="md:hidden">
           <Reveal delay={0.05}>
             <p className="mt-8 text-xs font-semibold uppercase tracking-wider text-slate-500">Главное</p>
-            {/* Чистый CSS scroll-snap: карточка ~78vw + peek следующей, без JS-слушателей */}
-            <div className="no-scrollbar -mx-4 mt-3 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-4 px-4 pb-2 [overscroll-behavior-x:contain]">
+            {/* CSS scroll-snap: карточка ~78vw + peek следующей; JS — только
+                passive-слушатель точек-индикаторов ниже, жесты не трогает */}
+            <div
+              ref={scrollerRef}
+              className="no-scrollbar -mx-4 mt-3 flex snap-x snap-mandatory gap-4 overflow-x-auto scroll-px-4 px-4 pb-2 [overscroll-behavior-x:contain]"
+            >
               {MOBILE_HIGHLIGHTS.map((slug) => {
                 const section = bySlug.get(slug);
                 if (!section) return null;
@@ -199,15 +243,7 @@ export default function Features() {
                         layout-бокса нет; (б) секция ~2 экрана ниже фолда, eager лишь
                         конкурировал бы с критическим путём на LTE; префетч-дистанция
                         браузера догружает фото задолго до доскролла. */}
-                    <img
-                      src={`/img/landing/f-${slug}.webp`}
-                      alt=""
-                      width={1200}
-                      height={900}
-                      loading="lazy"
-                      decoding="async"
-                      className="aspect-[4/3] w-full rounded-t-3xl object-cover"
-                    />
+                    <HighlightPhoto slug={slug} icon={Icon} tint={tint} />
                     <span className="flex flex-1 flex-col p-4">
                       <span className="flex items-center gap-2.5">
                         <span
@@ -229,6 +265,13 @@ export default function Features() {
                 );
               })}
             </div>
+            {/* Точки-индикаторы карусели «Главное» */}
+            <CarouselDots
+              scrollerRef={scrollerRef}
+              count={MOBILE_HIGHLIGHTS.length}
+              itemLabel="Раздел"
+              className="mt-1"
+            />
           </Reveal>
 
           <Reveal delay={0.05}>
@@ -249,7 +292,7 @@ export default function Features() {
                       <Icon className={`h-[18px] w-[18px] ${tint.icon}`} />
                     </span>
                     <span className="line-clamp-2 min-w-0 text-[13px] font-medium leading-snug text-slate-800">
-                      {f.title}
+                      {f.shortTitle ?? f.title}
                     </span>
                   </Link>
                 );

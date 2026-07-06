@@ -1,9 +1,9 @@
-import { useSyncExternalStore, type CSSProperties } from 'react';
+import { useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
 import { ArrowRight, Banknote, CheckCircle2, TrendingUp } from 'lucide-react';
 import CtaButton from './CtaButton';
-import { hero } from '../content';
+import { hero, heroLightReady } from '../content';
 import { getAccessContactUrl, getWhatsAppUrl } from '../config';
 
 /* ---------- Атмосфера: сетка + шум (только CSS/data-uri, ноль запросов) ---------- */
@@ -113,6 +113,19 @@ function splitTitle(title: string): { head: string; tail: string } {
   return { head: title.slice(0, space), tail: title.slice(space + 1) };
 }
 
+/**
+ * Бейдж hero. Вариант-якорь «Старт бесплатно · от 1 000 ₽/мес» ОТВЕРГНУТ
+ * владельцем (07.07) — нейтральная пилюля с мини-логотипом, без ссылки и пульса.
+ */
+function AnchorBadge() {
+  return (
+    <span className="inline-flex min-h-[44px] items-center gap-2 rounded-full border border-slate-200/80 bg-white px-4 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
+      <img src="/logo-icon.png" alt="" width={16} height={16} decoding="async" className="h-4 w-4 rounded" />
+      {hero.badge}
+    </span>
+  );
+}
+
 /* ---------- Мобильный светлый hero (< md) ---------- */
 
 /**
@@ -130,11 +143,61 @@ const subscribeMobile = (cb: () => void) => {
 };
 const getIsMobile = () => window.matchMedia(MOBILE_QUERY).matches;
 
+type HeroPhotoStatus = 'loading' | 'loaded' | 'failed';
+
+const HERO_LIGHT_SRC = '/img/landing/hero-light.webp';
+
+/**
+ * Верхний блок мобильного hero — светлое фото /img/landing/hero-light.webp
+ * (~44svh, object-cover), нижние 40% плавно «растворяются» в фон страницы
+ * #FAFAFA светлым градиентом. Никаких тёмных оверлеев (анти-референс владельца).
+ *
+ * Монтируется ТОЛЬКО при heroLightReady === true (content.ts): файл едет через
+ * репо, его наличие — константа деплоя, поэтому без runtime-проб и без
+ * резервирования места «на всякий случай». Ноль CLS в обоих состояниях:
+ * сегодня (файла нет) блок не существует и hero сразу законченный
+ * (workshop-карточка внизу); после коммита с фото + флагом место
+ * зарезервировано с первого кадра. onError остаётся страховкой от битой
+ * загрузки на плохом LTE — блок схлопнется, вернётся workshop-карточка.
+ * matchMedia-гейт — чтобы desktop (md:hidden) не качал мобильное фото.
+ */
+function MobileHeroLightPhoto({
+  status,
+  onStatus,
+}: {
+  status: HeroPhotoStatus;
+  onStatus: (s: HeroPhotoStatus) => void;
+}) {
+  const isMobile = useSyncExternalStore(subscribeMobile, getIsMobile);
+  if (!isMobile || status === 'failed') return null;
+  return (
+    <div className="relative h-[44vh] w-full overflow-hidden supports-[height:44svh]:h-[44svh]">
+      <img
+        src={HERO_LIGHT_SRC}
+        alt="Светлый зал премиального автосервиса — кроссовер на подъёмнике"
+        loading="eager"
+        decoding="async"
+        onLoad={() => onStatus('loaded')}
+        onError={() => onStatus('failed')}
+        className={`h-full w-full object-cover transition-[transform,opacity] duration-[600ms] ease-out motion-reduce:transition-none ${
+          status === 'loaded' ? 'scale-100 opacity-100' : 'scale-[1.04] opacity-0'
+        }`}
+      />
+      {/* Fade нижних 40% в фон страницы — фото «растворяется», а не обрывается */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-[#FAFAFA] to-transparent"
+      />
+    </div>
+  );
+}
+
 /**
  * Фото-карточка мобильного hero: светлая мастерская /img/landing/workshop.webp
  * (файл на проде есть, его же использует CtaSection). loading=eager осознанно —
  * это LCP-элемент первого экрана на мобиле; на md+ фото не грузится вовсе
- * (matchMedia-гейт выше).
+ * (matchMedia-гейт выше). Рендерится только пока hero-light-фото нет (failed):
+ * с новым верхним фото вторая фотография в hero избыточна.
  */
 function MobileWorkshopPhoto() {
   const isMobile = useSyncExternalStore(subscribeMobile, getIsMobile);
@@ -190,16 +253,19 @@ function MobileAccessCta() {
 }
 
 /**
- * < md: светлый hero в палитре главной — mesh-блобы (primary/sky/amber,
- * без violet) + чертёжная сетка + noise, как на desktop. Сверху вниз:
- * бейдж → H1 с градиент-акцентом → подзаголовок → CTA → фото-карточка
- * светлой мастерской. Шапка с wordmark-логотипом и «Войти» видна и на
- * мобиле (Header.tsx) — дублирующая кнопка «Войти» из угла убрана.
- * Высота секции — авто (~1.1–1.2 экрана вместе с фото), не 92svh.
+ * < md: светлый hero в палитре главной. Сверху вниз: светлое hero-light-фото
+ * (~44svh, fade в фон; монтируется только при heroLightReady) →
+ * бейдж-якорь «Старт бесплатно · от 1 000 ₽/мес» (→ /tarify) → H1 →
+ * подзаголовок → CTA → workshop-карточка (только пока нет hero-light-фото).
+ * Атмосфера mesh-блобов/сетки — как на desktop. Шапка с wordmark-логотипом
+ * и «Войти» видна и на мобиле (Header.tsx).
  */
 function MobileHero() {
   const { head, tail } = splitTitle(hero.title);
   const reduceMotion = useReducedMotion();
+  // Флаг выключен → сразу 'failed': ветки рендера идентичны состоянию
+  // «фото не загрузилось» (workshop-карточка на месте, блока фото нет).
+  const [photoStatus, setPhotoStatus] = useState<HeroPhotoStatus>(heroLightReady ? 'loading' : 'failed');
 
   return (
     <section className="relative overflow-hidden md:hidden">
@@ -212,20 +278,18 @@ function MobileHero() {
         <div className="absolute inset-0 opacity-[0.025]" style={NOISE_STYLE} />
       </div>
 
-      {/* Оркестрованный вход: badge → заголовок → подзаголовок → CTA → фото */}
+      {heroLightReady && <MobileHeroLightPhoto status={photoStatus} onStatus={setPhotoStatus} />}
+
+      {/* Оркестрованный вход: бейдж-якорь → заголовок → подзаголовок → CTA → фото */}
       <motion.div
-        className="relative px-5 pb-12 pt-10"
+        className="relative px-5 pb-12 pt-8"
         variants={container}
         initial={reduceMotion ? false : 'hidden'}
         animate="visible"
       >
-        <motion.span
-          variants={item}
-          className="inline-flex items-center gap-2 rounded-full border border-slate-200/80 bg-white px-4 py-1.5 text-xs font-medium text-slate-600 shadow-sm"
-        >
-          <img src="/logo-icon.png" alt="" width={16} height={16} decoding="async" className="h-4 w-4 rounded" />
-          {hero.badge}
-        </motion.span>
+        <motion.div variants={item}>
+          <AnchorBadge />
+        </motion.div>
 
         <motion.h1
           variants={item}
@@ -254,9 +318,13 @@ function MobileHero() {
           </a>
         </motion.div>
 
-        <motion.div variants={item} className="mt-8">
-          <MobileWorkshopPhoto />
-        </motion.div>
+        {/* Workshop-карточка — только пока hero-light-фото нет: не оголяем hero,
+            но и не ставим два фото друг под другом, когда верхнее появилось */}
+        {photoStatus === 'failed' && (
+          <motion.div variants={item} className="mt-8">
+            <MobileWorkshopPhoto />
+          </motion.div>
+        )}
       </motion.div>
     </section>
   );
@@ -289,13 +357,9 @@ function DesktopHero() {
         animate="visible"
       >
         <div className="text-center lg:text-left">
-          <motion.span
-            variants={item}
-            className="inline-flex items-center gap-2 rounded-full border border-slate-200/80 bg-white px-4 py-1.5 text-xs font-medium text-slate-600 shadow-sm"
-          >
-            <img src="/logo-icon.png" alt="" width={16} height={16} decoding="async" className="h-4 w-4 rounded" />
-            {hero.badge}
-          </motion.span>
+          <motion.div variants={item}>
+            <AnchorBadge />
+          </motion.div>
 
           <motion.h1
             variants={item}

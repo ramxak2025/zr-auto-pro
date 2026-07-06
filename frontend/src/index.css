@@ -72,9 +72,15 @@
     }
   }
 
-  /* Disable browser's native pull-to-refresh (we use our own) */
-  html, body {
-    overscroll-behavior-y: contain;
+  /* Disable browser's native pull-to-refresh (we use our own).
+     ТОЛЬКО для тач-указателей: на десктопе contain на body ОБРЫВАЛ цепочку
+     прокрутки колесом (#root — overflow-y:auto без собственного скролла →
+     колесо упиралось в body и не доходило до окна; клавиатура работала).
+     Pull-to-refresh существует только на таче — там поведение сохранено. */
+  @media (pointer: coarse) {
+    html, body {
+      overscroll-behavior-y: contain;
+    }
   }
 }
 
@@ -253,6 +259,34 @@
   }
   .no-scrollbar::-webkit-scrollbar {
     display: none;
+  }
+}
+
+/* Плавное раскрытие аккордеонов лендинга (<details class="acc-details">):
+   interpolate-size: allow-keywords позволяет анимировать block-size 0 → auto.
+   Чистое прогрессивное улучшение: браузеры без поддержки (@supports) открывают
+   мгновенно, как раньше. Свойство наследуемое — задаём на самом details,
+   а не на :root, чтобы не трогать страницы приложения. Это не layout-джанк
+   на каждом кадре, а одиночная анимация контейнера при тапе; кривая —
+   ease-out expo, 250 мс. */
+@supports (interpolate-size: allow-keywords) {
+  .acc-details {
+    interpolate-size: allow-keywords;
+  }
+  .acc-details::details-content {
+    block-size: 0;
+    overflow-y: clip;
+    transition:
+      block-size 0.25s cubic-bezier(0.16, 1, 0.3, 1),
+      content-visibility 0.25s allow-discrete;
+  }
+  .acc-details[open]::details-content {
+    block-size: auto;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .acc-details::details-content {
+      transition: none;
+    }
   }
 }
 
