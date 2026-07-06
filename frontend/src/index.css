@@ -72,16 +72,10 @@
     }
   }
 
-  /* Disable browser's native pull-to-refresh (we use our own).
-     ТОЛЬКО для тач-указателей: на десктопе contain на body ОБРЫВАЛ цепочку
-     прокрутки колесом (#root — overflow-y:auto без собственного скролла →
-     колесо упиралось в body и не доходило до окна; клавиатура работала).
-     Pull-to-refresh существует только на таче — там поведение сохранено. */
-  @media (pointer: coarse) {
-    html, body {
-      overscroll-behavior-y: contain;
-    }
-  }
+  /* PWA pull-to-refresh-глушилка УДАЛЕНА по решению владельца (07.07):
+     overscroll-behavior contain на body обрывал цепочку прокрутки и колесом
+     (ПК), и тачем (/tarify на телефоне) — #root: overflow-y auto без своего
+     скролла упирался в body. PWA-обвязка больше не приоритет. */
 }
 
 /*
