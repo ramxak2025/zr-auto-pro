@@ -14,7 +14,7 @@ const COL_LINK = 'inline-flex min-h-[44px] items-center text-sm text-slate-500 t
 const PRODUCT_LINKS = [
   { label: 'Возможности', to: '/#features' },
   { label: 'Тарифы', to: '/tarify' },
-  { label: 'Вопросы и ответы', to: '/#faq' },
+  { label: 'Вопросы и ответы', to: '/voprosy' },
   { label: 'Войти', to: '/login' },
 ] as const;
 

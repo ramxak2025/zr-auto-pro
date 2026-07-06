@@ -50,6 +50,7 @@ function lazyWithRetry<T extends ComponentType<any>>(
 const LandingPage = lazyWithRetry(() => import('./pages/landing/LandingPage'));
 const FeatureDetailPage = lazyWithRetry(() => import('./pages/landing/FeatureDetailPage'));
 const TarifyPage = lazyWithRetry(() => import('./pages/landing/TarifyPage'));
+const VoprosyPage = lazyWithRetry(() => import('./pages/landing/VoprosyPage'));
 const LoginPage = lazyWithRetry(() => import('./pages/LoginPage'));
 const SubscriptionBlockedPage = lazyWithRetry(() => import('./pages/SubscriptionBlockedPage'));
 const DashboardPage = lazyWithRetry(() => import('./pages/DashboardPage'));
@@ -224,6 +225,9 @@ export default function App() {
 
           {/* Public: страница тарифов — по образцу /f/:slug, доступна и залогиненным */}
           <Route path="/tarify" element={<TarifyPage />} />
+
+          {/* Public: все вопросы и ответы — по образцу /tarify */}
+          <Route path="/voprosy" element={<VoprosyPage />} />
 
           {/* Public: Login */}
           <Route

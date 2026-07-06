@@ -1,41 +1,11 @@
-import { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
-import { ChevronDown } from 'lucide-react';
+import { ArrowRight, ChevronDown } from 'lucide-react';
 import Reveal from './Reveal';
+import { linkifyContacts } from './linkify';
 import { faqMain } from '../content';
-import { getTelegramUrl, getWhatsAppUrl, WHATSAPP_INSTALL_MESSAGE } from '../config';
 
-const LINK_CLS = 'font-medium text-primary-600 transition-colors hover:text-primary-700';
-
-const WA_INSTALL_URL = getWhatsAppUrl(WHATSAPP_INSTALL_MESSAGE);
-const TG_URL = getTelegramUrl();
-
-/**
- * Упоминания WhatsApp/Telegram в ответах превращаем в живые ссылки, а
- * «сравнение тарифов» — в Link на отдельную страницу /tarify (полное
- * сравнение переехало с главной туда). Текст остаётся ровно тем, что
- * в content.ts, меняется только разметка.
- */
-function linkifyContacts(text: string): ReactNode {
-  const parts = text.split(/(WhatsApp|Telegram|сравнение тарифов)/g);
-  if (parts.length === 1) return text;
-  return parts.map((part, i) => {
-    if (part === 'сравнение тарифов') {
-      return (
-        <Link key={i} to="/tarify" className={LINK_CLS}>
-          {part}
-        </Link>
-      );
-    }
-    const url = part === 'WhatsApp' ? WA_INSTALL_URL : part === 'Telegram' ? TG_URL : null;
-    if (!url) return part;
-    return (
-      <a key={i} href={url} target="_blank" rel="noopener noreferrer" className={LINK_CLS}>
-        {part}
-      </a>
-    );
-  });
-}
+/** На главной — только первые 5 вопросов; полный список живёт на /voprosy. */
+const FAQ_PREVIEW_COUNT = 5;
 
 export default function Faq() {
   return (
@@ -46,7 +16,7 @@ export default function Faq() {
         </Reveal>
 
         <div className="mt-12 space-y-3">
-          {faqMain.map((item, i) => (
+          {faqMain.slice(0, FAQ_PREVIEW_COUNT).map((item, i) => (
             <Reveal key={item.q} delay={Math.min(i * 0.05, 0.2)}>
               <details className="group rounded-2xl border border-slate-200/60 bg-white shadow-sm transition-colors hover:border-slate-300">
                 <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left text-base font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
@@ -58,6 +28,17 @@ export default function Faq() {
             </Reveal>
           ))}
         </div>
+
+        {/* Полный список вопросов (включая FAQ всех разделов) — на /voprosy */}
+        <Reveal delay={0.1} className="mt-8 text-center">
+          <Link
+            to="/voprosy"
+            className="inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl border border-slate-200 bg-white px-8 text-base font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-900 motion-safe:active:scale-[0.98]"
+          >
+            Все вопросы и ответы
+            <ArrowRight className="h-5 w-5" aria-hidden />
+          </Link>
+        </Reveal>
       </div>
     </section>
   );

@@ -1,4 +1,4 @@
-import { useState, useSyncExternalStore, type CSSProperties } from 'react';
+import { useSyncExternalStore, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
 import { ArrowRight, Banknote, CheckCircle2, TrendingUp } from 'lucide-react';
@@ -16,16 +16,6 @@ const GRID_STYLE: CSSProperties = {
   backgroundSize: '48px 48px',
   maskImage: 'radial-gradient(ellipse 90% 80% at 50% 35%, black 35%, transparent 78%)',
   WebkitMaskImage: 'radial-gradient(ellipse 90% 80% at 50% 35%, black 35%, transparent 78%)',
-};
-
-/** Та же инженерная сетка для тёмного мобильного hero — линии white/5. */
-const GRID_STYLE_DARK: CSSProperties = {
-  backgroundImage:
-    'linear-gradient(to right, rgb(255 255 255 / 0.05) 1px, transparent 1px), ' +
-    'linear-gradient(to bottom, rgb(255 255 255 / 0.05) 1px, transparent 1px)',
-  backgroundSize: '48px 48px',
-  maskImage: 'radial-gradient(ellipse 110% 90% at 50% 40%, black 40%, transparent 85%)',
-  WebkitMaskImage: 'radial-gradient(ellipse 110% 90% at 50% 40%, black 40%, transparent 85%)',
 };
 
 /** Очень лёгкий SVG-noise (feTurbulence) поверх mesh — глубина без веса. */
@@ -110,21 +100,27 @@ function PhoneMock() {
   );
 }
 
-/** Заголовок из content: последнее предложение — акцентным градиентом. */
+/**
+ * Заголовок из content: акцент градиентом. Если в середине есть '. ' —
+ * акцентируется последнее предложение; для короткого заголовка без него
+ * («Программа для автосервиса.») — последнее слово.
+ */
 function splitTitle(title: string): { head: string; tail: string } {
   const idx = title.lastIndexOf('. ');
-  if (idx === -1) return { head: title, tail: '' };
-  return { head: title.slice(0, idx + 1), tail: title.slice(idx + 2) };
+  if (idx !== -1) return { head: title.slice(0, idx + 1), tail: title.slice(idx + 2) };
+  const space = title.lastIndexOf(' ');
+  if (space === -1) return { head: title, tail: '' };
+  return { head: title.slice(0, space), tail: title.slice(space + 1) };
 }
 
-/* ---------- Мобильный тёмный hero (< md): фон — герой ---------- */
+/* ---------- Мобильный светлый hero (< md) ---------- */
 
 /**
  * Гейт по вьюпорту, а не по CSS: MobileHero скрыт на md+ через `md:hidden`,
  * но браузеры качают <img> и внутри display:none — без этого гейта каждый
- * desktop-визит тянул бы мобильный hero.webp (а до выкладки файла — давал 404).
- * matchMedia-порог 767px = tailwind `md` (768px). useSyncExternalStore реагирует
- * и на ресайз через breakpoint.
+ * desktop-визит тянул бы мобильное фото мастерской. matchMedia-порог 767px =
+ * tailwind `md` (768px). useSyncExternalStore реагирует и на ресайз через
+ * breakpoint.
  */
 const MOBILE_QUERY = '(max-width: 767px)';
 const subscribeMobile = (cb: () => void) => {
@@ -135,36 +131,25 @@ const subscribeMobile = (cb: () => void) => {
 const getIsMobile = () => window.matchMedia(MOBILE_QUERY).matches;
 
 /**
- * Опциональное фото /img/landing/hero.webp (портрет 1024×1536): абсолютный слой
- * поверх постоянного тёмного градиента. Паттерн OptionalImage: пока файла нет
- * (onError) — слой убирается целиком, ни рамок, ни CLS (absolute, вне потока);
- * появляется только после onLoad — мягким fade. Затемняющий градиент рендерится
- * вместе с фото и ГАРАНТИРУЕТ читаемость при любом кадре: via-black/60 со стопом
- * на 45% закрывает зону h1 (контент прижат к низу, заголовок стоит в средней
- * трети секции — старый via-black/35 по центру оставлял там лишь ~black/30,
- * на светлом участке фото это провал WCAG AA).
+ * Фото-карточка мобильного hero: светлая мастерская /img/landing/workshop.webp
+ * (файл на проде есть, его же использует CtaSection). loading=eager осознанно —
+ * это LCP-элемент первого экрана на мобиле; на md+ фото не грузится вовсе
+ * (matchMedia-гейт выше).
  */
-function HeroPhoto() {
+function MobileWorkshopPhoto() {
   const isMobile = useSyncExternalStore(subscribeMobile, getIsMobile);
-  const [loaded, setLoaded] = useState(false);
-  const [failed, setFailed] = useState(false);
-  if (failed || !isMobile) return null;
+  if (!isMobile) return null;
   return (
-    <div
-      aria-hidden
-      className={`absolute inset-0 transition-opacity duration-700 motion-reduce:transition-none ${
-        loaded ? 'opacity-100' : 'opacity-0'
-      }`}
-    >
+    <div className="overflow-hidden rounded-3xl border border-slate-200/60 shadow-lg shadow-slate-900/10">
       <img
-        src="/img/landing/hero.webp"
-        alt=""
+        src="/img/landing/workshop.webp"
+        alt="Светлая мастерская автосервиса — мастер с Autexa в телефоне"
+        width={1200}
+        height={900}
+        loading="eager"
         decoding="async"
-        className="h-full w-full object-cover"
-        onLoad={() => setLoaded(true)}
-        onError={() => setFailed(true)}
+        className="h-auto w-full object-cover"
       />
-      <div className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/60 via-45% to-black/25" />
     </div>
   );
 }
@@ -180,7 +165,7 @@ function HeroPhoto() {
 const EMERALD_CTA =
   'inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-8 text-base font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 motion-safe:active:scale-[0.98] active:bg-emerald-600';
 
-/** Primary-CTA мобильного hero: emerald «Получить доступ» → WhatsApp (как было); контактов нет → «Войти». */
+/** Primary-CTA мобильного hero: emerald «Получить доступ» → WhatsApp; контактов нет → «Войти». */
 function MobileAccessCta() {
   const url = getWhatsAppUrl() ?? getAccessContactUrl();
   if (!url) {
@@ -205,54 +190,38 @@ function MobileAccessCta() {
 }
 
 /**
- * < md: тёмный полноэкранный фото-hero. Слои: постоянный градиент
- * slate-950 → primary-950 + сетка white/5 (премиально и БЕЗ фото) → опциональное
- * фото → затемнение. Контент прижат к низу (justify-end), pb оставляет место
- * glass-бару + safe-area. Мокап телефона на мобиле убран — фон теперь герой.
- * Светлый Header на < md скрыт (см. Header.tsx), поэтому «Войти» продублирован
- * прозрачной кнопкой в правом верхнем углу — путь входа с телефона сохранён.
- * min-h-[92svh] — снизу виден намёк на контент (TrustStrip).
+ * < md: светлый hero в палитре главной — mesh-блобы (primary/sky/amber,
+ * без violet) + чертёжная сетка + noise, как на desktop. Сверху вниз:
+ * бейдж → H1 с градиент-акцентом → подзаголовок → CTA → фото-карточка
+ * светлой мастерской. Шапка с wordmark-логотипом и «Войти» видна и на
+ * мобиле (Header.tsx) — дублирующая кнопка «Войти» из угла убрана.
+ * Высота секции — авто (~1.1–1.2 экрана вместе с фото), не 92svh.
  */
 function MobileHero() {
+  const { head, tail } = splitTitle(hero.title);
   const reduceMotion = useReducedMotion();
 
   return (
-    <section className="relative flex min-h-[92svh] flex-col justify-end overflow-hidden bg-slate-950 md:hidden">
-      {/* (а) Постоянный тёмный фон: градиент + инженерная сетка white/5 */}
+    <section className="relative overflow-hidden md:hidden">
+      {/* Атмосфера: mesh-блобы → инженерная сетка → лёгкий noise */}
       <div aria-hidden className="pointer-events-none absolute inset-0">
-        <div className="absolute inset-0 bg-gradient-to-b from-slate-950 to-primary-950" />
-        <div className="absolute inset-0" style={GRID_STYLE_DARK} />
+        <div className="absolute -top-32 left-1/2 h-[360px] w-[560px] -translate-x-1/2 rounded-full bg-primary-300/30 blur-[110px]" />
+        <div className="absolute -left-28 top-64 h-[260px] w-[260px] rounded-full bg-sky-300/30 blur-[100px]" />
+        <div className="absolute -right-24 top-96 h-[240px] w-[240px] rounded-full bg-amber-200/40 blur-[100px]" />
+        <div className="absolute inset-0" style={GRID_STYLE} />
+        <div className="absolute inset-0 opacity-[0.025]" style={NOISE_STYLE} />
       </div>
 
-      {/* (б) Фото, когда владелец положит файл + (в) затемнение поверх */}
-      <HeroPhoto />
-
-      {/* «Войти» поверх тёмного hero — вместо скрытого на мобиле светлого Header */}
-      <div
-        className="absolute inset-x-0 top-0 z-20 flex justify-end px-4"
-        style={{ paddingTop: 'max(12px, env(safe-area-inset-top))' }}
-      >
-        <Link
-          to="/login"
-          // bg-black/30 (не white/10): верх hero — самая светлая зона оверлея
-          // (to-black/25), на ярком верхе фото белёсый чип терял контраст текста.
-          className="inline-flex min-h-[44px] items-center rounded-xl border border-white/30 bg-black/30 px-5 text-sm font-semibold text-white backdrop-blur transition motion-safe:active:scale-95"
-        >
-          Войти
-        </Link>
-      </div>
-
-      {/* Оркестрованный вход: badge → заголовок → подзаголовок → CTA (stagger 70 мс) */}
+      {/* Оркестрованный вход: badge → заголовок → подзаголовок → CTA → фото */}
       <motion.div
-        className="relative z-10 px-5"
-        style={{ paddingBottom: 'calc(max(16px, env(safe-area-inset-bottom)) + 92px)' }}
+        className="relative px-5 pb-12 pt-10"
         variants={container}
         initial={reduceMotion ? false : 'hidden'}
         animate="visible"
       >
         <motion.span
           variants={item}
-          className="inline-flex items-center gap-2 rounded-full border border-white/15 bg-white/10 px-4 py-1.5 text-xs font-medium text-white/90 backdrop-blur"
+          className="inline-flex items-center gap-2 rounded-full border border-slate-200/80 bg-white px-4 py-1.5 text-xs font-medium text-slate-600 shadow-sm"
         >
           <img src="/logo-icon.png" alt="" width={16} height={16} decoding="async" className="h-4 w-4 rounded" />
           {hero.badge}
@@ -260,12 +229,20 @@ function MobileHero() {
 
         <motion.h1
           variants={item}
-          className="mt-5 text-[clamp(38px,10.5vw,44px)] font-extrabold leading-[1.06] tracking-tight text-white"
+          className="mt-5 text-[clamp(34px,9vw,42px)] font-extrabold leading-[1.08] tracking-tight text-slate-900"
         >
-          {hero.title}
+          {head}
+          {tail && (
+            <>
+              {' '}
+              <span className="bg-gradient-to-r from-primary-500 to-primary-700 bg-clip-text text-transparent">
+                {tail}
+              </span>
+            </>
+          )}
         </motion.h1>
 
-        <motion.p variants={item} className="mt-4 max-w-md text-[17px] leading-relaxed text-white/80">
+        <motion.p variants={item} className="mt-4 max-w-md text-[17px] leading-relaxed text-slate-600">
           {hero.subtitle}
         </motion.p>
 
@@ -273,10 +250,14 @@ function MobileHero() {
           <MobileAccessCta />
           <a
             href="#features"
-            className="inline-flex min-h-[52px] w-full items-center justify-center rounded-2xl border border-white/25 bg-white/10 px-8 text-base font-semibold text-white backdrop-blur transition motion-safe:active:scale-[0.98]"
+            className="inline-flex min-h-[52px] w-full items-center justify-center rounded-2xl border border-slate-200 bg-white px-8 text-base font-semibold text-slate-700 shadow-sm transition hover:border-slate-300 hover:text-slate-900 motion-safe:active:scale-[0.98]"
           >
             Смотреть возможности
           </a>
+        </motion.div>
+
+        <motion.div variants={item} className="mt-8">
+          <MobileWorkshopPhoto />
         </motion.div>
       </motion.div>
     </section>

@@ -11,13 +11,14 @@ import SectionsSheet from './SectionsSheet';
  *  - «Главная»: на «/» — скролл вверх (#top), иначе Link на /;
  *  - «Разделы»: bottom-sheet со всеми 16 разделами (SectionsSheet);
  *  - «Тарифы»: Link на /tarify (на самой /tarify — скролл вверх);
- *  - «Вопросы»: на «/» — скролл #faq, иначе Link /#faq.
+ *  - «Вопросы»: Link на /voprosy (на самой /voprosy — скролл вверх);
+ *    якорь #faq из бара больше не нужен — все вопросы живут на /voprosy.
  * «Написать» из бара убран — WhatsApp живёт закреплённой кнопкой внизу
  * шторки «Разделы» и в CTA-секциях страниц.
  *
  * Active-подсветка по pathname: «/» → Главная, «/tarify» → Тарифы,
- * «/f/*» → Разделы (страницы разделов открываются из шторки «Разделы» —
- * подсвечиваем её как логичную зону, а не оставляем бар без активного пункта).
+ * «/voprosy» → Вопросы, «/f/*» → Разделы (страницы разделов открываются
+ * из шторки «Разделы» — подсвечиваем её как логичную зону).
  */
 
 function itemCls(active: boolean) {
@@ -57,6 +58,7 @@ export default function GlassTabBar() {
   const { pathname } = useLocation();
   const onHome = pathname === '/';
   const onTarify = pathname === '/tarify';
+  const onVoprosy = pathname === '/voprosy';
   const onFeature = pathname.startsWith('/f/');
   const [sheetOpen, setSheetOpen] = useState(false);
   const sectionsBtnRef = useRef<HTMLButtonElement>(null);
@@ -105,13 +107,13 @@ export default function GlassTabBar() {
           </Link>
         )}
 
-        {/* Вопросы: FAQ живёт на главной */}
-        {onHome ? (
-          <a href="#faq" className={itemCls(false)}>
+        {/* Вопросы: отдельная страница /voprosy; на ней самой — скролл вверх */}
+        {onVoprosy ? (
+          <a href="#top" className={itemCls(true)} aria-current="page">
             <ItemBody icon={HelpCircle} label="Вопросы" />
           </a>
         ) : (
-          <Link to="/#faq" className={itemCls(false)}>
+          <Link to="/voprosy" className={itemCls(false)}>
             <ItemBody icon={HelpCircle} label="Вопросы" />
           </Link>
         )}

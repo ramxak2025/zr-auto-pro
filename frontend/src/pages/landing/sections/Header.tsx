@@ -1,16 +1,15 @@
 import { Link } from 'react-router-dom';
 
 /**
- * Шапка главной. На < md скрыта: мобильный hero — тёмный полноэкранный
- * (фон-герой), навигацию несёт нижний glass-бар, а «Войти» продублирован
- * прозрачной кнопкой прямо в hero (Hero.tsx → MobileHero).
- * «Тарифы» — Link на отдельную страницу /tarify, остальные пункты — якоря.
+ * Шапка главной. Видна на всех брейкпоинтах: на мобиле — wordmark-логотип
+ * и «Войти» (nav-пункты скрыты, навигацию несёт нижний glass-бар).
+ * «Тарифы» и «Вопросы» — Link'и на отдельные страницы, остальное — якоря.
  */
 const NAV = [
   { label: 'Возможности', href: '#features' },
   { label: 'Надёжность', href: '#reliability' },
   { label: 'Тарифы', to: '/tarify' },
-  { label: 'Вопросы', href: '#faq' },
+  { label: 'Вопросы', to: '/voprosy' },
 ] as const;
 
 const NAV_LINK =
@@ -18,7 +17,7 @@ const NAV_LINK =
 
 export default function Header() {
   return (
-    <header className="sticky top-0 z-50 hidden border-b border-slate-200/70 bg-white/80 backdrop-blur-xl md:block">
+    <header className="sticky top-0 z-50 border-b border-slate-200/70 bg-white/80 backdrop-blur-xl">
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between px-4 sm:px-6">
         <a
           href="#top"
