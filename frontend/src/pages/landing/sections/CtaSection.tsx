@@ -5,7 +5,7 @@ import { ctaSection } from '../content';
 import { getTelegramUrl, getWhatsAppUrl } from '../config';
 
 const BIG_BTN =
-  'inline-flex min-h-[56px] w-full items-center justify-center gap-2.5 rounded-2xl px-8 text-base font-semibold text-white transition-colors sm:w-auto sm:text-lg';
+  'inline-flex min-h-[56px] w-full items-center justify-center gap-2.5 rounded-2xl px-8 text-base font-semibold text-white transition motion-safe:active:scale-[0.98] sm:w-auto sm:text-lg';
 
 export default function CtaSection() {
   const whatsapp = getWhatsAppUrl();
@@ -23,7 +23,7 @@ export default function CtaSection() {
             </div>
 
             <div className="relative">
-              <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-5xl">{ctaSection.title}</h2>
+              <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">{ctaSection.title}</h2>
               <p className="mx-auto mt-4 max-w-md text-lg text-slate-600">{ctaSection.subtitle}</p>
 
               {/* Риск-реверс — снимаем страх решения */}

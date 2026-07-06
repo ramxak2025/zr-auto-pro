@@ -13,7 +13,7 @@ export default function Platforms() {
     <section className="border-t border-slate-200/60">
       <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
         <Reveal className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-5xl">{storeSection.title}</h2>
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">{storeSection.title}</h2>
           <p className="mt-4 text-lg text-slate-600">{storeSection.subtitle}</p>
         </Reveal>
 
@@ -22,7 +22,7 @@ export default function Platforms() {
             const Icon = ICONS[p.icon] ?? Smartphone;
             return (
               <Reveal key={p.title} delay={Math.min(i * 0.07, 0.21)}>
-                <div className="h-full rounded-3xl border border-slate-200/60 bg-white p-6 text-center shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md">
+                <div className="h-full rounded-3xl border border-slate-200/60 bg-white p-6 text-center shadow-sm transition-all duration-300 motion-safe:hover:-translate-y-0.5 hover:shadow-md">
                   <span className="mx-auto inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-100">
                     <Icon className="h-6 w-6 text-slate-700" />
                   </span>
@@ -64,7 +64,7 @@ export default function Platforms() {
                 href={installUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex min-h-[64px] items-center justify-center gap-2.5 rounded-2xl bg-emerald-500 px-6 text-base font-semibold text-white shadow-lg shadow-emerald-500/25 transition-colors hover:bg-emerald-400 active:bg-emerald-600"
+                className="inline-flex min-h-[64px] items-center justify-center gap-2.5 rounded-2xl bg-emerald-500 px-6 text-base font-semibold text-white shadow-lg shadow-emerald-500/25 transition hover:bg-emerald-400 motion-safe:active:scale-[0.98] active:bg-emerald-600"
               >
                 <MessageCircle className="h-5 w-5" />
                 {storeSection.supportInstallLabel}

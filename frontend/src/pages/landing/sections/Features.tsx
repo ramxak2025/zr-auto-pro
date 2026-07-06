@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, LayoutGrid, Mic } from 'lucide-react';
 import Reveal from './Reveal';
 import { features } from '../content';
-import { SECTION_ICONS } from '../icons';
+import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS } from '../icons';
 
 /** Российский госномер — CSS-мокап настоящей плашки: А 123 ВС | 05 RUS + флаг. */
 function PlateMock() {
@@ -99,7 +99,7 @@ function CashFlowMock() {
     { label: 'Наличные', dot: 'bg-emerald-500' },
     { label: 'Карта', dot: 'bg-primary-500' },
     { label: 'Рассрочка', dot: 'bg-amber-400' },
-    { label: 'Гарантия', dot: 'bg-violet-400' },
+    { label: 'Гарантия', dot: 'bg-slate-400' },
   ];
   return (
     <div className="mt-4">
@@ -107,7 +107,8 @@ function CashFlowMock() {
         <div className="bg-emerald-500" style={{ width: '38%' }} />
         <div className="bg-primary-500" style={{ width: '34%' }} />
         <div className="bg-amber-400" style={{ width: '18%' }} />
-        <div className="bg-violet-400" style={{ width: '10%' }} />
+        {/* Гарантия — «неденежный» статус: нейтральный slate (палитра лендинга без violet) */}
+        <div className="bg-slate-400" style={{ width: '10%' }} />
       </div>
       <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1.5">
         {legend.map((l) => (
@@ -120,15 +121,6 @@ function CashFlowMock() {
     </div>
   );
 }
-
-/** Акцент иконки: emerald — деньги, amber — рассрочка, остальное — primary. */
-const ACCENTS: Record<string, { icon: string; bg: string }> = {
-  dengi: { icon: 'text-emerald-600', bg: 'bg-emerald-50' },
-  zarplata: { icon: 'text-emerald-600', bg: 'bg-emerald-50' },
-  otchety: { icon: 'text-emerald-600', bg: 'bg-emerald-50' },
-  rassrochka: { icon: 'text-amber-600', bg: 'bg-amber-50' },
-};
-const DEFAULT_ACCENT = { icon: 'text-primary-600', bg: 'bg-primary-50' };
 
 /**
  * Порядок и раскладка bento-сетки (lg — 12 колонок). Порядок отличается от
@@ -167,7 +159,7 @@ export default function Features() {
     <section id="features" className="scroll-mt-24 border-t border-slate-200/60">
       <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
         <Reveal className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-5xl">Всё, что нужно сервису</h2>
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">Всё, что нужно сервису</h2>
           <p className="mt-4 text-lg text-slate-600">
             От первого звонка клиента до зарплаты мастера — один инструмент вместо тетради, Excel и калькулятора.
           </p>
@@ -178,15 +170,26 @@ export default function Features() {
             const section = bySlug.get(slug);
             if (!section) return null;
             const Icon = SECTION_ICONS[section.icon] ?? LayoutGrid;
-            const accent = ACCENTS[slug] ?? DEFAULT_ACCENT;
+            const tint = SECTION_TINTS[slug] ?? DEFAULT_TINT;
             return (
-              <Reveal key={slug} className={className} delay={Math.min(i * 0.05, 0.3)}>
+              <Reveal key={slug} className={className} delay={Math.min(i * 0.04, 0.28)}>
                 <Link
                   to={`/f/${slug}`}
-                  className="group flex h-full flex-col rounded-3xl border border-slate-200/60 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md"
+                  className="group relative flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200/60 bg-white p-6 shadow-sm transition-all duration-300 motion-safe:hover:-translate-y-0.5 hover:shadow-md motion-safe:active:scale-[0.98]"
                 >
-                  <span className={`inline-flex h-10 w-10 items-center justify-center rounded-xl ${accent.bg}`}>
-                    <Icon className={`h-5 w-5 ${accent.icon}`} />
+                  {/* Карточкам без мокапа — большая полупрозрачная иконка раздела
+                      в правом верхнем углу: глубина без шума */}
+                  {!MOCKS[slug] && (
+                    <Icon
+                      aria-hidden
+                      strokeWidth={1.5}
+                      className={`pointer-events-none absolute -right-4 -top-4 h-24 w-24 rotate-6 ${tint.icon} opacity-[0.12]`}
+                    />
+                  )}
+                  <span
+                    className={`relative inline-flex h-10 w-10 items-center justify-center rounded-xl ${tint.chip}`}
+                  >
+                    <Icon className={`h-5 w-5 ${tint.icon}`} />
                   </span>
                   <h3 className="mt-4 text-lg font-semibold text-slate-900">{section.title}</h3>
                   <p className="mt-1 text-sm font-medium leading-relaxed text-slate-700">{section.tagline}</p>
@@ -194,7 +197,7 @@ export default function Features() {
                   {MOCKS[slug]}
                   <span className="mt-auto inline-flex items-center gap-1 pt-4 text-sm font-semibold text-primary-600 transition-colors group-hover:text-primary-700">
                     Подробнее
-                    <ArrowRight className="h-4 w-4 transition-transform duration-200 group-hover:translate-x-0.5" />
+                    <ArrowRight className="h-4 w-4 transition-transform duration-200 motion-safe:group-hover:translate-x-0.5" />
                   </span>
                 </Link>
               </Reveal>

@@ -32,7 +32,7 @@ export default function Faq() {
     <section id="faq" className="scroll-mt-24 border-t border-slate-200/60">
       <div className="mx-auto max-w-3xl px-4 py-20 sm:px-6 sm:py-28">
         <Reveal className="text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-5xl">Частые вопросы</h2>
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">Частые вопросы</h2>
         </Reveal>
 
         <div className="mt-12 space-y-3">
@@ -41,7 +41,7 @@ export default function Faq() {
               <details className="group rounded-2xl border border-slate-200/60 bg-white shadow-sm transition-colors hover:border-slate-300">
                 <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left text-base font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
                   {item.q}
-                  <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-300 group-open:rotate-180" />
+                  <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-300 group-open:rotate-180 motion-reduce:transition-none" />
                 </summary>
                 <p className="px-5 pb-5 text-sm leading-relaxed text-slate-600">{linkifyContacts(item.a)}</p>
               </details>

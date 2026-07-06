@@ -5,7 +5,8 @@ import { ctaSection, features, type FeatureSection, type RoleBenefits } from './
 import { getTelegramUrl, getWhatsAppUrl, WHATSAPP_ACCESS_MESSAGE } from './config';
 import Reveal from './sections/Reveal';
 import Footer from './sections/Footer';
-import { SECTION_ICONS } from './icons';
+import GlassTabBar from './sections/GlassTabBar';
+import { DEFAULT_TINT, SECTION_ICONS, SECTION_TINTS } from './icons';
 
 /**
  * Страница углублённого изучения раздела: /f/:slug.
@@ -55,7 +56,7 @@ function CtaButtons() {
   const whatsapp = getWhatsAppUrl(WHATSAPP_ACCESS_MESSAGE);
   const telegram = getTelegramUrl();
   const base =
-    'inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl px-6 text-base font-semibold transition-colors';
+    'inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl px-6 text-base font-semibold transition motion-safe:active:scale-[0.98]';
 
   if (!whatsapp && !telegram) {
     return (
@@ -100,13 +101,14 @@ function CtaButtons() {
 /** «Смотрите также» — карточка соседнего раздела. */
 function RelatedCard({ section }: { section: FeatureSection }) {
   const Icon = SECTION_ICONS[section.icon] ?? LayoutGrid;
+  const tint = SECTION_TINTS[section.slug] ?? DEFAULT_TINT;
   return (
     <Link
       to={`/f/${section.slug}`}
-      className="group flex min-h-[44px] items-start gap-4 rounded-2xl border border-slate-200 bg-white p-5 transition-all hover:-translate-y-0.5 hover:border-primary-300 hover:shadow-md"
+      className="group flex min-h-[44px] items-start gap-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition-all motion-safe:hover:-translate-y-0.5 hover:border-primary-300 hover:shadow-md motion-safe:active:scale-[0.98]"
     >
-      <span className="inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary-50">
-        <Icon className="h-5 w-5 text-primary-600" />
+      <span className={`inline-flex h-10 w-10 shrink-0 items-center justify-center rounded-xl ${tint.chip}`}>
+        <Icon className={`h-5 w-5 ${tint.icon}`} />
       </span>
       <span className="min-w-0">
         <span className="block font-semibold text-slate-900 group-hover:text-primary-600">{section.title}</span>
@@ -166,12 +168,13 @@ export default function FeatureDetailPage() {
 
   const { detail } = section;
   const SectionIcon = SECTION_ICONS[section.icon] ?? LayoutGrid;
+  const tint = SECTION_TINTS[section.slug] ?? DEFAULT_TINT;
   const roleCards = ROLE_LABELS.filter(({ key }) => detail.roleBenefits[key]);
   const idx = features.indexOf(section);
   const related = [1, 2, 3].map((offset) => features[(idx + offset) % features.length]);
 
   return (
-    <div className="min-h-screen bg-[#FAFAFA] text-slate-900 antialiased">
+    <div className="min-h-screen bg-[#FAFAFA] pb-28 font-display text-slate-900 antialiased md:pb-0">
       {/* Хлебные крошки */}
       <div className="border-b border-slate-200 bg-white/80 backdrop-blur">
         <div className="mx-auto max-w-6xl px-4 sm:px-6">
@@ -183,10 +186,12 @@ export default function FeatureDetailPage() {
         {/* Hero раздела */}
         <section className="py-12 sm:py-16">
           <Reveal className="max-w-3xl">
-            <span className="inline-flex h-12 w-12 items-center justify-center rounded-2xl bg-primary-50">
-              <SectionIcon className="h-6 w-6 text-primary-600" />
+            <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${tint.chip}`}>
+              <SectionIcon className={`h-6 w-6 ${tint.icon}`} />
             </span>
-            <h1 className="mt-5 text-3xl font-bold tracking-tight text-slate-900 sm:text-5xl">{detail.heroTitle}</h1>
+            <h1 className="mt-5 text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">
+              {detail.heroTitle}
+            </h1>
             <p className="mt-4 text-lg leading-relaxed text-slate-600">{detail.heroSubtitle}</p>
           </Reveal>
 
@@ -211,7 +216,9 @@ export default function FeatureDetailPage() {
         {/* Возможности */}
         <section className="pb-12 sm:pb-16">
           <Reveal>
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Как это работает в Autexa</h2>
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">
+              Как это работает в Autexa
+            </h2>
           </Reveal>
           <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
             {detail.capabilities.map((cap, i) => (
@@ -231,7 +238,7 @@ export default function FeatureDetailPage() {
         {/* Кому это */}
         <section className="pb-12 sm:pb-16">
           <Reveal>
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Кому это</h2>
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Кому это</h2>
           </Reveal>
           <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
             {roleCards.map(({ key, label }, i) => (
@@ -248,7 +255,7 @@ export default function FeatureDetailPage() {
         {/* Мини-FAQ */}
         <section className="pb-12 sm:pb-16">
           <Reveal>
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Частые вопросы</h2>
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Частые вопросы</h2>
           </Reveal>
           <div className="mt-8 space-y-3">
             {detail.faq.map((item, i) => (
@@ -256,7 +263,7 @@ export default function FeatureDetailPage() {
                 <details className="group rounded-2xl border border-slate-200 bg-white transition-colors hover:border-slate-300">
                   <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
                     {item.q}
-                    <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-300 group-open:rotate-180" />
+                    <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-300 group-open:rotate-180 motion-reduce:transition-none" />
                   </summary>
                   <p className="px-5 pb-5 text-sm leading-relaxed text-slate-600">{item.a}</p>
                 </details>
@@ -281,7 +288,7 @@ export default function FeatureDetailPage() {
         {/* Смотрите также */}
         <section className="pb-16 sm:pb-20">
           <Reveal>
-            <h2 className="text-2xl font-bold tracking-tight text-slate-900 sm:text-3xl">Смотрите также</h2>
+            <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl">Смотрите также</h2>
           </Reveal>
           <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
             {related.map((rel, i) => (
@@ -294,6 +301,9 @@ export default function FeatureDetailPage() {
       </main>
 
       <Footer />
+      {/* Общий liquid-glass бар сайта — режим «/f/:slug» (навигация на главную);
+          pb-28 md:pb-0 на корне даёт футеру место под баром */}
+      <GlassTabBar />
     </div>
   );
 }

@@ -8,6 +8,11 @@ export default {
   future: { hoverOnlyWhenSupported: true },
   theme: {
     extend: {
+      fontFamily: {
+        // 'font-display' — фирменный шрифт лендинга (self-hosted Onest, см. index.css);
+        // 'Onest Fallback' — метрически подогнанный local(Arial) против CLS при swap
+        display: ['Onest', 'Onest Fallback', 'system-ui', '-apple-system', 'Segoe UI', 'sans-serif'],
+      },
       colors: {
         primary: {
           50: '#eff6ff',

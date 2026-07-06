@@ -2,6 +2,7 @@ import { useEffect } from 'react';
 import { useNavigationType } from 'react-router-dom';
 import Header from './sections/Header';
 import Hero from './sections/Hero';
+import TrustStrip from './sections/TrustStrip';
 import Roles from './sections/Roles';
 import Features from './sections/Features';
 import Reliability from './sections/Reliability';
@@ -65,10 +66,11 @@ export default function LandingPage() {
   return (
     <div
       id="top"
-      className="min-h-screen bg-[#FAFAFA] pb-28 text-slate-900 antialiased selection:bg-primary-500/20 md:pb-0"
+      className="min-h-screen bg-[#FAFAFA] pb-28 font-display text-slate-900 antialiased selection:bg-primary-500/20 md:pb-0"
     >
       <Header />
       <Hero />
+      <TrustStrip />
       <Roles />
       <Features />
       <Reliability />

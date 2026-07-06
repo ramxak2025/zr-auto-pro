@@ -18,7 +18,9 @@ export default function Reliability() {
     <section id="reliability" className="scroll-mt-24 border-t border-slate-200/60">
       <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-28">
         <Reveal className="mx-auto max-w-2xl text-center">
-          <h2 className="text-3xl font-bold tracking-tight text-slate-900 sm:text-5xl">{section.title} — не опция</h2>
+          <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl">
+            {section.title} — не опция
+          </h2>
           <p className="mt-4 text-lg text-slate-600">{section.tagline}</p>
         </Reveal>
 
@@ -27,7 +29,7 @@ export default function Reliability() {
             const Icon = ICONS[i] ?? Server;
             return (
               <Reveal key={item.title} delay={Math.min(i * 0.06, 0.24)}>
-                <div className="h-full rounded-3xl border border-slate-200/60 bg-white p-6 shadow-sm transition-all duration-300 hover:-translate-y-0.5 hover:shadow-md">
+                <div className="h-full rounded-3xl border border-slate-200/60 bg-white p-6 shadow-sm transition-all duration-300 motion-safe:hover:-translate-y-0.5 hover:shadow-md">
                   <span className="inline-flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50">
                     <Icon className="h-5 w-5 text-primary-600" />
                   </span>
