@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Wallet, Tag, Loader2, X } from 'lucide-react';
+import { Plus, Trash2, Wallet, Tag, Loader2, X, ShieldAlert } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
@@ -192,36 +192,50 @@ export default function ExpensesPage() {
         <>
           {/* Mobile cards */}
           <div className="md:hidden space-y-2">
-            {expenses.map((exp: any) => (
-              <div
-                key={exp.id}
-                className="rounded-xl bg-white border border-gray-100 shadow-sm p-4 flex items-center gap-3"
-              >
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
-                    <span className="text-sm font-bold text-gray-900">{formatCurrency(exp.amount)}</span>
-                    {exp.categoryName && (
-                      <span className="text-[10px] font-semibold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded-full">
-                        {exp.categoryName}
+            {expenses.map((exp: any) => {
+              const isWarranty = exp.source === 'warranty';
+              return (
+                <div
+                  key={exp.id}
+                  className={`rounded-xl border shadow-sm p-4 flex items-center gap-3 ${
+                    isWarranty ? 'bg-amber-50/60 border-amber-200' : 'bg-white border-gray-100'
+                  }`}
+                >
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                      <span className={`text-sm font-bold ${isWarranty ? 'text-amber-700' : 'text-gray-900'}`}>
+                        {formatCurrency(exp.amount)}
                       </span>
-                    )}
+                      {isWarranty ? (
+                        <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
+                          <ShieldAlert className="w-3 h-3" />
+                          Гарантия (убыток)
+                        </span>
+                      ) : (
+                        exp.categoryName && (
+                          <span className="text-[10px] font-semibold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded-full">
+                            {exp.categoryName}
+                          </span>
+                        )
+                      )}
+                    </div>
+                    {exp.description && <p className="text-xs text-gray-500 truncate">{exp.description}</p>}
+                    <p className="text-[10px] text-gray-400 mt-0.5">
+                      {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
+                      {exp.userName ? ` · ${exp.userName}` : ''}
+                    </p>
                   </div>
-                  {exp.description && <p className="text-xs text-gray-500 truncate">{exp.description}</p>}
-                  <p className="text-[10px] text-gray-400 mt-0.5">
-                    {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
-                    {exp.userName ? ` · ${exp.userName}` : ''}
-                  </p>
+                  {isDirector && !isWarranty && (
+                    <button
+                      onClick={() => setDeleteId(exp.id)}
+                      className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  )}
                 </div>
-                {isDirector && (
-                  <button
-                    onClick={() => setDeleteId(exp.id)}
-                    className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Desktop table */}
@@ -238,38 +252,52 @@ export default function ExpensesPage() {
                 </tr>
               </thead>
               <tbody>
-                {expenses.map((exp) => (
-                  <tr key={exp.id}>
-                    <td className="font-semibold text-gray-900 whitespace-nowrap">{formatCurrency(exp.amount)}</td>
-                    <td>
-                      {exp.categoryName ? (
-                        <span className="text-[10px] font-semibold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded-full">
-                          {exp.categoryName}
-                        </span>
-                      ) : (
-                        <span className="text-gray-300">—</span>
-                      )}
-                    </td>
-                    <td className="max-w-[320px] truncate text-gray-600" title={exp.description || undefined}>
-                      {exp.description || <span className="text-gray-300">—</span>}
-                    </td>
-                    <td className="whitespace-nowrap text-gray-500">
-                      {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
-                    </td>
-                    <td className="text-gray-500">{exp.userName || '—'}</td>
-                    {isDirector && (
-                      <td>
-                        <button
-                          type="button"
-                          onClick={() => setDeleteId(exp.id)}
-                          className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                {expenses.map((exp) => {
+                  const isWarranty = exp.source === 'warranty';
+                  return (
+                    <tr key={exp.id} className={isWarranty ? 'bg-amber-50/50' : ''}>
+                      <td
+                        className={`font-semibold whitespace-nowrap ${isWarranty ? 'text-amber-700' : 'text-gray-900'}`}
+                      >
+                        {formatCurrency(exp.amount)}
                       </td>
-                    )}
-                  </tr>
-                ))}
+                      <td>
+                        {isWarranty ? (
+                          <span className="inline-flex items-center gap-0.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full">
+                            <ShieldAlert className="w-3 h-3" />
+                            Гарантия (убыток)
+                          </span>
+                        ) : exp.categoryName ? (
+                          <span className="text-[10px] font-semibold bg-rose-50 text-rose-600 px-1.5 py-0.5 rounded-full">
+                            {exp.categoryName}
+                          </span>
+                        ) : (
+                          <span className="text-gray-300">—</span>
+                        )}
+                      </td>
+                      <td className="max-w-[320px] truncate text-gray-600" title={exp.description || undefined}>
+                        {exp.description || <span className="text-gray-300">—</span>}
+                      </td>
+                      <td className="whitespace-nowrap text-gray-500">
+                        {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
+                      </td>
+                      <td className="text-gray-500">{exp.userName || '—'}</td>
+                      {isDirector && (
+                        <td>
+                          {!isWarranty && (
+                            <button
+                              type="button"
+                              onClick={() => setDeleteId(exp.id)}
+                              className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

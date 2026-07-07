@@ -11,6 +11,8 @@ import {
   Car,
   User as UserIcon,
   Percent,
+  Gauge,
+  ShieldAlert,
   Package,
   PackagePlus,
   AlertTriangle,
@@ -109,9 +111,11 @@ const MobileCheckCard = memo(function MobileCheckCard({
       className={`rounded-2xl border shadow-sm overflow-hidden active:scale-[0.99] transition-all cursor-pointer ${
         check.isDeferred
           ? 'bg-red-50/50 border-red-200'
-          : check.isExecutor
-            ? 'bg-violet-50/60 border-violet-200'
-            : 'bg-white border-gray-100'
+          : check.isWarranty
+            ? 'bg-amber-50/50 border-amber-200'
+            : check.isExecutor
+              ? 'bg-violet-50/60 border-violet-200'
+              : 'bg-white border-gray-100'
       }`}
     >
       <div className="px-4 pt-3.5 pb-2.5">
@@ -131,9 +135,16 @@ const MobileCheckCard = memo(function MobileCheckCard({
                 Исполнитель
               </span>
             )}
-            <span className={`flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
-              {paymentMethodLabel(check.paymentMethod)}
-            </span>
+            {check.isWarranty ? (
+              <span className="flex-shrink-0 inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                <ShieldAlert className="w-3 h-3" />
+                Гарантия
+              </span>
+            ) : (
+              <span className={`flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
+                {paymentMethodLabel(check.paymentMethod)}
+              </span>
+            )}
           </div>
           <div className="flex items-center gap-1.5 flex-shrink-0">
             {canDelete && (
@@ -163,6 +174,12 @@ const MobileCheckCard = memo(function MobileCheckCard({
               </p>
             </div>
           )}
+          {(check.mileage ?? 0) > 0 && (
+            <div className="flex items-center gap-2">
+              <Gauge className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+              <p className="text-sm text-gray-600">{(check.mileage ?? 0).toLocaleString('ru-RU')} км</p>
+            </div>
+          )}
         </div>
         {check.comment && (
           <div className="flex items-start gap-2 mb-3 bg-amber-50 rounded-lg px-2.5 py-1.5 border border-amber-100">
@@ -190,10 +207,21 @@ const MobileCheckCard = memo(function MobileCheckCard({
               <span className="text-xs font-medium text-orange-500">-{formatMoney(check.discount ?? 0)}</span>
             </div>
           )}
-          <span className="text-sm font-bold text-gray-900">{formatMoney(check.totalRevenue)}</span>
+          {check.isWarranty ? (
+            canViewProfit ? (
+              <div className="flex items-center gap-1">
+                <ShieldAlert className="w-3.5 h-3.5 text-red-400" />
+                <span className="text-sm font-bold text-red-500">-{formatMoney(check.warrantyLoss ?? 0)}</span>
+              </div>
+            ) : (
+              <span className="text-sm font-semibold text-amber-600">По гарантии</span>
+            )
+          ) : (
+            <span className="text-sm font-bold text-gray-900">{formatMoney(check.totalRevenue)}</span>
+          )}
         </div>
       </div>
-      {canViewProfit && (
+      {canViewProfit && !check.isWarranty && (
         <div
           className={`px-4 py-2 border-t flex items-center justify-between ${
             check.isDeferred ? 'border-red-100' : 'border-gray-100'
@@ -718,7 +746,13 @@ export default function ChecksPage() {
                     key={check.id}
                     onClick={() => navigate(`/checks/${check.id}`)}
                     className={`cursor-pointer ${
-                      check.isDeferred ? 'bg-red-50' : check.isExecutor ? 'bg-violet-50/60' : ''
+                      check.isDeferred
+                        ? 'bg-red-50'
+                        : check.isWarranty
+                          ? 'bg-amber-50/60'
+                          : check.isExecutor
+                            ? 'bg-violet-50/60'
+                            : ''
                     }`}
                   >
                     <td className="font-medium">
@@ -757,6 +791,11 @@ export default function ChecksPage() {
                         <div>
                           <div className="text-sm">{check.car.makeModel}</div>
                           <div className="text-xs text-gray-400">{check.car.plateNumber}</div>
+                          {(check.mileage ?? 0) > 0 && (
+                            <div className="text-xs text-gray-400">
+                              {(check.mileage ?? 0).toLocaleString('ru-RU')} км
+                            </div>
+                          )}
                         </div>
                       ) : (
                         '—'
@@ -779,16 +818,29 @@ export default function ChecksPage() {
                     </td>
                     {canViewProfit && (
                       <td>
-                        <span className={`font-semibold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
-                          {check.profit >= 0 ? '+' : ''}
-                          {formatMoney(check.profit)}
-                        </span>
+                        {check.isWarranty ? (
+                          <span className="inline-flex items-center gap-1 font-semibold text-red-500">
+                            <ShieldAlert className="w-3.5 h-3.5" />-{formatMoney(check.warrantyLoss ?? 0)}
+                          </span>
+                        ) : (
+                          <span className={`font-semibold ${check.profit >= 0 ? 'text-green-600' : 'text-red-500'}`}>
+                            {check.profit >= 0 ? '+' : ''}
+                            {formatMoney(check.profit)}
+                          </span>
+                        )}
                       </td>
                     )}
                     <td>
-                      <span className={paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}>
-                        {paymentMethodLabel(check.paymentMethod)}
-                      </span>
+                      {check.isWarranty ? (
+                        <span className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                          <ShieldAlert className="w-3 h-3" />
+                          Гарантия
+                        </span>
+                      ) : (
+                        <span className={paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}>
+                          {paymentMethodLabel(check.paymentMethod)}
+                        </span>
+                      )}
                     </td>
                     <td>
                       {check.isReturned ? (

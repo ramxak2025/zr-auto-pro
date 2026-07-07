@@ -10,7 +10,7 @@ import {
   BarChart3,
   Banknote,
   CreditCard,
-  ShieldCheck,
+  ShieldAlert,
   ClipboardList,
   Play,
   Square,
@@ -822,9 +822,9 @@ function MasterDashboard() {
             <p className="text-[10px] text-gray-400 mt-0.5">Карта</p>
           </div>
           <div className="rounded-xl bg-white p-3 text-center shadow-sm">
-            <ShieldCheck className="h-4 w-4 text-orange-500 mx-auto mb-1.5" />
+            <ShieldAlert className="h-4 w-4 text-amber-500 mx-auto mb-1.5" />
             <p className="text-sm font-bold text-gray-900">{formatMoney(data.todayWarranty ?? 0)}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">Гарантия</p>
+            <p className="text-[10px] text-gray-400 mt-0.5">Гарантия · не в кассу</p>
           </div>
         </div>
       </div>

@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Wallet, Banknote, CreditCard, Shield, Users, CalendarClock, Coins } from 'lucide-react';
+import { Wallet, Banknote, CreditCard, ShieldAlert, Users, CalendarClock, Coins } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
@@ -16,7 +16,11 @@ interface CashFlowDay {
   date: string;
   cash: number;
   card: number;
+  // «Гарантия» — отпускная стоимость гарантийных работ (справочно, НЕ в total).
   warranty: number;
+  // Реальный УБЫТОК по гарантии (запчасти + выплата мастеру). НЕ входит в оборот
+  // (total). Опционально: старый бэкенд не шлёт — рендерим только при числе > 0.
+  warrantyLoss?: number;
   total: number;
   // Долг по чекам в рассрочку (входит в оборот: cash + card + warranty +
   // installmentDebt = total) и погашения рассрочки по дате платежа (в оборот
@@ -36,6 +40,7 @@ interface CashFlowData {
     cash: number;
     card: number;
     warranty: number;
+    warrantyLoss?: number;
     total: number;
     installmentDebt?: number;
     installmentPaid?: number;
@@ -76,6 +81,10 @@ export default function CashFlowPage() {
   // у сервисов без рассрочки страница выглядит как раньше.
   const hasInstallmentDebt = typeof totals.installmentDebt === 'number' && totals.installmentDebt > 0;
   const hasInstallmentPaid = typeof totals.installmentPaid === 'number' && totals.installmentPaid > 0;
+  // «Гарантия (убыток)» — показываем только когда бэкенд прислал ненулевой
+  // warrantyLoss. Это ЗАТРАТА (запчасти + выплата мастеру), НЕ часть оборота:
+  // тождество кассы теперь cash + card + installmentDebt = total (без гарантии).
+  const hasWarrantyLoss = typeof totals.warrantyLoss === 'number' && totals.warrantyLoss > 0;
 
   // Разбивка погашений по способу оплаты (119) — подпись «в т.ч. наличными /
   // картой» только когда бэкенд прислал поля и часть ненулевая.
@@ -142,13 +151,6 @@ export default function CashFlowPage() {
           </div>
           <div className="stat-value text-blue-600">{formatMoney(totals.card)}</div>
         </div>
-        <div className="stat-card">
-          <div className="flex items-center gap-2 mb-1">
-            <Shield className="w-4 h-4 text-orange-500" />
-            <div className="stat-label">Гарантия</div>
-          </div>
-          <div className="stat-value text-orange-600">{formatMoney(totals.warranty)}</div>
-        </div>
         {hasInstallmentDebt && (
           <div className="stat-card">
             <div className="flex items-center gap-2 mb-1">
@@ -164,7 +166,18 @@ export default function CashFlowPage() {
             <div className="stat-label">Итого</div>
           </div>
           <div className="stat-value text-gray-900">{formatMoney(totals.total)}</div>
+          <p className="text-[11px] text-gray-400 mt-0.5">Оборот (без гарантии)</p>
         </div>
+        {hasWarrantyLoss && (
+          <div className="stat-card">
+            <div className="flex items-center gap-2 mb-1">
+              <ShieldAlert className="w-4 h-4 text-red-500" />
+              <div className="stat-label">Гарантия (убыток)</div>
+            </div>
+            <div className="stat-value text-red-600">-{formatMoney(totals.warrantyLoss ?? 0)}</div>
+            <p className="text-[11px] text-gray-400 mt-0.5">Не входит в оборот — запчасти + оплата мастеру</p>
+          </div>
+        )}
         {hasInstallmentPaid && (
           <div className="stat-card">
             <div className="flex items-center gap-2 mb-1">
@@ -210,10 +223,9 @@ export default function CashFlowPage() {
                       {formatMoney(day.card)}
                     </span>
                   )}
-                  {day.warranty > 0 && (
-                    <span className="text-orange-600">
-                      <Shield className="w-3 h-3 inline mr-0.5" />
-                      {formatMoney(day.warranty)}
+                  {(day.warrantyLoss ?? 0) > 0 && (
+                    <span className="text-red-600">
+                      <ShieldAlert className="w-3 h-3 inline mr-0.5" />-{formatMoney(day.warrantyLoss ?? 0)}
                     </span>
                   )}
                   {(day.installmentDebt ?? 0) > 0 && (
@@ -241,9 +253,9 @@ export default function CashFlowPage() {
                   <th>День недели</th>
                   <th className="text-right">Наличные</th>
                   <th className="text-right">Карта</th>
-                  <th className="text-right">Гарантия</th>
                   {hasInstallmentDebt && <th className="text-right">Рассрочка (долг)</th>}
                   <th className="text-right">Итого</th>
+                  {hasWarrantyLoss && <th className="text-right">Гарантия (убыток)</th>}
                   {hasInstallmentPaid && <th className="text-right">Погашено</th>}
                   <th className="w-[22%]">Доля периода</th>
                 </tr>
@@ -259,15 +271,17 @@ export default function CashFlowPage() {
                     </td>
                     <td className="text-right text-green-600">{day.cash > 0 ? formatMoney(day.cash) : '\u2014'}</td>
                     <td className="text-right text-blue-600">{day.card > 0 ? formatMoney(day.card) : '\u2014'}</td>
-                    <td className="text-right text-orange-600">
-                      {day.warranty > 0 ? formatMoney(day.warranty) : '\u2014'}
-                    </td>
                     {hasInstallmentDebt && (
                       <td className="text-right text-violet-600">
                         {(day.installmentDebt ?? 0) > 0 ? formatMoney(day.installmentDebt ?? 0) : '\u2014'}
                       </td>
                     )}
                     <td className="text-right font-semibold text-gray-900">{formatMoney(day.total)}</td>
+                    {hasWarrantyLoss && (
+                      <td className="text-right text-red-600">
+                        {(day.warrantyLoss ?? 0) > 0 ? `-${formatMoney(day.warrantyLoss ?? 0)}` : '\u2014'}
+                      </td>
+                    )}
                     {hasInstallmentPaid && (
                       <td className="text-right text-teal-600">
                         {(day.installmentPaid ?? 0) > 0 ? `+${formatMoney(day.installmentPaid ?? 0)}` : '\u2014'}
@@ -301,11 +315,13 @@ export default function CashFlowPage() {
                   <td className="text-gray-400">{days.length} дн.</td>
                   <td className="text-right font-bold text-green-600">{formatMoney(totals.cash)}</td>
                   <td className="text-right font-bold text-blue-600">{formatMoney(totals.card)}</td>
-                  <td className="text-right font-bold text-orange-600">{formatMoney(totals.warranty)}</td>
                   {hasInstallmentDebt && (
                     <td className="text-right font-bold text-violet-600">{formatMoney(totals.installmentDebt ?? 0)}</td>
                   )}
                   <td className="text-right font-bold text-gray-900">{formatMoney(totals.total)}</td>
+                  {hasWarrantyLoss && (
+                    <td className="text-right font-bold text-red-600">-{formatMoney(totals.warrantyLoss ?? 0)}</td>
+                  )}
                   {hasInstallmentPaid && (
                     <td className="text-right font-bold text-teal-600">+{formatMoney(totals.installmentPaid ?? 0)}</td>
                   )}

@@ -11,6 +11,7 @@ import {
   ArrowDownRight,
   BarChart3,
   Wallet,
+  ShieldAlert,
   AlertTriangle,
   PackageMinus,
   Undo2,
@@ -210,6 +211,24 @@ export default function ReportsPage() {
                   </div>
                   <p className="text-sm font-bold text-gray-900">{formatMoney(report.salaries)}</p>
                 </div>
+
+                {/* Warranty loss — «по гарантии» work = parts cost + master's labor
+                    payout. Already subtracted from netProfit server-side; surfaced
+                    here so the owner sees WHY net profit is lower. */}
+                {(report.warrantyLoss ?? 0) > 0 && (
+                  <div className="flex items-center justify-between px-4 py-3.5">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-amber-50">
+                        <ShieldAlert className="h-4 w-4 text-amber-500" />
+                      </div>
+                      <div>
+                        <p className="text-sm font-medium text-gray-900">Убыток по гарантии</p>
+                        <p className="text-[11px] text-gray-400">Запчасти + оплата мастеру по гарантийным работам</p>
+                      </div>
+                    </div>
+                    <p className="text-sm font-bold text-gray-900">{formatMoney(report.warrantyLoss ?? 0)}</p>
+                  </div>
+                )}
 
                 {/* Other expenses (director) */}
                 {((report as any).otherExpenses ?? 0) > 0 && (
