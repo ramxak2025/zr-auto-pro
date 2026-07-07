@@ -2,6 +2,15 @@ import { Injectable, Inject } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
+import { userHasPermission } from '../common/guards/permissions.guard';
+
+/** Актор запроса «Движения денег» — источник охвата (свои / все) и атрибуции. */
+interface CashFlowActor {
+  userID: string;
+  tenantID: string;
+  role?: string;
+  permissions?: Record<string, boolean>;
+}
 
 // Matches a calendar date `YYYY-MM-DD`. Anything else (locale-formatted,
 // empty, ISO-with-time, garbage) is rejected so it never reaches a raw
@@ -244,14 +253,26 @@ export class ReportsService {
     };
   }
 
-  async getCashFlow(tenantID: string, query: any) {
+  async getCashFlow(actor: CashFlowActor, query: any) {
+    const tenantID = actor.tenantID;
     const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
     const dateTo = this.safeDate(query?.dateTo, this.todayISO());
+
+    // ITEM 6 — охват «Движение денег»: свои vs все.
+    //   • cashflow_view_all (охват 'all', либо owner-class director/admin/superadmin
+    //     по строковой роли) → видит ВСЁ; клиентский masterId уважается как фильтр
+    //     (владелец может посмотреть конкретного мастера — прежнее поведение).
+    //   • только cashflow_view (охват 'own') → видит ТОЛЬКО свои операции:
+    //     принудительно masterId = свой userID, клиентский masterId игнорируется
+    //     (мастер не может подсмотреть чужую кассу, подставив чужой id).
+    // Сам факт доступа к эндпоинту гарантирует @RequirePermission('cashflow_view')
+    // в контроллере; здесь решается лишь широта охвата.
+    const canViewAll = userHasPermission(actor, 'cashflow_view_all');
     // masterId reaches a raw `master_id = $n` (uuid) comparison; a non-uuid
     // value triggers "invalid input syntax for type uuid" → 500. Ignore an
     // invalid filter rather than blow up (an invalid master = no such master,
     // so dropping the filter would over-report — instead force an empty set).
-    const rawMaster = query?.masterId;
+    const rawMaster = canViewAll ? query?.masterId : actor.userID;
     const masterId = typeof rawMaster === 'string' && UUID_RE.test(rawMaster) ? rawMaster : null;
     const masterInvalid = !!rawMaster && masterId === null;
     if (masterInvalid) {

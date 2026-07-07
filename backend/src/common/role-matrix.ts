@@ -19,7 +19,7 @@
  * Любое отсутствующее / невалидное значение читается как 'none' / false —
  * fail-closed, испорченный JSON не может ничего ВЫДАТЬ.
  *
- * Таблица соответствия «PermissionKey → путь в матрице» (полная, 26 ключей):
+ * Таблица соответствия «PermissionKey → путь в матрице» (полная, 28 ключей):
  *
  *   checks_view            ← checks.view       ('own'|'all' → true)
  *   checks_view_all        ← checks.view       ('all' → true)
@@ -45,6 +45,8 @@
  *   financial_reports      ← reports.view
  *   profit_view            ← reports.profit
  *   export_data            ← reports.export
+ *   cashflow_view          ← reports.cashflow  ('own'|'all' → true)   (ITEM 6)
+ *   cashflow_view_all      ← reports.cashflow  ('all' → true)         (ITEM 6)
  *   can_add_expenses       ← expenses.add
  *   marketing_access       ← marketing.view
  *   calls_view             ← calls.view
@@ -56,6 +58,17 @@
  * та же причина, по которой MASTER_PERMISSION_DEFAULTS в permissions.guard.ts —
  * зеркало ROLE_PERMISSION_DEFAULTS). Новый permission-ключ = новая ячейка здесь
  * + в RoleMatrix (shared) + в сидах системных ролей при необходимости.
+ *
+ * cashflow_view / cashflow_view_all (ITEM 6) введены как СТУПЕНЧАТЫЕ ключи —
+ * так же, как когда-то warehouse_delete и edit_closed_check: они уже типизированы
+ * в shared UserPermissions и раскладываются здесь (⇒ входят в
+ * CANONICAL_PERMISSION_KEYS и в GET /users/:id/effective-permissions), но НАМЕРЕННО
+ * ещё НЕ добавлены в union PermissionKey / PERMISSION_GROUPS shared. Причина:
+ * PERMISSION_GROUPS питает exhaustive `Record<PermissionKey, string>` в UI-файлах
+ * ролей (mobile roleMatrixEditor.ts, web RolesManagement.tsx) — их правит
+ * отдельная UI-волна (fan-out). До неё enforcement полностью рабочий (guard берёт
+ * строковый ключ), а три typecheck зелёные без правки UI. Поэтому CANONICAL здесь
+ * (28 ключей) временно шире shared PERMISSION_KEYS (26) ровно на эти два ключа.
  */
 
 export type RoleScopeValue = 'none' | 'own' | 'all';
@@ -67,6 +80,10 @@ export type RawRoleMatrix = Record<string, Record<string, unknown>>;
 const SCOPE_ACTIONS: Record<string, readonly string[]> = {
   checks: ['view', 'edit'],
   salary: ['view'],
+  // reports.cashflow — охват «Движение денег» (ITEM 6): 'own' видит только свои
+  // денежные операции, 'all' — все. Раскладывается в cashflow_view (own|all) +
+  // cashflow_view_all (all). Enforcement — ReportsService.getCashFlow.
+  reports: ['cashflow'],
 };
 
 /** Действия-тумблеры: секция → список boolean-ключей. */
@@ -131,6 +148,8 @@ export function flattenRoleMatrix(rawMatrix: unknown): Record<string, boolean> {
   const checksView = readScope(matrix, 'checks', 'view');
   const checksEdit = readScope(matrix, 'checks', 'edit');
   const salaryView = readScope(matrix, 'salary', 'view');
+  // ITEM 6 — охват «Движение денег»: own|all → cashflow_view; all → cashflow_view_all.
+  const reportsCashflow = readScope(matrix, 'reports', 'cashflow');
 
   return {
     checks_view: checksView !== 'none',
@@ -154,6 +173,8 @@ export function flattenRoleMatrix(rawMatrix: unknown): Record<string, boolean> {
     financial_reports: readBool(matrix, 'reports', 'view'),
     profit_view: readBool(matrix, 'reports', 'profit'),
     export_data: readBool(matrix, 'reports', 'export'),
+    cashflow_view: reportsCashflow !== 'none',
+    cashflow_view_all: reportsCashflow === 'all',
     can_add_expenses: readBool(matrix, 'expenses', 'add'),
     marketing_access: readBool(matrix, 'marketing', 'view'),
     calls_view: readBool(matrix, 'calls', 'view'),

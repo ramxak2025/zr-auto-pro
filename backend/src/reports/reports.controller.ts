@@ -28,9 +28,20 @@ export class ReportsController {
     return this.reportsService.getFinancial(user.tenantID, query);
   }
 
+  // «Движение денег» (ITEM 6) — доступ по ROLE-разрешению cashflow_view (НЕ по
+  // плановой фиче cashflow_view из feature-catalog — это разные пространства),
+  // а НЕ по financial_reports класса. Метод-декораторы ПЕРЕКРЫВАЮТ классовые
+  // (Reflector.getAllAndOverride, handler первым):
+  //   • @Roles(+'master') — впускаем и мастера; настоящий гейт — разрешение;
+  //   • @RequirePermission('cashflow_view') — вместо financial_reports.
+  // Охват свои/все решает сервис (cashflow_view_all). Ноль регрессии: owner-class
+  // проходят разрешение всегда (bypass) и видят всё; мастер без cashflow_view →
+  // 403, ровно как сегодня (эндпоинт был owner-class).
   @Get('cashflow')
+  @Roles('director', 'admin', 'superadmin', 'master')
+  @RequirePermission('cashflow_view')
   getCashFlow(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.reportsService.getCashFlow(user.tenantID, query);
+    return this.reportsService.getCashFlow(user, query);
   }
 
   /**

@@ -9,7 +9,11 @@ import { UpdateRoleDto } from './dto/update-role.dto';
 // Роли (Bitrix24-style, миграция 114) — управление ими эквивалентно правке
 // permission-карты сотрудника, поэтому та же owner-class-гейт, что у
 // PATCH /users/:id/permissions и permission-templates: director / admin /
-// superadmin. Всё тенант-скоуплено в сервисе (системные роли — read-only).
+// superadmin. Всё тенант-скоуплено в сервисе.
+//
+// Системные роли (миграция 121): правка «Мастера»/«Администратора» → сервис
+// делает copy-on-write (тенантный override, глобальный шаблон не трогается);
+// «Директор» — вечно read-only (403). Кастомные роли правятся на месте.
 const MANAGER_ROLES = ['director', 'admin', 'superadmin'] as const;
 
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -30,7 +34,8 @@ export class RolesController {
     return this.service.create(user.tenantID, dto);
   }
 
-  /** Обновить свою роль. Системная → 403 «создайте копию». */
+  /** Обновить роль. Кастомная — на месте; «Мастер»/«Администратор» — copy-on-write
+   *  (тенантный override); «Директор» → 403. См. RolesService.update. */
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateRoleDto) {
     return this.service.update(id, user.tenantID, dto);

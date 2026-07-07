@@ -626,6 +626,31 @@ export interface UserPermissions {
    * all three typechecks green without touching mobile/web).
    */
   edit_closed_check?: boolean;
+  /**
+   * «Движение денег: свои» (ITEM 6) — may open «Движение денег» / cash-flow and
+   * see ITS OWN money operations (own checks + installment repayments the user
+   * accepted). This is a ROLE permission — distinct from the plan/tariff feature
+   * flag also named `cashflow_view` in shared/constants/features.ts (different
+   * namespace: plan.features array vs this permissions map). Server-enforced in
+   * ReportsService.getCashFlow via @RequirePermission('cashflow_view'); the
+   * backend default mirror lives in PermissionsGuard.MASTER_PERMISSION_DEFAULTS
+   * (false). Owner-class roles (director/admin/superadmin) always see all.
+   * Derived from the role matrix cell `reports.cashflow` ('own'|'all' → true).
+   *
+   * NOTE: intentionally added here (typed, grantable) but NOT yet in the
+   * PermissionKey union / PERMISSION_GROUPS UI catalog — same staging as
+   * `warehouse_delete` / `edit_closed_check`. The reports/roles UI fan-out wave
+   * promotes it to PermissionKey + PERMISSION_GROUPS.Финансы +
+   * ROLE_PERMISSION_DEFAULTS[master] AND the web/mobile PERMISSION_LABELS maps
+   * together, so adding it here-only keeps all three typechecks green.
+   */
+  cashflow_view?: boolean;
+  /**
+   * «Движение денег: все» (ITEM 6) — may see ALL masters' money operations in
+   * cash-flow (not just their own). Derived from `reports.cashflow` === 'all'.
+   * Owner-class roles are implicit. Same staging note as `cashflow_view` above.
+   */
+  cashflow_view_all?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -799,7 +824,8 @@ export type RoleScope = 'none' | 'own' | 'all';
  *   warehouse.delete→warehouse_delete, suppliers.view→suppliers_access,
  *   clients.view→clients_view, clients.edit→clients_edit, schedule.view→schedule_view,
  *   bookings.view→bookings_access, salary.view→salary_view, reports.view→financial_reports,
- *   reports.profit→profit_view, reports.export→export_data, expenses.add→can_add_expenses,
+ *   reports.profit→profit_view, reports.export→export_data,
+ *   reports.cashflow→cashflow_view(+cashflow_view_all при 'all'), expenses.add→can_add_expenses,
  *   marketing.view→marketing_access, calls.view→calls_view, calls.listen→calls_listen,
  *   employees.manage→user_management.
  */
@@ -821,18 +847,42 @@ export interface RoleMatrix {
   schedule?: { view?: boolean };
   bookings?: { view?: boolean };
   salary?: { view?: RoleScope };
-  reports?: { view?: boolean; profit?: boolean; export?: boolean };
+  reports?: {
+    view?: boolean;
+    profit?: boolean;
+    export?: boolean;
+    /**
+     * «Движение денег» охват (ITEM 6): 'own' → только свои операции,
+     * 'all' → все. Раскладывается сервером в cashflow_view (own|all) +
+     * cashflow_view_all (all). Отсутствует → 'none' (fail-closed).
+     */
+    cashflow?: RoleScope;
+  };
   expenses?: { add?: boolean };
   marketing?: { view?: boolean };
   calls?: { view?: boolean; listen?: boolean };
   employees?: { manage?: boolean };
 }
 
+/** Стабильный ключ системной роли (миграция 121). Null у кастомных ролей. */
+export type RoleSystemKey = 'master' | 'admin' | 'director';
+
 /**
  * Роль. Системные (`isSystem: true` — «Мастер», «Администратор», «Директор»)
- * видны каждому тенанту, read-only (403 на PATCH/DELETE — создайте копию через
- * POST /roles c copyFromRoleId). Кастомные — тенантные, редактируемые.
- * Backend: roles/ (миграция 114); API: createRolesApi.
+ * видны каждому тенанту.
+ *
+ * Волна 3 (миграция 121, ITEM 5): директор тенанта МОЖЕТ настроить матрицу
+ * системной роли ДЛЯ СВОЕГО тенанта — сервер делает copy-on-write (создаёт
+ * тенантный override с тем же `systemKey`, глобальный шаблон не трогается, users
+ * переводятся на override). Исключение — «Директор» (`systemKey: 'director'`):
+ * `locked: true`, полные права, вечно read-only.
+ *   • `systemKey` — 'master'|'admin'|'director' у системной роли и её тенантного
+ *     override; null у кастомной. Позволяет UI понять, что override заменяет
+ *     системную роль (в списке дубля «Мастер» нет — сервер прячет глобал).
+ *   • `locked`   — редактируемость: true ТОЛЬКО у «Директора». Всё остальное
+ *     (системные «Мастер»/«Администратор», их override, кастомные) — редактируемо.
+ * Кастомные роли по-прежнему тенантные, редактируются на месте; копия — через
+ * POST /roles c copyFromRoleId. Backend: roles/; API: createRolesApi.
  */
 export interface Role {
   id: string;
@@ -841,6 +891,10 @@ export interface Role {
   isSystem: boolean;
   matrix: RoleMatrix;
   sort: number;
+  /** 'master'|'admin'|'director' у системной роли/override; null|undefined у кастомной. */
+  systemKey?: RoleSystemKey | null;
+  /** true ТОЛЬКО у «Директора» — вечно read-only. Иначе редактируема (copy-on-write у системных). */
+  locked?: boolean;
   createdAt?: string;
   updatedAt?: string;
 }

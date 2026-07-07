@@ -60,6 +60,12 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   export_data: false,
   can_add_expenses: false,
   salary_view: false,
+  // «Движение денег» (ITEM 6) — off by default. Масштаб охвата решает матрица
+  // роли (reports.cashflow: own|all); для легаси-мастера без матрицы дефолт
+  // false = БЕЗ доступа, ровно как сегодня (эндпоинт был owner-class). Владелец
+  // выдаёт «свои» (cashflow_view) или «все» (cashflow_view_all) явно — opt-in.
+  cashflow_view: false,
+  cashflow_view_all: false,
   // Склад — access flags off by default (reads are open elsewhere; mutations are role-gated).
   warehouse_access: false,
   // Удаление товаров/папок (#60) — off by default; owner grants explicitly. Gates
