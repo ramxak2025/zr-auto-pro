@@ -1,4 +1,4 @@
-import axios, { AxiosError } from 'axios';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { purgeApiCache, purgeOfflineQueues } from '../utils/swCache';
 
@@ -6,6 +6,26 @@ const api = axios.create({
   baseURL: import.meta.env.VITE_API_URL || '/api',
   timeout: 15000,
 });
+
+// Best-effort reserve API base. When the site's own origin `/api` path is
+// filtered by a carrier/VPN, an installed PWA still boots from its
+// service-worker-cached shell but every same-origin `/api` call dies with a
+// transport error and no fallback. This mirrors the mobile reserve ring: the
+// same Yandex API Gateway the mobile app uses, which proxies to the backend.
+// Configurable via env; an empty value disables the failover entirely (then
+// behaviour is byte-for-byte identical to before this change).
+const RESERVE_API_URL: string =
+  import.meta.env.VITE_API_FALLBACK_URL || 'https://d5dpq4hcfoor5l4q1a97.wnq2w1o5.apigw.yandexcloud.net/api';
+
+// Only these methods may be transparently retried against the reserve. A
+// mutation (POST/PATCH/PUT/DELETE) that failed at the transport layer may still
+// have reached the server, so re-sending it risks a double-write — never retry
+// those. GET/HEAD/OPTIONS are idempotent and safe to replay once.
+const IDEMPOTENT_METHODS = new Set(['get', 'head', 'options']);
+
+// Custom marker so a request is retried against the reserve at most once (loop
+// guard): once we flip it, an inner failure re-enters the interceptor and skips.
+type ReserveRetryConfig = InternalAxiosRequestConfig & { _reserveRetried?: boolean };
 
 api.interceptors.request.use((config) => {
   const token = localStorage.getItem('token');
@@ -51,9 +71,42 @@ function hardLogoutRedirect(): void {
 
 api.interceptors.response.use(
   (res) => res,
-  (error: AxiosError<{ message?: string }>) => {
+  async (error: AxiosError<{ message?: string }>) => {
     // Network error or server unreachable
     if (!error.response) {
+      // ── Best-effort reserve failover ──────────────────────────────────────
+      // `!error.response` is the ONLY signal that the origin `/api` path itself
+      // is unreachable (DNS/timeout/blocked/no CORS), as opposed to a real HTTP
+      // error from the server. In that case retry the SAME request ONCE against
+      // the absolute reserve base — but only for idempotent methods
+      // (GET/HEAD/OPTIONS), never for mutations, to avoid a double-write, and at
+      // most once (loop guard via `_reserveRetried`). Re-issuing via
+      // `api.request` re-runs the request interceptor, so Authorization /
+      // withCredentials behaviour is byte-identical to the primary path.
+      //
+      // CORS reality: the reserve is a different origin, so this only succeeds
+      // if the gateway returns CORS headers for our origin. If CORS blocks it,
+      // the retry just fails and we fall through to today's rejection below —
+      // best-effort, strictly never worse than the current behaviour.
+      const config = error.config as ReserveRetryConfig | undefined;
+      const method = (config?.method || '').toLowerCase();
+      if (
+        config &&
+        RESERVE_API_URL &&
+        !config._reserveRetried &&
+        IDEMPOTENT_METHODS.has(method) &&
+        config.baseURL !== RESERVE_API_URL
+      ) {
+        config._reserveRetried = true;
+        config.baseURL = RESERVE_API_URL;
+        try {
+          return await api.request(config);
+        } catch {
+          // Reserve also unreachable / CORS-blocked → fall through to the
+          // original network-error rejection. No regression vs. today.
+        }
+      }
+
       console.error('Network error:', error.message);
       return Promise.reject(new Error('Нет соединения с сервером'));
     }
