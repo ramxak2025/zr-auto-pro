@@ -36,55 +36,51 @@ export default function Footer() {
 
   return (
     <footer className="border-t border-slate-200/70 bg-slate-50">
-      {/* ── Мобильный минимализм (< md) ── */}
-      <div className="flex flex-col items-center px-4 pb-8 pt-10 md:hidden">
-        <img
-          src="/logo.png"
-          alt="Autexa"
-          width={99}
-          height={24}
-          loading="lazy"
-          decoding="async"
-          className="h-6 w-auto"
-        />
-        <div className="mt-4 flex items-center gap-2">
-          {whatsappUrl && (
-            <a
-              href={whatsappUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Написать в WhatsApp"
-              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-emerald-600 transition-colors hover:bg-emerald-50 motion-safe:active:scale-90"
-            >
-              <MessageCircle className="h-5 w-5" aria-hidden />
-            </a>
-          )}
-          {telegramUrl && (
-            <a
-              href={telegramUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              aria-label="Написать в Telegram"
-              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-sky-600 transition-colors hover:bg-sky-50 motion-safe:active:scale-90"
-            >
-              <Send className="h-5 w-5" aria-hidden />
-            </a>
-          )}
+      {/* ── Мобильный минимализм (< md): лого+иконки в одну строку, ниже — © ── */}
+      <div className="px-4 py-5 md:hidden">
+        <div className="flex items-center justify-between">
+          <img
+            src="/logo.png"
+            alt="Autexa"
+            width={90}
+            height={22}
+            loading="lazy"
+            decoding="async"
+            className="h-[22px] w-auto"
+          />
+          <div className="flex items-center gap-1">
+            {whatsappUrl && (
+              <a
+                href={whatsappUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Написать в WhatsApp"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-full text-emerald-600 transition-colors hover:bg-emerald-50 motion-safe:active:scale-90"
+              >
+                <MessageCircle className="h-5 w-5" aria-hidden />
+              </a>
+            )}
+            {telegramUrl && (
+              <a
+                href={telegramUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                aria-label="Написать в Telegram"
+                className="inline-flex h-11 w-11 items-center justify-center rounded-full text-sky-600 transition-colors hover:bg-sky-50 motion-safe:active:scale-90"
+              >
+                <Send className="h-5 w-5" aria-hidden />
+              </a>
+            )}
+          </div>
         </div>
-        {/* Одна строка: © + inline-ссылки. py-3.5 даёт ссылкам ≈47px тап-высоты
-            (обещанные файлом ≥44px); строка остаётся одной — только чуть выше */}
-        <p className="mt-4 text-center text-xs leading-relaxed text-slate-500">
+        <p className="mt-3 text-center text-[11px] text-slate-400">
           © Autexa 2026 ·{' '}
-          <Link to="/privacy" className="inline-block py-3.5 transition-colors hover:text-slate-700">
+          <Link to="/privacy" className="transition-colors hover:text-slate-600">
             Конфиденциальность
           </Link>{' '}
           ·{' '}
-          <Link to="/terms" className="inline-block py-3.5 transition-colors hover:text-slate-700">
+          <Link to="/terms" className="transition-colors hover:text-slate-600">
             Условия
-          </Link>{' '}
-          ·{' '}
-          <Link to="/login" className="inline-block py-3.5 transition-colors hover:text-slate-700">
-            Войти
           </Link>
         </p>
       </div>

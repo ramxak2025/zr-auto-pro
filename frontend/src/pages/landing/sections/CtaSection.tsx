@@ -1,4 +1,4 @@
-import { MessageCircle, Send, ShieldCheck } from 'lucide-react';
+import { MessageCircle, Send } from 'lucide-react';
 import Reveal from './Reveal';
 import CtaButton from './CtaButton';
 import OptionalImage from '../OptionalImage';
@@ -14,9 +14,9 @@ export default function CtaSection() {
 
   return (
     <section>
-      <div className="mx-auto max-w-6xl px-4 py-20 sm:px-6 sm:py-24">
+      <div className="mx-auto max-w-6xl px-4 py-14 sm:px-6 sm:py-24">
         <Reveal>
-          <div className="relative overflow-hidden rounded-3xl border border-slate-200/60 bg-white px-6 py-16 text-center shadow-sm sm:px-12">
+          <div className="relative overflow-hidden rounded-3xl border border-slate-200/60 bg-white px-6 py-12 text-center shadow-sm sm:px-12 sm:py-16">
             {/* Пастельная подсветка внутри карточки */}
             <div aria-hidden className="pointer-events-none absolute inset-0">
               <div className="absolute -top-24 left-1/2 h-64 w-[560px] -translate-x-1/2 rounded-full bg-primary-200/50 blur-[100px]" />
@@ -28,13 +28,6 @@ export default function CtaSection() {
                 <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
                   {ctaSection.title}
                 </h2>
-                <p className="mx-auto mt-4 max-w-md text-lg text-slate-600">{ctaSection.subtitle}</p>
-
-                {/* Риск-реверс — снимаем страх решения */}
-                <p className="mx-auto mt-4 flex max-w-lg items-start justify-center gap-2 text-sm leading-relaxed text-slate-600">
-                  <ShieldCheck className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-                  {ctaSection.riskReversal}
-                </p>
 
                 {whatsapp || telegram ? (
                   <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
