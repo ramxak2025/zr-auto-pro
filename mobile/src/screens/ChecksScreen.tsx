@@ -54,6 +54,15 @@ function formatMoney(v: number) {
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
 }
+// Пробег: те же разряды, что и деньги, но единица «км». Hermes-safe —
+// без toLocaleString (Intl в Hermes урезан), только регексп группировки.
+function formatMileage(v: number) {
+  return (
+    Math.round(v)
+      .toString()
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' км'
+  );
+}
 function formatDate(d: string) {
   const dt = new Date(d);
   return (
@@ -221,6 +230,15 @@ const CheckRow = React.memo(function CheckRow({
   // корректно в обеих темах (light: пастель, dark: приглушённое стекло).
   const isExecutor = check.isExecutor === true;
   const execBadge = getBadgeColors(palette.mode).purple;
+  // «По гарантии» — работа в убыток (выручки нет; totalRevenue = 0). Помечаем
+  // карточку красной плашкой «УБЫТОК» рядом с жёлтым бейджем оплаты «Гарантия»,
+  // а в подвале (для тех, кто видит прибыль) показываем сумму убытка.
+  const isWarranty = check.isWarranty === true;
+  const warrantyLoss = check.warrantyLoss ?? 0;
+  // Пробег авто и скидка на товары — доп. чипы в строке инфо. Показываем
+  // только когда значение осмысленно (> 0); 0 / отсутствие — прячем.
+  const mileage = typeof check.mileage === 'number' && check.mileage > 0 ? check.mileage : null;
+  const discount = typeof check.discount === 'number' && check.discount > 0 ? check.discount : null;
   // Time string — computed once per row mount; row is memoised, so the
   // `new Date(...).toLocaleTimeString(...)` no longer runs on every
   // parent re-render of the screen.
@@ -308,6 +326,15 @@ const CheckRow = React.memo(function CheckRow({
                   {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
                 </Text>
               </View>
+              {/* «По гарантии» — красная плашка «УБЫТОК» рядом с жёлтым
+                  «Гарантия»: вместе читаются как «гарантия → в убыток».
+                  Сплошной rose[500]/белый текст — корректно в обеих темах. */}
+              {isWarranty && (
+                <View style={styles.warrantyLossBadge}>
+                  <Ionicons name="trending-down" size={9} color={colors.white} />
+                  <Text style={styles.warrantyLossBadgeText}>УБЫТОК</Text>
+                </View>
+              )}
             </View>
             <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
               <Text style={[styles.checkTotal, { color: palette.text.primary }]}>
@@ -355,6 +382,24 @@ const CheckRow = React.memo(function CheckRow({
                 )}
               </View>
             )}
+            {/* Пробег авто — справочный чип. Показывается только когда он есть. */}
+            {mileage !== null && (
+              <View style={styles.infoChip}>
+                <Ionicons name="speedometer-outline" size={11} color={palette.text.tertiary} />
+                <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
+                  {formatMileage(mileage)}
+                </Text>
+              </View>
+            )}
+            {/* Скидка на товары — зелёный чип «Скидка N ₽» (только при > 0). */}
+            {discount !== null && (
+              <View style={styles.infoChip}>
+                <Ionicons name="pricetag-outline" size={11} color={colors.green[600]} />
+                <Text style={[styles.infoChipText, { color: colors.green[600] }]} numberOfLines={1}>
+                  Скидка {formatMoney(discount)}
+                </Text>
+              </View>
+            )}
           </View>
 
           {check.comment && (
@@ -368,12 +413,17 @@ const CheckRow = React.memo(function CheckRow({
             {check.master && (
               <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>{check.master.fullName}</Text>
             )}
-            {canViewProfit && (
-              <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
-                {check.profit >= 0 ? '+' : ''}
-                {formatMoney(check.profit)}
-              </Text>
-            )}
+            {canViewProfit &&
+              (isWarranty && warrantyLoss > 0 ? (
+                // Гарантийный чек: вместо прибыли показываем убыток (запчасти +
+                // выплата мастеру) красным со знаком минус.
+                <Text style={[styles.footerProfit, styles.profitNegative]}>−{formatMoney(warrantyLoss)}</Text>
+              ) : (
+                <Text style={[styles.footerProfit, check.profit >= 0 ? styles.profitPositive : styles.profitNegative]}>
+                  {check.profit >= 0 ? '+' : ''}
+                  {formatMoney(check.profit)}
+                </Text>
+              ))}
           </View>
         </View>
       </TouchableOpacity>
@@ -2254,6 +2304,18 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   returnedBadgeText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 0.3 },
+  // «По гарантии» → убыток. Сплошной rose[500] + белый текст (как returnedBadge)
+  // — читается одинаково в light и dark, не зависит от палитры бейджей.
+  warrantyLossBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
+    backgroundColor: colors.rose[500],
+    paddingHorizontal: spacing[1.5],
+    paddingVertical: 2,
+    borderRadius: borderRadius.full,
+  },
+  warrantyLossBadgeText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 0.3 },
   paymentBadge: { paddingHorizontal: spacing[1.5], paddingVertical: 1, borderRadius: borderRadius.full },
   paymentBadgeText: { fontSize: 10, fontWeight: fontWeight.medium },
   checkTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },

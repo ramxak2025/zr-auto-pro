@@ -95,7 +95,10 @@ interface ExpenseItem {
   userName?: string;
   createdBy?: string;
   creatorName?: string;
-  source?: 'owner' | 'employee';
+  // 'warranty' — производная строка «Гарантия (убыток)», которую сервер
+  // подмешивает в список (не хранимый расход). Синтетический id
+  // (`warranty-loss:<checkId>`) — редактировать / удалять / одобрять нельзя.
+  source?: 'owner' | 'employee' | 'warranty';
   approvalStatus?: 'approved' | 'pending' | 'rejected';
   createdAt: string;
 }
@@ -309,6 +312,9 @@ const ExpenseRow = React.memo(function ExpenseRow({
 }: ExpenseRowProps) {
   const pending = item.approvalStatus === 'pending';
   const rejected = item.approvalStatus === 'rejected';
+  // Производная строка «Гарантия (убыток)» — read-only: без тапа-редактирования,
+  // без корзины, без approve/reject (canManage/canApprove приходят false).
+  const isWarranty = item.source === 'warranty';
 
   return (
     <AnimatedCard
@@ -334,6 +340,19 @@ const ExpenseRow = React.memo(function ExpenseRow({
           <View style={styles.cardTopRow}>
             <Text style={[styles.cardAmount, { color: palette.text.primary }]}>{formatMoney(item.amount)}</Text>
             <View style={styles.cardBadgesRow}>
+              {isWarranty && (
+                <View
+                  style={[
+                    styles.pendingBadge,
+                    {
+                      backgroundColor: palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50],
+                    },
+                  ]}
+                >
+                  <Ionicons name="shield-outline" size={11} color={colors.rose[600]} />
+                  <Text style={[styles.pendingText, { color: colors.rose[600] }]}>Гарантия (убыток)</Text>
+                </View>
+              )}
               {pending && (
                 <View
                   style={[
@@ -890,6 +909,9 @@ export default function ExpensesScreen() {
 
   const handleEditExpense = useCallback(
     (item: ExpenseItem) => {
+      // Производная строка «Гарантия (убыток)» — только чтение: у неё
+      // синтетический id, PATCH/DELETE на сервере вернут 404. Тап игнорируем.
+      if (item.source === 'warranty') return;
       if (!isOwnerRole && item.createdBy !== user?.id) return;
       // Редактирование = delete-then-create (PATCH-эндпоинта нет). Строку
       // «на одобрении» так редактировать нельзя — replace сбросил бы
@@ -962,14 +984,17 @@ export default function ExpensesScreen() {
       const catName = item.categoryName || 'Без категории';
       const catColor = colorByName.get(catName) || getCategoryColor(0);
       const isOwn = item.createdBy === user?.id;
-      const canManage = isOwnerRole || isOwn;
+      // Синтетические строки «Гарантия (убыток)» нельзя ни удалять, ни одобрять
+      // — сервер вернёт 404 на любую мутацию по их id.
+      const isWarrantyRow = item.source === 'warranty';
+      const canManage = !isWarrantyRow && (isOwnerRole || isOwn);
       return (
         <ExpenseRow
           item={item}
           index={index}
           catColor={catColor}
           canManage={canManage}
-          canApprove={isOwnerRole}
+          canApprove={!isWarrantyRow && isOwnerRole}
           onDelete={handleDeleteExpense}
           onEdit={handleEditExpense}
           onApprove={handleApproveExpense}

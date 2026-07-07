@@ -802,7 +802,39 @@ export default function CashFlowScreen() {
                   amount={totals.warranty}
                   total={totals.total}
                   palette={palette}
+                  note={totals.warranty > 0 ? 'справочно · в оборот не входит' : undefined}
                 />
+                {/* «По гарантии» — УБЫТОК за период (запчасти + выплата мастеру).
+                    Отдельная красная строка: в оборот (Итого) не входит и НЕ
+                    задваивается с «Гарантией» выше (та — отпускная стоимость,
+                    справочно). Поле опциональное — старый бэк его не шлёт. */}
+                {typeof totals.warrantyLoss === 'number' && totals.warrantyLoss > 0 && (
+                  <>
+                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
+                    <View style={styles.channelRow}>
+                      <View
+                        style={[
+                          styles.channelIcon,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50],
+                          },
+                        ]}
+                      >
+                        <Ionicons name="trending-down-outline" size={16} color={colors.rose[600]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>Убыток по гарантии</Text>
+                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
+                          Запчасти + выплата мастеру — в оборот не входит
+                        </Text>
+                      </View>
+                      <Text style={[styles.channelAmount, { color: colors.rose[600] }]}>
+                        −{formatMoney(totals.warrantyLoss)}
+                      </Text>
+                    </View>
+                  </>
+                )}
                 {/* 4-я корзина: непогашенный долг по чекам в рассрочку. Вместе
                     с нал/картой/гарантией сходится к обороту копейка в копейку
                     (поле опциональное — старый бэк его не шлёт, строку прячем). */}
@@ -931,6 +963,16 @@ export default function CashFlowScreen() {
                           <View style={[styles.dayDot, { backgroundColor: colors.yellow[500] }]} />
                           <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
                             Гарант: {formatMoney(day.warranty)}
+                          </Text>
+                        </View>
+                      )}
+                      {/* Убыток по гарантии за день — красным. В day.total (оборот)
+                          не входит; поле опциональное. */}
+                      {typeof day.warrantyLoss === 'number' && day.warrantyLoss > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.rose[500] }]} />
+                          <Text style={[styles.dayDetailText, { color: colors.rose[600] }]}>
+                            Убыток гарантии: −{formatMoney(day.warrantyLoss)}
                           </Text>
                         </View>
                       )}
@@ -1108,6 +1150,7 @@ function ChannelRow({
   amount,
   total,
   palette,
+  note,
 }: {
   iconName: keyof typeof Ionicons.glyphMap;
   iconBg: string;
@@ -1116,6 +1159,10 @@ function ChannelRow({
   amount: number;
   total: number;
   palette: ReturnType<typeof useColors>;
+  // Когда задан — подпись под строкой показывает `note` вместо «% от итого».
+  // Нужен для «Гарантии»: она справочная и в оборот (Итого) не входит, поэтому
+  // доля «% от итого» для неё была бы вводящей в заблуждение.
+  note?: string;
 }) {
   const pct = total > 0 ? ((amount / total) * 100).toFixed(0) : '0';
   return (
@@ -1130,8 +1177,11 @@ function ChannelRow({
       </View>
       <View style={{ flex: 1 }}>
         <Text style={[styles.channelLabel, { color: palette.text.primary }]}>{label}</Text>
-        {total > 0 && amount > 0 && (
-          <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>{pct}% от итого</Text>
+        {note ? (
+          <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>{note}</Text>
+        ) : (
+          total > 0 &&
+          amount > 0 && <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>{pct}% от итого</Text>
         )}
       </View>
       <Text style={[styles.channelAmount, { color: palette.text.primary }]}>{formatMoney(amount)}</Text>

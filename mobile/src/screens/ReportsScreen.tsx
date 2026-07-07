@@ -698,6 +698,10 @@ export default function ReportsScreen() {
   const grossProfit = report?.grossProfit ?? 0;
   const netProfit = report?.netProfit ?? 0;
   const otherExpenses = (report as unknown as { otherExpenses?: number })?.otherExpenses ?? 0;
+  // «По гарантии» — убыток за период (запчасти + выплата мастеру). Уже вычтен
+  // бэком из netProfit; здесь показываем его отдельной строкой в воронке и P&L,
+  // чтобы «Чистая прибыль» сходилась и было видно, откуда просадка.
+  const warrantyLoss = report?.warrantyLoss ?? 0;
 
   const marginPct = revenue > 0 ? (netProfit / revenue) * 100 : 0;
   const prevMarginPct = prevReport && prevReport.revenue > 0 ? (prevReport.netProfit / prevReport.revenue) * 100 : 0;
@@ -950,6 +954,19 @@ export default function ReportsScreen() {
                     />
                   </>
                 )}
+                {warrantyLoss > 0 && (
+                  <>
+                    <FunnelArrow palette={palette} />
+                    <FunnelRow
+                      label="− Убыток по гарантии"
+                      amount={-warrantyLoss}
+                      pct={pctOf(warrantyLoss, revenue)}
+                      icon="shield-outline"
+                      tone="negative"
+                      palette={palette}
+                    />
+                  </>
+                )}
                 <FunnelArrow palette={palette} />
                 <FunnelRow
                   label="= Чистая прибыль"
@@ -986,6 +1003,9 @@ export default function ReportsScreen() {
                       palette={palette}
                       tone="negative"
                     />
+                    {warrantyLoss > 0 && (
+                      <PnLRow label="Убыток по гарантии" amount={-warrantyLoss} palette={palette} tone="negative" />
+                    )}
                     <View style={[styles.pnlDivider, { backgroundColor: palette.border.subtle }]} />
                     <PnLRow label="Чистая прибыль" amount={netProfit} palette={palette} tone="bold" />
                     <TouchableOpacity style={styles.pnlPdfBtn} onPress={exportPdf} activeOpacity={0.85}>

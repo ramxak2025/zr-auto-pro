@@ -1580,6 +1580,10 @@ function CashPositionCard() {
   const card = data?.cashPosition?.card ?? 0;
   const warranty = data?.cashPosition?.warranty ?? 0;
   const total = data?.cashPosition?.total ?? 0;
+  // «По гарантии» — сегодняшний УБЫТОК (запчасти + выплата мастеру). В total
+  // («Всего на руках» = нал + карта) НЕ входит; показываем отдельной красной
+  // строкой. Поле опциональное — старый бэк его не шлёт, строку прячем.
+  const warrantyLoss = data?.cashPosition?.warrantyLoss;
   // Рассрочка: долг по сегодняшним чекам и погашения за сегодня (по дате
   // платежа). Поля опциональные — старый бэк их не шлёт, строки прячем.
   // «Всего на руках» их НЕ включает: долг — ещё не деньги, погашения — деньги
@@ -1681,6 +1685,27 @@ function CashPositionCard() {
             <Text style={[styles.cashRowValue, { color: palette.text.primary }]}>{formatMoney(r.value)}</Text>
           </View>
         ))}
+        {typeof warrantyLoss === 'number' && warrantyLoss > 0 && (
+          <View style={styles.cashRowItem}>
+            <View
+              style={[
+                styles.cashRowIcon,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50] },
+              ]}
+            >
+              <Ionicons name="trending-down-outline" size={14} color={colors.rose[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.cashRowLabel, { flex: undefined, color: palette.text.primary }]}>
+                Убыток по гарантии
+              </Text>
+              <Text style={[styles.cashRowNote, { color: palette.text.tertiary }]}>
+                Запчасти + выплата мастеру — в кассу не входит
+              </Text>
+            </View>
+            <Text style={[styles.cashRowValue, { color: colors.rose[600] }]}>−{formatMoney(warrantyLoss)}</Text>
+          </View>
+        )}
         {typeof installmentPaid === 'number' && installmentPaid > 0 && (
           <View style={styles.cashRowItem}>
             <View
