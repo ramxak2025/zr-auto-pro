@@ -420,9 +420,30 @@ export interface UpdateTenantRequest {
   voiceMinutesExtra?: number;
 }
 
-/** POST /tenants/:id/extend — extend the tenant's subscription by N days. */
+/**
+ * POST /tenants/:id/extend — extend the tenant's subscription, PAID or FREE.
+ *
+ * BACKWARD-COMPAT: the legacy `{ days }` body still works exactly as before —
+ * `days` is now optional and, with no `type`/`amount`, records a FREE ledger
+ * entry (no revenue). To record PAID revenue the caller MUST send
+ * `type: 'paid'` + `amount > 0`. `until` (an explicit future date) wins over
+ * `days` when both are present.
+ */
 export interface ExtendSubscriptionRequest {
-  days: number;
+  /** Legacy path — extend by N days, anchored on max(current end, now). */
+  days?: number;
+  /**
+   * 122 — 'paid' records collected revenue (requires `amount` > 0); 'free'
+   * records a zero-revenue extension. Omitted → treated as FREE (no amount ⇒
+   * no revenue).
+   */
+  type?: 'paid' | 'free';
+  /** 122 — payment amount in rubles (required and > 0 when type='paid'; 0/ignored for free). */
+  amount?: number;
+  /** 122 — set the new subscription_end to this ISO date (must be in the future). Wins over `days`. */
+  until?: string;
+  /** 122 — optional human note stored on the ledger row. */
+  note?: string;
 }
 
 /** POST /tenants/:id/assign-plan — switch the tenant to a plan (syncs price + max users). */

@@ -75,7 +75,9 @@ export class TenantsController {
   @Roles('superadmin')
   @Post('tenants/:id/extend')
   async extend(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: ExtendSubscriptionDto) {
-    return this.tenantsService.extend(id, dto.days, await this.actor(user));
+    // 122 — pass the whole DTO (paid/free, amount, until, days, note). The
+    // legacy `{ days }` body still validates and records a FREE ledger row.
+    return this.tenantsService.extend(id, dto, await this.actor(user));
   }
 
   @Roles('superadmin')
@@ -152,5 +154,16 @@ export class AdminAuditController {
   @Get('mrr-trends')
   getMrrTrends(@Query('months') months?: string) {
     return this.tenantsService.getMrrTrends(months !== undefined ? parseInt(months, 10) : undefined);
+  }
+
+  /**
+   * 122 — платная выручка от подписок (собрано за месяц/всего, счётчики платных
+   * vs бесплатных продлений, помесячный ряд). Бесплатные продления в выручку НЕ
+   * входят. `months` по умолчанию 12, клампится на сервере в 1..36.
+   */
+  @Roles('superadmin')
+  @Get('subscription-revenue')
+  getSubscriptionRevenue(@Query('months') months?: string) {
+    return this.tenantsService.getSubscriptionRevenue(months !== undefined ? parseInt(months, 10) : undefined);
   }
 }

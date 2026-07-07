@@ -58,6 +58,7 @@ import type {
   TenantCabinet,
   PlatformStats,
   MrrTrendPoint,
+  SubscriptionRevenue,
   TodayEmployeeStatus,
   MarketingDashboard,
   ReviewResponse,
@@ -324,8 +325,18 @@ export function createTenantsApi(api: HttpClient) {
     update: (id: string, data: UpdateTenantRequest) => api.patch<Tenant>(`/tenants/${id}`, data),
     remove: (id: string) => api.delete(`/tenants/${id}`),
     // ── Subscription management (superadmin, from the tenant card) ──
-    extend: (id: string, days: number) =>
-      api.post<Tenant>(`/tenants/${id}/extend`, { days } satisfies ExtendSubscriptionRequest),
+    /**
+     * Extend a subscription. BACKWARD-COMPAT overload: pass a plain number to
+     * extend by N days (legacy — records a FREE ledger entry). Pass an options
+     * object to record a PAID extension (`{ type: 'paid', amount, until? }`) or
+     * a FREE one to a specific date (`{ type: 'free', until }`). Free never
+     * counts as revenue.
+     */
+    extend: (id: string, daysOrOpts: number | ExtendSubscriptionRequest) =>
+      api.post<Tenant>(
+        `/tenants/${id}/extend`,
+        (typeof daysOrOpts === 'number' ? { days: daysOrOpts } : daysOrOpts) satisfies ExtendSubscriptionRequest,
+      ),
     assignPlan: (id: string, planId: string) =>
       api.post<Tenant>(`/tenants/${id}/assign-plan`, { planId } satisfies AssignPlanRequest),
     /** Explicitly suspend a tenant (status → 'suspended', is_active forced false). */
@@ -347,6 +358,16 @@ export function createAdminApi(api: HttpClient) {
      */
     getMrrTrends: (months?: number) =>
       api.get<MrrTrendPoint[]>('/admin/mrr-trends', { params: months !== undefined ? { months } : undefined }),
+    /**
+     * 122 — платная выручка от подписок (собрано за месяц/всего, счётчики
+     * платных vs бесплатных продлений, помесячный ряд). superadmin-only.
+     * `months` по умолчанию 12, клампится на сервере в 1..36; старший месяц первым.
+     * Бесплатные продления в выручку НЕ входят.
+     */
+    getSubscriptionRevenue: (months?: number) =>
+      api.get<SubscriptionRevenue>('/admin/subscription-revenue', {
+        params: months !== undefined ? { months } : undefined,
+      }),
     /**
      * Глобальные настройки платформы (116). superadmin-only. Сейчас единственный
      * ключ — globalFreeVoiceMinutes (бесплатные минуты голосового ввода для всех

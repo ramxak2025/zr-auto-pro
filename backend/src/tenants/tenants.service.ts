@@ -33,6 +33,20 @@ export interface MrrTrendPoint {
  */
 export type SubscriptionStatus = 'active' | 'expired' | 'suspended';
 
+/**
+ * Options for TenantsService.extend (122). Mirrors the shared
+ * `ExtendSubscriptionRequest` — every field optional so the legacy `{ days }`
+ * body still works. Business rules (must supply `until` or `days`; paid needs
+ * `amount > 0`; `until` must be future) are enforced in the method.
+ */
+export interface ExtendSubscriptionOptions {
+  days?: number;
+  type?: 'paid' | 'free';
+  amount?: number;
+  until?: string;
+  note?: string;
+}
+
 @Injectable()
 export class TenantsService {
   private readonly logger = new Logger('TenantsService');
@@ -71,10 +85,90 @@ export class TenantsService {
       // 115 — индивидуальная надбавка минут голосового ввода поверх тарифа.
       voiceMinutesExtra: parseInt(row.voice_minutes_extra, 10) || 0,
       userCount: row.user_count !== undefined ? parseInt(row.user_count) : undefined,
+      // 122 — последний платёж/продление + платность текущего периода. Присутствуют
+      // только в запросах, которые их выбирают (getAll с LATERAL join); иначе поля
+      // остаются undefined и в payload не появляются (аддитивно, без регрессий).
+      ...(row.last_payment_id !== undefined
+        ? {
+            lastPayment: row.last_payment_id ? this.mapLastPayment(row) : null,
+            currentPeriodKind: (row.current_period_kind as 'paid' | 'free' | null) ?? null,
+          }
+        : {}),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
     };
   }
+
+  /**
+   * Map the `last_payment_*` prefixed columns (from the LATERAL "newest payment"
+   * subquery) into the shared SubscriptionPayment shape. Caller guarantees
+   * `row.last_payment_id` is non-null.
+   */
+  private mapLastPayment(row: any) {
+    return {
+      id: row.last_payment_id,
+      tenantId: row.id,
+      amount: parseFloat(row.last_payment_amount) || 0,
+      isFree: row.last_payment_is_free === true,
+      periodFrom: row.last_payment_period_from ?? null,
+      periodTo: row.last_payment_period_to ?? null,
+      previousEnd: row.last_payment_previous_end ?? null,
+      note: row.last_payment_note ?? null,
+      createdBy: row.last_payment_created_by ?? null,
+      createdAt: row.last_payment_created_at,
+    };
+  }
+
+  /** Map a raw subscription_payments row into the shared SubscriptionPayment shape. */
+  private mapSubscriptionPayment(row: any) {
+    return {
+      id: row.id,
+      tenantId: row.tenant_id,
+      amount: parseFloat(row.amount) || 0,
+      isFree: row.is_free === true,
+      periodFrom: row.period_from ?? null,
+      periodTo: row.period_to ?? null,
+      previousEnd: row.previous_end ?? null,
+      note: row.note ?? null,
+      createdBy: row.created_by ?? null,
+      createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * SQL fragment: the newest subscription_payments row for tenant alias `t`,
+   * joined as `lp`, plus the derived `current_period_kind`. Shared by getAll so
+   * the tenant list can badge «оплачено до …» / «бесплатно до …». `current_period_kind`
+   * is 'paid'/'free' ONLY when the newest payment's period_to matches the tenant's
+   * current subscription_end (i.e. the current window WAS set by that ledger row);
+   * otherwise NULL (subscription_end set by legacy/PATCH ⇒ unknown).
+   */
+  private static readonly LAST_PAYMENT_JOIN = `
+    LEFT JOIN LATERAL (
+      SELECT sp.id, sp.amount, sp.is_free, sp.period_from, sp.period_to,
+             sp.previous_end, sp.note, sp.created_by, sp.created_at
+        FROM subscription_payments sp
+       WHERE sp.tenant_id = t.id
+       ORDER BY sp.created_at DESC, sp.id DESC
+       LIMIT 1
+    ) lp ON true`;
+
+  private static readonly LAST_PAYMENT_COLUMNS = `
+    lp.id            AS last_payment_id,
+    lp.amount        AS last_payment_amount,
+    lp.is_free       AS last_payment_is_free,
+    lp.period_from   AS last_payment_period_from,
+    lp.period_to     AS last_payment_period_to,
+    lp.previous_end  AS last_payment_previous_end,
+    lp.note          AS last_payment_note,
+    lp.created_by    AS last_payment_created_by,
+    lp.created_at    AS last_payment_created_at,
+    CASE
+      WHEN lp.id IS NULL THEN NULL
+      WHEN lp.period_to IS NOT DISTINCT FROM t.subscription_end
+        THEN (CASE WHEN lp.is_free THEN 'free' ELSE 'paid' END)
+      ELSE NULL
+    END AS current_period_kind`;
 
   /**
    * Authoritative subscription status from a tenant row. `suspended` wins over
@@ -97,9 +191,11 @@ export class TenantsService {
     const { rows } = await this.pool.query(
       `SELECT t.*,
               (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) as user_count,
-              p.name as plan_name, p.monthly_price as plan_monthly_price, p.max_users as plan_max_users, p.description as plan_description
+              p.name as plan_name, p.monthly_price as plan_monthly_price, p.max_users as plan_max_users, p.description as plan_description,
+              ${TenantsService.LAST_PAYMENT_COLUMNS}
        FROM tenants t
        LEFT JOIN plans p ON p.id = t.plan_id
+       ${TenantsService.LAST_PAYMENT_JOIN}
        ORDER BY t.created_at DESC`,
     );
     return rows.map((row) => {
@@ -134,7 +230,16 @@ export class TenantsService {
             WHERE is_active = true
               AND (subscription_end IS NULL OR subscription_end >= now())) AS mrr,
          (SELECT COUNT(*) FROM tenants
-            WHERE created_at >= date_trunc('month', now())) AS new_tenants_this_month`,
+            WHERE created_at >= date_trunc('month', now())) AS new_tenants_this_month,
+         -- 122 — фактически собранная ПЛАТНАЯ выручка (free исключены через NOT is_free).
+         (SELECT COALESCE(SUM(amount), 0) FROM subscription_payments
+            WHERE is_free = false AND created_at >= date_trunc('month', now())) AS paid_revenue_this_month,
+         (SELECT COALESCE(SUM(amount), 0) FROM subscription_payments
+            WHERE is_free = false) AS paid_revenue_total,
+         (SELECT COUNT(*) FROM subscription_payments
+            WHERE is_free = false AND created_at >= date_trunc('month', now())) AS paid_ext_this_month,
+         (SELECT COUNT(*) FROM subscription_payments
+            WHERE is_free = true AND created_at >= date_trunc('month', now())) AS free_ext_this_month`,
     );
     const r = rows[0];
     const activeTenants = parseInt(r.active_tenants, 10);
@@ -147,6 +252,73 @@ export class TenantsService {
       mrr,
       arpu: activeTenants > 0 ? Math.round(mrr / activeTenants) : 0,
       newTenantsThisMonth: parseInt(r.new_tenants_this_month, 10),
+      // 122 — реально собранные деньги от продлений (бесплатные не считаются).
+      paidRevenueThisMonth: Math.round(parseFloat(r.paid_revenue_this_month) || 0),
+      paidRevenueTotal: Math.round(parseFloat(r.paid_revenue_total) || 0),
+      paidExtensionsThisMonth: parseInt(r.paid_ext_this_month, 10) || 0,
+      freeExtensionsThisMonth: parseInt(r.free_ext_this_month, 10) || 0,
+    };
+  }
+
+  /**
+   * 122 — платная выручка от подписок для суперадмин-дашборда
+   * (GET /admin/subscription-revenue). Header-агрегаты (собрано за месяц/всего +
+   * счётчики платных/бесплатных) + помесячный ряд последних N месяцев (12 по
+   * умолчанию, кламп 1..36), старший месяц первым.
+   *
+   * БЕСПЛАТНЫЕ ПРОДЛЕНИЯ ИСКЛЮЧЕНЫ ИЗ ВЫРУЧКИ ВЕЗДЕ: каждая денежная сумма —
+   * это Σ amount FILTER (WHERE NOT is_free). Бесплатные считаются ТОЛЬКО в
+   * отдельные *Count-поля, никогда не суммируются как деньги.
+   */
+  async getSubscriptionRevenue(months?: number) {
+    const n = Math.min(36, Math.max(1, Number.isFinite(months as number) ? Math.trunc(months as number) : 12));
+
+    const { rows: headerRows } = await this.pool.query(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE is_free = false AND created_at >= date_trunc('month', now())), 0) AS paid_this_month,
+         COALESCE(SUM(amount) FILTER (WHERE is_free = false), 0) AS paid_total,
+         COUNT(*) FILTER (WHERE is_free = false AND created_at >= date_trunc('month', now())) AS paid_ext_month,
+         COUNT(*) FILTER (WHERE is_free = true  AND created_at >= date_trunc('month', now())) AS free_ext_month,
+         COUNT(*) FILTER (WHERE is_free = false) AS paid_ext_total,
+         COUNT(*) FILTER (WHERE is_free = true)  AS free_ext_total
+       FROM subscription_payments`,
+    );
+    const h = headerRows[0];
+
+    const { rows: monthlyRows } = await this.pool.query(
+      `WITH series AS (
+         SELECT generate_series(
+                  date_trunc('month', now()) - (($1::int - 1) * interval '1 month'),
+                  date_trunc('month', now()),
+                  interval '1 month'
+                ) AS m_start
+       )
+       SELECT
+         to_char(s.m_start, 'YYYY-MM') AS month,
+         COALESCE(SUM(sp.amount) FILTER (WHERE sp.is_free = false), 0) AS paid_revenue,
+         COUNT(sp.id) FILTER (WHERE sp.is_free = false) AS paid_count,
+         COUNT(sp.id) FILTER (WHERE sp.is_free = true)  AS free_count
+       FROM series s
+       LEFT JOIN subscription_payments sp
+         ON sp.created_at >= s.m_start AND sp.created_at < s.m_start + interval '1 month'
+       GROUP BY s.m_start
+       ORDER BY s.m_start ASC`,
+      [n],
+    );
+
+    return {
+      paidRevenueThisMonth: Math.round(parseFloat(h.paid_this_month) || 0),
+      paidRevenueTotal: Math.round(parseFloat(h.paid_total) || 0),
+      paidExtensionsThisMonth: parseInt(h.paid_ext_month, 10) || 0,
+      freeExtensionsThisMonth: parseInt(h.free_ext_month, 10) || 0,
+      paidExtensionsTotal: parseInt(h.paid_ext_total, 10) || 0,
+      freeExtensionsTotal: parseInt(h.free_ext_total, 10) || 0,
+      monthly: monthlyRows.map((m) => ({
+        month: m.month,
+        paidRevenue: Math.round(parseFloat(m.paid_revenue) || 0),
+        paidCount: parseInt(m.paid_count, 10) || 0,
+        freeCount: parseInt(m.free_count, 10) || 0,
+      })),
     };
   }
 
@@ -260,9 +432,11 @@ export class TenantsService {
       `SELECT t.id, t.name, t.is_active, t.suspended_at, t.suspended_reason,
               t.subscription_end, t.monthly_price, t.max_users, t.plan_id, t.created_at,
               (SELECT COUNT(*) FROM users WHERE tenant_id=t.id) AS current_users,
-              p.name AS plan_name
+              p.name AS plan_name,
+              ${TenantsService.LAST_PAYMENT_COLUMNS}
          FROM tenants t
          LEFT JOIN plans p ON p.id = t.plan_id
+         ${TenantsService.LAST_PAYMENT_JOIN}
         WHERE t.id = $1`,
       [id],
     );
@@ -287,6 +461,9 @@ export class TenantsService {
         suspendedReason: r.suspended_reason ?? null,
         maxUsers: r.max_users,
         currentUsers: parseInt(r.current_users, 10) || 0,
+        // 122 — платность текущего периода + последний платёж для бейджа кабинета.
+        lastPayment: r.last_payment_id ? this.mapLastPayment(r) : null,
+        currentPeriodKind: (r.current_period_kind as 'paid' | 'free' | null) ?? null,
       },
       metrics,
     };
@@ -348,34 +525,114 @@ export class TenantsService {
   }
 
   /**
-   * Extend a tenant's subscription by `days`. Anchors on the LATER of the
-   * current end and now() so extending an already-expired subscription starts
-   * the new window from today (not retroactively from the lapsed date).
+   * Extend a tenant's subscription, PAID or FREE (122). ATOMIC: in one
+   * transaction it (1) moves tenants.subscription_end and (2) writes one
+   * subscription_payments ledger row recording whether this extension was paid
+   * (amount > 0, is_free=false) or free (amount 0, is_free=true).
+   *
+   * New end anchors on the LATER of the current end and now() (so extending an
+   * already-lapsed subscription starts from today, not retroactively). If
+   * `until` is given it wins and becomes the new end verbatim; otherwise
+   * anchor + `days`.
+   *
+   * BACKWARD-COMPAT: a legacy `{ days }` call (no `type`, no `amount`) records a
+   * FREE ledger row — no payment amount was supplied ⇒ no revenue. Recording
+   * PAID revenue REQUIRES `type: 'paid'` + `amount > 0`. This is deliberate: it
+   * guarantees the owner's rule "free extensions NEVER count as profit" holds
+   * even for the old endpoint shape.
    */
-  async extend(id: string, days: number, actor?: AuditActor) {
-    if (!Number.isFinite(days) || days <= 0) {
-      throw new BadRequestException({ message: 'Количество дней должно быть положительным' });
-    }
-    const { rows } = await this.pool.query(
-      `UPDATE tenants
-          SET subscription_end = GREATEST(COALESCE(subscription_end, now()), now()) + ($2 * interval '1 day'),
-              updated_at = now()
-        WHERE id = $1
-        RETURNING *`,
-      [id, days],
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+  async extend(id: string, opts: ExtendSubscriptionOptions, actor?: AuditActor) {
+    const note = opts.note ?? null;
 
-    if (actor) {
-      await this.audit.log(actor, 'tenant_extend', {
-        targetType: 'tenant',
-        targetId: id,
-        targetName: rows[0].name,
-        detail: { days, subscriptionEnd: rows[0].subscription_end },
-      });
+    // Paid iff explicitly type='paid', OR (no type given but a positive amount
+    // was passed — a convenience for callers that send amount without type).
+    const wantsPaid =
+      opts.type === 'paid' || (opts.type === undefined && typeof opts.amount === 'number' && opts.amount > 0);
+    const isFree = !wantsPaid;
+    const amount = wantsPaid ? Number(opts.amount) : 0;
+    if (wantsPaid && !(amount > 0)) {
+      throw new BadRequestException({ message: 'Для платного продления укажите сумму больше нуля' });
     }
 
-    return this.mapTenant(rows[0]);
+    const hasDays = typeof opts.days === 'number' && Number.isFinite(opts.days) && opts.days > 0;
+    const hasUntil = typeof opts.until === 'string' && opts.until.length > 0;
+    if (!hasDays && !hasUntil) {
+      throw new BadRequestException({ message: 'Укажите дату (until) или количество дней (days)' });
+    }
+    if (hasUntil) {
+      const untilTs = new Date(opts.until as string).getTime();
+      if (!Number.isFinite(untilTs) || untilTs <= Date.now()) {
+        throw new BadRequestException({ message: 'Дата продления должна быть в будущем' });
+      }
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Lock the tenant row and capture the PREVIOUS end before we overwrite it.
+      const { rows: cur } = await client.query(`SELECT name, subscription_end FROM tenants WHERE id = $1 FOR UPDATE`, [
+        id,
+      ]);
+      if (cur.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+      const previousEnd: string | null = cur[0].subscription_end ?? null;
+
+      // Compute anchor + new end IN SQL (timezone-correct GREATEST/interval math).
+      const { rows: calc } = await client.query(
+        `SELECT
+           GREATEST(COALESCE($1::timestamptz, now()), now()) AS anchor,
+           CASE WHEN $2::timestamptz IS NOT NULL THEN $2::timestamptz
+                ELSE GREATEST(COALESCE($1::timestamptz, now()), now()) + ($3::int * interval '1 day')
+           END AS new_end`,
+        [previousEnd, hasUntil ? opts.until : null, hasDays ? Math.trunc(opts.days as number) : null],
+      );
+      const anchor: string = calc[0].anchor;
+      const newEnd: string = calc[0].new_end;
+
+      const { rows: updated } = await client.query(
+        `UPDATE tenants SET subscription_end = $2, updated_at = now() WHERE id = $1 RETURNING *`,
+        [id, newEnd],
+      );
+
+      await client.query(
+        `INSERT INTO subscription_payments
+           (tenant_id, amount, is_free, period_from, period_to, previous_end, note, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [id, amount, isFree, anchor, newEnd, previousEnd, note, actor?.userId ?? null],
+      );
+
+      await client.query('COMMIT');
+
+      // Best-effort audit (never fails the committed extension).
+      if (actor) {
+        await this.audit.log(actor, 'tenant_extend', {
+          targetType: 'tenant',
+          targetId: id,
+          targetName: updated[0].name,
+          detail: {
+            type: isFree ? 'free' : 'paid',
+            amount,
+            days: hasDays ? Math.trunc(opts.days as number) : null,
+            until: hasUntil ? opts.until : null,
+            previousEnd,
+            subscriptionEnd: updated[0].subscription_end,
+          },
+        });
+      }
+
+      return this.mapTenant(updated[0]);
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* connection already dead — release below discards it */
+      }
+      if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
+      this.logger.error(`Tenant extend error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка при продлении подписки' });
+    } finally {
+      client.release();
+    }
   }
 
   /**

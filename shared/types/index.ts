@@ -101,10 +101,56 @@ export interface Tenant {
    * поля не имеют → трактовать как 0.
    */
   voiceMinutesExtra?: number;
+  /**
+   * 122 — самая свежая строка реестра продлений подписки (subscription_payments),
+   * или null, если тенант ни разу не продлевался через ledger-путь. Позволяет
+   * списку тенантов бейджить «оплачено до …» / «бесплатно до …». Absent на
+   * legacy-payload'ах (эндпоинты, не выбирающие реестр).
+   */
+  lastPayment?: SubscriptionPayment | null;
+  /**
+   * 122 — платный или бесплатный ТЕКУЩИЙ период ('paid' | 'free'), либо null,
+   * если определить нельзя (нет строки реестра, чей period_to == subscriptionEnd —
+   * например, subscription_end задан напрямую через PATCH/legacy). Выведено на
+   * сервере из последнего платежа.
+   */
+  currentPeriodKind?: SubscriptionPeriodKind | null;
   users?: User[];
   userCount?: number;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * 122 — платный ('paid') или бесплатный ('free') характер продления/периода
+ * подписки. Бесплатное продление НИКОГДА не учитывается как выручка.
+ */
+export type SubscriptionPeriodKind = 'paid' | 'free';
+
+/**
+ * 122 — одна строка реестра продлений подписки (subscription_payments,
+ * superadmin-only). Пишется атомарно с UPDATE tenants.subscription_end при
+ * каждом продлении. `amount` в рублях (0 для бесплатного); `isFree=true` ⇒
+ * строка не входит в выручку. `periodTo` — новый subscription_end, установленный
+ * этим продлением; `previousEnd` — что было до него.
+ */
+export interface SubscriptionPayment {
+  id: string;
+  tenantId: string;
+  /** Рубли; 0 для бесплатного продления. */
+  amount: number;
+  /** true → бесплатное продление, никогда не выручка. */
+  isFree: boolean;
+  /** Начало покрытого периода (якорь = max(текущий конец, now)). */
+  periodFrom: string | null;
+  /** Новый subscription_end, установленный этим продлением. */
+  periodTo: string | null;
+  /** subscription_end ДО продления (аудит). */
+  previousEnd: string | null;
+  note: string | null;
+  /** id действующего суперадмина (null, если пользователь удалён). */
+  createdBy: string | null;
+  createdAt: string;
 }
 
 /**
@@ -341,6 +387,60 @@ export interface PlatformStats {
   arpu: number;
   /** Tenants created since the start of the current month. */
   newTenantsThisMonth: number;
+  /**
+   * 122 — фактически СОБРАННАЯ платная выручка за текущий месяц: Σ
+   * subscription_payments.amount WHERE NOT is_free и created_at ≥ начало месяца
+   * (рубли, округлено). В отличие от `mrr` (сумма ценников тарифов) — это живые
+   * деньги от продлений. Бесплатные продления сюда НЕ входят.
+   */
+  paidRevenueThisMonth: number;
+  /** 122 — собранная платная выручка за всё время (free исключены; рубли, округлено). */
+  paidRevenueTotal: number;
+  /** 122 — число ПЛАТНЫХ продлений за текущий месяц. */
+  paidExtensionsThisMonth: number;
+  /** 122 — число БЕСПЛАТНЫХ продлений за текущий месяц (никогда не выручка). */
+  freeExtensionsThisMonth: number;
+}
+
+/**
+ * 122 — один месяц ряда платной выручки от подписок (GET /admin/subscription-revenue,
+ * superadmin-only). Строится из subscription_payments так же, как MRR-тренд:
+ * последние N месяцев, старший месяц первым. `paidRevenue` суммирует ТОЛЬКО
+ * платные строки (WHERE NOT is_free) — бесплатные продления сюда не попадают,
+ * их число отдаётся отдельным `freeCount` (справочно, не выручка).
+ */
+export interface SubscriptionRevenuePoint {
+  /** Метка месяца, 'YYYY-MM'. */
+  month: string;
+  /** Σ subscription_payments.amount за месяц WHERE NOT is_free (рубли, округлено). */
+  paidRevenue: number;
+  /** Число платных продлений за месяц. */
+  paidCount: number;
+  /** Число бесплатных продлений за месяц (справочно, НЕ выручка). */
+  freeCount: number;
+}
+
+/**
+ * 122 — сводка платной выручки от подписок для суперадмин-дашборда
+ * (GET /admin/subscription-revenue, superadmin-only). Бесплатные продления
+ * (is_free=true, amount=0) НИКОГДА не попадают в поля `paidRevenue*` — только
+ * в отдельные счётчики `free*`.
+ */
+export interface SubscriptionRevenue {
+  /** Собранная платная выручка за текущий месяц (рубли, округлено). */
+  paidRevenueThisMonth: number;
+  /** Собранная платная выручка за всё время (рубли, округлено). */
+  paidRevenueTotal: number;
+  /** Число платных продлений за текущий месяц. */
+  paidExtensionsThisMonth: number;
+  /** Число бесплатных продлений за текущий месяц. */
+  freeExtensionsThisMonth: number;
+  /** Число платных продлений за всё время. */
+  paidExtensionsTotal: number;
+  /** Число бесплатных продлений за всё время. */
+  freeExtensionsTotal: number;
+  /** Помесячный ряд платной выручки (старший месяц первым). */
+  monthly: SubscriptionRevenuePoint[];
 }
 
 /**
@@ -392,6 +492,17 @@ export interface TenantSubscriptionStatus {
   suspendedReason: string | null;
   maxUsers: number;
   currentUsers: number;
+  /**
+   * 122 — самая свежая строка реестра продлений (subscription_payments), null
+   * если тенант ещё не продлевался через ledger-путь. Для бейджа «оплачено до …»
+   * / «бесплатно до …» в кабинете.
+   */
+  lastPayment: SubscriptionPayment | null;
+  /**
+   * 122 — платный/бесплатный ТЕКУЩИЙ период ('paid' | 'free'), либо null, если
+   * определить нельзя (нет платежа, чей period_to == subscriptionEnd).
+   */
+  currentPeriodKind: SubscriptionPeriodKind | null;
 }
 
 /**
