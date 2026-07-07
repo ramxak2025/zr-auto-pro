@@ -1,19 +1,22 @@
+import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Check, ChevronDown, MessageCircle, Minus, Wrench } from 'lucide-react';
-import { pricing, type PlanCellValue, type PricingPlan } from '../content';
+import { Check, MessageCircle, Minus, Wrench } from 'lucide-react';
+import { formatRub, pricing, yearlyMonthly, type PlanCellValue, type PricingPlan } from '../content';
 import { getPlanConnectMessage, getWhatsAppUrl, WHATSAPP_IMPLEMENTATION_MESSAGE } from '../config';
 
 /**
- * Общие «тяжёлые» куски тарифов: карточка плана, карта «Внедрение под ключ»,
- * полное сравнение (desktop-таблица + mobile-details). Раньше жили в секции
- * Pricing на главной; с появлением отдельной страницы /tarify главная показывает
- * только компактный тизер (Pricing.tsx), а весь этот блок использует TarifyPage.
+ * Общие «тяжёлые» куски тарифов: карточка плана (с переключателем месяц/год),
+ * карта «Внедрение под ключ», полное сравнение (desktop-таблица + mobile —
+ * горизонтально листаемая таблица со «липкой» первой колонкой). Используются
+ * страницей /tarify; главная показывает компактный тизер (Pricing.tsx).
  */
+
+export type Billing = 'monthly' | 'yearly';
 
 const CTA_BASE =
   'inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl px-5 text-sm font-semibold transition motion-safe:active:scale-[0.98]';
 
-/** CTA «Подключить» → WhatsApp с тарифом в сообщении; контактов нет → «Войти». */
+/** CTA «Начать бесплатно» → WhatsApp с тарифом в сообщении; контактов нет → «Войти». */
 function PlanCta({ plan }: { plan: PricingPlan }) {
   const cls = `${CTA_BASE} ${
     plan.highlighted
@@ -31,7 +34,7 @@ function PlanCta({ plan }: { plan: PricingPlan }) {
   return (
     <a href={url} target="_blank" rel="noopener noreferrer" className={cls}>
       <MessageCircle className="h-4 w-4" />
-      Подключить
+      Начать бесплатно
     </a>
   );
 }
@@ -57,35 +60,9 @@ function CompareCell({ value }: { value: PlanCellValue }) {
   return <span className="text-sm font-semibold text-slate-900">{value}</span>;
 }
 
-/** Мини-чип мобильного сравнения: буква плана + ✓/—/значение. */
-function MiniChip({ label, value }: { label: string; value: PlanCellValue }) {
-  const included = value !== false;
-  return (
-    <span
-      className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-[11px] font-medium ${
-        included ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
-      }`}
-    >
-      <span className="font-semibold">{label}</span>
-      {value === true ? (
-        <>
-          <Check aria-hidden className="h-3 w-3" />
-          <span className="sr-only">входит</span>
-        </>
-      ) : value === false ? (
-        <>
-          <Minus aria-hidden className="h-3 w-3" />
-          <span className="sr-only">не входит</span>
-        </>
-      ) : (
-        value
-      )}
-    </span>
-  );
-}
-
 /** Карточка тарифа; «Легенда» — primary-бордер, бейдж и подъём на desktop. */
-export function PlanCard({ plan }: { plan: PricingPlan }) {
+export function PlanCard({ plan, billing }: { plan: PricingPlan; billing: Billing }) {
+  const monthly = billing === 'yearly' ? yearlyMonthly(plan.priceMonthly) : plan.priceMonthly;
   return (
     <div
       className={`relative flex h-full flex-col rounded-3xl bg-white p-6 sm:p-7 ${
@@ -102,11 +79,19 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
       <h3 className="text-lg font-bold text-slate-900">{plan.name}</h3>
       <p className="mt-1 text-sm text-slate-500">{plan.description}</p>
       <p className="mt-5 flex items-baseline gap-1.5">
-        <span className="text-4xl font-extrabold tracking-tight text-slate-900">{plan.price} ₽</span>
+        <span className="text-4xl font-extrabold tracking-tight text-slate-900">{formatRub(monthly)} ₽</span>
         <span className="text-sm font-medium text-slate-400">/мес</span>
       </p>
-      <p className="mt-1 text-sm font-medium text-slate-600">{plan.employees}</p>
-      <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-400">Что входит</p>
+      {billing === 'yearly' ? (
+        <p className="mt-1 text-sm text-slate-500">
+          {formatRub(monthly * 12)} ₽ в год ·{' '}
+          <span className="text-slate-400 line-through">{formatRub(plan.priceMonthly)} ₽/мес</span>
+        </p>
+      ) : (
+        <p className="mt-1 text-sm text-slate-500">При оплате за год — дешевле на 20%</p>
+      )}
+      <p className="mt-4 text-sm font-medium text-slate-600">{plan.employees}</p>
+      <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-500">Что входит</p>
       <ul className="mt-3 space-y-2.5">
         {plan.includes.map((item) => (
           <li key={item} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-600">
@@ -117,6 +102,7 @@ export function PlanCard({ plan }: { plan: PricingPlan }) {
       </ul>
       <div className="mt-auto pt-6">
         <PlanCta plan={plan} />
+        <p className="mt-2 text-center text-xs text-slate-400">14 дней бесплатно · отмена в любой момент</p>
       </div>
     </div>
   );
@@ -139,8 +125,6 @@ export function ImplementationCard() {
             </span>
             <h3 className="text-xl font-bold text-slate-900">{impl.title}</h3>
           </div>
-          {/* Абзац-описание — только md+: на мобиле карта компактная
-              (заголовок + пункты + цена + CTA) */}
           <p className="mt-3 hidden text-sm leading-relaxed text-slate-600 md:block">{impl.text}</p>
           <ul className="mt-4 grid grid-cols-1 gap-2.5 sm:grid-cols-2">
             {impl.includes.map((item) => (
@@ -174,7 +158,18 @@ export function ImplementationCard() {
   );
 }
 
-/** Desktop (md+): полная таблица сравнения — различия сверху, общее ниже. */
+/** Ряды таблицы сравнения: различия сверху + «Во всех тарифах» ниже. */
+function comparisonRows(): { section?: string; feature: string; values: PlanCellValue[] }[] {
+  const diff = pricing.differences.map((r) => ({ feature: r.feature, values: r.values as PlanCellValue[] }));
+  const common = pricing.commonFeatures.map((f, i) => ({
+    section: i === 0 ? pricing.commonLabel : undefined,
+    feature: f,
+    values: pricing.plans.map(() => true as PlanCellValue),
+  }));
+  return [...diff, ...common];
+}
+
+/** Desktop (md+): полная таблица сравнения. */
 export function ComparisonTable() {
   const highlightIdx = pricing.plans.findIndex((p) => p.highlighted);
   return (
@@ -194,7 +189,9 @@ export function ComparisonTable() {
                 <span className={`block text-sm font-bold ${p.highlighted ? 'text-primary-700' : 'text-slate-900'}`}>
                   {p.name}
                 </span>
-                <span className="mt-0.5 block text-xs font-medium text-slate-400">{p.price} ₽/мес</span>
+                <span className="mt-0.5 block text-xs font-medium text-slate-400">
+                  {formatRub(p.priceMonthly)} ₽/мес
+                </span>
               </th>
             ))}
           </tr>
@@ -240,39 +237,101 @@ export function ComparisonTable() {
   );
 }
 
-/** Mobile: полное сравнение — свёрнутый details, без горизонтального скролла. */
-export function ComparisonDetails() {
+/**
+ * Mobile: та же таблица, но горизонтально листаемая. Первая колонка
+ * «возможность» — sticky left-0 (не уезжает при свайпе), справа edge-fade
+ * подсказывает, что есть ещё колонки; подсказка «Листайте вбок →» гаснет
+ * после первого горизонтального сдвига. overscroll-behavior-x: contain —
+ * горизонтальный жест не тянет страницу, вертикальный скролл не ломается.
+ */
+export function ComparisonTableMobile() {
+  const [scrolled, setScrolled] = useState(false);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const highlightIdx = pricing.plans.findIndex((p) => p.highlighted);
+  const rows = comparisonRows();
+
   return (
-    // acc-details — плавное раскрытие (interpolate-size, см. index.css)
-    <details className="acc-details group mt-10 rounded-2xl border border-slate-200/60 bg-white shadow-sm">
-      <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left text-base font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
-        Полное сравнение возможностей
-        <ChevronDown className="h-5 w-5 shrink-0 text-slate-400 transition-transform duration-300 group-open:rotate-180 motion-reduce:transition-none" />
-      </summary>
-      <div className="border-t border-slate-100 px-5 pb-5">
-        <p className="pt-4 text-xs text-slate-400">{pricing.planShortLegend}</p>
-        <ul className="mt-4 space-y-4">
-          {pricing.differences.map((row) => (
-            <li key={row.feature}>
-              <p className="text-sm font-medium text-slate-700">{row.feature}</p>
-              <div className="mt-1.5 flex flex-wrap gap-1.5">
-                {row.values.map((value, i) => (
-                  <MiniChip key={pricing.planShortNames[i]} label={pricing.planShortNames[i]} value={value} />
+    <div className="mt-8">
+      <p
+        className={`mb-2 text-right text-xs text-slate-400 transition-opacity duration-300 ${
+          scrolled ? 'opacity-0' : 'opacity-100'
+        }`}
+      >
+        Листайте таблицу вбок →
+      </p>
+      <div className="relative">
+        <div
+          ref={scrollerRef}
+          onScroll={(e) => {
+            if (!scrolled && e.currentTarget.scrollLeft > 8) setScrolled(true);
+          }}
+          className="no-scrollbar overflow-x-auto rounded-2xl border border-slate-200/60 bg-white shadow-sm [overscroll-behavior-x:contain]"
+        >
+          <table className="w-full border-collapse text-left">
+            <thead>
+              <tr className="border-b border-slate-200/60">
+                <th
+                  scope="col"
+                  className="sticky left-0 z-10 min-w-[150px] bg-white px-4 py-3 text-xs font-semibold text-slate-500 shadow-[1px_0_0_rgba(226,232,240,0.8)]"
+                >
+                  Возможность
+                </th>
+                {pricing.plans.map((p, i) => (
+                  <th
+                    key={p.key}
+                    scope="col"
+                    className={`min-w-[104px] px-3 py-3 text-center ${i === highlightIdx ? 'bg-primary-50/60' : ''}`}
+                  >
+                    <span
+                      className={`block text-sm font-bold ${p.highlighted ? 'text-primary-700' : 'text-slate-900'}`}
+                    >
+                      {p.name}
+                    </span>
+                    <span className="mt-0.5 block text-[11px] font-medium text-slate-400">
+                      {formatRub(p.priceMonthly)} ₽
+                    </span>
+                  </th>
                 ))}
-              </div>
-            </li>
-          ))}
-        </ul>
-        <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-500">{pricing.commonLabel}</p>
-        <ul className="mt-3 space-y-2">
-          {pricing.commonFeatures.map((feature) => (
-            <li key={feature} className="flex items-start gap-2.5 text-sm leading-relaxed text-slate-600">
-              <Check aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-emerald-500" />
-              {feature}
-            </li>
-          ))}
-        </ul>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, ri) => (
+                <tr key={row.feature} className="border-b border-slate-100 last:border-0">
+                  <td
+                    className={`sticky left-0 z-10 min-w-[150px] px-4 py-3 text-sm text-slate-700 shadow-[1px_0_0_rgba(226,232,240,0.8)] ${
+                      ri % 2 === 1 ? 'bg-slate-50' : 'bg-white'
+                    }`}
+                  >
+                    {row.section && (
+                      <span className="mb-1 block text-[11px] font-semibold uppercase tracking-wider text-slate-500">
+                        {row.section}
+                      </span>
+                    )}
+                    {row.feature}
+                  </td>
+                  {row.values.map((value, i) => (
+                    <td
+                      key={i}
+                      className={`min-w-[104px] px-3 py-3 text-center ${
+                        i === highlightIdx ? 'bg-primary-50/40' : ri % 2 === 1 ? 'bg-slate-50/60' : ''
+                      }`}
+                    >
+                      <CompareCell value={value} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {/* edge-fade справа — подсказка, что таблица шире экрана */}
+        <div
+          aria-hidden
+          className={`pointer-events-none absolute inset-y-0 right-0 w-10 rounded-r-2xl bg-gradient-to-l from-white to-transparent transition-opacity duration-300 ${
+            scrolled ? 'opacity-0' : 'opacity-100'
+          }`}
+        />
       </div>
-    </details>
+    </div>
   );
 }

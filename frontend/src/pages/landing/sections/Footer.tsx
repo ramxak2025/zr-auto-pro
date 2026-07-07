@@ -47,14 +47,14 @@ export default function Footer() {
           decoding="async"
           className="h-6 w-auto"
         />
-        <div className="mt-5 flex items-center gap-3">
+        <div className="mt-4 flex items-center gap-2">
           {whatsappUrl && (
             <a
               href={whatsappUrl}
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Написать в WhatsApp"
-              className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-emerald-200 bg-emerald-50 text-emerald-700 transition-colors hover:bg-emerald-100 motion-safe:active:scale-95"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-emerald-600 transition-colors hover:bg-emerald-50 motion-safe:active:scale-90"
             >
               <MessageCircle className="h-5 w-5" aria-hidden />
             </a>
@@ -65,7 +65,7 @@ export default function Footer() {
               target="_blank"
               rel="noopener noreferrer"
               aria-label="Написать в Telegram"
-              className="inline-flex h-11 w-11 items-center justify-center rounded-2xl border border-sky-200 bg-sky-50 text-sky-700 transition-colors hover:bg-sky-100 motion-safe:active:scale-95"
+              className="inline-flex h-11 w-11 items-center justify-center rounded-full text-sky-600 transition-colors hover:bg-sky-50 motion-safe:active:scale-90"
             >
               <Send className="h-5 w-5" aria-hidden />
             </a>

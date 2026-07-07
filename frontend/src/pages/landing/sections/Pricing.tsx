@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight, ShieldCheck, Wrench } from 'lucide-react';
+import { ArrowRight, Sparkles, Wrench } from 'lucide-react';
 import Reveal from './Reveal';
-import { pricing } from '../content';
+import { formatRub, pricing, yearlyMonthly } from '../content';
 
 /**
  * Компактный тизер тарифов на главной. id="pricing" сохранён — старые якоря
@@ -40,8 +40,11 @@ export default function Pricing() {
                     <span className="mt-0.5 block text-sm text-slate-500">{plan.employees}</span>
                   </span>
                   <span className="shrink-0 whitespace-nowrap text-right">
-                    <span className="text-lg font-extrabold tracking-tight text-slate-900">{plan.price} ₽</span>
+                    <span className="text-lg font-extrabold tracking-tight text-slate-900">
+                      {formatRub(yearlyMonthly(plan.priceMonthly))} ₽
+                    </span>
                     <span className="text-sm font-medium text-slate-400">/мес</span>
+                    <span className="mt-0.5 block text-[11px] text-slate-400">при оплате за год</span>
                   </span>
                 </li>
               ))}
@@ -62,8 +65,8 @@ export default function Pricing() {
                 <ArrowRight className="h-5 w-5" aria-hidden />
               </Link>
               <p className="mt-4 flex items-center justify-center gap-2 text-center text-sm text-slate-500">
-                <ShieldCheck aria-hidden className="h-4 w-4 shrink-0 text-emerald-500" />
-                {pricing.honestyNote}
+                <Sparkles aria-hidden className="h-4 w-4 shrink-0 text-emerald-500" />
+                Первые 14 дней — бесплатно
               </p>
             </div>
           </div>

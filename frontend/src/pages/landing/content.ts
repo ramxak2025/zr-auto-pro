@@ -120,8 +120,8 @@ export type PlanCellValue = boolean | string;
 export interface PricingPlan {
   key: string;
   name: string;
-  /** Цена в месяц, уже отформатированная: '1 000'. */
-  price: string;
+  /** Базовая цена в месяц, числом (рублей). Годовая = ×12×(1−скидка). */
+  priceMonthly: number;
   /** Подпись про размер команды: '1 сотрудник' / 'до 10 сотрудников'. */
   employees: string;
   /** Одна строка сути тарифа. */
@@ -152,8 +152,10 @@ export interface ImplementationOffer {
 export interface PricingContent {
   title: string;
   subtitle: string;
-  /** Честная подпись под карточками — снимает страх скрытых платежей. */
-  honestyNote: string;
+  /** Скидка при оплате за год, % (годовая цена = месячная × 12 × (1 − pct/100)). */
+  yearlyDiscountPct: number;
+  /** Бесплатный пробный период, дней. */
+  trialDays: number;
   plans: PricingPlan[];
   implementation: ImplementationOffer;
   comparisonTitle: string;
@@ -163,9 +165,8 @@ export interface PricingContent {
   /** Возможности, входящие во все три тарифа. */
   commonFeatures: string[];
   /** Короткие имена планов для мини-чипов мобильного сравнения. */
+  /** Короткие имена планов для шапки свайп-таблицы сравнения. */
   planShortNames: [string, string, string];
-  /** Легенда мини-чипов («Л — Личный …»). */
-  planShortLegend: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1486,9 +1487,9 @@ export const faqMain: FaqItem[] = [
   {
     q: 'Сколько это стоит?',
     a:
-      '«Личный» — 1 000 ₽ в месяц для одного мастера, «Бизнес» — 7 000 ₽ до 10 сотрудников, ' +
-      '«Легенда» — 10 000 ₽ до 20 сотрудников и с голосовым вводом. ' +
-      'Внедрение под ключ — 100 000 ₽ разово, и только по желанию. Начать можно бесплатно.',
+      'Первые 14 дней — бесплатно, со всеми возможностями. Дальше: «Личный» — 1 000 ₽ в месяц ' +
+      'для одного мастера, «Бизнес» — 7 000 ₽ до 10 сотрудников, «Легенда» — 10 000 ₽ до 20 сотрудников. ' +
+      'При оплате за год — дешевле на 20%. Полное сравнение тарифов — на отдельной странице.',
   },
   {
     q: 'У меня всё в тетради и Excel. Долго переезжать?',
@@ -1587,12 +1588,13 @@ export const pricing: PricingContent = {
   subtitle:
     'Цена — за весь сервис, а не за каждого сотрудника. ' +
     'Начните бесплатно, а тариф выберите, когда команда будет готова.',
-  honestyNote: 'Цены без скрытых платежей. Отмена в любой момент.',
+  yearlyDiscountPct: 20,
+  trialDays: 14,
   plans: [
     {
       key: 'lichnyi',
       name: 'Личный',
-      price: '1 000',
+      priceMonthly: 1000,
       employees: '1 сотрудник',
       description: 'Полный учёт для одного мастера',
       includes: [
@@ -1606,7 +1608,7 @@ export const pricing: PricingContent = {
     {
       key: 'biznes',
       name: 'Бизнес',
-      price: '7 000',
+      priceMonthly: 7000,
       employees: 'до 10 сотрудников',
       description: 'Для сервиса с командой',
       includes: [
@@ -1620,7 +1622,7 @@ export const pricing: PricingContent = {
     {
       key: 'legenda',
       name: 'Легенда',
-      price: '10 000',
+      priceMonthly: 10000,
       employees: 'до 20 сотрудников',
       description: 'Максимум Autexa для растущего сервиса',
       highlighted: true,
@@ -1682,8 +1684,17 @@ export const pricing: PricingContent = {
     'Телефония',
   ],
   planShortNames: ['Л', 'Б', 'Лег'],
-  planShortLegend: 'Л — «Личный» · Б — «Бизнес» · Лег — «Легенда»',
 };
+
+/** Разряды тысяч пробелом: 9600 → «9 600». */
+export function formatRub(n: number): string {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+}
+
+/** Цена в месяц при годовой оплате (со скидкой), рублей. */
+export function yearlyMonthly(priceMonthly: number): number {
+  return Math.round(priceMonthly * (1 - pricing.yearlyDiscountPct / 100));
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Страница /tarify — hero-строка и mini-FAQ о ценах.
@@ -1691,11 +1702,23 @@ export const pricing: PricingContent = {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export const tarifyHero = {
-  title: 'Честные тарифы. Без скрытых платежей.',
-  subtitle: 'от 1 000 ₽ в месяц · отмена в любой момент',
+  title: 'Первые 14 дней — бесплатно.',
+  subtitle: 'Полный доступ ко всем возможностям · при оплате за год − 20%',
 };
 
 export const pricingFaq: FaqItem[] = [
+  {
+    q: 'Есть ли пробный период?',
+    a:
+      'Да — первые 14 дней бесплатно, с полным доступом ко всем возможностям. ' +
+      'Без карты: попробуйте на своих реальных чеках и клиентах, а потом решайте.',
+  },
+  {
+    q: 'Дешевле ли платить за год?',
+    a:
+      'Да, при оплате за год — скидка 20%: «Личный» выходит 800 ₽ в месяц, «Бизнес» — 5 600 ₽, ' +
+      '«Легенда» — 8 000 ₽. Помесячная оплата тоже доступна, без переплаты за подключение.',
+  },
   {
     q: 'Что входит в цену?',
     a:

@@ -1,12 +1,62 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Link, useNavigationType } from 'react-router-dom';
-import { ChevronDown, ChevronRight, ShieldCheck } from 'lucide-react';
+import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { motion, useReducedMotion } from 'framer-motion';
 import Reveal from './sections/Reveal';
 import CtaSection from './sections/CtaSection';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
-import { ComparisonDetails, ComparisonTable, ImplementationCard, PlanCard } from './sections/pricingShared';
+import {
+  type Billing,
+  ComparisonTable,
+  ComparisonTableMobile,
+  ImplementationCard,
+  PlanCard,
+} from './sections/pricingShared';
 import { pricing, pricingFaq, tarifyHero } from './content';
+
+/** Сегмент-контрол «Помесячно | На год −20%» с перетекающим ползунком. */
+function BillingToggle({ value, onChange }: { value: Billing; onChange: (b: Billing) => void }) {
+  const reduce = useReducedMotion();
+  const options: { key: Billing; label: string; badge?: string }[] = [
+    { key: 'monthly', label: 'Помесячно' },
+    { key: 'yearly', label: 'На год', badge: '−20%' },
+  ];
+  return (
+    <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1 shadow-sm">
+      {options.map((o) => {
+        const active = value === o.key;
+        return (
+          <button
+            key={o.key}
+            type="button"
+            onClick={() => onChange(o.key)}
+            aria-pressed={active}
+            className="relative inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-4 text-sm font-semibold"
+          >
+            {active && (
+              <motion.span
+                layoutId="billing-pill"
+                transition={reduce ? { duration: 0 } : { type: 'spring', stiffness: 400, damping: 34 }}
+                className="absolute inset-0 rounded-full bg-primary-600"
+              />
+            )}
+            <span className={`relative z-10 ${active ? 'text-white' : 'text-slate-600'}`}>{o.label}</span>
+            {o.badge && (
+              <span
+                className={`relative z-10 rounded-full px-1.5 py-0.5 text-[11px] font-bold ${
+                  active ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-600'
+                }`}
+              >
+                {o.badge}
+              </span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 /**
  * Отдельная страница тарифов /tarify. Публичная — доступна и гостям,
@@ -66,6 +116,8 @@ function Breadcrumbs() {
 
 export default function TarifyPage() {
   const navigationType = useNavigationType();
+  // По умолчанию «На год» — якорим выгодную цену (честно помечено −20%).
+  const [billing, setBilling] = useState<Billing>('yearly');
 
   // Заголовок вкладки с восстановлением при уходе
   useEffect(() => {
@@ -126,25 +178,35 @@ export default function TarifyPage() {
           <p className="mt-3 text-lg text-slate-600">{tarifyHero.subtitle}</p>
         </Reveal>
 
-        {/* Карточки планов: на мобиле — вертикальная стопка («Легенда» первой,
-            карусель на отдельной странице не нужна), на desktop — 3 колонки
-            в исходном порядке; pt-3 даёт место бейджу -top-3 */}
+        {/* Плашка «14 дней бесплатно» */}
         <Reveal delay={0.05}>
-          <div className="mt-8 flex flex-col gap-4 pt-3 sm:mt-10 md:grid md:grid-cols-3">
-            {pricing.plans.map((plan) => (
-              <div key={plan.key} className={plan.highlighted ? 'order-first md:order-none' : ''}>
-                <PlanCard plan={plan} />
-              </div>
-            ))}
+          <div className="mt-6 flex items-start gap-3 rounded-2xl border border-emerald-200/70 bg-emerald-50 p-4">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-100">
+              <Sparkles className="h-5 w-5 text-emerald-600" aria-hidden />
+            </span>
+            <p className="text-sm leading-relaxed text-emerald-900">
+              <span className="font-semibold">Первые 14 дней — бесплатно.</span> Полный доступ ко всем возможностям —
+              решите на своих цифрах, а не на обещаниях.
+            </p>
           </div>
         </Reveal>
 
-        {/* Честность — снимаем страх скрытых платежей */}
+        {/* Переключатель периода оплаты */}
+        <Reveal delay={0.08}>
+          <div className="mt-8 flex justify-center">
+            <BillingToggle value={billing} onChange={setBilling} />
+          </div>
+        </Reveal>
+
+        {/* Карточки планов: мобиле — стопка («Легенда» первой), desktop — 3 колонки */}
         <Reveal delay={0.1}>
-          <p className="mt-6 flex items-center justify-center gap-2 text-center text-sm text-slate-500">
-            <ShieldCheck aria-hidden className="h-4 w-4 shrink-0 text-emerald-500" />
-            {pricing.honestyNote}
-          </p>
+          <div className="mt-6 flex flex-col gap-4 pt-3 md:grid md:grid-cols-3">
+            {pricing.plans.map((plan) => (
+              <div key={plan.key} className={plan.highlighted ? 'order-first md:order-none' : ''}>
+                <PlanCard plan={plan} billing={billing} />
+              </div>
+            ))}
+          </div>
         </Reveal>
 
         {/* Внедрение под ключ */}
@@ -154,7 +216,7 @@ export default function TarifyPage() {
           </div>
         </Reveal>
 
-        {/* Полное сравнение: desktop-таблица / mobile-details */}
+        {/* Полное сравнение: desktop-таблица / mobile — свайп-таблица */}
         <Reveal delay={0.1} className="hidden md:block">
           <h2 className="mt-16 text-center text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
             {pricing.comparisonTitle}
@@ -162,7 +224,10 @@ export default function TarifyPage() {
           <ComparisonTable />
         </Reveal>
         <Reveal delay={0.1} className="md:hidden">
-          <ComparisonDetails />
+          <h2 className="mt-14 text-xl font-extrabold tracking-tight text-slate-900 text-balance">
+            {pricing.comparisonTitle}
+          </h2>
+          <ComparisonTableMobile />
         </Reveal>
 
         {/* Mini-FAQ о ценах */}

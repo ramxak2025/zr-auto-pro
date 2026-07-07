@@ -31,7 +31,7 @@ export const WHATSAPP_INSTALL_MESSAGE = 'Здравствуйте! Хочу ус
 
 /** Текст первого сообщения в WhatsApp для CTA «Подключить» на карточке тарифа. */
 export function getPlanConnectMessage(planName: string): string {
-  return `Здравствуйте! Хочу подключить Autexa, тариф «${planName}»`;
+  return `Здравствуйте! Хочу попробовать Autexa 14 дней бесплатно, тариф «${planName}»`;
 }
 
 /** Текст первого сообщения в WhatsApp для «Обсудить внедрение» (внедрение под ключ). */

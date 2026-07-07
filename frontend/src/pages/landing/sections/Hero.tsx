@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
-import { ArrowRight, Banknote, CheckCircle2, TrendingUp, Gauge } from 'lucide-react';
+import { ArrowRight, Banknote, CheckCircle2, TrendingUp, Gauge, Sparkles } from 'lucide-react';
 import CtaButton from './CtaButton';
 import { hero, heroLightReady } from '../content';
 import { getAccessContactUrl, getWhatsAppUrl } from '../config';
@@ -292,6 +292,11 @@ function MobileHero() {
           </a>
         </motion.div>
 
+        <motion.p variants={item} className="mt-3 flex items-center gap-1.5 text-sm text-slate-500">
+          <Sparkles className="h-4 w-4 text-emerald-500" aria-hidden />
+          14 дней бесплатно · все возможности
+        </motion.p>
+
         <motion.div variants={item} className="mt-8">
           <MobileHeroPhotoCard status={photoStatus} onStatus={setPhotoStatus} />
         </motion.div>
@@ -369,6 +374,14 @@ function DesktopHero() {
               Смотреть возможности
             </a>
           </motion.div>
+
+          <motion.p
+            variants={item}
+            className="mt-4 flex items-center justify-center gap-1.5 text-sm text-slate-500 lg:justify-start"
+          >
+            <Sparkles className="h-4 w-4 text-emerald-500" aria-hidden />
+            14 дней бесплатно · все возможности
+          </motion.p>
         </div>
 
         <motion.div variants={item}>
