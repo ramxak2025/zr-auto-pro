@@ -43,11 +43,21 @@ export class ReportsService {
     const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
     const dateTo = this.safeDate(query?.dateTo, this.todayISO());
 
+    // ITEM 2 — «по гарантии» = убыток, не выручка. Гарантийные чеки
+    // (payment_method='warranty') ИСКЛЮЧАЮТСЯ из revenue / productCost /
+    // salaries (FILTER … IS DISTINCT FROM 'warranty' — NULL считается
+    // не-гарантией), а вместо них учитывается ОТДЕЛЬНЫЙ убыток warrantyLoss =
+    // Σ(product_cost_total + service_salary_total) по гарантийным чекам
+    // (закупка запчастей + выплата мастеру за работу). netProfit уменьшается
+    // ровно на этот убыток. Чистый вклад гарантийного чека в netProfit =
+    // −(запчасти+зарплата), выручка = 0. Полностью derived из колонок checks —
+    // ничего не материализуем, двойного счёта с «Расходами» нет (см. expenses).
     const { rows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(total_revenue), 0) as revenue,
-         COALESCE(SUM(product_cost_total), 0) as product_cost,
-         COALESCE(SUM(service_salary_total) + SUM(COALESCE(product_salary_total, 0)), 0) as salaries,
+         COALESCE(SUM(total_revenue) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
+         COALESCE(SUM(product_cost_total) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as product_cost,
+         COALESCE(SUM(service_salary_total + COALESCE(product_salary_total, 0)) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as salaries,
+         COALESCE(SUM(product_cost_total + service_salary_total) FILTER (WHERE payment_method = 'warranty'), 0) as warranty_loss,
          COUNT(*) as check_count
        FROM checks
        WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false
@@ -59,6 +69,7 @@ export class ReportsService {
     const revenue = parseFloat(r.revenue) || 0;
     const productCost = parseFloat(r.product_cost) || 0;
     const salaries = parseFloat(r.salaries) || 0;
+    const warrantyLoss = parseFloat(r.warranty_loss) || 0;
     const grossProfit = revenue - productCost;
 
     // Get director expenses for the same period. Two corrections vs. naïve
@@ -79,7 +90,10 @@ export class ReportsService {
     );
     const otherExpenses = parseFloat(expRows[0]?.total) || 0;
 
-    const netProfit = grossProfit - salaries - otherExpenses;
+    // Гарантия вычитается ОТДЕЛЬНЫМ термом (warrantyLoss). productCost/salaries
+    // выше уже НЕ содержат гарантийных чеков (FILTER), поэтому двойного вычета
+    // запчастей/зарплаты нет.
+    const netProfit = grossProfit - salaries - otherExpenses - warrantyLoss;
 
     return {
       dateFrom,
@@ -88,6 +102,10 @@ export class ReportsService {
       productCost,
       salaries,
       otherExpenses,
+      // ITEM 2 — убыток по гарантийным чекам за период (запчасти + выплата
+      // мастеру). Уже вычтен из netProfit; отдаётся отдельно, чтобы UI мог
+      // показать «Гарантия (убыток)» строкой. 0 если гарантийных чеков не было.
+      warrantyLoss,
       grossProfit,
       netProfit,
       checkCount: parseInt(r.check_count) || 0,
@@ -243,6 +261,7 @@ export class ReportsService {
           cash: 0,
           card: 0,
           warranty: 0,
+          warrantyLoss: 0,
           total: 0,
           installmentDebt: 0,
           installmentPaid: 0,
@@ -259,18 +278,25 @@ export class ReportsService {
       masterFilter = ` AND master_id = $${params.length}`;
     }
 
-    // Разбивка оборота на 4 корзины: наличные + карта + гарантия + долг по
-    // рассрочке. Чек в рассрочку пишет total_revenue полностью (начисление), а
-    // в cash_amount/card_amount — только первый взнос; остаток долга раньше не
-    // попадал ни в одну корзину и «оборот ≠ нал+карта+гарантия» не сходился.
-    // Тождество: cash + card + warranty + installmentDebt = total.
+    // ITEM 2 — гарантия ИСКЛЮЧЕНА из оборота (total): работа по гарантии денег
+    // в кассу не приносит. total теперь = нал + карта + долг по рассрочке
+    // (гарантийные чеки имеют cash=card=0 и в total НЕ входят). Новое тождество:
+    // cash + card + installmentDebt = total.
+    //   • warranty (справочно, для совместимости) — «отпускная» стоимость
+    //     гарантийных работ = Σ total_revenue по гарантии (сколько было бы
+    //     выручки, если бы не гарантия). НЕ входит в total.
+    //   • warrantyLoss (НОВОЕ) — реальный УБЫТОК по гарантии = Σ(product_cost_total
+    //     + service_salary_total): закупка запчастей + выплата мастеру за работу.
+    //     Показывается как затрата в «Движении денег». Derived из checks, в
+    //     таблицу расходов не пишется → двойного счёта нет.
     const { rows } = await this.pool.query(
       `SELECT date::date as day,
               COALESCE(SUM(cash_amount), 0) as cash,
               COALESCE(SUM(card_amount), 0) as card,
               COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN total_revenue ELSE 0 END), 0) as warranty,
+              COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN product_cost_total + service_salary_total ELSE 0 END), 0) as warranty_loss,
               COALESCE(SUM(CASE WHEN payment_method = 'installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) ELSE 0 END), 0) as installment_debt,
-              COALESCE(SUM(total_revenue), 0) as total
+              COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0) as total
        FROM checks
        WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false
          AND deleted_at IS NULL${masterFilter}
@@ -323,6 +349,7 @@ export class ReportsService {
       cash: parseFloat(r.cash) || 0,
       card: parseFloat(r.card) || 0,
       warranty: parseFloat(r.warranty) || 0,
+      warrantyLoss: parseFloat(r.warranty_loss) || 0,
       installmentDebt: parseFloat(r.installment_debt) || 0,
       installmentPaid: 0,
       installmentPaidCash: 0,
@@ -350,6 +377,7 @@ export class ReportsService {
           cash: 0,
           card: 0,
           warranty: 0,
+          warrantyLoss: 0,
           installmentDebt: 0,
           installmentPaid: paid,
           installmentPaidCash: paidCash,
@@ -366,6 +394,7 @@ export class ReportsService {
       cash: 0,
       card: 0,
       warranty: 0,
+      warrantyLoss: 0,
       total: 0,
       installmentDebt: 0,
       installmentPaid: 0,
@@ -376,6 +405,7 @@ export class ReportsService {
       totals.cash += d.cash;
       totals.card += d.card;
       totals.warranty += d.warranty;
+      totals.warrantyLoss += d.warrantyLoss;
       totals.installmentDebt += d.installmentDebt;
       totals.installmentPaid += d.installmentPaid;
       totals.installmentPaidCash += d.installmentPaidCash;
@@ -405,16 +435,26 @@ export class ReportsService {
     const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
 
     // Existing dashboard numbers (preserve compatibility — caller sees them too).
+    // ITEM 2 — гарантия ИСКЛЮЧЕНА из выручки; в прибыли заменена на убыток.
+    //   • revenue_today/month: FILTER … IS DISTINCT FROM 'warranty' — гарантия
+    //     не выручка.
+    //   • profit_today/month: для гарантийного чека вместо сохранённого
+    //     (положительного) profit берём −(product_cost_total + service_salary_total)
+    //     — реальный убыток (запчасти + выплата мастеру). netProfit = profit −
+    //     расходы, поэтому убыток корректно уменьшает чистую прибыль.
+    //   • warranty_today (справочно) — «отпускная» сумма гарантийных работ.
+    //   • warranty_loss_today (НОВОЕ) — тот же убыток за сегодня для cashPosition.
     const { rows: baseRows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN date >= $2 THEN total_revenue END), 0) AS revenue_today,
+         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) AS revenue_today,
          COALESCE(COUNT(CASE WHEN date >= $2 THEN 1 END), 0) AS checks_today,
-         COALESCE(SUM(CASE WHEN date >= $3 THEN total_revenue END), 0) AS revenue_month,
-         COALESCE(SUM(CASE WHEN date >= $2 THEN profit END), 0) AS profit_today,
-         COALESCE(SUM(CASE WHEN date >= $3 THEN profit END), 0) AS profit_month,
+         COALESCE(SUM(CASE WHEN date >= $3 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) AS revenue_month,
+         COALESCE(SUM(CASE WHEN date >= $2 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total) ELSE profit END) END), 0) AS profit_today,
+         COALESCE(SUM(CASE WHEN date >= $3 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total) ELSE profit END) END), 0) AS profit_month,
          COALESCE(SUM(CASE WHEN date >= $2 THEN cash_amount END), 0) AS cash_today,
          COALESCE(SUM(CASE WHEN date >= $2 THEN card_amount END), 0) AS card_today,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN total_revenue END), 0) AS warranty_today,
+         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN product_cost_total + service_salary_total END), 0) AS warranty_loss_today,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) END), 0) AS installment_debt_today
        FROM checks
        WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL`,
@@ -452,14 +492,19 @@ export class ReportsService {
     const cashToday = parseFloat(base.cash_today) || 0;
     const cardToday = parseFloat(base.card_today) || 0;
     const warrantyToday = parseFloat(base.warranty_today) || 0;
+    const warrantyLossToday = parseFloat(base.warranty_loss_today) || 0;
     const installmentDebtToday = parseFloat(base.installment_debt_today) || 0;
 
     const netProfitToday = profitToday - expToday;
     const netProfitMonth = profitMonth - expMonth;
 
     // Previous-period net profit (last month) for marginPctChange.
+    // Гарантия исключена из выручки и заменена на убыток в прибыли — та же
+    // семантика, что в baseRows, чтобы marginPctChange считался консистентно.
     const { rows: prevRows } = await this.pool.query(
-      `SELECT COALESCE(SUM(total_revenue), 0) AS revenue, COALESCE(SUM(profit), 0) AS profit
+      `SELECT
+         COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0) AS revenue,
+         COALESCE(SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total) ELSE profit END), 0) AS profit
          FROM checks
         WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
           AND date >= $2 AND date < $3`,
@@ -479,7 +524,8 @@ export class ReportsService {
            SELECT generate_series(now()::date - interval '29 days', now()::date, '1 day')::date AS day
          ) d
          LEFT JOIN (
-           SELECT date::date AS day, SUM(profit) AS profit
+           SELECT date::date AS day,
+                  SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total) ELSE profit END) AS profit
              FROM checks
             WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
               AND date >= now() - interval '30 days'
@@ -517,16 +563,19 @@ export class ReportsService {
     const installmentPaidCashToday = parseFloat(instPaidRows[0]?.paid_cash) || 0;
     const installmentPaidCardToday = parseFloat(instPaidRows[0]?.paid_card) || 0;
 
-    // Cash position: simple — cumulative cash + card on paid checks.
-    // We use today's amount; richer interpretation can be wired later.
-    // `total` намеренно остаётся cash+card+warranty (реально принятые сегодня
-    // деньги + гарантия); installmentDebt/installmentPaid — отдельные строки,
-    // клиенты показывают их сами, когда поле пришло числом.
+    // Cash position: реально принятые сегодня деньги = cash + card (ITEM 2 —
+    // гарантия БОЛЬШЕ не входит в total: работа по гарантии денег в кассу не
+    // приносит). `warranty` остаётся справочным полем (отпускная стоимость
+    // гарантийных работ), `warrantyLoss` (НОВОЕ) — сегодняшний убыток по
+    // гарантии (запчасти + выплата мастеру) для показа затратой.
+    // installmentDebt/installmentPaid — отдельные строки, клиенты показывают их
+    // сами, когда поле пришло числом.
     const cashPosition = {
       cash: cashToday,
       card: cardToday,
       warranty: warrantyToday,
-      total: cashToday + cardToday + warrantyToday,
+      warrantyLoss: warrantyLossToday,
+      total: cashToday + cardToday,
       installmentDebt: installmentDebtToday,
       installmentPaid: installmentPaidToday,
       installmentPaidCash: installmentPaidCashToday,
@@ -544,15 +593,16 @@ export class ReportsService {
       sum: parseFloat(defRows[0]?.sum) || 0,
     };
 
-    // Personal record: best day + best month all time.
+    // Personal record: best day + best month all time. Гарантия исключена из
+    // выручки (ITEM 2), поэтому рекорд считается по реальной выручке.
     const { rows: bestDayRows } = await this.pool.query(
-      `SELECT date::date AS day, SUM(total_revenue) AS revenue
+      `SELECT date::date AS day, SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END) AS revenue
          FROM checks WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
          GROUP BY day ORDER BY revenue DESC LIMIT 1`,
       [tenantID],
     );
     const { rows: bestMonthRows } = await this.pool.query(
-      `SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS ym, SUM(total_revenue) AS revenue
+      `SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS ym, SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END) AS revenue
          FROM checks WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
          GROUP BY ym ORDER BY revenue DESC LIMIT 1`,
       [tenantID],

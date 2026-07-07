@@ -779,8 +779,12 @@ export function createReportsApi(api: HttpClient) {
     getFinancial: (params: DateRangeParams) => api.get<FinancialReport>('/reports/financial', { params }),
     getCashFlow: (params: CashFlowParams) =>
       api.get<{
-        // installmentDebt — долг по чекам в рассрочку за день (входит в total:
-        // cash + card + warranty + installmentDebt = total). installmentPaid —
+        // ITEM 2 — гарантия ИСКЛЮЧЕНА из оборота: total = cash + card +
+        // installmentDebt (гарантийные чеки имеют cash=card=0 и в total НЕ
+        // входят). `warranty` — справочно, отпускная стоимость гарантийных
+        // работ (НЕ в total). `warrantyLoss` (НОВОЕ) — реальный убыток по
+        // гарантии за день (запчасти + выплата мастеру), показывается затратой.
+        // installmentDebt — долг по чекам в рассрочку за день. installmentPaid —
         // погашения рассрочки по дате платежа, в total НЕ входят (деньги за
         // прошлые продажи). installmentPaidCash/Card (119) — разбивка погашений
         // по способу оплаты (installmentPaid = Cash + Card; до-миграционные
@@ -791,6 +795,7 @@ export function createReportsApi(api: HttpClient) {
           cash: number;
           card: number;
           warranty: number;
+          warrantyLoss?: number;
           total: number;
           installmentDebt?: number;
           installmentPaid?: number;
@@ -801,6 +806,7 @@ export function createReportsApi(api: HttpClient) {
           cash: number;
           card: number;
           warranty: number;
+          warrantyLoss?: number;
           total: number;
           installmentDebt?: number;
           installmentPaid?: number;
@@ -979,7 +985,9 @@ export function createExpensesApi(api: HttpClient) {
           userName?: string;
           createdBy?: string;
           creatorName?: string;
-          source?: 'owner' | 'employee';
+          // 'warranty' — DERIVED «Гарантия (убыток)» rows injected by the server
+          // (synthetic id `warranty-loss:<checkId>`, not a persisted expense).
+          source?: 'owner' | 'employee' | 'warranty';
           approvalStatus?: 'approved' | 'pending' | 'rejected';
           createdAt: string;
         }>

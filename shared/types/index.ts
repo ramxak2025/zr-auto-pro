@@ -1089,6 +1089,21 @@ export interface Check {
   productSalaryTotal?: number;
   totalCost: number;
   profit: number;
+  /**
+   * «По гарантии» (payment_method='warranty'). Warranty work earns nothing and
+   * is a LOSS: it is excluded from revenue / turnover / profit everywhere, and
+   * instead subtracts {@link warrantyLoss} from net profit. Present on BOTH the
+   * list (journal) and detail responses. Additive — older clients ignore it.
+   */
+  isWarranty?: boolean;
+  /**
+   * Computed loss for a warranty check = parts purchase cost
+   * (Σ cost_price × qty = productCostTotal) + the master's payout for the labor
+   * on this check (serviceSalaryTotal). 0 for non-warranty checks. Derived
+   * server-side from the check's own columns (never materialised). The journal
+   * can label the check and show this as the loss.
+   */
+  warrantyLoss?: number;
   /** Warranties spawned by this check (only populated by /checks/:id). */
   warrantyClaims?: WarrantyClaim[];
   /** Set when the check has been returned (full or partial). FE renders a strikethrough + badge in the journal. */
@@ -1748,6 +1763,13 @@ export interface FinancialReport {
   revenue: number;
   productCost: number;
   salaries: number;
+  /**
+   * «По гарантии» — total warranty LOSS in the window = Σ(parts cost + master
+   * labor payout) over warranty checks. Warranty checks are EXCLUDED from
+   * revenue / productCost / salaries; this loss is subtracted from netProfit
+   * separately. Optional so an older backend (no field) is treated as 0.
+   */
+  warrantyLoss?: number;
   grossProfit: number;
   netProfit: number;
   checkCount: number;
@@ -1974,8 +1996,14 @@ export interface Expense {
   /** User who entered the row (047_expenses_by_employee). */
   createdBy?: string;
   creatorName?: string;
-  /** 'owner' for owner/director/admin-created, 'employee' for non-privileged submitters. */
-  source?: 'owner' | 'employee';
+  /**
+   * 'owner' for owner/director/admin-created, 'employee' for non-privileged
+   * submitters, 'warranty' for the DERIVED «Гарантия (убыток)» rows the server
+   * injects into the list (not a persisted expense — see below). A 'warranty'
+   * row has a synthetic id (`warranty-loss:<checkId>`) and cannot be
+   * approved / rejected / deleted.
+   */
+  source?: 'owner' | 'employee' | 'warranty';
   /** 'approved' (default), 'pending' (over limit), 'rejected'. */
   approvalStatus?: 'approved' | 'pending' | 'rejected';
   createdAt: string;
@@ -2323,18 +2351,23 @@ export interface DashboardV2 {
   netProfitToday: number;
   netProfitMonth: number;
   /**
-   * total = cash + card + warranty (как раньше). installmentDebt — долг по
-   * сегодняшним чекам в рассрочку; installmentPaid — сегодняшние погашения
-   * рассрочки (по дате платежа, деньги за прошлые продажи).
-   * installmentPaidCash/Card (119) — разбивка погашений по способу оплаты
-   * (installmentPaid = Cash + Card; до-миграционные платежи считаются налом).
-   * Все опциональны — старый бэкенд их не шлёт, клиенты показывают строки
-   * только по числу.
+   * total = cash + card (ITEM 2 — гарантия БОЛЬШЕ не входит в total: работа по
+   * гарантии денег в кассу не приносит). `warranty` остаётся справочным полем
+   * (отпускная стоимость гарантийных работ, НЕ входит в total); `warrantyLoss`
+   * — сегодняшний убыток по гарантии (запчасти + выплата мастеру), показывается
+   * затратой. installmentDebt — долг по сегодняшним чекам в рассрочку;
+   * installmentPaid — сегодняшние погашения рассрочки (по дате платежа, деньги
+   * за прошлые продажи). installmentPaidCash/Card (119) — разбивка погашений по
+   * способу оплаты (installmentPaid = Cash + Card; до-миграционные платежи
+   * считаются налом). Все опциональны — старый бэкенд их не шлёт, клиенты
+   * показывают строки только по числу.
    */
   cashPosition: {
     cash: number;
     card: number;
     warranty: number;
+    /** «По гарантии» — сегодняшний убыток (запчасти + выплата мастеру). */
+    warrantyLoss?: number;
     total: number;
     installmentDebt?: number;
     installmentPaid?: number;

@@ -13,6 +13,13 @@ import { PushService } from '../push/push.service';
 
 const PRIVILEGED_ROLES = new Set(['director', 'admin', 'superadmin']);
 
+// A real expense id is a uuid. The «Гарантия (убыток)» rows injected into the
+// list (getAll) are DERIVED, non-persistent and carry a synthetic id
+// (`warranty-loss:<checkId>`). Guard the mutating endpoints so a synthetic (or
+// any non-uuid / garbage) id resolves to a clean 404 instead of a Postgres
+// "invalid input syntax for type uuid" 500 on the `WHERE id=$1` cast.
+const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
 @Injectable()
 export class ExpensesService {
   constructor(
@@ -136,7 +143,21 @@ export class ExpensesService {
       params,
     );
 
-    return rows.map((r) => ({
+    const expenses: Array<{
+      id: string;
+      categoryId: string | null;
+      categoryName: string | null;
+      amount: number;
+      description: string | null;
+      date: unknown;
+      userId: string | null;
+      userName: string | null;
+      createdBy: string | null;
+      creatorName: string | null;
+      source: string;
+      approvalStatus: string;
+      createdAt: unknown;
+    }> = rows.map((r) => ({
       id: r.id,
       categoryId: r.category_id,
       categoryName: r.category_name,
@@ -151,6 +172,69 @@ export class ExpensesService {
       approvalStatus: r.approval_status ?? 'approved',
       createdAt: r.created_at,
     }));
+
+    // ITEM 2 — «Гарантия (убыток)» видимой затратой в списке «Расходы».
+    // DERIVED, НЕ материализуем: строки-убытки строятся из гарантийных чеков
+    // периода на лету и в таблицу expenses НЕ пишутся. Поэтому getFinancial /
+    // dashboardV2 (которые суммируют ТАБЛИЦУ expenses для otherExpenses) их не
+    // видят, а убыток по гарантии учитывается ровно ОДИН раз — производным
+    // термом warrantyLoss из checks. Гарантия двойного счёта: 0.
+    //
+    // amount = product_cost_total + service_salary_total (закупка запчастей +
+    // выплата мастеру) — та же формула, что в reports/checks. Показываем только
+    // когда фильтры допускают: по конкретному сотруднику (createdBy) у
+    // синтетической строки автора нет, а очередь на одобрение (approvalStatus
+    // ≠ 'approved') — гарантия всегда реализованный расход, не «на одобрении».
+    const wantWarranty = !query.createdBy && (!query.approvalStatus || query.approvalStatus === 'approved');
+    if (wantWarranty) {
+      const wParams: any[] = [tenantID];
+      let wWhere =
+        `ch.tenant_id = $1 AND ch.payment_method = 'warranty' AND ch.is_deferred = false ` +
+        `AND ch.deleted_at IS NULL AND (ch.product_cost_total + ch.service_salary_total) > 0`;
+      let wIdx = 2;
+      if (dateFrom) {
+        wWhere += ` AND ch.date >= $${wIdx++}`;
+        wParams.push(dateFrom);
+      }
+      if (dateTo) {
+        wWhere += ` AND ch.date <= ($${wIdx++}::date + 1)::timestamptz`;
+        wParams.push(dateTo);
+      }
+      const { rows: wRows } = await this.pool.query(
+        `SELECT ch.id, ch.number, ch.date, ch.created_at, ch.master_id,
+                (ch.product_cost_total + ch.service_salary_total) AS loss,
+                u.full_name AS master_name, ca.plate_number
+           FROM checks ch
+           LEFT JOIN users u ON u.id = ch.master_id AND u.tenant_id = ch.tenant_id
+           LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
+          WHERE ${wWhere}
+          ORDER BY ch.date DESC
+          LIMIT 1000`,
+        wParams,
+      );
+      for (const w of wRows) {
+        expenses.push({
+          id: `warranty-loss:${w.id}`,
+          categoryId: null,
+          categoryName: 'Гарантия (убыток)',
+          amount: parseFloat(w.loss) || 0,
+          description: `Гарантия — заказ-наряд #${w.number}${w.plate_number ? ` · ${w.plate_number}` : ''}`,
+          date: w.date,
+          userId: w.master_id ?? null,
+          userName: w.master_name ?? null,
+          createdBy: null,
+          creatorName: null,
+          source: 'warranty',
+          approvalStatus: 'approved',
+          createdAt: w.created_at,
+        });
+        // Держим тот же порядок, что и основной список — по дате убывания —
+        // чтобы гарантийные строки встали в хронологию, а не хвостом.
+      }
+      expenses.sort((a, b) => new Date(b.date as string).getTime() - new Date(a.date as string).getTime());
+    }
+
+    return expenses;
   }
 
   async create(tenantID: string, userID: string, userRole: string, dto: any) {
@@ -271,6 +355,7 @@ export class ExpensesService {
    * a no-op and returns the existing record.
    */
   async approve(id: string, tenantID: string) {
+    if (!UUID_RE.test(id)) throw new NotFoundException({ message: 'Расход не найден' });
     const { rows } = await this.pool.query(
       `UPDATE expenses SET approval_status='approved' WHERE id=$1 AND tenant_id=$2 RETURNING *`,
       [id, tenantID],
@@ -281,6 +366,7 @@ export class ExpensesService {
   }
 
   async reject(id: string, tenantID: string) {
+    if (!UUID_RE.test(id)) throw new NotFoundException({ message: 'Расход не найден' });
     const { rows } = await this.pool.query(
       `UPDATE expenses SET approval_status='rejected' WHERE id=$1 AND tenant_id=$2 RETURNING *`,
       [id, tenantID],
@@ -291,6 +377,7 @@ export class ExpensesService {
   }
 
   async remove(id: string, tenantID: string) {
+    if (!UUID_RE.test(id)) throw new NotFoundException({ message: 'Расход не найден' });
     const { rows } = await this.pool.query('DELETE FROM expenses WHERE id=$1 AND tenant_id=$2 RETURNING id', [
       id,
       tenantID,

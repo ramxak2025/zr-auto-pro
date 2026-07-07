@@ -501,6 +501,19 @@ export class ChecksService {
       productSalaryTotal: parseFloat(row.product_salary_total) || 0,
       totalCost: parseFloat(row.total_cost) || 0,
       profit: parseFloat(row.profit) || 0,
+      // ITEM 2 — «по гарантии» = УБЫТОК, не выручка. Флаг + производная сумма
+      // убытка, отдаётся и в списке (журнал), и в детали (единый маппер).
+      // warrantyLoss = закупка использованных запчастей (Σ cost_price×qty =
+      // product_cost_total) + выплата мастеру за работу по этому чеку
+      // (service_salary_total) — формула владельца. Считается из уже сохранённых
+      // колонок строки, ничего не материализуем. Для НЕ-гарантийных чеков = 0.
+      // Отчёты/касса исключают гарантию из выручки и вычитают ровно этот убыток
+      // из прибыли (reports.service). Additive — старые клиенты поле игнорируют.
+      isWarranty: row.payment_method === 'warranty',
+      warrantyLoss:
+        row.payment_method === 'warranty'
+          ? round2((parseFloat(row.product_cost_total) || 0) + (parseFloat(row.service_salary_total) || 0))
+          : 0,
       // Returns metadata: 040 added is_returned + returned_at + return_destination + return_scope.
       // FE renders a strikethrough / red badge on returned checks in the journal.
       isReturned: !!row.is_returned,
