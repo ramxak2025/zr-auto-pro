@@ -9,7 +9,7 @@ import { StyleSheet, View } from 'react-native';
 import { Text } from '../../platform/Typography';
 import { colors, spacing, borderRadius, getBadgeColors, softTint } from '../../theme';
 import type { SemanticPalette } from '../../theme/palette';
-import type { Tenant, SubscriptionStatus, FeatureGroup } from '../../../../shared/types';
+import type { Tenant, SubscriptionStatus, SubscriptionPeriodKind, FeatureGroup } from '../../../../shared/types';
 
 /**
  * Human labels for the feature-catalog groups (core / section / integration).
@@ -38,6 +38,21 @@ export function formatDate(d?: string | null): string {
 export function formatFullDate(d?: string | null): string {
   if (!d) return '—';
   return new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+/** Compact «12 июл.» — day + short month, no year. Used inside tight chips. */
+export function formatDayMonth(d?: string | null): string {
+  if (!d) return '—';
+  return new Date(d).toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+}
+
+/** 'YYYY-MM' → короткий русский месяц «июл.» для оси мини-графика. */
+export function formatMonthShort(ym: string): string {
+  const m = /^(\d{4})-(\d{2})$/.exec(ym);
+  if (!m) return ym;
+  const date = new Date(Number(m[1]), Number(m[2]) - 1, 1);
+  if (Number.isNaN(date.getTime())) return ym;
+  return date.toLocaleDateString('ru-RU', { month: 'short' });
 }
 
 export function formatDateTime(d?: string | null): string {
@@ -125,6 +140,34 @@ export function subscriptionStatusInfo(status: SubscriptionStatus, mode: 'light'
   return dark
     ? { bg: badgesDark.green.bg, text: badgesDark.green.text, label: 'Активна' }
     : { bg: colors.green[50], text: colors.green[700], label: 'Активна' };
+}
+
+/**
+ * 122 — chip describing the CURRENT subscription period's KIND with its end
+ * date baked in: «Оплачено до 12 июл.» (paid → green, это выручка) /
+ * «Бесплатно до 12 июл.» (free → blue, НИКОГДА не выручка).
+ *
+ * Returns `null` when the kind is unknown (no ledger row anchoring the current
+ * `subscription_end` — e.g. the date was set directly via PATCH/legacy) so the
+ * caller simply omits the chip. Light branches use the pale tailwind objects;
+ * dark swaps for the translucent badge fills (mirrors {@link tenantStatus}).
+ */
+export function periodKindChip(
+  kind: SubscriptionPeriodKind | null | undefined,
+  subscriptionEnd: string | null | undefined,
+  mode: 'light' | 'dark' = 'light',
+): StatusInfo | null {
+  if (kind !== 'paid' && kind !== 'free') return null;
+  const dark = mode === 'dark';
+  const badges = getBadgeColors('dark');
+  const until = formatDayMonth(subscriptionEnd);
+  if (kind === 'paid')
+    return dark
+      ? { bg: badges.green.bg, text: badges.green.text, label: `Оплачено до ${until}` }
+      : { bg: colors.green[50], text: colors.green[700], label: `Оплачено до ${until}` };
+  return dark
+    ? { bg: badges.blue.bg, text: badges.blue.text, label: `Бесплатно до ${until}` }
+    : { bg: colors.blue[50], text: colors.blue[700], label: `Бесплатно до ${until}` };
 }
 
 /** Coloured status chip. */

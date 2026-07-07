@@ -40,7 +40,7 @@ import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
 import type { Tenant, Plan } from '../../../../shared/types';
 import type { CreateTenantRequest, UpdateTenantRequest } from '../../../../shared/api/types';
-import { formatMoney, isExpired, tenantStatus, StatusChip, InitialAvatar } from './adminShared';
+import { formatMoney, isExpired, tenantStatus, periodKindChip, StatusChip, InitialAvatar } from './adminShared';
 
 type FilterKey = 'all' | 'active' | 'expired';
 
@@ -254,6 +254,29 @@ export default function AdminTenantsScreen() {
       Alert.alert('Неверная дата', 'Введите дату окончания в формате ГГГГ-ММ-ДД.');
       return;
     }
+    // Директор — all-or-nothing при создании: если тронули любое из полей, то
+    // владелец создаётся и требует имя + корректный телефон + пароль ≥ 6.
+    if (!editing.id) {
+      const touchedDirector =
+        editing.directorName.trim() || editing.directorPhone.trim() || editing.directorPassword.length > 0;
+      if (touchedDirector) {
+        if (!editing.directorName.trim()) {
+          haptic('error');
+          Alert.alert('Укажите имя директора', 'Для создания владельца заполните имя.');
+          return;
+        }
+        if (!isValidPhone(editing.directorPhone)) {
+          haptic('error');
+          Alert.alert('Неверный телефон директора', 'Введите корректный номер телефона владельца.');
+          return;
+        }
+        if (editing.directorPassword.length < 6) {
+          haptic('error');
+          Alert.alert('Нужен пароль директора', 'Пароль владельца — минимум 6 символов.');
+          return;
+        }
+      }
+    }
     saveMutation.mutate(editing);
   }, [editing, saveMutation]);
 
@@ -344,28 +367,34 @@ export default function AdminTenantsScreen() {
             <Text style={[styles.emptyText, { color: palette.text.secondary }]}>Ничего не найдено</Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <Pressable
-            onPress={() => {
-              haptic('tap');
-              navigation.navigate('AdminTenantDetail', { id: item.id });
-            }}
-            style={[styles.row, surface.card]}
-          >
-            <InitialAvatar name={item.name} palette={palette} />
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.name, { color: palette.text.primary }]} numberOfLines={1}>
-                {item.name}
-              </Text>
-              <Text style={[styles.meta, { color: palette.text.tertiary }]} numberOfLines={1}>
-                {item.plan?.name || 'Без тарифа'} · {formatMoney(item.monthlyPrice)}/мес ·{' '}
-                {item.userCount ?? item.users?.length ?? 0} польз.
-              </Text>
-            </View>
-            <StatusChip status={tenantStatus(item, palette.mode)} />
-            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-          </Pressable>
-        )}
+        renderItem={({ item }) => {
+          const period = periodKindChip(item.currentPeriodKind, item.subscriptionEnd, palette.mode);
+          return (
+            <Pressable
+              onPress={() => {
+                haptic('tap');
+                navigation.navigate('AdminTenantDetail', { id: item.id });
+              }}
+              style={[styles.row, surface.card]}
+            >
+              <InitialAvatar name={item.name} palette={palette} />
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.name, { color: palette.text.primary }]} numberOfLines={1}>
+                  {item.name}
+                </Text>
+                <Text style={[styles.meta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  {item.plan?.name || 'Без тарифа'} · {formatMoney(item.monthlyPrice)}/мес ·{' '}
+                  {item.userCount ?? item.users?.length ?? 0} польз.
+                </Text>
+              </View>
+              <View style={styles.rowChips}>
+                <StatusChip status={tenantStatus(item, palette.mode)} />
+                {period ? <StatusChip status={period} /> : null}
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+            </Pressable>
+          );
+        }}
       />
 
       {/* Create / edit sheet */}
@@ -682,6 +711,7 @@ const styles = StyleSheet.create({
   chipText: { fontSize: 13, fontWeight: '600' },
   listContent: { paddingHorizontal: spacing[4], paddingTop: spacing[1], gap: spacing[2.5] },
   row: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3] },
+  rowChips: { alignItems: 'flex-end', gap: 4 },
   name: { fontSize: 15, fontWeight: '700' },
   meta: { fontSize: 12, marginTop: 2 },
   emptyBlock: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[16], gap: spacing[2] },

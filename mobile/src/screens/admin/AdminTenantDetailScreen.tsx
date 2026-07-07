@@ -30,6 +30,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { tenantsApi, plansApi, usersApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
+import DateTimePickerModal from '../../components/DateTimePickerModal';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useAuth } from '../../contexts/AuthContext';
@@ -39,16 +40,45 @@ import { colors, spacing, borderRadius, getBadgeColors } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import type { Tenant, Plan, TenantCabinet, SubscriptionStatus, User, PermissionKey } from '../../../../shared/types';
 import { UserRole, PERMISSION_KEYS, ROLE_PERMISSION_DEFAULTS } from '../../../../shared/types';
-import type { UpdateUserRequest } from '../../../../shared/api/types';
+import type { UpdateUserRequest, ExtendSubscriptionRequest } from '../../../../shared/api/types';
 import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
 import {
   formatMoney,
   formatFullDate,
   formatDateTime,
   subscriptionStatusInfo,
+  periodKindChip,
   StatusChip,
   InitialAvatar,
 } from './adminShared';
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Extension presets — fill the «до» date under the chosen paid/free mode. */
+const EXTEND_PRESETS: { label: string; days: number }[] = [
+  { label: '+30 дней', days: 30 },
+  { label: '+90 дней', days: 90 },
+  { label: '+год', days: 365 },
+];
+
+/**
+ * Backend anchors an extension on max(current end, now) — mirror that here so
+ * the presets add days onto the ЖИВОЙ конец подписки, not «now», when the
+ * tenant is still in-window.
+ */
+function anchorFrom(subscriptionEnd?: string | null): Date {
+  const now = new Date();
+  if (!subscriptionEnd) return now;
+  const end = new Date(subscriptionEnd);
+  return Number.isNaN(end.getTime()) || end < now ? now : end;
+}
+
+/** End of the given local day (23:59:59) — natural meaning of «оплачено до …». */
+function endOfDay(d: Date): Date {
+  const c = new Date(d);
+  c.setHours(23, 59, 59, 999);
+  return c;
+}
 
 /** Selectable per-tenant roles (superadmin can't be assigned from this screen). */
 const SELECTABLE_ROLES: { role: UserRole; label: string }[] = [
@@ -105,8 +135,11 @@ export default function AdminTenantDetailScreen() {
   const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
   const { beginImpersonation } = useAuth();
 
-  const [customExtendOpen, setCustomExtendOpen] = React.useState(false);
-  const [customDays, setCustomDays] = React.useState('');
+  const [extendOpen, setExtendOpen] = React.useState(false);
+  const [extendType, setExtendType] = React.useState<'paid' | 'free'>('paid');
+  const [extendAmount, setExtendAmount] = React.useState('');
+  const [extendUntil, setExtendUntil] = React.useState<Date | null>(null);
+  const [extendDatePickerOpen, setExtendDatePickerOpen] = React.useState(false);
   const [suspendOpen, setSuspendOpen] = React.useState(false);
   const [suspendReason, setSuspendReason] = React.useState('');
   const [busy, setBusy] = React.useState<null | 'extend' | 'plan' | 'suspend' | 'impersonate'>(null);
@@ -155,12 +188,13 @@ export default function AdminTenantDetailScreen() {
   }, [queryClient, id]);
 
   const extendMutation = useMutation({
-    mutationFn: async (days: number) => {
+    mutationFn: async (opts: ExtendSubscriptionRequest) => {
       setBusy('extend');
-      await tenantsApi.extend(id, days);
+      await tenantsApi.extend(id, opts);
     },
     onSuccess: () => {
       haptic('success');
+      setExtendOpen(false);
       invalidate();
     },
     onError: () => {
@@ -338,21 +372,53 @@ export default function AdminTenantDetailScreen() {
     );
   }, [editingUser, deleteUserMutation]);
 
-  const handleExtend = React.useCallback(() => {
+  // Open the paid/free extend sheet — prefill the paid amount with the plan
+  // price and default the mode to whatever the CURRENT period is (paid unless
+  // the last period was explicitly free).
+  const openExtend = React.useCallback(() => {
     haptic('tap');
-    Alert.alert('Продлить подписку', tenant ? `«${tenant.name}»` : undefined, [
-      { text: '+30 дней', onPress: () => extendMutation.mutate(30) },
-      { text: '+90 дней', onPress: () => extendMutation.mutate(90) },
-      {
-        text: 'Произвольно…',
-        onPress: () => {
-          setCustomDays('');
-          setCustomExtendOpen(true);
-        },
-      },
-      { text: 'Отмена', style: 'cancel' },
-    ]);
-  }, [extendMutation, tenant]);
+    const price = sub?.planPrice ?? tenant?.monthlyPrice ?? 0;
+    setExtendType(sub?.currentPeriodKind === 'free' ? 'free' : 'paid');
+    setExtendAmount(price > 0 ? String(Math.round(price)) : '');
+    setExtendUntil(null);
+    setExtendOpen(true);
+  }, [sub?.planPrice, sub?.currentPeriodKind, tenant?.monthlyPrice]);
+
+  // Presets fill the «до» date onto the live subscription end (or now, если
+  // истекла) — same anchor the backend uses for `days`.
+  const applyExtendPreset = React.useCallback(
+    (days: number) => {
+      haptic('select');
+      const anchor = anchorFrom(sub?.subscriptionEnd ?? tenant?.subscriptionEnd);
+      setExtendUntil(endOfDay(new Date(anchor.getTime() + days * DAY_MS)));
+    },
+    [sub?.subscriptionEnd, tenant?.subscriptionEnd],
+  );
+
+  const submitExtend = React.useCallback(() => {
+    if (!extendUntil) {
+      haptic('error');
+      Alert.alert('Укажите дату', 'Выберите дату, до которой продлить подписку.');
+      return;
+    }
+    const until = endOfDay(extendUntil);
+    if (until.getTime() <= Date.now()) {
+      haptic('error');
+      Alert.alert('Неверная дата', 'Дата окончания должна быть в будущем.');
+      return;
+    }
+    if (extendType === 'paid') {
+      const amount = Math.round(Number(extendAmount.replace(',', '.')));
+      if (!Number.isFinite(amount) || amount <= 0) {
+        haptic('error');
+        Alert.alert('Укажите сумму', 'Для платного продления введите сумму больше нуля.');
+        return;
+      }
+      extendMutation.mutate({ type: 'paid', amount, until: until.toISOString() });
+    } else {
+      extendMutation.mutate({ type: 'free', until: until.toISOString() });
+    }
+  }, [extendType, extendAmount, extendUntil, extendMutation]);
 
   const handleChangePlan = React.useCallback(() => {
     if (!tenant) return;
@@ -454,6 +520,8 @@ export default function AdminTenantDetailScreen() {
   const expired = status === 'expired';
   const monthlyPrice = sub?.planPrice ?? tenant.monthlyPrice;
   const subscriptionEnd = sub?.subscriptionEnd ?? tenant.subscriptionEnd;
+  // 122 — «Оплачено до …» / «Бесплатно до …» from the authoritative period kind.
+  const periodChip = periodKindChip(sub?.currentPeriodKind, subscriptionEnd, palette.mode);
 
   return (
     <View style={[styles.root, { backgroundColor: palette.bg.canvas }]}>
@@ -470,6 +538,11 @@ export default function AdminTenantDetailScreen() {
             <Text style={[styles.summaryTitle, { color: palette.text.primary }]}>Подписка</Text>
             <StatusChip status={subscriptionStatusInfo(status, palette.mode)} />
           </View>
+          {periodChip ? (
+            <View style={styles.periodChipRow}>
+              <StatusChip status={periodChip} />
+            </View>
+          ) : null}
           <InfoRow label="Тариф" value={planName} palette={palette} />
           <InfoRow label="Стоимость" value={`${formatMoney(monthlyPrice)}/мес`} palette={palette} />
           <InfoRow
@@ -550,7 +623,7 @@ export default function AdminTenantDetailScreen() {
           <ActionButton
             icon="time-outline"
             label="Продлить подписку"
-            onPress={handleExtend}
+            onPress={openExtend}
             loading={busy === 'extend'}
             palette={palette}
             surfaceCard={surface.card}
@@ -646,48 +719,157 @@ export default function AdminTenantDetailScreen() {
         )}
       </ScrollView>
 
-      {/* Custom-days extend modal */}
+      {/* Paid / free extend sheet */}
       <Modal
-        visible={customExtendOpen}
+        visible={extendOpen}
         transparent
         statusBarTranslucent
-        animationType="fade"
-        onRequestClose={() => setCustomExtendOpen(false)}
+        animationType="slide"
+        onRequestClose={() => setExtendOpen(false)}
       >
-        <Pressable style={styles.modalBackdrop} onPress={() => setCustomExtendOpen(false)}>
-          <Pressable style={[styles.modalCard, { backgroundColor: palette.bg.card }]} onPress={() => {}}>
-            <Text style={[styles.modalTitle, { color: palette.text.primary }]}>На сколько дней продлить?</Text>
-            <TextInput
-              style={[styles.modalInput, { color: palette.text.primary, borderColor: palette.border.subtle }]}
-              placeholder="например, 14"
-              placeholderTextColor={palette.text.tertiary}
-              keyboardType="number-pad"
-              value={customDays}
-              onChangeText={setCustomDays}
-              autoFocus
-            />
-            <View style={styles.modalActions}>
-              <Pressable style={styles.modalCancel} onPress={() => setCustomExtendOpen(false)}>
-                <Text style={[styles.modalCancelText, { color: palette.text.secondary }]}>Отмена</Text>
+        <View style={styles.sheetBackdrop}>
+          <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
+            <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
+              <Pressable onPress={() => setExtendOpen(false)} hitSlop={8}>
+                <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
               </Pressable>
-              <Pressable
-                style={[styles.modalConfirm, { backgroundColor: palette.accent.primary }]}
-                onPress={() => {
-                  const n = parseInt(customDays, 10);
-                  if (!Number.isFinite(n) || n <= 0) {
-                    Alert.alert('Неверное число', 'Введите положительное число дней.');
-                    return;
-                  }
-                  setCustomExtendOpen(false);
-                  extendMutation.mutate(n);
-                }}
-              >
-                <Text style={styles.modalConfirmText}>Продлить</Text>
+              <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>Продлить подписку</Text>
+              <Pressable onPress={submitExtend} disabled={busy === 'extend'} hitSlop={8}>
+                {busy === 'extend' ? (
+                  <ActivityIndicator size="small" color={palette.accent.primary} />
+                ) : (
+                  <Text style={[styles.sheetSave, { color: palette.accent.primary }]}>Продлить</Text>
+                )}
               </Pressable>
             </View>
-          </Pressable>
-        </Pressable>
+
+            <ScrollView
+              contentContainerStyle={styles.sheetScroll}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+            >
+              {/* Current period recap */}
+              <View style={[styles.extendRecap, surface.cardCompact]}>
+                <Text style={[styles.extendRecapLabel, { color: palette.text.tertiary }]}>Сейчас действует до</Text>
+                <Text
+                  style={[styles.extendRecapValue, { color: expired ? colors.red[600] : palette.text.primary }]}
+                  numberOfLines={1}
+                >
+                  {formatFullDate(subscriptionEnd)}
+                </Text>
+              </View>
+
+              {/* Paid / free segmented control */}
+              <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Тип продления</Text>
+              <View style={styles.segmented}>
+                {(['paid', 'free'] as const).map((t) => {
+                  const on = extendType === t;
+                  return (
+                    <Pressable
+                      key={t}
+                      onPress={() => {
+                        haptic('select');
+                        setExtendType(t);
+                      }}
+                      style={[
+                        styles.segment,
+                        {
+                          backgroundColor: on ? palette.accent.primary : palette.bg.card,
+                          borderColor: on ? palette.accent.primary : palette.border.subtle,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name={t === 'paid' ? 'card-outline' : 'gift-outline'}
+                        size={16}
+                        color={on ? colors.white : palette.text.secondary}
+                      />
+                      <Text style={[styles.segmentText, { color: on ? colors.white : palette.text.secondary }]}>
+                        {t === 'paid' ? 'Платно' : 'Бесплатно'}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              {/* Amount — paid only */}
+              {extendType === 'paid' ? (
+                <>
+                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Сумма, ₽</Text>
+                  <View style={[styles.inputWrap, surface.cardCompact]}>
+                    <TextInput
+                      style={[styles.sheetInput, styles.amountInput, { color: palette.text.primary }]}
+                      placeholder="0"
+                      placeholderTextColor={palette.text.tertiary}
+                      keyboardType="number-pad"
+                      value={extendAmount}
+                      onChangeText={(v) => setExtendAmount(v.replace(/[^0-9]/g, ''))}
+                    />
+                  </View>
+                </>
+              ) : null}
+
+              {/* Until date */}
+              <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Продлить до</Text>
+              <View style={styles.presetRow}>
+                {EXTEND_PRESETS.map((p) => (
+                  <Pressable
+                    key={p.label}
+                    onPress={() => applyExtendPreset(p.days)}
+                    style={[
+                      styles.presetChip,
+                      { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                    ]}
+                  >
+                    <Text style={[styles.presetChipText, { color: palette.text.secondary }]}>{p.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
+              <Pressable
+                onPress={() => {
+                  haptic('tap');
+                  setExtendDatePickerOpen(true);
+                }}
+                style={[styles.dateRow, surface.cardCompact]}
+              >
+                <Ionicons name="calendar-outline" size={18} color={palette.text.secondary} />
+                <Text style={[styles.dateValue, { color: extendUntil ? palette.text.primary : palette.text.tertiary }]}>
+                  {extendUntil ? formatFullDate(extendUntil.toISOString()) : 'Выбрать дату'}
+                </Text>
+                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+              </Pressable>
+
+              {/* Revenue hint — free is explicitly not revenue */}
+              <View style={styles.extendHintRow}>
+                <Ionicons
+                  name={extendType === 'paid' ? 'trending-up-outline' : 'information-circle-outline'}
+                  size={15}
+                  color={extendType === 'paid' ? colors.green[600] : palette.text.tertiary}
+                />
+                <Text style={[styles.extendHintText, { color: palette.text.secondary }]}>
+                  {extendType === 'paid'
+                    ? 'Сумма попадёт в платную выручку от подписок.'
+                    : 'Бесплатное продление не учитывается как выручка.'}
+                </Text>
+              </View>
+
+              <View style={{ height: spacing[8] }} />
+            </ScrollView>
+          </View>
+        </View>
       </Modal>
+
+      {/* Date picker for the extend sheet (sibling Modal — the proven pattern). */}
+      <DateTimePickerModal
+        visible={extendDatePickerOpen}
+        value={extendUntil ?? anchorFrom(subscriptionEnd)}
+        mode="date"
+        onConfirm={(d) => {
+          setExtendUntil(d);
+          setExtendDatePickerOpen(false);
+        }}
+        onCancel={() => setExtendDatePickerOpen(false)}
+      />
 
       {/* Suspend-with-reason modal (cross-platform — Alert.prompt is iOS-only). */}
       <Modal
@@ -1023,6 +1205,50 @@ const styles = StyleSheet.create({
     marginTop: spacing[1],
   },
   impersonateText: { color: colors.white, fontSize: 16, fontWeight: '700' },
+  periodChipRow: { flexDirection: 'row', paddingBottom: spacing[3] },
+  // Extend sheet
+  extendRecap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[3],
+    marginBottom: spacing[1],
+  },
+  extendRecapLabel: { fontSize: 13, fontWeight: '500' },
+  extendRecapValue: { fontSize: 14, fontWeight: '700', flexShrink: 1, textAlign: 'right' },
+  segmented: { flexDirection: 'row', gap: spacing[2] },
+  segment: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  segmentText: { fontSize: 15, fontWeight: '700' },
+  amountInput: { fontSize: 20, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  presetRow: { flexDirection: 'row', gap: spacing[2] },
+  presetChip: {
+    flex: 1,
+    alignItems: 'center',
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  presetChipText: { fontSize: 13, fontWeight: '600' },
+  dateRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[3.5],
+    marginTop: spacing[2],
+  },
+  dateValue: { flex: 1, fontSize: 16, fontWeight: '600' },
+  extendHintRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2], marginTop: spacing[3] },
+  extendHintText: { flex: 1, fontSize: 13, lineHeight: 18 },
   // Modal
   modalBackdrop: {
     flex: 1,

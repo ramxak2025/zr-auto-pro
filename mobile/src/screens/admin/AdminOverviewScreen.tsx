@@ -15,7 +15,7 @@ import { View, StyleSheet, ScrollView, Pressable, RefreshControl, Alert, Activit
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { tenantsApi } from '../../api/services';
+import { tenantsApi, adminApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
@@ -23,8 +23,19 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { Tenant, PlatformStats } from '../../../../shared/types';
-import { formatMoney, formatDate, daysLeft, tenantStatus, StatusChip, InitialAvatar } from './adminShared';
+import type { Tenant, PlatformStats, SubscriptionRevenue, SubscriptionRevenuePoint } from '../../../../shared/types';
+import type { SemanticPalette } from '../../theme/palette';
+import {
+  formatMoney,
+  formatDate,
+  formatMonthShort,
+  daysLeft,
+  tenantStatus,
+  StatusChip,
+  InitialAvatar,
+} from './adminShared';
+
+const CHART_HEIGHT = 56;
 
 export default function AdminOverviewScreen() {
   const navigation = useNavigation<any>();
@@ -44,6 +55,20 @@ export default function AdminOverviewScreen() {
     queryKey: ['admin-tenants'],
     queryFn: async () => (await tenantsApi.getAll()).data,
   });
+
+  // 122 — collected PAID subscription revenue (this-month / total, paid vs free
+  // extension counts, monthly series). Free extensions never count as revenue.
+  const { data: revenue } = useQuery<SubscriptionRevenue>({
+    queryKey: ['admin-subscription-revenue'],
+    queryFn: async () => (await adminApi.getSubscriptionRevenue()).data,
+  });
+
+  // Server returns the series newest-first; take the most recent 8 and flip to
+  // oldest→newest so the mini-chart reads left → right like a calendar.
+  const chartPoints = React.useMemo<SubscriptionRevenuePoint[]>(
+    () => (revenue?.monthly ?? []).slice(0, 8).reverse(),
+    [revenue?.monthly],
+  );
 
   const extendMutation = useMutation({
     mutationFn: async ({ id, days }: { id: string; days: number }) => {
@@ -67,6 +92,7 @@ export default function AdminOverviewScreen() {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['admin-tenants'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-subscription-revenue'] }),
     ]);
     setRefreshing(false);
   }, [queryClient]);
@@ -168,6 +194,48 @@ export default function AdminOverviewScreen() {
           />
         </View>
 
+        {/* Paid subscription revenue */}
+        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Платная выручка от подписок</Text>
+        <View style={[surface.card, styles.revenueCard]}>
+          <View style={styles.revenueTopRow}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.revenueValue, { color: palette.text.primary }]}>
+                {formatMoney(revenue?.paidRevenueThisMonth ?? 0)}
+              </Text>
+              <Text style={[styles.revenueCaption, { color: palette.text.tertiary }]}>Собрано за этот месяц</Text>
+            </View>
+            <View style={styles.revenueTotalBox}>
+              <Text style={[styles.revenueTotalValue, { color: palette.text.secondary }]}>
+                {formatMoney(revenue?.paidRevenueTotal ?? 0)}
+              </Text>
+              <Text style={[styles.revenueCaption, { color: palette.text.tertiary }]}>Всего</Text>
+            </View>
+          </View>
+
+          {chartPoints.some((p) => p.paidRevenue > 0) ? (
+            <PaidRevenueChart points={chartPoints} palette={palette} />
+          ) : (
+            <Text style={[styles.revenueEmpty, { color: palette.text.tertiary }]}>
+              Пока нет платных продлений за последние месяцы
+            </Text>
+          )}
+
+          <View style={[styles.revenueFooter, { borderTopColor: palette.border.subtle }]}>
+            <View style={styles.revenueStat}>
+              <View style={[styles.revenueDot, { backgroundColor: colors.green[500] }]} />
+              <Text style={[styles.revenueStatText, { color: palette.text.secondary }]}>
+                {revenue?.paidExtensionsThisMonth ?? 0} платных за месяц
+              </Text>
+            </View>
+            <View style={styles.revenueStat}>
+              <View style={[styles.revenueDot, { backgroundColor: palette.text.tertiary }]} />
+              <Text style={[styles.revenueStatText, { color: palette.text.tertiary }]}>
+                {revenue?.freeExtensionsThisMonth ?? 0} бесплатных · не выручка
+              </Text>
+            </View>
+          </View>
+        </View>
+
         {/* Expiring / lapsed board */}
         <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Истекают и просрочены</Text>
         <View style={[styles.card, surface.card]}>
@@ -260,6 +328,38 @@ export default function AdminOverviewScreen() {
   );
 }
 
+/**
+ * Mini bar chart of monthly PAID subscription revenue (oldest → newest). Bars
+ * with zero revenue render as a faint stub so the month still reads on the axis.
+ * Pure Views — no chart lib, Android-safe.
+ */
+function PaidRevenueChart({ points, palette }: { points: SubscriptionRevenuePoint[]; palette: SemanticPalette }) {
+  const max = Math.max(1, ...points.map((p) => p.paidRevenue));
+  return (
+    <View style={styles.chartRow}>
+      {points.map((p) => {
+        const hasRevenue = p.paidRevenue > 0;
+        const h = hasRevenue ? Math.max(4, Math.round((p.paidRevenue / max) * CHART_HEIGHT)) : 3;
+        return (
+          <View key={p.month} style={styles.chartCol}>
+            <View style={styles.chartTrack}>
+              <View
+                style={[
+                  styles.chartBar,
+                  { height: h, backgroundColor: hasRevenue ? palette.accent.primary : palette.border.strong },
+                ]}
+              />
+            </View>
+            <Text style={[styles.chartMonth, { color: palette.text.tertiary }]} numberOfLines={1}>
+              {formatMonthShort(p.month)}
+            </Text>
+          </View>
+        );
+      })}
+    </View>
+  );
+}
+
 function MetricTile({
   icon,
   tint,
@@ -335,6 +435,29 @@ const styles = StyleSheet.create({
     marginLeft: spacing[1],
   },
   card: { padding: spacing[2], gap: 0 },
+  // Paid revenue block
+  revenueCard: { gap: spacing[3.5] },
+  revenueTopRow: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing[3] },
+  revenueValue: { fontSize: 28, fontWeight: '800', letterSpacing: -0.6, fontVariant: ['tabular-nums'] },
+  revenueCaption: { fontSize: 12, marginTop: 2 },
+  revenueTotalBox: { alignItems: 'flex-end' },
+  revenueTotalValue: { fontSize: 17, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  revenueEmpty: { fontSize: 13, textAlign: 'center', paddingVertical: spacing[3] },
+  chartRow: { flexDirection: 'row', alignItems: 'flex-end', gap: spacing[1.5], height: CHART_HEIGHT + 20 },
+  chartCol: { flex: 1, alignItems: 'center', gap: spacing[1] },
+  chartTrack: { height: CHART_HEIGHT, justifyContent: 'flex-end', width: '100%', alignItems: 'center' },
+  chartBar: { width: '72%', borderRadius: 4, minHeight: 3 },
+  chartMonth: { fontSize: 10, fontWeight: '600' },
+  revenueFooter: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing[3],
+    paddingTop: spacing[3],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  revenueStat: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
+  revenueDot: { width: 8, height: 8, borderRadius: 4 },
+  revenueStatText: { fontSize: 12.5, fontWeight: '600' },
   expRow: {
     flexDirection: 'row',
     alignItems: 'center',
