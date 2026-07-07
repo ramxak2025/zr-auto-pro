@@ -1,7 +1,7 @@
 import { useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
-import { ArrowRight, Banknote, CheckCircle2, TrendingUp } from 'lucide-react';
+import { ArrowRight, Banknote, CheckCircle2, TrendingUp, Gauge } from 'lucide-react';
 import CtaButton from './CtaButton';
 import { hero, heroLightReady } from '../content';
 import { getAccessContactUrl, getWhatsAppUrl } from '../config';
@@ -120,7 +120,7 @@ function splitTitle(title: string): { head: string; tail: string } {
 function AnchorBadge() {
   return (
     <span className="inline-flex min-h-[44px] items-center gap-2 rounded-full border border-slate-200/80 bg-white px-4 py-1.5 text-xs font-medium text-slate-600 shadow-sm">
-      <img src="/logo-icon.png" alt="" width={16} height={16} decoding="async" className="h-4 w-4 rounded" />
+      <Gauge className="h-4 w-4 text-primary-600" aria-hidden />
       {hero.badge}
     </span>
   );
