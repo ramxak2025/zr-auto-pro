@@ -678,6 +678,8 @@ export type PermissionKey =
   | 'profit_view'
   | 'financial_reports'
   | 'export_data'
+  | 'cashflow_view'
+  | 'cashflow_view_all'
   | 'can_add_expenses'
   | 'warehouse_access'
   | 'suppliers_access'
@@ -710,7 +712,15 @@ export const PERMISSION_GROUPS = {
     'sell_installment',
     'edit_closed_check',
   ],
-  Финансы: ['profit_view', 'financial_reports', 'export_data', 'can_add_expenses', 'salary_view'],
+  Финансы: [
+    'profit_view',
+    'financial_reports',
+    'export_data',
+    'cashflow_view',
+    'cashflow_view_all',
+    'can_add_expenses',
+    'salary_view',
+  ],
   Склад: ['warehouse_access', 'suppliers_access', 'warehouse_delete'],
   CRM: [
     'clients_view',
@@ -761,6 +771,8 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     profit_view: false,
     financial_reports: false,
     export_data: false,
+    cashflow_view: false, // «Движение денег» закрыто по умолчанию; владелец выдаёт «свои» или «все»
+    cashflow_view_all: false,
     can_add_expenses: false,
     salary_view: false,
     // Склад — reads are open elsewhere; mutations are role-gated. No access flag by default.

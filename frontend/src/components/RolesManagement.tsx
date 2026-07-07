@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Copy, KeyRound, Loader2, Lock, Plus, Trash2 } from 'lucide-react';
+import { ArrowLeft, Copy, Info, KeyRound, Loader2, Lock, Plus, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { rolesApi } from '../api/services';
@@ -22,6 +22,13 @@ interface CellDef {
   section: string;
   action: string;
   kind: 'scope' | 'bool';
+  /**
+   * Переопределение подписи строки редактора. Нужно scope-ячейкам, чьё имя в
+   * exhaustive-карте MATRIX_LABELS содержит «: свои» (напр. cashflow_view →
+   * «Движение денег: свои»), а в строке с сегментом Нет/Свои/Все охват задаёт
+   * сам сегмент, поэтому строка подписывается коротко — «Движение денег».
+   */
+  label?: string;
 }
 
 /**
@@ -51,6 +58,10 @@ const MATRIX_CELLS: Partial<Record<PermissionKey, CellDef>> = {
   financial_reports: { section: 'reports', action: 'view', kind: 'bool' },
   profit_view: { section: 'reports', action: 'profit', kind: 'bool' },
   export_data: { section: 'reports', action: 'export', kind: 'bool' },
+  // «Движение денег» — охват (none/own/all). 'all' раскладывается сервером в
+  // cashflow_view + cashflow_view_all, поэтому cashflow_view_all собственной
+  // ячейки не имеет (как checks_view_all у охвата checks.view).
+  cashflow_view: { section: 'reports', action: 'cashflow', kind: 'scope', label: 'Движение денег' },
   can_add_expenses: { section: 'expenses', action: 'add', kind: 'bool' },
   marketing_access: { section: 'marketing', action: 'view', kind: 'bool' },
   calls_view: { section: 'calls', action: 'view', kind: 'bool' },
@@ -76,6 +87,8 @@ const MATRIX_LABELS: Record<PermissionKey, string> = {
   profit_view: 'Видит прибыль',
   financial_reports: 'Финансовые отчёты',
   export_data: 'Экспорт данных',
+  cashflow_view: 'Движение денег: свои', // в редакторе строка охвата подписана «Движение денег» (см. CellDef.label)
+  cashflow_view_all: 'Движение денег: все', // поглощён охватом reports.cashflow ('all')
   can_add_expenses: 'Вносит расходы',
   salary_view: 'Видит зарплаты',
   warehouse_access: 'Доступ к складу',
@@ -94,6 +107,7 @@ const MATRIX_LABELS: Record<PermissionKey, string> = {
 /** Пояснения к неочевидным строкам. */
 const MATRIX_HINTS: Partial<Record<PermissionKey, string>> = {
   checks_view: '«Свои» — только собственные заказ-наряды, «Все» — всех мастеров.',
+  cashflow_view: '«Свои» — только собственные операции, «Все» — по всему автосервису.',
   accept_payment: 'Действует, когда включён режим кассовых смен.',
 };
 
@@ -162,7 +176,12 @@ function buildMatrix(m: EditableMatrix): RoleMatrix {
     schedule: { view: bool('schedule', 'view') },
     bookings: { view: bool('bookings', 'view') },
     salary: { view: scope('salary', 'view') },
-    reports: { view: bool('reports', 'view'), profit: bool('reports', 'profit'), export: bool('reports', 'export') },
+    reports: {
+      view: bool('reports', 'view'),
+      profit: bool('reports', 'profit'),
+      export: bool('reports', 'export'),
+      cashflow: scope('reports', 'cashflow'),
+    },
     expenses: { add: bool('expenses', 'add') },
     marketing: { view: bool('marketing', 'view') },
     calls: { view: bool('calls', 'view'), listen: bool('calls', 'listen') },
@@ -402,7 +421,12 @@ function RoleEditor({
   onCopy: (role: Role) => void;
 }) {
   const queryClient = useQueryClient();
-  const readOnly = mode === 'edit' && !!role?.isSystem;
+  // Волна 3 (миграция 121): системные «Мастер»/«Администратор» теперь РЕДАКТИРУЕМЫ
+  // — сервер делает copy-on-write (тенантный override). Read-only остаётся ТОЛЬКО
+  // у заблокированной роли (`locked: true` — это «Директор», полные права).
+  const readOnly = mode === 'edit' && role?.locked === true;
+  // Редактируемая системная роль — показываем ненавязчивую подсказку про override.
+  const systemEditable = mode === 'edit' && !!role?.isSystem && !readOnly;
 
   const [name, setName] = useState(mode === 'edit' ? (role?.name ?? '') : copyFrom ? `${copyFrom.name} (копия)` : '');
   const [description, setDescription] = useState(
@@ -460,7 +484,16 @@ function RoleEditor({
         <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-100 rounded-xl px-4 py-3">
           <Lock className="w-4 h-4 text-blue-500 flex-shrink-0 mt-0.5" />
           <p className="text-xs text-blue-700">
-            Системная роль — только для чтения. Создайте копию, чтобы настроить права под себя.
+            Директор — полные права, редактировать нельзя. При необходимости создайте копию как основу для своей роли.
+          </p>
+        </div>
+      )}
+
+      {systemEditable && (
+        <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+          <Info className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-gray-500">
+            Системная роль. Изменения сохранятся только для вашего автосервиса — общий шаблон остаётся прежним.
           </p>
         </div>
       )}
@@ -506,7 +539,7 @@ function RoleEditor({
                 return (
                   <div key={key} className="flex items-center justify-between gap-3 py-2.5">
                     <div className="min-w-0">
-                      <p className="text-sm text-gray-700">{MATRIX_LABELS[key]}</p>
+                      <p className="text-sm text-gray-700">{def.label ?? MATRIX_LABELS[key]}</p>
                       {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}
                     </div>
                     {def.kind === 'scope' ? (

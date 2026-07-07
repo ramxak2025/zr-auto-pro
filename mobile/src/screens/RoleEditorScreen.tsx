@@ -2,10 +2,13 @@
  * RoleEditorScreen — редактор одной роли (Bitrix24-style, миграция 114).
  *
  * Режимы (route.params):
- *   • { roleId }            — существующая роль. Своя → редактирование;
- *                             системная → read-only (все контролы disabled,
- *                             плашка «Системную роль нельзя изменить» +
- *                             кнопка «Создать копию»).
+ *   • { roleId }            — существующая роль. Своя и системные
+ *                             «Мастер»/«Администратор» → редактирование (сервер
+ *                             делает copy-on-write в тенантный override, глобал
+ *                             не трогается). «Директор» (`locked: true`) →
+ *                             read-only: все контролы disabled, плашка
+ *                             «Директор — полные права, редактировать нельзя» +
+ *                             кнопка «Создать копию».
  *   • { copyFromRoleId }    — создание КОПИИ: имя «<источник> (копия)», матрица
  *                             и описание предзаполнены с источника; на сервер
  *                             уходит copyFromRoleId + полная локальная матрица
@@ -79,9 +82,17 @@ const ROW_HINTS: Partial<Record<string, string>> = {
   checks_edit:
     '«Свои» — редактирует только свои чеки. Сегодня сервер различает «есть право / нет»; охват — задел на будущее.',
   salary_view: 'Сегодня сервер различает «есть право / нет»; охват — задел на будущее.',
+  cashflow_view: '«Свои» — сотрудник видит движение денег только по своим операциям. «Все» — касса всего автосервиса.',
   warehouse_delete: 'Удаление товаров и папок склада. Удалённое попадает в Корзину — можно восстановить.',
   edit_closed_check: 'Правка уже проведённого чека: склад, зарплата и касса пересчитаются автоматически.',
   user_management: 'Доступ к экрану «Пользователи»: сотрудники, права, роли.',
+};
+
+// Scope-строки берут подпись из PERMISSION_LABELS, кроме «Движения денег»: в
+// плоской матрице сотрудника это ДВА ключа («…: свои» / «…: все»), а в редакторе
+// роли — одна scope-строка с сегментом [Нет | Свои | Все], поэтому имя короче.
+const SCOPE_ROW_LABELS: Partial<Record<ScopePermissionKey, string>> = {
+  cashflow_view: 'Движение денег',
 };
 
 const SCOPE_OPTIONS: { value: RoleScope; label: string }[] = [
@@ -162,7 +173,16 @@ export default function RoleEditorScreen() {
 
   const isCreate = !roleId;
   const isSystem = !!existing?.isSystem;
-  const readOnly = isSystem;
+  // Волна 3 (миграция 121): системные «Мастер»/«Администратор» теперь
+  // РЕДАКТИРУЕМЫ — при сохранении сервер делает copy-on-write в тенантный
+  // override. Read-only остаётся ТОЛЬКО у заблокированного «Директора»
+  // (`locked: true`, полные права владельца). Все disabled-контролы и скрытие
+  // кнопки «Сохранить» завязаны на `readOnly`, поэтому меняем один флаг.
+  const isLocked = !!existing?.locked;
+  const readOnly = isLocked;
+  // Системная «Мастер»/«Администратор» — редактируема, но правки материализуют
+  // тенантную копию: показываем информирующую (не блокирующую) плашку.
+  const isEditableSystem = isSystem && !isLocked;
 
   // Роль-источник черновика: редактируемая (roleId) или копируемая
   // (copyFromRoleId); создание с нуля — источника нет.
@@ -366,7 +386,13 @@ export default function RoleEditorScreen() {
   }
 
   const headerTitle = isCreate ? 'Новая роль' : existing?.name || 'Роль';
-  const headerSubtitle = isSystem ? 'Системная роль' : copySource ? `Копия «${copySource.name}»` : undefined;
+  const headerSubtitle = isLocked
+    ? 'Только просмотр'
+    : isSystem
+      ? 'Системная роль'
+      : copySource
+        ? `Копия «${copySource.name}»`
+        : undefined;
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -376,8 +402,8 @@ export default function RoleEditorScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Системная роль — read-only плашка + «Создать копию». */}
-        {isSystem && (
+        {/* Заблокированный «Директор» — вечно read-only плашка + «Создать копию». */}
+        {isLocked && (
           <View
             style={[
               styles.systemNote,
@@ -388,10 +414,11 @@ export default function RoleEditorScreen() {
             <Ionicons name="lock-closed" size={18} color={colors.primary[600]} />
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[styles.systemNoteTitle, { color: palette.text.primary }]}>
-                Системную роль нельзя изменить
+                Директор — полные права, редактировать нельзя
               </Text>
               <Text style={[styles.systemNoteSub, { color: palette.text.tertiary }]}>
-                Посмотрите её права ниже или создайте свою копию и настройте её.
+                Это роль владельца автосервиса: полный доступ ко всему. Для ограниченного доступа создайте свою копию и
+                настройте её.
               </Text>
             </View>
             <TouchableOpacity
@@ -402,6 +429,28 @@ export default function RoleEditorScreen() {
             >
               <Text style={styles.copyBtnText}>Создать копию</Text>
             </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Системные «Мастер»/«Администратор» — редактируемы: правки сохранятся
+            как настройка ТОЛЬКО вашего автосервиса (copy-on-write на сервере). */}
+        {isEditableSystem && (
+          <View
+            style={[
+              styles.systemNote,
+              shadow,
+              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            ]}
+          >
+            <Ionicons name="options-outline" size={18} color={colors.primary[600]} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[styles.systemNoteTitle, { color: palette.text.primary }]}>
+                Системную роль можно настроить
+              </Text>
+              <Text style={[styles.systemNoteSub, { color: palette.text.tertiary }]}>
+                Изменения сохранятся как настройка вашего автосервиса и не затронут другие компании.
+              </Text>
+            </View>
           </View>
         )}
 
@@ -494,7 +543,8 @@ export default function RoleEditorScreen() {
                       <View key={row.key} style={styles.permRow}>
                         <View style={styles.permTextWrap}>
                           <Text style={[styles.permLabel, { color: palette.text.primary }]}>
-                            {PERMISSION_LABELS[row.key]}
+                            {(row.kind === 'scope' && SCOPE_ROW_LABELS[row.key as ScopePermissionKey]) ||
+                              PERMISSION_LABELS[row.key]}
                           </Text>
                           {!!hint && <Text style={[styles.permHint, { color: palette.text.tertiary }]}>{hint}</Text>}
                         </View>

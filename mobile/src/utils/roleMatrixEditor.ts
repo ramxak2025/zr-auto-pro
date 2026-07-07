@@ -10,14 +10,14 @@
  * boolean-тумблер. Таблица соответствия «PermissionKey → ячейка матрицы»
  * зафиксирована в backend/src/common/role-matrix.ts — этот модуль её повторяет:
  *
- *   • три scope-ячейки: checks.view (checks_view + checks_view_all),
- *     checks.edit (checks_edit), salary.view (salary_view) — в UI сегмент
- *     [Нет | Свои | Все];
+ *   • четыре scope-ячейки: checks.view (checks_view + checks_view_all),
+ *     checks.edit (checks_edit), salary.view (salary_view), reports.cashflow
+ *     (cashflow_view + cashflow_view_all) — в UI сегмент [Нет | Свои | Все];
  *   • остальные 22 ключа — boolean-тумблеры, 1:1 с ячейками.
  *
- * ВАЖНО: `checks_view_all` НЕ является отдельной строкой редактора — это
- * значение 'all' сегмента checks.view (сервер флаттенит view==='all' → оба
- * плоских ключа).
+ * ВАЖНО: `checks_view_all` и `cashflow_view_all` НЕ являются отдельными
+ * строками редактора — это значение 'all' сегментов checks.view /
+ * reports.cashflow (сервер флаттенит view/cashflow==='all' → оба плоских ключа).
  *
  * Защита от дрейфа со shared (runtime-импорт shared/types под babel-jest
  * невозможен — @babel/runtime не резолвится из-за пределов mobile/, поэтому
@@ -45,23 +45,32 @@ type PermissionGroups = SharedTypesModule['PERMISSION_GROUPS'];
 /** Название секции-аккордеона — ровно ключи PERMISSION_GROUPS. */
 export type PermissionGroupTitle = keyof PermissionGroups;
 
-/** Ключи одной shared-группы за вычетом свёрнутого checks_view_all. */
-type EditorKeysOf<T extends PermissionGroupTitle> = Exclude<PermissionGroups[T][number], 'checks_view_all'>;
+/** Ключи одной shared-группы за вычетом свёрнутых checks_view_all / cashflow_view_all. */
+type EditorKeysOf<T extends PermissionGroupTitle> = Exclude<
+  PermissionGroups[T][number],
+  'checks_view_all' | 'cashflow_view_all'
+>;
 
 /** Ключи, чья ячейка — охват (сегмент [Нет | Свои | Все]). */
-export type ScopePermissionKey = 'checks_view' | 'checks_edit' | 'salary_view';
+export type ScopePermissionKey = 'checks_view' | 'checks_edit' | 'salary_view' | 'cashflow_view';
 
-/** Все ключи редактора (канонические минус checks_view_all). */
-export type EditorPermissionKey = Exclude<PermissionKey, 'checks_view_all'>;
+/** Все ключи редактора (канонические минус свёрнутые checks_view_all / cashflow_view_all). */
+export type EditorPermissionKey = Exclude<PermissionKey, 'checks_view_all' | 'cashflow_view_all'>;
 
 /** Ключи-тумблеры (всё, что не охват). */
 export type BoolPermissionKey = Exclude<EditorPermissionKey, ScopePermissionKey>;
 
-export const SCOPE_PERMISSION_KEYS: readonly ScopePermissionKey[] = ['checks_view', 'checks_edit', 'salary_view'];
+export const SCOPE_PERMISSION_KEYS: readonly ScopePermissionKey[] = [
+  'checks_view',
+  'checks_edit',
+  'salary_view',
+  'cashflow_view',
+];
 
 /**
  * Русские подписи КАЖДОГО канонического PermissionKey (включая checks_view_all
- * — он нужен матрице сотрудника в UsersScreen; редактор ролей его не рендерит).
+ * и cashflow_view_all — они нужны плоской матрице сотрудника в UsersScreen;
+ * редактор ролей их не рендерит, там это охват сегмента).
  * Один источник для UsersScreen и RoleEditorScreen: Record над полным union —
  * новый ключ в shared валит typecheck, пока подпись не добавлена.
  * Формулировки — «что сотрудник может ДЕЛАТЬ», чтобы владелец читал строку
@@ -83,6 +92,8 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   profit_view: 'Видит прибыль',
   financial_reports: 'Финансовые отчёты',
   export_data: 'Экспорт данных',
+  cashflow_view: 'Движение денег: свои',
+  cashflow_view_all: 'Движение денег: все',
   can_add_expenses: 'Вносит расходы',
   salary_view: 'Видит зарплаты',
   // Склад
@@ -121,6 +132,7 @@ const CELL_KIND: Record<EditorPermissionKey, 'scope' | 'bool'> = {
   profit_view: 'bool',
   financial_reports: 'bool',
   export_data: 'bool',
+  cashflow_view: 'scope',
   can_add_expenses: 'bool',
   salary_view: 'scope',
   // Склад
@@ -182,7 +194,7 @@ const GROUP_SPECS: readonly [
   },
   {
     title: 'Финансы',
-    keys: ['profit_view', 'financial_reports', 'export_data', 'can_add_expenses', 'salary_view'],
+    keys: ['profit_view', 'financial_reports', 'export_data', 'cashflow_view', 'can_add_expenses', 'salary_view'],
   },
   { title: 'Склад', keys: ['warehouse_access', 'suppliers_access', 'warehouse_delete'] },
   {
@@ -245,6 +257,7 @@ export function draftFromMatrix(matrix: RoleMatrix | null | undefined): RoleMatr
       checks_view: readScope(m.checks?.view),
       checks_edit: readScope(m.checks?.edit),
       salary_view: readScope(m.salary?.view),
+      cashflow_view: readScope(m.reports?.cashflow),
     },
     bools: {
       checks_create: readBool(m.checks?.create),
@@ -298,7 +311,7 @@ export function matrixFromDraft(draft: RoleMatrixDraft): RoleMatrix {
     schedule: { view: b.schedule_view },
     bookings: { view: b.bookings_access },
     salary: { view: s.salary_view },
-    reports: { view: b.financial_reports, profit: b.profit_view, export: b.export_data },
+    reports: { view: b.financial_reports, profit: b.profit_view, export: b.export_data, cashflow: s.cashflow_view },
     expenses: { add: b.can_add_expenses },
     marketing: { view: b.marketing_access },
     calls: { view: b.calls_view, listen: b.calls_listen },

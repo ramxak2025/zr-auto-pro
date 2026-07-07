@@ -52,8 +52,13 @@ interface CashFlowData {
 export default function CashFlowPage() {
   const today = format(new Date(), 'yyyy-MM-dd');
   const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
-  const { user } = useAuth();
-  const canFilterByMaster = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
+  const { user, hasPermission } = useAuth();
+  // Owner-class видит фильтр по мастерам как раньше. Не-owner роль может попасть
+  // сюда по праву `cashflow_view` (волна ролей): если у неё НЕТ `cashflow_view_all`,
+  // сервер всё равно отдаёт только её собственные операции и игнорирует masterId —
+  // поэтому селектор мастера прячем (нечего выбирать). Виден только при _all.
+  const isOwnerClass = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
+  const canFilterByMaster = isOwnerClass || hasPermission('cashflow_view_all');
 
   const [dateFrom, setDateFrom] = useState(monthStart);
   const [dateTo, setDateTo] = useState(today);

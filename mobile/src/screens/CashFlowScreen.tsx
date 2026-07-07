@@ -266,18 +266,25 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
 export default function CashFlowScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
+  const { isRole, hasPermission } = useAuth();
   const palette = useColors();
-  // «Движение денег» — owner-facing money screen. `/reports/cashflow` is
-  // controller-gated @Roles('director','admin','superadmin') → a master
-  // gets a deterministic 403 (live-probed 2026-06-13: master=403,
-  // director=200). Without this gate the master's query fired, errored, and
-  // rendered a generic «Проверьте соединение» card whose retry could never
-  // succeed (the owner's exact «retry doesn't help» symptom). Same canonical
-  // role check used everywhere else in the app (`isRole`), identical to
-  // `canFilterByEmployee` — a master simply has no access to this screen.
-  const canViewCashFlow = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
-  const canFilterByEmployee = canViewCashFlow;
+  // «Движение денег» — теперь НЕ только owner-class. Волна 3 (миграция 121):
+  // сервер гейтит `/reports/cashflow` через @RequirePermission('cashflow_view')
+  // и сам скоупит выдачу (own-vs-all), поэтому экран доступен и обычной роли с
+  // выданным `cashflow_view`.
+  //   • canViewAllCashFlow — видит движение денег ВСЕГО автосервиса и может
+  //     фильтровать по сотруднику: owner-class (director/admin/superadmin) ЛИБО
+  //     явный `cashflow_view_all`. Поведение владельца не меняется.
+  //   • canViewCashFlow    — доступ к экрану вообще: всё выше ЛИБО own-only
+  //     `cashflow_view` (сервер вернёт только его операции).
+  const canViewAllCashFlow =
+    isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN) || hasPermission('cashflow_view_all');
+  const canViewCashFlow = canViewAllCashFlow || hasPermission('cashflow_view');
+  // Own-only держатель `cashflow_view` фильтр по сотруднику НЕ видит: сервер
+  // всё равно игнорирует переданный masterId и отдаёт только его операции,
+  // поэтому пикер был бы ложным обещанием. Показываем его только тем, кто
+  // видит «все».
+  const canFilterByEmployee = canViewAllCashFlow;
   const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = useState(false);
 
@@ -587,7 +594,7 @@ export default function CashFlowScreen() {
         <View style={styles.noAccessWrap}>
           <EmptyState
             title="Нет доступа"
-            description="Движение денег доступно только владельцу и администратору."
+            description="Движение денег доступно владельцу, администратору и сотрудникам, которым выдали это право."
             icon="lock"
           />
         </View>

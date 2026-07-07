@@ -30,12 +30,13 @@ describe('MATRIX_GROUPS — покрытие словаря редактора',
     expect([...groupKeys].sort()).toEqual([...EDITOR_PERMISSION_KEYS].sort()); // полное покрытие
   });
 
-  it('26 канонических ключей − свёрнутый checks_view_all = 25 строк редактора', () => {
-    expect(ALL_MATRIX_ROWS).toHaveLength(25);
+  it('28 канонических ключей − 2 свёрнутых (checks_view_all + cashflow_view_all) = 26 строк редактора', () => {
+    expect(ALL_MATRIX_ROWS).toHaveLength(26);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'checks_view_all')).toBe(false);
+    expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'cashflow_view_all')).toBe(false);
   });
 
-  it('scope-строки — ровно три ячейки охвата из role-matrix.ts', () => {
+  it('scope-строки — ровно четыре ячейки охвата (+reports.cashflow) из role-matrix.ts', () => {
     const scopeRows = ALL_MATRIX_ROWS.filter((r) => r.kind === 'scope').map((r) => r.key);
     expect([...scopeRows].sort()).toEqual([...SCOPE_PERMISSION_KEYS].sort());
   });
@@ -48,7 +49,12 @@ describe('MATRIX_GROUPS — покрытие словаря редактора',
 describe('draftFromMatrix — fail-closed чтение', () => {
   it('пустая/отсутствующая матрица → всё запрещено', () => {
     const draft = draftFromMatrix(undefined);
-    expect(draft.scopes).toEqual({ checks_view: 'none', checks_edit: 'none', salary_view: 'none' });
+    expect(draft.scopes).toEqual({
+      checks_view: 'none',
+      checks_edit: 'none',
+      salary_view: 'none',
+      cashflow_view: 'none',
+    });
     expect(Object.values(draft.bools).every((v) => v === false)).toBe(true);
     expect(countGranted(draft, ALL_MATRIX_ROWS)).toBe(0);
   });
@@ -71,12 +77,14 @@ describe('draftFromMatrix — fail-closed чтение', () => {
     const matrix: RoleMatrix = {
       checks: { view: 'own', create: true, edit: 'all' },
       salary: { view: 'all' },
+      reports: { cashflow: 'own' },
       employees: { manage: true },
     };
     const draft = draftFromMatrix(matrix);
     expect(draft.scopes.checks_view).toBe('own');
     expect(draft.scopes.checks_edit).toBe('all');
     expect(draft.scopes.salary_view).toBe('all');
+    expect(draft.scopes.cashflow_view).toBe('own');
     expect(draft.bools.checks_create).toBe(true);
     expect(draft.bools.user_management).toBe(true);
     expect(draft.bools.checks_delete).toBe(false);
@@ -89,6 +97,7 @@ describe('matrixFromDraft — полная материализация и round
     draft.scopes.checks_view = 'all';
     draft.scopes.checks_edit = 'own';
     draft.scopes.salary_view = 'own';
+    draft.scopes.cashflow_view = 'all';
     draft.bools.checks_create = true;
     draft.bools.warehouse_access = true;
     draft.bools.calls_listen = true;
@@ -118,6 +127,7 @@ describe('matrixFromDraft — полная материализация и round
     expect(matrix.checks?.view).toBe('none');
     expect(matrix.checks?.create).toBe(false);
     expect(matrix.salary?.view).toBe('none');
+    expect(matrix.reports?.cashflow).toBe('none');
     expect(matrix.employees?.manage).toBe(false);
   });
 });
