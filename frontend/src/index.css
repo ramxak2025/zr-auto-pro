@@ -32,9 +32,15 @@
     padding-right: env(safe-area-inset-right, 0px);
   }
 
-  /* <main> is the sole scroll container — clip horizontal overflow */
+  /* <main> приложения — единственный скролл-контейнер (его overflow-y-auto
+     задан классами в Layout.tsx). ВАЖНО: clip, а не hidden — hidden превращал
+     семантические <main> ЛЕНДИНГА (/tarify и др.) в скролл-ловушку: ox:hidden
+     делает oy computed=auto → main становился скроллером, глотал тач-жест
+     (24px хода) и страница «не скроллилась» с телефона. clip режет горизонталь
+     БЕЗ создания скролл-контейнера; в приложении (явный overflow-y-auto)
+     clip+auto по спеке вычисляется в hidden — поведение байт-в-байт прежнее. */
   main {
-    overflow-x: hidden !important;
+    overflow-x: clip !important;
     -webkit-overflow-scrolling: touch;
     max-width: 100%;
   }
