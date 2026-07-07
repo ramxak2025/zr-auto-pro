@@ -18,6 +18,7 @@ import { tenantsApi } from '../../api/services';
 import { PlatformStats } from '../../types';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import MrrTrendChart from '../../components/MrrTrendChart';
+import SubscriptionRevenuePanel from '../../components/SubscriptionRevenuePanel';
 
 function formatRub(value: number | undefined): string {
   return `${(value ?? 0).toLocaleString('ru-RU')} ₽`;
@@ -35,7 +36,21 @@ export default function AdminDashboardPage() {
   return (
     <div>
       <div className="page-header">
-        <h1 className="page-title">Панель управления</h1>
+        <div>
+          <h1 className="page-title">Панель управления</h1>
+          <p className="mt-1 text-sm text-gray-500">Платная выручка по подпискам и состояние платформы</p>
+        </div>
+      </div>
+
+      {/* Paid subscription revenue — front and center */}
+      <SubscriptionRevenuePanel />
+
+      {/* Platform overview */}
+      <div className="mb-3 flex items-center gap-2.5">
+        <div className="rounded-lg bg-blue-50 p-2">
+          <Building2 className="h-4 w-4 text-blue-600" />
+        </div>
+        <h2 className="text-lg font-semibold text-gray-900">Обзор платформы</h2>
       </div>
 
       {/* Stats */}
@@ -47,7 +62,7 @@ export default function AdminDashboardPage() {
             </div>
             <div>
               <p className="stat-label">Всего клиентов</p>
-              <p className="stat-value">{stats?.totalTenants ?? 0}</p>
+              <p className="stat-value tabular-nums">{stats?.totalTenants ?? 0}</p>
             </div>
           </div>
         </div>
@@ -59,7 +74,7 @@ export default function AdminDashboardPage() {
             </div>
             <div>
               <p className="stat-label">Активных</p>
-              <p className="stat-value">{stats?.activeTenants ?? 0}</p>
+              <p className="stat-value tabular-nums">{stats?.activeTenants ?? 0}</p>
             </div>
           </div>
         </div>
@@ -71,7 +86,7 @@ export default function AdminDashboardPage() {
             </div>
             <div>
               <p className="stat-label">Истёкших</p>
-              <p className="stat-value">{stats?.expiredTenants ?? 0}</p>
+              <p className="stat-value tabular-nums">{stats?.expiredTenants ?? 0}</p>
             </div>
           </div>
         </div>
@@ -83,7 +98,7 @@ export default function AdminDashboardPage() {
             </div>
             <div>
               <p className="stat-label">MRR (мес. выручка)</p>
-              <p className="stat-value">{formatRub(stats?.mrr)}</p>
+              <p className="stat-value tabular-nums">{formatRub(stats?.mrr)}</p>
             </div>
           </div>
         </div>
@@ -95,7 +110,7 @@ export default function AdminDashboardPage() {
             </div>
             <div>
               <p className="stat-label">ARPU (на клиента)</p>
-              <p className="stat-value">{formatRub(stats?.arpu)}</p>
+              <p className="stat-value tabular-nums">{formatRub(stats?.arpu)}</p>
             </div>
           </div>
         </div>
@@ -107,7 +122,7 @@ export default function AdminDashboardPage() {
             </div>
             <div>
               <p className="stat-label">Новых в этом месяце</p>
-              <p className="stat-value">{stats?.newTenantsThisMonth ?? 0}</p>
+              <p className="stat-value tabular-nums">{stats?.newTenantsThisMonth ?? 0}</p>
             </div>
           </div>
         </div>
@@ -119,7 +134,7 @@ export default function AdminDashboardPage() {
             </div>
             <div>
               <p className="stat-label">Всего пользователей</p>
-              <p className="stat-value">{stats?.totalUsers ?? 0}</p>
+              <p className="stat-value tabular-nums">{stats?.totalUsers ?? 0}</p>
             </div>
           </div>
         </div>

@@ -23,21 +23,32 @@ import {
   ClipboardList,
   PauseCircle,
   PlayCircle,
+  Wallet,
+  Gift,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { format, parseISO, isPast, formatDistanceToNow } from 'date-fns';
+import { format, parseISO, isPast, formatDistanceToNow, addDays, addYears } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 import { tenantsApi, usersApi, plansApi } from '../../api/services';
+import type { ExtendSubscriptionRequest } from '../../api/services';
 import { useAuth } from '../../contexts/AuthContext';
 import { Tenant, User, UserRole, UserPermissions, TenantCabinet, SubscriptionStatus, Plan } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import EmptyState from '../../components/EmptyState';
+import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
 import { roleLabels } from '../../../../shared/utils/formatters';
 
-const EXTEND_PRESETS = [30, 90] as const;
+// Quick-fill presets — each computes the new "until" date from the anchor
+// (current end if still in the future, otherwise today). They only set the
+// date; the paid/free mode is chosen separately above.
+const EXTEND_PRESETS: { label: string; add: (d: Date) => Date }[] = [
+  { label: '+30 дней', add: (d) => addDays(d, 30) },
+  { label: '+90 дней', add: (d) => addDays(d, 90) },
+  { label: '+год', add: (d) => addYears(d, 1) },
+];
 
 function formatRub(value: number | undefined | null): string {
   return `${(value ?? 0).toLocaleString('ru-RU')} ₽`;
@@ -116,7 +127,9 @@ export default function AdminTenantDetailPage() {
 
   // Subscription management modals
   const [extendModalOpen, setExtendModalOpen] = useState(false);
-  const [customDays, setCustomDays] = useState('');
+  const [extendMode, setExtendMode] = useState<'paid' | 'free'>('paid');
+  const [extendAmount, setExtendAmount] = useState('');
+  const [extendUntil, setExtendUntil] = useState(''); // YYYY-MM-DD
   const [planModalOpen, setPlanModalOpen] = useState(false);
   const [selectedPlanId, setSelectedPlanId] = useState('');
   const [impersonateConfirm, setImpersonateConfirm] = useState(false);
@@ -203,12 +216,11 @@ export default function AdminTenantDetailPage() {
   };
 
   const extendMutation = useMutation({
-    mutationFn: (days: number) => tenantsApi.extend(id!, days),
-    onSuccess: (_res, days) => {
+    mutationFn: (opts: ExtendSubscriptionRequest) => tenantsApi.extend(id!, opts),
+    onSuccess: (_res, opts) => {
       invalidateTenant();
-      toast.success(`Подписка продлена на ${days} дн.`);
+      toast.success(opts.type === 'paid' ? 'Подписка продлена (оплачено)' : 'Подписка продлена (бесплатно)');
       setExtendModalOpen(false);
-      setCustomDays('');
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.message || 'Не удалось продлить подписку');
@@ -334,13 +346,42 @@ export default function AdminTenantDetailPage() {
     setPlanModalOpen(true);
   };
 
-  const handleCustomExtend = () => {
-    const days = Number(customDays);
-    if (!Number.isFinite(days) || days <= 0) {
-      toast.error('Введите количество дней (больше 0)');
+  // Anchor for date math: the current end if it's still in the future,
+  // otherwise today (a lapsed subscription restarts from now).
+  const extendAnchor = (): Date => {
+    const end = tenant?.subscriptionEnd ? parseISO(tenant.subscriptionEnd) : null;
+    return end && !isPast(end) ? end : new Date();
+  };
+
+  const openExtendModal = () => {
+    setExtendMode('paid');
+    // Pre-fill amount with the plan price (a sensible default the operator can edit).
+    setExtendAmount(subStatus?.planPrice ? String(subStatus.planPrice) : '');
+    setExtendUntil(format(addDays(extendAnchor(), 30), 'yyyy-MM-dd'));
+    setExtendModalOpen(true);
+  };
+
+  // Presets only fill the until-date under the chosen paid/free mode.
+  const applyExtendPreset = (add: (d: Date) => Date) => {
+    setExtendUntil(format(add(extendAnchor()), 'yyyy-MM-dd'));
+  };
+
+  const handleExtendSubmit = () => {
+    const todayStr = format(new Date(), 'yyyy-MM-dd');
+    if (!extendUntil || extendUntil <= todayStr) {
+      toast.error('Укажите дату окончания в будущем');
       return;
     }
-    extendMutation.mutate(Math.round(days));
+    if (extendMode === 'paid') {
+      const amount = Number(extendAmount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        toast.error('Введите сумму больше 0');
+        return;
+      }
+      extendMutation.mutate({ type: 'paid', amount: Math.round(amount), until: extendUntil });
+    } else {
+      extendMutation.mutate({ type: 'free', until: extendUntil });
+    }
   };
 
   const handleTenantSubmit = (e: React.FormEvent) => {
@@ -442,6 +483,13 @@ export default function AdminTenantDetailPage() {
   // status; fall back to the tenant's own suspendedAt marker until it resolves.
   const isSuspended = subStatus ? subStatus.status === 'suspended' : !!tenant.suspendedAt;
 
+  // Extend-modal derived validation (paid → amount>0 + future date; free → future date).
+  const extendTodayStr = format(new Date(), 'yyyy-MM-dd');
+  const extendUntilValid = !!extendUntil && extendUntil > extendTodayStr;
+  const extendAmountNum = Number(extendAmount);
+  const extendAmountValid = Number.isFinite(extendAmountNum) && extendAmountNum > 0;
+  const canSubmitExtend = extendUntilValid && (extendMode === 'free' || extendAmountValid);
+
   return (
     <div>
       {/* Back + Header */}
@@ -456,7 +504,7 @@ export default function AdminTenantDetailPage() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="page-title">{tenant.name}</h1>
           <div className="flex flex-wrap items-center gap-2">
-            <button onClick={() => setExtendModalOpen(true)} className="btn-secondary btn-sm">
+            <button onClick={openExtendModal} className="btn-secondary btn-sm">
               <CalendarPlus className="w-4 h-4" />
               Продлить
             </button>
@@ -567,7 +615,10 @@ export default function AdminTenantDetailPage() {
         <div className="card card-body mb-6">
           <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
             <h2 className="text-lg font-semibold text-gray-900">Подписка</h2>
-            <span className={subStatusMeta[subStatus.status].badge}>{subStatusMeta[subStatus.status].label}</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <SubscriptionPeriodBadge kind={subStatus.currentPeriodKind} until={subStatus.subscriptionEnd} />
+              <span className={subStatusMeta[subStatus.status].badge}>{subStatusMeta[subStatus.status].label}</span>
+            </div>
           </div>
 
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -580,10 +631,10 @@ export default function AdminTenantDetailPage() {
               <p className="text-sm font-semibold text-gray-900">{formatRub(subStatus.planPrice)}/мес</p>
             </div>
             <div>
-              <p className="text-xs text-gray-500 mb-0.5">Оплачено до</p>
+              <p className="text-xs text-gray-500 mb-0.5">Действует до</p>
               {subStatus.subscriptionEnd ? (
                 <p
-                  className={`text-sm font-semibold ${
+                  className={`text-sm font-semibold tabular-nums ${
                     subStatus.status === 'expired' ? 'text-red-600' : 'text-gray-900'
                   }`}
                 >
@@ -1000,48 +1051,137 @@ export default function AdminTenantDetailPage() {
         variant="danger"
       />
 
-      {/* Extend Subscription Modal */}
+      {/* Extend Subscription Modal — paid/free segmented flow */}
       <Modal isOpen={extendModalOpen} onClose={() => setExtendModalOpen(false)} title="Продлить подписку" size="sm">
         <div className="space-y-4">
-          <p className="text-sm text-gray-500">
-            Подписка до:{' '}
-            <span className="font-medium text-gray-700">
-              {subscriptionEnd ? format(subscriptionEnd, 'd MMMM yyyy', { locale: ru }) : 'не указано'}
-            </span>
-          </p>
-
-          <div className="grid grid-cols-2 gap-3">
-            {EXTEND_PRESETS.map((days) => (
-              <button
-                key={days}
-                onClick={() => extendMutation.mutate(days)}
-                disabled={extendMutation.isPending}
-                className="btn-secondary justify-center"
-              >
-                +{days} дней
-              </button>
-            ))}
+          {/* Current period */}
+          <div className="rounded-xl bg-gray-50 p-3">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-gray-500">Текущий срок</span>
+              <span className="text-sm font-semibold tabular-nums text-gray-900">
+                {subscriptionEnd ? format(subscriptionEnd, 'd MMMM yyyy', { locale: ru }) : 'не указан'}
+              </span>
+            </div>
+            {subStatus?.currentPeriodKind && (
+              <div className="mt-2">
+                <SubscriptionPeriodBadge
+                  kind={subStatus.currentPeriodKind}
+                  until={subStatus.subscriptionEnd}
+                  size="sm"
+                />
+              </div>
+            )}
           </div>
 
+          {/* Paid / Free segmented toggle */}
           <div>
-            <label className="label">Своё количество дней</label>
-            <div className="flex items-center gap-2">
-              <input
-                type="number"
-                className="input"
-                value={customDays}
-                onChange={(e) => setCustomDays(e.target.value)}
-                placeholder="например, 14"
-                min={1}
-              />
+            <label className="label">Тип продления</label>
+            <div className="grid grid-cols-2 gap-1 rounded-xl bg-gray-100 p-1">
               <button
-                onClick={handleCustomExtend}
-                disabled={extendMutation.isPending}
-                className="btn-primary whitespace-nowrap"
+                type="button"
+                onClick={() => setExtendMode('paid')}
+                className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                  extendMode === 'paid' ? 'bg-white text-emerald-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
               >
-                {extendMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Продлить'}
+                <Wallet className="h-4 w-4" />
+                Платно
+              </button>
+              <button
+                type="button"
+                onClick={() => setExtendMode('free')}
+                className={`flex items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+                  extendMode === 'free' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <Gift className="h-4 w-4" />
+                Бесплатно
               </button>
             </div>
+            <p className="mt-1.5 text-xs text-gray-500">
+              {extendMode === 'paid'
+                ? 'Платёж запишется в выручку по подпискам.'
+                : 'Бесплатное продление не учитывается как выручка.'}
+            </p>
+          </div>
+
+          {/* Amount — paid only */}
+          {extendMode === 'paid' && (
+            <div>
+              <label className="label">Сумма платежа, ₽</label>
+              <input
+                type="number"
+                className="input tabular-nums"
+                value={extendAmount}
+                onChange={(e) => setExtendAmount(e.target.value)}
+                placeholder="например, 2990"
+                min={1}
+                inputMode="numeric"
+              />
+            </div>
+          )}
+
+          {/* Quick presets fill the until-date */}
+          <div>
+            <label className="label">Быстрое продление</label>
+            <div className="grid grid-cols-3 gap-2">
+              {EXTEND_PRESETS.map((preset) => (
+                <button
+                  key={preset.label}
+                  type="button"
+                  onClick={() => applyExtendPreset(preset.add)}
+                  className="btn-secondary justify-center py-2 text-sm"
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-1.5 text-xs text-gray-400">
+              Считаются от {subscriptionEnd && !isExpired ? 'текущего срока' : 'сегодня'} и подставляют дату ниже.
+            </p>
+          </div>
+
+          {/* Until date */}
+          <div>
+            <label className="label">Действует до</label>
+            <input
+              type="date"
+              className="input tabular-nums"
+              value={extendUntil}
+              min={extendTodayStr}
+              onChange={(e) => setExtendUntil(e.target.value)}
+            />
+            {extendUntil && !extendUntilValid && (
+              <p className="mt-1 text-xs text-red-600">Дата должна быть в будущем.</p>
+            )}
+          </div>
+
+          {/* Actions */}
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-200">
+            <button type="button" onClick={() => setExtendModalOpen(false)} className="btn-secondary">
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={handleExtendSubmit}
+              disabled={!canSubmitExtend || extendMutation.isPending}
+              className="btn-primary"
+            >
+              {extendMutation.isPending ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Продление...
+                </>
+              ) : extendMode === 'paid' ? (
+                extendAmountValid ? (
+                  `Продлить · ${formatRub(extendAmountNum)}`
+                ) : (
+                  'Продлить'
+                )
+              ) : (
+                'Продлить бесплатно'
+              )}
+            </button>
           </div>
         </div>
       </Modal>

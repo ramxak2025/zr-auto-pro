@@ -1,7 +1,21 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { Plus, Pencil, Trash2, Building2, Loader2, UserPlus, ChevronDown, Phone, MapPin, Mail, Calendar, StickyNote, Users } from 'lucide-react';
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  Building2,
+  Loader2,
+  UserPlus,
+  ChevronDown,
+  Phone,
+  MapPin,
+  Mail,
+  Calendar,
+  StickyNote,
+  Users,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format, parseISO } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -12,6 +26,7 @@ import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import LoadingSpinner from '../../components/LoadingSpinner';
 import EmptyState from '../../components/EmptyState';
+import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
 
 interface TenantFormData {
   name: string;
@@ -53,8 +68,7 @@ function formatPhone(raw: string): string {
   if (digits.length === 0) return '';
   if (digits.length <= 1) return `+${digits}`;
   if (digits.length <= 4) return `+${digits.slice(0, 1)} (${digits.slice(1)}`;
-  if (digits.length <= 7)
-    return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4)}`;
+  if (digits.length <= 7) return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4)}`;
   if (digits.length <= 9)
     return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7)}`;
   return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
@@ -83,7 +97,7 @@ export default function AdminTenantsPage() {
   });
 
   const tenants = data ?? [];
-  const plans = (plansData ?? []).filter(p => p.isActive);
+  const plans = (plansData ?? []).filter((p) => p.isActive);
 
   const createMutation = useMutation({
     mutationFn: (data: any) => tenantsApi.create(data),
@@ -140,9 +154,7 @@ export default function AdminTenantsPage() {
       planId: tenant.planId || '',
       maxUsers: tenant.maxUsers,
       isActive: tenant.isActive,
-      subscriptionEnd: tenant.subscriptionEnd
-        ? tenant.subscriptionEnd.slice(0, 10)
-        : '',
+      subscriptionEnd: tenant.subscriptionEnd ? tenant.subscriptionEnd.slice(0, 10) : '',
       subscriptionNote: tenant.subscriptionNote || '',
       directorName: '',
       directorPhone: '',
@@ -175,7 +187,7 @@ export default function AdminTenantsPage() {
       return;
     }
 
-    const selectedPlan = plans.find(p => p.id === form.planId);
+    const selectedPlan = plans.find((p) => p.id === form.planId);
     const payload: any = {
       name: form.name,
       phone: form.phone || undefined,
@@ -237,10 +249,7 @@ export default function AdminTenantsPage() {
             const userCount = tenant.userCount ?? tenant.users?.length ?? 0;
 
             return (
-              <div
-                key={tenant.id}
-                className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm"
-              >
+              <div key={tenant.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
                 {/* Collapsed header - always visible */}
                 <button
                   type="button"
@@ -252,9 +261,7 @@ export default function AdminTenantsPage() {
                       <Building2 className="w-4.5 h-4.5 text-primary-600" />
                     </div>
                     <div className="min-w-0">
-                      <div className="font-semibold text-gray-900 truncate">
-                        {tenant.name}
-                      </div>
+                      <div className="font-semibold text-gray-900 truncate">{tenant.name}</div>
                       <div className="flex items-center gap-2 mt-0.5">
                         {tenant.isActive ? (
                           <span className="badge-green text-xs">Активна</span>
@@ -264,10 +271,15 @@ export default function AdminTenantsPage() {
                         {tenant.plan?.name && (
                           <span className="text-xs text-primary-600 font-medium">{tenant.plan.name}</span>
                         )}
-                        <span className="flex items-center gap-1 text-xs text-gray-500">
+                        <span className="flex items-center gap-1 text-xs text-gray-500 tabular-nums">
                           <Users className="w-3 h-3" />
                           {userCount} / {tenant.maxUsers}
                         </span>
+                        <SubscriptionPeriodBadge
+                          kind={tenant.currentPeriodKind}
+                          until={tenant.subscriptionEnd}
+                          size="sm"
+                        />
                       </div>
                     </div>
                   </div>
@@ -509,7 +521,9 @@ export default function AdminTenantsPage() {
                           {plan.description && ` · ${plan.description}`}
                         </p>
                       </div>
-                      <span className={`text-sm font-bold ${isSelected ? 'text-primary-600' : 'text-gray-700'}`}>
+                      <span
+                        className={`text-sm font-bold tabular-nums ${isSelected ? 'text-primary-600' : 'text-gray-700'}`}
+                      >
                         {plan.monthlyPrice.toLocaleString('ru-RU')} ₽/мес
                       </span>
                     </button>
@@ -517,7 +531,9 @@ export default function AdminTenantsPage() {
                 })}
               </div>
             ) : (
-              <p className="text-sm text-gray-400">Нет доступных тарифов. Создайте тариф в разделе &laquo;Тарифы&raquo;.</p>
+              <p className="text-sm text-gray-400">
+                Нет доступных тарифов. Создайте тариф в разделе &laquo;Тарифы&raquo;.
+              </p>
             )}
           </div>
 
@@ -532,9 +548,7 @@ export default function AdminTenantsPage() {
               />
               <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
             </label>
-            <span className="text-sm font-medium text-gray-700">
-              {form.isActive ? 'Активна' : 'Неактивна'}
-            </span>
+            <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активна' : 'Неактивна'}</span>
           </div>
 
           {/* Subscription End */}
