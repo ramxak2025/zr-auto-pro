@@ -42,6 +42,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import ProductPickerModal from '../components/ProductPickerModal';
+import QtyInput from '../components/QtyInput';
 import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
 import { useColors } from '../contexts/ThemeContext';
 import { purchaseOrdersApi, suppliersApi } from '../api/services';
@@ -56,6 +57,7 @@ import {
   type Supplier,
 } from '../../../shared/types';
 import { formatMoney } from './purchaseOrders/purchaseOrderHelpers';
+import { MIN_QTY, roundQty } from '../utils/units';
 
 interface DraftLine {
   productId: string;
@@ -157,10 +159,20 @@ export default function PurchaseOrderCreateScreen() {
     haptic('tap');
     setLines((prev) =>
       prev.map((l) =>
-        // Нельзя опускать количество ниже уже принятого (backend это запретит).
-        l.productId === productId ? { ...l, quantity: Math.max(Math.max(1, l.received), l.quantity + delta) } : l,
+        // Степпер ±1 держит целочисленный «пол» 1 (или уже принятое кол-во —
+        // backend запретит опустить ниже приёмки). roundQty гасит float-грязь,
+        // если до этого набрали дробь вручную (0.5 + 1).
+        l.productId === productId
+          ? { ...l, quantity: Math.max(Math.max(1, l.received), roundQty(l.quantity + delta)) }
+          : l,
       ),
     );
+  }, []);
+
+  // Ручной ввод количества (QtyInput уже округляет и клампит к min = принятому);
+  // здесь просто фиксируем валидное значение строки.
+  const setLineQty = useCallback((productId: string, qty: number) => {
+    setLines((prev) => prev.map((l) => (l.productId === productId ? { ...l, quantity: qty } : l)));
   }, []);
 
   const changeCost = useCallback((productId: string, costText: string) => {
@@ -472,12 +484,18 @@ export default function PurchaseOrderCreateScreen() {
                       )}
                     </View>
                     <View style={styles.lineControls}>
-                      {/* Qty stepper */}
+                      {/* Qty stepper — ± кнопки + ручной ввод (в т.ч. дробный). */}
                       <View style={[styles.stepper, { borderColor: palette.border.subtle }]}>
                         <TouchableOpacity onPress={() => changeQty(l.productId, -1)} style={styles.stepBtn} hitSlop={6}>
                           <Ionicons name="remove" size={18} color={palette.text.secondary} />
                         </TouchableOpacity>
-                        <Text style={[styles.stepValue, { color: palette.text.primary }]}>{l.quantity}</Text>
+                        <QtyInput
+                          value={l.quantity}
+                          min={l.received > 0 ? l.received : MIN_QTY}
+                          onCommit={(n) => setLineQty(l.productId, n)}
+                          style={[styles.stepInput, { color: palette.text.primary }]}
+                          placeholderTextColor={palette.text.tertiary}
+                        />
                         <TouchableOpacity onPress={() => changeQty(l.productId, 1)} style={styles.stepBtn} hitSlop={6}>
                           <Ionicons name="add" size={18} color={palette.text.secondary} />
                         </TouchableOpacity>
@@ -704,7 +722,14 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   stepBtn: { paddingHorizontal: spacing[3], paddingVertical: spacing[2] },
-  stepValue: { minWidth: 28, textAlign: 'center', fontSize: 15, fontWeight: '700', fontVariant: ['tabular-nums'] },
+  stepInput: {
+    minWidth: 44,
+    textAlign: 'center',
+    fontSize: 15,
+    fontWeight: '700',
+    paddingVertical: spacing[2],
+    fontVariant: ['tabular-nums'],
+  },
   costWrap: {
     flex: 1,
     flexDirection: 'row',

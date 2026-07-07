@@ -40,6 +40,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
+import QtyInput from '../components/QtyInput';
 import { ListSkeleton } from '../components/Skeleton';
 import QueryErrorState from '../components/QueryErrorState';
 import { useAuth } from '../contexts/AuthContext';
@@ -51,12 +52,13 @@ import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type PurchaseOrder } from '../../../shared/types';
 import { formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purchaseOrderHelpers';
+import { roundQty } from '../utils/units';
 
 type PayMode = 'debt' | 'paid';
 
 interface LineState {
-  /** «Принять сейчас» — дельта приёмки, не больше остатка. */
-  qtyText: string;
+  /** «Принять сейчас» — дельта приёмки (в т.ч. дробная), не больше остатка. */
+  qty: number;
   /** Закупочная цена за единицу (free-text, чтобы 12.5 печаталось чисто). */
   priceText: string;
   /** Включена ли строка в накладную (можно «вычеркнуть» лишнюю). */
@@ -66,10 +68,6 @@ interface LineState {
 function parsePrice(t: string): number {
   const n = parseFloat((t || '').replace(',', '.'));
   return Number.isNaN(n) || n < 0 ? 0 : n;
-}
-function parseQty(t: string): number {
-  const n = parseInt((t || '').replace(/[^0-9]/g, ''), 10);
-  return Number.isNaN(n) ? 0 : n;
 }
 
 export default function SupplyReceiveScreen() {
@@ -112,7 +110,7 @@ export default function SupplyReceiveScreen() {
     for (const it of items) {
       const out = outstandingQty(it.quantity, it.receivedQuantity);
       init[it.id] = {
-        qtyText: String(out),
+        qty: out,
         priceText: it.costPrice ? String(it.costPrice) : '',
         included: out > 0,
       };
@@ -121,29 +119,28 @@ export default function SupplyReceiveScreen() {
     setSeeded(true);
   }, [items, seeded]);
 
-  const setQty = useCallback((id: string, value: string, max: number) => {
-    const cleaned = value.replace(/[^0-9]/g, '');
+  // Ручной ввод количества. QtyInput уже клампит к [0; max] и округляет до
+  // 3 знаков (дробная приёмка «0.5 м»), здесь фиксируем валидное значение.
+  const setQty = useCallback((id: string, n: number) => {
     setLineState((s) => {
-      const cur = s[id] ?? { qtyText: '', priceText: '', included: true };
-      if (cleaned === '') return { ...s, [id]: { ...cur, qtyText: '' } };
-      const n = Math.min(max, parseInt(cleaned, 10));
-      return { ...s, [id]: { ...cur, qtyText: String(n) } };
+      const cur = s[id] ?? { qty: 0, priceText: '', included: true };
+      return { ...s, [id]: { ...cur, qty: n } };
     });
   }, []);
 
   const stepQty = useCallback((id: string, delta: number, max: number) => {
     haptic('tap');
     setLineState((s) => {
-      const cur = s[id] ?? { qtyText: '0', priceText: '', included: true };
-      const n = Math.max(0, Math.min(max, parseQty(cur.qtyText) + delta));
-      return { ...s, [id]: { ...cur, qtyText: String(n) } };
+      const cur = s[id] ?? { qty: 0, priceText: '', included: true };
+      const n = Math.max(0, Math.min(max, roundQty(cur.qty + delta)));
+      return { ...s, [id]: { ...cur, qty: n } };
     });
   }, []);
 
   const setPrice = useCallback((id: string, value: string) => {
     const cleaned = value.replace(/[^0-9.,]/g, '');
     setLineState((s) => {
-      const cur = s[id] ?? { qtyText: '', priceText: '', included: true };
+      const cur = s[id] ?? { qty: 0, priceText: '', included: true };
       return { ...s, [id]: { ...cur, priceText: cleaned } };
     });
   }, []);
@@ -151,7 +148,7 @@ export default function SupplyReceiveScreen() {
   const toggleIncluded = useCallback((id: string) => {
     haptic('select');
     setLineState((s) => {
-      const cur = s[id] ?? { qtyText: '', priceText: '', included: false };
+      const cur = s[id] ?? { qty: 0, priceText: '', included: false };
       return { ...s, [id]: { ...cur, included: !cur.included } };
     });
   }, []);
@@ -162,7 +159,7 @@ export default function SupplyReceiveScreen() {
       items.reduce((sum, it) => {
         const ls = lineState[it.id];
         if (!ls || !ls.included) return sum;
-        return sum + parseQty(ls.qtyText) * parsePrice(ls.priceText);
+        return sum + ls.qty * parsePrice(ls.priceText);
       }, 0),
     [items, lineState],
   );
@@ -175,7 +172,7 @@ export default function SupplyReceiveScreen() {
           const ls = lineState[it.id];
           if (!ls || !ls.included) return null;
           const max = outstandingQty(it.quantity, it.receivedQuantity);
-          const qty = Math.min(max, parseQty(ls.qtyText));
+          const qty = Math.min(max, ls.qty);
           if (qty <= 0) return null;
           return { itemId: it.id, receivedQuantity: qty, purchasePrice: parsePrice(ls.priceText) };
         })
@@ -300,7 +297,7 @@ export default function SupplyReceiveScreen() {
             const max = outstandingQty(it.quantity, it.receivedQuantity);
             const done = max === 0;
             const included = !done && (ls?.included ?? false);
-            const qty = parseQty(ls?.qtyText ?? '');
+            const qty = ls?.qty ?? 0;
             const price = parsePrice(ls?.priceText ?? '');
             const lineTotal = included ? qty * price : 0;
             const notLast = idx < items.length - 1;
@@ -391,11 +388,12 @@ export default function SupplyReceiveScreen() {
                       <TouchableOpacity onPress={() => stepQty(it.id, -1, max)} style={styles.stepBtn} hitSlop={6}>
                         <Ionicons name="remove" size={18} color={palette.text.secondary} />
                       </TouchableOpacity>
-                      <TextInput
-                        value={ls?.qtyText ?? ''}
-                        onChangeText={(t) => setQty(it.id, t, max)}
+                      <QtyInput
+                        value={qty}
+                        min={0}
+                        max={max}
+                        onCommit={(n) => setQty(it.id, n)}
                         style={[styles.stepInput, { color: palette.text.primary }]}
-                        keyboardType="number-pad"
                         placeholder="0"
                         placeholderTextColor={palette.text.tertiary}
                       />

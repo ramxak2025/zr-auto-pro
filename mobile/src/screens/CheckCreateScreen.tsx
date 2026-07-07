@@ -14,8 +14,6 @@ import {
   LayoutAnimation,
   AccessibilityInfo,
   Switch,
-  StyleProp,
-  TextStyle,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -44,8 +42,9 @@ import {
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { MIN_QTY, formatQty, parseQtyInput, roundQty, unitLabel } from '../utils/units';
+import { formatQty, roundQty, unitLabel } from '../utils/units';
 import Modal from '../components/Modal';
+import QtyInput from '../components/QtyInput';
 import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
 import DateTimePickerModal from '../components/DateTimePickerModal';
@@ -130,61 +129,6 @@ function formatMoney(v: number) {
 function parseMoneyInput(v: string): number {
   const n = parseFloat(String(v).replace(',', '.'));
   return Number.isFinite(n) ? n : 0;
-}
-
-/**
- * QtyInput — поле количества строки товара (120, дробные количества).
- *
- * Старый контролируемый инпут (`value={String(line.quantity)}` +
- * пере-парс на каждом символе) физически не давал набрать дробь: «0.»
- * парсился в 0 → `|| 1` → мгновенно перерисовывался как «1», точка
- * съедалась. Здесь черновик текста живёт локально: коммитим наверх каждое
- * валидное значение ≥ MIN_QTY (0.001), а на blur нормализуем отображение
- * («2,» → «2», пусто → последнее валидное). Запятая = точка (RU decimal-pad),
- * глубже 3 знаков не уходит (parseQtyInput округляет — ровно NUMERIC(12,3)).
- * Степперы ±1 снаружи продолжают работать: пока поле не в фокусе, внешние
- * изменения значения синхронизируются в черновик.
- */
-function QtyInput({
-  value,
-  onCommit,
-  style,
-}: {
-  value: number;
-  onCommit: (n: number) => void;
-  style?: StyleProp<TextStyle>;
-}) {
-  const [text, setText] = useState(() => formatQty(value));
-  const focusedRef = useRef(false);
-  useEffect(() => {
-    if (!focusedRef.current) setText(formatQty(value));
-  }, [value]);
-  return (
-    <TextInput
-      value={text}
-      onChangeText={(v) => {
-        setText(v);
-        const n = parseQtyInput(v);
-        if (n !== null && n >= MIN_QTY) onCommit(n);
-      }}
-      onFocus={() => {
-        focusedRef.current = true;
-      }}
-      onBlur={() => {
-        focusedRef.current = false;
-        const n = parseQtyInput(text);
-        if (n === null || n < MIN_QTY) {
-          setText(formatQty(value));
-        } else {
-          setText(formatQty(n));
-          onCommit(n);
-        }
-      }}
-      style={style}
-      keyboardType="decimal-pad"
-      selectTextOnFocus
-    />
-  );
 }
 
 /**
