@@ -272,7 +272,7 @@ function MobileHero() {
           {head}
           {tail && (
             <>
-              {' '}
+              <br />
               <span className="text-primary-600">{tail}</span>
             </>
           )}
@@ -338,7 +338,7 @@ function DesktopHero() {
             {head}
             {tail && (
               <>
-                {' '}
+                <br />
                 <span className="text-primary-600">{tail}</span>
               </>
             )}
