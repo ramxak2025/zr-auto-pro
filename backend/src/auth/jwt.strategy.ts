@@ -4,7 +4,7 @@ import { ExtractJwt, Strategy } from 'passport-jwt';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
-import { authCacheKey, AUTH_CACHE_TTL_MS, ValidatedUser } from '../common/auth-cache';
+import { authCacheKey, AUTH_CACHE_TTL_MS, NO_TENANT_ID, ValidatedUser } from '../common/auth-cache';
 import { mergeEffectivePermissions } from '../common/role-matrix';
 
 @Injectable()
@@ -67,7 +67,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // (нулевой дополнительный DB-hop). role_id NULL (все существующие
     // пользователи) → role_matrix NULL → путь байт-в-байт как до 114.
     const { rows } = await this.pool.query(
-      `SELECT u.is_active, COALESCE(u.tenant_id::text, '') as tenant_id, u.role, u.dismissed_at, u.purged_at,
+      `SELECT u.is_active, u.tenant_id::text as tenant_id, u.role, u.dismissed_at, u.purged_at,
               COALESCE(u.permissions, '{}') as permissions,
               r.matrix as role_matrix
        FROM users u
@@ -125,7 +125,10 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
 
     return {
       userID,
-      tenantID: rows[0].tenant_id,
+      // NULL tenant (a global superadmin) → nil-UUID sentinel, never '' — an
+      // empty string would crash every `WHERE tenant_id = $1` on a uuid column.
+      // See NO_TENANT_ID for the full rationale.
+      tenantID: rows[0].tenant_id ?? NO_TENANT_ID,
       role: rows[0].role,
       permissions,
       jti,

@@ -10,6 +10,7 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { parseFields, filterShape } from '../common/field-filter';
+import { NO_TENANT_ID } from '../common/auth-cache';
 
 @Injectable()
 export class ProductsService {
@@ -571,7 +572,9 @@ export class ProductsService {
         throw new BadRequestException({ message: 'Нет данных для импорта' });
       }
 
-      if (!tenantID) {
+      // NO_TENANT_ID (a tenant-less superadmin) must not write rows into a
+      // phantom tenant — reject the import the same as a missing tenant.
+      if (!tenantID || tenantID === NO_TENANT_ID) {
         throw new BadRequestException({ message: 'Нет tenantID' });
       }
 

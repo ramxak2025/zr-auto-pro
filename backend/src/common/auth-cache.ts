@@ -19,6 +19,26 @@ import { ttlCache } from './ttl-cache';
  */
 export const AUTH_CACHE_TTL_MS = 30_000;
 
+/**
+ * Sentinel tenant id for a user that has NO tenant (users.tenant_id IS NULL —
+ * i.e. a global `superadmin`).
+ *
+ * Why a nil-UUID instead of '' or null:
+ *   • `tenant_id` columns are `uuid`. Feeding an empty string into any
+ *     `WHERE tenant_id = $1` makes Postgres cast '' → uuid and throw 22P02
+ *     ("invalid input syntax for type uuid"), which surfaced as a 500 on
+ *     EVERY tenant-scoped endpoint the web app-shell fires while a superadmin
+ *     browses /admin (users, products, clients, subscription, …).
+ *   • `null` would be correct too, but `tenantID` is typed `string` and
+ *     threaded through ~40 controllers → services as a non-null `string`;
+ *     widening it to `string | null` ripples across the whole protected API.
+ *   • The nil-UUID is a valid uuid that no real tenant ever owns (tenants get
+ *     random v4 ids), so tenant-scoped filters return an EMPTY set (200 []),
+ *     never a crash — the correct answer for a tenant-less user. It also flows
+ *     safely through the RLS GUC cast (see TenantContextInterceptor).
+ */
+export const NO_TENANT_ID = '00000000-0000-0000-0000-000000000000';
+
 /** Shape returned by JwtStrategy.validate and attached to the request user. */
 export interface ValidatedUser {
   userID: string;
