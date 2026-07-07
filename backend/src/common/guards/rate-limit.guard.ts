@@ -2,17 +2,22 @@ import { Injectable, CanActivate, ExecutionContext, HttpException, HttpStatus } 
 import { Request } from 'express';
 import * as crypto from 'crypto';
 import { redisIncrWithExpiry } from '../redis';
+import { phoneSearchKey } from '../normalize-phone';
 
 /**
  * Global rate limiter with different limits per endpoint TYPE.
  *
- * Login/register only: 20/min  (brute-force protection)
+ * Login/register:      DUAL bucket (brute-force protection, shared-IP-safe):
+ *                        · fine   20/min  per (ip, account)     — targeted-account cap
+ *                        · coarse 100/min per ip (all accounts) — anti username-rotation
  * Read endpoints:      600/min (handles SPAs that fan out 5-10 parallel queries
  *                               per page, multiplied by office NAT shared IPs)
  * Write endpoints:     150/min
  *
- * Bucket key = IP + a per-TOKEN fingerprint, so that multiple users behind the
- * same NAT (autoservice office Wi-Fi) don't share a quota.
+ * Bucket key (read/write) = IP + a per-TOKEN fingerprint, so that multiple users
+ * behind the same NAT (autoservice office Wi-Fi) don't share a quota. The login
+ * bucket adds a per-ACCOUNT dimension for the same reason — see the /auth branch
+ * in canActivate for the shared-reserve-IP rationale.
  *
  * IMPORTANT — token fingerprint, not a fixed token slice:
  *   The previous implementation used `auth.slice(7, 23)` — the first 16 chars
@@ -84,38 +89,87 @@ export class RateLimitGuard implements CanActivate {
     const userKey = token ? crypto.createHash('sha1').update(token).digest('base64').slice(0, 22) : 'anon';
     const idKey = `${ip}:${userKey}`;
 
-    // Determine bucket and limit
-    let maxAttempts: number;
-    let bucketKey: string;
+    // ── Select the fixed-window bucket(s) this request is metered against ────
+    // Most requests hit ONE bucket. Credential-exchange endpoints hit TWO (a
+    // fine per-(ip,account) bucket + a coarse per-ip backstop) — see below.
+    const checks: Array<{ key: string; max: number }> = [];
 
-    // Brute-force protection ONLY on credential-exchange endpoints
     if (/\/auth\/(login|register)\b/.test(path)) {
-      maxAttempts = 20;
-      bucketKey = `auth:${ip}`; // by IP only — login is unauthenticated
+      // Brute-force protection on login/register, hardened against many users
+      // arriving from ONE upstream IP. When the mobile app fails over to the
+      // Yandex reserve API-gateway, all traffic reaches us from the gateway's
+      // single public egress IP — which is NOT a trusted proxy hop (main.ts
+      // trusts only private ranges), so request.ip is identical for every
+      // reserve user. Keying the login bucket by IP alone made a whole shop
+      // share one 20/min bucket during a reserve window → spurious 429 lockouts
+      // ("приложение не работает"). Two independent limits fix that WITHOUT
+      // weakening protection:
+      //
+      //   FINE   auth:<ip>:<acct>   20/min — the real brute-force ceiling. A
+      //          targeted attack on any SINGLE account from one IP is still
+      //          capped at 20/min, exactly as before. Distinct accounts behind
+      //          a shared IP no longer collide, so legit users stop cross-locking.
+      //   COARSE auth-ip:<ip>      100/min — backstop so an attacker on one IP
+      //          cannot get unlimited tries by ROTATING usernames. 5× the fine
+      //          cap: enough headroom for a whole shop re-authenticating through
+      //          one gateway IP, yet still a hard per-IP cap on stuffing/spraying.
+      //
+      // The account key is the format-agnostic national phone key (last 10
+      // digits — same normalisation as dedup) hashed with SHA-1, so reformatting
+      // the phone can't evade the fine bucket and we never store the raw phone.
+      const body = request.body as { phone?: unknown } | undefined;
+      const rawPhone = typeof body?.phone === 'string' ? body.phone : '';
+      const acct = phoneSearchKey(rawPhone);
+      const acctKey = acct ? crypto.createHash('sha1').update(acct).digest('base64').slice(0, 16) : 'noacct';
+      checks.push({ key: `auth:${ip}:${acctKey}`, max: 20 });
+      checks.push({ key: `auth-ip:${ip}`, max: 100 });
     } else if (method === 'GET') {
-      maxAttempts = 600;
-      bucketKey = `read:${idKey}`;
+      checks.push({ key: `read:${idKey}`, max: 600 });
     } else {
-      maxAttempts = 150;
-      bucketKey = `write:${idKey}`;
+      checks.push({ key: `write:${idKey}`, max: 150 });
     }
 
+    // Meter EVERY selected bucket (a blocked request still consumes its budget
+    // in each bucket — standard fixed-window behaviour). Block if ANY bucket is
+    // over its limit, reporting the longest remaining window for Retry-After.
+    let blockedResetAt = 0;
+    for (const c of checks) {
+      const res = await this.bump(c.key, c.max, now);
+      if (res.overLimit && res.resetAt > blockedResetAt) blockedResetAt = res.resetAt;
+    }
+    if (blockedResetAt > 0) {
+      const retryAfter = Math.ceil((blockedResetAt - now) / 1000);
+      throw new HttpException(
+        { message: `Слишком много запросов. Повторите через ${retryAfter} сек.` },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+
+    return true;
+  }
+
+  /**
+   * Increment one fixed-window bucket and report whether it is now OVER its
+   * limit. Redis-first (atomic INCR, shared across instances) with a per-process
+   * in-memory fallback — semantics are identical to the original single-bucket
+   * flow. NEVER throws: a Redis hiccup degrades to the local Map, it never
+   * denies a legitimate request nor raises a 500.
+   */
+  private async bump(
+    bucketKey: string,
+    maxAttempts: number,
+    now: number,
+  ): Promise<{ overLimit: boolean; resetAt: number }> {
     // ── Redis path (shared across instances) ───────────────────────────────
     // redisIncrWithExpiry NEVER throws: it returns the new counter when Redis
     // is healthy, or null when there is no URL / Redis is down / it errored /
     // timed out. A null means "Redis unavailable" → fall through to the Map.
     const redisCount = await redisIncrWithExpiry(`rl:${bucketKey}`, this.windowMs);
     if (redisCount !== null) {
-      if (redisCount > maxAttempts) {
-        // We don't know the exact remaining TTL cheaply here; the window is
-        // fixed at windowMs, so report the full window as a safe upper bound.
-        const retryAfter = Math.ceil(this.windowMs / 1000);
-        throw new HttpException(
-          { message: `Слишком много запросов. Повторите через ${retryAfter} сек.` },
-          HttpStatus.TOO_MANY_REQUESTS,
-        );
-      }
-      return true;
+      // We don't track the exact window start cheaply on the Redis path; the
+      // window is fixed at windowMs, so report the full window as a safe upper
+      // bound for Retry-After (unchanged from the original behaviour).
+      return { overLimit: redisCount > maxAttempts, resetAt: now + this.windowMs };
     }
 
     // ── In-memory fallback (per-process) ────────────────────────────────────
@@ -124,19 +178,11 @@ export class RateLimitGuard implements CanActivate {
     // instead of dropping rate-limiting entirely or returning 500s.
     const entry = this.attempts.get(bucketKey);
     if (!entry || now > entry.resetAt) {
-      this.attempts.set(bucketKey, { count: 1, resetAt: now + this.windowMs });
-      return true;
+      const resetAt = now + this.windowMs;
+      this.attempts.set(bucketKey, { count: 1, resetAt });
+      return { overLimit: false, resetAt };
     }
-
     entry.count++;
-    if (entry.count > maxAttempts) {
-      const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
-      throw new HttpException(
-        { message: `Слишком много запросов. Повторите через ${retryAfter} сек.` },
-        HttpStatus.TOO_MANY_REQUESTS,
-      );
-    }
-
-    return true;
+    return { overLimit: entry.count > maxAttempts, resetAt: entry.resetAt };
   }
 }
