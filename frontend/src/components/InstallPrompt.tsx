@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { X, Share, Plus, Download, Smartphone, ChevronDown } from 'lucide-react';
 
 interface BeforeInstallPromptEvent extends Event {
@@ -25,10 +26,7 @@ function getPlatform(): Platform {
 }
 
 function isStandalone(): boolean {
-  return (
-    window.matchMedia('(display-mode: standalone)').matches ||
-    (window.navigator as any).standalone === true
-  );
+  return window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true;
 }
 
 function isDismissed(): boolean {
@@ -43,6 +41,9 @@ function isDismissed(): boolean {
 }
 
 export default function InstallPrompt() {
+  // Показываем ТОЛЬКО на странице входа (решение владельца 07.07):
+  // на маркетинговом сайте баннер «установите приложение» мешал продажам.
+  const { pathname } = useLocation();
   const [platform, setPlatform] = useState<Platform>(null);
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [visible, setVisible] = useState(false);
@@ -91,6 +92,7 @@ export default function InstallPrompt() {
     setDeferredPrompt(null);
   }, [deferredPrompt, dismiss]);
 
+  if (pathname !== '/login') return null;
   if (!visible || !platform) return null;
 
   return (
@@ -126,7 +128,11 @@ export default function InstallPrompt() {
             </button>
 
             <div className="px-6 pb-6 pt-2">
-              {platform === 'ios' ? <IOSContent /> : <AndroidContent onInstall={handleAndroidInstall} hasPrompt={!!deferredPrompt} />}
+              {platform === 'ios' ? (
+                <IOSContent />
+              ) : (
+                <AndroidContent onInstall={handleAndroidInstall} hasPrompt={!!deferredPrompt} />
+              )}
             </div>
           </div>
         </div>
@@ -216,9 +222,7 @@ function IOSContent() {
       </div>
 
       {/* Footer note */}
-      <p className="text-center text-xs text-gray-400">
-        Приложение бесплатно и не занимает место
-      </p>
+      <p className="text-center text-xs text-gray-400">Приложение бесплатно и не занимает место</p>
     </div>
   );
 }
@@ -297,9 +301,7 @@ function AndroidContent({ onInstall, hasPrompt }: { onInstall: () => void; hasPr
       )}
 
       {/* Footer note */}
-      <p className="text-center text-xs text-gray-400">
-        Приложение бесплатно и не занимает место
-      </p>
+      <p className="text-center text-xs text-gray-400">Приложение бесплатно и не занимает место</p>
     </div>
   );
 }

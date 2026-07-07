@@ -148,20 +148,13 @@ type HeroPhotoStatus = 'loading' | 'loaded' | 'failed';
 const HERO_LIGHT_SRC = '/img/landing/hero-light.webp';
 
 /**
- * Верхний блок мобильного hero — светлое фото /img/landing/hero-light.webp
- * (~44svh, object-cover), нижние 40% плавно «растворяются» в фон страницы
- * #FAFAFA светлым градиентом. Никаких тёмных оверлеев (анти-референс владельца).
- *
- * Монтируется ТОЛЬКО при heroLightReady === true (content.ts): файл едет через
- * репо, его наличие — константа деплоя, поэтому без runtime-проб и без
- * резервирования места «на всякий случай». Ноль CLS в обоих состояниях:
- * сегодня (файла нет) блок не существует и hero сразу законченный
- * (workshop-карточка внизу); после коммита с фото + флагом место
- * зарезервировано с первого кадра. onError остаётся страховкой от битой
- * загрузки на плохом LTE — блок схлопнется, вернётся workshop-карточка.
- * matchMedia-гейт — чтобы desktop (md:hidden) не качал мобильное фото.
+ * Фото-карточка мобильного hero (под CTA): hero-light.webp в скруглённой
+ * карточке + плавающий продуктовый чип «Касса сегодня» — сообщение и кнопки
+ * остаются в первом экране (решение владельца 07.07: фото сверху съедало
+ * весь фолд, CTA были невидимы). Фолбэк при ошибке — workshop.webp, затем null.
+ * matchMedia-гейт: desktop (md:hidden) фото не качает.
  */
-function MobileHeroLightPhoto({
+function MobileHeroPhotoCard({
   status,
   onStatus,
 }: {
@@ -169,50 +162,33 @@ function MobileHeroLightPhoto({
   onStatus: (s: HeroPhotoStatus) => void;
 }) {
   const isMobile = useSyncExternalStore(subscribeMobile, getIsMobile);
-  if (!isMobile || status === 'failed') return null;
+  if (!isMobile) return null;
+  const src = status === 'failed' ? '/img/landing/workshop.webp' : HERO_LIGHT_SRC;
   return (
-    <div className="relative h-[44vh] w-full overflow-hidden supports-[height:44svh]:h-[44svh]">
+    <div className="relative overflow-hidden rounded-3xl border border-slate-200/60 shadow-lg shadow-slate-900/10">
       <img
-        src={HERO_LIGHT_SRC}
+        src={src}
         alt="Светлый зал премиального автосервиса — кроссовер на подъёмнике"
+        width={1536}
+        height={1024}
         loading="eager"
         decoding="async"
-        onLoad={() => onStatus('loaded')}
+        onLoad={() => status !== 'loaded' && onStatus('loaded')}
         onError={() => onStatus('failed')}
-        className={`h-full w-full object-cover transition-[transform,opacity] duration-[600ms] ease-out motion-reduce:transition-none ${
+        className={`h-auto w-full object-cover transition-[transform,opacity] duration-[600ms] ease-out motion-reduce:transition-none ${
           status === 'loaded' ? 'scale-100 opacity-100' : 'scale-[1.04] opacity-0'
         }`}
       />
-      {/* Fade нижних 40% в фон страницы — фото «растворяется», а не обрывается */}
-      <div
-        aria-hidden
-        className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-[#FAFAFA] to-transparent"
-      />
-    </div>
-  );
-}
-
-/**
- * Фото-карточка мобильного hero: светлая мастерская /img/landing/workshop.webp
- * (файл на проде есть, его же использует CtaSection). loading=eager осознанно —
- * это LCP-элемент первого экрана на мобиле; на md+ фото не грузится вовсе
- * (matchMedia-гейт выше). Рендерится только пока hero-light-фото нет (failed):
- * с новым верхним фото вторая фотография в hero избыточна.
- */
-function MobileWorkshopPhoto() {
-  const isMobile = useSyncExternalStore(subscribeMobile, getIsMobile);
-  if (!isMobile) return null;
-  return (
-    <div className="overflow-hidden rounded-3xl border border-slate-200/60 shadow-lg shadow-slate-900/10">
-      <img
-        src="/img/landing/workshop.webp"
-        alt="Светлая мастерская автосервиса — мастер с Autexa в телефоне"
-        width={1200}
-        height={900}
-        loading="eager"
-        decoding="async"
-        className="h-auto w-full object-cover"
-      />
+      {/* Продуктовый чип поверх фото — эхо приложения, живость без веса */}
+      {status === 'loaded' && (
+        <div className="absolute left-3 top-3 flex items-center gap-2 rounded-2xl border border-slate-200/70 bg-white/95 px-3 py-2 shadow-lg shadow-slate-900/10 backdrop-blur">
+          <CheckCircle2 className="h-4 w-4 text-emerald-500" aria-hidden />
+          <div className="text-left">
+            <p className="text-[11px] font-semibold leading-tight text-slate-900">Касса сегодня</p>
+            <p className="text-[11px] leading-tight text-slate-500">48 250 ₽ · всё сходится</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -278,8 +254,6 @@ function MobileHero() {
         <div className="absolute inset-0 opacity-[0.025]" style={NOISE_STYLE} />
       </div>
 
-      {heroLightReady && <MobileHeroLightPhoto status={photoStatus} onStatus={setPhotoStatus} />}
-
       {/* Оркестрованный вход: бейдж-якорь → заголовок → подзаголовок → CTA → фото */}
       <motion.div
         className="relative px-5 pb-12 pt-8"
@@ -318,13 +292,9 @@ function MobileHero() {
           </a>
         </motion.div>
 
-        {/* Workshop-карточка — только пока hero-light-фото нет: не оголяем hero,
-            но и не ставим два фото друг под другом, когда верхнее появилось */}
-        {photoStatus === 'failed' && (
-          <motion.div variants={item} className="mt-8">
-            <MobileWorkshopPhoto />
-          </motion.div>
-        )}
+        <motion.div variants={item} className="mt-8">
+          <MobileHeroPhotoCard status={photoStatus} onStatus={setPhotoStatus} />
+        </motion.div>
       </motion.div>
     </section>
   );
