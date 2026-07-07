@@ -1,4 +1,4 @@
-import api from './axios';
+import api, { loginAcrossHosts } from './axios';
 import {
   createAuthApi,
   createProfileApi,
@@ -54,7 +54,19 @@ import {
   createVoiceApi,
 } from '../../../shared/api/createServices';
 
-export const authApi = createAuthApi(api);
+// Login uses happy-eyeballs across the failover ring (FIX B): fired at ALL ring
+// hosts concurrently, first success wins — a slow/blocked primary no longer
+// stalls sign-in ~15s before the reserve is tried. Login is the ONLY mutation
+// safe to duplicate (password check + token issue, no side effects). Every OTHER
+// auth method (register/me/logout/updateAvatar/deleteAccount) is passed through
+// unchanged. On single-host builds `loginAcrossHosts` degrades to one ordinary
+// request, so this wrapper is byte-for-byte the previous behaviour there.
+const authApiBase = createAuthApi(api);
+export const authApi: typeof authApiBase = {
+  ...authApiBase,
+  login: (data: Parameters<typeof authApiBase.login>[0]) =>
+    loginAcrossHosts<Awaited<ReturnType<typeof authApiBase.login>>['data']>(data),
+};
 // «Мой профиль» (migration 099). Self profile edit + self password change for
 // every role; владелец (director/superadmin) edits apply directly, сотрудник
 // (admin/master) edits create a pending change-request that an owner approves.

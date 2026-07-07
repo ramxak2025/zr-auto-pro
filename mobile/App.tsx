@@ -29,7 +29,7 @@ import {
   type QueuedCheck,
 } from './src/utils/offlineCheckQueue';
 import { shouldRetryTransient, transientRetryDelay } from './src/utils/queryRetry';
-import { API_URL, onRequestSucceeded } from './src/api/axios';
+import { API_URL, onRequestSucceeded, raceInitialActiveHost } from './src/api/axios';
 import { checksApi } from './src/api/services';
 
 // NetInfo's DEFAULT reachability probe hits clients3.google.com in the
@@ -68,6 +68,15 @@ onlineManager.setEventListener((setOnline) =>
     setOnline(state.isConnected !== false);
   }),
 );
+
+// Happy-eyeballs launch host race (FIX B). Fire GET /health at ALL failover-ring
+// hosts concurrently and adopt the FIRST that answers as the active base, so the
+// app connects as fast as the FASTEST reachable host instead of stalling ~15s on
+// primary before failover. INERT on single-host builds (guarded inside), fires
+// nothing on Android beyond the same /health GET, and never forces offline. Runs
+// once, as early as possible — before the first real request wave (AuthContext
+// /me revalidation) mounts.
+raceInitialActiveHost();
 
 // Configure how notifications are handled when the app is in the foreground.
 // Must be set before any notification arrives — top-level call outside component.

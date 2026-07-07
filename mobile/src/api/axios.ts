@@ -1,7 +1,8 @@
-import axios, { AxiosError, type InternalAxiosRequestConfig } from 'axios';
+import axios, { AxiosError, type AxiosRequestConfig, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
 import { buildApiHosts, isHtmlApiPayload } from './apiHosts';
+import { isDeterministicClientError } from '../utils/queryRetry';
 
 // API URL: hardcoded production server, fallback to dev server
 function getApiBaseUrl(): string {
@@ -31,10 +32,19 @@ export const API_URL = API_BASE_URL;
 // Поведение: на СЕТЕВОМ отказе любого запроса (нет ответа: DNS / connect /
 // timeout) тот же запрос прозрачно повторяется ОДИН раз на следующий хост
 // кольца. Успех на резерве → он запоминается активной базой (module state +
-// AsyncStorage, переживает рестарт), а фоновая проба раз в 10 минут пытается
+// AsyncStorage, переживает рестарт), а фоновая проба каждые ~75 с пытается
 // вернуть primary. Auth (Bearer из interceptor'а ниже) и отсутствие
 // клиентского ETag-слоя (удалён, см. историю ниже) действуют на резерве
 // байт-в-байт так же — интерсепторы общие и от хоста не зависят.
+//
+// HAPPY-EYEBALLS (FIX B): вместо ожидания ~DEFAULT_TIMEOUT_MS на primary до
+// первого failover'а — на старте гоняем GET /health по ВСЕМ хостам кольца
+// параллельно и берём активной базой ПЕРВЫЙ ответивший (raceInitialActiveHost);
+// логин уходит на ВСЕ хосты сразу и берёт первый успех (loginAcrossHosts).
+// Дублировать так можно ТОЛЬКО идемпотентное: /health (GET) и /auth/login
+// (единственная мутация без побочных эффектов — проверка пароля + выдача
+// токена). Обычные мутации (POST/PATCH/... кроме логина) НИКОГДА не гоняются
+// параллельно и не ретраятся вслепую — иначе задвоение записи в касса/склад.
 //
 // ГАРАНТИЯ ИНЕРТНОСТИ: пока apiFallbackUrls пуст, API_HOSTS.length === 1 —
 // каждая ветка ниже начинается с проверки `API_HOSTS.length > 1`, поэтому ни
@@ -56,8 +66,37 @@ export function getActiveApiBaseUrl(): string {
 }
 
 const ACTIVE_BASE_STORAGE_KEY = 'active_api_base_v1';
-const PRIMARY_RETURN_PROBE_INTERVAL_MS = 10 * 60_000;
+// Пока живём на резерве — как часто пробуем вернуться на primary. Было 10 мин:
+// кратковременная просадка primary (blip) уводила сессию на более медленный
+// резерв на все 10 минут. ~75 с (в окне 60–90 с) возвращает почти сразу, но не
+// спамит: таймер живёт ТОЛЬКО пока activeBaseUrl !== primary (обычно никогда).
+const PRIMARY_RETURN_PROBE_INTERVAL_MS = 75_000;
 const PRIMARY_RETURN_PROBE_TIMEOUT_MS = 5_000;
+/** Короткий таймаут одной пробы стартовой гонки хостов (happy-eyeballs). */
+const LAUNCH_HOST_RACE_TIMEOUT_MS = 5_000;
+
+/**
+ * Проба живости ОДНОГО хоста кольца: GET {base}/health с коротким таймаутом,
+ * true только на 2xx с НЕ-HTML телом (HTML-200 = captive-portal / чужой
+ * апстрim, не наш API — тот же страж, что в axios / OfflineBanner /
+ * backendRecovery). Ходит через fetch (не через инстанс axios), поэтому не
+ * трогает auth-интерсепторы и не путается с «живым» трафиком. Никогда не
+ * бросает — резолвит true/false.
+ */
+async function probeHostHealth(base: string, timeoutMs: number): Promise<boolean> {
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${base}/health`, { method: 'GET', signal: abort.signal });
+    if (!res.ok) return false;
+    const body = await res.text().catch(() => '');
+    return !isHtmlApiPayload(body, res.headers.get('content-type'));
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 let primaryReturnTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -68,7 +107,7 @@ function stopPrimaryReturnProbe(): void {
   }
 }
 
-/** Пока живём на резерве — раз в 10 минут пробуем /health primary и возвращаемся. */
+/** Пока живём на резерве — раз в ~75 с пробуем /health primary и возвращаемся. */
 function ensurePrimaryReturnProbe(): void {
   if (primaryReturnTimer || activeBaseUrl === API_BASE_URL) return;
   primaryReturnTimer = setInterval(async () => {
@@ -76,16 +115,10 @@ function ensurePrimaryReturnProbe(): void {
       stopPrimaryReturnProbe();
       return;
     }
-    const abort = new AbortController();
-    const t = setTimeout(() => abort.abort(), PRIMARY_RETURN_PROBE_TIMEOUT_MS);
-    try {
-      const res = await fetch(`${API_BASE_URL}/health`, { method: 'GET', signal: abort.signal });
-      if (res.ok) adoptActiveBase(API_BASE_URL);
-    } catch {
-      // primary всё ещё недоступен — остаёмся на резерве до следующей пробы
-    } finally {
-      clearTimeout(t);
+    if (await probeHostHealth(API_BASE_URL, PRIMARY_RETURN_PROBE_TIMEOUT_MS)) {
+      adoptActiveBase(API_BASE_URL);
     }
+    // primary всё ещё недоступен — остаёмся на резерве до следующей пробы.
   }, PRIMARY_RETURN_PROBE_INTERVAL_MS);
 }
 
@@ -487,5 +520,117 @@ api.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+// ── Happy-eyeballs, старт (FIX B) ────────────────────────────────────────────
+let launchHostRaceStarted = false;
+
+/**
+ * Стартовая гонка хостов. ДО того как приложение осядет на одном хосте, шлём
+ * GET /health по ВСЕМ хостам кольца параллельно и берём активной базой ПЕРВЫЙ,
+ * кто ответил валидно (2xx, не HTML). Так «какой хост доступен» на холодном
+ * старте решается за время САМОГО БЫСТРОГО хоста, а не ~DEFAULT_TIMEOUT_MS
+ * ожидания primary до первого failover'а.
+ *
+ * БЕЗОПАСНОСТЬ / ИНЕРТНОСТЬ:
+ *   • пробит ТОЛЬКО GET /health (read-only liveness) через fetch — никогда мутацию;
+ *   • ИНЕРТНА при одном хосте (API_HOSTS.length <= 1): single-host-сборки её не
+ *     запускают, поведение байт-в-байт прежнее;
+ *   • идемпотентна — не больше одного запуска на JS-контекст (launchHostRaceStarted);
+ *   • если НИКТО не ответил — activeBaseUrl не трогаем (никакого форс-офлайна),
+ *     обычное пер-запросное кольцо failover продолжает работать как прежде.
+ */
+export function raceInitialActiveHost(): void {
+  if (API_HOSTS.length <= 1) return;
+  if (launchHostRaceStarted) return;
+  launchHostRaceStarted = true;
+  let settled = false;
+  for (const host of API_HOSTS) {
+    void probeHostHealth(host, LAUNCH_HOST_RACE_TIMEOUT_MS).then((ok) => {
+      if (settled || !ok) return;
+      settled = true;
+      // Победил первый доступный хост. adoptActiveBase — no-op, когда база уже
+      // равна host (например, primary ответил первым); для резерва — persist +
+      // запуск пробы возврата на primary.
+      adoptActiveBase(host);
+    });
+  }
+}
+
+/** Конфиг дочернего запроса гонки логина: обычный axios-конфиг + наши флаги. */
+type LoginRaceConfig = AxiosRequestConfig &
+  Pick<FailoverAwareConfig, '_failoverBaseUrl' | '_failoverAttempted' | '_loginRetryAttempted'>;
+
+/**
+ * Happy-eyeballs ЛОГИН (FIX B). Шлём POST /auth/login на ВСЕ хосты кольца
+ * параллельно и резолвим ПЕРВЫМ успехом — медленный/заблокированный primary
+ * больше не тормозит вход ~DEFAULT_TIMEOUT_MS до попытки резерва.
+ *
+ * ПОЧЕМУ ЭТУ МУТАЦИЮ МОЖНО ДУБЛИРОВАТЬ (и только её): /auth/login БЕЗ побочных
+ * эффектов — проверяет пароль и выдаёт токен (см. login-retry выше). Отправка
+ * на N хостов даёт максимум N валидных токенов; берём победителя, проигравших
+ * игнорируем. НИКОГДА не звать для register/expenses/checks и любой другой
+ * записи — они не идемпотентны.
+ *
+ * ГРАНИЦА + ОТМЕНА ПРОИГРАВШИХ:
+ *   • ровно API_HOSTS.length запросов, не больше — у каждого дочернего ОТКЛЮЧЕН
+ *     и failover-ретрай, и последовательный login-retry (_failoverAttempted /
+ *     _loginRetryAttempted), поэтому параллельный веер не рекурсирует;
+ *   • первый 2xx → резолв сразу, adopt этого хоста, проигравшие игнорируются
+ *     (settled-флаг — их поздний .then/.catch становится no-op);
+ *   • первый детерминированный 4xx (неверный пароль / валидация — одинаков на
+ *     всех хостах, за ними один backend) → reject сразу, чтобы неверный пароль
+ *     оставался быстрым, а не ждал таймаута медленного хоста;
+ *   • сеть / 5xx одного хоста → ждём остальных; reject только когда ВСЕ упали,
+ *     предпочитая ответ сервера как выводимую причину.
+ *
+ * При одном хосте — ОДИН обычный запрос: байт-в-байт прежнее поведение (в т.ч.
+ * одиночный прозрачный login-retry интерсептора на тот же хост).
+ */
+export function loginAcrossHosts<T = unknown>(data: unknown): Promise<AxiosResponse<T>> {
+  if (API_HOSTS.length <= 1) {
+    return api.post<T>('/auth/login', data);
+  }
+  return new Promise<AxiosResponse<T>>((resolve, reject) => {
+    let remaining = API_HOSTS.length;
+    let settled = false;
+    let bestError: unknown;
+    for (const host of API_HOSTS) {
+      const cfg: LoginRaceConfig = {
+        method: 'post',
+        url: '/auth/login',
+        data,
+        _failoverBaseUrl: host,
+        _failoverAttempted: true,
+        _loginRetryAttempted: true,
+      };
+      api
+        .request<T>(cfg)
+        .then((res) => {
+          if (settled) return;
+          settled = true;
+          adoptActiveBase(host);
+          resolve(res);
+        })
+        .catch((err) => {
+          if (settled) return;
+          // Детерминированный 4xx авторитетен для ВСЕХ хостов (за ними один
+          // backend) — reject сразу, не дожидаясь медленных.
+          if (isDeterministicClientError(err)) {
+            settled = true;
+            reject(err);
+            return;
+          }
+          // Предпочитаем ответ сервера голой сетевой ошибке как причину
+          // («неверный пароль» важнее «нет соединения»).
+          if (!bestError || (err as AxiosError)?.response) bestError = err;
+          remaining -= 1;
+          if (remaining === 0) {
+            settled = true;
+            reject(bestError);
+          }
+        });
+    }
+  });
+}
 
 export default api;
