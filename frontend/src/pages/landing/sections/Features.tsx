@@ -82,7 +82,7 @@ function CheckMock() {
     <div className="mt-6 rounded-2xl border border-slate-200/70 bg-slate-50/70 p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-slate-900">Магомед</p>
+          <p className="truncate text-sm font-semibold text-slate-900">Дмитрий</p>
           <p className="truncate text-xs text-slate-400">Lada Priora · 2012</p>
         </div>
         <PlateMock />
