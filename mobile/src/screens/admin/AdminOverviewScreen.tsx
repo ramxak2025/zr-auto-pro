@@ -23,7 +23,13 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { Tenant, PlatformStats, SubscriptionRevenue, SubscriptionRevenuePoint } from '../../../../shared/types';
+import type {
+  Tenant,
+  PlatformStats,
+  SubscriptionRevenue,
+  SubscriptionRevenuePoint,
+  RegistrationRequest,
+} from '../../../../shared/types';
 import type { SemanticPalette } from '../../theme/palette';
 import {
   formatMoney,
@@ -55,6 +61,15 @@ export default function AdminOverviewScreen() {
     queryKey: ['admin-tenants'],
     queryFn: async () => (await tenantsApi.getAll()).data,
   });
+
+  // Pending self-service registration requests (123) — drives the top card's
+  // count badge. Shares the exact query key the review screen uses so the two
+  // stay in lock-step after an approve/reject invalidates the family.
+  const { data: pendingRequests = [] } = useQuery<RegistrationRequest[]>({
+    queryKey: ['admin-registration-requests', 'pending'],
+    queryFn: async () => (await adminApi.listRegistrationRequests('pending')).data,
+  });
+  const pendingCount = pendingRequests.length;
 
   // 122 — collected PAID subscription revenue (this-month / total, paid vs free
   // extension counts, monthly series). Free extensions never count as revenue.
@@ -93,6 +108,7 @@ export default function AdminOverviewScreen() {
       queryClient.invalidateQueries({ queryKey: ['admin-tenants'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] }),
       queryClient.invalidateQueries({ queryKey: ['admin-subscription-revenue'] }),
+      queryClient.invalidateQueries({ queryKey: ['admin-registration-requests'] }),
     ]);
     setRefreshing(false);
   }, [queryClient]);
@@ -136,6 +152,40 @@ export default function AdminOverviewScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
       >
+        {/* Self-service registration requests — top card with a pending count. */}
+        <Pressable
+          onPress={() => {
+            haptic('tap');
+            navigation.navigate('AdminRegistrationRequests');
+          }}
+          style={[styles.requestsCard, surface.card]}
+        >
+          <View
+            style={[
+              styles.requestsIcon,
+              { backgroundColor: pendingCount > 0 ? palette.accent.primarySoft : palette.bg.muted },
+            ]}
+          >
+            <Ionicons
+              name="mail-unread-outline"
+              size={22}
+              color={pendingCount > 0 ? palette.accent.primaryText : palette.text.tertiary}
+            />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.requestsTitle, { color: palette.text.primary }]}>Заявки на регистрацию</Text>
+            <Text style={[styles.requestsSub, { color: palette.text.tertiary }]}>
+              {pendingCount > 0 ? `${pendingCount} ждут решения` : 'Новых заявок нет'}
+            </Text>
+          </View>
+          {pendingCount > 0 ? (
+            <View style={[styles.requestsBadge, { backgroundColor: palette.accent.primary }]}>
+              <Text style={styles.requestsBadgeText}>{pendingCount}</Text>
+            </View>
+          ) : null}
+          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+        </Pressable>
+
         {/* Hero MRR card */}
         <View style={[styles.heroCard, surface.card]}>
           <View style={styles.heroTopRow}>
@@ -391,6 +441,30 @@ function MetricTile({
 const styles = StyleSheet.create({
   root: { flex: 1 },
   scroll: { paddingHorizontal: spacing[4], paddingTop: spacing[1], gap: spacing[3] },
+  requestsCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    padding: spacing[4],
+  },
+  requestsIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  requestsTitle: { fontSize: 15, fontWeight: '700' },
+  requestsSub: { fontSize: 12.5, marginTop: 2 },
+  requestsBadge: {
+    minWidth: 24,
+    height: 24,
+    borderRadius: 12,
+    paddingHorizontal: 7,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  requestsBadgeText: { color: colors.white, fontSize: 12, fontWeight: '800' },
   heroCard: {
     padding: spacing[5],
     gap: spacing[1],

@@ -14,6 +14,7 @@ import {
 } from 'react-native';
 import CachedImage from '../components/CachedImage';
 import { Button } from '../components/Button';
+import RegistrationRequestSheet from './RegistrationRequestSheet';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useAuth } from '../contexts/AuthContext';
@@ -34,6 +35,7 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [phoneError, setPhoneError] = useState('');
   const [passwordError, setPasswordError] = useState('');
+  const [registerOpen, setRegisterOpen] = useState(false);
 
   // Entrance animations — the LOGO is intentionally static at full
   // opacity/scale so the SplashOverlay → LoginScreen handoff is seamless:
@@ -203,6 +205,18 @@ export default function LoginScreen() {
               <Button title="Войти" onPress={handleSubmit} loading={submitting} size="lg" />
             </Animated.View>
 
+            {/* Self-service registration — secondary action under the login form. */}
+            <Animated.View style={[styles.registerWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>
+              <Button
+                title="Регистрация"
+                variant="secondary"
+                onPress={() => setRegisterOpen(true)}
+                disabled={submitting}
+                size="md"
+                hapticIntent="tap"
+              />
+            </Animated.View>
+
             {/* Demo access */}
             <Animated.View style={[styles.demoSection, { opacity: demoFade }]}>
               <View style={styles.dividerRow}>
@@ -239,6 +253,8 @@ export default function LoginScreen() {
           <Text style={styles.footer}>Autexa v2.1 © 2026</Text>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      <RegistrationRequestSheet visible={registerOpen} onClose={() => setRegisterOpen(false)} />
     </SafeAreaView>
   );
 }
@@ -343,6 +359,9 @@ const styles = StyleSheet.create({
     color: colors.white,
     fontSize: 15,
     fontWeight: fontWeight.semibold,
+  },
+  registerWrap: {
+    marginTop: spacing[3],
   },
   demoSection: {
     marginTop: spacing[8],

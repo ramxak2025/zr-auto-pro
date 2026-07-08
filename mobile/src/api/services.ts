@@ -1,6 +1,7 @@
 import api, { loginAcrossHosts } from './axios';
 import {
   createAuthApi,
+  createRegistrationApi,
   createProfileApi,
   createUsersApi,
   createTenantsApi,
@@ -67,6 +68,13 @@ export const authApi: typeof authApiBase = {
   login: (data: Parameters<typeof authApiBase.login>[0]) =>
     loginAcrossHosts<Awaited<ReturnType<typeof authApiBase.login>>['data']>(data),
 };
+// Self-service registration (migration 123). ONE public method — submit() from
+// the LOGIN screen (pre-auth). It is UNAUTHENTICATED by design: it rides the same
+// axios instance, and the request interceptor only attaches a Bearer when a token
+// is cached — on the login screen there is none, so the call goes through tokenless
+// exactly like the login request. Superadmin review (list/approve/reject) lives on
+// `adminApi` below (createAdminApi already exposes those three methods).
+export const registrationApi = createRegistrationApi(api);
 // «Мой профиль» (migration 099). Self profile edit + self password change for
 // every role; владелец (director/superadmin) edits apply directly, сотрудник
 // (admin/master) edits create a pending change-request that an owner approves.

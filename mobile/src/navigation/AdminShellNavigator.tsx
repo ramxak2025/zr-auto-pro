@@ -17,6 +17,7 @@ import AdminTabBar from './AdminTabBar';
 import AdminOverviewScreen from '../screens/admin/AdminOverviewScreen';
 import AdminTenantsScreen from '../screens/admin/AdminTenantsScreen';
 import AdminTenantDetailScreen from '../screens/admin/AdminTenantDetailScreen';
+import AdminRegistrationRequestsScreen from '../screens/admin/AdminRegistrationRequestsScreen';
 import AdminPlansScreen from '../screens/admin/AdminPlansScreen';
 import AdminBroadcastScreen from '../screens/admin/AdminBroadcastScreen';
 import AdminMoreScreen from '../screens/admin/AdminMoreScreen';
@@ -47,6 +48,7 @@ function AdminOverviewStackNavigator() {
   return (
     <OverviewStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <OverviewStack.Screen name="AdminOverviewHome" component={AdminOverviewScreen} />
+      <OverviewStack.Screen name="AdminRegistrationRequests" component={AdminRegistrationRequestsScreen} />
       <OverviewStack.Screen name="AdminTenantDetail" component={AdminTenantDetailScreen} />
     </OverviewStack.Navigator>
   );

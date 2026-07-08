@@ -16,6 +16,7 @@ import { View, StyleSheet, ScrollView, Pressable, RefreshControl } from 'react-n
 import Constants from 'expo-constants';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
+import { useNavigation } from '@react-navigation/native';
 import { adminApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
@@ -25,7 +26,7 @@ import { useColors, useThemeMode } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { AuditLogEntry } from '../../../../shared/types';
+import type { AuditLogEntry, RegistrationRequest } from '../../../../shared/types';
 import { formatDateTime } from './adminShared';
 
 // Human-readable Russian labels for the known platform audit actions. Unknown
@@ -63,12 +64,21 @@ function actionIcon(action: string): keyof typeof Ionicons.glyphMap {
 }
 
 export default function AdminMoreScreen() {
+  const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
   const { contentInset, contentContainerPaddingBottom } = useAdminTabBarScrollInsets();
   const { logout, user } = useAuth();
   const { mode, toggle } = useThemeMode();
   const [refreshing, setRefreshing] = React.useState(false);
+
+  // Pending registration requests — count badge on the «Заявки» row. Same query
+  // key the Overview card + review screen use, so all three stay consistent.
+  const { data: pendingRequests = [] } = useQuery<RegistrationRequest[]>({
+    queryKey: ['admin-registration-requests', 'pending'],
+    queryFn: async () => (await adminApi.listRegistrationRequests('pending')).data,
+  });
+  const pendingCount = pendingRequests.length;
 
   const {
     data: log = [],
@@ -131,6 +141,29 @@ export default function AdminMoreScreen() {
           </View>
         </View>
 
+        {/* Management */}
+        <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Управление</Text>
+        <Pressable
+          onPress={() => {
+            haptic('tap');
+            // Nested navigate — the review screen lives in the Overview tab's
+            // stack (AdminShellNavigator). This switches to it and pushes the list.
+            navigation.navigate('AdminOverview', { screen: 'AdminRegistrationRequests' });
+          }}
+          style={[styles.card, surface.card, styles.navRow]}
+        >
+          <View style={[styles.settingIcon, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="mail-unread-outline" size={18} color={palette.text.primary} />
+          </View>
+          <Text style={[styles.settingLabel, { color: palette.text.primary }]}>Заявки на регистрацию</Text>
+          {pendingCount > 0 ? (
+            <View style={[styles.navBadge, { backgroundColor: palette.accent.primary }]}>
+              <Text style={styles.navBadgeText}>{pendingCount}</Text>
+            </View>
+          ) : null}
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </Pressable>
+
         {/* Audit log */}
         <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Журнал действий</Text>
         <View style={[styles.card, surface.card]}>
@@ -158,7 +191,9 @@ export default function AdminMoreScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={[styles.logAction, { color: palette.text.primary }]} numberOfLines={1}>
                     {actionLabel(entry.action)}
-                    {entry.targetName ? <Text style={{ color: palette.text.secondary }}> · {entry.targetName}</Text> : null}
+                    {entry.targetName ? (
+                      <Text style={{ color: palette.text.secondary }}> · {entry.targetName}</Text>
+                    ) : null}
                   </Text>
                   <Text style={[styles.logMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
                     {entry.actorName ?? 'Система'} · {formatDateTime(entry.createdAt)}
@@ -187,6 +222,16 @@ const styles = StyleSheet.create({
   settingIcon: { width: 32, height: 32, borderRadius: borderRadius.lg, alignItems: 'center', justifyContent: 'center' },
   settingLabel: { fontSize: 15, fontWeight: '500', flex: 1 },
   settingValue: { fontSize: 14, fontWeight: '500' },
+  navRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3.5] },
+  navBadge: {
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    paddingHorizontal: 6,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  navBadgeText: { color: colors.white, fontSize: 11, fontWeight: '800' },
   divider: { height: StyleSheet.hairlineWidth },
   sectionLabel: {
     fontSize: 11,
