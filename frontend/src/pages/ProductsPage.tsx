@@ -25,6 +25,7 @@ import {
   GripVertical,
   ArrowLeftRight,
   Recycle,
+  Percent,
 } from 'lucide-react';
 import { productsApi, uploadsApi, warehouseCategoriesApi, warehousesApi, stockMovementsApi } from '../api/services';
 import type { Product, BundleItem, PaginatedResponse, StockMovement, Warehouse as WarehouseRecord } from '../types';
@@ -35,6 +36,7 @@ import TrashModal from '../components/TrashModal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import VirtualProductGrid from '../components/VirtualProductGrid';
 import VirtualList from '../components/VirtualList';
+import BulkPriceAdjustModal from '../components/BulkPriceAdjustModal';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { DEFAULT_UNIT, UNIT_PRESETS, formatQty, unitLabel } from '../utils/units';
 import * as XLSX from 'xlsx';
@@ -1495,6 +1497,7 @@ export default function ProductsPage() {
   // Global warehouse operations
   const [warehouseOpsOpen, setWarehouseOpsOpen] = useState(false);
   const [trashOpen, setTrashOpen] = useState(false);
+  const [bulkPriceOpen, setBulkPriceOpen] = useState(false);
   const [warehouseOpsMode, setWarehouseOpsMode] = useState<'inventory' | 'writeoff' | null>(null);
   const [warehouseOpsProducts, setWarehouseOpsProducts] = useState<Record<string, { actual: string; reason: string }>>(
     {},
@@ -2301,6 +2304,15 @@ export default function ProductsPage() {
               onChange={handleImportFile}
               className="hidden"
             />
+            <button
+              type="button"
+              onClick={() => setBulkPriceOpen(true)}
+              className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
+              title="Массовая корректировка цен"
+            >
+              <Percent className="h-4 w-4" />
+              <span className="hidden xl:inline">Цены</span>
+            </button>
             <button
               type="button"
               onClick={() => setTrashOpen(true)}
@@ -3125,6 +3137,17 @@ export default function ProductsPage() {
 
       {/* Trash bin — soft-deleted products with restore / hard-delete / empty */}
       <TrashModal isOpen={trashOpen} onClose={() => setTrashOpen(false)} />
+
+      {/* Mass sell-price adjustment (owner-class only — gated by canManageWarehouse) */}
+      {bulkPriceOpen && (
+        <BulkPriceAdjustModal
+          isOpen={bulkPriceOpen}
+          onClose={() => setBulkPriceOpen(false)}
+          folders={warehouseCats || []}
+          products={allProducts}
+          initialProductIds={Array.from(selectedProducts)}
+        />
+      )}
     </div>
   );
 }
