@@ -38,6 +38,7 @@ import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
 import FolderPickerModal from '../components/FolderPickerModal';
 import ProductMovementHistoryModal from '../components/ProductMovementHistoryModal';
+import BulkPriceAdjustSheet from '../components/BulkPriceAdjustSheet';
 import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
 import FreshnessBadge from '../components/FreshnessBadge';
@@ -324,6 +325,10 @@ export default function ProductsScreen() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showOpsModal, setShowOpsModal] = useState(false);
+  // «Массовая корректировка цен» — owner-class bulk sell-price tool. Opened
+  // from the warehouse-ops sheet; the entry itself is gated on isOwnerClass
+  // because the backend endpoint is director/admin/superadmin only.
+  const [showBulkPrice, setShowBulkPrice] = useState(false);
   // Корзина склада — full-screen modal hosted from the warehouse ops modal,
   // rather than a separate "Ещё" tab item, because soft-deleted products are
   // a warehouse concern.
@@ -2209,7 +2214,7 @@ export default function ProductsScreen() {
         title={
           '\u0421\u043A\u043B\u0430\u0434\u0441\u043A\u0438\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438'
         }
-        heightRatio={0.5}
+        heightRatio={0.62}
       >
         <TouchableOpacity
           style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
@@ -2282,6 +2287,36 @@ export default function ProductsScreen() {
           </View>
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
+
+        {/* Массовая корректировка цен — owner-class (director/admin/superadmin).
+            Скрыта от мастеров, даже если у них есть warehouse_access, потому что
+            бэкенд-эндпоинт разрешён только owner-class. Открывает bottom-sheet с
+            обязательным предпросмотром перед применением. */}
+        {isOwnerClass && (
+          <TouchableOpacity
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => {
+              setShowOpsModal(false);
+              setShowBulkPrice(true);
+            }}
+          >
+            <View
+              style={[
+                styles.opsIcon,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+              ]}
+            >
+              <Ionicons name="pricetags-outline" size={22} color={colors.green[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Массовая корректировка цен'}</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                {'Поднять или снизить цены на % с округлением'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        )}
 
         {/* Корзина склада — soft-deleted products. Lives here (not in
             "Ещё") because it's a warehouse-only concern. */}
@@ -3347,6 +3382,18 @@ export default function ProductsScreen() {
           </>
         )}
       </Modal>
+
+      {/* Массовая корректировка цен — owner-class bulk sell-price sheet.
+          Self-contained: обязательный dry-run предпросмотр перед применением,
+          инвалидация products/all-products-check после применения. Папки берём
+          из warehouse-categories активного склада, позиции — из текущего
+          списка товаров. */}
+      <BulkPriceAdjustSheet
+        visible={showBulkPrice}
+        onClose={() => setShowBulkPrice(false)}
+        categories={Array.isArray(extraFolders) ? extraFolders : []}
+        products={allProducts}
+      />
     </View>
   );
 }
