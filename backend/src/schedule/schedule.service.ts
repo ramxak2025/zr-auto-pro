@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { NO_TENANT_ID } from '../common/auth-cache';
 
 // Valid statuses for the schedule_settings.shift_statuses array.
 // Anything outside this set is ignored on write so a manipulated DTO can't
@@ -37,6 +38,12 @@ export class ScheduleService {
    * settings query.
    */
   async getSettings(tenantID: string) {
+    // Tenant-less caller (superadmin, nil-UUID sentinel): return defaults WITHOUT
+    // seeding — an INSERT with the sentinel tenant_id FK-violates and 500s
+    // /schedule/today (which resolves settings). Same spirit as jwt.strategy's
+    // NO_TENANT_ID handling and the warehouses lazy-seed guard.
+    if (tenantID === NO_TENANT_ID) return { shiftStatuses: DEFAULT_SHIFT_STATUSES };
+
     const { rows } = await this.pool.query('SELECT shift_statuses FROM schedule_settings WHERE tenant_id=$1 LIMIT 1', [
       tenantID,
     ]);

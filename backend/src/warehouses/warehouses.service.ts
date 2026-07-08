@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { NO_TENANT_ID } from '../common/auth-cache';
 
 export type WarehouseKind = 'main' | 'defect' | 'used';
 
@@ -33,6 +34,13 @@ export class WarehousesService {
    * can present them deterministically.
    */
   async listByTenant(tenantID: string): Promise<WarehouseRow[]> {
+    // A tenant-less caller (superadmin, tenant_id = nil-UUID sentinel) has no
+    // warehouses and must NOT trigger the lazy seed below — inserting a
+    // warehouse with the sentinel tenant_id FK-violates warehouses_tenant_id_fkey
+    // (no such tenant) → 500 on GET /warehouses. Return empty, same spirit as
+    // the NO_TENANT_ID handling in jwt.strategy.
+    if (tenantID === NO_TENANT_ID) return [];
+
     const { rows } = await this.pool.query(
       `SELECT id, tenant_id, name, kind, sort_order
          FROM warehouses
@@ -78,6 +86,11 @@ export class WarehousesService {
       [tenantID, kind],
     );
     if (rows.length === 0) {
+      // Tenant-less caller (nil-UUID sentinel) can't own a warehouse and the
+      // seed would FK-violate — surface a clean 404 instead of a 500.
+      if (tenantID === NO_TENANT_ID) {
+        throw new NotFoundException({ message: `Склад "${kind}" не найден` });
+      }
       // Self-heal — seed the missing kind, then retry.
       const seedName = kind === 'main' ? 'Основной склад' : kind === 'defect' ? 'Склад брака' : 'Склад Б/У';
       const sort = kind === 'main' ? 0 : kind === 'defect' ? 1 : 2;
