@@ -97,6 +97,12 @@ export default function ServicesScreen() {
   const [name, setName] = useState('');
   const [category, setCategory] = useState('');
   const [defaultPrice, setDefaultPrice] = useState('');
+  // Особый % мастера — необязательное поле. Пусто = null (берётся личный
+  // процент мастера, сегодняшнее поведение). Явный 0 сохраняется как 0
+  // (мастер получает 0 за эту услугу). Заданное число 0..100 переопределяет
+  // личный процент мастера для строки с этой услугой. Семантика уже
+  // проверяется на бэке (Service.masterPercent) — контракт менять не нужно.
+  const [masterPercent, setMasterPercent] = useState('');
   // Срок гарантии (дней) — необязательное поле. Пусто = без гарантии (null
   // на бэке). Число > 0 — сколько дней действует гарантия на услугу после
   // включения её в чек. Используется для авто-создания WarrantyClaim'ов.
@@ -161,6 +167,7 @@ export default function ServicesScreen() {
     setName('');
     setCategory('');
     setDefaultPrice('');
+    setMasterPercent('');
     setWarrantyDays('');
     setModalOpen(true);
   };
@@ -170,6 +177,9 @@ export default function ServicesScreen() {
     setName(s.name);
     setCategory(s.category || '');
     setDefaultPrice(String(s.defaultPrice));
+    // masterPercent — number | null. Пустая строка = null (личный процент
+    // мастера). Явный 0 показываем как «0», не как пусто.
+    setMasterPercent(s.masterPercent != null ? String(s.masterPercent) : '');
     // warrantyDays приходит как number | null — пустая строка означает «без
     // гарантии», иначе показываем число дней.
     setWarrantyDays(s.warrantyDays != null ? String(s.warrantyDays) : '');
@@ -181,16 +191,33 @@ export default function ServicesScreen() {
     setEditingService(null);
   };
 
+  // Только цифры и одна десятичная точка (веб разрешает шаг 0.5). Запятую
+  // приводим к точке для удобства ввода на iOS/Android.
+  const onChangeMasterPercent = (t: string) => {
+    const cleaned = t.replace(',', '.').replace(/[^0-9.]/g, '');
+    const parts = cleaned.split('.');
+    setMasterPercent(parts.length > 1 ? `${parts[0]}.${parts.slice(1).join('')}` : cleaned);
+  };
+
   const handleSubmit = () => {
     // Парсим warrantyDays: пустая строка → null (нет гарантии). Число < 1
     // тоже считаем «нет гарантии», чтобы не плодить мусорные WarrantyClaim'ы.
     const trimmedWarranty = warrantyDays.trim();
     const parsedWarranty = trimmedWarranty === '' ? null : Math.max(0, Math.floor(Number(trimmedWarranty) || 0));
     const warrantyPayload = parsedWarranty && parsedWarranty > 0 ? parsedWarranty : null;
+    // masterPercent: пусто → null (личный процент мастера). Иначе — число,
+    // зажатое в 0..100. Явный 0 остаётся 0 (не превращаем в null/пусто).
+    const trimmedPercent = masterPercent.trim();
+    let masterPercentPayload: number | null = null;
+    if (trimmedPercent !== '') {
+      const n = Number(trimmedPercent);
+      masterPercentPayload = Number.isFinite(n) ? Math.min(100, Math.max(0, n)) : null;
+    }
     const payload = {
       name,
       category: category || undefined,
       defaultPrice: Number(defaultPrice) || 0,
+      masterPercent: masterPercentPayload,
       warrantyDays: warrantyPayload,
     };
     if (editingService) {
@@ -412,6 +439,24 @@ export default function ServicesScreen() {
           />
         </View>
         <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Особый % мастера</Text>
+          <TextInput
+            value={masterPercent}
+            onChangeText={onChangeMasterPercent}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
+            keyboardType="numeric"
+            placeholder="Оставьте пустым — процент мастера"
+            placeholderTextColor={palette.text.tertiary}
+            maxLength={5}
+          />
+          <Text style={[styles.formHint, { color: palette.text.tertiary }]}>
+            Если задан — считается по нему (важнее процента мастера). Пусто — берётся процент мастера.
+          </Text>
+        </View>
+        <View style={styles.formField}>
           <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Срок гарантии (дней)</Text>
           <TextInput
             value={warrantyDays}
@@ -587,6 +632,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
     fontSize: fontSize.sm,
     color: colors.gray[900],
+  },
+  formHint: {
+    fontSize: fontSize.xs,
+    color: colors.gray[400],
+    marginTop: spacing[1.5],
+    lineHeight: 16,
   },
   formActions: {
     flexDirection: 'row',
