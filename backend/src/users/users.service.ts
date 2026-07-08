@@ -11,7 +11,7 @@ import { Pool, PoolClient } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
-import { invalidateAuthUser } from '../common/auth-cache';
+import { invalidateAuthUser, NO_TENANT_ID } from '../common/auth-cache';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { invalidateReportsForTenant } from '../common/reports-cache';
@@ -47,6 +47,40 @@ export class UsersService {
     if (SUPERADMIN_ONLY_ROLES.has(requestedRole) && actorRole !== 'superadmin') {
       throw new ForbiddenException({ message: 'Только суперадмин может назначить эту роль' });
     }
+  }
+
+  /**
+   * Resolve which tenant a per-user-by-id operation must run inside.
+   *
+   * WHY: every per-employee mutation/read in this service is scoped by
+   * `WHERE id=$ AND tenant_id=$`. For a director/admin that guard IS the tenant
+   * boundary — they may only touch rows in their OWN tenant. But a `superadmin`
+   * has no real tenant of their own: `jwt.strategy` maps their NULL tenant_id to
+   * the NO_TENANT_ID nil-UUID sentinel, so passing `actor.tenantID` would run
+   * `AND tenant_id=<nil-uuid>` and match NOTHING → a spurious «Пользователь не
+   * найден» when the admin cabinet edits an employee of a MANAGED tenant.
+   *
+   * Resolution:
+   *   • non-superadmin → return `actor.tenantID` UNCHANGED. Behaviour is
+   *     byte-identical to before; the caller's `AND tenant_id=$` still pins them
+   *     to their own tenant, and (when the RLS dual-pool is active) the
+   *     TenantContextInterceptor independently forces every query through the
+   *     app-pool under `tenant_id = app.tenant_id`. A director can never reach
+   *     another tenant's user through this path.
+   *   • superadmin → look up the TARGET user's OWN tenant_id and act inside it.
+   *     Superadmin requests legitimately bypass the tenant CLS (they run on the
+   *     admin pool, no RLS — see TenantContextInterceptor), so this cross-tenant
+   *     lookup is intended and safe. A missing id 404s cleanly (never a 500).
+   *
+   * A tenant-less target (another superadmin, tenant_id NULL) collapses to the
+   * nil-UUID → downstream `AND tenant_id=$` matches nothing → clean 404, which
+   * is correct: such accounts are not managed through the tenant employee cabinet.
+   */
+  async resolveTenantForTarget(actor: { role: string; tenantID: string }, targetUserId: string): Promise<string> {
+    if (actor.role !== 'superadmin') return actor.tenantID;
+    const { rows } = await this.pool.query('SELECT tenant_id FROM users WHERE id=$1', [targetUserId]);
+    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+    return (rows[0].tenant_id as string | null) ?? NO_TENANT_ID;
   }
 
   private mapUser(row: any) {

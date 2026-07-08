@@ -24,4 +24,11 @@ export class CreateUserDto {
   @IsObject()
   @IsOptional()
   permissions?: Record<string, boolean>;
+
+  // Target tenant for the new user. Declared here so the global whitelisting
+  // ValidationPipe does not strip it. Only a superadmin caller may target
+  // another tenant (enforced in the controller); ignored for everyone else.
+  @IsString()
+  @IsOptional()
+  tenantId?: string;
 }

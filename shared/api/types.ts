@@ -127,6 +127,13 @@ export interface CreateUserRequest {
   role: string;
   salaryPercent?: number;
   permissions?: Record<string, boolean>;
+  /**
+   * Target tenant for the new user — ONLY honoured when the caller is a
+   * superadmin creating an employee inside a tenant from the admin cabinet.
+   * For any non-superadmin caller the server ignores this and uses the
+   * caller's own tenant (a director cannot create users in other tenants).
+   */
+  tenantId?: string;
 }
 
 export interface UpdateUserRequest {

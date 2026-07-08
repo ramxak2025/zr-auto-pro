@@ -42,15 +42,17 @@ export class UsersController {
 
   @Roles(...MANAGER_ROLES)
   @Post(':id/restore')
-  restore(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.usersService.restore(id, user.tenantID);
+  async restore(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.restore(id, tenantID);
   }
 
   // "Delete completely" — keeps the row (FK/history) but hides it forever.
   @Roles(...MANAGER_ROLES)
   @Post(':id/purge')
-  purge(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.usersService.purge(id, user.tenantID, user.userID);
+  async purge(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.purge(id, tenantID, user.userID);
   }
 
   @Roles(...MANAGER_ROLES)
@@ -60,26 +62,35 @@ export class UsersController {
   }
 
   @Get(':id')
-  getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.usersService.getById(id, user.tenantID);
+  async getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.getById(id, tenantID);
   }
 
   @Roles(...MANAGER_ROLES)
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateUserDto) {
-    return this.usersService.create(user.tenantID, user.role, dto);
+    // Superadmin adds an employee INTO a specific tenant from the admin cabinet
+    // (dto.tenantId = target). Everyone else can only create inside their own
+    // tenant — dto.tenantId is ignored so a director can't seed users in other
+    // tenants. Without this, a superadmin (whose own tenant is the nil-UUID
+    // sentinel) hit a tenant_id FK violation → «автосервис не найден».
+    const targetTenant = user.role === 'superadmin' && dto.tenantId ? dto.tenantId : user.tenantID;
+    return this.usersService.create(targetTenant, user.role, dto);
   }
 
   @Roles(...MANAGER_ROLES)
   @Patch(':id')
-  update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateUserDto) {
-    return this.usersService.update(id, user.tenantID, user.role, user.userID, dto);
+  async update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateUserDto) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.update(id, tenantID, user.role, user.userID, dto);
   }
 
   @Roles(...MANAGER_ROLES)
   @Delete(':id')
-  remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.usersService.remove(id, user.tenantID, user.userID, user.role);
+  async remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.remove(id, tenantID, user.userID, user.role);
   }
 
   // ─── Section Visibility (071) ───────────────────────────────────────
@@ -88,18 +99,20 @@ export class UsersController {
 
   @Roles(...MANAGER_ROLES)
   @Get(':id/section-visibility')
-  getSectionVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.usersService.getSectionVisibility(id, user.tenantID);
+  async getSectionVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.getSectionVisibility(id, tenantID);
   }
 
   @Roles(...MANAGER_ROLES)
   @Patch(':id/section-visibility')
-  updateSectionVisibility(
+  async updateSectionVisibility(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateSectionVisibilityDto,
   ) {
-    return this.usersService.updateSectionVisibility(id, user.tenantID, dto.sections);
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.updateSectionVisibility(id, tenantID, dto.sections);
   }
 
   // ─── Item Visibility (073) ──────────────────────────────────────────
@@ -109,14 +122,20 @@ export class UsersController {
 
   @Roles(...MANAGER_ROLES)
   @Get(':id/item-visibility')
-  getItemVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.usersService.getItemVisibility(id, user.tenantID);
+  async getItemVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.getItemVisibility(id, tenantID);
   }
 
   @Roles(...MANAGER_ROLES)
   @Patch(':id/item-visibility')
-  updateItemVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateItemVisibilityDto) {
-    return this.usersService.updateItemVisibility(id, user.tenantID, dto.items);
+  async updateItemVisibility(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: UpdateItemVisibilityDto,
+  ) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.updateItemVisibility(id, tenantID, dto.items);
   }
 
   // ─── Action Permissions (server-enforced) ──────────────────────────
@@ -127,14 +146,16 @@ export class UsersController {
 
   @Roles(...MANAGER_ROLES)
   @Get(':id/permissions')
-  getPermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.usersService.getPermissions(id, user.tenantID);
+  async getPermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.getPermissions(id, tenantID);
   }
 
   @Roles(...MANAGER_ROLES)
   @Patch(':id/permissions')
-  updatePermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdatePermissionsDto) {
-    return this.usersService.updatePermissions(id, user.tenantID, user.userID, dto.permissions);
+  async updatePermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdatePermissionsDto) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.updatePermissions(id, tenantID, user.userID, dto.permissions);
   }
 
   // 114 — ЭФФЕКТИВНЫЕ права (плоско): flatten(матрицы назначенной роли) ⊕
@@ -142,8 +163,9 @@ export class UsersController {
   // enforcement. Для UI волны 2 (экран роли / карточка сотрудника).
   @Roles(...MANAGER_ROLES)
   @Get(':id/effective-permissions')
-  getEffectivePermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.usersService.getEffectivePermissions(id, user.tenantID);
+  async getEffectivePermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.getEffectivePermissions(id, tenantID);
   }
 
   // ─── Product Commissions ────────────────────────────────────────────
