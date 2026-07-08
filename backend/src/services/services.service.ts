@@ -28,6 +28,30 @@ export class ServicesService {
     return Math.min(n, 36500);
   }
 
+  /**
+   * Normalize the per-service master-commission override (`services.master_percent`,
+   * exposed on the shared contract as `Service.masterPercent`). This is the
+   * ALREADY-EXISTING per-service percent that — when NOT NULL — overrides the
+   * line executor's `user.salary_percent` at check-write time (see
+   * ChecksService.create/fullUpdate/recomputeClosedCheckLines). Contract:
+   *   • undefined / null / '' / non-numeric → null («не задан» = использовать
+   *     процент мастера);
+   *   • a finite number → clamped to [0, 100].
+   * `0` is a LEGITIMATE explicit override (мастер получает 0 за эту услугу) and is
+   * preserved as `0` — NEVER coerced to null (the check-side rule keys on
+   * `master_percent IS NOT NULL`, so 0 must survive as a real value). 100 is the
+   * max sane commission; an out-of-range value (only reachable via a raw API
+   * caller — the web field is a percent box) is clamped rather than rejected,
+   * mirroring normalizeWarrantyDays, so a malformed write can never 500 and can
+   * never bake a >100% payout into a salary snapshot.
+   */
+  private normalizeMasterPercent(value: unknown): number | null {
+    if (value === undefined || value === null || value === '') return null;
+    const n = typeof value === 'number' ? value : parseFloat(String(value));
+    if (!Number.isFinite(n)) return null;
+    return Math.min(100, Math.max(0, n));
+  }
+
   async getAll(tenantID: string, query: any) {
     const page = parseInt(query.page) || 1;
     // Cap 10 000 (not lower): the cash-screen service picker fetches the full
@@ -78,7 +102,7 @@ export class ServicesService {
         dto.name,
         dto.category,
         dto.defaultPrice || 0,
-        dto.masterPercent ?? null,
+        this.normalizeMasterPercent(dto.masterPercent),
         this.normalizeWarrantyDays(dto.warrantyDays),
         tenantID,
       ],
@@ -104,8 +128,11 @@ export class ServicesService {
       vals.push(dto.defaultPrice);
     }
     if (dto.masterPercent !== undefined) {
+      // Range-validate (0..100) + null-clear via the shared normalizer. `null`
+      // clears the override back to «use the master's percent»; `0` is kept as a
+      // real explicit override (мастер получает 0 за эту услугу).
       sets.push(`master_percent=$${idx++}`);
-      vals.push(dto.masterPercent);
+      vals.push(this.normalizeMasterPercent(dto.masterPercent));
     }
     if (dto.warrantyDays !== undefined) {
       sets.push(`warranty_days=$${idx++}`);
