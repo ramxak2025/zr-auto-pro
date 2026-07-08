@@ -2627,6 +2627,85 @@ export interface RetentionStats {
 }
 
 // ───────────────────────────────────────────────────────────────────────
+//  Marketing report (GET /reports/marketing?from&to) — consolidated,
+//  period-based marketing analytics for the «Маркетинговые отчёты» screen.
+//  Owner-class / marketing_access gated. Every sub-section is computed
+//  best-effort server-side, so a failure in one (e.g. no calls integration)
+//  degrades to zeros instead of failing the whole report.
+// ───────────────────────────────────────────────────────────────────────
+
+/** One acquisition-source bucket for new clients acquired within the window. */
+export interface MarketingAcquisitionSource {
+  /** clients.source, or «Без источника» when null/empty. */
+  source: string;
+  /** New clients (first check inside the window) carrying this source. */
+  count: number;
+  /** Revenue from those clients' checks inside the window. */
+  revenue: number;
+}
+
+export interface MarketingReport {
+  period: { from: string; to: string };
+  /**
+   * New vs returning acquisition. new = client's FIRST check falls inside the
+   * window; returning = client's first check predates the window. Plus a
+   * by-source breakdown of the NEW clients (clients.source).
+   */
+  acquisition: {
+    newClients: number;
+    returningClients: number;
+    newRevenue: number;
+    returningRevenue: number;
+    bySource: MarketingAcquisitionSource[];
+  };
+  /**
+   * Retention over the window. returningRate/avgLtv/avgDaysBetweenVisits are
+   * computed over the ALL-TIME visit history of clients who had at least one
+   * check inside [from,to] (windowed client selection, all-time per-client
+   * aggregates — same semantics as /reports/retention, but anchored to the
+   * window instead of a rolling now()-interval).
+   */
+  retention: {
+    returningRate: number;
+    avgLtv: number;
+    avgDaysBetweenVisits: number;
+  };
+  /**
+   * Calls for the window. total/incoming/outgoing/missed/notCalledBack come
+   * from the live calls provider (МоиЗвонки proxy / stored Mango) and are 0
+   * when no telephony integration is configured. answerRate = answered/total
+   * where answered = total − missed. funnel is the sms_history→checks funnel.
+   */
+  calls: {
+    total: number;
+    incoming: number;
+    outgoing: number;
+    missed: number;
+    notCalledBack: number;
+    answerRate: number;
+    funnel: {
+      uniqueCallers: number;
+      arrivedClients: number;
+      createdChecks: number;
+      conversionRate: number;
+      repeatClients: number;
+      revenue: number;
+    };
+  };
+  /** Reviews for the window (period-scoped review_responses + review_tokens). */
+  reviews: {
+    total: number;
+    avgRating: number;
+    positive: number;
+    negative: number;
+    responseRate: number;
+    conversionRate: number;
+    tokensSent: number;
+    tokensResponded: number;
+  };
+}
+
+// ───────────────────────────────────────────────────────────────────────
 //  Warehouse analytics (045_stock_value_snapshots + computed endpoints)
 // ───────────────────────────────────────────────────────────────────────
 

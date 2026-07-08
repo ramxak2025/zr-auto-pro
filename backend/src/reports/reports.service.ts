@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import { CallsService } from '../calls/calls.service';
 
 /** Актор запроса «Движения денег» — источник охвата (свои / все) и атрибуции. */
 interface CashFlowActor {
@@ -21,7 +22,10 @@ const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0
 
 @Injectable()
 export class ReportsService {
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private callsService: CallsService,
+  ) {}
 
   /**
    * Normalise a caller-supplied date param to a safe `YYYY-MM-DD` string.
@@ -946,6 +950,255 @@ export class ReportsService {
       returningRate: total > 0 ? Math.round((returning / total) * 1000) / 10 : 0,
       avgLtv: Math.round(parseFloat(r?.avg_ltv) || 0),
       avgDaysBetweenVisits: Math.round(parseFloat(r?.avg_days_between) || 0),
+    };
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Consolidated «Маркетинговые отчёты» (GET /reports/marketing?from&to).
+  //  ONE period, everything grouped: acquisition (new/returning + by-source),
+  //  retention, calls (+ funnel), reviews. Each sub-section is computed
+  //  best-effort — a failure in one (e.g. no telephony integration) degrades
+  //  to zeros instead of failing the whole report. All queries are tenant-
+  //  scoped; from/to default to the current month.
+  // ──────────────────────────────────────────────────────────────────────
+
+  async getMarketingReport(tenantID: string, query: { from?: string; to?: string }) {
+    const from = this.safeDate(query?.from, this.firstOfMonth());
+    const to = this.safeDate(query?.to, this.todayISO());
+
+    const [acquisition, retention, calls, reviews] = await Promise.all([
+      this.marketingAcquisition(tenantID, from, to).catch(() => ({
+        newClients: 0,
+        returningClients: 0,
+        newRevenue: 0,
+        returningRevenue: 0,
+        bySource: [] as Array<{ source: string; count: number; revenue: number }>,
+      })),
+      this.retentionForWindow(tenantID, from, to).catch(() => ({
+        returningRate: 0,
+        avgLtv: 0,
+        avgDaysBetweenVisits: 0,
+      })),
+      this.marketingCalls(tenantID, from, to).catch(() => ({
+        total: 0,
+        incoming: 0,
+        outgoing: 0,
+        missed: 0,
+        notCalledBack: 0,
+        answerRate: 0,
+        funnel: {
+          uniqueCallers: 0,
+          arrivedClients: 0,
+          createdChecks: 0,
+          conversionRate: 0,
+          repeatClients: 0,
+          revenue: 0,
+        },
+      })),
+      this.periodReviews(tenantID, from, to).catch(() => ({
+        total: 0,
+        avgRating: 0,
+        positive: 0,
+        negative: 0,
+        responseRate: 0,
+        conversionRate: 0,
+        tokensSent: 0,
+        tokensResponded: 0,
+      })),
+    ]);
+
+    return { period: { from, to }, acquisition, retention, calls, reviews };
+  }
+
+  /**
+   * Acquisition: reuse clientsNewVsReturning for the new/returning split, then
+   * ADD a by-source breakdown of the NEW clients (those whose FIRST check falls
+   * inside the window), grouped by clients.source. null/empty source →
+   * «Без источника». Per-source revenue = Σ of those clients' checks inside the
+   * window, so Σ bySource.revenue ≈ newRevenue.
+   */
+  private async marketingAcquisition(tenantID: string, from: string, to: string) {
+    const base = await this.clientsNewVsReturning(tenantID, { from, to });
+
+    const { rows } = await this.pool.query(
+      `WITH first_visits AS (
+         SELECT client_id, MIN(date) AS first_date
+           FROM checks
+          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
+            AND deleted_at IS NULL
+          GROUP BY client_id
+       ),
+       new_clients AS (
+         SELECT client_id
+           FROM first_visits
+          WHERE first_date::date BETWEEN $2::date AND $3::date
+       )
+       SELECT
+         COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника') AS source,
+         COUNT(DISTINCT nc.client_id) AS count,
+         COALESCE(SUM(ch.total_revenue), 0) AS revenue
+       FROM new_clients nc
+       JOIN clients cl ON cl.id = nc.client_id AND cl.tenant_id = $1
+       LEFT JOIN checks ch
+         ON ch.client_id = nc.client_id
+        AND ch.tenant_id = $1
+        AND ch.is_deferred = false
+        AND ch.deleted_at IS NULL
+        AND ch.date::date BETWEEN $2::date AND $3::date
+       GROUP BY COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника')
+       ORDER BY count DESC, revenue DESC`,
+      [tenantID, from, to],
+    );
+
+    return {
+      newClients: base.newCount,
+      returningClients: base.returningCount,
+      newRevenue: base.newRevenue,
+      returningRevenue: base.returningRevenue,
+      bySource: rows.map((r) => ({
+        source: r.source as string,
+        count: parseInt(r.count, 10) || 0,
+        revenue: parseFloat(r.revenue) || 0,
+      })),
+    };
+  }
+
+  /**
+   * Windowed retention: identical aggregate logic to `retention()`, but the
+   * client set is selected by «had ≥1 check inside [from,to]» instead of a
+   * rolling now()-interval. Per-client aggregates (visit_count, ltv,
+   * first/last date) stay ALL-TIME, so returningRate/avgLtv/avgDaysBetween
+   * describe the lifetime behaviour of clients who were active in the window.
+   */
+  private async retentionForWindow(tenantID: string, from: string, to: string) {
+    const { rows } = await this.pool.query(
+      `WITH visits AS (
+         SELECT client_id, COUNT(*) AS visit_count, SUM(total_revenue) AS ltv,
+                MIN(date) AS first_date, MAX(date) AS last_date
+           FROM checks
+          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
+            AND deleted_at IS NULL
+          GROUP BY client_id
+       ),
+       window_clients AS (
+         SELECT DISTINCT client_id
+           FROM checks
+          WHERE tenant_id=$1 AND is_deferred=false
+            AND deleted_at IS NULL
+            AND date::date BETWEEN $2::date AND $3::date
+            AND client_id IS NOT NULL
+       )
+       SELECT
+         COUNT(*) AS total_in_window,
+         COUNT(*) FILTER (WHERE v.visit_count > 1) AS returning,
+         COALESCE(AVG(v.ltv), 0) AS avg_ltv,
+         COALESCE(AVG(EXTRACT(EPOCH FROM (v.last_date - v.first_date)) / 86400 / NULLIF(v.visit_count - 1, 0)), 0) AS avg_days_between
+       FROM window_clients wc
+       JOIN visits v ON v.client_id = wc.client_id`,
+      [tenantID, from, to],
+    );
+    const r = rows[0];
+    const total = parseInt(r?.total_in_window) || 0;
+    const returning = parseInt(r?.returning) || 0;
+    return {
+      returningRate: total > 0 ? Math.round((returning / total) * 1000) / 10 : 0,
+      avgLtv: Math.round(parseFloat(r?.avg_ltv) || 0),
+      avgDaysBetweenVisits: Math.round(parseFloat(r?.avg_days_between) || 0),
+    };
+  }
+
+  /**
+   * Calls section: reuse getCallFunnel (sms_history → checks) for the funnel and
+   * CallsService.getCalls for the raw summary (МоиЗвонки live proxy / stored
+   * Mango). getCalls throws when no telephony integration is configured — that
+   * is caught here and degraded to zero counts (the funnel still returns from
+   * sms_history). answerRate = answered / total, answered = total − missed.
+   */
+  private async marketingCalls(tenantID: string, from: string, to: string) {
+    const funnel = await this.getCallFunnel(tenantID, { dateFrom: from, dateTo: to });
+
+    let summary = { total: 0, incoming: 0, outgoing: 0, missed: 0, notCalledBack: 0 };
+    try {
+      const res = await this.callsService.getCalls(tenantID, { dateFrom: from, dateTo: to });
+      summary = res.summary;
+    } catch {
+      // No МоиЗвонки/Mango integration (or provider error) → zero call counts;
+      // the funnel below is independent (sms_history-derived) and still shows.
+    }
+
+    const answered = Math.max(summary.total - summary.missed, 0);
+    const answerRate = summary.total > 0 ? Math.round((answered / summary.total) * 1000) / 10 : 0;
+
+    return {
+      total: summary.total,
+      incoming: summary.incoming,
+      outgoing: summary.outgoing,
+      missed: summary.missed,
+      notCalledBack: summary.notCalledBack,
+      answerRate,
+      funnel: {
+        uniqueCallers: funnel.uniqueCallers,
+        arrivedClients: funnel.arrivedClients,
+        createdChecks: funnel.createdChecks,
+        conversionRate: funnel.conversionRate,
+        repeatClients: funnel.repeatClients,
+        revenue: funnel.totalRevenue,
+      },
+    };
+  }
+
+  /**
+   * Period-aware review KPIs (the existing marketing getDashboard is all-time).
+   * review_responses are counted by created_at within [from,to]; review_tokens
+   * are counted by created_at within the same window (tokensResponded = those
+   * tokens that were also used → responded ⊆ sent, keeping responseRate ≤ 100%).
+   * Semantics otherwise mirror getDashboard (positive ≥4, negative ≤3,
+   * conversionRate = redirected/positive).
+   */
+  private async periodReviews(tenantID: string, from: string, to: string) {
+    const {
+      rows: [stats],
+    } = await this.pool.query(
+      `SELECT COUNT(*) AS total,
+              COALESCE(AVG(rating), 0) AS avg_rating,
+              COUNT(*) FILTER (WHERE rating >= 4) AS positive,
+              COUNT(*) FILTER (WHERE rating <= 3) AS negative,
+              COUNT(*) FILTER (WHERE redirected_to IS NOT NULL) AS redirected
+         FROM review_responses
+        WHERE tenant_id=$1
+          AND created_at >= $2::date
+          AND created_at < ($3::date + 1)`,
+      [tenantID, from, to],
+    );
+
+    const {
+      rows: [tokenStats],
+    } = await this.pool.query(
+      `SELECT COUNT(*) AS sent,
+              COUNT(*) FILTER (WHERE used_at IS NOT NULL) AS responded
+         FROM review_tokens
+        WHERE tenant_id=$1
+          AND created_at >= $2::date
+          AND created_at < ($3::date + 1)`,
+      [tenantID, from, to],
+    );
+
+    const total = parseInt(stats.total, 10) || 0;
+    const positive = parseInt(stats.positive, 10) || 0;
+    const negative = parseInt(stats.negative, 10) || 0;
+    const redirected = parseInt(stats.redirected, 10) || 0;
+    const sent = parseInt(tokenStats.sent, 10) || 0;
+    const responded = parseInt(tokenStats.responded, 10) || 0;
+
+    return {
+      total,
+      avgRating: Math.round((parseFloat(stats.avg_rating) || 0) * 10) / 10,
+      positive,
+      negative,
+      responseRate: sent > 0 ? Math.round((responded / sent) * 100) : 0,
+      conversionRate: positive > 0 && redirected > 0 ? Math.round((redirected / positive) * 100) : 0,
+      tokensSent: sent,
+      tokensResponded: responded,
     };
   }
 

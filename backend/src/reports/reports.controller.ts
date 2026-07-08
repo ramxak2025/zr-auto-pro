@@ -95,4 +95,20 @@ export class ReportsController {
   retention(@CurrentUser() user: JwtPayload, @Query() query: { period?: 'week' | 'month' | 'year' }) {
     return this.reportsService.retention(user.tenantID, query?.period ?? 'month');
   }
+
+  // ── Consolidated «Маркетинговые отчёты» ──────────────────────────────
+  // ONE period → acquisition (new/returning + by-source), retention, calls
+  // (+ funnel), reviews. Gate: owner-class via the class-level @Roles
+  // (director/admin/superadmin) + @RequirePermission('marketing_access')
+  // OVERRIDING the class-level 'financial_reports' (method decorator wins via
+  // Reflector.getAllAndOverride — same pattern as getCashFlow above). Owner-
+  // class roles bypass the permission check entirely (permissions.guard), so
+  // in practice this stays owner-class-only today; the marketing_access key
+  // future-proofs it if the role gate is ever loosened. Every sub-section is
+  // computed best-effort in the service, so one failing section never 500s.
+  @Get('marketing')
+  @RequirePermission('marketing_access')
+  getMarketingReport(@CurrentUser() user: JwtPayload, @Query() query: { from?: string; to?: string }) {
+    return this.reportsService.getMarketingReport(user.tenantID, query);
+  }
 }

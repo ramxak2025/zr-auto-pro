@@ -89,6 +89,7 @@ import type {
   BestDayOfWeek,
   RecentReview,
   RetentionStats,
+  MarketingReport,
   WarehouseSummary,
   VelocityRow,
   ReorderItem,
@@ -909,6 +910,14 @@ export function createReportsApi(api: HttpClient) {
     recentReviews: (limit?: number) => api.get<RecentReview[]>('/reports/recent-reviews', { params: { limit } }),
     retention: (params: { period: 'week' | 'month' | 'year' }) =>
       api.get<RetentionStats>('/reports/retention', { params }),
+    /**
+     * Consolidated «Маркетинговые отчёты» — acquisition (new/returning +
+     * by-source), retention, calls (+ funnel), reviews — all for ONE period.
+     * Owner-class / marketing_access gated. Defaults to the current month
+     * when from/to omitted.
+     */
+    getMarketingReport: (params: { from: string; to: string }) =>
+      api.get<MarketingReport>('/reports/marketing', { params }),
   };
 }
 
