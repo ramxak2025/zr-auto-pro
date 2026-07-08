@@ -196,7 +196,11 @@ export class BookingsService {
         const message = `Вы записаны на ${this.formatWhen(dto.scheduledAt)}. Ждём вас!`;
         // Fire-and-forget — never block the API response on a messaging provider.
         void this.marketingService
-          .sendClientMessage(tenantId, phone, message)
+          .sendClientMessage(tenantId, phone, message, {
+            clientId: dto.clientId ?? null,
+            messageType: 'booking',
+            dedupKey: `booking_confirm:${bookingId}`,
+          })
           .catch((err) => this.logger.warn(`Booking confirmation send failed: ${err}`));
       }
     }

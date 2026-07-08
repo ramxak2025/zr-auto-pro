@@ -77,6 +77,9 @@ import type {
   ReminderSettings,
   WinbackClient,
   WinbackSendResult,
+  SegmentBroadcastRequest,
+  SegmentBroadcastResult,
+  AutoMailingOverview,
   CheckReturn,
   ScheduleSettings,
   EmployeeProfile,
@@ -1142,6 +1145,11 @@ export function createMarketingApi(api: HttpClient) {
       api.get<WinbackClient[]>('/marketing/winback', { params: days != null ? { days } : undefined }),
     winbackSend: (data: { days: number; message: string }) =>
       api.post<WinbackSendResult>('/marketing/winback/send', data),
+    // Рассылки: ручная сегментная рассылка (анти-спам-гейт + идемпотентность)
+    // и обзор авто-рассылок (обзор + deep-link на редакторы настроек).
+    sendSegmentBroadcast: (data: SegmentBroadcastRequest) =>
+      api.post<SegmentBroadcastResult>('/marketing/broadcast/send', data),
+    getAutoMailings: () => api.get<AutoMailingOverview[]>('/marketing/auto-mailings'),
   };
 }
 

@@ -2404,6 +2404,64 @@ export interface WinbackSendResult {
   sent: number;
   failed: number;
   total: number;
+  /**
+   * Recipients the anti-spam gate (sent_messages, migration 124) refused as a
+   * would-be duplicate — cooldown / exact-duplicate / 24h cap / already sent.
+   * Optional for back-compat; absent on legacy responses.
+   */
+  skippedDedup?: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Рассылки — ручная сегментная рассылка + обзор авто-рассылок (мигр. 124).
+//  Каждая отправка проходит анти-спам-гейт (журнал sent_messages): не дублируем
+//  SMS и не спамим клиентов. НЕ путать с superadmin→tenant Broadcast выше.
+// ───────────────────────────────────────────────────────────────────────
+
+/** Criteria for a manual «Рассылки» segment (all optional, AND-combined). */
+export interface SegmentBroadcastCriteria {
+  /** Last non-deferred visit older than N days (or never visited). */
+  lastVisitDays?: number;
+  /** clients.source exact match. */
+  source?: string;
+  /** Only clients that currently owe money (debt ledger > 0 OR open installment). */
+  hasDebt?: boolean;
+  /** Explicit client id allow-list (still filtered to messageable clients). */
+  clientIds?: string[];
+}
+
+/** Request body for POST /marketing/broadcast/send. */
+export interface SegmentBroadcastRequest {
+  /** Segment criteria; omit/empty = every messageable (non-retail, has-phone) client. */
+  segment?: SegmentBroadcastCriteria;
+  message: string;
+  /** Choose a specific connected integration… */
+  integrationId?: string;
+  /** …or a provider type; omit both to use the tenant's default active channel. */
+  providerType?: MessagingIntegration['providerType'];
+  /** Makes a retried request idempotent (no client double-charged). */
+  idempotencyKey?: string;
+}
+
+/** Result of POST /marketing/broadcast/send. sent + skippedDedup + failed = total. */
+export interface SegmentBroadcastResult {
+  sent: number;
+  skippedDedup: number;
+  failed: number;
+  total: number;
+}
+
+/**
+ * One row of GET /marketing/auto-mailings — a read-only overview of an AUTO
+ * mailing surface so the UI can list enabled-state + deep-link to its editor.
+ * `type`: review | car_ready | installment_reminder | service_reminder.
+ * `settingsRef`: relative API path of the settings endpoint that edits it.
+ */
+export interface AutoMailingOverview {
+  type: 'review' | 'car_ready' | 'installment_reminder' | 'service_reminder';
+  enabled: boolean;
+  summary: string;
+  settingsRef: string;
 }
 
 // ───────────────────────────────────────────────────────────────────────

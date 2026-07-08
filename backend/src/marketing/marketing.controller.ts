@@ -10,6 +10,7 @@ import { UpdateReviewSettingsDto } from './dto/update-review-settings.dto';
 import { UpdateReminderSettingsDto } from './dto/update-reminder-settings.dto';
 import { UpdateCarReadySettingsDto } from './dto/update-car-ready-settings.dto';
 import { WinbackSendDto } from './dto/winback-send.dto';
+import { SegmentBroadcastDto } from './dto/segment-broadcast.dto';
 import { ReminderService } from './reminder.service';
 
 @Controller('marketing')
@@ -158,6 +159,37 @@ export class MarketingController {
   @Post('winback/send')
   winbackSend(@CurrentUser() user: JwtPayload, @Body() dto: WinbackSendDto) {
     return this.marketingService.winbackSend(user.tenantID, dto.days, dto.message);
+  }
+
+  // ─── Manual segment broadcast («Рассылки») ───────────────────────
+  // Owner-class / marketing_access gated (same gate as winback/reminders).
+  // Every recipient passes the anti-spam gate; the call is idempotent so a
+  // retried request can't double-charge a client.
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
+  @Post('broadcast/send')
+  sendSegmentBroadcast(@CurrentUser() user: JwtPayload, @Body() dto: SegmentBroadcastDto) {
+    return this.marketingService.sendSegmentBroadcast(
+      user.tenantID,
+      {
+        segment: dto.segment,
+        message: dto.message,
+        integrationId: dto.integrationId ?? null,
+        providerType: dto.providerType ?? null,
+        idempotencyKey: dto.idempotencyKey ?? null,
+      },
+      user.userID,
+    );
+  }
+
+  // ─── Auto-mailings overview (read-only) ──────────────────────────
+  // Lists the AUTO mailing surfaces (review / car-ready / installment &
+  // service reminders) so the UI can show enabled-state + deep-link to each
+  // existing settings editor. Read is open to any tenant user (like settings).
+  @UseGuards(JwtAuthGuard)
+  @Get('auto-mailings')
+  getAutoMailings(@CurrentUser() user: JwtPayload) {
+    return this.marketingService.getAutoMailings(user.tenantID);
   }
 
   // ─── Public Review Endpoints (no auth) ────────────────────────────

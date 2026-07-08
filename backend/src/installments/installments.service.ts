@@ -504,7 +504,12 @@ export class InstallmentsService {
     if (settings.mode === 'off') return { sent: 0, failed: 0, total: 0 };
 
     const { rows } = await this.pool.query(
-      `SELECT p.id, p.remaining, p.next_payment_date,
+      `SELECT p.id, p.client_id, p.remaining, p.next_payment_date,
+              CASE
+                WHEN p.next_payment_date > (now() AT TIME ZONE 'Europe/Moscow')::date THEN 'before'
+                WHEN p.next_payment_date = (now() AT TIME ZONE 'Europe/Moscow')::date THEN 'due'
+                ELSE 'overdue'
+              END AS phase,
               cl.full_name AS client_name, cl.phone AS client_phone
          FROM installment_plans p
          JOIN clients cl ON cl.id = p.client_id AND cl.tenant_id = p.tenant_id
@@ -530,10 +535,23 @@ export class InstallmentsService {
         .replace(/\{amount\}/g, String(round2(num(r.remaining))))
         .replace(/\{date\}/g, dateLabel);
       try {
-        const result = await this.marketing.sendClientMessage(tenantID, r.client_phone, message);
-        if (result.sent) {
+        // Anti-spam gate. dedup_key `installment_reminder:<planId>:<dueDate>:<phase>`
+        // = at most ONE reminder per plan per due-date per phase (before/due/
+        // overdue). Kills the daily-overdue-spam an open plan would otherwise
+        // generate (it matches the overdue branch every day), while still
+        // allowing the meaningful pre-/on-/first-overdue touch points.
+        const dueDate = r.next_payment_date ? String(r.next_payment_date).slice(0, 10) : 'na';
+        const result = await this.marketing.guardAndLogSend({
+          tenantId: tenantID,
+          phone: r.client_phone,
+          body: message,
+          messageType: 'reminder',
+          clientId: r.client_id,
+          dedupKey: `installment_reminder:${r.id}:${dueDate}:${r.phase}`,
+        });
+        if (result.status === 'sent') {
           sent++;
-        } else {
+        } else if (result.status === 'failed') {
           failed++;
           if (result.reason === 'no_provider') {
             // No provider for this tenant → the rest will fail identically; stop.
@@ -541,6 +559,7 @@ export class InstallmentsService {
             break;
           }
         }
+        // skipped_dedup → already reminded for this plan/date/phase; not a failure.
       } catch (err) {
         failed++;
         this.logger.warn(`Installment reminder failed for plan ${r.id}: ${err instanceof Error ? err.message : err}`);

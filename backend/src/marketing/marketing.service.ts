@@ -11,10 +11,55 @@ import { Pool } from 'pg';
 import * as crypto from 'crypto';
 import { PG_POOL } from '../database.module';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
+import { phoneSearchKey } from '../common/normalize-phone';
 
 // ─── Messaging Provider Strategy Pattern ─────────────────────────────
 interface MessagingProviderAdapter {
   sendMessage(phone: string, message: string): Promise<{ success: boolean; error?: string }>;
+}
+
+// ─── Outbound message log / anti-spam gate contract ──────────────────
+export type OutboundMessageType = 'review' | 'reminder' | 'car_ready' | 'winback' | 'booking' | 'manual' | 'broadcast';
+
+/** Why a send was refused/failed — surfaced to callers, never persisted verbatim. */
+export type GuardSendReason =
+  | 'no_phone'
+  | 'no_provider'
+  | 'error'
+  | 'cooldown'
+  | 'exact_duplicate'
+  | 'rate_cap'
+  | 'dedup_key';
+
+export interface GuardSendResult {
+  status: 'sent' | 'failed' | 'skipped_dedup';
+  reason?: GuardSendReason;
+  error?: string;
+}
+
+export interface GuardAndLogSendOptions {
+  tenantId: string;
+  phone: string;
+  body: string;
+  messageType: OutboundMessageType;
+  /** Null for channel-level messages (e.g. Telegram → owner chat). */
+  clientId?: string | null;
+  /**
+   * Idempotency key for auto-types (`review:<checkId>`, `car_ready:<checkId>`,
+   * `installment_reminder:<planId>:<date>:<phase>`, …). When omitted a key is
+   * synthesized from (type, phone, content_hash, hour bucket) so identical
+   * retries within the hour collide but a legitimately-repeated message next
+   * hour is allowed.
+   */
+  dedupKey?: string | null;
+  /** Per-(client, type) cooldown in hours. 0/undefined → rely on dedupKey only. */
+  cooldownHours?: number;
+  /** Choose a specific connected integration; else the tenant's default active one. */
+  integrationId?: string | null;
+  providerType?: string | null;
+  createdBy?: string | null;
+  /** Pre-resolved adapter (review-job path already fetched one) — skips a lookup. */
+  adapter?: MessagingProviderAdapter | null;
 }
 
 // Hard deadline for EVERY outbound provider call (audit round 7, item 7). A
@@ -314,6 +359,175 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
+   * Resolve the messaging_integrations ROW for a send: an explicit integration,
+   * else the first active integration of a requested provider type, else the
+   * tenant's default (oldest active) integration. Returns null when nothing
+   * matches → callers treat as `no_provider` (never throws).
+   */
+  private async getAdapterRowFor(
+    tenantId: string,
+    opts: { integrationId?: string | null; providerType?: string | null },
+  ): Promise<any | null> {
+    if (opts.integrationId) {
+      const { rows } = await this.pool.query(
+        `SELECT * FROM messaging_integrations WHERE id=$1 AND tenant_id=$2 AND is_active=true LIMIT 1`,
+        [opts.integrationId, tenantId],
+      );
+      return rows[0] ?? null;
+    }
+    if (opts.providerType) {
+      const { rows } = await this.pool.query(
+        `SELECT * FROM messaging_integrations
+          WHERE tenant_id=$1 AND provider_type=$2 AND is_active=true ORDER BY created_at LIMIT 1`,
+        [tenantId, opts.providerType],
+      );
+      return rows[0] ?? null;
+    }
+    const { rows } = await this.pool.query(
+      `SELECT * FROM messaging_integrations WHERE tenant_id=$1 AND is_active=true ORDER BY created_at LIMIT 1`,
+      [tenantId],
+    );
+    return rows[0] ?? null;
+  }
+
+  // ─── Anti-spam / no-duplicate gate (sent_messages, migration 124) ─────
+  // Owner's hard rule: «НЕ ДУБЛИРОВАТЬ SMS и НЕ СПАМИТЬ клиентов». Every
+  // outbound client message flows through guardAndLogSend, which refuses a send
+  // that would be a duplicate and logs every real attempt. Values below are the
+  // documented judgement calls — one-line constants, easy for the owner to tune.
+
+  /** Global ceiling: max messages to ONE client per rolling 24h, across ALL types. */
+  private static readonly PER_CLIENT_24H_CAP = 3;
+  /** Exact-duplicate window: same phone + identical body inside this many hours → skip. */
+  private static readonly EXACT_DUP_WINDOW_HOURS = 1;
+
+  private contentHash(body: string): string {
+    return crypto
+      .createHash('sha1')
+      .update(body ?? '', 'utf8')
+      .digest('hex');
+  }
+
+  /** UTC hour bucket (YYYYMMDDHH) folded into synthesized dedup keys. */
+  private hourStamp(d = new Date()): string {
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}${p(d.getUTCHours())}`;
+  }
+
+  /**
+   * THE single anti-spam gate. Order matters:
+   *   0. no phone → fail (never charge for an empty number).
+   *   1. resolve the channel FIRST — no provider → fail WITHOUT logging (so we
+   *      don't burn a dedup_key before we can ever send; preserves the existing
+   *      "stop on no_provider" behaviour of win-back / reminders).
+   *   2. soft ceilings (best-effort SELECTs): per-(client,type) cooldown →
+   *      exact-duplicate (phone+content within EXACT_DUP_WINDOW_HOURS) →
+   *      per-client 24h cap. Any hit → skipped_dedup (counted, NOT logged as a
+   *      row: a skip must not occupy a dedup_key).
+   *   3. CLAIM the dedup_key by inserting the log row (status='sent') with
+   *      ON CONFLICT (tenant_id, dedup_key) DO NOTHING. Empty RETURNING = another
+   *      send already claimed this exact key (concurrent retry / prior send) →
+   *      skipped_dedup, WITHOUT sending. This is the race-safe, money-exact
+   *      "one SMS exactly once" guarantee (TenantAwarePool runs each query in its
+   *      own tx, so a unique index — not FOR UPDATE — is the correct primitive).
+   *   4. send; on provider failure downgrade the row to status='failed'.
+   *
+   * Judgement call: a failed send keeps its 'failed' row, so a retry with the
+   * SAME explicit dedup_key is blocked (bias to never-double-send over always-
+   * retry — the owner pays per SMS). Synthesized keys fold an hour bucket, so a
+   * genuine next-hour retry is allowed.
+   */
+  async guardAndLogSend(opts: GuardAndLogSendOptions): Promise<GuardSendResult> {
+    const phoneRaw = (opts.phone || '').trim();
+    const phoneKey = phoneSearchKey(phoneRaw);
+    if (!phoneKey) return { status: 'failed', reason: 'no_phone' };
+
+    const body = opts.body ?? '';
+    const hash = this.contentHash(body);
+    const { tenantId, messageType } = opts;
+    const clientId = opts.clientId ?? null;
+    const cooldownHours = opts.cooldownHours && opts.cooldownHours > 0 ? opts.cooldownHours : 0;
+
+    // 1. Resolve channel first (no key burned on a missing provider).
+    const providerRow = opts.adapter ? null : await this.getAdapterRowFor(tenantId, opts);
+    const adapter = opts.adapter ?? (providerRow ? this.createAdapter(providerRow) : null);
+    if (!adapter) return { status: 'failed', reason: 'no_provider' };
+    const providerType = opts.providerType ?? providerRow?.provider_type ?? null;
+
+    // 2a. Per-(client, type) cooldown.
+    if (clientId && cooldownHours > 0) {
+      const { rows } = await this.pool.query(
+        `SELECT 1 FROM sent_messages
+          WHERE tenant_id=$1 AND client_id=$2 AND message_type=$3 AND status='sent'
+            AND sent_at > now() - ($4 * interval '1 hour') LIMIT 1`,
+        [tenantId, clientId, messageType, cooldownHours],
+      );
+      if (rows.length > 0) return { status: 'skipped_dedup', reason: 'cooldown' };
+    }
+
+    // 2b. Exact-duplicate: identical body to the same phone within the window.
+    {
+      const { rows } = await this.pool.query(
+        `SELECT 1 FROM sent_messages
+          WHERE tenant_id=$1 AND phone=$2 AND content_hash=$3 AND status='sent'
+            AND sent_at > now() - ($4 * interval '1 hour') LIMIT 1`,
+        [tenantId, phoneKey, hash, MarketingService.EXACT_DUP_WINDOW_HOURS],
+      );
+      if (rows.length > 0) return { status: 'skipped_dedup', reason: 'exact_duplicate' };
+    }
+
+    // 2c. Global per-client 24h cap (all types).
+    if (clientId) {
+      const { rows } = await this.pool.query(
+        `SELECT count(*)::int AS n FROM sent_messages
+          WHERE tenant_id=$1 AND client_id=$2 AND status='sent'
+            AND sent_at > now() - interval '24 hours'`,
+        [tenantId, clientId],
+      );
+      if ((rows[0]?.n ?? 0) >= MarketingService.PER_CLIENT_24H_CAP) {
+        return { status: 'skipped_dedup', reason: 'rate_cap' };
+      }
+    }
+
+    // 3. Claim the dedup_key + write the log row atomically.
+    const dedupKey =
+      opts.dedupKey && opts.dedupKey.trim()
+        ? opts.dedupKey.trim()
+        : `${messageType}:${phoneKey}:${hash}:${this.hourStamp()}`;
+    const claim = await this.pool.query(
+      `INSERT INTO sent_messages
+         (tenant_id, client_id, message_type, provider_type, phone, content_hash, status, dedup_key, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,'sent',$7,$8)
+       ON CONFLICT (tenant_id, dedup_key) DO NOTHING
+       RETURNING id`,
+      [tenantId, clientId, messageType, providerType, phoneKey, hash, dedupKey, opts.createdBy ?? null],
+    );
+    if (claim.rows.length === 0) return { status: 'skipped_dedup', reason: 'dedup_key' };
+    const logId = claim.rows[0].id;
+
+    // 4. Send; downgrade the row on failure.
+    try {
+      const result = await adapter.sendMessage(phoneRaw, body);
+      if (result.success) return { status: 'sent' };
+      await this.pool
+        .query(`UPDATE sent_messages SET status='failed', error=$2 WHERE id=$1`, [
+          logId,
+          (result.error ?? 'send failed').slice(0, 500),
+        ])
+        .catch(() => undefined);
+      return { status: 'failed', reason: 'error', error: result.error };
+    } catch (err: any) {
+      await this.pool
+        .query(`UPDATE sent_messages SET status='failed', error=$2 WHERE id=$1`, [
+          logId,
+          String(err?.message ?? err).slice(0, 500),
+        ])
+        .catch(() => undefined);
+      return { status: 'failed', reason: 'error', error: err?.message || String(err) };
+    }
+  }
+
+  /**
    * Public messaging reuse point for other modules (e.g. Bookings). Sends a
    * one-off message to a client phone using the tenant's configured messaging
    * provider (the same `messaging_integrations` adapter the review/reminder
@@ -329,16 +543,37 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     tenantId: string,
     phone: string,
     message: string,
+    opts?: {
+      clientId?: string | null;
+      messageType?: OutboundMessageType;
+      dedupKey?: string | null;
+      cooldownHours?: number;
+      integrationId?: string | null;
+      providerType?: string | null;
+      createdBy?: string | null;
+    },
   ): Promise<{ sent: boolean; reason?: 'no_provider' | 'no_phone' | 'error'; error?: string }> {
-    if (!phone || !phone.trim()) return { sent: false, reason: 'no_phone' };
-    const adapter = await this.getAdapter(tenantId);
-    if (!adapter) return { sent: false, reason: 'no_provider' };
-    try {
-      const result = await adapter.sendMessage(phone, message);
-      return result.success ? { sent: true } : { sent: false, reason: 'error', error: result.error };
-    } catch (err: any) {
-      return { sent: false, reason: 'error', error: err?.message || String(err) };
-    }
+    // Now routed through the anti-spam gate (guardAndLogSend). Existing 3-arg
+    // callers keep the old `{ sent, reason }` contract; the gate still applies
+    // exact-duplicate + (when a clientId/type is passed) cooldown + 24h cap.
+    const r = await this.guardAndLogSend({
+      tenantId,
+      phone,
+      body: message,
+      messageType: opts?.messageType ?? 'manual',
+      clientId: opts?.clientId ?? null,
+      dedupKey: opts?.dedupKey ?? null,
+      cooldownHours: opts?.cooldownHours ?? 0,
+      integrationId: opts?.integrationId ?? null,
+      providerType: opts?.providerType ?? null,
+      createdBy: opts?.createdBy ?? null,
+    });
+    if (r.status === 'sent') return { sent: true };
+    if (r.reason === 'no_phone') return { sent: false, reason: 'no_phone' };
+    if (r.reason === 'no_provider') return { sent: false, reason: 'no_provider' };
+    // skipped_dedup or provider error → not sent; surface as a benign 'error'
+    // so best-effort callers (bookings) just log-and-move-on, never retry-loop.
+    return { sent: false, reason: 'error', error: r.error ?? r.reason };
   }
 
   // ─── «Машина готова» (car-ready) auto-notification ───────────────
@@ -411,7 +646,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     if (!settings.enabled) return { sent: false, reason: 'disabled' };
 
     const { rows } = await this.pool.query(
-      `SELECT ch.number,
+      `SELECT ch.number, ch.client_id,
               cl.full_name AS client_name, cl.phone AS client_phone,
               ca.make_model, ca.plate_number
        FROM checks ch
@@ -433,7 +668,20 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       .replace(/\{car\}/g, carLabel || 'автомобиль')
       .replace(/\{clientName\}/g, r.client_name || 'клиент');
 
-    return this.sendClientMessage(tenantId, r.client_phone, message);
+    // Gate: `car_ready:<checkId>` = exactly one «машина готова» per check, ever.
+    // Previously this had NO idempotency — two ready-transitions double-sent.
+    const gate = await this.guardAndLogSend({
+      tenantId,
+      phone: r.client_phone,
+      body: message,
+      messageType: 'car_ready',
+      clientId: r.client_id ?? null,
+      dedupKey: `car_ready:${checkId}`,
+    });
+    if (gate.status === 'sent') return { sent: true };
+    if (gate.reason === 'no_phone') return { sent: false, reason: 'no_phone' };
+    if (gate.reason === 'no_provider') return { sent: false, reason: 'no_provider' };
+    return { sent: false, reason: 'error', error: gate.error ?? gate.reason };
   }
 
   // ─── Token Generation ────────────────────────────────────────────
@@ -864,6 +1112,10 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   // ─── Win-back segment («давно не приезжал») ──────────────────────
   private static readonly WINBACK_DEFAULT_DAYS = 90;
   private static readonly WINBACK_MAX_ROWS = 500;
+  /** Anti-spam: no win-back to the same client more than once per ~day. */
+  private static readonly WINBACK_COOLDOWN_HOURS = 20;
+  /** Manual segment broadcast recipient ceiling (money guard, mirrors win-back). */
+  private static readonly BROADCAST_MAX_ROWS = 500;
 
   private normalizeWinbackDays(days?: number): number {
     const n = Math.floor(Number(days));
@@ -926,31 +1178,241 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     tenantId: string,
     days: number,
     message: string,
-  ): Promise<{ sent: number; failed: number; total: number }> {
+  ): Promise<{ sent: number; failed: number; skippedDedup: number; total: number }> {
     const text = (message || '').trim();
     if (!text) throw new BadRequestException({ message: 'Сообщение не может быть пустым' });
 
     const segment = await this.getWinbackSegment(tenantId, days);
     const total = segment.length;
+    const dayStamp = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     let sent = 0;
     let failed = 0;
+    let skippedDedup = 0;
 
     for (const client of segment) {
-      const result = await this.sendClientMessage(tenantId, client.phone, text);
-      if (result.sent) {
+      // Gate: `winback:<clientId>:<day>` = one win-back per client per day
+      // (idempotent retries); cooldown 20h additionally blocks a same-client
+      // re-blast within the day. Anti-spam: «давно не приезжал» must not spam.
+      const result = await this.guardAndLogSend({
+        tenantId,
+        phone: client.phone,
+        body: text,
+        messageType: 'winback',
+        clientId: client.clientId,
+        dedupKey: `winback:${client.clientId}:${dayStamp}`,
+        cooldownHours: MarketingService.WINBACK_COOLDOWN_HOURS,
+      });
+      if (result.status === 'sent') {
         sent++;
+      } else if (result.status === 'skipped_dedup') {
+        skippedDedup++;
       } else {
         failed++;
         // No provider configured → the same holds for every remaining client.
         // Count the rest as not-sent and stop. Clear counts, no throw.
         if (result.reason === 'no_provider') {
-          failed = total - sent;
+          failed = total - sent - skippedDedup;
           break;
         }
       }
     }
 
-    return { sent, failed, total };
+    return { sent, failed, skippedDedup, total };
+  }
+
+  // ─── Manual segment broadcast («Рассылки») ───────────────────────
+  /**
+   * Resolve a segment definition to a de-duplicated recipient list (clientId +
+   * phone). Tenant-scoped, excludes the pinned retail buyer and phoneless
+   * clients, and is HARD-capped at BROADCAST_MAX_ROWS so one call can never
+   * fan out unbounded (money guard). Criteria AND-combine; reuses the same
+   * "last visit older than N days OR never" shape as the win-back segment.
+   */
+  private async resolveSegment(
+    tenantId: string,
+    segment: { lastVisitDays?: number; source?: string; hasDebt?: boolean; clientIds?: string[] },
+  ): Promise<Array<{ clientId: string; phone: string }>> {
+    const params: unknown[] = [tenantId];
+    let idx = 2;
+    const where: string[] = [
+      `cl.tenant_id = $1`,
+      `cl.is_retail = false`,
+      `cl.phone IS NOT NULL`,
+      `btrim(cl.phone) <> ''`,
+    ];
+    const having: string[] = [];
+
+    if (Array.isArray(segment.clientIds) && segment.clientIds.length > 0) {
+      where.push(`cl.id = ANY($${idx}::uuid[])`);
+      params.push(segment.clientIds);
+      idx++;
+    }
+    if (segment.source && String(segment.source).trim()) {
+      where.push(`cl.source = $${idx}`);
+      params.push(String(segment.source).trim());
+      idx++;
+    }
+    if (segment.hasDebt) {
+      // «Есть долг» = положительный баланс client_debts ИЛИ открытая рассрочка с остатком.
+      where.push(`(
+        COALESCE((SELECT SUM(CASE WHEN d.type='charge' THEN d.amount ELSE -d.amount END)
+                  FROM client_debts d WHERE d.tenant_id = $1 AND d.client_id = cl.id), 0) > 0
+        OR EXISTS (SELECT 1 FROM installment_plans ip
+                    WHERE ip.tenant_id = $1 AND ip.client_id = cl.id
+                      AND ip.status = 'open' AND ip.remaining > 0)
+      )`);
+    }
+    if (segment.lastVisitDays != null && Number.isFinite(Number(segment.lastVisitDays))) {
+      const n = Math.max(0, Math.floor(Number(segment.lastVisitDays)));
+      having.push(`(MAX(ch.date) IS NULL OR MAX(ch.date) <= now() - ($${idx} * interval '1 day'))`);
+      params.push(n);
+      idx++;
+    }
+
+    const sql = `
+      SELECT cl.id, cl.phone
+        FROM clients cl
+        LEFT JOIN checks ch
+          ON ch.client_id = cl.id AND ch.tenant_id = $1
+         AND ch.is_deferred = false AND ch.deleted_at IS NULL
+       WHERE ${where.join(' AND ')}
+       GROUP BY cl.id, cl.phone
+       ${having.length ? 'HAVING ' + having.join(' AND ') : ''}
+       ORDER BY cl.id
+       LIMIT ${MarketingService.BROADCAST_MAX_ROWS}`;
+    const { rows } = await this.pool.query(sql, params);
+    return rows.map((r) => ({ clientId: r.id, phone: r.phone }));
+  }
+
+  /**
+   * Owner-initiated blast to a resolved segment via a chosen channel. Every
+   * recipient goes through the anti-spam gate, so nobody is double-charged even
+   * on a request retry: with an explicit `idempotencyKey` (or, absent one, a
+   * content+hour-derived run key) the per-recipient dedup_key
+   * `broadcast:<runKey>:<clientId>` collapses identical retries onto the same
+   * claimed rows. Fails fast with a clear message if the chosen channel isn't
+   * connected. Returns exact counts.
+   */
+  async sendSegmentBroadcast(
+    tenantId: string,
+    dto: {
+      segment?: { lastVisitDays?: number; source?: string; hasDebt?: boolean; clientIds?: string[] };
+      message: string;
+      providerType?: string | null;
+      integrationId?: string | null;
+      idempotencyKey?: string | null;
+    },
+    createdBy?: string | null,
+  ): Promise<{ sent: number; skippedDedup: number; failed: number; total: number }> {
+    const text = (dto.message || '').trim();
+    if (!text) throw new BadRequestException({ message: 'Сообщение не может быть пустым' });
+
+    // Resolve the channel ONCE and fail fast if nothing is connected.
+    const adapterRow = await this.getAdapterRowFor(tenantId, {
+      integrationId: dto.integrationId,
+      providerType: dto.providerType,
+    });
+    if (!adapterRow) {
+      throw new BadRequestException({ message: 'Нет подключённого канала для выбранной рассылки' });
+    }
+    const adapter = this.createAdapter(adapterRow);
+    const providerType = adapterRow.provider_type;
+
+    const recipients = await this.resolveSegment(tenantId, dto.segment || {});
+    const contentHash = this.contentHash(text);
+    const runKey =
+      dto.idempotencyKey && dto.idempotencyKey.trim()
+        ? dto.idempotencyKey.trim()
+        : `${contentHash.slice(0, 12)}:${this.hourStamp()}`;
+
+    const seen = new Set<string>();
+    let sent = 0;
+    let skippedDedup = 0;
+    let failed = 0;
+    let total = 0;
+
+    for (const rcpt of recipients) {
+      if (seen.has(rcpt.clientId)) continue; // each client at most once per blast
+      seen.add(rcpt.clientId);
+      total++;
+      const result = await this.guardAndLogSend({
+        tenantId,
+        phone: rcpt.phone,
+        body: text,
+        messageType: 'broadcast',
+        clientId: rcpt.clientId,
+        dedupKey: `broadcast:${runKey}:${rcpt.clientId}`,
+        providerType,
+        createdBy: createdBy ?? null,
+        adapter,
+      });
+      if (result.status === 'sent') sent++;
+      else if (result.status === 'skipped_dedup') skippedDedup++;
+      else failed++;
+    }
+
+    return { sent, skippedDedup, failed, total };
+  }
+
+  // ─── Auto-mailings overview (read-only surface for the «Рассылки» UI) ─
+  /**
+   * Aggregate the AUTO mailing settings so the UI can list them + deep-link to
+   * the existing per-type settings editors. Read-only: editing stays on the
+   * dedicated endpoints referenced by `settingsRef`.
+   */
+  async getAutoMailings(
+    tenantId: string,
+  ): Promise<Array<{ type: string; enabled: boolean; summary: string; settingsRef: string }>> {
+    const review = await this.getSettings(tenantId);
+    const carReady = await this.getCarReadySettings(tenantId);
+
+    const { rows: svcRows } = await this.pool.query(
+      `SELECT enabled, months_interval FROM reminder_settings WHERE tenant_id=$1`,
+      [tenantId],
+    );
+    const svc = svcRows[0] ?? { enabled: false, months_interval: null };
+
+    const { rows: instRows } = await this.pool.query(
+      `SELECT mode, days_before, on_due, on_overdue FROM installment_reminder_settings WHERE tenant_id=$1`,
+      [tenantId],
+    );
+    const inst = instRows[0] ?? { mode: 'off', days_before: null, on_due: false, on_overdue: false };
+
+    return [
+      {
+        type: 'review',
+        enabled: !!review.autoSendEnabled,
+        summary: review.autoSendEnabled
+          ? `Запрос отзыва авто-отправкой в ${review.sendTime ?? ''}`.trim()
+          : 'Запрос отзыва выключен',
+        settingsRef: 'marketing/settings',
+      },
+      {
+        type: 'car_ready',
+        enabled: !!carReady.enabled,
+        summary: carReady.enabled ? '«Машина готова» при переводе в статус «готов»' : '«Машина готова» выключена',
+        settingsRef: 'marketing/car-ready',
+      },
+      {
+        type: 'installment_reminder',
+        enabled: inst.mode === 'auto',
+        summary:
+          inst.mode === 'auto'
+            ? `Напоминания рассрочки: за ${inst.days_before ?? 0} дн.${inst.on_due ? ', в день' : ''}${inst.on_overdue ? ', просрочка' : ''}`
+            : inst.mode === 'manual'
+              ? 'Напоминания рассрочки: только вручную'
+              : 'Напоминания рассрочки выключены',
+        settingsRef: 'installments/reminder-settings',
+      },
+      {
+        type: 'service_reminder',
+        enabled: !!svc.enabled,
+        summary: svc.enabled
+          ? `Напоминание «давно не обслуживались»: каждые ${svc.months_interval ?? 0} мес.`
+          : 'Напоминание «давно не обслуживались» выключено',
+        settingsRef: 'marketing/reminders',
+      },
+    ];
   }
 
   // ─── Job Processor: Scan for completed checks ────────────────────
@@ -1058,7 +1520,18 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
             // template doesn't reference it, the substitution is a no-op.
             .replace(/\{motivation\}/g, motivationMessage);
 
-          await adapter.sendMessage(job.client_phone, message);
+          // Route through the anti-spam gate. `review:<checkId>` = one review
+          // request per check, ever (belt-and-suspenders over review_jobs' own
+          // ON CONFLICT (check_id)); reuse the already-resolved adapter.
+          await this.guardAndLogSend({
+            tenantId: job.tenant_id,
+            phone: job.client_phone,
+            body: message,
+            messageType: 'review',
+            clientId: job.client_id ?? null,
+            dedupKey: `review:${job.check_id}`,
+            adapter,
+          });
           await this.pool.query(`UPDATE review_jobs SET status='sent' WHERE id=$1`, [job.id]);
         } catch (err: any) {
           this.logger.error(`Review job ${job.id} failed: ${err.message}`);

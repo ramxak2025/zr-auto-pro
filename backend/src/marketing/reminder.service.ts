@@ -123,19 +123,32 @@ export class ReminderService implements OnModuleInit, OnModuleDestroy {
 
     let sent = 0;
     let errors = 0;
+    const monthStamp = new Date().toISOString().slice(0, 7); // YYYY-MM
 
     for (const client of clients) {
       const monthsAgo = Math.round(parseFloat(client.months_ago) || monthsInterval);
       const message = template.replace('{name}', client.full_name || 'клиент').replace('{months}', String(monthsAgo));
 
       try {
-        const result = await adapter.sendMessage(client.phone, message);
-        if (result.success) {
+        // Anti-spam gate: `service_reminder:<clientId>:<YYYY-MM>` = at most one
+        // «давно не обслуживались» per client per calendar month. Reuse the
+        // already-resolved adapter so no extra provider lookup per client.
+        const result = await this.marketingService.guardAndLogSend({
+          tenantId,
+          phone: client.phone,
+          body: message,
+          messageType: 'reminder',
+          clientId: client.id,
+          dedupKey: `service_reminder:${client.id}:${monthStamp}`,
+          adapter,
+        });
+        if (result.status === 'sent') {
           sent++;
-        } else {
+        } else if (result.status === 'failed') {
           errors++;
-          this.logger.warn(`Reminder SMS failed for client ${client.id}: ${result.error}`);
+          this.logger.warn(`Reminder SMS failed for client ${client.id}: ${result.error ?? result.reason}`);
         }
+        // skipped_dedup → intentional anti-spam skip, not an error.
       } catch (err) {
         errors++;
         this.logger.error(`Reminder SMS exception for client ${client.id}: ${err}`);

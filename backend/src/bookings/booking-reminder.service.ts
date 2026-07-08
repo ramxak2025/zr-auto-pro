@@ -101,7 +101,11 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
             continue;
           }
           const message = `Вы записаны на ${this.formatWhen(row.scheduled_at)}. Если передумали — позвоните, чтобы отменить.`;
-          const result = await this.marketingService.sendClientMessage(row.tenant_id, phone, message);
+          const result = await this.marketingService.sendClientMessage(row.tenant_id, phone, message, {
+            clientId: row.client_id ?? null,
+            messageType: 'booking',
+            dedupKey: `booking_reminder:${row.id}`,
+          });
           if (!result.sent) {
             this.logger.warn(
               `Booking reminder not delivered (booking ${row.id}, tenant ${row.tenant_id}): ${result.reason}${result.error ? ` — ${result.error}` : ''}`,
