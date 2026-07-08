@@ -1,23 +1,23 @@
 /**
- * MailingsScreen — "Рассылки".
+ * MailingsScreen — «Рассылки».
  *
- * Owner feedback ("сам дизайн ux ui не нравится, надо сделать современный
- * и удобный и убрать тавтологию в словах") drove a full UI rebuild:
+ * Restructured around the server's segment-broadcast + auto-mailing overview
+ * (мигр. 124) so the owner trusts that nobody gets spammed:
  *
- *   • Round segmented control tabs (capsule, not square chips).
- *   • Tab labels deduplicated: "Авто-напоминания" / "Ручная" / "История".
- *     The word «рассылка» is no longer repeated on every tab.
- *   • Step-based "Ручная" tab — Получатели → Сообщение → Отправить.
- *   • Polished history rows with channel icon + delivery status pill.
- *   • All Ionicons names verified to have explicit map entries (active
- *     variants get a `tab.iconSolid` so the runtime never has to strip
- *     `-outline` and hit the Circle fallback).
+ *   • Ручная — сегментная рассылка. Выбираешь СЕГМЕНТ (все / давно не приезжали /
+ *     по источнику / есть долг / вручную), КАНАЛ (из подключённых интеграций) и
+ *     текст → `marketingApi.sendSegmentBroadcast`. Результат честно показывает
+ *     «Отправлено · Пропущено (дубли) · Ошибок» — `skippedDedup` берётся из
+ *     анти-спам-журнала. «Возвращение клиентов» теперь просто пресет сегмента.
  *
- * Backend stays unchanged — manual bulk send still loops `sendSms` per
- * recipient client-side; history is in-memory until `/marketing/mailings`
- * ships server-side.
+ *   • Авто — обзор автоматических рассылок (`getAutoMailings`): отзыв, машина
+ *     готова, напоминание о визите, оплата рассрочки — со статусом вкл/выкл и
+ *     переходом в «Настройки» для правки текста. Анти-спам-примечание рядом.
+ *
+ * Каждая отправка идемпотентна (`idempotencyKey`) — повтор при плохой сети не
+ * задваивает списание SMS.
  */
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
 import {
   View,
   ScrollView,
@@ -27,325 +27,191 @@ import {
   RefreshControl,
   ActivityIndicator,
   Alert,
-  Pressable,
-  Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../contexts/ThemeContext';
-import { marketingApi, clientsApi } from '../api/services';
+import { marketingApi, clientsApi, clientSourcesApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import type { Client } from '../../../shared/types';
+import type {
+  Client,
+  MessagingIntegration,
+  SegmentBroadcastCriteria,
+  SegmentBroadcastResult,
+  AutoMailingOverview,
+} from '../../../shared/types';
 
-type TabKey = 'auto' | 'manual' | 'history';
+type TabKey = 'manual' | 'auto';
+type SegmentKey = 'all' | 'inactive' | 'source' | 'debt' | 'clients';
 
 const TEMPLATES: { id: string; title: string; body: string }[] = [
   {
     id: 'thanks',
     title: 'Спасибо за визит',
-    body: 'Здравствуйте, {имя}! Спасибо за визит в наш сервис. Будем рады видеть вас снова.',
-  },
-  {
-    id: 'maintenance',
-    title: 'Напоминание о ТО',
-    body: 'Здравствуйте, {имя}! По нашим данным вашему {авто} скоро потребуется ТО. Запишитесь по телефону.',
+    body: 'Здравствуйте, {имя}! Спасибо за визит. Будем рады видеть вас снова.',
   },
   {
     id: 'seasonal',
     title: 'Сезонная акция',
-    body: 'Здравствуйте, {имя}! Сейчас сезон смены резины — успейте записаться по специальной цене.',
+    body: 'Здравствуйте, {имя}! Сезон смены резины — успейте записаться по спеццене.',
   },
   {
     id: 'oil',
     title: 'Скидка на масло',
-    body: 'Здравствуйте, {имя}! Только в этом месяце скидка 10% на замену моторного масла.',
+    body: 'Здравствуйте, {имя}! В этом месяце скидка 10% на замену моторного масла.',
+  },
+  {
+    id: 'comeback',
+    title: 'Давно не виделись',
+    body: 'Здравствуйте, {имя}! Давно вас не было — приезжайте на бесплатную диагностику.',
   },
 ];
 
-// ─────────────────────────────────────────────────────────────────────
-//  Авто-напоминания
-// ─────────────────────────────────────────────────────────────────────
+const SEGMENTS: { key: SegmentKey; title: string; subtitle: string; icon: keyof typeof Ionicons.glyphMap }[] = [
+  { key: 'all', title: 'Все клиенты', subtitle: 'Всем с телефоном (кроме розницы)', icon: 'people-outline' },
+  {
+    key: 'inactive',
+    title: 'Давно не приезжали',
+    subtitle: 'Возврат клиентов — не были N дней',
+    icon: 'repeat-outline',
+  },
+  { key: 'source', title: 'По источнику', subtitle: 'Пришли из конкретного канала', icon: 'funnel-outline' },
+  { key: 'debt', title: 'Есть долг', subtitle: 'Незакрытая рассрочка или долг', icon: 'alert-circle-outline' },
+  {
+    key: 'clients',
+    title: 'Выбрать вручную',
+    subtitle: 'Отметить конкретных клиентов',
+    icon: 'checkmark-circle-outline',
+  },
+];
 
-function AutoTab() {
-  const palette = useColors();
+const CHANNEL_META: Record<
+  MessagingIntegration['providerType'],
+  { label: string; icon: keyof typeof Ionicons.glyphMap }
+> = {
+  whatsapp: { label: 'WhatsApp', icon: 'logo-whatsapp' },
+  telegram: { label: 'Telegram', icon: 'paper-plane-outline' },
+  smsru: { label: 'SMS.RU', icon: 'chatbox-ellipses-outline' },
+  sms: { label: 'SMS', icon: 'chatbox-outline' },
+  moizvonki: { label: 'Мои Звонки', icon: 'call-outline' },
+  email: { label: 'Email', icon: 'mail-outline' },
+};
 
-  const [enabled, setEnabled] = useState(false);
-  const [monthsInterval, setMonthsInterval] = useState(6);
-  const [messageTemplate, setMessageTemplate] = useState('');
-  const [sendResult, setSendResult] = useState<string | null>(null);
+function makeIdempotencyKey(): string {
+  return `mail-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
-  const { data: settings, refetch: refetchSettings } = useQuery({
-    queryKey: ['reminder-settings'],
-    queryFn: async () => (await marketingApi.getReminderSettings()).data,
-    staleTime: 60_000,
-  });
-
-  React.useEffect(() => {
-    if (settings) {
-      setEnabled(settings.enabled);
-      setMonthsInterval(settings.monthsInterval);
-      setMessageTemplate(settings.messageTemplate);
-    }
-  }, [settings]);
-
-  const saveSettings = useMutation({
-    mutationFn: () => marketingApi.updateReminderSettings({ enabled, monthsInterval, messageTemplate }),
-    onSuccess: () => {
-      haptic('success');
-      refetchSettings();
-      Alert.alert('Сохранено', 'Настройки применены');
-    },
-    onError: () => {
-      haptic('error');
-      Alert.alert('Ошибка', 'Не удалось сохранить');
-    },
-  });
-
-  const sendNow = useMutation({
-    mutationFn: () => marketingApi.sendReminders(),
-    onSuccess: (res) => {
-      haptic('success');
-      setSendResult(`Отправлено: ${res.data.sent}, ошибок: ${res.data.errors}`);
-      Alert.alert('Готово', `Отправлено: ${res.data.sent}, ошибок: ${res.data.errors}`);
-    },
-    onError: () => {
-      haptic('error');
-      Alert.alert('Ошибка', 'Не удалось отправить');
-    },
-  });
-
-  const insertVariable = (variable: string) => {
-    haptic('select');
-    setMessageTemplate((prev) => `${prev}${variable}`);
-  };
-
-  return (
-    <View style={{ gap: spacing[3] }}>
-      {/* Big enable row */}
-      <AnimatedCard
-        index={0}
-        style={[styles.bigToggleCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-      >
-        <View
-          style={[
-            styles.bigToggleIcon,
-            {
-              backgroundColor: enabled
-                ? palette.mode === 'dark'
-                  ? softTint(colors.green[600], 'dark')
-                  : colors.green[50]
-                : palette.bg.muted,
-            },
-          ]}
-        >
-          <Ionicons
-            name={enabled ? 'notifications' : 'notifications-outline'}
-            size={20}
-            color={enabled ? colors.green[600] : palette.text.tertiary}
-          />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.bigToggleTitle, { color: palette.text.primary }]}>Авто-напоминания о ТО</Text>
-          <Text style={[styles.bigToggleSub, { color: palette.text.tertiary }]}>
-            {enabled ? 'Включены — клиенты получают раз в N месяцев' : 'Отключены — никому не пишем'}
-          </Text>
-        </View>
-        <Pressable
-          onPress={() => {
-            haptic('select');
-            setEnabled((v) => !v);
-          }}
-          style={({ pressed }) => [{ opacity: pressed ? 0.7 : 1 }]}
-          hitSlop={8}
-        >
-          <View
-            style={[styles.switchTrack, { backgroundColor: enabled ? palette.accent.primary : palette.border.strong }]}
-          >
-            <View style={[styles.switchThumb, { transform: [{ translateX: enabled ? 20 : 2 }] }]} />
-          </View>
-        </Pressable>
-      </AnimatedCard>
-
-      {/* Interval */}
-      <AnimatedCard
-        index={1}
-        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-      >
-        <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Раз в N месяцев</Text>
-        <View style={{ flexDirection: 'row', gap: spacing[2] }}>
-          {[3, 6, 12].map((m) => {
-            const active = monthsInterval === m;
-            return (
-              <TouchableOpacity
-                key={m}
-                style={[
-                  styles.intervalChip,
-                  {
-                    backgroundColor: active ? palette.accent.primary : palette.bg.muted,
-                    borderColor: active ? palette.accent.primary : palette.border.subtle,
-                  },
-                ]}
-                onPress={() => {
-                  haptic('select');
-                  setMonthsInterval(m);
-                }}
-              >
-                <Text
-                  style={{
-                    fontSize: fontSize.sm,
-                    fontWeight: fontWeight.bold,
-                    color: active ? colors.white : palette.text.secondary,
-                  }}
-                >
-                  {m}
-                </Text>
-                <Text
-                  style={{
-                    fontSize: 11,
-                    color: active ? colors.white : palette.text.tertiary,
-                  }}
-                >
-                  {m === 3 ? 'месяца' : 'месяцев'}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </AnimatedCard>
-
-      {/* Template */}
-      <AnimatedCard
-        index={2}
-        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-      >
-        <View style={styles.sectionHeaderRow}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-            <Ionicons name="document-text-outline" size={16} color={palette.text.secondary} />
-            <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: 0 }]}>
-              Шаблон сообщения
-            </Text>
-          </View>
-        </View>
-
-        <TextInput
-          value={messageTemplate}
-          onChangeText={setMessageTemplate}
-          style={[
-            styles.textArea,
-            {
-              backgroundColor: palette.bg.muted,
-              borderColor: palette.border.subtle,
-              color: palette.text.primary,
-            },
-          ]}
-          multiline
-          numberOfLines={4}
-          placeholder="Здравствуйте, {имя}! Прошло {месяцы} месяцев с вашего последнего визита. Ждём вас!"
-          placeholderTextColor={palette.text.tertiary}
-        />
-
-        <Text style={[styles.varHint, { color: palette.text.tertiary }]}>Переменные — нажмите, чтобы вставить</Text>
-        <View style={styles.varRow}>
-          {[
-            { label: '{имя}', insert: '{имя}' },
-            { label: '{авто}', insert: '{авто}' },
-            { label: '{месяцы}', insert: '{месяцы}' },
-          ].map((v) => (
-            <TouchableOpacity
-              key={v.label}
-              onPress={() => insertVariable(v.insert)}
-              style={[styles.varChip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-            >
-              <Text style={{ fontSize: 12, color: palette.accent.primary, fontWeight: '600' }}>{v.label}</Text>
-            </TouchableOpacity>
-          ))}
-        </View>
-      </AnimatedCard>
-
-      {/* Actions */}
-      <View style={styles.actionsRow}>
-        <TouchableOpacity
-          style={[
-            styles.actionBtnPrimary,
-            { backgroundColor: palette.accent.primary },
-            saveSettings.isPending && { opacity: 0.7 },
-          ]}
-          onPress={() => {
-            haptic('tap');
-            saveSettings.mutate();
-          }}
-          disabled={saveSettings.isPending}
-        >
-          {saveSettings.isPending ? (
-            <ActivityIndicator size="small" color={colors.white} />
-          ) : (
-            <>
-              <Ionicons name="checkmark" size={16} color={colors.white} />
-              <Text style={styles.actionBtnPrimaryText}>Сохранить</Text>
-            </>
-          )}
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[
-            styles.actionBtnSecondary,
-            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-            sendNow.isPending && { opacity: 0.7 },
-          ]}
-          onPress={() => {
-            haptic('tap');
-            setSendResult(null);
-            sendNow.mutate();
-          }}
-          disabled={sendNow.isPending}
-        >
-          {sendNow.isPending ? (
-            <ActivityIndicator size="small" color={palette.text.primary} />
-          ) : (
-            <>
-              <Ionicons name="paper-plane-outline" size={16} color={palette.text.primary} />
-              <Text style={[styles.actionBtnSecondaryText, { color: palette.text.primary }]}>Отправить сейчас</Text>
-            </>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {sendResult ? <Text style={[styles.resultText, { color: palette.text.tertiary }]}>{sendResult}</Text> : null}
-    </View>
-  );
+function pluralDays(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'день';
+  if (m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20)) return 'дня';
+  return 'дней';
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  Ручная
+//  Ручная — segment broadcast
 // ─────────────────────────────────────────────────────────────────────
 
-function ManualTab({
-  history,
-  setHistory,
-}: {
-  history: ManualHistoryEntry[];
-  setHistory: (next: ManualHistoryEntry[]) => void;
-}) {
+function ManualTab() {
   const palette = useColors();
   const queryClient = useQueryClient();
 
-  const [search, setSearch] = useState('');
+  const [segmentKey, setSegmentKey] = useState<SegmentKey>('all');
+  const [days, setDays] = useState(90);
+  const [source, setSource] = useState<string | null>(null);
   const [picked, setPicked] = useState<Record<string, Client>>({});
-  const [channel, setChannel] = useState<'sms' | 'whatsapp'>('sms');
+  const [search, setSearch] = useState('');
+  const [channelId, setChannelId] = useState<string | null>(null); // null = «Авто» (default channel)
   const [message, setMessage] = useState('');
+  const [result, setResult] = useState<SegmentBroadcastResult | null>(null);
+  const idempotencyKey = useRef(makeIdempotencyKey());
+
+  // A distinct composition = a fresh idempotency key. Retries of the SAME
+  // composition reuse it, so a flaky-network retry never double-sends.
+  React.useEffect(() => {
+    idempotencyKey.current = makeIdempotencyKey();
+    setResult(null);
+  }, [segmentKey, days, source, message, channelId, picked]);
+
+  const integrationsQuery = useQuery({
+    queryKey: ['marketing-integrations'],
+    queryFn: async () => (await marketingApi.getIntegrations()).data,
+    staleTime: 60_000,
+  });
+  const channels: MessagingIntegration[] = (Array.isArray(integrationsQuery.data) ? integrationsQuery.data : []).filter(
+    (i) => i.isActive,
+  );
+
+  const sourcesQuery = useQuery({
+    queryKey: ['client-sources'],
+    queryFn: async () => (await clientSourcesApi.get()).data,
+    staleTime: 5 * 60_000,
+    enabled: segmentKey === 'source',
+  });
+  const sources = sourcesQuery.data?.sources ?? [];
 
   const clientsQuery = useQuery({
     queryKey: ['mailings-clients', search],
     queryFn: async () => (await clientsApi.getAll({ search, page: 1, limit: 50 })).data,
     staleTime: 30_000,
+    enabled: segmentKey === 'clients',
   });
   const clients = clientsQuery.data?.data ?? [];
   const pickedIds = Object.keys(picked);
+
+  const buildSegment = (): SegmentBroadcastCriteria | undefined => {
+    switch (segmentKey) {
+      case 'all':
+        return undefined;
+      case 'inactive':
+        return { lastVisitDays: days };
+      case 'source':
+        return source ? { source } : undefined;
+      case 'debt':
+        return { hasDebt: true };
+      case 'clients':
+        return { clientIds: pickedIds };
+    }
+  };
+
+  const segmentReady =
+    segmentKey !== 'source' && segmentKey !== 'clients'
+      ? true
+      : segmentKey === 'source'
+        ? !!source
+        : pickedIds.length > 0;
+
+  const canSend = message.trim().length > 0 && segmentReady;
+
+  const send = useMutation({
+    mutationFn: async () => {
+      const res = await marketingApi.sendSegmentBroadcast({
+        segment: buildSegment(),
+        message: message.trim(),
+        integrationId: channelId ?? undefined,
+        idempotencyKey: idempotencyKey.current,
+      });
+      return res.data;
+    },
+    onSuccess: (res) => {
+      haptic('success');
+      setResult(res);
+      queryClient.invalidateQueries({ queryKey: ['marketing-dashboard'] });
+      // Next send gets a new key.
+      idempotencyKey.current = makeIdempotencyKey();
+    },
+    onError: (e: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', e?.response?.data?.message || 'Не удалось отправить рассылку');
+    },
+  });
 
   const togglePick = (c: Client) => {
     haptic('select');
@@ -357,203 +223,271 @@ function ManualTab({
     });
   };
 
-  const applyTemplate = (tpl: (typeof TEMPLATES)[number]) => {
+  const confirmSend = () => {
+    if (!canSend) return;
     haptic('tap');
-    setMessage(tpl.body);
+    Alert.alert('Отправить рассылку?', 'Сообщение уйдёт выбранному сегменту. Дубли отсеются автоматически.', [
+      { text: 'Отмена', style: 'cancel' },
+      { text: 'Отправить', onPress: () => send.mutate() },
+    ]);
   };
-
-  const send = useMutation({
-    mutationFn: async () => {
-      let sent = 0;
-      let errors = 0;
-      for (const id of pickedIds) {
-        const c = picked[id];
-        if (!c.phone) {
-          errors += 1;
-          continue;
-        }
-        const text = renderTemplate(message, c);
-        try {
-          await marketingApi.sendSms({ phone: c.phone, text });
-          sent += 1;
-        } catch {
-          errors += 1;
-        }
-      }
-      return { sent, errors };
-    },
-    onSuccess: (res) => {
-      haptic('success');
-      const entry: ManualHistoryEntry = {
-        id: `local-${Date.now()}`,
-        sentAt: new Date().toISOString(),
-        channel,
-        audience: pickedIds.length,
-        delivered: res.sent,
-        failed: res.errors,
-        textPreview: message.slice(0, 80),
-      };
-      setHistory([entry, ...history].slice(0, 50));
-      Alert.alert('Готово', `Отправлено: ${res.sent}${res.errors ? `, ошибок: ${res.errors}` : ''}`);
-      setPicked({});
-      setMessage('');
-      queryClient.invalidateQueries({ queryKey: ['marketing-dashboard'] });
-    },
-    onError: () => {
-      haptic('error');
-      Alert.alert('Ошибка', 'Не удалось отправить');
-    },
-  });
-
-  const canSend = pickedIds.length > 0 && message.trim().length > 0 && !send.isPending;
 
   return (
     <View style={{ gap: spacing[3] }}>
-      {/* Step 1 — Получатели */}
+      {/* Step 1 — Segment */}
       <AnimatedCard
         index={0}
-        style={[styles.stepCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
       >
-        <View style={styles.stepHeader}>
-          <View style={[styles.stepNumber, { backgroundColor: palette.accent.primary }]}>
-            <Text style={styles.stepNumberText}>1</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
-              <Ionicons name="people-outline" size={15} color={palette.text.primary} />
-              <Text style={[styles.stepTitle, { color: palette.text.primary }]}>Получатели</Text>
-            </View>
-            <Text style={[styles.stepCount, { color: palette.text.tertiary }]}>Выбрано: {pickedIds.length}</Text>
-          </View>
-          {pickedIds.length > 0 && (
-            <TouchableOpacity
-              onPress={() => {
-                haptic('tap');
-                setPicked({});
-              }}
-              hitSlop={6}
-            >
-              <Text style={[styles.stepClear, { color: palette.accent.primary }]}>Сбросить</Text>
-            </TouchableOpacity>
-          )}
-        </View>
-
-        <View style={[styles.searchRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          <Ionicons name="search-outline" size={16} color={palette.text.tertiary} />
-          <TextInput
-            value={search}
-            onChangeText={setSearch}
-            style={[styles.searchInput, { color: palette.text.primary }]}
-            placeholder="Имя или телефон"
-            placeholderTextColor={palette.text.tertiary}
-            autoCorrect={false}
-          />
-        </View>
-
-        <View style={{ maxHeight: 240, marginTop: spacing[2] }}>
-          {clientsQuery.isLoading && clients.length === 0 ? (
-            <ActivityIndicator color={palette.accent.primary} style={{ marginVertical: spacing[4] }} />
-          ) : clients.length === 0 ? (
-            <Text style={[styles.helperText, { color: palette.text.tertiary }]}>Никого не нашли</Text>
-          ) : (
-            <ScrollView keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-              {clients.map((c) => {
-                const active = !!picked[c.id];
-                return (
-                  <TouchableOpacity
-                    key={c.id}
-                    style={[
-                      styles.clientRow,
-                      {
-                        backgroundColor: active ? palette.accent.primarySoft : palette.bg.card,
-                        borderColor: active ? palette.accent.primary : palette.border.subtle,
-                      },
-                    ]}
-                    onPress={() => togglePick(c)}
-                  >
-                    <View
-                      style={[
-                        styles.checkbox,
-                        active
-                          ? { backgroundColor: palette.accent.primary, borderColor: palette.accent.primary }
-                          : { borderColor: palette.border.strong, backgroundColor: 'transparent' },
-                      ]}
-                    >
-                      {active && <Ionicons name="checkmark" size={14} color={colors.white} />}
-                    </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.clientName, { color: palette.text.primary }]} numberOfLines={1}>
-                        {c.fullName}
-                      </Text>
-                      <Text style={[styles.clientPhone, { color: palette.text.tertiary }]} numberOfLines={1}>
-                        {c.phone || 'нет телефона'}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          )}
-        </View>
-      </AnimatedCard>
-
-      {/* Step 2 — Сообщение */}
-      <AnimatedCard
-        index={1}
-        style={[styles.stepCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-      >
-        <View style={styles.stepHeader}>
-          <View style={[styles.stepNumber, { backgroundColor: palette.accent.primary }]}>
-            <Text style={styles.stepNumberText}>2</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
-              <Ionicons name="document-text-outline" size={15} color={palette.text.primary} />
-              <Text style={[styles.stepTitle, { color: palette.text.primary }]}>Сообщение</Text>
-            </View>
-            <Text style={[styles.stepCount, { color: palette.text.tertiary }]}>
-              Канал · {channel === 'sms' ? 'SMS' : 'WhatsApp'}
-            </Text>
-          </View>
-        </View>
-
-        <View style={{ flexDirection: 'row', gap: spacing[2], marginBottom: spacing[3] }}>
-          {(['sms', 'whatsapp'] as const).map((c) => {
-            const active = channel === c;
+        <StepHeader n={1} icon="people-outline" title="Кому" hint="Выберите сегмент" />
+        <View style={{ gap: spacing[2] }}>
+          {SEGMENTS.map((s) => {
+            const active = segmentKey === s.key;
             return (
               <TouchableOpacity
-                key={c}
+                key={s.key}
                 onPress={() => {
                   haptic('select');
-                  setChannel(c);
+                  setSegmentKey(s.key);
                 }}
+                activeOpacity={0.8}
                 style={[
-                  styles.channelChip,
+                  styles.segmentRow,
                   {
                     backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
                     borderColor: active ? palette.accent.primary : palette.border.subtle,
                   },
                 ]}
               >
-                <Ionicons
-                  name={c === 'sms' ? 'chatbox-outline' : 'logo-whatsapp'}
-                  size={16}
-                  color={active ? palette.accent.primary : palette.text.tertiary}
-                />
-                <Text
-                  style={{
-                    fontSize: fontSize.sm,
-                    fontWeight: '600',
-                    color: active ? palette.accent.primary : palette.text.secondary,
-                  }}
+                <Ionicons name={s.icon} size={18} color={active ? palette.accent.primary : palette.text.tertiary} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.segmentTitle, { color: palette.text.primary }]}>{s.title}</Text>
+                  <Text style={[styles.segmentSub, { color: palette.text.tertiary }]}>{s.subtitle}</Text>
+                </View>
+                <View
+                  style={[
+                    styles.radio,
+                    active
+                      ? { borderColor: palette.accent.primary, backgroundColor: palette.accent.primary }
+                      : { borderColor: palette.border.strong },
+                  ]}
                 >
-                  {c === 'sms' ? 'SMS' : 'WhatsApp'}
-                </Text>
+                  {active ? <Ionicons name="checkmark" size={12} color={colors.white} /> : null}
+                </View>
               </TouchableOpacity>
             );
           })}
         </View>
 
+        {/* Days sub-control for «давно не приезжали» */}
+        {segmentKey === 'inactive' ? (
+          <View style={{ marginTop: spacing[3] }}>
+            <Text style={[styles.subLabel, { color: palette.text.secondary }]}>Не приезжали дольше</Text>
+            <View style={{ flexDirection: 'row', gap: spacing[2], marginTop: spacing[2] }}>
+              {[30, 60, 90, 180].map((d) => {
+                const active = days === d;
+                return (
+                  <TouchableOpacity
+                    key={d}
+                    onPress={() => {
+                      haptic('select');
+                      setDays(d);
+                    }}
+                    style={[
+                      styles.dayChip,
+                      {
+                        backgroundColor: active ? palette.accent.primary : palette.bg.muted,
+                        borderColor: active ? palette.accent.primary : palette.border.subtle,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        fontSize: fontSize.sm,
+                        fontWeight: fontWeight.bold,
+                        color: active ? colors.white : palette.text.secondary,
+                      }}
+                    >
+                      {d}
+                    </Text>
+                    <Text style={{ fontSize: 10, color: active ? colors.white : palette.text.tertiary }}>
+                      {pluralDays(d)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        ) : null}
+
+        {/* Source picker */}
+        {segmentKey === 'source' ? (
+          <View style={{ marginTop: spacing[3] }}>
+            <Text style={[styles.subLabel, { color: palette.text.secondary }]}>Источник</Text>
+            {sourcesQuery.isLoading ? (
+              <ActivityIndicator color={palette.accent.primary} style={{ marginVertical: spacing[3] }} />
+            ) : sources.length === 0 ? (
+              <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>Источники не заданы</Text>
+            ) : (
+              <View style={styles.chipWrap}>
+                {sources.map((s) => {
+                  const active = source === s;
+                  return (
+                    <TouchableOpacity
+                      key={s}
+                      onPress={() => {
+                        haptic('select');
+                        setSource(active ? null : s);
+                      }}
+                      style={[
+                        styles.sourceChip,
+                        {
+                          backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
+                          borderColor: active ? palette.accent.primary : palette.border.subtle,
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          fontWeight: '600',
+                          color: active ? palette.accent.primary : palette.text.secondary,
+                        }}
+                      >
+                        {s}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            )}
+          </View>
+        ) : null}
+
+        {/* Manual client multi-select */}
+        {segmentKey === 'clients' ? (
+          <View style={{ marginTop: spacing[3] }}>
+            <View style={[styles.searchRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+              <Ionicons name="search-outline" size={16} color={palette.text.tertiary} />
+              <TextInput
+                value={search}
+                onChangeText={setSearch}
+                style={[styles.searchInput, { color: palette.text.primary }]}
+                placeholder="Имя или телефон"
+                placeholderTextColor={palette.text.tertiary}
+                autoCorrect={false}
+              />
+              {pickedIds.length > 0 ? (
+                <TouchableOpacity onPress={() => setPicked({})} hitSlop={6}>
+                  <Text style={{ fontSize: 12, fontWeight: '600', color: palette.accent.primary }}>Сброс</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            <Text style={[styles.subLabel, { color: palette.text.tertiary, marginTop: spacing[2] }]}>
+              Выбрано: {pickedIds.length}
+            </Text>
+            <View style={{ maxHeight: 240, marginTop: spacing[1] }}>
+              {clientsQuery.isLoading && clients.length === 0 ? (
+                <ActivityIndicator color={palette.accent.primary} style={{ marginVertical: spacing[4] }} />
+              ) : clients.length === 0 ? (
+                <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>Никого не нашли</Text>
+              ) : (
+                <ScrollView
+                  keyboardShouldPersistTaps="handled"
+                  showsVerticalScrollIndicator={false}
+                  nestedScrollEnabled
+                >
+                  {clients.map((c) => {
+                    const active = !!picked[c.id];
+                    return (
+                      <TouchableOpacity
+                        key={c.id}
+                        style={[
+                          styles.clientRow,
+                          {
+                            backgroundColor: active ? palette.accent.primarySoft : palette.bg.card,
+                            borderColor: active ? palette.accent.primary : palette.border.subtle,
+                          },
+                        ]}
+                        onPress={() => togglePick(c)}
+                      >
+                        <View
+                          style={[
+                            styles.checkbox,
+                            active
+                              ? { backgroundColor: palette.accent.primary, borderColor: palette.accent.primary }
+                              : { borderColor: palette.border.strong },
+                          ]}
+                        >
+                          {active ? <Ionicons name="checkmark" size={14} color={colors.white} /> : null}
+                        </View>
+                        <View style={{ flex: 1 }}>
+                          <Text style={[styles.clientName, { color: palette.text.primary }]} numberOfLines={1}>
+                            {c.fullName}
+                          </Text>
+                          <Text style={[styles.clientPhone, { color: palette.text.tertiary }]} numberOfLines={1}>
+                            {c.phone || 'нет телефона'}
+                          </Text>
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
+            </View>
+          </View>
+        ) : null}
+      </AnimatedCard>
+
+      {/* Step 2 — Channel */}
+      <AnimatedCard
+        index={1}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <StepHeader n={2} icon="git-network-outline" title="Канал" hint="Откуда отправить" />
+        <View style={styles.chipWrap}>
+          <ChannelChip
+            label="Авто"
+            icon="flash-outline"
+            active={channelId === null}
+            onPress={() => {
+              haptic('select');
+              setChannelId(null);
+            }}
+          />
+          {channels.map((ch) => {
+            const meta = CHANNEL_META[ch.providerType];
+            return (
+              <ChannelChip
+                key={ch.id}
+                label={meta?.label ?? ch.providerType}
+                icon={meta?.icon ?? 'chatbox-outline'}
+                active={channelId === ch.id}
+                onPress={() => {
+                  haptic('select');
+                  setChannelId(ch.id);
+                }}
+              />
+            );
+          })}
+        </View>
+        {channels.length === 0 ? (
+          <Text style={[styles.channelNote, { color: palette.text.tertiary }]}>
+            Нет подключённых каналов — «Авто» использует канал по умолчанию. Подключить можно в «Интеграции».
+          </Text>
+        ) : (
+          <Text style={[styles.channelNote, { color: palette.text.tertiary }]}>
+            «Авто» — активный канал по умолчанию.
+          </Text>
+        )}
+      </AnimatedCard>
+
+      {/* Step 3 — Message */}
+      <AnimatedCard
+        index={2}
+        style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+      >
+        <StepHeader n={3} icon="document-text-outline" title="Сообщение" hint="Что напишем" />
         <ScrollView
           horizontal
           showsHorizontalScrollIndicator={false}
@@ -563,7 +497,10 @@ function ManualTab({
           {TEMPLATES.map((tpl) => (
             <TouchableOpacity
               key={tpl.id}
-              onPress={() => applyTemplate(tpl)}
+              onPress={() => {
+                haptic('tap');
+                setMessage(tpl.body);
+              }}
               style={[styles.templateChip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
             >
               <Ionicons name="document-text-outline" size={13} color={palette.text.secondary} />
@@ -571,47 +508,55 @@ function ManualTab({
             </TouchableOpacity>
           ))}
         </ScrollView>
-
         <TextInput
           value={message}
           onChangeText={setMessage}
           style={[
             styles.textArea,
-            {
-              backgroundColor: palette.bg.muted,
-              borderColor: palette.border.subtle,
-              color: palette.text.primary,
-            },
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
           ]}
           multiline
-          numberOfLines={5}
+          textAlignVertical="top"
           placeholder="Введите сообщение или выберите шаблон выше"
           placeholderTextColor={palette.text.tertiary}
         />
         <Text style={[styles.varHint, { color: palette.text.tertiary }]}>
-          Переменные {'{имя}'}, {'{авто}'} подставятся для каждого получателя
+          {'{имя}'} и {'{авто}'} подставятся для каждого получателя
         </Text>
       </AnimatedCard>
 
-      {/* Step 3 — Send */}
+      {/* Result */}
+      {result ? (
+        <View style={[styles.resultCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View style={styles.resultRow}>
+            <ResultStat value={result.sent} label="Отправлено" tone="ok" />
+            <ResultStat value={result.skippedDedup} label="Пропущено" tone="muted" />
+            <ResultStat value={result.failed} label="Ошибок" tone={result.failed > 0 ? 'warn' : 'muted'} />
+          </View>
+          {result.skippedDedup > 0 ? (
+            <Text style={[styles.resultNote, { color: palette.text.tertiary }]}>
+              Пропущены дубли — этим клиентам уже писали недавно (анти-спам).
+            </Text>
+          ) : null}
+        </View>
+      ) : null}
+
+      {/* Send */}
       <TouchableOpacity
-        style={[styles.bigSendBtn, { backgroundColor: palette.accent.primary }, !canSend && { opacity: 0.5 }]}
-        disabled={!canSend}
-        onPress={() => {
-          haptic('tap');
-          send.mutate();
-        }}
+        style={[
+          styles.sendBtn,
+          { backgroundColor: palette.accent.primary },
+          (!canSend || send.isPending) && { opacity: 0.5 },
+        ]}
+        disabled={!canSend || send.isPending}
+        onPress={confirmSend}
       >
         {send.isPending ? (
           <ActivityIndicator size="small" color={colors.white} />
         ) : (
           <>
             <Ionicons name="paper-plane" size={18} color={colors.white} />
-            <Text style={styles.bigSendBtnText}>
-              {pickedIds.length > 0
-                ? `Отправить ${pickedIds.length} ${pluralize(pickedIds.length)}`
-                : 'Выберите получателей'}
-            </Text>
+            <Text style={styles.sendBtnText}>Отправить рассылку</Text>
           </>
         )}
       </TouchableOpacity>
@@ -619,139 +564,187 @@ function ManualTab({
   );
 }
 
-function pluralize(n: number): string {
-  const mod10 = n % 10;
-  const mod100 = n % 100;
-  if (mod10 === 1 && mod100 !== 11) return 'сообщение';
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'сообщения';
-  return 'сообщений';
-}
-
-function renderTemplate(tpl: string, client: Client): string {
-  const firstName = client.fullName.split(' ')[0] || client.fullName;
-  const car = client.cars?.[0];
-  const carLabel = car ? car.makeModel || car.plateNumber : 'ваш автомобиль';
-  return tpl
-    .replace(/\{имя\}/g, firstName)
-    .replace(/\{name\}/g, firstName)
-    .replace(/\{авто\}/g, carLabel)
-    .replace(/\{car\}/g, carLabel);
-}
-
-// ─────────────────────────────────────────────────────────────────────
-//  История
-// ─────────────────────────────────────────────────────────────────────
-
-interface ManualHistoryEntry {
-  id: string;
-  sentAt: string;
-  channel: 'sms' | 'whatsapp';
-  audience: number;
-  delivered: number;
-  failed: number;
-  textPreview: string;
-}
-
-function HistoryTab({ history }: { history: ManualHistoryEntry[] }) {
+function ChannelChip({
+  label,
+  icon,
+  active,
+  onPress,
+}: {
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  active: boolean;
+  onPress: () => void;
+}) {
   const palette = useColors();
-  if (history.length === 0) {
-    return (
-      <View style={styles.emptyCard}>
-        <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
-          <Ionicons name="time-outline" size={28} color={palette.text.tertiary} />
-        </View>
-        <Text style={[styles.emptyTitle, { color: palette.text.primary }]}>Здесь будут отправленные рассылки</Text>
-        <Text style={[styles.emptyHint, { color: palette.text.tertiary }]}>История появится после первой отправки</Text>
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={[
+        styles.channelChip,
+        {
+          backgroundColor: active ? palette.accent.primarySoft : palette.bg.muted,
+          borderColor: active ? palette.accent.primary : palette.border.subtle,
+        },
+      ]}
+    >
+      <Ionicons name={icon} size={15} color={active ? palette.accent.primary : palette.text.tertiary} />
+      <Text
+        style={{ fontSize: 13, fontWeight: '600', color: active ? palette.accent.primary : palette.text.secondary }}
+      >
+        {label}
+      </Text>
+    </TouchableOpacity>
+  );
+}
+
+function ResultStat({ value, label, tone }: { value: number; label: string; tone: 'ok' | 'warn' | 'muted' }) {
+  const palette = useColors();
+  const color = tone === 'ok' ? colors.green[600] : tone === 'warn' ? colors.orange[600] : palette.text.secondary;
+  return (
+    <View style={styles.resultStat}>
+      <Text style={[styles.resultValue, { color }]}>{value}</Text>
+      <Text style={[styles.resultLabel, { color: palette.text.tertiary }]}>{label}</Text>
+    </View>
+  );
+}
+
+function StepHeader({
+  n,
+  icon,
+  title,
+  hint,
+}: {
+  n: number;
+  icon: keyof typeof Ionicons.glyphMap;
+  title: string;
+  hint: string;
+}) {
+  const palette = useColors();
+  return (
+    <View style={styles.stepHeader}>
+      <View style={[styles.stepNumber, { backgroundColor: palette.accent.primary }]}>
+        <Text style={styles.stepNumberText}>{n}</Text>
       </View>
-    );
-  }
+      <View style={{ flex: 1 }}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] }}>
+          <Ionicons name={icon} size={15} color={palette.text.primary} />
+          <Text style={[styles.stepTitle, { color: palette.text.primary }]}>{title}</Text>
+        </View>
+        <Text style={[styles.stepHint, { color: palette.text.tertiary }]}>{hint}</Text>
+      </View>
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//  Авто — auto-mailing overview
+// ─────────────────────────────────────────────────────────────────────
+
+const AUTO_META: Record<
+  AutoMailingOverview['type'],
+  { title: string; icon: keyof typeof Ionicons.glyphMap; tint: string }
+> = {
+  review: { title: 'Запрос отзыва', icon: 'star-outline', tint: colors.amber[600] },
+  car_ready: { title: 'Машина готова', icon: 'car-sport-outline', tint: colors.blue[600] },
+  service_reminder: { title: 'Напоминание о визите', icon: 'notifications-outline', tint: colors.violet[600] },
+  installment_reminder: { title: 'Оплата рассрочки', icon: 'card-outline', tint: colors.emerald[700] },
+};
+
+function AutoTab() {
+  const palette = useColors();
+  const navigation = useNavigation<any>();
+
+  const query = useQuery({
+    queryKey: ['marketing-auto-mailings'],
+    queryFn: async () => (await marketingApi.getAutoMailings()).data,
+    staleTime: 30_000,
+  });
+  const items: AutoMailingOverview[] = Array.isArray(query.data) ? query.data : [];
+
   return (
     <View style={{ gap: spacing[3] }}>
-      {history.map((h, idx) => (
-        <AnimatedCard
-          key={h.id}
-          index={idx}
-          style={[styles.histCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-        >
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[3] }}>
-            <View
-              style={[
-                styles.histIcon,
-                {
-                  backgroundColor:
-                    h.channel === 'whatsapp'
-                      ? palette.mode === 'dark'
-                        ? softTint(colors.green[600], 'dark')
-                        : '#dcf8c6'
-                      : palette.accent.primarySoft,
-                },
-              ]}
-            >
-              <Ionicons
-                name={h.channel === 'whatsapp' ? 'logo-whatsapp' : 'chatbox'}
-                size={18}
-                color={
-                  h.channel === 'whatsapp'
-                    ? palette.mode === 'dark'
-                      ? colors.green[400]
-                      : '#075E54'
-                    : palette.accent.primary
-                }
-              />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.histTitle, { color: palette.text.primary }]}>
-                {new Date(h.sentAt).toLocaleString('ru-RU', {
-                  day: 'numeric',
-                  month: 'short',
-                  hour: '2-digit',
-                  minute: '2-digit',
-                })}
-              </Text>
-              <Text style={[styles.histSub, { color: palette.text.tertiary }]}>
-                {h.audience} {pluralize(h.audience)} · доставлено {h.delivered}
-                {h.failed > 0 ? `, ошибок ${h.failed}` : ''}
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.statusPill,
-                h.failed === 0
-                  ? palette.mode === 'dark'
-                    ? { backgroundColor: softTint(colors.green[600], 'dark') }
-                    : styles.statusPillOk
-                  : {
-                      backgroundColor:
-                        palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
-                    },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.statusPillText,
-                  {
-                    color:
-                      h.failed === 0
-                        ? palette.mode === 'dark'
-                          ? colors.green[300]
-                          : colors.green[700]
-                        : palette.mode === 'dark'
-                          ? colors.orange[400]
-                          : colors.orange[700],
-                  },
-                ]}
-              >
-                {h.failed === 0 ? 'Доставлено' : 'Частично'}
-              </Text>
-            </View>
+      {/* Anti-spam trust note */}
+      <View
+        style={[styles.antiSpam, { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary }]}
+      >
+        <Ionicons name="shield-checkmark-outline" size={18} color={palette.accent.primary} />
+        <Text style={[styles.antiSpamText, { color: palette.text.secondary }]}>
+          Клиенту не приходит два сообщения подряд — авто- и ручные рассылки проходят общий анти-спам-фильтр (не чаще
+          одного в сутки).
+        </Text>
+      </View>
+
+      {query.isLoading && items.length === 0 ? (
+        <ActivityIndicator color={palette.accent.primary} style={{ marginTop: spacing[6] }} />
+      ) : items.length === 0 ? (
+        <View style={styles.emptyBlock}>
+          <View style={[styles.emptyIcon, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="notifications-off-outline" size={26} color={palette.text.tertiary} />
           </View>
-          {h.textPreview ? (
-            <Text style={[styles.histPreview, { color: palette.text.secondary }]} numberOfLines={2}>
-              {h.textPreview}
-            </Text>
-          ) : null}
-        </AnimatedCard>
-      ))}
+          <Text style={[styles.emptyTitle, { color: palette.text.primary }]}>Авто-рассылки не настроены</Text>
+          <Text style={[styles.emptyHint, { color: palette.text.tertiary, textAlign: 'center' }]}>
+            Включите их в «Настройки» — там же задаётся текст.
+          </Text>
+        </View>
+      ) : (
+        items.map((it, idx) => {
+          const meta = AUTO_META[it.type];
+          return (
+            <AnimatedCard
+              key={it.type}
+              index={idx}
+              onPress={() => {
+                haptic('tap');
+                navigation.navigate('MarketingSettings');
+              }}
+              style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+            >
+              <View style={styles.autoRow}>
+                <View
+                  style={[
+                    styles.autoIcon,
+                    { backgroundColor: palette.mode === 'dark' ? softTint(meta.tint, 'dark') : `${meta.tint}18` },
+                  ]}
+                >
+                  <Ionicons name={meta.icon} size={20} color={meta.tint} />
+                </View>
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[styles.autoTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                    {meta.title}
+                  </Text>
+                  <Text style={[styles.autoSummary, { color: palette.text.tertiary }]} numberOfLines={2}>
+                    {it.summary}
+                  </Text>
+                </View>
+                <View style={{ alignItems: 'flex-end', gap: 6 }}>
+                  <View
+                    style={[
+                      styles.statePill,
+                      it.enabled
+                        ? {
+                            backgroundColor:
+                              palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
+                          }
+                        : { backgroundColor: palette.bg.muted },
+                    ]}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 10,
+                        fontWeight: fontWeight.bold,
+                        color: it.enabled ? colors.green[700] : palette.text.tertiary,
+                      }}
+                    >
+                      {it.enabled ? 'Вкл' : 'Выкл'}
+                    </Text>
+                  </View>
+                  <Text style={[styles.autoConfigure, { color: palette.accent.primary }]}>Настроить</Text>
+                </View>
+              </View>
+            </AnimatedCard>
+          );
+        })
+      )}
     </View>
   );
 }
@@ -765,10 +758,8 @@ export default function MailingsScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
-  const [activeTab, setActiveTab] = useState<TabKey>('auto');
+  const [activeTab, setActiveTab] = useState<TabKey>('manual');
   const [refreshing, setRefreshing] = useState(false);
-  // History is in-memory only until the backend ships a real endpoint.
-  const [history, setHistory] = useState<ManualHistoryEntry[]>([]);
 
   const tabs: {
     key: TabKey;
@@ -777,17 +768,18 @@ export default function MailingsScreen() {
     iconSolid: keyof typeof Ionicons.glyphMap;
   }[] = useMemo(
     () => [
-      { key: 'auto', label: 'Авто-напоминания', iconOutline: 'notifications-outline', iconSolid: 'notifications' },
       { key: 'manual', label: 'Ручная', iconOutline: 'paper-plane-outline', iconSolid: 'paper-plane' },
-      { key: 'history', label: 'История', iconOutline: 'time-outline', iconSolid: 'time' },
+      { key: 'auto', label: 'Авто', iconOutline: 'notifications-outline', iconSolid: 'notifications' },
     ],
     [],
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await queryClient.invalidateQueries({ queryKey: ['reminder-settings'] });
-    await queryClient.invalidateQueries({ queryKey: ['mailings-clients'] });
+    await Promise.all([
+      queryClient.invalidateQueries({ queryKey: ['marketing-integrations'] }),
+      queryClient.invalidateQueries({ queryKey: ['marketing-auto-mailings'] }),
+    ]);
     setRefreshing(false);
   };
 
@@ -795,7 +787,6 @@ export default function MailingsScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Рассылки" onBack={() => navigation.goBack()} />
 
-      {/* Round capsule segmented control */}
       <View style={styles.tabBarWrap}>
         <View style={[styles.tabBar, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
           {tabs.map((tab) => {
@@ -816,7 +807,6 @@ export default function MailingsScreen() {
                   color={active ? palette.accent.primary : palette.text.tertiary}
                 />
                 <Text
-                  numberOfLines={1}
                   style={[
                     styles.tabText,
                     {
@@ -840,36 +830,9 @@ export default function MailingsScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
         keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
       >
-        {/* Возвращение клиентов — segment broadcast to clients who haven't
-            visited for N days. It's a broadcast, so it belongs under «Рассылки»;
-            the full composer lives on WinbackScreen (owner-class self-gated). */}
-        <TouchableOpacity
-          style={[
-            styles.winbackCard,
-            { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary },
-          ]}
-          activeOpacity={0.85}
-          onPress={() => {
-            haptic('tap');
-            navigation.navigate('Winback');
-          }}
-        >
-          <View style={[styles.winbackIcon, { backgroundColor: palette.accent.primary }]}>
-            <Ionicons name="repeat-outline" size={18} color={colors.white} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.winbackTitle, { color: palette.text.primary }]}>Возвращение клиентов</Text>
-            <Text style={[styles.winbackSub, { color: palette.text.secondary }]}>
-              Напишите тем, кто давно не приезжал
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
-        </TouchableOpacity>
-
-        {activeTab === 'auto' && <AutoTab />}
-        {activeTab === 'manual' && <ManualTab history={history} setHistory={setHistory} />}
-        {activeTab === 'history' && <HistoryTab history={history} />}
+        {activeTab === 'manual' ? <ManualTab /> : <AutoTab />}
       </ScrollView>
     </View>
   );
@@ -881,32 +844,11 @@ export default function MailingsScreen() {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+  scroll: { flex: 1 },
+  scrollContent: { padding: spacing[4] },
 
-  // Возвращение клиентов entry card
-  winbackCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    padding: spacing[3.5],
-    marginBottom: spacing[3],
-  },
-  winbackIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  winbackTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.3 },
-  winbackSub: { fontSize: fontSize.xs, marginTop: 2 },
-
-  // Round capsule segmented control
-  tabBarWrap: {
-    paddingHorizontal: spacing[4],
-    paddingBottom: spacing[2.5],
-  },
+  // Segmented tab control
+  tabBarWrap: { paddingHorizontal: spacing[4], paddingBottom: spacing[2.5] },
   tabBar: {
     flexDirection: 'row',
     borderRadius: borderRadius.full,
@@ -924,149 +866,70 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   tabActive: {
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.08,
-        shadowRadius: 2,
-      },
-      android: { elevation: 1 },
-    }),
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 2,
+    elevation: 1,
   },
-  tabText: { fontSize: 12.5 },
+  tabText: { fontSize: 13 },
 
-  scroll: { flex: 1 },
-  scrollContent: { padding: spacing[4] },
+  card: { borderRadius: borderRadius['2xl'], borderWidth: 1, padding: spacing[4] },
 
-  // Generic card
-  card: {
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    padding: spacing[4],
-  },
-  sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, marginBottom: spacing[3] },
-  sectionHeaderRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    marginBottom: spacing[3],
-  },
+  // Step header
+  stepHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], marginBottom: spacing[3] },
+  stepNumber: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  stepNumberText: { color: colors.white, fontSize: 13, fontWeight: '700' },
+  stepTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
+  stepHint: { fontSize: 11, marginTop: 2 },
 
-  // Big toggle card (Авто-напоминания master switch)
-  bigToggleCard: {
+  // Segment rows
+  segmentRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[3],
-    borderRadius: borderRadius['2xl'],
+    borderRadius: borderRadius.lg,
     borderWidth: 1,
-    padding: spacing[4],
+    padding: spacing[3],
   },
-  bigToggleIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bigToggleTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
-  bigToggleSub: { fontSize: 12, marginTop: 2 },
+  segmentTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  segmentSub: { fontSize: 11, marginTop: 2 },
+  radio: { width: 20, height: 20, borderRadius: 10, borderWidth: 1.5, alignItems: 'center', justifyContent: 'center' },
 
-  // iOS-style switch
-  switchTrack: {
-    width: 44,
-    height: 26,
-    borderRadius: 13,
-    justifyContent: 'center',
-  },
-  switchThumb: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#ffffff',
-    ...Platform.select({
-      ios: {
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.15,
-        shadowRadius: 2,
-      },
-      android: { elevation: 2 },
-    }),
-  },
+  subLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
 
-  // Interval chips
-  intervalChip: {
+  // Day chips
+  dayChip: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 0,
-    paddingVertical: spacing[3],
-    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
     borderWidth: 1,
   },
 
-  // Variables
-  varHint: { fontSize: 11, marginTop: spacing[2], marginBottom: spacing[2] },
-  varRow: { flexDirection: 'row', gap: spacing[2], flexWrap: 'wrap' },
-  varChip: {
+  // Source chips
+  chipWrap: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
+  sourceChip: {
     paddingHorizontal: spacing[3],
-    paddingVertical: spacing[1.5],
+    paddingVertical: spacing[2],
     borderRadius: borderRadius.full,
     borderWidth: 1,
   },
 
-  // Action row (Save + Send now)
-  actionsRow: { flexDirection: 'row', gap: spacing[2] },
-  actionBtnPrimary: {
-    flex: 1,
+  // Channel chips
+  channelChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
-    borderRadius: borderRadius.xl,
-    paddingVertical: spacing[3.5],
-  },
-  actionBtnPrimaryText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
-  actionBtnSecondary: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
-    borderRadius: borderRadius.xl,
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.full,
     borderWidth: 1,
-    paddingVertical: spacing[3.5],
   },
-  actionBtnSecondaryText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  channelNote: { fontSize: 11, marginTop: spacing[2.5], lineHeight: 15 },
 
-  resultText: { fontSize: 12, textAlign: 'center', marginTop: spacing[2] },
-
-  // Step cards
-  stepCard: {
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    padding: spacing[4],
-  },
-  stepHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[3],
-    marginBottom: spacing[3],
-  },
-  stepNumber: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  stepNumberText: { color: colors.white, fontSize: 13, fontWeight: '700' },
-  stepTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
-  stepCount: { fontSize: 11, marginTop: 2 },
-  stepClear: { fontSize: 12, fontWeight: '600' },
-
-  // Search
+  // Client picker
   searchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1077,9 +940,6 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
   },
   searchInput: { flex: 1, fontSize: fontSize.sm, padding: 0 },
-  helperText: { fontSize: fontSize.xs, paddingVertical: spacing[3], textAlign: 'center' },
-
-  // Client picker rows
   clientRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1101,19 +961,7 @@ const styles = StyleSheet.create({
   clientName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   clientPhone: { fontSize: fontSize.xs, marginTop: 1 },
 
-  // Channel chip
-  channelChip: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
-    paddingVertical: spacing[2.5],
-    borderRadius: borderRadius.lg,
-    borderWidth: 1,
-  },
-
-  // Template chip
+  // Templates + message
   templateChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1123,18 +971,25 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
     borderWidth: 1,
   },
-
   textArea: {
     borderWidth: 1,
     borderRadius: borderRadius.xl,
     padding: spacing[3],
     fontSize: fontSize.sm,
-    textAlignVertical: 'top',
     minHeight: 110,
   },
+  varHint: { fontSize: 11, marginTop: spacing[2] },
 
-  // Big send button at bottom of step flow
-  bigSendBtn: {
+  // Result
+  resultCard: { borderRadius: borderRadius['2xl'], borderWidth: 1, padding: spacing[4] },
+  resultRow: { flexDirection: 'row' },
+  resultStat: { flex: 1, alignItems: 'center' },
+  resultValue: { fontSize: 24, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  resultLabel: { fontSize: 11, marginTop: 2 },
+  resultNote: { fontSize: 11, marginTop: spacing[3], lineHeight: 15, textAlign: 'center' },
+
+  // Send
+  sendBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
@@ -1142,41 +997,30 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
     paddingVertical: spacing[4],
   },
-  bigSendBtnText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.bold },
+  sendBtnText: { color: colors.white, fontSize: fontSize.base, fontWeight: fontWeight.bold },
 
-  // History
-  histCard: {
+  // Anti-spam note
+  antiSpam: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2.5],
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,
-    padding: spacing[4],
+    padding: spacing[3.5],
   },
-  histIcon: {
-    width: 38,
-    height: 38,
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  histTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  histSub: { fontSize: fontSize.xs, marginTop: 2 },
-  histPreview: { fontSize: fontSize.xs, marginTop: spacing[3], lineHeight: 18 },
-  statusPill: { paddingHorizontal: spacing[2.5], paddingVertical: 4, borderRadius: borderRadius.full },
-  statusPillOk: { backgroundColor: colors.green[50] },
-  statusPillText: { fontSize: 10, fontWeight: fontWeight.semibold },
+  antiSpamText: { flex: 1, fontSize: fontSize.xs, lineHeight: 17 },
+
+  // Auto rows
+  autoRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  autoIcon: { width: 44, height: 44, borderRadius: borderRadius.xl, alignItems: 'center', justifyContent: 'center' },
+  autoTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
+  autoSummary: { fontSize: fontSize.xs, marginTop: 2, lineHeight: 16 },
+  statePill: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
+  autoConfigure: { fontSize: 12, fontWeight: '600' },
 
   // Empty
-  emptyCard: {
-    alignItems: 'center',
-    paddingVertical: spacing[12],
-    gap: spacing[3],
-  },
-  emptyIcon: {
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
+  emptyBlock: { alignItems: 'center', paddingVertical: spacing[10], gap: spacing[3] },
+  emptyIcon: { width: 56, height: 56, borderRadius: 28, alignItems: 'center', justifyContent: 'center' },
   emptyTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
-  emptyHint: { fontSize: fontSize.sm, textAlign: 'center', maxWidth: 280 },
+  emptyHint: { fontSize: fontSize.sm, maxWidth: 280 },
 });

@@ -2,14 +2,17 @@
  * IntegrationsScreen — "Интеграции".
  *
  * Visual catalogue of available providers grouped by category:
- *   • Телефония и звонки    — МоиЗвонки (SMS+phone), Мегафон ВАТС
- *   • Мессенджеры           — WhatsApp Cloud API, Telegram (бот → чат персонала)
- *   • Автоуведомления       — «Машина готова» (toggle + шаблон сообщения)
- *   • Площадки отзывов      — Google / Яндекс / 2GIS / Авито (URL only)
+ *   • Онлайн-касса          — 54-ФЗ фискализация (→ PaymentIntegrations)
+ *   • Эквайринг             — приём оплат картой/СБП + Apple Wallet (→ PaymentIntegrations)
+ *   • Телефония             — МоиЗвонки (SMS+phone), Мегафон ВАТС, Mango Office
+ *   • Каналы рассылок       — WhatsApp Cloud API, SMS.RU, Telegram (бот → чат персонала)
+ *
+ * Автоуведомления «Машина готова» и площадки отзывов переехали в «Настройки»
+ * (MarketingSettings) — этот экран теперь про подключение каналов, а не про их
+ * настройку.
  *
  * Provider cards render the connection status pulled from
- * `marketingApi.getIntegrations()` for messaging providers and from
- * `marketingApi.getPlatformLinks()` for review platforms. Tapping a card
+ * `marketingApi.getIntegrations()` for messaging providers. Tapping a card
  * opens a configuration modal where the owner can:
  *   • paste an API key / token (password input);
  *   • copy the webhook URL (auto-populated);
@@ -62,7 +65,7 @@ import AnimatedCard from '../components/AnimatedCard';
 import Modal from '../components/Modal';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import type { MessagingIntegration, ReviewPlatformLink, TelephonySettings } from '../../../shared/types';
+import type { MessagingIntegration, TelephonySettings } from '../../../shared/types';
 
 // ─────────────────────────────────────────────────────────────────────
 //  Provider catalogue
@@ -149,70 +152,16 @@ const MESSENGER_PROVIDERS: ProviderDef[] = [
     needsChatId: true,
     hint: 'Telegram отправляет уведомления в чат владельца/персонала, не клиенту',
   },
-];
-
-interface PlatformDef {
-  key: string; // db platform value or 'avito'
-  name: string;
-  description: string;
-  iconName: keyof typeof import('@expo/vector-icons/build/Ionicons').default.glyphMap;
-  tone: { bg: string; fg: string };
-  /** False when backend has no DB row for this platform. */
-  supported: boolean;
-}
-
-// Placeholder + hint per platform — picked to match the canonical
-// profile URL format the owner is most likely to paste, so the input
-// hints at what's expected without forcing format validation.
-const PLATFORM_PLACEHOLDERS: Record<string, string> = {
-  google: 'https://maps.google.com/...',
-  yandex: 'https://yandex.ru/maps/org/...',
-  '2gis': 'https://2gis.ru/...',
-  avito: 'https://www.avito.ru/avtomoyka_xxx',
-};
-const PLATFORM_HINTS: Record<string, string> = {
-  avito: 'Откройте свой профиль на Авито и скопируйте URL из адресной строки',
-  google: 'Откройте свою карточку в Google Maps и скопируйте URL',
-  yandex: 'Откройте свою карточку в Яндекс.Картах и скопируйте URL',
-  '2gis': 'Откройте свою карточку в 2GIS и скопируйте URL',
-};
-
-const PLATFORMS: PlatformDef[] = [
   {
-    key: 'google',
-    name: 'Google Business',
-    description: 'Профиль компании в Google Maps',
-    // Lucide has no Google brand mark — fall back to a globe which our
-    // shim already maps. `logo-google` resolves to Globe via the map.
-    iconName: 'logo-google',
-    tone: { bg: '#dbeafe', fg: '#1d4ed8' },
-    supported: true,
-  },
-  {
-    key: 'yandex',
-    name: 'Яндекс Бизнес',
-    description: 'Карточка в Яндекс Картах',
-    iconName: 'globe-outline',
-    tone: { bg: '#fee2e2', fg: '#b91c1c' },
-    supported: true,
-  },
-  {
-    key: '2gis',
-    name: '2GIS',
-    description: 'Профиль в справочнике 2GIS',
-    iconName: 'map-outline',
-    tone: { bg: '#dcfce7', fg: '#16a34a' },
-    supported: true,
-  },
-  {
-    key: 'avito',
-    name: 'Авито',
-    description: 'Профиль автосервиса на Авито',
-    iconName: 'storefront-outline',
-    tone: { bg: '#dbeafe', fg: '#2563eb' },
-    // Migration 054 added 'avito' to the platform CHECK constraint —
-    // it's a first-class platform now.
-    supported: true,
+    key: 'smsru',
+    dbType: 'smsru',
+    kind: 'whatsapp',
+    name: 'SMS.RU',
+    description: 'Массовые SMS-рассылки клиентам',
+    iconName: 'chatbox-ellipses-outline',
+    tone: { bg: colors.blue[50], fg: colors.blue[600] },
+    apiKeyLabel: 'API ID',
+    needsName: true,
   },
 ];
 
@@ -337,61 +286,6 @@ function StatusPill({ kind }: { kind: 'ok' | 'warn' | 'off' }) {
       <View style={[styles.statusDot, { backgroundColor: map.dot }]} />
       <Text style={[styles.statusPillText, { color: map.fg }]}>{map.label}</Text>
     </View>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────
-//  Platform card
-// ─────────────────────────────────────────────────────────────────────
-
-interface PlatformCardProps {
-  platform: PlatformDef;
-  link?: ReviewPlatformLink;
-  onPress: () => void;
-  index: number;
-}
-
-function PlatformCard({ platform, link, onPress, index }: PlatformCardProps) {
-  const palette = useColors();
-  const connected = !!link?.url;
-  return (
-    <AnimatedCard
-      index={index}
-      onPress={onPress}
-      style={[styles.providerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-    >
-      <View style={styles.providerCardRow}>
-        <View
-          style={[
-            styles.providerLogo,
-            { backgroundColor: palette.mode === 'dark' ? softTint(platform.tone.fg, 'dark') : platform.tone.bg },
-          ]}
-        >
-          <Ionicons
-            name={platform.iconName as any}
-            size={22}
-            color={palette.mode === 'dark' ? platform.tone.bg : platform.tone.fg}
-          />
-        </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={[styles.providerName, { color: palette.text.primary }]} numberOfLines={1}>
-            {platform.name}
-          </Text>
-          <Text style={[styles.providerDesc, { color: palette.text.tertiary }]} numberOfLines={2}>
-            {platform.description}
-          </Text>
-          <View style={styles.providerMeta}>
-            <StatusPill kind={!platform.supported ? 'warn' : connected ? 'ok' : 'off'} />
-            {connected && link?.url && (
-              <Text style={[styles.providerActive, { color: palette.text.tertiary }]} numberOfLines={1}>
-                · {link.url.replace(/^https?:\/\//, '').slice(0, 30)}
-              </Text>
-            )}
-          </View>
-        </View>
-        <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
-      </View>
-    </AnimatedCard>
   );
 }
 
@@ -860,195 +754,6 @@ function ProviderModal({
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  Platform link modal
-// ─────────────────────────────────────────────────────────────────────
-
-function PlatformModal({
-  platform,
-  existing,
-  onClose,
-}: {
-  platform: PlatformDef | null;
-  existing?: ReviewPlatformLink;
-  onClose: () => void;
-}) {
-  const palette = useColors();
-  const queryClient = useQueryClient();
-  const [url, setUrl] = useState('');
-  const [isActive, setIsActive] = useState(true);
-
-  React.useEffect(() => {
-    if (!platform) return;
-    setUrl(existing?.url || '');
-    setIsActive(existing?.isActive ?? true);
-  }, [platform, existing]);
-
-  const save = useMutation({
-    mutationFn: () => marketingApi.upsertPlatformLink({ platform: platform!.key, url: url.trim(), isActive }),
-    onSuccess: () => {
-      haptic('success');
-      queryClient.invalidateQueries({ queryKey: ['marketing-platform-links'] });
-      Alert.alert('Готово', 'Ссылка сохранена');
-      onClose();
-    },
-    onError: (e: any) => {
-      haptic('error');
-      Alert.alert('Ошибка', e?.response?.data?.message || 'Не удалось сохранить');
-    },
-  });
-
-  const remove = useMutation({
-    mutationFn: () => marketingApi.removePlatformLink(existing!.id),
-    onSuccess: () => {
-      haptic('success');
-      queryClient.invalidateQueries({ queryKey: ['marketing-platform-links'] });
-      onClose();
-    },
-    onError: () => Alert.alert('Ошибка', 'Не удалось удалить'),
-  });
-
-  if (!platform) return null;
-
-  // Dead branch in 2026-05 — all current platforms are `supported: true`
-  // after migration 054 added Avito to the CHECK constraint. Kept as a
-  // safety net so a future "we added a platform but its DB enum isn't
-  // ready yet" doesn't crash the modal — it just shows a notice.
-  if (!platform.supported) {
-    return (
-      <Modal visible={!!platform} onClose={onClose} title={platform.name}>
-        <View style={styles.modalHeaderBlock}>
-          <View
-            style={[
-              styles.modalLogo,
-              { backgroundColor: palette.mode === 'dark' ? softTint(platform.tone.fg, 'dark') : platform.tone.bg },
-            ]}
-          >
-            <Ionicons
-              name={platform.iconName as any}
-              size={26}
-              color={palette.mode === 'dark' ? platform.tone.bg : platform.tone.fg}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>{platform.description}</Text>
-          </View>
-        </View>
-        <View style={[styles.notice, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}>
-          <Ionicons name="information-circle-outline" size={16} color={palette.text.secondary} />
-          <Text style={[styles.noticeText, { color: palette.text.secondary }]}>
-            Эта интеграция временно недоступна. Попробуйте позже.
-          </Text>
-        </View>
-      </Modal>
-    );
-  }
-
-  return (
-    <Modal visible={!!platform} onClose={onClose} title={platform.name}>
-      <View style={styles.modalHeaderBlock}>
-        <View
-          style={[
-            styles.modalLogo,
-            { backgroundColor: palette.mode === 'dark' ? softTint(platform.tone.fg, 'dark') : platform.tone.bg },
-          ]}
-        >
-          <Ionicons
-            name={platform.iconName as any}
-            size={26}
-            color={palette.mode === 'dark' ? platform.tone.bg : platform.tone.fg}
-          />
-        </View>
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>{platform.description}</Text>
-        </View>
-      </View>
-
-      <View style={styles.formField}>
-        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Ссылка на профиль / страницу отзывов</Text>
-        <TextInput
-          value={url}
-          onChangeText={setUrl}
-          style={[
-            styles.formInput,
-            {
-              backgroundColor: palette.bg.muted,
-              borderColor: palette.border.subtle,
-              color: palette.text.primary,
-            },
-          ]}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="url"
-          placeholder={PLATFORM_PLACEHOLDERS[platform.key] || 'https://...'}
-          placeholderTextColor={palette.text.tertiary}
-        />
-        {PLATFORM_HINTS[platform.key] ? (
-          <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
-            {PLATFORM_HINTS[platform.key]}
-          </Text>
-        ) : null}
-      </View>
-
-      <TouchableOpacity
-        style={[styles.activeRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-        onPress={() => {
-          haptic('select');
-          setIsActive((v) => !v);
-        }}
-      >
-        <Text style={[styles.activeLabel, { color: palette.text.primary }]}>Показывать в воронке</Text>
-        <View
-          style={[styles.switchTrack, { backgroundColor: isActive ? palette.accent.primary : palette.border.strong }]}
-        >
-          <View style={[styles.switchThumb, { transform: [{ translateX: isActive ? 20 : 2 }] }]} />
-        </View>
-      </TouchableOpacity>
-
-      <TouchableOpacity
-        style={[
-          styles.primaryBtn,
-          { backgroundColor: palette.accent.primary, marginTop: spacing[3] },
-          save.isPending && { opacity: 0.6 },
-        ]}
-        onPress={() => {
-          if (!url.trim()) {
-            Alert.alert('Ошибка', 'Введите ссылку');
-            return;
-          }
-          save.mutate();
-        }}
-        disabled={save.isPending}
-      >
-        {save.isPending ? (
-          <ActivityIndicator size="small" color={colors.white} />
-        ) : (
-          <>
-            <Ionicons name="checkmark" size={16} color={colors.white} />
-            <Text style={styles.primaryBtnText}>Сохранить</Text>
-          </>
-        )}
-      </TouchableOpacity>
-
-      {existing && (
-        <TouchableOpacity
-          style={[styles.dangerBtn, remove.isPending && { opacity: 0.6 }]}
-          onPress={() => {
-            Alert.alert('Удалить ссылку', `Убрать ${platform.name} из списка?`, [
-              { text: 'Отмена', style: 'cancel' },
-              { text: 'Удалить', style: 'destructive', onPress: () => remove.mutate() },
-            ]);
-          }}
-          disabled={remove.isPending}
-        >
-          <Ionicons name="trash-outline" size={16} color={colors.red[600]} />
-          <Text style={[styles.secondaryBtnText, { color: colors.red[700] }]}>Удалить</Text>
-        </TouchableOpacity>
-      )}
-    </Modal>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────
 //  Screen
 // ─────────────────────────────────────────────────────────────────────
 
@@ -1058,30 +763,21 @@ export default function IntegrationsScreen() {
   const tabBarHeight = useTabBarHeight();
 
   const [openProvider, setOpenProvider] = useState<ProviderDef | null>(null);
-  const [openPlatform, setOpenPlatform] = useState<PlatformDef | null>(null);
 
   const integrationsQuery = useQuery({
     queryKey: ['marketing-integrations'],
     queryFn: async () => (await marketingApi.getIntegrations()).data,
     staleTime: 60_000,
   });
-  const platformsQuery = useQuery({
-    queryKey: ['marketing-platform-links'],
-    queryFn: async () => (await marketingApi.getPlatformLinks()).data,
-    staleTime: 60_000,
-  });
 
   const integrations: MessagingIntegration[] = Array.isArray(integrationsQuery.data) ? integrationsQuery.data : [];
-  const platformLinks: ReviewPlatformLink[] = Array.isArray(platformsQuery.data) ? platformsQuery.data : [];
 
   // Find which DB row matches each visual provider card. We key by
   // `dbType` because the DB only stores the enum, not our visual key.
   const findIntegration = (p: ProviderDef): MessagingIntegration | undefined =>
     integrations.find((i) => i.providerType === p.dbType);
 
-  const findLink = (p: PlatformDef): ReviewPlatformLink | undefined => platformLinks.find((l) => l.platform === p.key);
-
-  const loading = integrationsQuery.isLoading || platformsQuery.isLoading;
+  const loading = integrationsQuery.isLoading;
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -1092,15 +788,32 @@ export default function IntegrationsScreen() {
         contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
       >
         <Text style={[styles.heroSub, { color: palette.text.secondary }]}>
-          Подключайте сервисы — приём оплат, касса, звонки, мессенджеры, отзывы
+          Подключайте сервисы — приём оплат, касса, звонки и каналы рассылок
         </Text>
 
-        {/* Приём оплат и касса — money integrations live on their own settings
+        {/* 1. Онлайн-касса 54-ФЗ — the fiscalization settings live on their own
             screen (PaymentIntegrations) because their secrets + long forms differ
-            from the messaging flow. Surfaced here so EVERY integration — including
-            эквайринг (ЮKassa/Тинькофф) и онлайн-касса 54-ФЗ (АТОЛ) — is reachable
-            from one «Интеграции» roof. The target screen self-gates to owner-class. */}
-        <SectionHeader title="Приём оплат и касса" hint="Деньги и фискализация" />
+            from the messaging flow. Surfaced here so it's reachable from one
+            «Интеграции» roof. The target screen self-gates to owner-class. */}
+        <SectionHeader title="Онлайн-касса" hint="54-ФЗ · фискализация" />
+        <View style={{ gap: spacing[2.5] }}>
+          <MoneyEntryCard
+            index={0}
+            name="Онлайн-касса 54-ФЗ"
+            description="АТОЛ Онлайн — фискализация чеков"
+            iconName="receipt-outline"
+            tone={{ bg: colors.green[50], fg: colors.green[600] }}
+            onPress={() => {
+              haptic('tap');
+              navigation.navigate('PaymentIntegrations');
+            }}
+          />
+        </View>
+        <View style={{ height: spacing[5] }} />
+
+        {/* 2. Эквайринг — приём оплат картой/СБП + Apple Wallet. Same target
+            screen (PaymentIntegrations), grouped apart from фискализация. */}
+        <SectionHeader title="Эквайринг" hint="Приём оплат картой и СБП" />
         <View style={{ gap: spacing[2.5] }}>
           <MoneyEntryCard
             index={0}
@@ -1115,17 +828,6 @@ export default function IntegrationsScreen() {
           />
           <MoneyEntryCard
             index={1}
-            name="Онлайн-касса 54-ФЗ"
-            description="АТОЛ Онлайн — фискализация чеков"
-            iconName="receipt-outline"
-            tone={{ bg: colors.green[50], fg: colors.green[600] }}
-            onPress={() => {
-              haptic('tap');
-              navigation.navigate('PaymentIntegrations');
-            }}
-          />
-          <MoneyEntryCard
-            index={2}
             name="Apple Wallet"
             description="Карта лояльности клиента (.pkpass)"
             iconName="wallet-outline"
@@ -1138,12 +840,12 @@ export default function IntegrationsScreen() {
         </View>
         <View style={{ height: spacing[5] }} />
 
-        {loading && integrations.length === 0 && platformLinks.length === 0 ? (
+        {loading && integrations.length === 0 ? (
           <ActivityIndicator color={palette.accent.primary} style={{ marginTop: spacing[8] }} />
         ) : (
           <>
-            {/* Phone providers */}
-            <SectionHeader title="Телефония и звонки" hint="Звонки и SMS" />
+            {/* 3. Телефония — phone providers + Mango Office */}
+            <SectionHeader title="Телефония" hint="Звонки и SMS" />
             <View style={{ gap: spacing[2.5] }}>
               {PHONE_PROVIDERS.map((p, idx) => (
                 <ProviderCard
@@ -1165,9 +867,9 @@ export default function IntegrationsScreen() {
             <View style={{ height: spacing[2.5] }} />
             <MangoSection />
 
-            {/* Messengers — WhatsApp Cloud API + Telegram */}
+            {/* 4. Каналы рассылок — WhatsApp Cloud API + SMS.RU + Telegram */}
             <View style={{ height: spacing[5] }} />
-            <SectionHeader title="Мессенджеры" hint="WhatsApp и Telegram" />
+            <SectionHeader title="Каналы рассылок" hint="WhatsApp · SMS.RU · Telegram" />
             <View style={{ gap: spacing[2.5] }}>
               {MESSENGER_PROVIDERS.map((p, idx) => (
                 <ProviderCard
@@ -1178,30 +880,7 @@ export default function IntegrationsScreen() {
                     haptic('tap');
                     setOpenProvider(p);
                   }}
-                  index={idx + 2}
-                />
-              ))}
-            </View>
-
-            {/* «Машина готова» auto-notification */}
-            <View style={{ height: spacing[5] }} />
-            <SectionHeader title="Автоуведомления" hint="Когда машина готова" />
-            <CarReadySection />
-
-            {/* Platforms */}
-            <View style={{ height: spacing[5] }} />
-            <SectionHeader title="Площадки отзывов" hint="Профили компании" />
-            <View style={{ gap: spacing[2.5] }}>
-              {PLATFORMS.map((p, idx) => (
-                <PlatformCard
-                  key={p.key}
-                  platform={p}
-                  link={findLink(p)}
-                  onPress={() => {
-                    haptic('tap');
-                    setOpenPlatform(p);
-                  }}
-                  index={idx + 4}
+                  index={idx}
                 />
               ))}
             </View>
@@ -1214,149 +893,6 @@ export default function IntegrationsScreen() {
         existing={openProvider ? findIntegration(openProvider) : undefined}
         onClose={() => setOpenProvider(null)}
       />
-      <PlatformModal
-        platform={openPlatform}
-        existing={openPlatform ? findLink(openPlatform) : undefined}
-        onClose={() => setOpenPlatform(null)}
-      />
-    </View>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────
-//  «Машина готова» auto-notification section
-// ─────────────────────────────────────────────────────────────────────
-
-const DEFAULT_CAR_READY_TEMPLATE =
-  'Здравствуйте, {clientName}! Ваш автомобиль {car} готов к выдаче. Заказ-наряд №{number}. Спасибо, что выбрали нас!';
-
-const CAR_READY_PLACEHOLDERS = '{number} — номер заказа · {car} — авто · {clientName} — имя клиента';
-
-function CarReadySection() {
-  const palette = useColors();
-  const queryClient = useQueryClient();
-
-  const [enabled, setEnabled] = useState(false);
-  const [template, setTemplate] = useState(DEFAULT_CAR_READY_TEMPLATE);
-  // Hydrate the form once from the server, then let the owner edit freely —
-  // a background refetch must not clobber unsaved keystrokes.
-  const hydrated = React.useRef(false);
-
-  const settingsQuery = useQuery({
-    queryKey: ['marketing-car-ready'],
-    queryFn: async () => (await marketingApi.getCarReadySettings()).data,
-    staleTime: 60_000,
-  });
-
-  React.useEffect(() => {
-    if (settingsQuery.data && !hydrated.current) {
-      hydrated.current = true;
-      setEnabled(!!settingsQuery.data.enabled);
-      setTemplate(settingsQuery.data.messageTemplate || DEFAULT_CAR_READY_TEMPLATE);
-    }
-  }, [settingsQuery.data]);
-
-  const save = useMutation({
-    mutationFn: () =>
-      marketingApi.updateCarReadySettings({
-        enabled,
-        messageTemplate: template.trim() || DEFAULT_CAR_READY_TEMPLATE,
-      }),
-    onSuccess: () => {
-      haptic('success');
-      queryClient.invalidateQueries({ queryKey: ['marketing-car-ready'] });
-      Alert.alert('Готово', 'Настройки уведомления сохранены');
-    },
-    onError: (e: any) => {
-      haptic('error');
-      Alert.alert('Ошибка', e?.response?.data?.message || 'Не удалось сохранить');
-    },
-  });
-
-  const handleSave = () => {
-    if (enabled && !template.trim()) {
-      Alert.alert('Ошибка', 'Введите текст уведомления');
-      return;
-    }
-    save.mutate();
-  };
-
-  return (
-    <View style={[styles.carReadyCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-      {/* Enable toggle */}
-      <TouchableOpacity
-        style={[styles.activeRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-        onPress={() => {
-          haptic('select');
-          setEnabled((v) => !v);
-        }}
-        accessibilityRole="switch"
-        accessibilityState={{ checked: enabled }}
-      >
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.activeLabel, { color: palette.text.primary }]}>Уведомлять клиента</Text>
-          <Text style={[styles.activeSub, { color: palette.text.tertiary }]}>
-            Сообщение уйдёт автоматически, когда машина переходит в статус «Готова»
-          </Text>
-        </View>
-        <View
-          style={[styles.switchTrack, { backgroundColor: enabled ? palette.accent.primary : palette.border.strong }]}
-        >
-          <View style={[styles.switchThumb, { transform: [{ translateX: enabled ? 20 : 2 }] }]} />
-        </View>
-      </TouchableOpacity>
-
-      {/* Template editor */}
-      <View style={styles.formField}>
-        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Текст сообщения</Text>
-        <TextInput
-          value={template}
-          onChangeText={setTemplate}
-          style={[
-            styles.formInput,
-            styles.templateInput,
-            {
-              backgroundColor: palette.bg.muted,
-              borderColor: palette.border.subtle,
-              color: palette.text.primary,
-            },
-          ]}
-          multiline
-          textAlignVertical="top"
-          placeholder={DEFAULT_CAR_READY_TEMPLATE}
-          placeholderTextColor={palette.text.tertiary}
-        />
-        <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
-          Переменные: {CAR_READY_PLACEHOLDERS}
-        </Text>
-      </View>
-
-      {/* Channel note */}
-      <View style={[styles.notice, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}>
-        <Ionicons name="information-circle-outline" size={16} color={palette.text.secondary} />
-        <Text style={[styles.noticeText, { color: palette.text.secondary }]}>
-          Отправляется через активный канал (WhatsApp / Telegram / SMS). Подключите его выше.
-        </Text>
-      </View>
-
-      <TouchableOpacity
-        style={[
-          styles.primaryBtn,
-          { backgroundColor: palette.accent.primary, marginTop: spacing[3] },
-          save.isPending && { opacity: 0.6 },
-        ]}
-        onPress={handleSave}
-        disabled={save.isPending || settingsQuery.isLoading}
-      >
-        {save.isPending ? (
-          <ActivityIndicator size="small" color={colors.white} />
-        ) : (
-          <>
-            <Ionicons name="checkmark" size={16} color={colors.white} />
-            <Text style={styles.primaryBtnText}>Сохранить</Text>
-          </>
-        )}
-      </TouchableOpacity>
     </View>
   );
 }

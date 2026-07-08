@@ -1,26 +1,32 @@
 /**
  * MarketingScreen — «Маркетинг» hub.
  *
- * The owner kept getting lost in a single jumbled «Маркетинг» list that
- * mixed analytics, integration keys, review settings and broadcasts. This
- * screen is now a clean hub that routes into exactly four well-labelled
- * directions, each its own sub-screen:
+ * The owner called the old Маркетинг a «франкенштейн модулей без структуры»:
+ * analytics, integration keys, review texts, платёжки and broadcasts were all
+ * jumbled together. This hub is now a calm, grouped index — each row opens a
+ * single, well-scoped screen, and every configuration surface has exactly one
+ * home:
  *
- *   1. Маркетинговые отчёты  → MarketingReports     (analytics, read-only)
- *   2. Отзывы и репутация    → ReviewsReputation    (collect reviews, площадки)
- *   3. Интеграции            → Integrations         (ALL integrations: касса 54-ФЗ,
- *                                                    эквайринг, мессенджеры, телефония)
- *   4. Рассылки              → Mailings             (авто/ручные рассылки, шаблоны)
+ *   АНАЛИТИКА
+ *     • Отчёты                → MarketingReports    (analytics, read-only)
  *
- * Звонки (call journal) stays a sibling row in the «Ещё» menu — it's a
- * daily-use log, not a marketing setting. PaymentIntegrations is reached
- * from inside «Интеграции» so every integration lives under one roof.
+ *   РАБОТА С КЛИЕНТАМИ
+ *     • Отзывы и репутация    → ReviewsReputation   (лента, рейтинг мастеров,
+ *                                                    подарок за отзыв, запрос)
+ *     • Рассылки              → Mailings            (сегментная + авто-рассылки)
+ *     • Лояльность            → Loyalty             (бонусы / кешбэк)
  *
- * Owner-class gating: «Интеграции» and «Рассылки» configure API keys /
- * outbound messaging, so they stay director/admin/superadmin only — exactly
- * the access the previous separate menu rows had. «Отчёты» and «Отзывы»
- * stay open to anyone who can see the Маркетинг section (matching the old
- * always-open «Отзывы и репутация» entry).
+ *   ПОДКЛЮЧЕНИЯ И НАСТРОЙКИ
+ *     • Интеграции            → Integrations        (телефония, каналы рассылок,
+ *                                                    онлайн-касса 54-ФЗ, эквайринг)
+ *     • Настройки             → MarketingSettings   (площадки отзывов + все тексты:
+ *                                                    отзыв, машина готова, визит,
+ *                                                    рассрочка)
+ *
+ * Gating: reading (отчёты, отзывы) is open to anyone who can see Маркетинг;
+ * everything that configures outbound messaging / API keys / money settings
+ * (рассылки, лояльность, интеграции, настройки) stays owner-class
+ * (director / admin / superadmin) — the same access the old menu rows had.
  */
 import React from 'react';
 import { View, ScrollView, StyleSheet } from 'react-native';
@@ -32,6 +38,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
+import SectionHeader from '../components/SectionHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import { UserRole } from '../../../shared/types';
@@ -48,44 +55,88 @@ interface Direction {
   ownerOnly?: boolean;
 }
 
-const DIRECTIONS: Direction[] = [
+interface Group {
+  key: string;
+  title: string;
+  items: Direction[];
+}
+
+const GROUPS: Group[] = [
   {
-    key: 'reports',
-    label: 'Маркетинговые отчёты',
-    description: 'Аналитика отзывов, рейтинги, воронка',
-    screen: 'MarketingReports',
-    icon: 'stats-chart-outline',
-    iconBg: colors.violet[50],
-    iconColor: colors.violet[600],
+    key: 'analytics',
+    title: 'Аналитика',
+    items: [
+      {
+        key: 'reports',
+        label: 'Отчёты',
+        description: 'Рейтинги, воронка отзывов, динамика по периодам',
+        screen: 'MarketingReports',
+        icon: 'stats-chart-outline',
+        iconBg: colors.violet[50],
+        iconColor: colors.violet[600],
+      },
+    ],
   },
   {
-    key: 'reviews',
-    label: 'Отзывы и репутация',
-    description: 'Сбор отзывов, площадки, подарок за отзыв',
-    screen: 'ReviewsReputation',
-    icon: 'star-outline',
-    iconBg: colors.amber[50],
-    iconColor: colors.amber[600],
+    key: 'clients',
+    title: 'Работа с клиентами',
+    items: [
+      {
+        key: 'reviews',
+        label: 'Отзывы и репутация',
+        description: 'Лента отзывов, рейтинг мастеров, подарок за отзыв',
+        screen: 'ReviewsReputation',
+        icon: 'star-outline',
+        iconBg: colors.amber[50],
+        iconColor: colors.amber[600],
+      },
+      {
+        key: 'mailings',
+        label: 'Рассылки',
+        description: 'Сегментные и авто-рассылки, возврат клиентов',
+        screen: 'Mailings',
+        icon: 'paper-plane-outline',
+        iconBg: colors.blue[50],
+        iconColor: colors.blue[600],
+        ownerOnly: true,
+      },
+      {
+        key: 'loyalty',
+        label: 'Лояльность',
+        description: 'Бонусы и кешбэк за визиты',
+        screen: 'Loyalty',
+        icon: 'ribbon-outline',
+        iconBg: colors.emerald[50],
+        iconColor: colors.emerald[700],
+        ownerOnly: true,
+      },
+    ],
   },
   {
-    key: 'integrations',
-    label: 'Интеграции',
-    description: 'Касса 54-ФЗ, эквайринг, мессенджеры, телефония',
-    screen: 'Integrations',
-    icon: 'extension-puzzle-outline',
-    iconBg: colors.slate[100],
-    iconColor: colors.slate[600],
-    ownerOnly: true,
-  },
-  {
-    key: 'mailings',
-    label: 'Рассылки',
-    description: 'Авто и ручные рассылки, шаблоны, возврат клиентов',
-    screen: 'Mailings',
-    icon: 'paper-plane-outline',
-    iconBg: colors.blue[50],
-    iconColor: colors.blue[600],
-    ownerOnly: true,
+    key: 'connections',
+    title: 'Подключения и настройки',
+    items: [
+      {
+        key: 'integrations',
+        label: 'Интеграции',
+        description: 'Телефония, каналы рассылок, онлайн-касса, эквайринг',
+        screen: 'Integrations',
+        icon: 'git-network-outline',
+        iconBg: colors.slate[100],
+        iconColor: colors.slate[600],
+        ownerOnly: true,
+      },
+      {
+        key: 'settings',
+        label: 'Настройки',
+        description: 'Площадки отзывов и тексты уведомлений клиентам',
+        screen: 'MarketingSettings',
+        icon: 'options-outline',
+        iconBg: colors.indigo[50],
+        iconColor: colors.indigo[600],
+        ownerOnly: true,
+      },
+    ],
   },
 ];
 
@@ -96,7 +147,11 @@ export default function MarketingScreen() {
   const { isRole } = useAuth();
 
   const isOwner = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
-  const visible = DIRECTIONS.filter((d) => !d.ownerOnly || isOwner);
+
+  const visibleGroups = GROUPS.map((g) => ({
+    ...g,
+    items: g.items.filter((d) => !d.ownerOnly || isOwner),
+  })).filter((g) => g.items.length > 0);
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -108,42 +163,47 @@ export default function MarketingScreen() {
         showsVerticalScrollIndicator={false}
       >
         <Text style={[styles.intro, { color: palette.text.secondary }]}>
-          Всё про продвижение в одном месте — отчёты, отзывы, интеграции и рассылки клиентам.
+          Всё про продвижение и связь с клиентами в одном месте — отчёты, отзывы, рассылки и подключения.
         </Text>
 
-        <View style={{ gap: spacing[3] }}>
-          {visible.map((d, idx) => (
-            <AnimatedCard
-              key={d.key}
-              index={idx}
-              onPress={() => {
-                haptic('tap');
-                navigation.navigate(d.screen);
-              }}
-              style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            >
-              <View style={styles.cardRow}>
-                <View
-                  style={[
-                    styles.iconTile,
-                    { backgroundColor: palette.mode === 'dark' ? softTint(d.iconColor, 'dark') : d.iconBg },
-                  ]}
+        {visibleGroups.map((group) => (
+          <View key={group.key} style={styles.group}>
+            <SectionHeader title={group.title} count={null} />
+            <View style={styles.groupCards}>
+              {group.items.map((d, idx) => (
+                <AnimatedCard
+                  key={d.key}
+                  index={idx}
+                  onPress={() => {
+                    haptic('tap');
+                    navigation.navigate(d.screen);
+                  }}
+                  style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
                 >
-                  <Ionicons name={d.icon} size={22} color={d.iconColor} />
-                </View>
-                <View style={{ flex: 1, minWidth: 0 }}>
-                  <Text style={[styles.cardTitle, { color: palette.text.primary }]} numberOfLines={1}>
-                    {d.label}
-                  </Text>
-                  <Text style={[styles.cardDesc, { color: palette.text.secondary }]} numberOfLines={2}>
-                    {d.description}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
-              </View>
-            </AnimatedCard>
-          ))}
-        </View>
+                  <View style={styles.cardRow}>
+                    <View
+                      style={[
+                        styles.iconTile,
+                        { backgroundColor: palette.mode === 'dark' ? softTint(d.iconColor, 'dark') : d.iconBg },
+                      ]}
+                    >
+                      <Ionicons name={d.icon} size={22} color={d.iconColor} />
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[styles.cardTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                        {d.label}
+                      </Text>
+                      <Text style={[styles.cardDesc, { color: palette.text.secondary }]} numberOfLines={2}>
+                        {d.description}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+                  </View>
+                </AnimatedCard>
+              ))}
+            </View>
+          </View>
+        ))}
       </ScrollView>
     </View>
   );
@@ -156,8 +216,10 @@ const styles = StyleSheet.create({
   intro: {
     fontSize: fontSize.sm,
     lineHeight: 20,
-    marginBottom: spacing[5],
+    marginBottom: spacing[4],
   },
+  group: { marginTop: spacing[1] },
+  groupCards: { gap: spacing[3], marginTop: spacing[2] },
   card: {
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,

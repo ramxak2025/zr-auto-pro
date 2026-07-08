@@ -8,11 +8,12 @@
  * two concerns stop competing for the same «Сводка» tab.
  *
  * Two tabs:
- *   • Настройки — manual review-request CTA, «Подарок за отзыв» editor,
- *                 «Источники клиентов» editor (owner), and a read-only
- *                 «Площадки» reputation summary with a shortcut into
- *                 «Интеграции» where the links are actually edited.
- *   • Отзывы    — month-paginated review feed.
+ *   • Мотивация — manual review-request CTA, «Подарок за отзыв» editor and
+ *                 «Источники клиентов» editor (owner). (The review-platform
+ *                 links moved to the top-level «Настройки» section, so the
+ *                 read-only «Площадки» summary no longer lives here.)
+ *   • Отзывы    — «Рейтинг мастеров» leaderboard on top of the
+ *                 month-paginated review feed.
  *
  * Header trailing slot opens a one-off SMS / WhatsApp review request to a
  * picked client (RequestReviewModal). Extracted verbatim from the former
@@ -42,9 +43,10 @@ import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import EmptyState from '../components/EmptyState';
+import SectionHeader from '../components/SectionHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import type { Client, ReviewPlatformLink, ReviewSettings } from '../../../shared/types';
+import type { Client, EmployeeReviewRating, ReviewSettings } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 
 const MAX_SOURCE_LEN = 100;
@@ -65,13 +67,6 @@ function normalizeSources(list: string[]): string[] {
 }
 
 type TabKey = 'settings' | 'reviews';
-
-const PLATFORM_LABELS: Record<string, string> = {
-  google: 'Google',
-  yandex: 'Яндекс',
-  '2gis': '2GIS',
-  avito: 'Авито',
-};
 
 function StarRating({ rating, size = 14 }: { rating: number; size?: number }) {
   const stars = [] as React.ReactElement[];
@@ -459,87 +454,73 @@ function ClientSourcesCard() {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-//  Reputation — read-only review-platform summary
-//  The links themselves are edited in «Интеграции» → «Площадки отзывов»;
-//  here we only surface presence + a shortcut, so reputation reads in one
-//  glance without duplicating the editor.
+//  Рейтинг мастеров — employee leaderboard by review score
+//  Shares the ['marketing-dashboard'] cache key with MarketingReportsScreen
+//  so opening either screen warms the other. Read-only, sits atop the feed.
 // ─────────────────────────────────────────────────────────────────────
 
-function PlatformsReputationCard({ onConfigure }: { onConfigure: () => void }) {
+/** Medal tint for the top-3 index badge; falls back to a neutral chip. */
+function medalTint(rank: number, palette: ReturnType<typeof useColors>): { bg: string; fg: string } {
+  const dark = palette.mode === 'dark';
+  switch (rank) {
+    case 1: // gold
+      return { bg: dark ? softTint(colors.amber[600], 'dark') : colors.amber[100], fg: colors.amber[700] };
+    case 2: // silver
+      return { bg: dark ? softTint(colors.slate[500], 'dark') : colors.slate[100], fg: colors.slate[600] };
+    case 3: // bronze
+      return { bg: dark ? softTint(colors.orange[500], 'dark') : colors.orange[50], fg: colors.orange[700] };
+    default:
+      return { bg: palette.bg.muted, fg: palette.text.tertiary };
+  }
+}
+
+function LeaderboardRow({ item, rank }: { item: EmployeeReviewRating; rank: number }) {
   const palette = useColors();
-  const platformQuery = useQuery({
-    queryKey: ['marketing-platform-links'],
-    queryFn: async () => (await marketingApi.getPlatformLinks()).data,
+  const tint = medalTint(rank, palette);
+  const isMedal = rank <= 3;
+  return (
+    <View style={[styles.leaderRow, rank > 1 && [styles.leaderRowBorder, { borderTopColor: palette.border.subtle }]]}>
+      <View style={[styles.rankBadge, { backgroundColor: tint.bg }]}>
+        <Text style={[styles.rankBadgeText, { color: tint.fg }]}>{isMedal ? rank : `#${rank}`}</Text>
+      </View>
+      <Text style={[styles.leaderName, { color: palette.text.primary }]} numberOfLines={1}>
+        {item.employeeName}
+      </Text>
+      <View style={styles.leaderScore}>
+        <Ionicons name="star" size={13} color={colors.amber[600]} />
+        <Text style={[styles.leaderRating, { color: palette.text.primary }]}>{item.avgRating.toFixed(1)}</Text>
+      </View>
+      <Text style={[styles.leaderCount, { color: palette.text.tertiary }]}>{item.reviewCount} отз.</Text>
+    </View>
+  );
+}
+
+function LeaderboardCard() {
+  const palette = useColors();
+  const { data } = useQuery({
+    queryKey: ['marketing-dashboard'],
+    queryFn: async () => (await marketingApi.getDashboard()).data,
     staleTime: 60_000,
   });
-  const platforms: ReviewPlatformLink[] = Array.isArray(platformQuery.data) ? platformQuery.data : [];
+
+  const ranked = useMemo(() => {
+    const list = data?.employeeRatings ?? [];
+    return [...list].sort((a, b) => b.avgRating - a.avgRating || b.reviewCount - a.reviewCount);
+  }, [data?.employeeRatings]);
 
   return (
     <AnimatedCard
       index={0}
       style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
-      <View style={styles.sectionHeaderRow}>
-        <Text style={[styles.sectionTitle, { color: palette.text.primary, marginBottom: 0 }]}>Площадки</Text>
-        <Ionicons name="globe-outline" size={16} color={palette.text.tertiary} />
-      </View>
-      {platforms.length === 0 ? (
-        <Text style={[styles.platformsHint, { color: palette.text.tertiary }]}>
-          Площадки не подключены. Откройте «Интеграции», чтобы добавить ссылки на Google / Яндекс / 2GIS / Авито.
-        </Text>
+      {ranked.length === 0 ? (
+        <View style={styles.leaderEmpty}>
+          <Ionicons name="trophy-outline" size={28} color={palette.text.tertiary} />
+          <Text style={[styles.leaderEmptyText, { color: palette.text.tertiary }]}>Пока нет отзывов по мастерам</Text>
+        </View>
       ) : (
-        platforms.map((p, idx) => (
-          <View
-            key={p.id}
-            style={[
-              styles.platformRow,
-              idx > 0 && [styles.platformRowBorder, { borderTopColor: palette.border.subtle }],
-            ]}
-          >
-            <View style={[styles.platformBadge, { backgroundColor: palette.bg.muted }]}>
-              <Ionicons name="link-outline" size={16} color={palette.text.secondary} />
-            </View>
-            <View style={{ flex: 1 }}>
-              <Text style={[styles.platformName, { color: palette.text.primary }]} numberOfLines={1}>
-                {PLATFORM_LABELS[p.platform] ?? p.platform}
-              </Text>
-              <Text style={[styles.platformUrl, { color: palette.text.tertiary }]} numberOfLines={1}>
-                {p.url}
-              </Text>
-            </View>
-            <View
-              style={[
-                styles.statusPill,
-                p.isActive
-                  ? palette.mode === 'dark'
-                    ? { backgroundColor: softTint(colors.green[600], 'dark') }
-                    : styles.statusPillActive
-                  : { backgroundColor: palette.bg.muted },
-              ]}
-            >
-              <Text
-                style={[
-                  styles.statusPillText,
-                  p.isActive ? styles.statusPillTextActive : { color: palette.text.tertiary },
-                ]}
-              >
-                {p.isActive ? 'Подключено' : 'Выключено'}
-              </Text>
-            </View>
-          </View>
-        ))
+        ranked.map((item, idx) => <LeaderboardRow key={item.employeeId} item={item} rank={idx + 1} />)
       )}
-
-      <TouchableOpacity
-        style={[styles.linkBtn, { borderColor: palette.border.subtle }]}
-        onPress={() => {
-          haptic('tap');
-          onConfigure();
-        }}
-      >
-        <Ionicons name="settings-outline" size={16} color={palette.accent.primary} />
-        <Text style={[styles.linkBtnText, { color: palette.accent.primary }]}>Настроить площадки</Text>
-      </TouchableOpacity>
     </AnimatedCard>
   );
 }
@@ -550,7 +531,6 @@ function PlatformsReputationCard({ onConfigure }: { onConfigure: () => void }) {
 
 function SettingsTab({ onRequestReview }: { onRequestReview: () => void }) {
   const palette = useColors();
-  const navigation = useNavigation<any>();
   const { isRole } = useAuth();
   // Only owner-level roles configure the client-source list.
   const canEditSources = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
@@ -584,9 +564,6 @@ function SettingsTab({ onRequestReview }: { onRequestReview: () => void }) {
 
       {/* Motivational gift editor */}
       <MotivationCard />
-
-      {/* Reputation — review platform summary + shortcut into Интеграции */}
-      <PlatformsReputationCard onConfigure={() => navigation.navigate('Integrations')} />
 
       {/* Client-source list editor (owner-only) */}
       {canEditSources && <ClientSourcesCard />}
@@ -640,6 +617,10 @@ function ReviewsTab() {
 
   return (
     <View style={{ gap: spacing[4] }}>
+      {/* Рейтинг мастеров — leaderboard atop the feed */}
+      <SectionHeader title="Рейтинг мастеров" />
+      <LeaderboardCard />
+
       <View style={styles.monthNav}>
         <TouchableOpacity
           onPress={() => navigateMonth(-1)}
@@ -924,14 +905,14 @@ export default function ReviewsReputationScreen() {
     iconOutline: keyof typeof Ionicons.glyphMap;
     iconSolid: keyof typeof Ionicons.glyphMap;
   }[] = [
-    { key: 'settings', label: 'Настройки', iconOutline: 'options-outline', iconSolid: 'options' },
+    { key: 'settings', label: 'Мотивация', iconOutline: 'options-outline', iconSolid: 'options' },
     { key: 'reviews', label: 'Отзывы', iconOutline: 'chatbubbles-outline', iconSolid: 'chatbubbles' },
   ];
 
   const onRefresh = async () => {
     setRefreshing(true);
     await Promise.all([
-      queryClient.invalidateQueries({ queryKey: ['marketing-platform-links'] }),
+      queryClient.invalidateQueries({ queryKey: ['marketing-dashboard'] }),
       queryClient.invalidateQueries({ queryKey: ['marketing-reviews'] }),
       queryClient.invalidateQueries({ queryKey: ['marketing-review-settings'] }),
       queryClient.invalidateQueries({ queryKey: ['client-sources'] }),
@@ -1183,38 +1164,32 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
 
-  // Platforms (reputation)
-  platformRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3], paddingVertical: spacing[3] },
-  platformRowBorder: { borderTopWidth: 1 },
-  platformBadge: {
-    width: 36,
-    height: 36,
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  platformName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
-  platformUrl: { fontSize: fontSize.xs, marginTop: 2 },
+  // Shared hint text (also used by the request-review modal's empty state)
   platformsHint: { fontSize: fontSize.xs, lineHeight: 18 },
-  statusPill: {
-    paddingHorizontal: spacing[2.5],
-    paddingVertical: 4,
-    borderRadius: borderRadius.full,
-  },
-  statusPillActive: { backgroundColor: colors.green[50] },
-  statusPillText: { fontSize: 10, fontWeight: fontWeight.semibold },
-  statusPillTextActive: { color: colors.green[700] },
-  linkBtn: {
+
+  // Leaderboard (рейтинг мастеров)
+  leaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[2],
-    borderRadius: borderRadius.xl,
-    borderWidth: 1,
-    paddingVertical: spacing[3],
-    marginTop: spacing[3],
+    gap: spacing[3],
+    paddingVertical: spacing[2.5],
   },
-  linkBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  leaderRowBorder: { borderTopWidth: 1 },
+  rankBadge: {
+    minWidth: 30,
+    height: 30,
+    paddingHorizontal: spacing[1.5],
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rankBadgeText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+  leaderName: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  leaderScore: { flexDirection: 'row', alignItems: 'center', gap: spacing[1] },
+  leaderRating: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+  leaderCount: { fontSize: fontSize.xs, minWidth: 56, textAlign: 'right', fontVariant: ['tabular-nums'] },
+  leaderEmpty: { alignItems: 'center', gap: spacing[2], paddingVertical: spacing[4] },
+  leaderEmptyText: { fontSize: fontSize.sm },
 
   // Empty
   emptyCard: { alignItems: 'center', paddingVertical: spacing[12], gap: spacing[3] },

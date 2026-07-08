@@ -56,6 +56,8 @@ import KnowledgeLessonScreen from '../screens/KnowledgeLessonScreen';
 import KnowledgeCourseEditorScreen from '../screens/KnowledgeCourseEditorScreen';
 import MarketingScreen from '../screens/MarketingScreen';
 import MarketingReportsScreen from '../screens/MarketingReportsScreen';
+import MarketingSettingsScreen from '../screens/MarketingSettingsScreen';
+import LoyaltyScreen from '../screens/LoyaltyScreen';
 import ReviewsReputationScreen from '../screens/ReviewsReputationScreen';
 import WinbackScreen from '../screens/WinbackScreen';
 import CarsScreen from '../screens/CarsScreen';
@@ -457,6 +459,14 @@ function MoreStackNavigator() {
           (sub-screen → Маркетинг → Ещё). */}
       <MoreStack.Screen name="Marketing" component={MarketingScreen} />
       <MoreStack.Screen name="MarketingReports" component={MarketingReportsScreen} />
+      {/* «Настройки» маркетинга — площадки отзывов + все тексты уведомлений
+          (отзыв, машина готова, визит, рассрочка). Собраны из «Интеграций» и
+          «Отзывов», чтобы у каждого текста был один дом. Owner-class (экран
+          самогейтится, строка в хабе roles-filtered). */}
+      <MoreStack.Screen name="MarketingSettings" component={MarketingSettingsScreen} />
+      {/* «Лояльность» — бонусы/кешбэк (loyalty/, мигр. 083). Читают все, PATCH
+          owner-class (экран самогейтит редактор). */}
+      <MoreStack.Screen name="Loyalty" component={LoyaltyScreen} />
       <MoreStack.Screen name="ReviewsReputation" component={ReviewsReputationScreen} />
       {/* «Возвращение клиентов» — win-back broadcast reached from «Рассылки»
           (Mailings → карточка). Lives in MoreStack so the floating tab bar
