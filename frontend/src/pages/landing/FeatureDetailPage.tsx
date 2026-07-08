@@ -52,48 +52,51 @@ function Breadcrumbs({ title }: { title: string }) {
   );
 }
 
-/** CTA-кнопки WhatsApp/Telegram из config.ts; контактов нет → «Войти». */
+/**
+ * CTA раздела: primary «Начать бесплатно» → self-service регистрация (/register);
+ * ниже — живой контакт WhatsApp/Telegram (secondary, «написать нам»).
+ */
 function CtaButtons() {
   const whatsapp = getWhatsAppUrl(WHATSAPP_ACCESS_MESSAGE);
   const telegram = getTelegramUrl();
-  const base =
-    'inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl px-6 text-base font-semibold transition motion-safe:active:scale-[0.98]';
-
-  if (!whatsapp && !telegram) {
-    return (
-      <Link
-        to="/login"
-        className={`${base} bg-primary-600 text-white shadow-lg shadow-primary-600/25 hover:bg-primary-500`}
-      >
-        Войти
-        <ArrowRight className="h-5 w-5" />
-      </Link>
-    );
-  }
+  const contact =
+    'inline-flex min-h-[48px] items-center justify-center gap-2 rounded-2xl px-6 text-sm font-semibold transition motion-safe:active:scale-[0.98]';
 
   return (
-    <div className="flex w-full flex-col items-stretch justify-center gap-3 sm:w-auto sm:flex-row">
-      {whatsapp && (
-        <a
-          href={whatsapp}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`${base} bg-emerald-600 text-white shadow-lg shadow-emerald-600/25 hover:bg-emerald-500`}
-        >
-          <MessageCircle className="h-5 w-5" />
-          {ctaSection.whatsappLabel}
-        </a>
-      )}
-      {telegram && (
-        <a
-          href={telegram}
-          target="_blank"
-          rel="noopener noreferrer"
-          className={`${base} border border-slate-300 bg-white text-slate-900 hover:border-primary-400 hover:text-primary-600`}
-        >
-          <Send className="h-5 w-5 text-sky-500" />
-          {ctaSection.telegramLabel}
-        </a>
+    <div className="flex w-full flex-col items-center gap-4 sm:w-auto">
+      <Link
+        to="/register"
+        className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-primary-600 px-8 text-base font-semibold text-white shadow-lg shadow-primary-600/25 transition hover:bg-primary-500 motion-safe:active:scale-[0.98] active:bg-primary-700 sm:w-auto"
+      >
+        Начать бесплатно
+        <ArrowRight className="h-5 w-5" />
+      </Link>
+
+      {(whatsapp || telegram) && (
+        <div className="flex w-full flex-col items-stretch justify-center gap-3 sm:w-auto sm:flex-row">
+          {whatsapp && (
+            <a
+              href={whatsapp}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${contact} border border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100`}
+            >
+              <MessageCircle className="h-4 w-4" />
+              {ctaSection.whatsappLabel}
+            </a>
+          )}
+          {telegram && (
+            <a
+              href={telegram}
+              target="_blank"
+              rel="noopener noreferrer"
+              className={`${contact} border border-sky-200 bg-sky-50 text-sky-700 hover:bg-sky-100`}
+            >
+              <Send className="h-4 w-4" />
+              {ctaSection.telegramLabel}
+            </a>
+          )}
+        </div>
       )}
     </div>
   );

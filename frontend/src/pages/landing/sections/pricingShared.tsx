@@ -2,7 +2,7 @@ import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, MessageCircle, Minus, Wrench } from 'lucide-react';
 import { formatRub, pricing, yearlyMonthly, type PlanCellValue, type PricingPlan } from '../content';
-import { getPlanConnectMessage, getWhatsAppUrl, WHATSAPP_IMPLEMENTATION_MESSAGE } from '../config';
+import { getWhatsAppUrl, WHATSAPP_IMPLEMENTATION_MESSAGE } from '../config';
 
 /**
  * Общие «тяжёлые» куски тарифов: карточка плана (с переключателем месяц/год),
@@ -16,26 +16,17 @@ export type Billing = 'monthly' | 'yearly';
 const CTA_BASE =
   'inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl px-5 text-sm font-semibold transition motion-safe:active:scale-[0.98]';
 
-/** CTA «Начать бесплатно» → WhatsApp с тарифом в сообщении; контактов нет → «Войти». */
+/** CTA «Начать бесплатно» → self-service регистрация (/register). */
 function PlanCta({ plan }: { plan: PricingPlan }) {
   const cls = `${CTA_BASE} ${
     plan.highlighted
       ? 'bg-primary-600 text-white shadow-lg shadow-primary-600/25 hover:bg-primary-500 active:bg-primary-700'
       : 'border border-slate-200 bg-white text-slate-900 shadow-sm hover:border-primary-300 hover:text-primary-600'
   }`;
-  const url = getWhatsAppUrl(getPlanConnectMessage(plan.name));
-  if (!url) {
-    return (
-      <Link to="/login" className={cls}>
-        Войти
-      </Link>
-    );
-  }
   return (
-    <a href={url} target="_blank" rel="noopener noreferrer" className={cls}>
-      <MessageCircle className="h-4 w-4" />
+    <Link to="/register" className={cls}>
       Начать бесплатно
-    </a>
+    </Link>
   );
 }
 

@@ -52,6 +52,7 @@ const FeatureDetailPage = lazyWithRetry(() => import('./pages/landing/FeatureDet
 const TarifyPage = lazyWithRetry(() => import('./pages/landing/TarifyPage'));
 const VoprosyPage = lazyWithRetry(() => import('./pages/landing/VoprosyPage'));
 const LoginPage = lazyWithRetry(() => import('./pages/LoginPage'));
+const RegisterPage = lazyWithRetry(() => import('./pages/RegisterPage'));
 const SubscriptionBlockedPage = lazyWithRetry(() => import('./pages/SubscriptionBlockedPage'));
 const DashboardPage = lazyWithRetry(() => import('./pages/DashboardPage'));
 const ChecksPage = lazyWithRetry(() => import('./pages/ChecksPage'));
@@ -238,6 +239,20 @@ export default function App() {
                 <Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace />
               ) : (
                 <LoginPage />
+              )
+            }
+          />
+
+          {/* Public: self-service registration (landing primary CTAs point here).
+              Must stay reachable when logged OUT — outside the auth-gated blocks.
+              A logged-in visitor is bounced to their home, exactly like /login. */}
+          <Route
+            path="/register"
+            element={
+              user ? (
+                <Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace />
+              ) : (
+                <RegisterPage />
               )
             }
           />

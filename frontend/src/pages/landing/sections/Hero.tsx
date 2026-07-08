@@ -4,7 +4,6 @@ import { motion, useReducedMotion, type Variants } from 'framer-motion';
 import { ArrowRight, Banknote, CheckCircle2, TrendingUp, Gauge, Sparkles } from 'lucide-react';
 import CtaButton from './CtaButton';
 import { hero, heroLightReady } from '../content';
-import { getAccessContactUrl, getWhatsAppUrl } from '../config';
 
 /* ---------- Атмосфера: сетка + шум (только CSS/data-uri, ноль запросов) ---------- */
 
@@ -193,38 +192,16 @@ function MobileHeroPhotoCard({
   );
 }
 
-/*
- * ОСОЗНАННОЕ РЕШЕНИЕ по контрасту: белый текст на emerald-500 ≈ 2.3:1 —
- * формально ниже WCAG AA (4.5:1 для 14–16px). Это бренд-паттерн
- * «зелёный = WhatsApp» по всему лендингу (здесь, SectionsSheet, ImplementationCard
- * в pricingShared) — кнопка распознаётся формой/иконкой и конвертирует лучше
- * тёмной. Реальный AA дал бы только emerald-700 или тёмный текст на emerald-400;
- * решено оставить как есть. Если владелец захочет строгий AA — менять все три места.
- */
-const EMERALD_CTA =
-  'inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-emerald-500 px-8 text-base font-semibold text-white shadow-lg shadow-emerald-500/30 transition hover:bg-emerald-400 motion-safe:active:scale-[0.98] active:bg-emerald-600';
+const PRIMARY_CTA =
+  'inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-primary-600 px-8 text-base font-semibold text-white shadow-lg shadow-primary-600/25 transition hover:bg-primary-500 motion-safe:active:scale-[0.98] active:bg-primary-700';
 
-/** Primary-CTA мобильного hero: emerald «Получить доступ» → WhatsApp; контактов нет → «Войти». */
+/** Primary-CTA мобильного hero: «Получить доступ» → self-service регистрация (/register). */
 function MobileAccessCta() {
-  const url = getWhatsAppUrl() ?? getAccessContactUrl();
-  if (!url) {
-    return (
-      <Link to="/login" className={EMERALD_CTA}>
-        Войти
-        <ArrowRight className="h-5 w-5" aria-hidden />
-      </Link>
-    );
-  }
   return (
-    <a
-      href={url}
-      target={url.startsWith('http') ? '_blank' : undefined}
-      rel="noopener noreferrer"
-      className={EMERALD_CTA}
-    >
+    <Link to="/register" className={PRIMARY_CTA}>
       Получить доступ
       <ArrowRight className="h-5 w-5" aria-hidden />
-    </a>
+    </Link>
   );
 }
 
