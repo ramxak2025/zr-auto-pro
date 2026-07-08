@@ -13,10 +13,8 @@ import {
   Pencil,
   Save,
   ExternalLink,
-  TrendingUp,
   Users,
   Send,
-  Eye,
   ThumbsUp,
   ThumbsDown,
   Loader2,
@@ -31,6 +29,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { marketingApi } from '../api/services';
+import MarketingReportsView from '../components/marketing/MarketingReportsView';
 import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../types';
 import type {
@@ -95,84 +94,15 @@ function DashboardTab({
   alerts: ReviewAlert[];
   onAlertRead: (id: string) => void;
 }) {
-  if (!data)
-    return (
-      <div className="text-center py-12">
-        <BarChart3 className="h-10 w-10 text-gray-200 mx-auto mb-3" />
-        <p className="text-sm text-gray-500">Нет данных</p>
-        <p className="text-xs text-gray-400 mt-1">Данные появятся после получения первых отзывов</p>
-      </div>
-    );
-
-  const statCards = [
-    { label: 'Всего отзывов', value: data.totalReviews, icon: Star, color: 'text-amber-600', bg: 'bg-amber-50' },
-    {
-      label: 'Средний балл',
-      value: data.avgRating.toFixed(1),
-      icon: TrendingUp,
-      color: 'text-green-600',
-      bg: 'bg-green-50',
-    },
-    { label: 'Отправлено', value: data.tokensSent, icon: Send, color: 'text-blue-600', bg: 'bg-blue-50' },
-    { label: 'Отвечено', value: `${data.responseRate}%`, icon: Eye, color: 'text-violet-600', bg: 'bg-violet-50' },
-  ];
-
   const unreadAlerts = alerts.filter((a) => !a.isRead);
 
   return (
     <div className="space-y-5">
-      {/* Stats grid */}
-      <div className="grid grid-cols-2 gap-3">
-        {statCards.map((s) => {
-          const Icon = s.icon;
-          return (
-            <div key={s.label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <div className={`flex h-8 w-8 items-center justify-center rounded-lg ${s.bg}`}>
-                  <Icon className={`h-4 w-4 ${s.color}`} />
-                </div>
-              </div>
-              <p className="text-xl font-bold text-gray-900">{s.value}</p>
-              <p className="text-xs text-gray-500 mt-0.5">{s.label}</p>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Funnel */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-        <h3 className="text-sm font-semibold text-gray-900 mb-3">Воронка отзывов</h3>
-        <div className="space-y-2">
-          {[
-            { label: 'Отправлено ссылок', value: data.tokensSent, pct: 100 },
-            { label: 'Получено ответов', value: data.tokensResponded, pct: data.responseRate },
-            {
-              label: 'Положительных (4-5)',
-              value: data.positiveReviews,
-              pct: data.totalReviews > 0 ? Math.round((data.positiveReviews / data.totalReviews) * 100) : 0,
-            },
-            { label: 'Перешли на площадку', value: data.publicRedirects, pct: data.conversionRate },
-          ].map((f) => (
-            <div key={f.label}>
-              <div className="flex justify-between text-xs mb-1">
-                <span className="text-gray-600">{f.label}</span>
-                <span className="font-medium text-gray-900">
-                  {f.value} ({f.pct}%)
-                </span>
-              </div>
-              <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-violet-500 rounded-full transition-all"
-                  style={{ width: `${Math.min(f.pct, 100)}%` }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
+      {/* Period-based marketing analytics — привлечение / удержание / звонки / отзывы */}
+      <MarketingReportsView />
 
       {/* Employee ratings */}
-      {data.employeeRatings.length > 0 && (
+      {data && data.employeeRatings.length > 0 && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
           <div className="flex items-center gap-2 mb-3">
             <Users className="h-4 w-4 text-gray-400" />
