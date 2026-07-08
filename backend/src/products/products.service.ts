@@ -440,6 +440,153 @@ export class ProductsService {
     return this.mapProduct(rows[0]);
   }
 
+  /**
+   * Mass sell-price adjustment (owner-class only — see controller @Roles).
+   *
+   * Raises / lowers `sell_price` by a percent for a chosen scope, with optional
+   * rounding to a "nice" step. Money-sensitive: fully tenant-scoped, only ever
+   * touches LIVE products (`deleted_at IS NULL`), only writes `sell_price`, and
+   * applies in ONE transactional UPDATE (no partial application).
+   *
+   * Scope resolution:
+   *   • 'all'        → every live product of the tenant.
+   *   • 'categories' → the selected folders AND their descendants. Categories
+   *     are a flat path-string model: `warehouse_categories.path` holds e.g.
+   *     "Масла/Синтетика" and a product links to it via `products.category`
+   *     (the path string — there is NO category_id FK). We resolve the given
+   *     category ids → paths, then match products whose `category` equals a
+   *     path OR is nested under it (`category LIKE path || '/%'`). Descendant
+   *     folders are covered automatically because their path is `parent/child`.
+   *   • 'products'   → the explicit product ids.
+   *
+   * Price computation (identical in dry-run preview and in the apply UPDATE, so
+   * «стало» in the preview is exactly what gets written):
+   *   raw   = sell_price * factor,  factor = 1 ± percent/100
+   *   'up'   → ceil(raw/step)*step   'down' → floor(raw/step)*step
+   *   'none' → round(raw, 2)
+   *   then clamp to [0, 99999999.99] (the app-wide price cap).
+   *
+   * `dryRun` returns { affected, examples[≤30] } WITHOUT writing. Apply returns
+   * { affected }.
+   */
+  async bulkAdjustPrice(
+    tenantID: string,
+    dto: {
+      scope: 'all' | 'categories' | 'products';
+      categoryIds?: string[];
+      productIds?: string[];
+      direction: 'increase' | 'decrease';
+      percent: number;
+      rounding?: { mode: 'none' | 'up' | 'down'; step: number };
+      dryRun?: boolean;
+    },
+  ) {
+    const factor = dto.direction === 'increase' ? 1 + dto.percent / 100 : 1 - dto.percent / 100;
+    const mode: 'none' | 'up' | 'down' = dto.rounding?.mode ?? 'none';
+    // step only matters for up/down; keep it a safe positive default otherwise
+    // (the CASE branch that divides by it is never taken when mode='none').
+    const step = mode !== 'none' && dto.rounding ? dto.rounding.step : 1;
+
+    // Escape LIKE metacharacters so a folder literally named e.g. "50%" or
+    // "A_B" can't over-match. Paired with `ESCAPE '\'` in the query.
+    const escapeLike = (s: string) => s.replace(/[\\%_]/g, (c) => '\\' + c);
+
+    const params: any[] = [tenantID];
+    let where = 'p.tenant_id = $1 AND p.deleted_at IS NULL';
+    let idx = 2;
+
+    if (dto.scope === 'products') {
+      const ids = dto.productIds ?? [];
+      if (ids.length === 0) throw new BadRequestException({ message: 'Не выбраны товары' });
+      where += ` AND p.id = ANY($${idx}::uuid[])`;
+      params.push(ids);
+      idx++;
+    } else if (dto.scope === 'categories') {
+      const ids = dto.categoryIds ?? [];
+      if (ids.length === 0) throw new BadRequestException({ message: 'Не выбраны папки' });
+      // Resolve the selected folder ids → live paths (tenant-scoped).
+      const { rows: catRows } = await this.pool.query(
+        `SELECT path FROM warehouse_categories
+          WHERE tenant_id = $1 AND deleted_at IS NULL AND id = ANY($2::uuid[])`,
+        [tenantID, ids],
+      );
+      if (catRows.length === 0) {
+        // No matching folders → nothing to do (stay a no-op, don't 404).
+        return dto.dryRun ? { affected: 0, examples: [] } : { affected: 0 };
+      }
+      const ors: string[] = [];
+      for (const row of catRows) {
+        const path = row.path as string;
+        const exactIdx = idx;
+        params.push(path);
+        idx++;
+        const prefixIdx = idx;
+        params.push(escapeLike(path) + '/%');
+        idx++;
+        ors.push(`(p.category = $${exactIdx} OR p.category LIKE $${prefixIdx} ESCAPE '\\')`);
+      }
+      where += ` AND (${ors.join(' OR ')})`;
+    }
+    // scope === 'all' → no extra predicate (tenant + not-deleted already applied)
+
+    const factorIdx = idx;
+    params.push(factor);
+    idx++;
+    const stepIdx = idx;
+    params.push(step);
+    idx++;
+    const modeIdx = idx;
+    params.push(mode);
+    idx++;
+
+    // Shared price expression — used verbatim by both the preview SELECT and the
+    // apply UPDATE so the previewed «стало» is byte-for-byte what gets written.
+    // Clamp to [0, cap]: a below-cost result is NOT floored to cost_price (a
+    // clearance sale below cost is a legitimate owner choice — see report).
+    const priceExpr = `LEAST(99999999.99::numeric, GREATEST(0::numeric,
+      CASE
+        WHEN $${modeIdx} = 'up'   THEN CEIL((p.sell_price * $${factorIdx}::numeric) / $${stepIdx}::numeric) * $${stepIdx}::numeric
+        WHEN $${modeIdx} = 'down' THEN FLOOR((p.sell_price * $${factorIdx}::numeric) / $${stepIdx}::numeric) * $${stepIdx}::numeric
+        ELSE ROUND((p.sell_price * $${factorIdx}::numeric), 2)
+      END
+    ))`;
+
+    if (dto.dryRun) {
+      const countRes = await this.pool.query(`SELECT COUNT(*)::int AS affected FROM products p WHERE ${where}`, params);
+      const affected = countRes.rows[0]?.affected ?? 0;
+      const exRes = await this.pool.query(
+        `SELECT p.id, p.name, p.sell_price AS old_price, ${priceExpr} AS new_price
+           FROM products p WHERE ${where}
+          ORDER BY p.name LIMIT 30`,
+        params,
+      );
+      return {
+        affected,
+        examples: exRes.rows.map((r) => ({
+          id: r.id,
+          name: r.name,
+          oldPrice: parseFloat(r.old_price) || 0,
+          newPrice: parseFloat(r.new_price) || 0,
+        })),
+      };
+    }
+
+    // Apply — single transactional UPDATE, all-or-nothing.
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const res = await client.query(`UPDATE products p SET sell_price = ${priceExpr} WHERE ${where}`, params);
+      await client.query('COMMIT');
+      return { affected: res.rowCount ?? 0 };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`bulkAdjustPrice failed: ${err instanceof Error ? err.message : err}`);
+      throw new InternalServerErrorException({ message: 'Не удалось изменить цены' });
+    } finally {
+      client.release();
+    }
+  }
+
   async getProductMovements(productId: string, tenantID: string) {
     const { rows } = await this.pool.query(
       `SELECT sm.*, u.full_name as user_name

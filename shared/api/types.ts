@@ -276,6 +276,62 @@ export interface StockUpdateRequest {
   recordAsExpense?: boolean;
 }
 
+/**
+ * Rounding rule for a bulk sell-price adjustment. Applied AFTER the percent
+ * change to make prices "nice".
+ *   • 'none' → plain round to 2 decimals.
+ *   • 'up'   → ceil to `step`  (156, step 50 → 200).
+ *   • 'down' → floor to `step` (156, step 50 → 150).
+ * `step` must be > 0 (ignored when mode='none').
+ */
+export interface BulkAdjustPriceRounding {
+  mode: 'none' | 'up' | 'down';
+  step: number;
+}
+
+/**
+ * Body for POST /products/bulk-adjust-price (owner-class only). Raises / lowers
+ * the SELL price of a chosen scope by a percent. Only ever changes sell_price;
+ * cost_price / stock are untouched. `dryRun: true` previews «было → стало»
+ * WITHOUT writing.
+ */
+export interface BulkAdjustPriceRequest {
+  /** 'all' | 'categories' (folders incl. descendants) | 'products'. */
+  scope: 'all' | 'categories' | 'products';
+  /** warehouse_categories ids — required (non-empty) when scope='categories'. */
+  categoryIds?: string[];
+  /** product ids — required (non-empty) when scope='products'. */
+  productIds?: string[];
+  /** Raise or lower. */
+  direction: 'increase' | 'decrease';
+  /** Percent to change by (>0, ≤1000). 10 = ±10%. */
+  percent: number;
+  /** Optional rounding rule applied after the percent change. */
+  rounding?: BulkAdjustPriceRounding;
+  /** true → preview only (no write). false / omitted → apply. */
+  dryRun?: boolean;
+}
+
+/** One «было → стало» preview row (dry-run only), capped at 30 rows. */
+export interface BulkAdjustPriceExample {
+  id: string;
+  name: string;
+  oldPrice: number;
+  newPrice: number;
+}
+
+/**
+ * Response of POST /products/bulk-adjust-price.
+ *   • dryRun=true  → { affected, examples }  (nothing written).
+ *   • apply        → { affected }            (examples undefined).
+ */
+export interface BulkAdjustPriceResponse {
+  /** How many products match / were updated. */
+  affected: number;
+  /** Present only on a dry-run — up to 30 «было → стало» rows. */
+  examples?: BulkAdjustPriceExample[];
+}
+
 export interface CreateServiceRequest {
   name: string;
   category?: string;

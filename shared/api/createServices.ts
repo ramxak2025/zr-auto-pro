@@ -182,6 +182,8 @@ import type {
   CreateProductRequest,
   UpdateProductRequest,
   StockUpdateRequest,
+  BulkAdjustPriceRequest,
+  BulkAdjustPriceResponse,
   CreateServiceRequest,
   UpdateServiceRequest,
   CreateCheckRequest,
@@ -512,6 +514,14 @@ export function createProductsApi(api: HttpClient) {
     update: (id: string, data: UpdateProductRequest) => api.patch<Product>(`/products/${id}`, data),
     /** Set just the sell price on an existing product. */
     setSellPrice: (id: string, sellPrice: number) => api.patch<Product>(`/products/${id}/sell-price`, { sellPrice }),
+    /**
+     * Mass sell-price adjustment (owner-class only). Raise / lower the sell price
+     * of a scope (all / folders / products) by a percent, with optional rounding.
+     * `dryRun: true` returns { affected, examples } for a «было → стало» preview
+     * WITHOUT writing; omit / false applies transactionally and returns { affected }.
+     */
+    bulkAdjustPrice: (data: BulkAdjustPriceRequest) =>
+      api.post<BulkAdjustPriceResponse>('/products/bulk-adjust-price', data),
     remove: (id: string) => api.delete(`/products/${id}`),
     // ── Trash bin ─────────────────────────────────────────────────────
     // Soft-deleted products live in the trash. They stay searchable here

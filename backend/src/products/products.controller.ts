@@ -8,6 +8,7 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { StockUpdateDto } from './dto/stock-update.dto';
+import { BulkAdjustPriceDto } from './dto/bulk-adjust-price.dto';
 
 // Reads stay open to every authenticated user (a master needs to browse
 // products to build a check). MUTATIONS are gated per-method to
@@ -51,6 +52,18 @@ export class ProductsController {
   @Post('import-csv')
   importCsv(@CurrentUser() user: JwtPayload, @Body() dto: { items: any[] }) {
     return this.productsService.importCsv(user.tenantID, dto.items);
+  }
+
+  // Mass sell-price change (raise / lower by a percent, optional rounding).
+  // Money-sensitive: owner-class only (director/admin/superadmin) — same gate
+  // as the single-product price mutations (update, sell-price). A master must
+  // not be able to rewrite many prices at once. `dryRun: true` returns a
+  // «было → стало» preview without writing; otherwise applied transactionally.
+  // Literal path — no collision with :id routes (registered before them anyway).
+  @Roles('director', 'admin', 'superadmin')
+  @Post('bulk-adjust-price')
+  bulkAdjustPrice(@CurrentUser() user: JwtPayload, @Body() dto: BulkAdjustPriceDto) {
+    return this.productsService.bulkAdjustPrice(user.tenantID, dto);
   }
 
   // ── Trash bin ──────────────────────────────────────────────────────────
