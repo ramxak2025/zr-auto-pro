@@ -4,6 +4,7 @@ import { Loader2, Phone, Lock, Eye, EyeOff } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { formatPhone } from '../../../shared/validation/phone';
+import RegisterModal from '../components/RegisterModal';
 
 export default function LoginPage() {
   const navigate = useNavigate();
@@ -14,6 +15,7 @@ export default function LoginPage() {
   const [phoneError, setPhoneError] = useState('');
   const [passwordError, setPasswordError] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [registerOpen, setRegisterOpen] = useState(false);
   const passwordRef = useRef<HTMLInputElement>(null);
 
   const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -148,8 +150,22 @@ export default function LoginPage() {
               )}
             </button>
           </form>
+
+          {/* Registration entry point — secondary, unobtrusive */}
+          <div className="mt-6 text-center">
+            <span className="text-sm text-gray-400">Нет аккаунта? </span>
+            <button
+              type="button"
+              onClick={() => setRegisterOpen(true)}
+              className="text-sm font-semibold text-primary-600 transition-colors hover:text-primary-700"
+            >
+              Регистрация
+            </button>
+          </div>
         </div>
       </div>
+
+      <RegisterModal isOpen={registerOpen} onClose={() => setRegisterOpen(false)} />
 
       {/* Copyright footer */}
       <div className="pb-8 pt-4 space-y-2">

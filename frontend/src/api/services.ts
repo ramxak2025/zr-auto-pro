@@ -41,6 +41,7 @@ import {
   createFiscalApi,
   createTelephonyApi,
   createWalletApi,
+  createRegistrationApi,
 } from '../../../shared/api/createServices';
 
 // Re-export all API request types for any file that imports them from here
@@ -123,6 +124,10 @@ export const installmentsApi = createInstallmentsApi(api);
 export const loyaltyApi = createLoyaltyApi(api);
 export const purchaseOrdersApi = createPurchaseOrdersApi(api);
 export const adminApi = createAdminApi(api);
+// Self-service registration (migration 123). `registrationApi.submit` is PUBLIC
+// (unauthenticated, from the login screen). The superadmin review methods
+// (list/approve/reject) already live on `adminApi` via createAdminApi.
+export const registrationApi = createRegistrationApi(api);
 export const paymentsApi = createPaymentsApi(api);
 export const fiscalApi = createFiscalApi(api);
 export const telephonyApi = createTelephonyApi(api);

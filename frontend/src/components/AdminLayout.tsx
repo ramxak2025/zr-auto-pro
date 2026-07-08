@@ -1,10 +1,13 @@
 import { useLocation, useNavigate, Link, Outlet } from 'react-router-dom';
-import { LayoutDashboard, Building2, CreditCard, Megaphone, ScrollText, LogOut } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import { LayoutDashboard, Building2, CreditCard, Megaphone, ScrollText, UserPlus, LogOut } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { adminApi } from '../api/services';
 
 const navItems = [
   { label: 'Панель', path: '/admin/dashboard', icon: LayoutDashboard },
   { label: 'Клиенты', path: '/admin/tenants', icon: Building2 },
+  { label: 'Заявки', path: '/admin/registration', icon: UserPlus },
   { label: 'Тарифы', path: '/admin/plans', icon: CreditCard },
   { label: 'Рассылка', path: '/admin/broadcast', icon: Megaphone },
   { label: 'Журнал', path: '/admin/audit-log', icon: ScrollText },
@@ -14,6 +17,14 @@ export default function AdminLayout() {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+
+  // Pending registration count → small badge on the «Заявки» nav item.
+  const { data: pendingCount } = useQuery({
+    queryKey: ['registration-requests', 'pending'],
+    queryFn: () => adminApi.listRegistrationRequests('pending'),
+    select: (res) => res.data.length,
+    staleTime: 60_000,
+  });
 
   const isActive = (path: string) => location.pathname.startsWith(path);
 
@@ -46,7 +57,12 @@ export default function AdminLayout() {
                     }`}
                   >
                     <Icon className="w-5 h-5 flex-shrink-0" />
-                    {item.label}
+                    <span className="flex-1">{item.label}</span>
+                    {item.path === '/admin/registration' && !!pendingCount && (
+                      <span className="inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-primary-600 px-1.5 py-0.5 text-xs font-semibold text-white">
+                        {pendingCount}
+                      </span>
+                    )}
                   </Link>
                 </li>
               );
@@ -105,6 +121,11 @@ export default function AdminLayout() {
               >
                 <Icon className="w-4 h-4" />
                 {item.label}
+                {item.path === '/admin/registration' && !!pendingCount && (
+                  <span className="inline-flex min-w-[1.125rem] items-center justify-center rounded-full bg-primary-600 px-1.5 py-0.5 text-[11px] font-semibold leading-none text-white">
+                    {pendingCount}
+                  </span>
+                )}
               </Link>
             );
           })}

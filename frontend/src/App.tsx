@@ -100,6 +100,7 @@ const AdminTenantDetailPage = lazyWithRetry(() => import('./pages/admin/AdminTen
 const AdminPlansPage = lazyWithRetry(() => import('./pages/admin/AdminPlansPage'));
 const AdminBroadcastPage = lazyWithRetry(() => import('./pages/admin/AdminBroadcastPage'));
 const AdminAuditLogPage = lazyWithRetry(() => import('./pages/admin/AdminAuditLogPage'));
+const AdminRegistrationRequestsPage = lazyWithRetry(() => import('./pages/admin/AdminRegistrationRequestsPage'));
 
 // ─── Feature gate definitions (same keys as mobile) ─────────────────────────
 const FEATURE_GATES: Record<string, { title: string; description: string; benefits: string[] }> = {
@@ -305,6 +306,7 @@ export default function App() {
                       <Route path="/admin/dashboard" element={<AdminDashboardPage />} />
                       <Route path="/admin/tenants" element={<AdminTenantsPage />} />
                       <Route path="/admin/tenants/:id" element={<AdminTenantDetailPage />} />
+                      <Route path="/admin/registration" element={<AdminRegistrationRequestsPage />} />
                       <Route path="/admin/plans" element={<AdminPlansPage />} />
                       <Route path="/admin/broadcast" element={<AdminBroadcastPage />} />
                       <Route path="/admin/audit-log" element={<AdminAuditLogPage />} />
