@@ -51,6 +51,37 @@ export interface RegisterRequest {
   tenantName?: string;
 }
 
+// ─── Self-service registration requests (migration 123) ────────────────────────
+
+/**
+ * PUBLIC body of POST /registration-requests — a prospective owner's self-service
+ * registration request from the login screen (UNAUTHENTICATED). The owner chooses
+ * their own password (min 8 chars); it is bcrypt-hashed server-side and reused to
+ * create the owner account on approval. The endpoint returns only `{ ok: true }`.
+ */
+export interface RegisterRequestPayload {
+  companyName: string;
+  ownerName: string;
+  phone: string;
+  password: string;
+  comment?: string;
+}
+
+/**
+ * POST /admin/registration-requests/:id/approve (superadmin) — create the tenant +
+ * owner + a FREE trial. Default trial is 14 days if neither field is given; `until`
+ * (an explicit future ISO date) wins over `trialDays`.
+ */
+export interface ApproveRegistrationRequest {
+  until?: string;
+  trialDays?: number;
+}
+
+/** POST /admin/registration-requests/:id/reject (superadmin). */
+export interface RejectRegistrationRequest {
+  reason?: string;
+}
+
 // ─── Account deletion (Apple 5.1.1(v) / Google Play data-deletion) ──────────────
 
 /** POST /account/delete body — re-confirmation required to avoid accidents. */

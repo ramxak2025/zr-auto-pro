@@ -542,6 +542,30 @@ export interface AuditLogEntry {
 }
 
 /**
+ * A self-service registration request (migration 123) — a prospective autoservice
+ * owner's application submitted UNAUTHENTICATED from the login screen and reviewed
+ * by a superadmin. NEVER carries the password hash: the owner's chosen password is
+ * stored server-side as a bcrypt hash and, on approve, reused to create the owner
+ * account — it is never exposed in any API response.
+ */
+export interface RegistrationRequest {
+  id: string;
+  companyName: string;
+  ownerName: string;
+  phone: string;
+  comment: string | null;
+  status: 'pending' | 'approved' | 'rejected';
+  /** Populated when status='rejected'. */
+  rejectReason: string | null;
+  /** Superadmin who reviewed it (approve/reject), or null while pending. */
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+  /** The tenant created on approval, or null. */
+  createdTenantId: string | null;
+  createdAt: string;
+}
+
+/**
  * 071 — per-employee top-level section visibility override.
  * `sectionKey` buckets navigation into five logical groups; a stored row with
  * `isVisible: false` hides that group for the user. The absence of a row means

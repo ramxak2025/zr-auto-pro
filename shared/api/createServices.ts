@@ -160,6 +160,7 @@ import type {
   VoiceUsage,
   VoiceTranscribeResult,
   PlatformSettings,
+  RegistrationRequest,
 } from '../types';
 import type {
   LoginRequest,
@@ -223,6 +224,9 @@ import type {
   UpdateProfileRequest,
   UpdateProfileResponse,
   ChangePasswordRequest,
+  RegisterRequestPayload,
+  ApproveRegistrationRequest,
+  RejectRegistrationRequest,
 } from './types';
 
 export function createAuthApi(api: HttpClient) {
@@ -238,6 +242,19 @@ export function createAuthApi(api: HttpClient) {
     // current password + an explicit confirm flag. After a 200, the client must
     // drop its token and return to the login screen.
     deleteAccount: (data: DeleteAccountRequest) => api.post<DeleteAccountResponse>('/account/delete', data),
+  };
+}
+
+/**
+ * Self-service registration (migration 123). ONE public method — the submit from
+ * the login screen. It is UNAUTHENTICATED: wire it on the same axios instance as
+ * everything else (no token is attached pre-login, and the endpoint requires
+ * none). Superadmin review (list/approve/reject) lives on createAdminApi.
+ */
+export function createRegistrationApi(api: HttpClient) {
+  return {
+    /** PUBLIC — submit a registration request. Returns `{ ok: true }` on success. */
+    submit: (data: RegisterRequestPayload) => api.post<{ ok: boolean }>('/registration-requests', data),
   };
 }
 
@@ -376,6 +393,21 @@ export function createAdminApi(api: HttpClient) {
      */
     getSettings: () => api.get<PlatformSettings>('/admin/settings'),
     updateSettings: (data: Partial<PlatformSettings>) => api.patch<PlatformSettings>('/admin/settings', data),
+    // ── Self-service registration requests (migration 123, superadmin) ──
+    /** List registration requests (newest first), optionally filtered by status. */
+    listRegistrationRequests: (status?: 'pending' | 'approved' | 'rejected') =>
+      api.get<RegistrationRequest[]>('/admin/registration-requests', {
+        params: status ? { status } : undefined,
+      }),
+    /**
+     * Approve a request → creates the tenant + owner + a FREE trial and returns the
+     * created tenant. Default trial 14 days; pass `{ until }` or `{ trialDays }` to override.
+     */
+    approveRegistrationRequest: (id: string, data?: ApproveRegistrationRequest) =>
+      api.post<Tenant>(`/admin/registration-requests/${id}/approve`, data ?? {}),
+    /** Reject a request (optional reason). Returns the updated request. */
+    rejectRegistrationRequest: (id: string, data?: RejectRegistrationRequest) =>
+      api.post<RegistrationRequest>(`/admin/registration-requests/${id}/reject`, data ?? {}),
   };
 }
 

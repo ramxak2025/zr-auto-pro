@@ -54,6 +54,7 @@ import { MotivationModule } from './motivation/motivation.module';
 import { ProfileModule } from './profile/profile.module';
 import { VoiceModule } from './voice/voice.module';
 import { SettingsModule } from './settings/settings.module';
+import { RegistrationModule } from './registration/registration.module';
 
 @Module({
   imports: [
@@ -111,6 +112,7 @@ import { SettingsModule } from './settings/settings.module';
     ProfileModule,
     VoiceModule,
     SettingsModule,
+    RegistrationModule,
   ],
   providers: [MigrationRunner],
 })

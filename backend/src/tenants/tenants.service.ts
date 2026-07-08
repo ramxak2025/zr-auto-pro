@@ -7,7 +7,7 @@ import {
   Logger,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { randomUUID } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
@@ -56,6 +56,15 @@ export class TenantsService {
     private jwtService: JwtService,
     private audit: AuditService,
   ) {}
+
+  /**
+   * Full director permission set for a freshly-created owner account — byte-for-byte
+   * the same map `create()` seeds inline (and AuthService.register). Kept as one
+   * constant so the self-service approval path (createWithOwnerAndTrialTx) and the
+   * legacy inline literal can never drift apart on a permission key.
+   */
+  private static readonly OWNER_PERMISSIONS_JSON =
+    '{"checks_view":true,"checks_create":true,"checks_edit":true,"checks_delete":true,"checks_change_datetime":true,"profit_view":true,"clients_view":true,"clients_edit":true,"warehouse_access":true,"suppliers_access":true,"financial_reports":true,"export_data":true,"user_management":true,"schedule_view":true,"salary_view":true,"marketing_access":true}';
 
   private mapTenant(row: any) {
     return {
@@ -874,6 +883,105 @@ export class TenantsService {
     } finally {
       client.release();
     }
+  }
+
+  /**
+   * Create a tenant + its owner (director) + a FREE trial, on a CALLER-SUPPLIED
+   * transaction client. Mirrors the create-with-owner logic of `create()` (same
+   * warehouse + used-purchase-supplier seeding, same full director permission set)
+   * but with two differences required by the self-service registration-approval
+   * flow (RegistrationService.approve):
+   *
+   *   1. PRE-HASHED PASSWORD — `ownerPasswordHash` is inserted VERBATIM into
+   *      users.password. It was already bcrypt-hashed when the owner submitted
+   *      their registration request, so we MUST NOT hash it again (double-hashing
+   *      would make login impossible). This is the whole reason this path exists
+   *      instead of calling `create()`.
+   *   2. TRIAL + LEDGER — subscription_end is set to the trial end, and one FREE
+   *      subscription_payments row (amount 0, is_free=true) is written in the SAME
+   *      transaction — the exact item-122 ledger mechanism, so the tenant card's
+   *      «бесплатно до …» badge and the revenue analytics stay coherent from day one.
+   *
+   * ATOMICITY is the caller's: it owns BEGIN/COMMIT and also marks the request
+   * approved inside the same transaction, so "tenant created" and "request
+   * approved" commit together or not at all. Runs on the superadmin adminPool
+   * (superuser) — RLS is bypassed exactly like `create()`.
+   *
+   * Trial end: `until` (explicit future ISO date) wins; otherwise now() + trialDays.
+   * Computed in SQL for timezone-correct interval math.
+   */
+  async createWithOwnerAndTrialTx(
+    client: PoolClient,
+    opts: {
+      companyName: string;
+      ownerName: string;
+      ownerPhone: string; // already normalized by the caller
+      ownerPasswordHash: string; // already bcrypt-hashed — inserted verbatim, NEVER re-hashed
+      until?: string | null; // explicit trial end (wins over trialDays)
+      trialDays: number; // used when `until` is null
+      createdBy?: string | null; // superadmin id → subscription_payments.created_by
+    },
+  ): Promise<{ tenant: ReturnType<TenantsService['mapTenant']>; ownerUserId: string }> {
+    // Compute the trial end once (TZ-correct): `until` verbatim if given, else
+    // now() + trialDays. `anchor` (now) is the ledger period_from.
+    const { rows: calc } = await client.query(
+      `SELECT
+         now() AS anchor,
+         CASE WHEN $1::timestamptz IS NOT NULL THEN $1::timestamptz
+              ELSE now() + ($2::int * interval '1 day')
+         END AS new_end`,
+      [opts.until ?? null, Math.trunc(opts.trialDays)],
+    );
+    const anchor: string = calc[0].anchor;
+    const newEnd: string = calc[0].new_end;
+
+    // 1. Tenant — active, default 10 seats, subscription_end = trial end.
+    const { rows: tenantRows } = await client.query(
+      `INSERT INTO tenants (name, is_active, max_users, subscription_end)
+       VALUES ($1, true, 10, $2)
+       RETURNING *`,
+      [opts.companyName, newEnd],
+    );
+    const tenant = this.mapTenant(tenantRows[0]);
+
+    // 2. Seed the three default warehouses (idempotent on (tenant_id, kind)).
+    await client.query(
+      `INSERT INTO warehouses (tenant_id, name, kind, sort_order) VALUES
+         ($1, 'Основной склад', 'main',   0),
+         ($1, 'Склад брака',    'defect', 1),
+         ($1, 'Склад Б/У',      'used',   2)
+       ON CONFLICT (tenant_id, kind) DO NOTHING`,
+      [tenant.id],
+    );
+
+    // 3. Seed the pinned "Покупка б/у товара" system supplier (idempotent).
+    await client.query(
+      `INSERT INTO suppliers (tenant_id, name, is_system, kind)
+         SELECT $1, 'Покупка б/у товара', true, 'used_purchase'
+          WHERE NOT EXISTS (
+              SELECT 1 FROM suppliers WHERE tenant_id = $1 AND kind = 'used_purchase'
+          )`,
+      [tenant.id],
+    );
+
+    // 4. Owner (director) — PRE-HASHED password inserted verbatim, full perms.
+    const { rows: ownerRows } = await client.query(
+      `INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions)
+       VALUES ($1, $2, $3, 'director', true, $4, $5)
+       RETURNING id`,
+      [opts.ownerPhone, opts.ownerPasswordHash, opts.ownerName, tenant.id, TenantsService.OWNER_PERMISSIONS_JSON],
+    );
+
+    // 5. FREE trial ledger row (item-122 mechanism): amount 0, is_free=true,
+    //    period_from=now, period_to=trial end, no previous end (brand-new tenant).
+    await client.query(
+      `INSERT INTO subscription_payments
+         (tenant_id, amount, is_free, period_from, period_to, previous_end, note, created_by)
+       VALUES ($1, 0, true, $2, $3, NULL, $4, $5)`,
+      [tenant.id, anchor, newEnd, 'Пробный период (одобрение заявки на регистрацию)', opts.createdBy ?? null],
+    );
+
+    return { tenant, ownerUserId: ownerRows[0].id };
   }
 
   async update(id: string, dto: any, actor?: AuditActor) {
