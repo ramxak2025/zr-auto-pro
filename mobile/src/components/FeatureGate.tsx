@@ -90,17 +90,49 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
     return <>{children}</>;
   }
 
+  // App Store Guideline 3.1.1/3.1.3(c) — on iOS the app is a PURE internal
+  // business tool: no tariff / подписка / план / price / «веб-версия» wording
+  // anywhere a reviewer could see. A gated feature reads as an ORGANISATION
+  // setting, not a purchasable upsell. Android keeps the full upgrade path.
+  const isIos = Platform.OS === 'ios';
+
+  // iOS: neutral «feature unavailable in your organisation» screen. No hero
+  // paywall, no plan name, no price, no CTA, no support-for-payment link —
+  // just the feature name + «обратитесь к администратору».
+  if (isIos) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top']}>
+        <View style={styles.header}>
+          <Pressable
+            onPress={() => navigation.goBack()}
+            hitSlop={10}
+            style={[styles.backBtn, { backgroundColor: palette.bg.muted }]}
+          >
+            <Ionicons name="chevron-back" size={20} color={palette.text.primary} />
+          </Pressable>
+          <Text style={[styles.headerTitle, { color: palette.text.primary }]}>{title}</Text>
+          <View style={{ width: 36 }} />
+        </View>
+
+        <View style={styles.neutralWrap}>
+          <View style={[styles.neutralIcon, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="lock-closed-outline" size={28} color={palette.text.tertiary} />
+          </View>
+          <Text style={[styles.neutralTitle, { color: palette.text.primary }]}>{title}</Text>
+          <Text style={[styles.neutralBody, { color: palette.text.secondary }]}>
+            Эта функция недоступна в вашей организации. Обратитесь к администратору.
+          </Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
   const unlockingPlan = cheapestUnlockingPlan(sub.plans, featureKey);
   // Highlights for the named plan: its gated features as human labels (excludes
   // always-on keys like check_photos that aren't paywalls). Cap at 5.
   const planHighlights: string[] = unlockingPlan
     ? unlockingPlan.features.map((k) => featureLabel(k)).slice(0, 6)
     : benefits;
-
-  // App Store Guideline 3.1.1 — on iOS the paywall is INFORMATIONAL only: no
-  // price, no «upgrade» CTA, and no external-purchase link (WhatsApp). Managing
-  // the plan happens outside the app. Android keeps the full upgrade path.
-  const isIos = Platform.OS === 'ios';
 
   const openWhatsApp = () => {
     haptic('tap');
@@ -142,7 +174,7 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
             <Ionicons name="lock-closed" size={30} color={colors.white} />
           </View>
           <Text style={styles.heroTitle}>{title}</Text>
-          {unlockingPlan && !isIos ? (
+          {unlockingPlan ? (
             <>
               <Text style={styles.heroPlan}>Доступно на тарифе «{unlockingPlan.name}»</Text>
               <View style={styles.priceRow}>
@@ -160,11 +192,7 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
         {/* What the plan unlocks */}
         <View style={[styles.benefitsCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <Text style={[styles.benefitsTitle, { color: palette.text.primary }]}>
-            {isIos
-              ? 'Возможности функции'
-              : unlockingPlan
-                ? `Тариф «${unlockingPlan.name}» включает`
-                : 'Что вы получите'}
+            {unlockingPlan ? `Тариф «${unlockingPlan.name}» включает` : 'Что вы получите'}
           </Text>
           {planHighlights.map((b, i) => (
             <View key={i} style={styles.benefitRow}>
@@ -174,35 +202,19 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
           ))}
         </View>
 
-        {isIos ? (
-          /* iOS (Guideline 3.1.1): informational note only — no purchase CTA and
-             no external-payment link. The plan is managed outside the app. */
-          <View style={[styles.iosNote, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-            <Ionicons name="information-circle-outline" size={18} color={palette.text.tertiary} />
-            <Text style={[styles.iosNoteText, { color: palette.text.secondary }]}>
-              Эта функция не входит в ваш тариф. Управление тарифом доступно в веб-версии Autexa.
-            </Text>
-          </View>
-        ) : (
-          <>
-            {/* Primary CTA → in-app subscription screen. */}
-            <Pressable
-              style={[styles.primaryBtn, { backgroundColor: palette.accent.primary }]}
-              onPress={goToSubscription}
-            >
-              <Ionicons name="rocket-outline" size={18} color={colors.white} />
-              <Text style={styles.primaryBtnText}>
-                {unlockingPlan ? `Перейти на «${unlockingPlan.name}»` : 'Выбрать тариф'}
-              </Text>
-            </Pressable>
+        {/* Primary CTA → in-app subscription screen. */}
+        <Pressable style={[styles.primaryBtn, { backgroundColor: palette.accent.primary }]} onPress={goToSubscription}>
+          <Ionicons name="rocket-outline" size={18} color={colors.white} />
+          <Text style={styles.primaryBtnText}>
+            {unlockingPlan ? `Перейти на «${unlockingPlan.name}»` : 'Выбрать тариф'}
+          </Text>
+        </Pressable>
 
-            {/* WhatsApp — secondary fallback. */}
-            <Pressable style={styles.secondaryBtn} onPress={openWhatsApp}>
-              <Ionicons name="logo-whatsapp" size={18} color={palette.text.secondary} />
-              <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>Написать в поддержку</Text>
-            </Pressable>
-          </>
-        )}
+        {/* WhatsApp — secondary fallback. */}
+        <Pressable style={styles.secondaryBtn} onPress={openWhatsApp}>
+          <Ionicons name="logo-whatsapp" size={18} color={palette.text.secondary} />
+          <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>Написать в поддержку</Text>
+        </Pressable>
       </ScrollView>
     </SafeAreaView>
   );
@@ -278,13 +290,25 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2],
   },
   secondaryBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
-  iosNote: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: spacing[2],
-    padding: spacing[4],
-    borderRadius: borderRadius['2xl'],
-    borderWidth: StyleSheet.hairlineWidth,
+
+  // iOS neutral «feature unavailable in your organisation» screen — no paywall,
+  // no plan, no price, no CTA (App Store Guideline 3.1.1/3.1.3(c)).
+  neutralWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[8],
+    gap: spacing[3],
+    marginBottom: spacing[16],
   },
-  iosNoteText: { flex: 1, fontSize: fontSize.sm, lineHeight: 20 },
+  neutralIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing[1],
+  },
+  neutralTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, textAlign: 'center', letterSpacing: -0.4 },
+  neutralBody: { fontSize: fontSize.base, textAlign: 'center', lineHeight: 22 },
 });

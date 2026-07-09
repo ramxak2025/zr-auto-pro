@@ -572,6 +572,10 @@ export default function MoreScreen() {
   const isOwnerClass = !!user?.role && MENU_OWNER_CLASS_ROLES.has(user.role);
 
   const filterItem = (item: MenuItem): boolean => {
+    // App Store Guideline 3.1.1/3.1.3(c): на iOS приложение — чисто внутренний
+    // инструмент организации, никакой «покупаемой» подписки/тарифа в интерфейсе.
+    // Пункт «Подписка» (Subscription) скрыт на iOS целиком; на Android остаётся.
+    if (Platform.OS === 'ios' && item.screen === 'Subscription') return false;
     // ROLE-ONLY menu-hide: раздел без права СКРЫТ целиком (не «с замком»).
     // Owner-class минует гейт прав; остальные — hasPermission из матрицы роли.
     if (item.permission && !isOwnerClass && !hasPermission(item.permission)) return false;

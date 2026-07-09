@@ -37,6 +37,20 @@ export class PlansService {
     return Math.max(0, Math.trunc(Number(v) || 0));
   }
 
+  /**
+   * Минимальный размер команды на любом тарифе — 2 сотрудника (App Store
+   * 3.1.3(c) «Enterprise Services»: сервис для «organizations or groups of
+   * employees», а не одиночного пользователя). Ни один тариф не может обслуживать
+   * одного человека. Пол — только вверх: суперадмин-редактор физически не может
+   * сохранить тариф с max_users < 2. Пустой/битый ввод → дефолт 5.
+   */
+  static readonly MIN_TEAM_USERS = 2;
+  private floorMaxUsers(v: unknown, fallback = 5): number {
+    const n = Math.trunc(Number(v));
+    const base = Number.isFinite(n) && n > 0 ? n : fallback;
+    return Math.max(PlansService.MIN_TEAM_USERS, base);
+  }
+
   async getAll() {
     const { rows } = await this.pool.query('SELECT * FROM plans ORDER BY sort_order, monthly_price');
     return rows.map(this.mapPlan);
@@ -51,7 +65,7 @@ export class PlansService {
         dto.monthlyPrice || 0,
         dto.description,
         JSON.stringify(dto.features || []),
-        dto.maxUsers || 5,
+        this.floorMaxUsers(dto.maxUsers),
         dto.sortOrder || 0,
         this.toNonNegInt(dto.voiceMinutes),
       ],
@@ -82,7 +96,8 @@ export class PlansService {
     }
     if (dto.maxUsers !== undefined) {
       sets.push(`max_users=$${idx++}`);
-      vals.push(dto.maxUsers);
+      // Пол ≥2: тариф не может обслуживать одного человека (App Store 3.1.3(c)).
+      vals.push(this.floorMaxUsers(dto.maxUsers));
     }
     if (dto.isActive !== undefined) {
       sets.push(`is_active=$${idx++}`);

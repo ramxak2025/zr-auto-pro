@@ -41,12 +41,11 @@ export default function LoginScreen() {
   // opacity/scale so the SplashOverlay → LoginScreen handoff is seamless:
   // the splash's centered logo cross-fades out onto an already-present
   // identical logo, with no second "logo pop" underneath. Only the form
-  // (fields + demo block) does a quick staggered fade/slide-up.
+  // (fields + submit) does a quick staggered fade/slide-up.
   const logoFade = useRef(new Animated.Value(1)).current;
   const logoScale = useRef(new Animated.Value(1)).current;
   const formSlide = useRef(new Animated.Value(20)).current;
   const formFade = useRef(new Animated.Value(0)).current;
-  const demoFade = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
     let cancelled = false;
@@ -57,16 +56,12 @@ export default function LoginScreen() {
           // Reduce Motion: no slide-up, present the form at rest with a
           // short opacity reveal only.
           formSlide.setValue(0);
-          Animated.parallel([
-            Animated.timing(formFade, { toValue: 1, duration: 160, useNativeDriver: true }),
-            Animated.timing(demoFade, { toValue: 1, duration: 160, useNativeDriver: true }),
-          ]).start();
+          Animated.timing(formFade, { toValue: 1, duration: 160, useNativeDriver: true }).start();
           return;
         }
         Animated.parallel([
           Animated.timing(formFade, { toValue: 1, duration: 250, useNativeDriver: true }),
           Animated.timing(formSlide, { toValue: 0, duration: 250, useNativeDriver: true }),
-          Animated.timing(demoFade, { toValue: 1, duration: 350, useNativeDriver: true }),
         ]).start();
       })
       .catch(() => {
@@ -74,13 +69,12 @@ export default function LoginScreen() {
         Animated.parallel([
           Animated.timing(formFade, { toValue: 1, duration: 250, useNativeDriver: true }),
           Animated.timing(formSlide, { toValue: 0, duration: 250, useNativeDriver: true }),
-          Animated.timing(demoFade, { toValue: 1, duration: 350, useNativeDriver: true }),
         ]).start();
       });
     return () => {
       cancelled = true;
     };
-  }, [demoFade, formFade, formSlide]);
+  }, [formFade, formSlide]);
 
   const handlePhoneChange = (raw: string) => {
     const digits = raw.replace(/\D/g, '');
@@ -111,21 +105,6 @@ export default function LoginScreen() {
         Alert.alert('Ошибка', error.response?.data?.message || 'Неверный телефон или пароль');
       } else {
         Alert.alert('Ошибка', `Ошибка сервера: ${error.response?.status}. Попробуйте позже.`);
-      }
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleDemoLogin = async (demoPhone: string) => {
-    setSubmitting(true);
-    try {
-      await login(demoPhone, 'demo123');
-    } catch (err: any) {
-      if (err.code === 'ERR_NETWORK' || !err.response) {
-        Alert.alert('Сервер недоступен', err.message || 'Проверьте подключение.');
-      } else {
-        Alert.alert('Ошибка', `Ошибка демо-входа: ${err.response?.data?.message || err.response?.status}`);
       }
     } finally {
       setSubmitting(false);
@@ -224,37 +203,6 @@ export default function LoginScreen() {
                 />
               </Animated.View>
             )}
-
-            {/* Demo access */}
-            <Animated.View style={[styles.demoSection, { opacity: demoFade }]}>
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={styles.dividerText}>ДЕМО-ДОСТУП</Text>
-                <View style={styles.dividerLine} />
-              </View>
-              <View style={styles.demoButtons}>
-                <View style={{ flex: 1 }}>
-                  <Button
-                    title="Владелец"
-                    variant="secondary"
-                    onPress={() => handleDemoLogin('+7 (000) 000-00-01')}
-                    disabled={submitting}
-                    size="md"
-                    hapticIntent="select"
-                  />
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Button
-                    title="Мастер"
-                    variant="secondary"
-                    onPress={() => handleDemoLogin('+7 (000) 000-00-02')}
-                    disabled={submitting}
-                    size="md"
-                    hapticIntent="select"
-                  />
-                </View>
-              </View>
-            </Animated.View>
           </View>
 
           {/* Footer */}
@@ -372,54 +320,6 @@ const styles = StyleSheet.create({
   },
   registerWrap: {
     marginTop: spacing[3],
-  },
-  demoSection: {
-    marginTop: spacing[8],
-  },
-  dividerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: spacing[4],
-  },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: colors.gray[200],
-  },
-  dividerText: {
-    paddingHorizontal: spacing[3],
-    fontSize: fontSize.xs,
-    color: colors.gray[400],
-    letterSpacing: 1.5,
-  },
-  demoButtons: {
-    flexDirection: 'row',
-    gap: spacing[3],
-  },
-  demoBtn: {
-    flex: 1,
-    paddingVertical: spacing[3],
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    borderWidth: 1,
-  },
-  demoBtnOwner: {
-    backgroundColor: colors.emerald[50],
-    borderColor: colors.emerald[200],
-  },
-  demoBtnOwnerText: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
-    color: colors.emerald[700],
-  },
-  demoBtnMaster: {
-    backgroundColor: colors.blue[50],
-    borderColor: colors.blue[200],
-  },
-  demoBtnMasterText: {
-    fontSize: fontSize.sm,
-    fontWeight: fontWeight.medium,
-    color: colors.blue[700],
   },
   footer: {
     textAlign: 'center',

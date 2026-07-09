@@ -50,9 +50,10 @@ export default function SubscriptionBlockedScreen() {
     staleTime: 60 * 1000,
   });
 
-  // App Store Guideline 3.1.1 — on iOS this block must not read as «pay here»:
-  // no renewal price and no «по вопросам оплаты» wording. The path to resolution
-  // is a neutral support contact + re-check. Android keeps the price callout.
+  // App Store Guideline 3.1.1/3.1.3(c) — on iOS this block is a PURE internal
+  // access notice: no subscription/оплата/тариф/продление wording at all, no
+  // renewal price, no «по вопросам оплаты». Neutral copy + support contact +
+  // re-check. Android keeps the full subscription/price callout.
   const isIos = Platform.OS === 'ios';
 
   const status: SubscriptionStatus = sub?.status === 'suspended' ? 'suspended' : 'expired';
@@ -92,18 +93,18 @@ export default function SubscriptionBlockedScreen() {
 
         {/* Status emblem */}
         <View style={[styles.emblem, { backgroundColor: accentSoft }]}>
-          <Ionicons name={suspended ? 'pause-circle' : 'time'} size={40} color={accent} />
+          <Ionicons name={isIos ? 'lock-closed' : suspended ? 'pause-circle' : 'time'} size={40} color={accent} />
         </View>
 
         <Text style={[styles.title, { color: palette.text.primary }]}>
-          {suspended ? 'Подписка приостановлена' : 'Срок действия подписки истёк'}
+          {isIos ? 'Доступ приостановлен' : suspended ? 'Подписка приостановлена' : 'Срок действия подписки истёк'}
         </Text>
 
         <Text style={[styles.body, { color: palette.text.secondary }]}>
-          {suspended
-            ? 'Работа в приложении временно недоступна. Для возобновления свяжитесь с нами.'
-            : isIos
-              ? 'К сожалению, действие вашей подписки на Autexa завершилось. Для возобновления работы свяжитесь с нами.'
+          {isIos
+            ? 'Доступ к приложению временно приостановлен. Обратитесь к администратору вашей организации.'
+            : suspended
+              ? 'Работа в приложении временно недоступна. Для возобновления свяжитесь с нами.'
               : 'К сожалению, действие вашей подписки на Autexa завершилось. Чтобы продолжить работу, продлите тариф ниже. До оплаты доступ к разделам ограничен.'}
         </Text>
 
