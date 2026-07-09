@@ -11,6 +11,10 @@ import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { parseFields, filterShape } from '../common/field-filter';
 import { NO_TENANT_ID } from '../common/auth-cache';
+import { userHasPermission } from '../common/guards/permissions.guard';
+
+/** Actor shape (JWT payload subset) needed to decide cost-price visibility. */
+type ProductActor = { role?: string; permissions?: Record<string, boolean> } | undefined;
 
 @Injectable()
 export class ProductsService {
@@ -18,13 +22,26 @@ export class ProductsService {
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
-  private mapProduct(row: any) {
+  /**
+   * ROLE-ONLY (консолидация 2026-07): себестоимость (costPrice) — чувствительное
+   * поле склада. Видна только тем, у кого есть 'warehouse_manage' (полное
+   * управление складом). Owner-class (director/admin/superadmin) — всегда true
+   * через userHasPermission. Мастер с 'warehouse_access' (view) видит товары БЕЗ
+   * себестоимости. undefined actor (внутренние вызовы, где нет actor) → скрываем
+   * (fail-closed).
+   */
+  private canSeeCost(actor: ProductActor): boolean {
+    return userHasPermission(actor, 'warehouse_manage');
+  }
+
+  private mapProduct(row: any, canSeeCost = true) {
     const p: any = {
       id: row.id,
       name: row.name,
       category: row.category,
       photo: row.photo,
-      costPrice: parseFloat(row.cost_price) || 0,
+      // Себестоимость скрывается у тех, кто не управляет складом (см. canSeeCost).
+      costPrice: canSeeCost ? parseFloat(row.cost_price) || 0 : 0,
       sellPrice: parseFloat(row.sell_price) || 0,
       stock: parseFloat(row.stock) || 0,
       minStock: parseFloat(row.min_stock) || 0,
@@ -78,7 +95,8 @@ export class ProductsService {
     return rows.length > 0 ? rows[0].id : null;
   }
 
-  async getAll(tenantID: string, query: any) {
+  async getAll(tenantID: string, query: any, actor?: ProductActor) {
+    const canSeeCost = this.canSeeCost(actor);
     const page = parseInt(query.page) || 1;
     // Cap 10 000 (not lower): the mobile warehouse picker legitimately fetches
     // the full catalogue today — see cap-limit.ts.
@@ -125,11 +143,12 @@ export class ProductsService {
     // to opt-in to specific subsets. Caller passes `?fields=*` (or omits
     // entirely) to get the full mapping for backwards compatibility.
     const fields = parseFields(query.fields);
-    const data = rows.map((r) => filterShape(this.mapProduct(r), fields));
+    const data = rows.map((r) => filterShape(this.mapProduct(r, canSeeCost), fields));
     return { data, total, page, limit };
   }
 
-  async getLowStock(tenantID: string) {
+  async getLowStock(tenantID: string, actor?: ProductActor) {
+    const canSeeCost = this.canSeeCost(actor);
     const { rows } = await this.pool.query(
       `SELECT p.*, s.name as supplier_name
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
@@ -138,7 +157,7 @@ export class ProductsService {
        ORDER BY p.name`,
       [tenantID],
     );
-    return rows.map(this.mapProduct);
+    return rows.map((r) => this.mapProduct(r, canSeeCost));
   }
 
   async getMovements(tenantID: string, query?: { masterId?: string; dateFrom?: string; dateTo?: string }) {
@@ -222,7 +241,7 @@ export class ProductsService {
     };
   }
 
-  async getById(id: string, tenantID: string) {
+  async getById(id: string, tenantID: string, actor?: ProductActor) {
     const { rows } = await this.pool.query(
       `SELECT p.*, s.name as supplier_name
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
@@ -230,7 +249,7 @@ export class ProductsService {
       [id, tenantID],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
-    return this.mapProduct(rows[0]);
+    return this.mapProduct(rows[0], this.canSeeCost(actor));
   }
 
   async create(tenantID: string, dto: any) {
@@ -609,7 +628,8 @@ export class ProductsService {
     }));
   }
 
-  async getProductPriceHistory(productId: string, tenantID: string) {
+  async getProductPriceHistory(productId: string, tenantID: string, actor?: ProductActor) {
+    const canSeeCost = this.canSeeCost(actor);
     const { rows } = await this.pool.query(
       `SELECT ph.*, u.full_name as user_name
        FROM price_history ph
@@ -618,10 +638,11 @@ export class ProductsService {
        ORDER BY ph.created_at DESC LIMIT 50`,
       [productId, tenantID],
     );
+    // ROLE-ONLY: cost-price columns hidden unless the actor manages the warehouse.
     return rows.map((row) => ({
       id: row.id,
-      costPriceBefore: parseFloat(row.cost_price_before) || 0,
-      costPriceAfter: parseFloat(row.cost_price_after) || 0,
+      costPriceBefore: canSeeCost ? parseFloat(row.cost_price_before) || 0 : 0,
+      costPriceAfter: canSeeCost ? parseFloat(row.cost_price_after) || 0 : 0,
       sellPriceBefore: parseFloat(row.sell_price_before) || 0,
       sellPriceAfter: parseFloat(row.sell_price_after) || 0,
       user: row.user_id ? { id: row.user_id, fullName: row.user_name } : null,
@@ -645,7 +666,8 @@ export class ProductsService {
   }
 
   // List items currently in trash, newest first.
-  async getTrash(tenantID: string) {
+  async getTrash(tenantID: string, actor?: ProductActor) {
+    const canSeeCost = this.canSeeCost(actor);
     const { rows } = await this.pool.query(
       `SELECT p.*, s.name as supplier_name
        FROM products p LEFT JOIN suppliers s ON s.id = p.supplier_id
@@ -653,7 +675,7 @@ export class ProductsService {
        ORDER BY p.deleted_at DESC`,
       [tenantID],
     );
-    return rows.map(this.mapProduct);
+    return rows.map((r) => this.mapProduct(r, canSeeCost));
   }
 
   async restore(id: string, tenantID: string) {

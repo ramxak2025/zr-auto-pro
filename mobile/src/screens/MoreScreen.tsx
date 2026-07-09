@@ -78,6 +78,13 @@ interface MenuSection {
   items: MenuItem[];
 }
 
+// ROLE-ONLY menu-hide (консолидация 2026-07): раздел без доступа СКРЫТ целиком
+// (не «показан с замком»). Бэкенд теперь возвращает 403 и costPrice:0 — UI обязан
+// это зеркалить: никаких мёртвых кнопок и «0 ₽ себестоимости». Owner-class
+// (superadmin/director/admin) видят всё — тот же байпас, что у сервера
+// (permissions.guard OWNER_CLASS_ROLES).
+const MENU_OWNER_CLASS_ROLES = new Set<string>(['superadmin', 'director', 'admin']);
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Menu structure — owner-requested 5-group taxonomy (#17), iOS Settings-style.
 //
@@ -120,6 +127,7 @@ const menuSections: MenuSection[] = [
         description: 'График работы и смены',
         screen: 'Schedule',
         itemKey: 'schedule',
+        permission: 'schedule_view',
         featureKey: 'schedule_view',
         icon: 'calendar-outline',
         iconBg: colors.indigo[50],
@@ -178,6 +186,7 @@ const menuSections: MenuSection[] = [
         description: 'Поступления и выдачи по дням',
         screen: 'CashFlow',
         itemKey: 'cashflow',
+        permission: 'cashflow_view',
         featureKey: 'cashflow_view',
         icon: 'swap-horizontal-outline',
         iconBg: colors.teal[50],
@@ -221,6 +230,7 @@ const menuSections: MenuSection[] = [
         description: 'Заработок мастеров',
         screen: 'Salary',
         itemKey: 'salary',
+        permission: 'salary_view',
         featureKey: 'salary_view',
         icon: 'wallet-outline',
         iconBg: colors.green[50],
@@ -279,6 +289,7 @@ const menuSections: MenuSection[] = [
         description: 'Каталог услуг и цены',
         screen: 'Services',
         itemKey: 'services',
+        permission: 'services_view',
         featureKey: 'services_view',
         icon: 'pricetags-outline',
         iconBg: colors.orange[50],
@@ -305,6 +316,7 @@ const menuSections: MenuSection[] = [
         description: 'Инструменты и оборудование',
         screen: 'Equipment',
         itemKey: 'equipment',
+        permission: 'equipment_view',
         icon: 'construct-outline',
         iconBg: colors.emerald[50],
         iconColor: colors.emerald[700],
@@ -336,6 +348,7 @@ const menuSections: MenuSection[] = [
         description: 'Отчёты, отзывы, интеграции и рассылки',
         screen: 'Marketing',
         itemKey: 'marketing',
+        permission: 'marketing_access',
         icon: 'megaphone-outline',
         iconBg: colors.violet[50],
         iconColor: colors.violet[600],
@@ -347,7 +360,7 @@ const menuSections: MenuSection[] = [
         description: 'Журнал звонков и записи',
         screen: 'Calls',
         itemKey: 'calls',
-        roles: ['director', 'superadmin'],
+        permission: 'calls_view',
         icon: 'call-outline',
         iconBg: colors.blue[50],
         iconColor: colors.blue[600],
@@ -363,6 +376,7 @@ const menuSections: MenuSection[] = [
         description: 'Карточки персонала, статус, рейтинги',
         screen: 'Employees',
         itemKey: 'employees',
+        permission: 'user_management',
         icon: 'people-circle-outline',
         iconBg: colors.cyan[50],
         iconColor: colors.cyan[600],
@@ -551,8 +565,16 @@ export default function MoreScreen() {
     return !(Array.isArray(sub.features) && sub.features.includes(featureKey));
   };
 
+  // Owner-class (superadmin/director/admin) — always see everything, matching
+  // the server's permissions.guard OWNER_CLASS_ROLES bypass. Their permission
+  // map from the role matrix may be sparse (guards short-circuit them by string
+  // role), so the client MUST bypass here too or an admin would lose menu rows.
+  const isOwnerClass = !!user?.role && MENU_OWNER_CLASS_ROLES.has(user.role);
+
   const filterItem = (item: MenuItem): boolean => {
-    if (item.permission && !hasPermission(item.permission)) return false;
+    // ROLE-ONLY menu-hide: раздел без права СКРЫТ целиком (не «с замком»).
+    // Owner-class минует гейт прав; остальные — hasPermission из матрицы роли.
+    if (item.permission && !isOwnerClass && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
     // 073 — granular per-item visibility override (additive to the group-level
     // isSectionVisible check the caller already applied). Owners keep their

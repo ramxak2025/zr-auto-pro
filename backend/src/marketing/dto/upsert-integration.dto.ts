@@ -64,4 +64,15 @@ export class UpsertIntegrationDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+
+  /**
+   * Independent switch for OUTBOUND client SMS through this integration
+   * (migration 127). Decoupled from `isActive`: the integration can stay
+   * connected (calls keep syncing for «Мои Звонки») while client SMS is muted.
+   * When false, guardAndLogSend skips this channel as an SMS sender. Omitted →
+   * server keeps the stored value (default true = current behaviour).
+   */
+  @IsOptional()
+  @IsBoolean()
+  smsNotificationsEnabled?: boolean;
 }

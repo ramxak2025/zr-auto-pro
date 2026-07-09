@@ -1,6 +1,7 @@
 import { Injectable, Inject, Logger, OnModuleInit, OnModuleDestroy } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { isTenantLess } from '../common/auth-cache';
 import { MarketingService } from './marketing.service';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 
@@ -48,6 +49,19 @@ export class ReminderService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getSettings(tenantId: string) {
+    // Tenant-less caller (superadmin, nil-UUID sentinel): return column defaults
+    // WITHOUT seeding — the upsert-on-read below would FK-violate
+    // reminder_settings_tenant_id_fkey (no such tenant) → 500. Shape mirrors a
+    // fresh row (038 defaults).
+    if (isTenantLess(tenantId)) {
+      return this.mapRow({
+        enabled: false,
+        months_interval: 6,
+        message_template:
+          'Уважаемый(ая) {name}, напоминаем, что прошло {months} мес. с последнего визита. Будем рады видеть вас снова!',
+        last_run_at: null,
+      });
+    }
     const { rows } = await this.pool.query(
       `SELECT enabled, months_interval, message_template, last_run_at
        FROM reminder_settings WHERE tenant_id=$1`,

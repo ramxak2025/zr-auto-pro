@@ -86,15 +86,7 @@ function formatPhone(phone: string): string {
 // Audio player (inline, not modal)
 // ---------------------------------------------------------------------------
 
-function AudioPlayer({
-  recordingId,
-  phone,
-  onClose,
-}: {
-  recordingId: string;
-  phone: string;
-  onClose: () => void;
-}) {
+function AudioPlayer({ recordingId, phone, onClose }: { recordingId: string; phone: string; onClose: () => void }) {
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const progressRef = useRef<HTMLDivElement | null>(null);
   const [loading, setLoading] = useState(true);
@@ -141,20 +133,28 @@ function AudioPlayer({
   const togglePlay = useCallback(() => {
     const a = audioRef.current;
     if (!a) return;
-    if (playing) { a.pause(); setPlaying(false); }
-    else { a.play(); setPlaying(true); }
+    if (playing) {
+      a.pause();
+      setPlaying(false);
+    } else {
+      a.play();
+      setPlaying(true);
+    }
   }, [playing]);
 
-  const seek = useCallback((e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
-    const bar = progressRef.current;
-    const a = audioRef.current;
-    if (!bar || !a || !duration) return;
-    const rect = bar.getBoundingClientRect();
-    const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
-    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
-    a.currentTime = pct * duration;
-    setCurrent(a.currentTime);
-  }, [duration]);
+  const seek = useCallback(
+    (e: React.MouseEvent<HTMLDivElement> | React.TouchEvent<HTMLDivElement>) => {
+      const bar = progressRef.current;
+      const a = audioRef.current;
+      if (!bar || !a || !duration) return;
+      const rect = bar.getBoundingClientRect();
+      const clientX = 'touches' in e ? e.touches[0].clientX : e.clientX;
+      const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+      a.currentTime = pct * duration;
+      setCurrent(a.currentTime);
+    },
+    [duration],
+  );
 
   const fmtTime = (s: number) => {
     if (!s || !isFinite(s)) return '0:00';
@@ -174,7 +174,13 @@ function AudioPlayer({
           disabled={loading || !!error}
           className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-500 text-white shadow-sm hover:bg-primary-600 active:scale-95 transition-all flex-shrink-0 disabled:opacity-50"
         >
-          {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : playing ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4 ml-0.5" />}
+          {loading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : playing ? (
+            <Pause className="h-4 w-4" />
+          ) : (
+            <Play className="h-4 w-4 ml-0.5" />
+          )}
         </button>
 
         <div className="flex-1 min-w-0">
@@ -189,7 +195,10 @@ function AudioPlayer({
                 onTouchStart={seek}
                 onTouchMove={seek}
               >
-                <div className="absolute left-0 top-0 h-full bg-primary-500 rounded-full" style={{ width: `${pct}%` }} />
+                <div
+                  className="absolute left-0 top-0 h-full bg-primary-500 rounded-full"
+                  style={{ width: `${pct}%` }}
+                />
               </div>
               <div className="flex justify-between mt-1">
                 <span className="text-[10px] text-primary-600">{fmtTime(currentTime)}</span>
@@ -199,7 +208,11 @@ function AudioPlayer({
           )}
         </div>
 
-        <button type="button" onClick={onClose} className="p-1 rounded-lg hover:bg-primary-100 text-primary-400 flex-shrink-0">
+        <button
+          type="button"
+          onClick={onClose}
+          className="p-1 rounded-lg hover:bg-primary-100 text-primary-400 flex-shrink-0"
+        >
           <X className="h-4 w-4" />
         </button>
       </div>
@@ -211,7 +224,12 @@ function AudioPlayer({
 // Call row
 // ---------------------------------------------------------------------------
 
-function CallRow({ call, canListen, activeRecording, onPlayRecording }: {
+function CallRow({
+  call,
+  canListen,
+  activeRecording,
+  onPlayRecording,
+}: {
   call: Call;
   canListen: boolean;
   activeRecording: string | null;
@@ -220,16 +238,26 @@ function CallRow({ call, canListen, activeRecording, onPlayRecording }: {
   const isMissed = call.direction === 'incoming' && (call.status === 'missed' || call.duration === 0);
   const isIncoming = call.direction === 'incoming';
   const displayPhone = isIncoming ? call.from : call.to;
-  const callTime = call.date ? new Date(call.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' }) : '';
+  const callTime = call.date
+    ? new Date(call.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    : '';
   const isPlaying = activeRecording === call.recordingUrl;
 
   return (
     <div>
       <div className="flex items-center gap-3 px-4 py-3 active:bg-gray-50 transition-colors">
         {/* Left: direction indicator */}
-        <div className={`flex h-9 w-9 items-center justify-center rounded-full flex-shrink-0 ${
-          isMissed && call.calledBack ? 'bg-green-50' : isMissed ? 'bg-red-50' : isIncoming ? 'bg-green-50' : 'bg-blue-50'
-        }`}>
+        <div
+          className={`flex h-9 w-9 items-center justify-center rounded-full flex-shrink-0 ${
+            isMissed && call.calledBack
+              ? 'bg-green-50'
+              : isMissed
+                ? 'bg-red-50'
+                : isIncoming
+                  ? 'bg-green-50'
+                  : 'bg-blue-50'
+          }`}
+        >
           {isMissed && call.calledBack ? (
             <PhoneForwarded className="h-4 w-4 text-green-600" />
           ) : isMissed ? (
@@ -266,15 +294,9 @@ function CallRow({ call, canListen, activeRecording, onPlayRecording }: {
         <div className="flex items-center gap-2 flex-shrink-0">
           <div className="text-right">
             <p className="text-xs text-gray-500">{callTime}</p>
-            {call.duration > 0 && (
-              <p className="text-[10px] text-gray-400">{formatDuration(call.duration)}</p>
-            )}
-            {isMissed && call.calledBack && (
-              <p className="text-[10px] font-medium text-green-600">Перезвонили</p>
-            )}
-            {isMissed && !call.calledBack && (
-              <p className="text-[10px] font-medium text-red-500">Пропущен</p>
-            )}
+            {call.duration > 0 && <p className="text-[10px] text-gray-400">{formatDuration(call.duration)}</p>}
+            {isMissed && call.calledBack && <p className="text-[10px] font-medium text-green-600">Перезвонили</p>}
+            {isMissed && !call.calledBack && <p className="text-[10px] font-medium text-red-500">Пропущен</p>}
           </div>
 
           {canListen && call.recordingUrl && (
@@ -295,11 +317,7 @@ function CallRow({ call, canListen, activeRecording, onPlayRecording }: {
 
       {/* Inline audio player */}
       {isPlaying && call.recordingUrl && (
-        <AudioPlayer
-          recordingId={call.recordingUrl}
-          phone={displayPhone}
-          onClose={() => onPlayRecording(null)}
-        />
+        <AudioPlayer recordingId={call.recordingUrl} phone={displayPhone} onClose={() => onPlayRecording(null)} />
       )}
     </div>
   );
@@ -322,8 +340,10 @@ export default function CallsPage() {
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
 
-  const canView = hasPermission('calls_view' as any) || isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
-  const canListen = hasPermission('calls_listen' as any) || isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
+  // Owner-class (superadmin/director/admin) видит и слушает всё; иначе — по правам.
+  const isOwnerClass = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
+  const canView = isOwnerClass || hasPermission('calls_view' as any);
+  const canListen = isOwnerClass || hasPermission('calls_listen' as any);
 
   const dateStr = format(selectedDate, 'yyyy-MM-dd');
 
@@ -353,20 +373,26 @@ export default function CallsPage() {
   const filteredCalls = useMemo(() => {
     switch (activeTab) {
       case 'incoming':
-        return calls.filter(c => c.direction === 'incoming' && c.status === 'answered');
+        return calls.filter((c) => c.direction === 'incoming' && c.status === 'answered');
       case 'outgoing':
-        return calls.filter(c => c.direction === 'outgoing');
+        return calls.filter((c) => c.direction === 'outgoing');
       case 'missed':
-        return calls.filter(c => c.direction === 'incoming' && (c.status === 'missed' || c.duration === 0));
+        return calls.filter((c) => c.direction === 'incoming' && (c.status === 'missed' || c.duration === 0));
       default:
         return calls;
     }
   }, [calls, activeTab]);
 
-  const goToPrevDay = () => { setSelectedDate(d => subDays(d, 1)); setActiveRecording(null); };
+  const goToPrevDay = () => {
+    setSelectedDate((d) => subDays(d, 1));
+    setActiveRecording(null);
+  };
   const goToNextDay = () => {
     const tomorrow = addDays(selectedDate, 1);
-    if (tomorrow <= new Date()) { setSelectedDate(tomorrow); setActiveRecording(null); }
+    if (tomorrow <= new Date()) {
+      setSelectedDate(tomorrow);
+      setActiveRecording(null);
+    }
   };
   const isToday = format(new Date(), 'yyyy-MM-dd') === dateStr;
 
@@ -393,7 +419,12 @@ export default function CallsPage() {
             <ChevronLeft className="w-5 h-5" />
           </button>
           <span className="text-sm font-medium text-gray-700 min-w-[80px] text-center">{dateLabel}</span>
-          <button type="button" onClick={goToNextDay} disabled={isToday} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 disabled:opacity-20">
+          <button
+            type="button"
+            onClick={goToNextDay}
+            disabled={isToday}
+            className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 disabled:opacity-20"
+          >
             <ChevronRight className="w-5 h-5" />
           </button>
         </div>
@@ -406,7 +437,7 @@ export default function CallsPage() {
           { label: 'Исх.', value: summary?.outgoing ?? 0, color: 'text-blue-600', bg: 'bg-blue-50' },
           { label: 'Пропущ.', value: summary?.missed ?? 0, color: 'text-red-600', bg: 'bg-red-50' },
           { label: 'Без ответа', value: summary?.notCalledBack ?? 0, color: 'text-orange-600', bg: 'bg-orange-50' },
-        ].map(s => (
+        ].map((s) => (
           <div key={s.label} className={`flex-1 ${s.bg} rounded-xl py-2.5 px-2 text-center`}>
             <p className={`text-lg font-bold ${s.color}`}>{isLoading ? '-' : s.value}</p>
             <p className="text-[10px] text-gray-500 mt-0.5">{s.label}</p>
@@ -419,7 +450,8 @@ export default function CallsPage() {
         <div className="flex items-center gap-2.5 bg-orange-50 border border-orange-200 rounded-xl px-3.5 py-2.5">
           <PhoneForwarded className="h-4 w-4 text-orange-500 flex-shrink-0" />
           <p className="text-xs text-orange-700 font-medium">
-            {summary.notCalledBack} {summary.notCalledBack === 1 ? 'пропущенный без перезвона' : 'пропущенных без перезвона'}
+            {summary.notCalledBack}{' '}
+            {summary.notCalledBack === 1 ? 'пропущенный без перезвона' : 'пропущенных без перезвона'}
           </p>
         </div>
       )}
@@ -428,27 +460,33 @@ export default function CallsPage() {
       <div className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden">
         {/* Tabs */}
         <div className="flex border-b border-gray-100">
-          {filterTabs.map(tab => {
-            const count = tab.key === 'all' ? summary?.total
-              : tab.key === 'incoming' ? summary?.incoming
-              : tab.key === 'outgoing' ? summary?.outgoing
-              : summary?.missed;
+          {filterTabs.map((tab) => {
+            const count =
+              tab.key === 'all'
+                ? summary?.total
+                : tab.key === 'incoming'
+                  ? summary?.incoming
+                  : tab.key === 'outgoing'
+                    ? summary?.outgoing
+                    : summary?.missed;
             const active = activeTab === tab.key;
             return (
               <button
                 key={tab.key}
                 type="button"
-                onClick={() => { setActiveTab(tab.key); setActiveRecording(null); }}
+                onClick={() => {
+                  setActiveTab(tab.key);
+                  setActiveRecording(null);
+                }}
                 className={`flex-1 py-2.5 text-center transition-all relative ${
                   active ? 'text-primary-600' : 'text-gray-400 hover:text-gray-600'
                 }`}
               >
                 <span className="text-xs font-semibold">
-                  {tab.label}{count !== undefined ? ` ${count}` : ''}
+                  {tab.label}
+                  {count !== undefined ? ` ${count}` : ''}
                 </span>
-                {active && (
-                  <div className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-500 rounded-full" />
-                )}
+                {active && <div className="absolute bottom-0 left-3 right-3 h-0.5 bg-primary-500 rounded-full" />}
               </button>
             );
           })}
@@ -477,9 +515,7 @@ export default function CallsPage() {
         ) : filteredCalls.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">
             <Phone className="h-8 w-8 text-gray-200 mb-2" />
-            <p className="text-sm text-gray-400">
-              {activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}
-            </p>
+            <p className="text-sm text-gray-400">{activeTab === 'missed' ? 'Пропущенных нет' : 'Нет звонков'}</p>
           </div>
         ) : (
           <div className="divide-y divide-gray-50">

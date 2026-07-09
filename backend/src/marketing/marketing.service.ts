@@ -10,6 +10,7 @@ import {
 import { Pool } from 'pg';
 import * as crypto from 'crypto';
 import { PG_POOL } from '../database.module';
+import { isTenantLess } from '../common/auth-cache';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { phoneSearchKey } from '../common/normalize-phone';
 
@@ -351,8 +352,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async getAdapter(tenantId: string): Promise<MessagingProviderAdapter | null> {
+    // Only integrations with the outbound-SMS switch ON (migration 127) are
+    // eligible SMS channels. `is_active` (connected) is necessary but not
+    // sufficient — a muted integration keeps syncing calls yet never sends SMS.
     const { rows } = await this.pool.query(
-      `SELECT * FROM messaging_integrations WHERE tenant_id=$1 AND is_active=true ORDER BY created_at LIMIT 1`,
+      `SELECT * FROM messaging_integrations
+        WHERE tenant_id=$1 AND is_active=true AND sms_notifications_enabled=true
+        ORDER BY created_at LIMIT 1`,
       [tenantId],
     );
     return rows.length > 0 ? this.createAdapter(rows[0]) : null;
@@ -368,9 +374,16 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     tenantId: string,
     opts: { integrationId?: string | null; providerType?: string | null },
   ): Promise<any | null> {
+    // Every branch additionally requires sms_notifications_enabled=true
+    // (migration 127): a connected-but-SMS-muted integration is never chosen as
+    // a client-SMS sender. An explicit integrationId that is muted resolves to
+    // null → the caller treats it as `no_provider` and skips the send, WITHOUT
+    // touching the integration's own connected/is_active state (calls keep
+    // syncing). This is the single choke point for all outbound client SMS.
     if (opts.integrationId) {
       const { rows } = await this.pool.query(
-        `SELECT * FROM messaging_integrations WHERE id=$1 AND tenant_id=$2 AND is_active=true LIMIT 1`,
+        `SELECT * FROM messaging_integrations
+          WHERE id=$1 AND tenant_id=$2 AND is_active=true AND sms_notifications_enabled=true LIMIT 1`,
         [opts.integrationId, tenantId],
       );
       return rows[0] ?? null;
@@ -378,13 +391,16 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     if (opts.providerType) {
       const { rows } = await this.pool.query(
         `SELECT * FROM messaging_integrations
-          WHERE tenant_id=$1 AND provider_type=$2 AND is_active=true ORDER BY created_at LIMIT 1`,
+          WHERE tenant_id=$1 AND provider_type=$2 AND is_active=true AND sms_notifications_enabled=true
+          ORDER BY created_at LIMIT 1`,
         [tenantId, opts.providerType],
       );
       return rows[0] ?? null;
     }
     const { rows } = await this.pool.query(
-      `SELECT * FROM messaging_integrations WHERE tenant_id=$1 AND is_active=true ORDER BY created_at LIMIT 1`,
+      `SELECT * FROM messaging_integrations
+        WHERE tenant_id=$1 AND is_active=true AND sms_notifications_enabled=true
+        ORDER BY created_at LIMIT 1`,
       [tenantId],
     );
     return rows[0] ?? null;
@@ -585,6 +601,12 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     'Здравствуйте! Ваш автомобиль {car} готов. Заказ-наряд №{number}. Будем рады видеть вас!';
 
   async getCarReadySettings(tenantId: string): Promise<{ enabled: boolean; messageTemplate: string }> {
+    // Tenant-less caller (superadmin, nil-UUID sentinel): return the default
+    // WITHOUT seeding — the upsert-on-read below would FK-violate
+    // car_ready_settings_tenant_id_fkey (no such tenant) → 500. Disabled default.
+    if (isTenantLess(tenantId)) {
+      return { enabled: false, messageTemplate: MarketingService.CAR_READY_DEFAULT_TEMPLATE };
+    }
     const { rows } = await this.pool.query(
       `SELECT enabled, message_template FROM car_ready_settings WHERE tenant_id=$1`,
       [tenantId],
@@ -705,7 +727,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     // UI can show/edit them.
     const { rows } = await this.pool.query(
       `SELECT id, provider_type, sender_name, sender_phone, webhook_url,
-              phone_number_id, telegram_chat_id, is_active, created_at
+              phone_number_id, telegram_chat_id, is_active, sms_notifications_enabled, created_at
        FROM messaging_integrations WHERE tenant_id=$1 ORDER BY created_at`,
       [tenantId],
     );
@@ -718,6 +740,11 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       phoneNumberId: r.phone_number_id,
       chatId: r.telegram_chat_id,
       isActive: r.is_active,
+      // Independent outbound-SMS switch (migration 127). Decoupled from
+      // is_active: the integration stays connected (calls keep syncing) while
+      // client SMS is muted. Default true when null/absent so a legacy row keeps
+      // sending as before.
+      smsNotificationsEnabled: r.sms_notifications_enabled !== false,
       createdAt: r.created_at,
     }));
   }
@@ -743,8 +770,9 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       await this.pool.query(
         `UPDATE messaging_integrations SET provider_type=$1, api_key=$2, sender_name=$3,
          sender_phone=$4, webhook_url=$5, phone_number_id=$6, telegram_chat_id=$7,
-         is_active=$8, updated_at=now()
-         WHERE id=$9 AND tenant_id=$10`,
+         is_active=$8, sms_notifications_enabled=COALESCE($9, sms_notifications_enabled),
+         updated_at=now()
+         WHERE id=$10 AND tenant_id=$11`,
         [
           dto.providerType,
           apiKey,
@@ -754,6 +782,9 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
           dto.phoneNumberId || null,
           dto.chatId || null,
           dto.isActive !== false,
+          // Only overwrite the SMS switch when the caller explicitly sends it;
+          // an omitted field leaves the stored value untouched (COALESCE above).
+          typeof dto.smsNotificationsEnabled === 'boolean' ? dto.smsNotificationsEnabled : null,
           dto.id,
           tenantId,
         ],
@@ -765,8 +796,9 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       }
       await this.pool.query(
         `INSERT INTO messaging_integrations
-           (tenant_id, provider_type, api_key, sender_name, sender_phone, webhook_url, phone_number_id, telegram_chat_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+           (tenant_id, provider_type, api_key, sender_name, sender_phone, webhook_url,
+            phone_number_id, telegram_chat_id, sms_notifications_enabled)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,COALESCE($9, true))`,
         [
           tenantId,
           dto.providerType,
@@ -776,6 +808,8 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
           dto.webhookUrl || null,
           dto.phoneNumberId || null,
           dto.chatId || null,
+          // New integration defaults to sending SMS (true) unless explicitly off.
+          typeof dto.smsNotificationsEnabled === 'boolean' ? dto.smsNotificationsEnabled : null,
         ],
       );
     }
@@ -816,6 +850,20 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
 
   // ─── Review Settings ─────────────────────────────────────────────
   async getSettings(tenantId: string) {
+    // Tenant-less caller (superadmin, nil-UUID sentinel): return column defaults
+    // WITHOUT seeding — the upsert-on-read below would FK-violate
+    // review_settings_tenant_id_fkey (no such tenant) → 500 on GET
+    // /marketing/settings. Shape mirrors a fresh row (007 defaults).
+    if (isTenantLess(tenantId)) {
+      return this.mapSettings({
+        send_time: '20:00',
+        feedback_delay_hours: 2,
+        auto_send_enabled: true,
+        message_template:
+          'Здравствуйте, {clientName}! Спасибо за визит в {tenantName}. Оцените качество обслуживания: {reviewLink}',
+        motivation_message: '',
+      });
+    }
     const { rows } = await this.pool.query(`SELECT * FROM review_settings WHERE tenant_id=$1`, [tenantId]);
     if (rows.length === 0) {
       await this.pool.query(`INSERT INTO review_settings (tenant_id) VALUES ($1) ON CONFLICT DO NOTHING`, [tenantId]);

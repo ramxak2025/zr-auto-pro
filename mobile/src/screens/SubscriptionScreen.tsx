@@ -135,15 +135,19 @@ export default function SubscriptionScreen() {
                 </View>
               </View>
 
-              <View style={[styles.infoBlock, { backgroundColor: palette.bg.muted }]}>
-                <Ionicons name="card-outline" size={18} color={palette.text.tertiary} />
-                <View>
-                  <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Стоимость</Text>
-                  <Text style={[styles.infoValue, { color: palette.text.primary }]}>
-                    {sub?.monthlyPrice ? `${sub.monthlyPrice.toLocaleString('ru-RU')} ₽/мес` : 'Не указано'}
-                  </Text>
+              {/* Price of the current plan — hidden on iOS (Guideline 3.1.1:
+                  keep the subscription surface free of purchasable pricing). */}
+              {!isIos && (
+                <View style={[styles.infoBlock, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="card-outline" size={18} color={palette.text.tertiary} />
+                  <View>
+                    <Text style={[styles.infoLabel, { color: palette.text.secondary }]}>Стоимость</Text>
+                    <Text style={[styles.infoValue, { color: palette.text.primary }]}>
+                      {sub?.monthlyPrice ? `${sub.monthlyPrice.toLocaleString('ru-RU')} ₽/мес` : 'Не указано'}
+                    </Text>
+                  </View>
                 </View>
-              </View>
+              )}
             </View>
 
             {/* Users */}
@@ -179,7 +183,7 @@ export default function SubscriptionScreen() {
               >
                 <Ionicons name="information-circle-outline" size={18} color={palette.text.tertiary} />
                 <Text style={[styles.manageText, { color: palette.text.secondary }]}>
-                  Управление подпиской и оплата доступны в личном кабинете на сайте autexa.pw.
+                  Управление подпиской доступно в веб-версии Autexa.
                 </Text>
               </View>
             ) : (
@@ -191,8 +195,10 @@ export default function SubscriptionScreen() {
           </View>
         </AnimatedCard>
 
-        {/* Available plans */}
-        {sub?.plans && sub.plans.length > 0 && (
+        {/* Available plans — HIDDEN on iOS (Guideline 3.1.1): a list of
+            purchasable tariffs with prices is a purchase surface. iOS shows only
+            the current-plan status above; Android keeps the full comparison. */}
+        {!isIos && sub?.plans && sub.plans.length > 0 && (
           <>
             <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>Доступные тарифы</Text>
             {sub.plans.map((plan, idx) => {

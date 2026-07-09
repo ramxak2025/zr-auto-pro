@@ -274,13 +274,15 @@ export default function SuppliersScreen() {
   // renders here instead of behind a standalone menu entry.
   const [view, setView] = useState<SuppliersView>('suppliers');
 
-  // Permission gate for the destructive swipe-delete. Owner-class roles
-  // see it unconditionally; otherwise we require `suppliers_access`
-  // (the only suppliers-related permission key in UserPermissions).
-  const canDelete = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('suppliers_access');
-  // Write gate for placing purchase orders — matches PurchaseOrdersScreen
-  // (director / admin / superadmin); the server re-checks on every mutation.
-  const canWriteOrders = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Single manage gate for the WHOLE control surface (create / edit /
+  // delete / приёмка-поставка / возврат брака / заказы). `suppliers_access`
+  // is VIEW-only — it must never expose a mutating control. Owner-class
+  // roles (superadmin / director / admin) bypass by string role: the
+  // backend PermissionsGuard bypasses them too, so their flattened
+  // permission map may not even contain `suppliers_manage`. The server
+  // re-checks `suppliers_manage` on every mutation regardless.
+  const canManageSuppliers =
+    isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('suppliers_manage');
 
   // Confirm dialog state — driven by row swipe.
   const [pendingDelete, setPendingDelete] = useState<Supplier | null>(null);
@@ -489,7 +491,7 @@ export default function SuppliersScreen() {
       <SupplierRow
         item={item}
         index={index}
-        canDelete={canDelete}
+        canDelete={canManageSuppliers}
         onPress={handlePressSupplier}
         onPressInRow={handlePressInSupplier}
         onEdit={openEdit}
@@ -505,7 +507,7 @@ export default function SuppliersScreen() {
       />
     ),
     [
-      canDelete,
+      canManageSuppliers,
       handlePressSupplier,
       handlePressInSupplier,
       openEdit,
@@ -543,37 +545,42 @@ export default function SuppliersScreen() {
         onBack={() => navigation.goBack()}
         trailing={
           view === 'suppliers' ? (
-            /* Suppliers segment — TWO actions:
+            /* Suppliers segment — управляющие действия видны только с
+               `suppliers_manage`. Без него экран строго view-only: ни
+               «Возврат брака», ни «+ Новый» не рендерим (мёртвых кнопок
+               не оставляем).
                1) «Возврат брака» — secondary, opens a supplier picker
                   sheet that forwards to SupplierDetail with the
                   auto-open flag.
                2) «+ Новый» — primary, opens the create-supplier modal. */
-            <View style={styles.headerTrailing}>
-              <TouchableOpacity
-                onPress={() => setDefectPickerOpen(true)}
-                style={[
-                  styles.headerSecondaryBtn,
-                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                ]}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Возврат брака"
-              >
-                <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
-                <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
-                  Возврат брака
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.addBtn}
-                onPress={openCreate}
-                hitSlop={8}
-                accessibilityLabel="Новый поставщик"
-              >
-                <Ionicons name="add" size={18} color={colors.white} />
-              </TouchableOpacity>
-            </View>
-          ) : canWriteOrders ? (
+            canManageSuppliers ? (
+              <View style={styles.headerTrailing}>
+                <TouchableOpacity
+                  onPress={() => setDefectPickerOpen(true)}
+                  style={[
+                    styles.headerSecondaryBtn,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                  ]}
+                  hitSlop={8}
+                  accessibilityRole="button"
+                  accessibilityLabel="Возврат брака"
+                >
+                  <Ionicons name="return-down-back-outline" size={16} color={colors.orange[600]} />
+                  <Text style={[styles.headerSecondaryText, { color: palette.text.primary }]} numberOfLines={1}>
+                    Возврат брака
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.addBtn}
+                  onPress={openCreate}
+                  hitSlop={8}
+                  accessibilityLabel="Новый поставщик"
+                >
+                  <Ionicons name="add" size={18} color={colors.white} />
+                </TouchableOpacity>
+              </View>
+            ) : undefined
+          ) : canManageSuppliers ? (
             /* Orders segment — single «+» that opens order creation. The
                embedded PurchaseOrdersScreen drops its own header, so this
                is the create entry-point (mirrors the standalone screen). */
@@ -656,8 +663,10 @@ export default function SuppliersScreen() {
           ) : !suppliers.length && !isLoading ? (
             <EmptyState
               title="Нет поставщиков"
-              description="Добавьте первого поставщика"
-              action={{ label: 'Добавить', onPress: openCreate }}
+              description={canManageSuppliers ? 'Добавьте первого поставщика' : 'Список поставщиков пуст'}
+              // «Добавить» — только с правом управления. View-only роль
+              // видит пустое состояние без мутирующего действия.
+              action={canManageSuppliers ? { label: 'Добавить', onPress: openCreate } : undefined}
             />
           ) : (
             <FlashList

@@ -5,8 +5,9 @@ import { UsersService } from './users.service';
 @Module({
   controllers: [UsersController],
   providers: [UsersService],
-  // Exported so PermissionTemplatesModule can reuse updatePermissions() (the
-  // self-lockout-protected apply path) instead of duplicating the guard.
+  // Exported so other modules can reuse UsersService. (permission-templates,
+  // which previously consumed updatePermissions(), was removed in the ROLE-ONLY
+  // consolidation 2026-07.)
   exports: [UsersService],
 })
 export class UsersModule {}

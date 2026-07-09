@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { isTenantLess } from '../common/auth-cache';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { UpdateLoyaltySettingsDto } from './dto/update-loyalty-settings.dto';
 import { AccrueBonusDto } from './dto/accrue-bonus.dto';
@@ -163,6 +164,13 @@ export class LoyaltyService {
 
   /** Upsert-on-read: create the default row the first time, then return it. */
   async getSettings(tenantID: string): Promise<ResolvedSettings> {
+    // Tenant-less caller (superadmin, nil-UUID sentinel): return the column
+    // defaults WITHOUT seeding — the upsert-on-read below would FK-violate
+    // loyalty_settings_tenant_id_fkey (no such tenant) → 500 on GET
+    // /loyalty/settings. Shape mirrors a fresh row (redeem_max_percent DEFAULT 50).
+    if (isTenantLess(tenantID)) {
+      return { enabled: false, accrualPercent: 0, redeemMaxPercent: 50, updatedAt: null };
+    }
     await this.pool.query('INSERT INTO loyalty_settings (tenant_id) VALUES ($1) ON CONFLICT (tenant_id) DO NOTHING', [
       tenantID,
     ]);

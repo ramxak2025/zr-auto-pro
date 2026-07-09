@@ -703,6 +703,15 @@ export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { hasPermission, user } = useAuth();
+
+  // ROLE/PERMISSION: editing an existing client profile (ФИО / телефон /
+  // комментарий) requires `clients_edit`. Owner-class roles bypass, matching the
+  // per-page gate pattern used across this batch. Creating a new client,
+  // attaching/editing a car, and adding a client to a check stay ungated.
+  const isOwnerClass =
+    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
+  const canEditClient = isOwnerClass || hasPermission('clients_edit');
 
   // Client edit modal
   const [clientModalOpen, setClientModalOpen] = useState(false);
@@ -970,10 +979,12 @@ export default function ClientDetailPage() {
       <div className="card p-6 mb-6">
         <div className="flex items-start justify-between mb-4">
           <h2 className="text-xl font-semibold text-gray-900">Информация о клиенте</h2>
-          <button onClick={openClientEditModal} className="btn-secondary">
-            <Edit2 className="w-4 h-4" />
-            Редактировать
-          </button>
+          {canEditClient && (
+            <button onClick={openClientEditModal} className="btn-secondary">
+              <Edit2 className="w-4 h-4" />
+              Редактировать
+            </button>
+          )}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">

@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { isTenantLess } from '../common/auth-cache';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { MarketingService } from '../marketing/marketing.service';
 import { PayInstallmentDto } from './dto/pay-installment.dto';
@@ -445,6 +446,13 @@ export class InstallmentsService {
   }
 
   async getReminderSettings(tenantID: string) {
+    // Tenant-less caller (superadmin, nil-UUID sentinel): return column defaults
+    // WITHOUT seeding — the upsert-on-read below would FK-violate
+    // installment_reminder_settings_tenant_id_fkey (no such tenant) → 500.
+    // mapReminderSettings({}) yields the exact 093 defaults (mode 'off').
+    if (isTenantLess(tenantID)) {
+      return this.mapReminderSettings({});
+    }
     const { rows } = await this.pool.query(`SELECT * FROM installment_reminder_settings WHERE tenant_id = $1`, [
       tenantID,
     ]);

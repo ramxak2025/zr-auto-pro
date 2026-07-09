@@ -158,18 +158,19 @@ export default function ProductDetailScreen() {
   const tabBarHeight = useTabBarHeight();
   const { user, hasPermission } = useAuth();
 
-  // Mirror ProductRow's gating EXACTLY — directors / admins / superadmins see
-  // cost & margin; masters never do.
-  const canSeeCostPrice = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
-  // Edit (PATCH /products/:id) is role-gated on the backend; warehouse_access
-  // is the same permission the warehouse screen uses to surface edit.
-  const canManageWarehouse = hasPermission('warehouse_access');
-  // #60 — «Удаление на складе». Owner-class (superadmin/director/admin) всегда
-  // разрешено — бэкенд PermissionsGuard так же байпасит их; мастеру право
-  // выдаёт владелец. Удаление мягкое: товар уходит в Корзину, откуда его
-  // можно восстановить.
+  // Owner-class (superadmin/director/admin) минует все склад-гейты — как на
+  // сервере (PermissionsGuard байпасит их по строковой роли).
   const isOwnerClass = user?.role === 'superadmin' || user?.role === 'director' || user?.role === 'admin';
-  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_delete');
+  // ROLE-ONLY (консолидация 2026-07): управление складом (себестоимость +
+  // редактирование) — только warehouse_manage. Бэкенд шлёт costPrice:0 и 403 на
+  // PATCH не-менеджеру, поэтому себестоимость/маржу/редактор прячем (иначе
+  // «0 ₽ себестоимости» и мёртвая кнопка «Сохранить»). Mirror ProductRow.
+  const canManageWarehouse = isOwnerClass || hasPermission('warehouse_manage');
+  // Себестоимость и маржу видит только тот, кто управляет складом (manage ⇒
+  // backend отдаёт реальную costPrice; иначе costPrice:0 — показывать нельзя).
+  const canSeeCostPrice = canManageWarehouse;
+  // #60 — «Удаление на складе». manage ⇒ delete; либо явное warehouse_delete.
+  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
 
   const passedProduct = (route.params as ProductDetailParams).product;
   const productId = passedProduct.id;

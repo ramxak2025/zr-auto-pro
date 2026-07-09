@@ -12,6 +12,7 @@ import { Cron } from '@nestjs/schedule';
 import { randomUUID } from 'crypto';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { isTenantLess } from '../common/auth-cache';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { WarrantyService } from '../warranty/warranty.service';
 import { PushService } from '../push/push.service';
@@ -1069,6 +1070,12 @@ export class ChecksService {
    * on every board read and on setWorkStatus.
    */
   private async ensureBoardColumnsDefaults(tenantID: string): Promise<void> {
+    // Tenant-less caller (superadmin, nil-UUID sentinel): skip the seed — this
+    // runs on the board READ path (getBoard / listBoardColumns), and an INSERT
+    // with the sentinel tenant_id FK-violates work_board_columns_tenant_id_fkey
+    // (no such tenant) → 500. A tenant-less caller has no board columns anyway
+    // (the follow-up SELECT returns []), so returning early is correct.
+    if (isTenantLess(tenantID)) return;
     const keys = DEFAULT_BOARD_COLUMNS.map((c) => c.key);
     const labels = DEFAULT_BOARD_COLUMNS.map((c) => c.label);
     const colors = DEFAULT_BOARD_COLUMNS.map((c) => c.color);

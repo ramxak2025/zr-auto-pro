@@ -41,7 +41,6 @@ import {
   createKnowledgeApi,
   createNotificationsApi,
   createBookingsApi,
-  createPermissionTemplatesApi,
   createRolesApi,
   createCashShiftsApi,
   createDebtsApi,
@@ -131,10 +130,6 @@ export const journalApi = createJournalApi(api);
 export const knowledgeApi = createKnowledgeApi(api);
 export const notificationsApi = createNotificationsApi(api);
 export const bookingsApi = createBookingsApi(api);
-// Role templates — saved permission blueprints applied to employees. Gated
-// director/admin/superadmin server-side; consumed by UsersScreen's permission
-// matrix («Сохранить как роль» / «Применить роль»).
-export const permissionTemplatesApi = createPermissionTemplatesApi(api);
 // Роли (Bitrix24-style, миграция 114) — живая база прав: сервер строит
 // эффективные права назначенного пользователя как «flatten(матрицы роли) ⊕
 // персональные overrides». Все маршруты director/admin/superadmin-gated

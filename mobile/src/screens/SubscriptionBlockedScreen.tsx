@@ -21,7 +21,7 @@
  * deliberately takes NO navigation prop — it lives outside any navigator.
  */
 import React from 'react';
-import { View, StyleSheet, ScrollView, Pressable, Linking, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ScrollView, Pressable, Linking, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -49,6 +49,11 @@ export default function SubscriptionBlockedScreen() {
     queryFn: async () => (await subscriptionApi.get()).data,
     staleTime: 60 * 1000,
   });
+
+  // App Store Guideline 3.1.1 — on iOS this block must not read as «pay here»:
+  // no renewal price and no «по вопросам оплаты» wording. The path to resolution
+  // is a neutral support contact + re-check. Android keeps the price callout.
+  const isIos = Platform.OS === 'ios';
 
   const status: SubscriptionStatus = sub?.status === 'suspended' ? 'suspended' : 'expired';
   const suspended = status === 'suspended';
@@ -97,11 +102,14 @@ export default function SubscriptionBlockedScreen() {
         <Text style={[styles.body, { color: palette.text.secondary }]}>
           {suspended
             ? 'Работа в приложении временно недоступна. Для возобновления свяжитесь с нами.'
-            : 'К сожалению, действие вашей подписки на Autexa завершилось. Чтобы продолжить работу, продлите тариф ниже. До оплаты доступ к разделам ограничен.'}
+            : isIos
+              ? 'К сожалению, действие вашей подписки на Autexa завершилось. Для возобновления работы свяжитесь с нами.'
+              : 'К сожалению, действие вашей подписки на Autexa завершилось. Чтобы продолжить работу, продлите тариф ниже. До оплаты доступ к разделам ограничен.'}
         </Text>
 
-        {/* Plan / price callout — only meaningful for an expired subscription. */}
-        {!suspended ? (
+        {/* Plan / price callout — only for an expired subscription, and hidden on
+            iOS (Guideline 3.1.1: no renewal price on the block screen). */}
+        {!suspended && !isIos ? (
           <View style={[styles.planCard, surface.card]}>
             <View style={[styles.planIcon, { backgroundColor: palette.accent.primarySoft }]}>
               <Ionicons name="pricetags" size={20} color={palette.accent.primaryText} />
@@ -128,7 +136,7 @@ export default function SubscriptionBlockedScreen() {
           </View>
           <View style={{ flex: 1 }}>
             <Text style={[styles.contactLabel, { color: palette.text.tertiary }]}>
-              {suspended ? 'Связаться с нами' : 'По вопросам оплаты'}
+              {suspended || isIos ? 'Связаться с нами' : 'По вопросам оплаты'}
             </Text>
             <Text style={[styles.contactValue, { color: palette.text.primary }]}>{SUPPORT_EMAIL}</Text>
           </View>

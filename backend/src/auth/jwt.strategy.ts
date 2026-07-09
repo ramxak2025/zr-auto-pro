@@ -64,11 +64,12 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     }
 
     // 114 — LEFT JOIN подтягивает матрицу назначенной роли тем же запросом
-    // (нулевой дополнительный DB-hop). role_id NULL (все существующие
-    // пользователи) → role_matrix NULL → путь байт-в-байт как до 114.
+    // (нулевой дополнительный DB-hop). ROLE-ONLY (консолидация 2026-07): матрица
+    // роли — единственный источник прав; users.permissions больше не читаются.
+    // role_id NULL (аномалия после cutover-миграции 126) → role_matrix NULL →
+    // deny-by-default для мастера падает на MASTER_PERMISSION_DEFAULTS в guard.
     const { rows } = await this.pool.query(
       `SELECT u.is_active, u.tenant_id::text as tenant_id, u.role, u.dismissed_at, u.purged_at,
-              COALESCE(u.permissions, '{}') as permissions,
               r.matrix as role_matrix
        FROM users u
        LEFT JOIN roles r ON r.id = u.role_id
@@ -91,37 +92,24 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       throw new UnauthorizedException({ message: 'Аккаунт деактивирован' });
     }
 
-    // `permissions` is jsonb — node-pg returns it already parsed as an object,
-    // but a legacy text column would come back as a string. Normalize both,
-    // and never let a malformed value reject an otherwise-valid token.
-    let permissions: Record<string, boolean> = {};
-    const rawPerms = rows[0].permissions;
-    if (rawPerms && typeof rawPerms === 'object') {
-      permissions = rawPerms as Record<string, boolean>;
-    } else if (typeof rawPerms === 'string') {
-      try {
-        permissions = JSON.parse(rawPerms) as Record<string, boolean>;
-      } catch {
-        permissions = {};
-      }
-    }
-
-    // ── 114 — мост совместимости ролей ───────────────────────────────────
-    // Назначена роль (role_id → матрица) → база actor.permissions строится из
-    // flatten(матрицы), персональные users.permissions действуют ПОВЕРХ. Все
-    // guards/сервисы по-прежнему спрашивают userHasPermission(actor, key) — ни
-    // один enforcement-путь не меняется, меняется только источник карты.
-    // Матрицы нет (role_id NULL — все существующие пользователи) →
-    // mergeEffectivePermissions возвращает карту как есть: поведение прежнее.
+    // ── ROLE-ONLY (консолидация 2026-07) — источник прав только матрица роли ──
+    // Назначена роль (role_id → матрица) → actor.permissions = flatten(матрицы).
+    // Персональные users.permissions УДАЛЕНЫ из модели прав (миграция 126
+    // мигрирует любые расхождения в кастомные роли). Все guards/сервисы
+    // по-прежнему спрашивают userHasPermission(actor, key) — меняется только
+    // источник карты. Матрицы нет (role_id NULL — аномалия после cutover) →
+    // mergeEffectivePermissions возвращает {} (deny-by-default); мастер
+    // добирает базу из MASTER_PERMISSION_DEFAULTS в guard, owner-class обходит
+    // гейты по строковой роли.
     let roleMatrix = rows[0].role_matrix ?? null;
     if (typeof roleMatrix === 'string') {
       try {
         roleMatrix = JSON.parse(roleMatrix);
       } catch {
-        roleMatrix = null; // fail-closed до легаси-пути, а не 500 на каждый запрос
+        roleMatrix = null; // fail-closed до deny-by-default, а не 500 на каждый запрос
       }
     }
-    permissions = mergeEffectivePermissions(roleMatrix, permissions);
+    const permissions: Record<string, boolean> = mergeEffectivePermissions(roleMatrix);
 
     return {
       userID,

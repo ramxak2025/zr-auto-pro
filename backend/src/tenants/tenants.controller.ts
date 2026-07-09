@@ -3,9 +3,16 @@ import { TenantsService } from './tenants.service';
 import { AuditService, AuditActor } from './audit.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { ExtendSubscriptionDto, AssignPlanDto, SuspendTenantDto } from './dto/subscription.dto';
 
+// Superadmin manages ALL tenants here (by explicit :id), so these writes are
+// legitimately tenant-less — exempt from the tenant-less write block. The one
+// tenant-scoped write on this controller, PATCH /my-company, targets `UPDATE
+// tenants WHERE id=<sentinel>` for a tenant-less caller, which matches no row
+// and returns a clean 404 (its existing behaviour) — never an FK-500.
+@AllowNoTenant()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class TenantsController {

@@ -1,52 +1,62 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { SuppliersService } from './suppliers.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+// ROLE-ONLY (консолидация 2026-07). Enforcement на сервере:
+//   • view   — список/детали поставщиков, поставок, оплат → 'suppliers_access';
+//   • manage — create/update/delete + поставки/оплаты/возвраты/б-у → 'suppliers_manage'.
+// Owner-class (director/admin/superadmin) обходит гейты через PermissionsGuard.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('suppliers')
 export class SuppliersController {
   constructor(private suppliersService: SuppliersService) {}
 
+  @RequirePermission('suppliers_access')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.suppliersService.getAll(user.tenantID, query);
   }
 
+  @RequirePermission('suppliers_access')
   @Get('deliveries')
   getDeliveries(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.suppliersService.getDeliveries(user.tenantID, query);
   }
 
+  @RequirePermission('suppliers_access')
   @Get('payments')
   getPayments(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.suppliersService.getPayments(user.tenantID, query);
   }
 
+  @RequirePermission('suppliers_access')
   @Get('deliveries/:id')
   getDeliveryById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.suppliersService.getDeliveryById(id, user.tenantID);
   }
 
+  @RequirePermission('suppliers_access')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.suppliersService.getById(id, user.tenantID);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('suppliers_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.suppliersService.create(user.tenantID, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('suppliers_manage')
   @Post('deliveries')
   createDelivery(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.suppliersService.createDelivery(user.tenantID, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('suppliers_manage')
   @Post('payments')
   createPayment(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.suppliersService.createPayment(user.tenantID, dto);
@@ -54,8 +64,8 @@ export class SuppliersController {
 
   // Defect return-to-supplier. Decrements defect-warehouse stock, lowers the
   // supplier's outstanding debt, and logs a stock_movement of type
-  // defect_return_to_supplier. Director / admin / superadmin only.
-  @Roles('director', 'admin', 'superadmin')
+  // defect_return_to_supplier.
+  @RequirePermission('suppliers_manage')
   @Post(':id/return-defect')
   returnDefect(
     @Param('id') id: string,
@@ -70,7 +80,7 @@ export class SuppliersController {
   // increments) the matching product on the Б/У warehouse, logs the
   // delivery + supplier debt, and writes a stock_movement marked with
   // is_used_purchase=true for journal rendering.
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('suppliers_manage')
   @Post(':id/used-purchase')
   usedPurchase(
     @Param('id') id: string,
@@ -80,13 +90,13 @@ export class SuppliersController {
     return this.suppliersService.usedPurchase(user.tenantID, user.userID, id, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('suppliers_manage')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.suppliersService.update(id, user.tenantID, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('suppliers_manage')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.suppliersService.remove(id, user.tenantID);

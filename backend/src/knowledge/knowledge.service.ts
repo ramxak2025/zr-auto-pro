@@ -1,6 +1,7 @@
 import { Injectable, Inject, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { isTenantLess } from '../common/auth-cache';
 import { PushService } from '../push/push.service';
 import {
   CreateCategoryDto,
@@ -323,6 +324,12 @@ export class KnowledgeService {
    * Safe to call on every list request — it no-ops once categories exist.
    */
   private async ensureSeed(tenantID: string): Promise<void> {
+    // Tenant-less caller (superadmin, nil-UUID sentinel): skip the seed. Every
+    // knowledge read path calls this first; seeding categories/articles with the
+    // sentinel tenant_id FK-violates knowledge_*_tenant_id_fkey (no such tenant)
+    // → 500. A tenant-less caller owns no knowledge base, so the subsequent
+    // tenant-scoped SELECTs correctly return empty.
+    if (isTenantLess(tenantID)) return;
     const { rows } = await this.pool.query('SELECT 1 FROM knowledge_categories WHERE tenant_id=$1 LIMIT 1', [tenantID]);
     if (rows.length > 0) return;
 

@@ -20,6 +20,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
 import { callsApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
+import { UserRole } from '../../../shared/types';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 
@@ -98,12 +100,15 @@ const CallRow = React.memo(function CallRow({
   navigation,
   playingId,
   setPlayingId,
+  canListen,
   palette,
 }: {
   call: Call;
   navigation: any;
   playingId: string | null;
   setPlayingId: (id: string | null) => void;
+  /** ROLE-ONLY: прослушивание записей — только с calls_listen (список гейтится calls_view в меню). */
+  canListen: boolean;
   palette: ReturnType<typeof useColors>;
 }) {
   const isMissed = call.direction === 'incoming' && (call.status === 'missed' || call.duration === 0);
@@ -186,7 +191,7 @@ const CallRow = React.memo(function CallRow({
           )}
         </View>
 
-        {call.recordingUrl && (
+        {call.recordingUrl && canListen && (
           <TouchableOpacity
             style={[
               styles.playBtn,
@@ -204,7 +209,7 @@ const CallRow = React.memo(function CallRow({
           </TouchableOpacity>
         )}
       </View>
-      {isThisPlaying && call.recordingUrl && (
+      {isThisPlaying && call.recordingUrl && canListen && (
         <ExpandedRecordingPlayer
           recordingUrl={call.recordingUrl}
           onClose={() => setPlayingId(null)}
@@ -409,6 +414,12 @@ const TABS: { key: FilterTab; label: string }[] = [
 
 export default function CallsScreen({ navigation }: { navigation: any }) {
   const palette = useColors();
+  const { hasPermission, isRole } = useAuth();
+  // ROLE-ONLY (консолидация 2026-07): список звонков доступен по calls_view (гейт
+  // меню), а ПРОСЛУШИВАНИЕ записей — отдельное право calls_listen. Owner-class
+  // (superadmin/director/admin) минует, как на сервере. Без права — кнопка play
+  // не показывается (бэкенд закрывает signed-URL 403 → не будет мёртвой кнопки).
+  const canListen = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('calls_listen');
   const tabBarHeight = useTabBarHeight();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
@@ -692,6 +703,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
               navigation={navigation}
               playingId={playingId}
               setPlayingId={setPlayingId}
+              canListen={canListen}
               palette={palette}
             />
           ))

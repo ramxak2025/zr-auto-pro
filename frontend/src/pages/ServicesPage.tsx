@@ -3,18 +3,26 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Wrench, Edit2, Trash2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { servicesApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
-import { Service, PaginatedResponse } from '../types';
+import { Service, PaginatedResponse, UserRole } from '../types';
 
 const SERVICE_CATEGORIES: string[] = [];
 
 export default function ServicesPage() {
   const queryClient = useQueryClient();
+  const { hasPermission, user } = useAuth();
+  // ROLE-ONLY: управление каталогом (add/edit/delete + %/гарантия) — только с
+  // services_manage. Owner-class видит и делает всё. services_view (просмотр +
+  // в чек) — у всех, кто сюда попал; backend всё равно вернёт 403 без права.
+  const isOwnerClass =
+    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
+  const canManage = isOwnerClass || hasPermission('services_manage');
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -178,10 +186,12 @@ export default function ServicesPage() {
       {/* Header */}
       <div className="page-header">
         <h1 className="page-title">Услуги</h1>
-        <button onClick={openCreateModal} className="btn-primary">
-          <Plus className="w-4 h-4" />
-          Новая услуга
-        </button>
+        {canManage && (
+          <button onClick={openCreateModal} className="btn-primary">
+            <Plus className="w-4 h-4" />
+            Новая услуга
+          </button>
+        )}
       </div>
 
       {/* Search */}
@@ -231,7 +241,9 @@ export default function ServicesPage() {
             search || categoryFilter !== 'Все' ? 'По вашему запросу ничего не найдено' : 'Добавьте первую услугу'
           }
           action={
-            !search && categoryFilter === 'Все' ? { label: 'Добавить услугу', onClick: openCreateModal } : undefined
+            canManage && !search && categoryFilter === 'Все'
+              ? { label: 'Добавить услугу', onClick: openCreateModal }
+              : undefined
           }
         />
       ) : (
@@ -242,20 +254,22 @@ export default function ServicesPage() {
               <div key={service.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-4">
                 <div className="flex items-center justify-between mb-1">
                   <span className="font-semibold text-gray-900 text-sm">{service.name}</span>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    <button
-                      onClick={(e) => openEditModal(service, e)}
-                      className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
-                    <button
-                      onClick={(e) => handleDelete(service.id, e)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
+                  {canManage && (
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      <button
+                        onClick={(e) => openEditModal(service, e)}
+                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        onClick={(e) => handleDelete(service.id, e)}
+                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-3">
                   {service.category && <span className="badge-default text-[11px]">{service.category}</span>}
@@ -273,9 +287,9 @@ export default function ServicesPage() {
                   <th>Название</th>
                   <th>Категория</th>
                   <th className="text-right">Цена по умолчанию</th>
-                  <th className="text-right">% мастера</th>
+                  {canManage && <th className="text-right">% мастера</th>}
                   <th className="text-right">Гарантия</th>
-                  <th className="w-24 text-right">Действия</th>
+                  {canManage && <th className="w-24 text-right">Действия</th>}
                 </tr>
               </thead>
               <tbody>
@@ -295,13 +309,15 @@ export default function ServicesPage() {
                       )}
                     </td>
                     <td className="text-right font-medium text-gray-900">{formatCurrency(service.defaultPrice)} ₽</td>
-                    <td className="text-right">
-                      {service.masterPercent != null ? (
-                        <span className="font-medium text-gray-700">{service.masterPercent}%</span>
-                      ) : (
-                        <span className="text-gray-400">стандарт</span>
-                      )}
-                    </td>
+                    {canManage && (
+                      <td className="text-right">
+                        {service.masterPercent != null ? (
+                          <span className="font-medium text-gray-700">{service.masterPercent}%</span>
+                        ) : (
+                          <span className="text-gray-400">стандарт</span>
+                        )}
+                      </td>
+                    )}
                     <td className="text-right">
                       {service.warrantyDays != null && service.warrantyDays > 0 ? (
                         <span className="badge-default">{service.warrantyDays} дн.</span>
@@ -309,24 +325,26 @@ export default function ServicesPage() {
                         <span className="text-gray-300">—</span>
                       )}
                     </td>
-                    <td>
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          onClick={(e) => openEditModal(service, e)}
-                          className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
-                          title="Редактировать"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-                        <button
-                          onClick={(e) => handleDelete(service.id, e)}
-                          className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                          title="Удалить"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
+                    {canManage && (
+                      <td>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            onClick={(e) => openEditModal(service, e)}
+                            className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
+                            title="Редактировать"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={(e) => handleDelete(service.id, e)}
+                            className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                            title="Удалить"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    )}
                   </tr>
                 ))}
               </tbody>

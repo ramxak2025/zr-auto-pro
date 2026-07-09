@@ -25,6 +25,7 @@ import {
   CreditCard,
   LayoutGrid,
   ShoppingCart,
+  Phone,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { subscriptionApi } from '../api/services';
@@ -42,13 +43,18 @@ interface NavItem {
   featureKey?: string;
 }
 
+// ROLE-ONLY (консолидация 2026-07): `permission` — gating-ключ. Пункт скрыт из
+// меню, если у сотрудника нет этого права. Owner-class (superadmin/director/
+// admin) видит всё (см. `canSeeNav` ниже). `featureKey` — отдельный gate по
+// тарифу (замок, не скрытие). Карта секция→ключ синхронизирована с mobile
+// MoreScreen и с бэкенд-guard'ами.
 const navItems: NavItem[] = [
   { label: 'Главная', path: '/dashboard', icon: LayoutDashboard },
   { label: 'Клиенты', path: '/clients', icon: Users, permission: 'clients_view', featureKey: 'clients_view' },
   { label: 'Касса', path: '/checks', icon: Receipt, permission: 'checks_view' },
   { label: 'Доска работ', path: '/work-board', icon: LayoutGrid, permission: 'checks_view' },
   { label: 'Склад', path: '/products', icon: Package, permission: 'warehouse_access' },
-  { label: 'Услуги', path: '/services', icon: Wrench, featureKey: 'services_view' },
+  { label: 'Услуги', path: '/services', icon: Wrench, permission: 'services_view', featureKey: 'services_view' },
   {
     label: 'Поставщики',
     path: '/suppliers',
@@ -63,13 +69,21 @@ const navItems: NavItem[] = [
     permission: 'suppliers_access',
     featureKey: 'suppliers_view',
   },
-  { label: 'Движение денег', path: '/cashflow', icon: Wallet, featureKey: 'cashflow_view' },
+  { label: 'Оборудование', path: '/equipment', icon: Wrench, permission: 'equipment_view' },
+  {
+    label: 'Движение денег',
+    path: '/cashflow',
+    icon: Wallet,
+    permission: 'cashflow_view',
+    featureKey: 'cashflow_view',
+  },
   { label: 'Кассовая смена', path: '/cash-shift', icon: ClipboardList },
   { label: 'Рассрочка', path: '/installments', icon: CreditCard },
-  { label: 'Зарплата', path: '/salary', icon: Wallet, featureKey: 'salary_view' },
+  { label: 'Зарплата', path: '/salary', icon: Wallet, permission: 'salary_view', featureKey: 'salary_view' },
   { label: 'Расписание', path: '/schedule', icon: CalendarDays, featureKey: 'schedule_view' },
   { label: 'Отчёты', path: '/reports', icon: BarChart3, permission: 'financial_reports', featureKey: 'reports_view' },
-  { label: 'Маркетинг', path: '/marketing', icon: Megaphone },
+  { label: 'Маркетинг', path: '/marketing', icon: Megaphone, permission: 'marketing_access' },
+  { label: 'Звонки', path: '/calls', icon: Phone, permission: 'calls_view' },
   { label: 'База знаний', path: '/knowledge', icon: GraduationCap },
   { label: 'Пользователи', path: '/users', icon: Shield, permission: 'user_management', featureKey: 'users_manage' },
 ];
@@ -195,6 +209,8 @@ interface SidebarProps {
   userInitial: string;
   roleLabel: string;
   hasPermission: (perm: keyof UserPermissions) => boolean;
+  /** Owner-class (superadmin/director/admin) sees every nav item regardless of gating permission. */
+  isOwnerClass: boolean;
   isFeatureLocked: (featureKey?: string) => boolean;
   onLogout: () => void;
 }
@@ -205,6 +221,7 @@ const DesktopSidebar = memo(function DesktopSidebar({
   userInitial,
   roleLabel,
   hasPermission,
+  isOwnerClass,
   isFeatureLocked,
   onLogout,
 }: SidebarProps) {
@@ -219,7 +236,9 @@ const DesktopSidebar = memo(function DesktopSidebar({
       <nav className="flex-1 overflow-y-auto px-3 py-4">
         <ul className="space-y-1">
           {navItems.map((item) => {
-            if (item.permission && !hasPermission(item.permission)) return null;
+            // ROLE-ONLY hide-by-permission: скрываем пункт, если у сотрудника нет
+            // gating-права. Owner-class (superadmin/director/admin) видит всё.
+            if (item.permission && !isOwnerClass && !hasPermission(item.permission)) return null;
             const Icon = item.icon;
             const locked = isFeatureLocked(item.featureKey);
             return (
@@ -398,6 +417,9 @@ export default function Layout() {
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const userName = user?.fullName || 'User';
   const userInitial = user?.fullName?.charAt(0) || 'U';
+  // Owner-class always sees every section (hide-by-permission applies to
+  // masters / restricted custom roles only).
+  const isOwnerClass = user?.role === 'superadmin' || user?.role === 'director' || user?.role === 'admin';
 
   // Memoize to prevent unnecessary re-renders of child components
   const sidebarProps = useMemo(
@@ -407,10 +429,11 @@ export default function Layout() {
       userInitial,
       roleLabel,
       hasPermission,
+      isOwnerClass,
       isFeatureLocked,
       onLogout: logout,
     }),
-    [userName, user?.avatar, userInitial, roleLabel, hasPermission, isFeatureLocked, logout],
+    [userName, user?.avatar, userInitial, roleLabel, hasPermission, isOwnerClass, isFeatureLocked, logout],
   );
 
   return (

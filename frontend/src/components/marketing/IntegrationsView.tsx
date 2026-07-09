@@ -1,13 +1,36 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { CreditCard, Info, MessageSquare, Pencil, Phone, Plus, Receipt, Trash2, Zap } from 'lucide-react';
+import {
+  CreditCard,
+  Info,
+  MessageSquare,
+  MessageSquareText,
+  Pencil,
+  Phone,
+  Plus,
+  Receipt,
+  Trash2,
+  Zap,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { marketingApi } from '../../api/services';
 import type { MessagingIntegration } from '../../types';
-import { LoadingBlock, SectionCard } from './marketingKit';
+import { LoadingBlock, SectionCard, Toggle } from './marketingKit';
 
 type ProviderType = MessagingIntegration['providerType'];
+
+// Providers whose outbound message reaches the CLIENT's phone as an SMS — the
+// only ones for which the independent «SMS клиентам» switch is meaningful.
+// Telegram/email/whatsapp deliver elsewhere (owner chat / inbox / WA), so no SMS
+// toggle is shown for them.
+const CLIENT_SMS_TYPES: ProviderType[] = ['moizvonki', 'smsru', 'sms'];
+
+// Backend sentinel (UpsertIntegrationDto): «keep the stored api_key». The upsert
+// requires a non-empty apiKey AND rewrites sender/webhook/id columns from the
+// DTO on every UPDATE, so a settings-preserving write must send this sentinel
+// plus the integration's current routing fields — never blank them.
+const KEEP_API_KEY = '_existing_';
 
 const PROVIDER_LABELS: Record<string, string> = {
   moizvonki: 'Мои Звонки',
@@ -251,39 +274,73 @@ function IntegrationForm({
 // ─── One provider row ───────────────────────────────────────────────
 function ProviderRow({
   integration,
+  smsPending,
   onEdit,
   onRemove,
+  onToggleSms,
 }: {
   integration: MessagingIntegration;
+  smsPending: boolean;
   onEdit: () => void;
   onRemove: () => void;
+  onToggleSms: (next: boolean) => void;
 }) {
+  const showSmsToggle = CLIENT_SMS_TYPES.includes(integration.providerType);
+  const smsOn = integration.smsNotificationsEnabled;
+
   return (
-    <div className="flex items-center justify-between rounded-xl bg-gray-50 p-3">
-      <div className="flex min-w-0 items-center gap-2">
-        <span
-          className={`h-2 w-2 flex-shrink-0 rounded-full ${integration.isActive ? 'bg-green-500' : 'bg-gray-300'}`}
-          title={integration.isActive ? 'Активен' : 'Отключён'}
-        />
-        <span className="text-sm font-medium text-gray-900">
-          {PROVIDER_LABELS[integration.providerType] || integration.providerType}
-        </span>
-        {integration.senderName && <span className="truncate text-xs text-gray-500">({integration.senderName})</span>}
-        {integration.providerType === 'whatsapp' && integration.phoneNumberId && (
-          <span className="truncate text-xs text-gray-500">· ID {integration.phoneNumberId}</span>
-        )}
-        {integration.providerType === 'telegram' && integration.chatId && (
-          <span className="truncate text-xs text-gray-500">· чат {integration.chatId}</span>
-        )}
+    <div className="rounded-xl bg-gray-50 p-3">
+      <div className="flex items-center justify-between">
+        <div className="flex min-w-0 items-center gap-2">
+          <span
+            className={`h-2 w-2 flex-shrink-0 rounded-full ${integration.isActive ? 'bg-green-500' : 'bg-gray-300'}`}
+            title={integration.isActive ? 'Активен' : 'Отключён'}
+          />
+          <span className="text-sm font-medium text-gray-900">
+            {PROVIDER_LABELS[integration.providerType] || integration.providerType}
+          </span>
+          {integration.senderName && <span className="truncate text-xs text-gray-500">({integration.senderName})</span>}
+          {integration.providerType === 'whatsapp' && integration.phoneNumberId && (
+            <span className="truncate text-xs text-gray-500">· ID {integration.phoneNumberId}</span>
+          )}
+          {integration.providerType === 'telegram' && integration.chatId && (
+            <span className="truncate text-xs text-gray-500">· чат {integration.chatId}</span>
+          )}
+        </div>
+        <div className="flex flex-shrink-0 items-center gap-1">
+          <button
+            onClick={onEdit}
+            className="press-soft p-1 text-gray-400 hover:text-primary-600"
+            aria-label="Изменить"
+          >
+            <Pencil className="h-4 w-4" />
+          </button>
+          <button onClick={onRemove} className="press-soft p-1 text-gray-400 hover:text-red-500" aria-label="Удалить">
+            <Trash2 className="h-4 w-4" />
+          </button>
+        </div>
       </div>
-      <div className="flex flex-shrink-0 items-center gap-1">
-        <button onClick={onEdit} className="press-soft p-1 text-gray-400 hover:text-primary-600" aria-label="Изменить">
-          <Pencil className="h-4 w-4" />
-        </button>
-        <button onClick={onRemove} className="press-soft p-1 text-gray-400 hover:text-red-500" aria-label="Удалить">
-          <Trash2 className="h-4 w-4" />
-        </button>
-      </div>
+
+      {showSmsToggle && (
+        <div className="mt-2.5 flex items-start gap-3 border-t border-gray-200/70 pt-2.5">
+          <div className="min-w-0 flex-1">
+            <p className="flex items-center gap-1.5 text-xs font-medium text-gray-700">
+              <MessageSquareText className="h-3.5 w-3.5 flex-shrink-0 text-gray-400" />
+              Отправлять SMS клиентам
+            </p>
+            <p className="mt-0.5 text-[11px] leading-snug text-gray-400">
+              {smsOn
+                ? 'Клиенты получают SMS (готовность авто, напоминания, отзывы).'
+                : integration.providerType === 'moizvonki'
+                  ? 'SMS клиентам отключены. Интеграция подключена — звонки продолжают синхронизироваться.'
+                  : 'SMS клиентам отключены. Интеграция остаётся подключённой.'}
+            </p>
+          </div>
+          <div className={smsPending ? 'pointer-events-none opacity-50' : ''}>
+            <Toggle checked={smsOn} onChange={onToggleSms} label="Отправлять SMS клиентам" />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -334,6 +391,34 @@ function ConfigurableGroup({
     onError: () => toast.error('Ошибка удаления'),
   });
 
+  // Independent «SMS клиентам» switch (127), decoupled from isActive. The upsert
+  // rewrites every routing column from the DTO, so we echo the integration's
+  // current sender/webhook/id fields back verbatim and use the KEEP_API_KEY
+  // sentinel — toggling the SMS switch never touches the credential or the
+  // «Мои Звонки» domain/login, so call sync keeps working regardless.
+  const toggleSms = useMutation({
+    mutationFn: (v: { integration: MessagingIntegration; next: boolean }) =>
+      marketingApi
+        .upsertIntegration({
+          id: v.integration.id,
+          providerType: v.integration.providerType,
+          apiKey: KEEP_API_KEY,
+          senderName: v.integration.senderName,
+          senderPhone: v.integration.senderPhone,
+          webhookUrl: v.integration.webhookUrl,
+          phoneNumberId: v.integration.phoneNumberId,
+          chatId: v.integration.chatId,
+          isActive: v.integration.isActive,
+          smsNotificationsEnabled: v.next,
+        })
+        .then((r) => r.data),
+    onSuccess: (fresh) => {
+      qc.setQueryData(['marketing', 'integrations'], fresh);
+    },
+    onError: () => toast.error('Не удалось изменить отправку SMS'),
+  });
+  const togglingId = toggleSms.isPending ? toggleSms.variables?.integration.id : null;
+
   return (
     <SectionCard
       icon={icon}
@@ -374,11 +459,13 @@ function ConfigurableGroup({
             <ProviderRow
               key={i.id}
               integration={i}
+              smsPending={togglingId === i.id}
               onEdit={() => {
                 setEditing(i);
                 setOpen(true);
               }}
               onRemove={() => remove.mutate(i.id)}
+              onToggleSms={(next) => toggleSms.mutate({ integration: i, next })}
             />
           ))}
         </div>

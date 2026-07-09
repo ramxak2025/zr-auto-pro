@@ -1,29 +1,34 @@
 /**
  * MarketingReportsScreen — «Маркетинговые отчёты».
  *
- * Одна из четырёх «Маркетинг»-веток (hub → этот экран). Полный
- * period-based консолидированный отчёт по маркетингу — зеркалит web-волну
- * для паритета. Читает ОДИН endpoint:
+ * Одна из «Маркетинг»-веток (hub → этот экран). Мощный period-based
+ * консолидированный отчёт, организованный ПО НАПРАВЛЕНИЯМ. Читает ОДИН endpoint:
  *
  *   reportsApi.getMarketingReport({ from, to }) → MarketingReport
  *
- * Разделы (сверху вниз):
- *   • Период         — пресеты (Сегодня / Неделя / Месяц / Квартал / Год)
- *                      + произвольный диапазон.
- *   • Привлечение    — новые vs повторные (кол-во + выручка) + разбивка
- *                      «По источникам» (с «Без источника»).
- *   • Удержание      — доля возвратов %, средний LTV, дней между визитами.
- *   • Звонки         — всего/входящие/исходящие/пропущено/не перезвонили,
- *                      отвечаемость %, воронка (уник.→доехали→оформлено),
- *                      конверсия %, повторные, выручка.
- *   • Отзывы         — всего, средний рейтинг, позитив/негатив, отклик %,
- *                      конверсия %, отправлено/ответили.
+ * Направления (сверху вниз):
+ *   • KPI-лента     — герой: выручка периода, новые клиенты, доля возвратов,
+ *                     средний рейтинг (мгновенный обзор здоровья маркетинга).
+ *   • Тренды        — недельные/месячные ряды, переключатель метрики
+ *                     (выручка / новые / возвраты / звонки / отзывы) + scrub.
+ *   • Привлечение   — новые vs повторные (кол-во+выручка), по источникам,
+ *                     когорты первого визита.
+ *   • Удержание     — доля возвратов, LTV, дней между визитами, гистограмма
+ *                     повторных покупок.
+ *   • Звонки        — всего/входящие/исходящие/пропущено/не перезвонили,
+ *                     отвечаемость, воронка (уник.→доехали→оформлено), конверсия.
+ *                     БЕЗ телефонии — честные нули, ничего не выдумываем.
+ *   • Отзывы        — рейтинг-герой, сентимент, отклик/конверсия, токены.
+ *   • Лояльность    — пончик (погашено vs остаток), участники, начисления.
+ *                     Выключена → честный zero-state, а не фейковые цифры.
+ *   • Выручка       — атрибуция по источникам и по мастерам.
  *
- * Графики нарисованы Views (пропорциональные бары) — без новых зависимостей.
- * Loading spinner + дружелюбный empty state + pull-to-refresh.
+ * Графики — лёгкие SVG-компоненты (`react-native-svg`, уже в проекте) в
+ * `components/charts/MarketingCharts.tsx`: статические Path/Rect, пересчёт только
+ * на смену данных/ширины — 60 fps в длинном скролле, без тяжёлых зависимостей.
  *
- * Все *Rate-поля приходят с бэка уже в 0–100 (см. reports.service.ts),
- * деньги — целые рубли, avgRating — 0–5.
+ * Все *Rate-поля приходят с бэка уже в 0–100, деньги — целые рубли,
+ * avgRating — 0–5. Кеш — тёплый ['subscription']-style (staleTime + SWR).
  */
 import React from 'react';
 import { View, ScrollView, StyleSheet, RefreshControl, TouchableOpacity } from 'react-native';
@@ -40,10 +45,11 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import FreshnessBadge from '../components/FreshnessBadge';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import { TrendLineChart, MiniBars, DonutRatio } from '../components/charts/MarketingCharts';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import { toLocalISODate } from '../utils/dates';
-import type { MarketingReport } from '../../../shared/types';
+import type { MarketingReport, MarketingTrendPoint } from '../../../shared/types';
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Формат — единый источник правды по числам/деньгам/процентам.
@@ -111,6 +117,7 @@ const RU_MONTHS = [
   'ноября',
   'декабря',
 ];
+const RU_MONTHS_SHORT = ['янв', 'фев', 'мар', 'апр', 'май', 'июн', 'июл', 'авг', 'сен', 'окт', 'ноя', 'дек'];
 const RU_MONTHS_NOM = [
   'Январь',
   'Февраль',
@@ -136,7 +143,6 @@ function getDateRange(period: PeriodKey, custom?: DateRange): DateRange {
   const today = toLocalISODate(now);
   if (period === 'today') return { from: today, to: today };
   if (period === 'week') {
-    // ISO-неделя, понедельник — начало.
     const day = now.getDay();
     const diff = day === 0 ? 6 : day - 1;
     const monday = new Date(now);
@@ -156,7 +162,7 @@ function getDateRange(period: PeriodKey, custom?: DateRange): DateRange {
   return custom ?? { from: today, to: today };
 }
 
-/** Человекочитаемый ярлык периода для подзаголовка («Май 2026», «1 — 7 июля»). */
+/** Человекочитаемый ярлык периода для подзаголовка. */
 function formatPeriodLabel(period: PeriodKey, range: DateRange): string {
   const from = parseDateStr(range.from);
   const to = parseDateStr(range.to);
@@ -172,7 +178,14 @@ function formatPeriodLabel(period: PeriodKey, range: DateRange): string {
   return `${from.getDate()} ${RU_MONTHS[from.getMonth()]} — ${to.getDate()} ${RU_MONTHS[to.getMonth()]} ${to.getFullYear()}`;
 }
 
-// Ротация цветов для баров «По источникам» (гарантированно существуют в палитре).
+/** Короткая метка точки тренда для x-оси: «12 июл» (нед.) / «Июл» (мес.). */
+function trendPointLabel(iso: string, granularity: 'weekly' | 'monthly'): string {
+  const d = parseDateStr(iso);
+  if (granularity === 'monthly') return RU_MONTHS_SHORT[d.getMonth()];
+  return `${d.getDate()} ${RU_MONTHS_SHORT[d.getMonth()]}`;
+}
+
+// Ротация цветов для баров «По источникам».
 const SOURCE_COLORS = [
   colors.primary[600],
   colors.teal[600],
@@ -194,11 +207,13 @@ function SectionHeader({
   icon,
   title,
   accent,
+  subtitle,
   trailing,
 }: {
   icon: React.ComponentProps<typeof Ionicons>['name'];
   title: string;
   accent: SectionAccent;
+  subtitle?: string;
   trailing?: React.ReactNode;
 }) {
   const palette = useColors();
@@ -212,7 +227,16 @@ function SectionHeader({
       >
         <Ionicons name={icon} size={16} color={accent.color} />
       </View>
-      <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>{title}</Text>
+      <View style={{ flexShrink: 1 }}>
+        <Text style={[styles.sectionTitle, { color: palette.text.primary }]} numberOfLines={1}>
+          {title}
+        </Text>
+        {subtitle ? (
+          <Text style={[styles.sectionSubtitle, { color: palette.text.tertiary }]} numberOfLines={1}>
+            {subtitle}
+          </Text>
+        ) : null}
+      </View>
       {trailing ? <View style={styles.sectionTrailing}>{trailing}</View> : null}
     </View>
   );
@@ -272,7 +296,7 @@ function SplitBar({ segments, bg }: { segments: { value: number; color: string }
   );
 }
 
-/** Строка воронки / источника — подпись + значение + бар доли. */
+/** Строка воронки — подпись + значение + бар доли. */
 function BarRow({
   label,
   value,
@@ -307,6 +331,50 @@ function BarRow({
   );
 }
 
+/** Строка «источник / мастер»: имя · чеки · выручка + бар по выручке. */
+function AttributionRow({
+  name,
+  checks,
+  revenue,
+  max,
+  color,
+}: {
+  name: string;
+  checks: number;
+  revenue: number;
+  max: number;
+  color: string;
+}) {
+  const palette = useColors();
+  const width = revenue > 0 && max > 0 ? Math.max(4, (revenue / max) * 100) : 0;
+  return (
+    <View style={styles.sourceRow}>
+      <View style={styles.sourceHead}>
+        <Text style={[styles.sourceName, { color: palette.text.primary }]} numberOfLines={1}>
+          {name}
+        </Text>
+        <Text style={[styles.sourceRevenue, { color: palette.text.primary }]}>{formatMoneyCompact(revenue)}</Text>
+      </View>
+      <View style={styles.sourceBarRow}>
+        <View style={[styles.barTrack, styles.sourceBarTrack, { backgroundColor: palette.bg.muted }]}>
+          <View style={[styles.barFill, { width: `${width}%`, backgroundColor: color }]} />
+        </View>
+        <Text style={[styles.sourceCount, { color: palette.text.tertiary }]}>
+          {formatInt(checks)} чек{plural(checks)}
+        </Text>
+      </View>
+    </View>
+  );
+}
+
+function plural(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return '';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'а';
+  return 'ов';
+}
+
 function StarRating({ rating, size = 15 }: { rating: number; size?: number }) {
   const stars: React.ReactElement[] = [];
   for (let i = 1; i <= 5; i++) {
@@ -322,11 +390,168 @@ function StarRating({ rating, size = 15 }: { rating: number; size?: number }) {
   return <View style={{ flexDirection: 'row', gap: 2 }}>{stars}</View>;
 }
 
-// Accent-палитры разделов (icon-плитки).
+// Accent-палитры разделов.
 const ACC_ACQUIRE: SectionAccent = { color: colors.primary[600], bgLight: colors.primary[50] };
 const ACC_RETAIN: SectionAccent = { color: colors.teal[600], bgLight: colors.teal[50] };
 const ACC_CALLS: SectionAccent = { color: colors.indigo[600], bgLight: colors.indigo[50] };
 const ACC_REVIEWS: SectionAccent = { color: colors.amber[600], bgLight: colors.amber[50] };
+const ACC_LOYALTY: SectionAccent = { color: colors.violet[600], bgLight: colors.violet[50] };
+const ACC_REVENUE: SectionAccent = { color: colors.emerald[700], bgLight: colors.emerald[50] };
+const ACC_TRENDS: SectionAccent = { color: colors.rose[600], bgLight: colors.rose[50] };
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  Тренды — переключатель метрики + недельно/месячно + интерактивный график.
+// ─────────────────────────────────────────────────────────────────────────────
+
+type TrendMetric = 'revenue' | 'newClients' | 'returningRate' | 'calls' | 'reviews';
+
+const TREND_METRICS: { key: TrendMetric; label: string; color: string; kind: 'money' | 'int' | 'pct' }[] = [
+  { key: 'revenue', label: 'Выручка', color: colors.emerald[700], kind: 'money' },
+  { key: 'newClients', label: 'Новые', color: colors.primary[600], kind: 'int' },
+  { key: 'returningRate', label: 'Возвраты', color: colors.teal[600], kind: 'pct' },
+  { key: 'calls', label: 'Звонки', color: colors.indigo[600], kind: 'int' },
+  { key: 'reviews', label: 'Отзывы', color: colors.amber[600], kind: 'int' },
+];
+
+function TrendsCard({ trends }: { trends: MarketingReport['trends'] }) {
+  const palette = useColors();
+  const [granularity, setGranularity] = React.useState<'weekly' | 'monthly'>('weekly');
+  const [metric, setMetric] = React.useState<TrendMetric>('revenue');
+  const [selectedIndex, setSelectedIndex] = React.useState<number | null>(null);
+
+  const points: MarketingTrendPoint[] = granularity === 'weekly' ? trends.weekly : trends.monthly;
+  const metricDef = TREND_METRICS.find((m) => m.key === metric) ?? TREND_METRICS[0];
+
+  const values = React.useMemo(() => points.map((p) => p[metric] as number), [points, metric]);
+  const labels = React.useMemo(
+    () => points.map((p) => trendPointLabel(p.periodStart, granularity)),
+    [points, granularity],
+  );
+
+  const fmt = React.useCallback(
+    (v: number) =>
+      metricDef.kind === 'money' ? formatMoneyCompact(v) : metricDef.kind === 'pct' ? formatPct(v) : formatInt(v),
+    [metricDef.kind],
+  );
+
+  // Свод по видимому ряду: сумма (кол-во/деньги) или среднее (проценты).
+  const total = values.reduce((s, v) => s + v, 0);
+  const summaryValue = metricDef.kind === 'pct' ? fmt(values.length ? total / values.length : 0) : fmt(total);
+  const summaryLabel = metricDef.kind === 'pct' ? 'в среднем' : 'за период';
+
+  const hasData = points.length > 0 && values.some((v) => v > 0);
+
+  const onGranularity = (g: 'weekly' | 'monthly') => {
+    if (g === granularity) return;
+    haptic('select');
+    setSelectedIndex(null);
+    setGranularity(g);
+  };
+  const onMetric = (m: TrendMetric) => {
+    if (m === metric) return;
+    haptic('select');
+    setSelectedIndex(null);
+    setMetric(m);
+  };
+
+  return (
+    <>
+      <SectionHeader
+        icon="trending-up-outline"
+        title="Тренды"
+        accent={ACC_TRENDS}
+        trailing={
+          <View style={[styles.segmented, { backgroundColor: palette.bg.muted }]}>
+            {(['weekly', 'monthly'] as const).map((g) => {
+              const active = granularity === g;
+              return (
+                <TouchableOpacity
+                  key={g}
+                  onPress={() => onGranularity(g)}
+                  style={[styles.segment, active && { backgroundColor: palette.bg.card }]}
+                  activeOpacity={0.7}
+                >
+                  <Text style={[styles.segmentText, { color: active ? palette.text.primary : palette.text.tertiary }]}>
+                    {g === 'weekly' ? 'Недели' : 'Месяцы'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        }
+      />
+
+      {/* Свод + метрика */}
+      <View style={styles.trendSummaryRow}>
+        <View>
+          <Text style={[styles.trendSummaryValue, { color: metricDef.color }]}>{summaryValue}</Text>
+          <Text style={[styles.trendSummarySub, { color: palette.text.tertiary }]}>
+            {metricDef.label} · {summaryLabel}
+          </Text>
+        </View>
+      </View>
+
+      {hasData ? (
+        <TrendLineChart
+          values={values}
+          labels={labels}
+          color={metricDef.color}
+          gridColor={palette.border.subtle}
+          labelColor={palette.text.tertiary}
+          selectedIndex={selectedIndex}
+          onSelectIndex={setSelectedIndex}
+          formatValue={fmt}
+          tooltipColor={metricDef.color}
+        />
+      ) : (
+        <View style={[styles.chartEmpty, { backgroundColor: palette.bg.muted }]}>
+          <Ionicons name="pulse-outline" size={22} color={palette.text.tertiary} />
+          <Text style={[styles.chartEmptyText, { color: palette.text.tertiary }]}>
+            Пока недостаточно данных для графика
+          </Text>
+        </View>
+      )}
+
+      {/* Селектор метрики */}
+      <ScrollView
+        horizontal
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={styles.metricRow}
+        style={{ marginTop: spacing[3] }}
+      >
+        {TREND_METRICS.map((m) => {
+          const active = metric === m.key;
+          return (
+            <TouchableOpacity
+              key={m.key}
+              onPress={() => onMetric(m.key)}
+              activeOpacity={0.7}
+              style={[
+                styles.metricChip,
+                {
+                  backgroundColor: active
+                    ? palette.mode === 'dark'
+                      ? softTint(m.color, 'dark')
+                      : softTint(m.color, 'light')
+                    : palette.bg.muted,
+                  borderColor: active ? m.color : 'transparent',
+                },
+              ]}
+            >
+              <View style={[styles.metricDot, { backgroundColor: m.color }]} />
+              <Text
+                style={[styles.metricChipText, { color: active ? m.color : palette.text.secondary }]}
+                numberOfLines={1}
+              >
+                {m.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </ScrollView>
+    </>
+  );
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Screen
@@ -349,6 +574,8 @@ export default function MarketingReportsScreen() {
     [period, customRange],
   );
 
+  // Тёплый ['subscription']-style кеш: staleTime + глобальный SWR
+  // (placeholderData: prev => prev) держат отчёт мгновенным между периодами.
   const reportQuery = useQuery<MarketingReport>({
     queryKey: ['marketing-report', range.from, range.to],
     queryFn: async () => (await reportsApi.getMarketingReport({ from: range.from, to: range.to })).data,
@@ -383,7 +610,12 @@ export default function MarketingReportsScreen() {
     report.acquisition.newRevenue === 0 &&
     report.acquisition.returningRevenue === 0 &&
     report.calls.total === 0 &&
-    report.reviews.total === 0;
+    report.reviews.total === 0 &&
+    report.revenue.bySource.length === 0 &&
+    report.loyalty.pointsAccrued === 0;
+
+  const totalRevenue = report ? report.acquisition.newRevenue + report.acquisition.returningRevenue : 0;
+  const totalClients = report ? report.acquisition.newClients + report.acquisition.returningClients : 0;
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -462,11 +694,51 @@ export default function MarketingReportsScreen() {
           </View>
         ) : (
           <View style={{ gap: spacing[4] }}>
-            {/* ═══ ПРИВЛЕЧЕНИЕ ═══ */}
+            {/* ═══ KPI-ЛЕНТА ═══ */}
             <AnimatedCard index={0} style={cardStyle}>
+              <View style={styles.kpiGrid}>
+                <KpiCell
+                  icon="cash-outline"
+                  accent={colors.emerald[700]}
+                  value={formatMoneyCompact(totalRevenue)}
+                  label="Выручка периода"
+                />
+                <KpiCell
+                  icon="person-add-outline"
+                  accent={colors.primary[600]}
+                  value={formatInt(totalClients)}
+                  label="Клиентов"
+                  sub={`${formatInt(report.acquisition.newClients)} новых`}
+                />
+                <KpiCell
+                  icon="repeat-outline"
+                  accent={colors.teal[600]}
+                  value={formatPct(report.retention.returningRate)}
+                  label="Доля возвратов"
+                />
+                <KpiCell
+                  icon="star-outline"
+                  accent={colors.amber[600]}
+                  value={report.reviews.avgRating > 0 ? report.reviews.avgRating.toFixed(1) : '—'}
+                  label="Средний рейтинг"
+                  sub={
+                    report.reviews.total > 0
+                      ? `${formatInt(report.reviews.total)} отзыв${plural(report.reviews.total)}`
+                      : 'нет отзывов'
+                  }
+                />
+              </View>
+            </AnimatedCard>
+
+            {/* ═══ ТРЕНДЫ ═══ */}
+            <AnimatedCard index={1} style={cardStyle}>
+              <TrendsCard trends={report.trends} />
+            </AnimatedCard>
+
+            {/* ═══ ПРИВЛЕЧЕНИЕ ═══ */}
+            <AnimatedCard index={2} style={cardStyle}>
               <SectionHeader icon="person-add-outline" title="Привлечение" accent={ACC_ACQUIRE} />
 
-              {/* Пропорция новые vs повторные */}
               <SplitBar
                 bg={palette.bg.muted}
                 segments={[
@@ -539,23 +811,57 @@ export default function MarketingReportsScreen() {
                   })}
                 </View>
               )}
+
+              {/* Когорты первого визита */}
+              {report.acquisition.firstVisitCohort.length > 1 && (
+                <View style={[styles.subBlock, { borderTopColor: palette.border.subtle }]}>
+                  <Text style={[styles.subLabel, { color: palette.text.tertiary }]}>КОГОРТЫ ПЕРВОГО ВИЗИТА</Text>
+                  <MiniBars
+                    bars={report.acquisition.firstVisitCohort.map((c) => ({
+                      label: trendPointLabel(c.periodStart, 'weekly'),
+                      value: c.newClients,
+                    }))}
+                    color={colors.primary[600]}
+                    trackColor={palette.bg.muted}
+                    labelColor={palette.text.tertiary}
+                    valueColor={palette.text.secondary}
+                  />
+                </View>
+              )}
             </AnimatedCard>
 
             {/* ═══ УДЕРЖАНИЕ ═══ */}
-            <AnimatedCard index={1} style={cardStyle}>
+            <AnimatedCard index={3} style={cardStyle}>
               <SectionHeader icon="repeat-outline" title="Удержание" accent={ACC_RETAIN} />
               <View style={styles.tileRow}>
                 <StatTile label="Возвраты" value={formatPct(report.retention.returningRate)} tone="good" />
                 <StatTile label="Средний LTV" value={formatMoneyCompact(report.retention.avgLtv)} />
                 <StatTile label="Между визитами" value={`${formatInt(report.retention.avgDaysBetweenVisits)} дн.`} />
               </View>
+
+              {/* Гистограмма повторных покупок */}
+              {report.retention.repeatPurchaseDistribution.some((b) => b.clients > 0) && (
+                <View style={[styles.subBlock, { borderTopColor: palette.border.subtle }]}>
+                  <Text style={[styles.subLabel, { color: palette.text.tertiary }]}>ЧИСЛО ВИЗИТОВ · КЛИЕНТЫ</Text>
+                  <MiniBars
+                    bars={report.retention.repeatPurchaseDistribution.map((b) => ({
+                      label: b.visits,
+                      value: b.clients,
+                    }))}
+                    color={colors.teal[600]}
+                    trackColor={palette.bg.muted}
+                    labelColor={palette.text.tertiary}
+                    valueColor={palette.text.secondary}
+                  />
+                </View>
+              )}
             </AnimatedCard>
 
-            {/* ═══ ЗВОНКИ ═══ */}
-            <AnimatedCard index={2} style={cardStyle}>
+            {/* ═══ ЗВОНКИ — ВОРОНКА ═══ */}
+            <AnimatedCard index={4} style={cardStyle}>
               <SectionHeader
                 icon="call-outline"
-                title="Звонки"
+                title="Звонки — воронка"
                 accent={ACC_CALLS}
                 trailing={
                   <View style={[styles.pill, { backgroundColor: palette.bg.muted }]}>
@@ -566,26 +872,37 @@ export default function MarketingReportsScreen() {
                 }
               />
 
-              <View style={styles.tileRow}>
-                <StatTile label="Всего" value={formatInt(report.calls.total)} />
-                <StatTile label="Входящие" value={formatInt(report.calls.incoming)} icon="arrow-down-outline" />
-                <StatTile label="Исходящие" value={formatInt(report.calls.outgoing)} icon="arrow-up-outline" />
-              </View>
-              <View style={styles.tileRow}>
-                <StatTile
-                  label="Пропущено"
-                  value={formatInt(report.calls.missed)}
-                  tone={report.calls.missed > 0 ? 'warn' : 'neutral'}
-                />
-                <StatTile
-                  label="Не перезвонили"
-                  value={formatInt(report.calls.notCalledBack)}
-                  tone={report.calls.notCalledBack > 0 ? 'warn' : 'neutral'}
-                />
-                <View style={styles.tileSpacer} />
-              </View>
+              {report.calls.total === 0 ? (
+                <View style={[styles.noTelephony, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="call-outline" size={18} color={palette.text.tertiary} />
+                  <Text style={[styles.noTelephonyText, { color: palette.text.secondary }]}>
+                    Телефония не подключена — звонков за период 0. Подключите АТС в «Интеграции».
+                  </Text>
+                </View>
+              ) : (
+                <>
+                  <View style={styles.tileRow}>
+                    <StatTile label="Всего" value={formatInt(report.calls.total)} />
+                    <StatTile label="Входящие" value={formatInt(report.calls.incoming)} icon="arrow-down-outline" />
+                    <StatTile label="Исходящие" value={formatInt(report.calls.outgoing)} icon="arrow-up-outline" />
+                  </View>
+                  <View style={styles.tileRow}>
+                    <StatTile
+                      label="Пропущено"
+                      value={formatInt(report.calls.missed)}
+                      tone={report.calls.missed > 0 ? 'warn' : 'neutral'}
+                    />
+                    <StatTile
+                      label="Не перезвонили"
+                      value={formatInt(report.calls.notCalledBack)}
+                      tone={report.calls.notCalledBack > 0 ? 'warn' : 'neutral'}
+                    />
+                    <View style={styles.tileSpacer} />
+                  </View>
+                </>
+              )}
 
-              {/* Воронка звонков */}
+              {/* Воронка */}
               <View style={[styles.subBlock, { borderTopColor: palette.border.subtle }]}>
                 <View style={styles.funnelHead}>
                   <Text style={[styles.subLabel, { color: palette.text.tertiary, marginBottom: 0 }]}>ВОРОНКА</Text>
@@ -639,10 +956,9 @@ export default function MarketingReportsScreen() {
             </AnimatedCard>
 
             {/* ═══ ОТЗЫВЫ ═══ */}
-            <AnimatedCard index={3} style={cardStyle}>
+            <AnimatedCard index={5} style={cardStyle}>
               <SectionHeader icon="star-outline" title="Отзывы" accent={ACC_REVIEWS} />
 
-              {/* Рейтинг-герой */}
               <View style={styles.ratingHero}>
                 <View>
                   <Text style={[styles.ratingBig, { color: palette.text.primary }]}>
@@ -658,7 +974,6 @@ export default function MarketingReportsScreen() {
                 </View>
               </View>
 
-              {/* Сентимент-бар позитив/негатив */}
               {report.reviews.total > 0 && (
                 <>
                   <SplitBar
@@ -698,6 +1013,135 @@ export default function MarketingReportsScreen() {
                 />
               </View>
             </AnimatedCard>
+
+            {/* ═══ ЛОЯЛЬНОСТЬ ═══ */}
+            <AnimatedCard index={6} style={cardStyle}>
+              <SectionHeader
+                icon="gift-outline"
+                title="Лояльность"
+                accent={ACC_LOYALTY}
+                subtitle={report.loyalty.enabled ? `Начисление ${formatPct(report.loyalty.accrualPercent)}` : undefined}
+                trailing={
+                  <View
+                    style={[
+                      styles.pill,
+                      {
+                        backgroundColor: report.loyalty.enabled
+                          ? softTintOr(palette.mode, colors.violet[600], colors.violet[50])
+                          : palette.bg.muted,
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.pillText,
+                        { color: report.loyalty.enabled ? colors.violet[600] : palette.text.tertiary },
+                      ]}
+                    >
+                      {report.loyalty.enabled ? 'Включена' : 'Выключена'}
+                    </Text>
+                  </View>
+                }
+              />
+
+              {report.loyalty.enabled ? (
+                <>
+                  <View style={styles.loyaltyRow}>
+                    <DonutRatio
+                      fraction={
+                        report.loyalty.pointsAccrued > 0
+                          ? report.loyalty.pointsRedeemed / report.loyalty.pointsAccrued
+                          : 0
+                      }
+                      color={colors.violet[600]}
+                      trackColor={palette.bg.muted}
+                      centerLabel={formatMoneyCompact(report.loyalty.outstandingBalance)}
+                      centerSub="остаток"
+                      labelColor={palette.text.primary}
+                      subColor={palette.text.tertiary}
+                    />
+                    <View style={styles.loyaltyStats}>
+                      <LoyaltyStat
+                        label="Начислено"
+                        value={formatMoney(report.loyalty.pointsAccrued)}
+                        sub={`${formatInt(report.loyalty.accrualCount)} операц.`}
+                        dot={colors.violet[600]}
+                      />
+                      <LoyaltyStat
+                        label="Погашено"
+                        value={formatMoney(report.loyalty.pointsRedeemed)}
+                        sub={`${formatInt(report.loyalty.redemptionCount)} операц.`}
+                        dot={colors.teal[600]}
+                      />
+                      <LoyaltyStat
+                        label="Участники"
+                        value={formatInt(report.loyalty.participants)}
+                        dot={palette.border.strong}
+                      />
+                    </View>
+                  </View>
+                </>
+              ) : (
+                <View style={[styles.noTelephony, { backgroundColor: palette.bg.muted }]}>
+                  <Ionicons name="gift-outline" size={18} color={palette.text.tertiary} />
+                  <Text style={[styles.noTelephonyText, { color: palette.text.secondary }]}>
+                    Программа лояльности не запущена — начислений и погашений за период 0.
+                  </Text>
+                </View>
+              )}
+            </AnimatedCard>
+
+            {/* ═══ ВЫРУЧКА ═══ */}
+            {(report.revenue.bySource.length > 0 || report.revenue.byMaster.length > 0) && (
+              <AnimatedCard index={7} style={cardStyle}>
+                <SectionHeader
+                  icon="cash-outline"
+                  title="Выручка"
+                  accent={ACC_REVENUE}
+                  subtitle="Без гарантийных чеков"
+                />
+
+                {report.revenue.bySource.length > 0 && (
+                  <>
+                    <Text style={[styles.subLabel, { color: palette.text.tertiary, marginBottom: spacing[3] }]}>
+                      ПО ИСТОЧНИКАМ
+                    </Text>
+                    {(() => {
+                      const maxRev = Math.max(...report.revenue.bySource.map((s) => s.revenue), 1);
+                      return report.revenue.bySource.map((s, idx) => (
+                        <AttributionRow
+                          key={`rev-src-${s.source}-${idx}`}
+                          name={s.source?.trim() ? s.source : 'Без источника'}
+                          checks={s.checks}
+                          revenue={s.revenue}
+                          max={maxRev}
+                          color={SOURCE_COLORS[idx % SOURCE_COLORS.length]}
+                        />
+                      ));
+                    })()}
+                  </>
+                )}
+
+                {report.revenue.byMaster.length > 0 && (
+                  <View style={[styles.subBlock, { borderTopColor: palette.border.subtle }]}>
+                    <Text style={[styles.subLabel, { color: palette.text.tertiary }]}>ПО МАСТЕРАМ</Text>
+                    {(() => {
+                      const maxRev = Math.max(...report.revenue.byMaster.map((m) => m.revenue), 1);
+                      return report.revenue.byMaster.map((m, idx) => (
+                        <AttributionRow
+                          key={`rev-master-${m.masterId ?? 'none'}-${idx}`}
+                          name={m.masterName}
+                          checks={m.checks}
+                          revenue={m.revenue}
+                          max={maxRev}
+                          color={colors.emerald[700]}
+                        />
+                      ));
+                    })()}
+                  </View>
+                )}
+              </AnimatedCard>
+            )}
           </View>
         )}
       </ScrollView>
@@ -711,8 +1155,6 @@ export default function MarketingReportsScreen() {
           const iso = toLocalISODate(date);
           setCustomRange((prev) => {
             const next = showPicker === 'to' ? { ...prev, to: iso } : { ...prev, from: iso };
-            // Держим from ≤ to — если пользователь перевернул диапазон,
-            // схлопываем оба края к выбранной дате.
             if (parseDateStr(next.from) > parseDateStr(next.to)) {
               return { from: iso, to: iso };
             }
@@ -722,6 +1164,76 @@ export default function MarketingReportsScreen() {
           setShowPicker(null);
         }}
       />
+    </View>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  KPI hero cell — icon-pill + big value + label (+ optional sub).
+// ─────────────────────────────────────────────────────────────────────────────
+
+function KpiCell({
+  icon,
+  accent,
+  value,
+  label,
+  sub,
+}: {
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+  accent: string;
+  value: string;
+  label: string;
+  sub?: string;
+}) {
+  const palette = useColors();
+  return (
+    <View style={styles.kpiCell}>
+      <View
+        style={[
+          styles.kpiIcon,
+          { backgroundColor: palette.mode === 'dark' ? softTint(accent, 'dark') : softTint(accent, 'light') },
+        ]}
+      >
+        <Ionicons name={icon} size={16} color={accent} />
+      </View>
+      <Text
+        style={[styles.kpiValue, { color: palette.text.primary }]}
+        numberOfLines={1}
+        adjustsFontSizeToFit
+        minimumFontScale={0.7}
+      >
+        {value}
+      </Text>
+      <Text style={[styles.kpiLabel, { color: palette.text.tertiary }]} numberOfLines={1}>
+        {label}
+      </Text>
+      {sub ? (
+        <Text style={[styles.kpiSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+          {sub}
+        </Text>
+      ) : null}
+    </View>
+  );
+}
+
+function LoyaltyStat({ label, value, sub, dot }: { label: string; value: string; sub?: string; dot: string }) {
+  const palette = useColors();
+  return (
+    <View style={styles.loyaltyStat}>
+      <View style={styles.legendDotRow}>
+        <View style={[styles.legendDot, { backgroundColor: dot }]} />
+        <Text style={[styles.legendLabel, { color: palette.text.tertiary }]} numberOfLines={1}>
+          {label}
+        </Text>
+      </View>
+      <Text style={[styles.loyaltyValue, { color: palette.text.primary }]} numberOfLines={1}>
+        {value}
+      </Text>
+      {sub ? (
+        <Text style={[styles.loyaltySub, { color: palette.text.tertiary }]} numberOfLines={1}>
+          {sub}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -766,6 +1278,26 @@ const styles = StyleSheet.create({
     padding: spacing[4],
   },
 
+  // KPI band
+  kpiGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+  kpiCell: { width: '50%', paddingVertical: spacing[2], paddingRight: spacing[3], gap: 4 },
+  kpiIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 2,
+  },
+  kpiValue: {
+    fontSize: fontSize['2xl'],
+    fontWeight: fontWeight.bold,
+    letterSpacing: -0.5,
+    fontVariant: ['tabular-nums'],
+  },
+  kpiLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
+  kpiSub: { fontSize: 11, fontWeight: fontWeight.medium },
+
   // Section header
   sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], marginBottom: spacing[4] },
   sectionIcon: {
@@ -775,8 +1307,49 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  sectionTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.3, flexShrink: 1 },
+  sectionTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.3 },
+  sectionSubtitle: { fontSize: 11, fontWeight: fontWeight.medium, marginTop: 1 },
   sectionTrailing: { marginLeft: 'auto' },
+
+  // Segmented control (trends granularity)
+  segmented: { flexDirection: 'row', borderRadius: borderRadius.lg, padding: 2, gap: 2 },
+  segment: { paddingHorizontal: spacing[2.5], paddingVertical: 5, borderRadius: borderRadius.md },
+  segmentText: { fontSize: 12, fontWeight: fontWeight.semibold },
+
+  // Trends
+  trendSummaryRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-end',
+    marginBottom: spacing[3],
+  },
+  trendSummaryValue: {
+    fontSize: fontSize['3xl'],
+    fontWeight: fontWeight.bold,
+    letterSpacing: -0.8,
+    fontVariant: ['tabular-nums'],
+  },
+  trendSummarySub: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, marginTop: 2 },
+  metricRow: { gap: spacing[2], paddingRight: spacing[2] },
+  metricChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+  },
+  metricDot: { width: 8, height: 8, borderRadius: 4 },
+  metricChipText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  chartEmpty: {
+    height: 120,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+  },
+  chartEmptyText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
 
   // Pill
   pill: {
@@ -800,21 +1373,21 @@ const styles = StyleSheet.create({
   splitValue: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
   splitSub: { fontSize: fontSize.xs, fontVariant: ['tabular-nums'] },
 
-  // Sub block (source / funnel)
+  // Sub block (source / funnel / cohort)
   subBlock: { marginTop: spacing[4], paddingTop: spacing[4], borderTopWidth: StyleSheet.hairlineWidth },
   subLabel: { fontSize: 11, fontWeight: fontWeight.bold, letterSpacing: 0.8, marginBottom: spacing[3] },
 
-  // Source rows
+  // Source / attribution rows
   sourceRow: { marginBottom: spacing[3] },
   sourceHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },
   sourceName: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, flexShrink: 1, marginRight: spacing[2] },
-  sourceRevenue: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, fontVariant: ['tabular-nums'] },
+  sourceRevenue: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, fontVariant: ['tabular-nums'] },
   sourceBarRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   sourceBarTrack: { flex: 1 },
   sourceCount: {
     fontSize: fontSize.xs,
     fontWeight: fontWeight.semibold,
-    minWidth: 28,
+    minWidth: 56,
     textAlign: 'right',
     fontVariant: ['tabular-nums'],
   },
@@ -840,6 +1413,16 @@ const styles = StyleSheet.create({
   tileLabel: { fontSize: 11, fontWeight: fontWeight.medium, flexShrink: 1 },
   tileValue: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
   tileSpacer: { flex: 1 },
+
+  // No-telephony / disabled zero state
+  noTelephony: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    borderRadius: borderRadius.xl,
+    padding: spacing[3.5],
+  },
+  noTelephonyText: { flex: 1, fontSize: fontSize.xs, lineHeight: 18 },
 
   // Funnel foot
   funnelHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
@@ -867,6 +1450,13 @@ const styles = StyleSheet.create({
   ratingCountLabel: { fontSize: fontSize.xs, marginTop: 2 },
   sentimentLegend: { flexDirection: 'row', gap: spacing[4], marginTop: spacing[3], marginBottom: spacing[1] },
   reviewTiles: { marginTop: spacing[4] },
+
+  // Loyalty
+  loyaltyRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[4] },
+  loyaltyStats: { flex: 1, gap: spacing[3] },
+  loyaltyStat: { gap: 2 },
+  loyaltyValue: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+  loyaltySub: { fontSize: 11 },
 
   // Empty
   emptyWrap: { alignItems: 'center', paddingVertical: spacing[16], paddingHorizontal: spacing[6], gap: spacing[3] },

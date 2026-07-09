@@ -3,9 +3,18 @@ import { Response } from 'express';
 import { ClientsService } from './clients.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+// SPLIT client permissions (build-50). Enforcement on the server:
+//   • Editing an EXISTING client's profile (name/phone/comment/source/notes) →
+//     'clients_edit' (defaults FALSE for masters). Gates the three PATCH /:id* routes.
+//   • CREATE a walk-in client (POST /clients), reading (GET *), selecting a client
+//     for a check, and attaching a car (cars controller) stay OPEN — masters need
+//     them in Касса and hold 'clients_view' (defaults true) but not 'clients_edit'.
+//   • DELETE stays owner-class via @Roles below.
+// Owner-class (director/admin/superadmin) bypasses the key gate via PermissionsGuard.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('clients')
 export class ClientsController {
   constructor(private clientsService: ClientsService) {}
@@ -62,6 +71,10 @@ export class ClientsController {
     return this.clientsService.create(user.tenantID, dto);
   }
 
+  // Edit an EXISTING client's own profile fields (name/phone/comment/source/
+  // owner_notes). Distinct from POST /clients (walk-in create) which stays open
+  // so masters can add a client in Касса without 'clients_edit'.
+  @RequirePermission('clients_edit')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.clientsService.update(id, user.tenantID, dto);
@@ -72,6 +85,7 @@ export class ClientsController {
    * without touching the rest of the client; a focused endpoint avoids the
    * full diff payload and lets the FE invalidate just the source field.
    */
+  @RequirePermission('clients_edit')
   @Patch(':id/source')
   updateSource(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { source: string | null }) {
     return this.clientsService.updateSource(id, user.tenantID, dto?.source ?? null);
@@ -81,6 +95,7 @@ export class ClientsController {
    * Owner notes — free-form text used for "VIP клиент", "Не звонить", etc.
    * Capped at 4000 chars server-side.
    */
+  @RequirePermission('clients_edit')
   @Patch(':id/notes')
   updateNotes(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { notes: string | null }) {
     return this.clientsService.updateNotes(id, user.tenantID, dto?.notes ?? null);

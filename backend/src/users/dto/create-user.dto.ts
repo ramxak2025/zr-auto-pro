@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, MinLength, IsOptional, IsNumber, IsEnum, IsObject, IsBoolean } from 'class-validator';
+import { IsString, IsNotEmpty, MinLength, IsOptional, IsNumber, IsUUID } from 'class-validator';
 
 export class CreateUserDto {
   @IsString()
@@ -21,9 +21,12 @@ export class CreateUserDto {
   @IsOptional()
   salaryPercent?: number;
 
-  @IsObject()
+  // ROLE-ONLY (консолидация 2026-07): персональные users.permissions удалены.
+  // Права нового сотрудника задаёт назначенная роль (roleId, опционально); без
+  // неё сотрудник получает легаси-дефолты своей строковой роли (master и т.д.).
+  @IsUUID()
   @IsOptional()
-  permissions?: Record<string, boolean>;
+  roleId?: string;
 
   // Target tenant for the new user. Declared here so the global whitelisting
   // ValidationPipe does not strip it. Only a superadmin caller may target

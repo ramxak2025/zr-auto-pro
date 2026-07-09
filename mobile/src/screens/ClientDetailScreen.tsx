@@ -191,11 +191,16 @@ export default function ClientDetailScreen() {
   const { hasPermission, isRole } = useAuth();
   const palette = useColors();
   const canViewProfit = hasPermission('profit_view');
-  // Notes / source EDITING — gated to director / superadmin / clients_edit.
-  // The «Только для сотрудников» card itself is now visible to ALL staff
-  // (#19.4) — only the ability to CHANGE notes/source stays gated, so a
-  // master sees the info read-only but can't reshape it.
-  const canEditMeta = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
+  // Редактирование СУЩЕСТВУЮЩЕГО профиля клиента (имя/телефон/комментарий +
+  // заметки/источник + правка/удаление авто в гараже) — гейт `clients_edit`;
+  // owner-class (superadmin/director/admin) минует его, как и остальные
+  // per-screen гейты этого батча (зеркалит серверный PermissionsGuard, который
+  // байпасит гейт по строковой роли). Добавление НОВОГО клиента, привязка авто
+  // и выбор клиента в чек НЕ гейтятся — мастерам это нужно в Кассе.
+  // Карточка «Только для сотрудников» видна ВСЕМ (#19.4); гейт лишь запрещает
+  // ИЗМЕНЯТЬ данные — мастер видит профиль read-only.
+  const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+  const canEditMeta = isOwnerClass || hasPermission('clients_edit');
   // Дебиторка — начисление долга / приём оплаты внутри карточки клиента.
   // Role-gated to director/admin/superadmin (and enforced server-side); a
   // master sees the balance + ledger read-only without the action buttons.

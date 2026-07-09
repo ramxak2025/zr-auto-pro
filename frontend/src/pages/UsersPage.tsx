@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus,
@@ -14,14 +14,14 @@ import {
   RotateCcw,
   UserX,
   KeyRound,
+  ShieldCheck,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { usersApi, productsApi, rolesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import { User, UserRole, UserPermissions, Product, PaginatedResponse } from '../types';
-import { ROLE_PERMISSION_DEFAULTS, PERMISSION_KEYS } from '../types';
-import type { PermissionKey, Role } from '../types';
+import { User, UserRole, Product, PaginatedResponse } from '../types';
+import type { Role } from '../types';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -72,58 +72,19 @@ const roleBadgeMap: Record<string, string> = {
   master: 'badge-yellow',
 };
 
-// Partial: the new server-enforced permission keys (checks_view_all,
-// payment_edit, bookings_access, …) are optional in UserPermissions and don't
-// yet have a row in this web editor — Partial keeps this map valid without
-// forcing a label for every key. The rendered set (Object.keys below) is
-// unchanged, so behaviour is identical.
-const permissionLabels: Partial<Record<keyof UserPermissions, string>> = {
-  checks_view: 'Просмотр заказ-нарядов',
-  checks_create: 'Создание заказ-нарядов',
-  checks_edit: 'Редактирование заказ-нарядов',
-  checks_delete: 'Удаление заказ-нарядов',
-  checks_change_datetime: 'Изменение даты/времени заказ-нарядов',
-  accept_payment: 'Приём оплаты (кассир)',
-  profit_view: 'Просмотр прибыли',
-  clients_view: 'Просмотр клиентов',
-  clients_edit: 'Редактирование клиентов',
-  warehouse_access: 'Доступ к складу',
-  suppliers_access: 'Доступ к поставщикам',
-  financial_reports: 'Финансовые отчёты',
-  export_data: 'Экспорт данных',
-  user_management: 'Управление сотрудниками',
-  schedule_view: 'Просмотр расписания',
-  salary_view: 'Просмотр зарплат',
-  marketing_access: 'Доступ к маркетингу',
-};
-
 interface UserFormData {
   fullName: string;
   phone: string;
   password: string;
   role: UserRole;
-  /** 114 — назначенная роль (Bitrix24-style). null → без роли (легаси-права). */
+  /**
+   * ROLE-ONLY (консолидация 2026-07): назначенная роль — ЕДИНСТВЕННЫЙ источник
+   * прав сотрудника. null → без роли (сервер применяет легаси-дефолты строковой
+   * роли `role`). Персональных галочек прав больше нет — доступ = роль.
+   */
   roleId: string | null;
   salaryPercent: number;
   isActive: boolean;
-  permissions: UserPermissions;
-}
-
-/**
- * Полная карта прав из РОЛЕВЫХ эффективных дефолтов (ROLE_PERMISSION_DEFAULTS —
- * та же таблица, которую зеркалит серверный PermissionsGuard для ключей,
- * отсутствующих в сохранённой карте). Ключ вне дефолтов роли → false.
- *
- * Фикс бага «права сбрасываются при сохранении»: раньше здесь была локальная
- * таблица defaultPermissions, расходившаяся с серверными фоллбэками
- * (у мастера checks_edit / schedule_view на сервере по умолчанию TRUE, тут были
- * FALSE), и она уезжала полной заменой карты при КАЖДОМ сохранении профиля.
- */
-function permissionsFromRoleDefaults(role: UserRole): UserPermissions {
-  const defaults = ROLE_PERMISSION_DEFAULTS[role] ?? {};
-  const map = {} as Record<PermissionKey, boolean>;
-  for (const key of PERMISSION_KEYS) map[key] = defaults[key] === true;
-  return map;
 }
 
 const emptyForm: UserFormData = {
@@ -134,7 +95,6 @@ const emptyForm: UserFormData = {
   roleId: null,
   salaryPercent: 0,
   isActive: true,
-  permissions: permissionsFromRoleDefaults(UserRole.MASTER),
 };
 
 export default function UsersPage() {
@@ -152,15 +112,6 @@ export default function UsersPage() {
   const [rolesOpen, setRolesOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserFormData>({ ...emptyForm });
-  // Матрица прав: пока авторитетная карта тянется с выделенного endpoint'а,
-  // чекбоксы заблокированы; отправляем права ТОЛЬКО если владелец их трогал
-  // (touched) — сохранение одного лишь профиля больше не переписывает права.
-  const [permsLoading, setPermsLoading] = useState(false);
-  const [permsTouched, setPermsTouched] = useState(false);
-  const [permsLoadFailed, setPermsLoadFailed] = useState(false);
-  // Сессия редактирования: поздний ответ GET-прав предыдущего сотрудника не
-  // должен вливаться в форму текущего.
-  const editSessionRef = useRef(0);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [commissionModalOpen, setCommissionModalOpen] = useState(false);
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
@@ -201,14 +152,10 @@ export default function UsersPage() {
   });
 
   const updateMutation = useMutation({
-    // Права идут через ВЫДЕЛЕННЫЙ endpoint (self-lockout-guard на сервере), а не
-    // в общем PATCH-теле: общий PATCH раньше вёз permissions из устаревшего
-    // seed'а и сбрасывал права при любом сохранении профиля. __permissions
-    // приходит только когда владелец реально менял чекбоксы.
-    mutationFn: async ({ id, data, __permissions }: { id: string; data: any; __permissions?: UserPermissions }) => {
-      await usersApi.update(id, data);
-      if (__permissions) await usersApi.updatePermissions(id, __permissions);
-    },
+    // ROLE-ONLY (консолидация 2026-07): доступ сотрудника задаётся ТОЛЬКО
+    // назначенной ролью (PATCH /users/:id { roleId }). Персональные права
+    // (GET/PATCH /users/:id/permissions) сняты — общий PATCH их больше не везёт.
+    mutationFn: ({ id, data }: { id: string; data: any }) => usersApi.update(id, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       toast.success('Сотрудник обновлён');
@@ -236,21 +183,13 @@ export default function UsersPage() {
   }
 
   const openCreate = () => {
-    editSessionRef.current++; // инвалидируем возможный in-flight GET прав
     setEditingUser(null);
-    setPermsLoading(false);
-    setPermsTouched(false);
-    setPermsLoadFailed(false);
     setForm({ ...emptyForm });
     setModalOpen(true);
   };
 
   const openEdit = (user: User) => {
-    const session = ++editSessionRef.current;
     setEditingUser(user);
-    setPermsLoading(true);
-    setPermsTouched(false);
-    setPermsLoadFailed(false);
     setForm({
       fullName: user.fullName,
       phone: user.phone || '',
@@ -259,35 +198,13 @@ export default function UsersPage() {
       roleId: user.roleId ?? null,
       salaryPercent: user.salaryPercent,
       isActive: user.isActive,
-      // Seed: ролевые эффективные дефолты + карта из строки списка (list может
-      // быть stale — авторитетная карта дотягивается ниже).
-      permissions: { ...permissionsFromRoleDefaults(user.role), ...user.permissions },
     });
     setModalOpen(true);
-    // Авторитетная сохранённая карта — с выделенного endpoint'а, как на mobile.
-    usersApi
-      .getPermissions(user.id)
-      .then((res) => {
-        if (editSessionRef.current !== session) return;
-        setForm((prev) => ({ ...prev, permissions: { ...permissionsFromRoleDefaults(user.role), ...res.data } }));
-      })
-      .catch(() => {
-        if (editSessionRef.current !== session) return;
-        setPermsLoadFailed(true);
-      })
-      .finally(() => {
-        if (editSessionRef.current !== session) return;
-        setPermsLoading(false);
-      });
   };
 
   const closeModal = () => {
-    editSessionRef.current++;
     setModalOpen(false);
     setEditingUser(null);
-    setPermsLoading(false);
-    setPermsTouched(false);
-    setPermsLoadFailed(false);
     setForm({ ...emptyForm });
   };
 
@@ -306,9 +223,8 @@ export default function UsersPage() {
       return;
     }
 
-    // ВАЖНО: permissions в общем теле только при СОЗДАНИИ (id ещё нет, выделенный
-    // endpoint недоступен). При редактировании общий PATCH прав не везёт — их
-    // сохраняет выделенный endpoint ниже, и только если чекбоксы реально трогали.
+    // ROLE-ONLY: доступ = назначенная роль. Персональные права больше не
+    // отправляются (эндпоинты сняты, PATCH /users их игнорирует).
     const payload: any = {
       fullName: form.fullName,
       phone: form.phone,
@@ -319,40 +235,20 @@ export default function UsersPage() {
 
     if (!editingUser) {
       payload.password = form.password;
-      payload.permissions = form.permissions;
       createMutation.mutate(payload);
     } else {
       if (form.password) {
         payload.password = form.password;
       }
-      // 114 — назначение роли. Только owner-class (select виден только ему) и
-      // только в edit-режиме: CreateUserRequest roleId не принимает. null
-      // снимает роль (возврат к легаси-дефолтам строковой роли).
+      // Назначение роли (единственный источник прав). Только owner-class (select
+      // виден только ему) и только в edit-режиме: CreateUserRequest roleId не
+      // принимает. null снимает роль (возврат к легаси-дефолтам строковой роли).
+      // Сервер сам защищает от самолокаута (нельзя снять с себя user_management).
       if (isOwnerClass) {
         payload.roleId = form.roleId;
       }
-      // Self-lockout net (как на mobile): редактируя СВОЙ аккаунт, нельзя снять
-      // с себя user_management — иначе потеряешь доступ к этому же экрану.
-      const editsOwnAccount = editingUser.id === currentUser?.id;
-      const permissions: UserPermissions | undefined =
-        permsLoading || !permsTouched
-          ? undefined
-          : editsOwnAccount
-            ? { ...form.permissions, user_management: true }
-            : form.permissions;
-      updateMutation.mutate({ id: editingUser.id, data: payload, __permissions: permissions });
+      updateMutation.mutate({ id: editingUser.id, data: payload });
     }
-  };
-
-  const togglePermission = (key: keyof UserPermissions) => {
-    setPermsTouched(true);
-    setForm((prev) => ({
-      ...prev,
-      permissions: {
-        ...prev.permissions,
-        [key]: !prev.permissions[key],
-      },
-    }));
   };
 
   const isSaving = createMutation.isPending || updateMutation.isPending;
@@ -565,17 +461,18 @@ export default function UsersPage() {
             </select>
           </div>
 
-          {/* Назначенная роль прав (114, Bitrix24-style) — только edit-режим:
-              создание её не принимает (роль назначается после создания). */}
+          {/* Назначенная роль прав — ЕДИНСТВЕННЫЙ источник доступа (ROLE-ONLY).
+              Только edit-режим: создание её не принимает (роль назначается после
+              создания). Виден только owner-class. */}
           {editingUser && isOwnerClass && (
             <div>
-              <label className="label">Роль (набор прав)</label>
+              <label className="label">Роль (доступ)</label>
               <select
                 className="input"
                 value={form.roleId ?? ''}
                 onChange={(e) => setForm({ ...form, roleId: e.target.value || null })}
               >
-                <option value="">Без роли — только индивидуальные права</option>
+                <option value="">Без роли (базовые права по типу «{roleLabels[form.role] || form.role}»)</option>
                 {systemRoles.length > 0 && (
                   <optgroup label="Системные">
                     {systemRoles.map((r) => (
@@ -596,7 +493,15 @@ export default function UsersPage() {
                 )}
               </select>
               <p className="text-xs text-gray-400 mt-1">
-                Роль задаёт базовый набор прав. Изменение применяется в течение ~30 секунд.
+                Доступ сотрудника полностью определяется ролью. Чтобы изменить, что может роль, откройте{' '}
+                <button
+                  type="button"
+                  onClick={() => setRolesOpen(true)}
+                  className="font-medium text-primary-600 hover:text-primary-700 underline underline-offset-2"
+                >
+                  «Роли»
+                </button>
+                . Изменения применяются в течение ~30 секунд.
               </p>
             </div>
           )}
@@ -658,40 +563,26 @@ export default function UsersPage() {
             <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активен' : 'Неактивен'}</span>
           </div>
 
-          {/* Permissions. С назначенной ролью галочки — персональные overrides
-              ПОВЕРХ матрицы роли (effective = flatten(matrix) ⊕ permissions). */}
-          <div>
-            <label className="label">
-              {editingUser && form.roleId ? 'Индивидуальные исключения (поверх роли)' : 'Права доступа'}
-            </label>
-            {editingUser && form.roleId && (
-              <p className="text-xs text-gray-400 mt-1">
-                База прав — роль «{roles.find((r) => r.id === form.roleId)?.name ?? '…'}». Отмеченные ниже галочки
-                действуют поверх неё.
+          {/* Права доступа — ROLE-ONLY (консолидация 2026-07). Персональных
+              галочек прав больше нет: доступ сотрудника = его роль. Настройка
+              возможностей — во вкладке «Роли». */}
+          {isOwnerClass && (
+            <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
+              <ShieldCheck className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-gray-500">
+                Права доступа задаёт назначенная роль — отдельных галочек по сотруднику больше нет. Чтобы изменить, что
+                может роль, откройте{' '}
+                <button
+                  type="button"
+                  onClick={() => setRolesOpen(true)}
+                  className="font-medium text-primary-600 hover:text-primary-700 underline underline-offset-2"
+                >
+                  «Роли»
+                </button>
+                .
               </p>
-            )}
-            {permsLoading && <p className="text-xs text-gray-400 mt-1">Загружаем сохранённые права…</p>}
-            {permsLoadFailed && !permsLoading && (
-              <p className="text-xs text-red-500 mt-1">
-                Не удалось загрузить сохранённые права — показаны последние известные значения. Обновите страницу,
-                прежде чем менять галочки.
-              </p>
-            )}
-            <div className={`grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2 ${permsLoading ? 'opacity-50' : ''}`}>
-              {(Object.keys(permissionLabels) as (keyof UserPermissions)[]).map((key) => (
-                <label key={key} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={!!form.permissions[key]}
-                    disabled={permsLoading}
-                    onChange={() => togglePermission(key)}
-                    className="w-4 h-4 text-primary-600 border-gray-300 rounded focus:ring-primary-500"
-                  />
-                  <span className="text-sm text-gray-700">{permissionLabels[key]}</span>
-                </label>
-              ))}
             </div>
-          </div>
+          )}
 
           {/* Actions */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">

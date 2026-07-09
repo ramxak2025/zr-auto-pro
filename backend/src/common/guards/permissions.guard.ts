@@ -43,6 +43,8 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   checks_delete: false,
   checks_change_datetime: false,
   checks_view_all: false,
+  // Охват редактирования чужих чеков — off by default (master edits only own).
+  checks_edit_all: false,
   payment_edit: false,
   // Кассир смены — off by default; the owner grants it explicitly. Only
   // consulted when the tenant's POS shift-mode is ON (092).
@@ -54,24 +56,36 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   // the owner grants it explicitly. Gates the closed-check cascade-recompute edit
   // path in ChecksService. Mirrors shared UserPermissions.edit_closed_check.
   edit_closed_check: false,
+  // Услуги — мастер СМОТРИТ услуги и добавляет их в чек (view), но не редактирует
+  // каталог/проценты/гарантию (manage off).
+  services_view: true,
+  services_manage: false,
   // Финансы — none by default.
   profit_view: false,
   financial_reports: false,
   export_data: false,
   can_add_expenses: false,
   salary_view: false,
+  salary_view_all: false,
   // «Движение денег» (ITEM 6) — off by default. Масштаб охвата решает матрица
   // роли (reports.cashflow: own|all); для легаси-мастера без матрицы дефолт
   // false = БЕЗ доступа, ровно как сегодня (эндпоинт был owner-class). Владелец
   // выдаёт «свои» (cashflow_view) или «все» (cashflow_view_all) явно — opt-in.
   cashflow_view: false,
   cashflow_view_all: false,
-  // Склад — access flags off by default (reads are open elsewhere; mutations are role-gated).
-  warehouse_access: false,
+  // Склад — мастер СМОТРИТ товары (без себестоимости) и добавляет их в чек (view);
+  // себестоимость / add-edit / инвентаризация (manage) и удаление (delete) — off.
+  warehouse_access: true,
+  warehouse_manage: false,
   // Удаление товаров/папок (#60) — off by default; owner grants explicitly. Gates
   // DELETE /products/:id (soft) and DELETE /warehouse/categories/:id (soft, cascades).
   warehouse_delete: false,
+  // Поставщики — none by default (view + manage off).
   suppliers_access: false,
+  suppliers_manage: false,
+  // Имущество — none by default (view + manage off).
+  equipment_view: false,
+  equipment_manage: false,
   // CRM — own clients/cars + own schedule; broad editing/marketing/calls off.
   clients_view: true,
   clients_edit: false,

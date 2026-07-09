@@ -31,8 +31,9 @@
  * × top-right). Body scrolls if it overflows the card. Primary "Выдать"
  * button is full-width at the bottom of the card.
  *
- * canEdit role gating preserved: only director / admin / superadmin
- * see the issue button, the FABs and the trash icon.
+ * canEdit permission gating: owner-class roles (superadmin / director / admin)
+ * OR the `equipment_manage` permission see the issue button, the FABs and the
+ * trash icon. Without it, only the reference view is available (no dead buttons).
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
@@ -59,6 +60,7 @@ import CachedImage from '../components/CachedImage';
 import IosScreenHeader from '../components/IosScreenHeader';
 import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
 import { equipmentApi, uploadsApi } from '../api/services';
+import { UserRole } from '../../../shared/types';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
@@ -1626,14 +1628,14 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
 // ─── Main Equipment screen ─────────────────────────────────────────────────
 export default function EquipmentScreen() {
   const navigation = useNavigation<any>();
-  const { user } = useAuth();
+  const { user, hasPermission, isRole } = useAuth();
   const tabBarHeight = useTabBarHeight();
   const { width: screenWidth } = useWindowDimensions();
   const palette = useColors();
   const [tab, setTab] = useState<Tab>('employees');
   const [showTrash, setShowTrash] = useState(false);
 
-  const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  const canEdit = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('equipment_manage');
   const isMaster = user?.role === 'master';
 
   // 2-column card width: (screen - left/right padding - gutter) / 2
@@ -1802,10 +1804,10 @@ export default function EquipmentScreen() {
 export function EquipmentEmployeeScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
-  const { user } = useAuth();
+  const { hasPermission, isRole } = useAuth();
   const palette = useColors();
   const emp = route.params?.emp;
-  const canEdit = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  const canEdit = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('equipment_manage');
 
   if (!emp) {
     return (

@@ -1,6 +1,7 @@
 import { Controller, Post, Body, UseGuards } from '@nestjs/common';
 import { AccountService } from './account.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { DeleteAccountDto } from './dto/delete-account.dto';
 
@@ -12,6 +13,10 @@ import { DeleteAccountDto } from './dto/delete-account.dto';
  * RateLimit only; JwtAuthGuard is applied here, mirroring AuthController). The
  * destructive semantics live in AccountService.
  */
+// Self-service account deletion keys off userID (anonymises the users row,
+// drops push tokens) and never inserts under the caller's tenant_id, so it is
+// a legitimate tenant-less write — exempt from the write block.
+@AllowNoTenant()
 @UseGuards(JwtAuthGuard)
 @Controller('account')
 export class AccountController {

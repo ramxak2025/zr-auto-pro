@@ -78,10 +78,17 @@ export default function SupplierDetailScreen() {
     : null;
   const actionTextDark = dark ? { color: colors.primary[300] } : null;
   const accentIconColor = dark ? colors.primary[300] : colors.primary[600];
-  const { isRole } = useAuth();
-  // Write gate for placing purchase orders — director / admin / superadmin
-  // (matches PurchaseOrdersScreen); the server re-checks on every mutation.
-  const canWriteOrders = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { isRole, hasPermission } = useAuth();
+  // Single manage gate for every mutating control on this screen
+  // (платёж / приёмка-поставка / возврат брака / покупка б/у / заказы /
+  // погашение долга). `suppliers_access` is VIEW-only, so a viewer sees
+  // the history but NO write actions. Owner-class roles bypass by string
+  // role (backend PermissionsGuard bypasses them too, so their flattened
+  // permission map may lack `suppliers_manage`). Computed identically to
+  // SuppliersScreen. The server re-checks `suppliers_manage` on every
+  // mutation regardless.
+  const canManageSuppliers =
+    isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('suppliers_manage');
   // Theme-aware fragments spread over the static (light-default) modal-form
   // styles so the sheets read correctly in dark mode. Values match the
   // already-converted form inputs across the app (UsersScreen/Suppliers).
@@ -310,6 +317,12 @@ export default function SupplierDetailScreen() {
   useEffect(() => {
     if (!openDefectReturn) return;
     if (defectReturnConsumed) return;
+    // Возврат брака — mutating flow; view-only роль его не открывает,
+    // даже если параметр как-то долетел (кнопки, ведущей сюда, у неё нет).
+    if (!canManageSuppliers) {
+      setDefectReturnConsumed(true);
+      return;
+    }
     if (!supplier) return;
     if (supplier.kind === 'used_purchase') {
       setDefectReturnConsumed(true);
@@ -330,7 +343,7 @@ export default function SupplierDetailScreen() {
     navigation.setParams({ openDefectReturn: undefined });
     // Explicit dep list — we want to retry only on the props that
     // actually unlock the action.
-  }, [openDefectReturn, defectReturnConsumed, supplier, defectWarehouse, navigation]);
+  }, [openDefectReturn, defectReturnConsumed, supplier, defectWarehouse, navigation, canManageSuppliers]);
 
   const invalidateAll = () =>
     Promise.all([
@@ -475,7 +488,7 @@ export default function SupplierDetailScreen() {
   const startNewSupply = () => {
     haptic('tap');
     if (receivableOrders.length === 0) {
-      if (canWriteOrders) {
+      if (canManageSuppliers) {
         Alert.alert('Нет активных заказов', 'Поставка принимается только по заказу. Создать новый заказ поставщику?', [
           { text: 'Отмена', style: 'cancel' },
           { text: 'Создать заказ', onPress: () => navigation.navigate('PurchaseOrderCreate', { supplierId: id }) },
@@ -649,15 +662,18 @@ export default function SupplierDetailScreen() {
           </AnimatedCard>
         </View>
 
-        {/* Quick pay debt button */}
-        {supplier.currentDebt > 0 && (
+        {/* Quick pay debt button — оплата это mutating-действие,
+            показываем только с правом управления. */}
+        {supplier.currentDebt > 0 && canManageSuppliers && (
           <TouchableOpacity style={styles.quickPayBtn} onPress={handlePayFullDebt}>
             <Ionicons name="wallet-outline" size={18} color={colors.white} />
             <Text style={styles.quickPayText}>Погасить долг {formatMoney(supplier.currentDebt)}</Text>
           </TouchableOpacity>
         )}
 
-        {isUsedPurchaseSupplier ? (
+        {/* Primary/secondary action row — покупка б/у или возврат брака.
+            Оба — mutating, поэтому весь блок скрыт без suppliers_manage. */}
+        {!canManageSuppliers ? null : isUsedPurchaseSupplier ? (
           // System "Покупка б/у товара" supplier — single primary CTA.
           // Standard delivery / return flows make no sense here: we
           // always buy from a client and the product lands on Б/У.
@@ -740,8 +756,11 @@ export default function SupplierDetailScreen() {
               )}
             </View>
 
-            <View style={styles.ordersActions}>
-              {canWriteOrders && (
+            {/* Действия над заказами (создать / сформировать запрос) —
+                mutating, скрываем целиком без suppliers_manage. View-only
+                роль видит список заказов, но не создаёт их. */}
+            {canManageSuppliers && (
+              <View style={styles.ordersActions}>
                 <TouchableOpacity
                   style={styles.ordersPrimaryBtn}
                   onPress={() => {
@@ -755,24 +774,24 @@ export default function SupplierDetailScreen() {
                     Новый заказ
                   </Text>
                 </TouchableOpacity>
-              )}
-              <TouchableOpacity
-                style={[
-                  styles.ordersSecondaryBtn,
-                  { borderColor: palette.border.strong, backgroundColor: palette.bg.muted },
-                ]}
-                onPress={() => {
-                  haptic('tap');
-                  setRequestOpen(true);
-                }}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="chatbubbles-outline" size={16} color={colors.primary[600]} />
-                <Text style={[styles.ordersSecondaryBtnText, { color: palette.text.primary }]} numberOfLines={1}>
-                  Сформировать запрос
-                </Text>
-              </TouchableOpacity>
-            </View>
+                <TouchableOpacity
+                  style={[
+                    styles.ordersSecondaryBtn,
+                    { borderColor: palette.border.strong, backgroundColor: palette.bg.muted },
+                  ]}
+                  onPress={() => {
+                    haptic('tap');
+                    setRequestOpen(true);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="chatbubbles-outline" size={16} color={colors.primary[600]} />
+                  <Text style={[styles.ordersSecondaryBtnText, { color: palette.text.primary }]} numberOfLines={1}>
+                    Сформировать запрос
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {supplierOrders === undefined ? null : supplierOrders.length === 0 ? (
               <Text style={[styles.ordersEmpty, { color: palette.text.tertiary }]}>Заказов поставщику пока нет</Text>
@@ -903,16 +922,16 @@ export default function SupplierDetailScreen() {
                 (или сразу в приёмку, если активный заказ один). Ручного ввода
                 накладной больше нет — поставка всегда привязана к заказу.
                 Системный «Покупка б/у» поставщик ведёт покупки своим CTA выше,
-                поэтому для него кнопку не показываем. Гейт canWriteOrders —
+                поэтому для него кнопку не показываем. Гейт canManageSuppliers —
                 приёмка это write-операция (сервер дублирует проверку). */}
-            {!isUsedPurchaseSupplier && canWriteOrders && (
+            {!isUsedPurchaseSupplier && canManageSuppliers && (
               <TouchableOpacity style={[styles.actionBtn, actionBtnDark]} onPress={startNewSupply} activeOpacity={0.8}>
                 <Ionicons name="add-circle-outline" size={18} color={accentIconColor} />
                 <Text style={[styles.actionBtnText, actionTextDark]}>Новая поставка</Text>
               </TouchableOpacity>
             )}
             {/* Подсказка, когда есть оформленные заказы, ожидающие приёмки. */}
-            {!isUsedPurchaseSupplier && canWriteOrders && receivableOrders.length > 0 && (
+            {!isUsedPurchaseSupplier && canManageSuppliers && receivableOrders.length > 0 && (
               <Text style={[styles.deliveriesHint, { color: palette.text.tertiary }]}>
                 {receivableOrders.length === 1
                   ? '1 заказ ожидает приёмки'
@@ -1063,17 +1082,20 @@ export default function SupplierDetailScreen() {
 
         {tab === 'payments' && (
           <>
-            <TouchableOpacity
-              style={[styles.actionBtn, actionBtnDark]}
-              onPress={() => {
-                setPaymentAmount('');
-                setPaymentComment('');
-                setPaymentModalOpen(true);
-              }}
-            >
-              <Ionicons name="add-circle-outline" size={18} color={accentIconColor} />
-              <Text style={[styles.actionBtnText, actionTextDark]}>Новый платёж</Text>
-            </TouchableOpacity>
+            {/* «Новый платёж» — mutating, только с правом управления. */}
+            {canManageSuppliers && (
+              <TouchableOpacity
+                style={[styles.actionBtn, actionBtnDark]}
+                onPress={() => {
+                  setPaymentAmount('');
+                  setPaymentComment('');
+                  setPaymentModalOpen(true);
+                }}
+              >
+                <Ionicons name="add-circle-outline" size={18} color={accentIconColor} />
+                <Text style={[styles.actionBtnText, actionTextDark]}>Новый платёж</Text>
+              </TouchableOpacity>
+            )}
 
             {(payments || []).length === 0 && (
               <View style={styles.emptyState}>
@@ -1113,10 +1135,11 @@ export default function SupplierDetailScreen() {
 
         {tab === 'returns' && (
           <>
-            {/* Возврат брака — только для обычных поставщиков. У системного
-                «Покупка б/у» поставщика нет товаров с закупкой через
-                стандартный flow, поэтому возвращать им нечего. */}
-            {!isUsedPurchaseSupplier && (
+            {/* Возврат брака — только для обычных поставщиков и только с
+                правом управления. У системного «Покупка б/у» поставщика нет
+                товаров с закупкой через стандартный flow, поэтому возвращать
+                им нечего. */}
+            {!isUsedPurchaseSupplier && canManageSuppliers && (
               <TouchableOpacity style={[styles.actionBtn, actionBtnDark]} onPress={openReturnDefect}>
                 <Ionicons name="arrow-undo-outline" size={18} color={accentIconColor} />
                 <Text style={[styles.actionBtnText, actionTextDark]}>Оформить возврат брака</Text>

@@ -1,6 +1,24 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Copy, Info, KeyRound, Loader2, Lock, Plus, Trash2 } from 'lucide-react';
+import {
+  ArrowLeft,
+  BarChart3,
+  Box,
+  Copy,
+  Info,
+  KeyRound,
+  Loader2,
+  Lock,
+  Package,
+  Plus,
+  Receipt,
+  ShieldCheck,
+  Trash2,
+  Truck,
+  Users2,
+  Wrench,
+} from 'lucide-react';
+import type { LucideIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { rolesApi } from '../api/services';
@@ -40,6 +58,7 @@ interface CellDef {
 const MATRIX_CELLS: Partial<Record<PermissionKey, CellDef>> = {
   checks_view: { section: 'checks', action: 'view', kind: 'scope' },
   checks_create: { section: 'checks', action: 'create', kind: 'bool' },
+  // Охват checks.edit ('all' → checks_edit + checks_edit_all), как у checks.view.
   checks_edit: { section: 'checks', action: 'edit', kind: 'scope' },
   checks_delete: { section: 'checks', action: 'delete', kind: 'bool' },
   checks_change_datetime: { section: 'checks', action: 'changeDatetime', kind: 'bool' },
@@ -47,14 +66,26 @@ const MATRIX_CELLS: Partial<Record<PermissionKey, CellDef>> = {
   payment_edit: { section: 'checks', action: 'editPayment', kind: 'bool' },
   accept_payment: { section: 'checks', action: 'acceptPayment', kind: 'bool' },
   sell_installment: { section: 'checks', action: 'sellInstallment', kind: 'bool' },
+  // Услуги: view (смотреть + в чек) / manage (CRUD + %/гарантия). manage ⇒ view.
+  services_view: { section: 'services', action: 'view', kind: 'bool' },
+  services_manage: { section: 'services', action: 'manage', kind: 'bool' },
+  // Склад: view (товары без себестоимости) / manage (себестоимость + CRUD +
+  // инвентаризация; manage ⇒ view И delete) / delete (удаление).
   warehouse_access: { section: 'warehouse', action: 'view', kind: 'bool' },
+  warehouse_manage: { section: 'warehouse', action: 'manage', kind: 'bool' },
   warehouse_delete: { section: 'warehouse', action: 'delete', kind: 'bool' },
+  // Поставщики: view / manage. manage ⇒ view.
   suppliers_access: { section: 'suppliers', action: 'view', kind: 'bool' },
+  suppliers_manage: { section: 'suppliers', action: 'manage', kind: 'bool' },
+  // Имущество: view (справочник) / manage (выдача/CRUD). manage ⇒ view.
+  equipment_view: { section: 'equipment', action: 'view', kind: 'bool' },
+  equipment_manage: { section: 'equipment', action: 'manage', kind: 'bool' },
   clients_view: { section: 'clients', action: 'view', kind: 'bool' },
   clients_edit: { section: 'clients', action: 'edit', kind: 'bool' },
   schedule_view: { section: 'schedule', action: 'view', kind: 'bool' },
   bookings_access: { section: 'bookings', action: 'view', kind: 'bool' },
-  salary_view: { section: 'salary', action: 'view', kind: 'scope' },
+  // Охват salary.view ('all' → salary_view + salary_view_all).
+  salary_view: { section: 'salary', action: 'view', kind: 'scope', label: 'Зарплата' },
   financial_reports: { section: 'reports', action: 'view', kind: 'bool' },
   profit_view: { section: 'reports', action: 'profit', kind: 'bool' },
   export_data: { section: 'reports', action: 'export', kind: 'bool' },
@@ -77,6 +108,7 @@ const MATRIX_LABELS: Record<PermissionKey, string> = {
   checks_view: 'Видит заказ-наряды',
   checks_create: 'Создаёт заказ-наряды',
   checks_edit: 'Редактирует заказ-наряды',
+  checks_edit_all: 'Редактирует заказ-наряды всех мастеров', // поглощён охватом checks_edit ('all')
   checks_delete: 'Удаляет заказ-наряды',
   checks_change_datetime: 'Меняет дату и время',
   checks_view_all: 'Видит заказ-наряды всех мастеров', // поглощён охватом checks_view
@@ -84,16 +116,23 @@ const MATRIX_LABELS: Record<PermissionKey, string> = {
   accept_payment: 'Кассир смены (принимает оплату)',
   sell_installment: 'Продаёт в рассрочку',
   edit_closed_check: 'Редактирует проведённый заказ-наряд',
+  services_view: 'Видит услуги (добавляет в чек)',
+  services_manage: 'Управляет каталогом услуг',
   profit_view: 'Видит прибыль',
   financial_reports: 'Финансовые отчёты',
   export_data: 'Экспорт данных',
   cashflow_view: 'Движение денег: свои', // в редакторе строка охвата подписана «Движение денег» (см. CellDef.label)
   cashflow_view_all: 'Движение денег: все', // поглощён охватом reports.cashflow ('all')
   can_add_expenses: 'Вносит расходы',
-  salary_view: 'Видит зарплаты',
+  salary_view: 'Видит зарплаты: свои', // в редакторе строка охвата подписана «Зарплата» (см. CellDef.label)
+  salary_view_all: 'Видит зарплаты: все', // поглощён охватом salary.view ('all')
   warehouse_access: 'Доступ к складу',
-  suppliers_access: 'Доступ к поставщикам',
+  warehouse_manage: 'Управляет складом (себестоимость, инвентаризация)',
   warehouse_delete: 'Удаление на складе',
+  suppliers_access: 'Доступ к поставщикам',
+  suppliers_manage: 'Управляет поставщиками',
+  equipment_view: 'Видит имущество',
+  equipment_manage: 'Управляет имуществом',
   clients_view: 'Видит клиентов',
   clients_edit: 'Редактирует клиентов',
   schedule_view: 'Доступ к расписанию',
@@ -107,20 +146,43 @@ const MATRIX_LABELS: Record<PermissionKey, string> = {
 /** Пояснения к неочевидным строкам. */
 const MATRIX_HINTS: Partial<Record<PermissionKey, string>> = {
   checks_view: '«Свои» — только собственные заказ-наряды, «Все» — всех мастеров.',
+  checks_edit: '«Свои» — редактирует только свои, «Все» — заказ-наряды всех мастеров.',
   cashflow_view: '«Свои» — только собственные операции, «Все» — по всему автосервису.',
+  salary_view: '«Свои» — только своя зарплата, «Все» — по всей команде.',
   accept_payment: 'Действует, когда включён режим кассовых смен.',
+  services_manage: 'Управление включает просмотр: редактирование каталога, % мастера и гарантию.',
+  warehouse_manage: 'Управление включает просмотр и удаление: себестоимость, цены, остатки, инвентаризация.',
+  suppliers_manage: 'Управление включает просмотр: создание, редактирование и удаление поставщиков.',
+  equipment_manage: 'Управление включает просмотр: выдача, возврат и редактирование имущества.',
+  calls_listen: 'Прослушивание записей разговоров.',
 };
 
-/** Секции редактора: PERMISSION_GROUPS минус checks_view_all (охват checks_view). */
-const EDITOR_GROUPS: { title: string; rows: { key: PermissionKey; def: CellDef }[] }[] = Object.entries(
-  PERMISSION_GROUPS,
-).map(([title, keys]) => ({
-  title,
-  rows: (keys as readonly PermissionKey[]).flatMap((key) => {
-    const def = MATRIX_CELLS[key];
-    return def ? [{ key, def }] : [];
-  }),
-}));
+/** Иконка секции редактора (по ключу PERMISSION_GROUPS). */
+const GROUP_ICONS: Record<string, LucideIcon> = {
+  Касса: Receipt,
+  Услуги: Wrench,
+  Финансы: BarChart3,
+  Склад: Package,
+  Поставщики: Truck,
+  Имущество: Box,
+  CRM: Users2,
+  Управление: ShieldCheck,
+};
+
+/**
+ * Секции редактора: PERMISSION_GROUPS. Ключи-«поглощённые» охватом
+ * (checks_view_all/checks_edit_all/salary_view_all/cashflow_view_all) не имеют
+ * своей ячейки в MATRIX_CELLS и в редактор не попадают — их задаёт сегмент охвата.
+ */
+const EDITOR_GROUPS: { title: string; icon: LucideIcon; rows: { key: PermissionKey; def: CellDef }[] }[] =
+  Object.entries(PERMISSION_GROUPS).map(([title, keys]) => ({
+    title,
+    icon: GROUP_ICONS[title] ?? KeyRound,
+    rows: (keys as readonly PermissionKey[]).flatMap((key) => {
+      const def = MATRIX_CELLS[key];
+      return def ? [{ key, def }] : [];
+    }),
+  }));
 
 const SCOPE_OPTIONS: { value: RoleScope; label: string }[] = [
   { value: 'none', label: 'Нет' },
@@ -170,8 +232,14 @@ function buildMatrix(m: EditableMatrix): RoleMatrix {
       acceptPayment: bool('checks', 'acceptPayment'),
       sellInstallment: bool('checks', 'sellInstallment'),
     },
-    warehouse: { view: bool('warehouse', 'view'), delete: bool('warehouse', 'delete') },
-    suppliers: { view: bool('suppliers', 'view') },
+    services: { view: bool('services', 'view'), manage: bool('services', 'manage') },
+    warehouse: {
+      view: bool('warehouse', 'view'),
+      manage: bool('warehouse', 'manage'),
+      delete: bool('warehouse', 'delete'),
+    },
+    suppliers: { view: bool('suppliers', 'view'), manage: bool('suppliers', 'manage') },
+    equipment: { view: bool('equipment', 'view'), manage: bool('equipment', 'manage') },
     clients: { view: bool('clients', 'view'), edit: bool('clients', 'edit') },
     schedule: { view: bool('schedule', 'view') },
     bookings: { view: bool('bookings', 'view') },
@@ -260,8 +328,8 @@ export default function RolesManagement({ isOpen, onClose, roles, rolesLoading, 
             <div className="space-y-5">
               <div className="flex items-start justify-between gap-3">
                 <p className="text-xs text-gray-500">
-                  Роль — базовый набор прав. Назначается сотруднику в его карточке; личные галочки сотрудника действуют
-                  поверх роли.
+                  Роль — набор прав доступа. Назначается сотруднику в его карточке и полностью определяет, что ему
+                  доступно.
                 </p>
                 <button onClick={() => setView({ kind: 'create' })} className="btn-primary flex-shrink-0">
                   <Plus className="w-4 h-4" />
@@ -530,35 +598,41 @@ function RoleEditor({
 
       {/* Матрица прав */}
       <div className="space-y-4">
-        {EDITOR_GROUPS.map((group) => (
-          <div key={group.title}>
-            <p className="text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1.5">{group.title}</p>
-            <div className="divide-y divide-gray-50 rounded-xl border border-gray-100 px-4">
-              {group.rows.map(({ key, def }) => {
-                const hint = MATRIX_HINTS[key];
-                return (
-                  <div key={key} className="flex items-center justify-between gap-3 py-2.5">
-                    <div className="min-w-0">
-                      <p className="text-sm text-gray-700">{def.label ?? MATRIX_LABELS[key]}</p>
-                      {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}
+        {EDITOR_GROUPS.map((group) => {
+          const GroupIcon = group.icon;
+          return (
+            <div key={group.title}>
+              <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
+                <GroupIcon className="w-3.5 h-3.5" />
+                {group.title}
+              </p>
+              <div className="divide-y divide-gray-50 rounded-xl border border-gray-100 px-4">
+                {group.rows.map(({ key, def }) => {
+                  const hint = MATRIX_HINTS[key];
+                  return (
+                    <div key={key} className="flex items-center justify-between gap-3 py-2.5">
+                      <div className="min-w-0">
+                        <p className="text-sm text-gray-700">{def.label ?? MATRIX_LABELS[key]}</p>
+                        {hint && <p className="text-xs text-gray-400 mt-0.5">{hint}</p>}
+                      </div>
+                      {def.kind === 'scope' ? (
+                        <ScopeSegmented value={scopeOf(def)} disabled={readOnly} onChange={(v) => setCell(def, v)} />
+                      ) : (
+                        <input
+                          type="checkbox"
+                          checked={boolOf(def)}
+                          disabled={readOnly}
+                          onChange={() => setCell(def, !boolOf(def))}
+                          className="w-4 h-4 flex-shrink-0 text-primary-600 border-gray-300 rounded focus:ring-primary-500 disabled:opacity-60"
+                        />
+                      )}
                     </div>
-                    {def.kind === 'scope' ? (
-                      <ScopeSegmented value={scopeOf(def)} disabled={readOnly} onChange={(v) => setCell(def, v)} />
-                    ) : (
-                      <input
-                        type="checkbox"
-                        checked={boolOf(def)}
-                        disabled={readOnly}
-                        onChange={() => setCell(def, !boolOf(def))}
-                        className="w-4 h-4 flex-shrink-0 text-primary-600 border-gray-300 rounded focus:ring-primary-500 disabled:opacity-60"
-                      />
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Footer */}

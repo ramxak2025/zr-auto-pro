@@ -93,6 +93,13 @@ interface ProviderDef {
   needsPhoneNumberId?: boolean;
   /** Show Telegram «Chat ID» field → chatId. */
   needsChatId?: boolean;
+  /**
+   * This provider can send SMS to CLIENTS. When true the config modal shows an
+   * independent «Отправлять SMS клиентам» switch (migration 127), decoupled from
+   * the connection on/off. WhatsApp/Telegram route to messengers, not SMS, so
+   * they leave it undefined.
+   */
+  sendsClientSms?: boolean;
   /** Provider-specific notice rendered at the top of the config modal. */
   hint?: string;
 }
@@ -108,6 +115,7 @@ const PHONE_PROVIDERS: ProviderDef[] = [
     tone: { bg: colors.blue[50], fg: colors.blue[600] },
     apiKeyLabel: 'API ключ',
     needsName: true,
+    sendsClientSms: true,
   },
   {
     key: 'megafon',
@@ -119,6 +127,7 @@ const PHONE_PROVIDERS: ProviderDef[] = [
     tone: { bg: colors.green[50], fg: colors.green[600] },
     apiKeyLabel: 'Токен ВАТС',
     needsPhone: true,
+    sendsClientSms: true,
   },
 ];
 
@@ -162,6 +171,7 @@ const MESSENGER_PROVIDERS: ProviderDef[] = [
     tone: { bg: colors.blue[50], fg: colors.blue[600] },
     apiKeyLabel: 'API ID',
     needsName: true,
+    sendsClientSms: true,
   },
 ];
 
@@ -361,6 +371,8 @@ function ProviderModal({
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [chatId, setChatId] = useState('');
   const [isActive, setIsActive] = useState(true);
+  // Independent outbound-SMS switch (127) — decoupled from isActive. Defaults on.
+  const [smsEnabled, setSmsEnabled] = useState(true);
   const [testStatus, setTestStatus] = useState<'idle' | 'ok' | 'err'>('idle');
   const [copied, setCopied] = useState(false);
 
@@ -375,6 +387,9 @@ function ProviderModal({
     setPhoneNumberId(existing?.phoneNumberId || '');
     setChatId(existing?.chatId || '');
     setIsActive(existing ? existing.isActive : true);
+    // Legacy rows are server-backfilled to true; a brand-new integration also
+    // starts sending SMS unless the owner mutes it.
+    setSmsEnabled(existing ? existing.smsNotificationsEnabled !== false : true);
     setTestStatus('idle');
     setCopied(false);
   }, [provider, existing]);
@@ -445,6 +460,9 @@ function ProviderModal({
       senderPhone: senderPhone.trim() || undefined,
       phoneNumberId: provider.needsPhoneNumberId ? phoneNumberId.trim() || undefined : undefined,
       chatId: provider.needsChatId ? chatId.trim() || undefined : undefined,
+      // Persist the independent client-SMS switch only for SMS-capable providers;
+      // omitting it for others leaves the stored value untouched server-side.
+      smsNotificationsEnabled: provider.sendsClientSms ? smsEnabled : undefined,
       webhookUrl,
       isActive,
     });
@@ -674,6 +692,38 @@ function ProviderModal({
         </View>
       </TouchableOpacity>
 
+      {/* Independent client-SMS switch (127) — separate from the connection
+          on/off. Muting it stops client SMS while the integration stays
+          connected; for «Мои Звонки» call sync keeps working regardless. */}
+      {provider.sendsClientSms && (
+        <TouchableOpacity
+          style={[styles.activeRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          onPress={() => {
+            haptic('select');
+            setSmsEnabled((v) => !v);
+          }}
+          accessibilityRole="switch"
+          accessibilityState={{ checked: smsEnabled }}
+        >
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.activeLabel, { color: palette.text.primary }]}>Отправлять SMS клиентам</Text>
+            <Text style={[styles.activeSub, { color: palette.text.tertiary }]}>
+              {smsEnabled
+                ? 'SMS клиентам отправляются через этот сервис'
+                : 'SMS клиентам не отправляются — интеграция остаётся подключённой, синхронизация звонков не затрагивается'}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.switchTrack,
+              { backgroundColor: smsEnabled ? palette.accent.primary : palette.border.strong },
+            ]}
+          >
+            <View style={[styles.switchThumb, { transform: [{ translateX: smsEnabled ? 20 : 2 }] }]} />
+          </View>
+        </TouchableOpacity>
+      )}
+
       {/* Test connection */}
       <TouchableOpacity
         style={[
@@ -763,6 +813,7 @@ export default function IntegrationsScreen() {
   const tabBarHeight = useTabBarHeight();
 
   const [openProvider, setOpenProvider] = useState<ProviderDef | null>(null);
+  const [mangoOpen, setMangoOpen] = useState(false);
 
   const integrationsQuery = useQuery({
     queryKey: ['marketing-integrations'],
@@ -861,11 +912,17 @@ export default function IntegrationsScreen() {
               ))}
             </View>
 
-            {/* Mango Office — виртуальная АТС (own backend: telephonyApi). Inline
-                config card, not a marketing ProviderCard, because its secrets +
-                callback URL differ from the messaging-integrations flow. */}
+            {/* Mango Office — виртуальная АТС (own backend: telephonyApi). Now a
+                compact tap-to-open card (like every other provider); its config —
+                секреты + callback URL — живут в модалке MangoModal. */}
             <View style={{ height: spacing[2.5] }} />
-            <MangoSection />
+            <MangoCard
+              index={PHONE_PROVIDERS.length}
+              onPress={() => {
+                haptic('tap');
+                setMangoOpen(true);
+              }}
+            />
 
             {/* 4. Каналы рассылок — WhatsApp Cloud API + SMS.RU + Telegram */}
             <View style={{ height: spacing[5] }} />
@@ -893,6 +950,8 @@ export default function IntegrationsScreen() {
         existing={openProvider ? findIntegration(openProvider) : undefined}
         onClose={() => setOpenProvider(null)}
       />
+
+      <MangoModal visible={mangoOpen} onClose={() => setMangoOpen(false)} />
     </View>
   );
 }
@@ -909,7 +968,69 @@ export default function IntegrationsScreen() {
 
 const MANGO_TONE = { bg: '#fdecec', fg: '#e11d48' };
 
-function MangoSection() {
+/** Read-only view of Mango's connection state for the compact catalogue card. */
+function useMangoStatus(): 'ok' | 'warn' | 'off' {
+  const settingsQuery = useQuery({
+    queryKey: ['telephony-settings'],
+    queryFn: async () => (await telephonyApi.getSettings()).data,
+    staleTime: 60_000,
+  });
+  const settings: TelephonySettings | undefined = settingsQuery.data;
+  const configured = !!settings?.hasApiKey && !!settings?.hasApiSalt;
+  return settings?.enabled && configured ? 'ok' : configured ? 'warn' : 'off';
+}
+
+/**
+ * Mango Office — compact tap-to-open card, matching every other provider's
+ * ProviderCard visual language (logo pill · name · desc · StatusPill · chevron).
+ * The full config form lives in MangoModal, opened on tap.
+ */
+function MangoCard({ onPress, index }: { onPress: () => void; index: number }) {
+  const palette = useColors();
+  const status = useMangoStatus();
+
+  return (
+    <AnimatedCard
+      index={index}
+      onPress={onPress}
+      style={[styles.providerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.providerCardRow}>
+        <View
+          style={[
+            styles.providerLogo,
+            { backgroundColor: palette.mode === 'dark' ? softTint(MANGO_TONE.fg, 'dark') : MANGO_TONE.bg },
+          ]}
+        >
+          <Ionicons name="call-outline" size={22} color={palette.mode === 'dark' ? MANGO_TONE.bg : MANGO_TONE.fg} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.providerName, { color: palette.text.primary }]} numberOfLines={1}>
+            Mango Office
+          </Text>
+          <Text style={[styles.providerDesc, { color: palette.text.tertiary }]} numberOfLines={2}>
+            Виртуальная АТС — входящие и пропущенные звонки
+          </Text>
+          <View style={styles.providerMeta}>
+            <StatusPill kind={status} />
+          </View>
+        </View>
+        <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} />
+      </View>
+    </AnimatedCard>
+  );
+}
+
+/**
+ * Mango Office config modal — same tap-to-open pattern as ProviderModal.
+ *
+ * Distinct from the marketing PHONE_PROVIDERS cards: Mango lives in its own
+ * backend (telephonyApi, migration 088) with a masked write-only api_key +
+ * api_salt and a server-only signature-verified callback the owner pastes into
+ * Mango's VPBX settings. Incoming/missed calls land in the existing calls list
+ * (CallsScreen) once the owner enters real keys AND flips the toggle on.
+ */
+function MangoModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
   const palette = useColors();
   const queryClient = useQueryClient();
   const { user } = useAuth();
@@ -929,16 +1050,20 @@ function MangoSection() {
   const [apiKey, setApiKey] = useState('');
   const [apiSalt, setApiSalt] = useState('');
   const [copied, setCopied] = useState(false);
-  // Hydrate the toggle once from the server, then let the owner edit freely so a
-  // background refetch never flips an unsaved switch.
-  const hydrated = React.useRef(false);
 
+  // Re-hydrate the toggle from the server every time the sheet (re)opens, so
+  // reopening reflects the stored state; while open, a background refetch never
+  // flips an unsaved switch (guarded by `visible`).
   React.useEffect(() => {
-    if (settings && !hydrated.current) {
-      hydrated.current = true;
+    if (visible && settings) {
       setEnabled(!!settings.enabled);
+      setApiKey('');
+      setApiSalt('');
+      setCopied(false);
     }
-  }, [settings]);
+    // Only re-sync on open transition, not on every settings refetch.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visible]);
 
   const webhookUrl = useMemo(() => mangoWebhookUrl(tenantId), [tenantId]);
 
@@ -963,6 +1088,7 @@ function MangoSection() {
       setApiSalt('');
       queryClient.invalidateQueries({ queryKey: ['telephony-settings'] });
       Alert.alert('Готово', 'Настройки телефонии сохранены');
+      onClose();
     },
     onError: (e: any) => {
       haptic('error');
@@ -999,24 +1125,21 @@ function MangoSection() {
     }
   };
 
-  const configured = !!settings?.hasApiKey && !!settings?.hasApiSalt;
-  const status: 'ok' | 'warn' | 'off' = settings?.enabled && configured ? 'ok' : configured ? 'warn' : 'off';
-
   return (
-    <View style={[styles.carReadyCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-      {/* Header */}
+    <Modal visible={visible} onClose={onClose} title="Mango Office">
       <View style={styles.modalHeaderBlock}>
-        <View style={[styles.modalLogo, { backgroundColor: MANGO_TONE.bg }]}>
-          <Ionicons name="call-outline" size={26} color={MANGO_TONE.fg} />
+        <View
+          style={[
+            styles.modalLogo,
+            { backgroundColor: palette.mode === 'dark' ? softTint(MANGO_TONE.fg, 'dark') : MANGO_TONE.bg },
+          ]}
+        >
+          <Ionicons name="call-outline" size={26} color={palette.mode === 'dark' ? MANGO_TONE.bg : MANGO_TONE.fg} />
         </View>
-        <View style={{ flex: 1, minWidth: 0 }}>
-          <Text style={[styles.providerName, { color: palette.text.primary }]}>Mango Office</Text>
+        <View style={{ flex: 1 }}>
           <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>
             Виртуальная АТС — входящие и пропущенные звонки в списке звонков
           </Text>
-          <View style={[styles.providerMeta, { marginTop: spacing[1.5] }]}>
-            <StatusPill kind={status} />
-          </View>
         </View>
       </View>
 
@@ -1150,7 +1273,7 @@ function MangoSection() {
           </>
         )}
       </TouchableOpacity>
-    </View>
+    </Modal>
   );
 }
 
@@ -1253,13 +1376,6 @@ const styles = StyleSheet.create({
     minHeight: 96,
     lineHeight: 20,
     paddingTop: spacing[2.5],
-  },
-
-  // «Машина готова» card
-  carReadyCard: {
-    borderRadius: borderRadius['2xl'],
-    borderWidth: 1,
-    padding: spacing[4],
   },
 
   // Webhook row

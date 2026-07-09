@@ -205,17 +205,25 @@ export default function LoginScreen() {
               <Button title="Войти" onPress={handleSubmit} loading={submitting} size="lg" />
             </Animated.View>
 
-            {/* Self-service registration — secondary action under the login form. */}
-            <Animated.View style={[styles.registerWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}>
-              <Button
-                title="Регистрация"
-                variant="secondary"
-                onPress={() => setRegisterOpen(true)}
-                disabled={submitting}
-                size="md"
-                hapticIntent="tap"
-              />
-            </Animated.View>
+            {/* Self-service registration — secondary action under the login form.
+                HIDDEN on iOS (App Store Guideline 3.1.1): in-app account creation
+                that unlocks a subscription paid outside Apple is not allowed. On
+                iOS the app is login-only for existing accounts; new autoservices
+                register on the web (autexa.pw). Android keeps self-service signup. */}
+            {Platform.OS !== 'ios' && (
+              <Animated.View
+                style={[styles.registerWrap, { opacity: formFade, transform: [{ translateY: formSlide }] }]}
+              >
+                <Button
+                  title="Регистрация"
+                  variant="secondary"
+                  onPress={() => setRegisterOpen(true)}
+                  disabled={submitting}
+                  size="md"
+                  hapticIntent="tap"
+                />
+              </Animated.View>
+            )}
 
             {/* Demo access */}
             <Animated.View style={[styles.demoSection, { opacity: demoFade }]}>
@@ -254,7 +262,9 @@ export default function LoginScreen() {
         </ScrollView>
       </KeyboardAvoidingView>
 
-      <RegistrationRequestSheet visible={registerOpen} onClose={() => setRegisterOpen(false)} />
+      {Platform.OS !== 'ios' && (
+        <RegistrationRequestSheet visible={registerOpen} onClose={() => setRegisterOpen(false)} />
+      )}
     </SafeAreaView>
   );
 }

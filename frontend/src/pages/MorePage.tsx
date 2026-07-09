@@ -83,6 +83,7 @@ const menuItems: MenuItem[] = [
     description: 'Каталог услуг',
     path: '/services',
     icon: Wrench,
+    permission: 'services_view',
     featureKey: 'services_view',
     color: 'bg-orange-50',
     iconColor: 'text-orange-600',
@@ -112,6 +113,7 @@ const menuItems: MenuItem[] = [
     description: 'Касса по дням и сотрудникам',
     path: '/cashflow',
     icon: ArrowRightLeft,
+    permission: 'cashflow_view',
     featureKey: 'cashflow_view',
     color: 'bg-teal-50',
     iconColor: 'text-teal-600',
@@ -137,6 +139,7 @@ const menuItems: MenuItem[] = [
     description: 'Заработок мастеров',
     path: '/salary',
     icon: Wallet,
+    permission: 'salary_view',
     featureKey: 'salary_view',
     color: 'bg-green-50',
     iconColor: 'text-green-600',
@@ -165,7 +168,7 @@ const menuItems: MenuItem[] = [
     description: 'Журнал звонков и записи',
     path: '/calls',
     icon: Phone,
-    roles: ['director', 'superadmin'],
+    permission: 'calls_view',
     color: 'bg-cyan-50',
     iconColor: 'text-cyan-600',
   },
@@ -174,6 +177,7 @@ const menuItems: MenuItem[] = [
     description: 'Рассылки, акции, аналитика',
     path: '/marketing',
     icon: Megaphone,
+    permission: 'marketing_access',
     color: 'bg-violet-50',
     iconColor: 'text-violet-600',
   },
@@ -200,7 +204,7 @@ const menuItems: MenuItem[] = [
     description: 'Учёт инструментов и оборудования',
     path: '/equipment',
     icon: Package,
-    roles: ['director', 'superadmin'],
+    permission: 'equipment_view',
     color: 'bg-emerald-50',
     iconColor: 'text-emerald-600',
   },
@@ -261,6 +265,9 @@ export default function MorePage() {
   // not a fragile match by plan name. See shared/constants/features.ts.
   const planFeatures: string[] = Array.isArray(sub?.features) ? sub!.features : [];
   const isBypass = user?.role === 'superadmin';
+  // Owner-class always sees every section (hide-by-permission applies to
+  // masters / restricted custom roles only).
+  const isOwnerClass = user?.role === 'superadmin' || user?.role === 'director' || user?.role === 'admin';
 
   const isFeatureLocked = (featureKey?: string) => {
     if (!featureKey || isBypass || !sub) return false;
@@ -328,7 +335,9 @@ export default function MorePage() {
       {/* Menu items */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-100 overflow-hidden">
         {menuItems.map((item) => {
-          if (item.permission && !hasPermission(item.permission)) {
+          // ROLE-ONLY hide-by-permission: скрываем пункт без gating-права.
+          // Owner-class (superadmin/director/admin) видит всё.
+          if (!isOwnerClass && item.permission && !hasPermission(item.permission)) {
             return null;
           }
           if (item.roles && user?.role && !item.roles.includes(user.role)) {

@@ -231,14 +231,50 @@ export class UsersService {
     }
 
     const hash = await bcrypt.hash(dto.password, 10);
-    const perms = dto.permissions ? JSON.stringify(dto.permissions) : '{}';
+
+    // ROLE-ONLY: personal permissions are gone — always write an empty map.
+    // Права задаёт назначенная роль (roleId). Если roleId передан — он обязан быть
+    // ВИДИМ тенанту (своя роль или глобальная системная). Если roleId НЕ передан —
+    // мы НЕ оставляем сотрудника без роли: жёстко проставляем СИСТЕМНУЮ роль по
+    // строковой роли (master→«Мастер», admin→«Администратор», director→«Директор»),
+    // предпочитая per-tenant override (roles WHERE tenant_id=<tenant> AND
+    // system_key=<role>), иначе глобальный шаблон (tenant_id IS NULL AND
+    // system_key=<role>). Иначе новый сотрудник получил бы role_id NULL →
+    // role_matrix NULL → эффективные права {} на клиенте (пустое меню), при этом
+    // backend-guard всё равно применил бы master-дефолты — рассинхрон + баг
+    // «новый сотрудник видит пустое приложение». superadmin (без тенанта) роли не
+    // требует — он обходит все гейты по строковой роли, ему role_id не нужен.
+    let roleId: string | null = null;
+    if (dto.roleId) {
+      const { rows: roleRows } = await this.pool.query(
+        `SELECT 1 FROM roles WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
+        [dto.roleId, tenantID],
+      );
+      if (roleRows.length === 0) throw new BadRequestException({ message: 'Роль не найдена' });
+      roleId = dto.roleId;
+    } else if (role !== 'superadmin') {
+      // Дефолт роли по строковой роли: сначала per-tenant override с этим
+      // system_key, иначе глобальный системный шаблон. Один запрос: ORDER BY
+      // (tenant_id IS NOT NULL) DESC ставит тенантный override перед глобальным.
+      const { rows: sysRoleRows } = await this.pool.query(
+        `SELECT id FROM roles
+          WHERE system_key = $1 AND (tenant_id = $2 OR tenant_id IS NULL)
+          ORDER BY (tenant_id IS NOT NULL) DESC
+          LIMIT 1`,
+        [role, tenantID],
+      );
+      // Если системная роль-шаблон почему-то отсутствует (не должно случаться —
+      // 3 глобальные строки сидятся миграцией 114/121), не блокируем создание:
+      // роль остаётся NULL, и guard применит легаси-дефолты строковой роли.
+      roleId = sysRoleRows.length > 0 ? (sysRoleRows[0].id as string) : null;
+    }
 
     try {
       const { rows } = await this.pool.query(
-        `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, is_active, tenant_id)
-         VALUES ($1, $2, $3, $4, $5, $6::jsonb, true, $7)
+        `INSERT INTO users (phone, password, full_name, role, salary_percent, permissions, role_id, is_active, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, '{}'::jsonb, $6, true, $7)
          RETURNING id, phone, full_name, username, avatar, role, salary_percent, product_salary_percent, permissions, days_off, is_active, team, can_add_expenses, daily_expense_limit, hidden_from_schedule, hidden_everywhere, dismissed_at, purged_at, role_id, tenant_id, created_at`,
-        [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, perms, tenantID],
+        [phone, hash, dto.fullName, role, Number(dto.salaryPercent) || 0, roleId, tenantID],
       );
       return this.mapUser(rows[0]);
     } catch (err: any) {
@@ -303,28 +339,14 @@ export class UsersService {
       }
     }
 
-    // Self-lockout guard for the LEGACY permissions path (mirrors the dedicated
-    // PATCH /users/:id/permissions). A user editing their OWN account must not
-    // be able to strip their own `user_management` — an `admin` would otherwise
-    // brick their access to Users/Employees (their client gate checks this key).
-    // superadmin/director are excluded: their client bypass is unconditional so
-    // they cannot self-lock, and excluding them avoids over-blocking an
-    // owner-class self profile-edit whose stored map happens to omit the key.
-    if (
-      dto.permissions !== undefined &&
-      id === actorID &&
-      actorRole !== 'superadmin' &&
-      actorRole !== 'director' &&
-      dto.permissions.user_management !== true
-    ) {
-      throw new BadRequestException({ message: 'Нельзя снять у себя право «Управление пользователями»' });
-    }
-
-    // ── 114 — назначение роли (roleId) ──────────────────────────────────
+    // ── ROLE-ONLY (консолидация 2026-07) — назначение роли (roleId) ──────────
+    // Персональные users.permissions удалены из модели прав: единственный способ
+    // изменить права сотрудника — назначить роль (dto.roleId). dto.permissions
+    // больше не принимается (снят из UpdateUserDto).
     // undefined → поле не трогаем; null → снять роль (возврат к легаси-дефолтам
-    // строковой роли — сегодняшнее поведение); uuid → роль обязана быть ВИДИМОЙ
-    // тенанту: системная (tenant_id IS NULL) или своя. Чужая → 400, id другого
-    // тенанта не различим от несуществующего.
+    // строковой роли); uuid → роль обязана быть ВИДИМОЙ тенанту: системная
+    // (tenant_id IS NULL) или своя. Чужая → 400, id другого тенанта не различим
+    // от несуществующего.
     if (dto.roleId !== undefined && dto.roleId !== null) {
       const { rows: roleRows } = await this.pool.query(
         `SELECT COALESCE(matrix, '{}') AS matrix FROM roles WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
@@ -332,20 +354,12 @@ export class UsersService {
       );
       if (roleRows.length === 0) throw new BadRequestException({ message: 'Роль не найдена' });
 
-      // Самолокаут-guard (зеркало правила для dto.permissions выше, но по
-      // ЭФФЕКТИВНОМУ результату): назначая роль СЕБЕ, нельзя получить
-      // user_management=false после «flatten(матрицы) ⊕ персональные overrides».
-      // superadmin/director исключены по той же причине, что и выше — их
-      // клиентский обход безусловный, самолокаут для них невозможен.
+      // Самолокаут-guard по ЭФФЕКТИВНОМУ результату (теперь только flatten(matrix)):
+      // назначая роль СЕБЕ, нельзя получить user_management=false. superadmin/
+      // director исключены — их клиентский обход безусловный, самолокаут невозможен.
       if (id === actorID && actorRole !== 'superadmin' && actorRole !== 'director') {
         const roleMatrix = typeof roleRows[0].matrix === 'string' ? JSON.parse(roleRows[0].matrix) : roleRows[0].matrix;
-        const storedPermsRaw = targetRows[0].permissions;
-        const storedPerms = (
-          typeof storedPermsRaw === 'string' ? JSON.parse(storedPermsRaw) : storedPermsRaw || {}
-        ) as Record<string, boolean>;
-        const resultingOwnPerms =
-          dto.permissions !== undefined ? (dto.permissions as Record<string, boolean>) : storedPerms;
-        const effective = mergeEffectivePermissions(roleMatrix, resultingOwnPerms);
+        const effective = mergeEffectivePermissions(roleMatrix);
         if (effective.user_management !== true) {
           throw new BadRequestException({ message: 'Нельзя снять у себя право «Управление пользователями»' });
         }
@@ -375,10 +389,6 @@ export class UsersService {
     if (dto.productSalaryPercent !== undefined) {
       sets.push(`product_salary_percent=$${idx++}`);
       vals.push(dto.productSalaryPercent);
-    }
-    if (dto.permissions !== undefined) {
-      sets.push(`permissions=$${idx++}`);
-      vals.push(JSON.stringify(dto.permissions));
     }
     if (dto.isActive !== undefined) {
       sets.push(`is_active=$${idx++}`);
@@ -983,98 +993,26 @@ export class UsersService {
     return this.getItemVisibility(userId, tenantID);
   }
 
-  // ─── Action Permissions (server-enforced) ──────────────────────────
-  // The owner sets another user's action-permission map (users.permissions).
-  // This is the SAME column the legacy PATCH /users/:id already writes via
-  // UpdateUserDto.permissions; this dedicated endpoint exists so the
-  // permissions editor has a focused, self-lockout-protected path. Reads/writes
-  // are tenant-scoped (a foreign id 404s) and the controller restricts the
-  // caller to owner-class roles.
-
-  /** Return the user's stored permission map (tenant-scoped). */
-  async getPermissions(userId: string, tenantID: string): Promise<Record<string, boolean>> {
-    const { rows } = await this.pool.query(
-      `SELECT COALESCE(permissions, '{}') as permissions FROM users WHERE id=$1 AND tenant_id=$2`,
-      [userId, tenantID],
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
-    const raw = rows[0].permissions;
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, boolean>;
-  }
+  // ─── Effective permissions (server-enforced, ROLE-ONLY) ─────────────
+  // Персональные users.permissions удалены (консолидация 2026-07). Права
+  // сотрудника задаёт назначенная роль. Осталось только ЧТЕНИЕ эффективных прав
+  // для UI (экран роли / карточка сотрудника). Запись прав — назначение роли
+  // (update(..., { roleId })).
 
   /**
-   * Replace a user's action-permission map.
-   *
-   * Self-lockout protection: a user editing THEIR OWN account cannot drop
-   * `user_management` — that's the key that gates the very screen they're using
-   * to manage permissions, so removing it from yourself would brick your access
-   * to user management (mirrors the section/item visibility «work» floor).
-   * Editing someone ELSE's `user_management` is allowed (an owner can demote a
-   * sub-admin). Owner-class role gating is enforced by the controller.
-   *
-   * Every value is coerced to a strict boolean so a forged `"true"`/1/null in
-   * the JSON body can't store a non-boolean that the guard would mis-read.
-   */
-  async updatePermissions(
-    userId: string,
-    tenantID: string,
-    actorUserId: string,
-    permissions: Record<string, boolean>,
-  ): Promise<Record<string, boolean>> {
-    // Tenant-scoped existence check — a forged id from another tenant 404s.
-    const { rows: existsRows } = await this.pool.query(`SELECT 1 FROM users WHERE id=$1 AND tenant_id=$2`, [
-      userId,
-      tenantID,
-    ]);
-    if (existsRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
-
-    // Coerce to a clean boolean map.
-    const clean: Record<string, boolean> = {};
-    for (const [key, value] of Object.entries(permissions || {})) {
-      clean[key] = value === true;
-    }
-
-    // Self-lockout guard: you can't strip your own user_management.
-    if (userId === actorUserId && clean.user_management !== true) {
-      throw new BadRequestException({
-        message: 'Нельзя снять у себя право «Управление пользователями»',
-      });
-    }
-
-    const { rows } = await this.pool.query(
-      `UPDATE users SET permissions=$1, updated_at=now() WHERE id=$2 AND tenant_id=$3
-       RETURNING COALESCE(permissions, '{}') as permissions`,
-      [JSON.stringify(clean), userId, tenantID],
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
-
-    // Permission change must take effect on the user's NEXT request, not after
-    // the auth-cache TTL — drop their cached JWT validations (same trigger the
-    // legacy PATCH /users/:id path already fires when it touches permissions).
-    invalidateAuthUser(userId);
-
-    const raw = rows[0].permissions;
-    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
-    return (parsed && typeof parsed === 'object' ? parsed : {}) as Record<string, boolean>;
-  }
-
-  /**
-   * 114 — ЭФФЕКТИВНЫЕ права пользователя (плоский результат для UI волны 2):
-   * ровно то, что ответит userHasPermission на каждый канонический ключ для
-   * этого аккаунта. Считается из тех же примитивов, что и enforcement
-   * (flatten(матрицы роли) ⊕ персональные overrides → userHasPermission), —
+   * ЭФФЕКТИВНЫЕ права пользователя (плоский результат): ровно то, что ответит
+   * userHasPermission на каждый канонический ключ. Считается из тех же
+   * примитивов, что и enforcement (flatten(матрицы роли) → userHasPermission), —
    * ответ физически не может разойтись с реальными решениями guard'ов:
-   * owner-class → всё true; master без role_id → сегодняшние дефолты; с
-   * role_id → база из матрицы. Явные НЕканонические ключи из users.permissions
-   * тоже включаются (их guard видит теми же глазами).
+   * owner-class → всё true; master без role_id → дефолты строковой роли; с
+   * role_id → база из матрицы.
    */
   async getEffectivePermissions(
     userId: string,
     tenantID: string,
   ): Promise<{ role: string; roleId: string | null; permissions: Record<string, boolean> }> {
     const { rows } = await this.pool.query(
-      `SELECT u.role, u.role_id, COALESCE(u.permissions, '{}') AS permissions, r.matrix AS role_matrix
+      `SELECT u.role, u.role_id, r.matrix AS role_matrix
        FROM users u
        LEFT JOIN roles r ON r.id = u.role_id
        WHERE u.id = $1 AND u.tenant_id = $2`,
@@ -1082,8 +1020,6 @@ export class UsersService {
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
 
-    const rawPerms = rows[0].permissions;
-    const ownPerms = (typeof rawPerms === 'string' ? JSON.parse(rawPerms) : rawPerms || {}) as Record<string, boolean>;
     let roleMatrix = rows[0].role_matrix ?? null;
     if (typeof roleMatrix === 'string') {
       try {
@@ -1093,10 +1029,9 @@ export class UsersService {
       }
     }
 
-    const actor = { role: rows[0].role as string, permissions: mergeEffectivePermissions(roleMatrix, ownPerms) };
-    const keys = new Set<string>([...CANONICAL_PERMISSION_KEYS, ...Object.keys(actor.permissions)]);
+    const actor = { role: rows[0].role as string, permissions: mergeEffectivePermissions(roleMatrix) };
     const permissions: Record<string, boolean> = {};
-    for (const key of keys) permissions[key] = userHasPermission(actor, key);
+    for (const key of CANONICAL_PERMISSION_KEYS) permissions[key] = userHasPermission(actor, key);
 
     return { role: actor.role, roleId: rows[0].role_id ?? null, permissions };
   }

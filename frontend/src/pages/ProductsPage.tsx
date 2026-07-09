@@ -89,6 +89,9 @@ interface ProductFormModalProps {
   defaultCategory?: string;
   /** Warehouse the create form should default to (currently active picker). */
   defaultWarehouseId?: string;
+  /** Owner-class or warehouse_manage. Gates the cost-price input (defensive —
+   *  non-managers never reach this modal since add/edit buttons are hidden). */
+  canManage?: boolean;
 }
 
 function ProductFormModal({
@@ -101,6 +104,7 @@ function ProductFormModal({
   allProducts,
   defaultCategory,
   defaultWarehouseId,
+  canManage = true,
 }: ProductFormModalProps) {
   const [name, setName] = useState(product?.name || '');
   const [category, setCategory] = useState(product?.category || defaultCategory || '');
@@ -293,18 +297,22 @@ function ProductFormModal({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1.5">Закуп. цена</label>
-            <input
-              type="number"
-              value={costPrice}
-              onChange={(e) => setCostPrice(e.target.value)}
-              min="0"
-              step="0.01"
-              className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
-            />
-          </div>
+        <div className={canManage ? 'grid grid-cols-2 gap-4' : ''}>
+          {/* Закуп. цена — cost-price is manage-only. Hidden defensively for
+              non-managers (they can't reach this modal anyway). */}
+          {canManage && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1.5">Закуп. цена</label>
+              <input
+                type="number"
+                value={costPrice}
+                onChange={(e) => setCostPrice(e.target.value)}
+                min="0"
+                step="0.01"
+                className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+              />
+            </div>
+          )}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">Продажная цена</label>
             <input
@@ -1157,6 +1165,7 @@ function ProductDetailModal({
   onDelete,
   onTransfer,
   canTransfer,
+  canManage,
 }: {
   product: Product;
   onClose: () => void;
@@ -1166,7 +1175,11 @@ function ProductDetailModal({
   onDelete: () => void;
   onTransfer?: () => void;
   canTransfer?: boolean;
+  /** Owner-class or warehouse_manage. Gates cost-price + all manage actions. */
+  canManage?: boolean;
 }) {
+  // Non-managers can only ever see the Info tab (cost + price history leak
+  // costPrice, so those tabs are hidden entirely for them).
   const [tab, setTab] = useState<'info' | 'movements' | 'prices'>('info');
   const isLow = product.stock <= product.minStock;
   const uLabel = unitLabel(product.unit);
@@ -1203,12 +1216,13 @@ function ProductDetailModal({
   return (
     <Modal isOpen onClose={onClose} title={product.name} size="lg">
       <div className="space-y-4">
-        {/* Tabs */}
+        {/* Tabs — the Prices tab exposes costPrice history, so hide it entirely
+            for users who cannot manage the warehouse. */}
         <div className="flex border-b border-gray-100">
           {[
             { key: 'info' as const, label: 'Информация' },
             { key: 'movements' as const, label: 'Движение' },
-            { key: 'prices' as const, label: 'Цены' },
+            ...(canManage ? [{ key: 'prices' as const, label: 'Цены' }] : []),
           ].map((t) => (
             <button
               key={t.key}
@@ -1271,10 +1285,14 @@ function ProductDetailModal({
             )}
 
             <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl bg-gray-50 p-3">
-                <p className="text-[11px] text-gray-400 mb-0.5">Закуп. цена</p>
-                <p className="text-sm font-bold text-gray-900">{formatMoney(product.costPrice)}</p>
-              </div>
+              {/* Закуп. цена — cost price is manage-only (backend zeroes it for
+                  users without warehouse_manage; never render "0 ₽" as real). */}
+              {canManage && (
+                <div className="rounded-xl bg-gray-50 p-3">
+                  <p className="text-[11px] text-gray-400 mb-0.5">Закуп. цена</p>
+                  <p className="text-sm font-bold text-gray-900">{formatMoney(product.costPrice)}</p>
+                </div>
+              )}
               <div className="rounded-xl bg-gray-50 p-3">
                 <p className="text-[11px] text-gray-400 mb-0.5">Продажная цена</p>
                 <p className="text-sm font-bold text-primary-600">{formatMoney(product.sellPrice)}</p>
@@ -1293,50 +1311,54 @@ function ProductDetailModal({
               </div>
             </div>
 
-            <div className="space-y-2 pt-2 border-t border-gray-100">
-              <button
-                type="button"
-                onClick={onEdit}
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-              >
-                <Pencil className="h-4 w-4 text-primary-500" />
-                Редактировать
-              </button>
-              {canTransfer && onTransfer && (
+            {/* Manage actions — edit / transfer / writeoff / inventory / delete.
+                Hidden entirely for users who cannot manage the warehouse. */}
+            {canManage && (
+              <div className="space-y-2 pt-2 border-t border-gray-100">
                 <button
                   type="button"
-                  onClick={onTransfer}
+                  onClick={onEdit}
                   className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
                 >
-                  <ArrowLeftRight className="h-4 w-4 text-amber-500" />
-                  Перенос в брак / Б/У
+                  <Pencil className="h-4 w-4 text-primary-500" />
+                  Редактировать
                 </button>
-              )}
-              <button
-                type="button"
-                onClick={onWriteoff}
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-              >
-                <PackageMinus className="h-4 w-4 text-orange-500" />
-                Списание
-              </button>
-              <button
-                type="button"
-                onClick={onInventory}
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
-              >
-                <ClipboardCheck className="h-4 w-4 text-blue-500" />
-                Инвентаризация
-              </button>
-              <button
-                type="button"
-                onClick={onDelete}
-                className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
-              >
-                <Trash2 className="h-4 w-4" />
-                Удалить товар
-              </button>
-            </div>
+                {canTransfer && onTransfer && (
+                  <button
+                    type="button"
+                    onClick={onTransfer}
+                    className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                  >
+                    <ArrowLeftRight className="h-4 w-4 text-amber-500" />
+                    Перенос в брак / Б/У
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={onWriteoff}
+                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <PackageMinus className="h-4 w-4 text-orange-500" />
+                  Списание
+                </button>
+                <button
+                  type="button"
+                  onClick={onInventory}
+                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <ClipboardCheck className="h-4 w-4 text-blue-500" />
+                  Инвентаризация
+                </button>
+                <button
+                  type="button"
+                  onClick={onDelete}
+                  className="flex w-full items-center gap-3 rounded-xl px-4 py-3 text-sm font-medium text-red-600 hover:bg-red-50 transition-colors"
+                >
+                  <Trash2 className="h-4 w-4" />
+                  Удалить товар
+                </button>
+              </div>
+            )}
           </div>
         )}
 
@@ -1465,8 +1487,17 @@ function ProductDetailModal({
 
 export default function ProductsPage() {
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const canManageWarehouse = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { isRole, hasPermission, user } = useAuth();
+  // ROLE-ONLY permission gating for the warehouse manage-controls.
+  // Owner-class (superadmin / director / admin) always bypasses; everyone else
+  // needs the explicit `warehouse_manage` permission. `hasPermission` already
+  // returns true for superadmin/director but NOT admin, so the isOwnerClass OR
+  // is required for admin to bypass too. When `canManageWarehouse` is false we
+  // hide every manage-control AND the cost-price everywhere (backend also
+  // returns costPrice:0 for these users — never render that as a real value).
+  const isOwnerClass =
+    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
+  const canManageWarehouse = isOwnerClass || hasPermission('warehouse_manage');
   const isOwner = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
 
   const { data: warehouseStats } = useQuery({
@@ -2647,6 +2678,7 @@ export default function ProductsPage() {
           // Перенос доступен только с основного склада (продаём с main; брак/б/у —
           // конечные точки, дальше — списание или возврат поставщику).
           canTransfer={activeWarehouseKind === 'main'}
+          canManage={canManageWarehouse}
           onTransfer={() => {
             setTransferTarget(detailTarget);
             setDetailTarget(null);
@@ -2667,6 +2699,7 @@ export default function ProductsPage() {
           allProducts={allProducts}
           defaultCategory={activePath.length > 0 ? activePath.join('/') : undefined}
           defaultWarehouseId={activeWarehouseId || undefined}
+          canManage={canManageWarehouse}
         />
       )}
 

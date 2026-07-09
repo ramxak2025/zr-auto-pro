@@ -13,6 +13,21 @@ interface CashFlowActor {
   permissions?: Record<string, boolean>;
 }
 
+/**
+ * One bucket in a marketing time-series (weekly or monthly). `periodStart` is the
+ * ISO date (YYYY-MM-DD) of the bucket's first day. Every metric is derived from
+ * real rows inside that bucket (see marketingTrends); a bucket with no activity
+ * is still emitted with zeros so the client can draw a continuous chart.
+ */
+export interface MarketingTrendPoint {
+  periodStart: string;
+  newClients: number;
+  revenue: number;
+  returningRate: number;
+  calls: number;
+  reviews: number;
+}
+
 // Matches a calendar date `YYYY-MM-DD`. Anything else (locale-formatted,
 // empty, ISO-with-time, garbage) is rejected so it never reaches a raw
 // `$n::date` cast in SQL — an invalid cast surfaces as a deterministic 500
@@ -955,59 +970,106 @@ export class ReportsService {
 
   // ──────────────────────────────────────────────────────────────────────
   //  Consolidated «Маркетинговые отчёты» (GET /reports/marketing?from&to).
-  //  ONE period, everything grouped: acquisition (new/returning + by-source),
-  //  retention, calls (+ funnel), reviews. Each sub-section is computed
-  //  best-effort — a failure in one (e.g. no telephony integration) degrades
-  //  to zeros instead of failing the whole report. All queries are tenant-
-  //  scoped; from/to default to the current month.
+  //
+  //  Owner-locked redesign: EVERY number here is derived from real rows in
+  //  existing tables — nothing is invented or forward-accumulated. Directions:
+  //    • acquisition — new/returning clients (count+revenue), by clients.source,
+  //                    first-visit cohort.            [checks + clients.source]
+  //    • retention   — returning rate, avg LTV, avg days between visits,
+  //                    repeat-purchase distribution.  [checks]
+  //    • calls       — funnel + summary (0 when no telephony).
+  //                                                   [CallsService + sms_history]
+  //    • reviews     — totals, rating, response/conversion, token funnel.
+  //                                                   [review_responses/_tokens]
+  //    • loyalty     — points accrued/redeemed, redemption value, participants.
+  //                                                   [loyalty_settings + client_bonuses]
+  //    • revenue     — revenue by client source and by master.        [checks]
+  //    • trends      — weekly AND monthly buckets over the window for
+  //                    new clients / revenue / returning rate / calls / reviews.
+  //                                        [checks + sms_history + review_responses]
+  //
+  //  Warranty checks (payment_method='warranty') are EXCLUDED from every revenue
+  //  figure — a warranty repair is a loss, not marketing revenue (mirrors the
+  //  financial report, ITEM 2). Each sub-section is computed best-effort — a
+  //  failure in one (e.g. no telephony) degrades to zeros/empty instead of
+  //  failing the whole report. All queries are tenant-scoped; from/to default to
+  //  the current month.
   // ──────────────────────────────────────────────────────────────────────
+
+  private static readonly EMPTY_ACQUISITION = {
+    newClients: 0,
+    returningClients: 0,
+    newRevenue: 0,
+    returningRevenue: 0,
+    bySource: [] as Array<{ source: string; count: number; revenue: number }>,
+    firstVisitCohort: [] as Array<{ periodStart: string; newClients: number; revenue: number }>,
+  };
+  private static readonly EMPTY_RETENTION = {
+    returningRate: 0,
+    avgLtv: 0,
+    avgDaysBetweenVisits: 0,
+    repeatPurchaseDistribution: [] as Array<{ visits: string; clients: number }>,
+  };
+  private static readonly EMPTY_CALLS = {
+    total: 0,
+    incoming: 0,
+    outgoing: 0,
+    missed: 0,
+    notCalledBack: 0,
+    answerRate: 0,
+    funnel: {
+      uniqueCallers: 0,
+      arrivedClients: 0,
+      createdChecks: 0,
+      conversionRate: 0,
+      repeatClients: 0,
+      revenue: 0,
+    },
+  };
+  private static readonly EMPTY_REVIEWS = {
+    total: 0,
+    avgRating: 0,
+    positive: 0,
+    negative: 0,
+    responseRate: 0,
+    conversionRate: 0,
+    tokensSent: 0,
+    tokensResponded: 0,
+  };
+  private static readonly EMPTY_LOYALTY = {
+    enabled: false,
+    accrualPercent: 0,
+    participants: 0,
+    pointsAccrued: 0,
+    pointsRedeemed: 0,
+    accrualCount: 0,
+    redemptionCount: 0,
+    outstandingBalance: 0,
+  };
+  private static readonly EMPTY_REVENUE = {
+    bySource: [] as Array<{ source: string; checks: number; revenue: number }>,
+    byMaster: [] as Array<{ masterId: string | null; masterName: string; checks: number; revenue: number }>,
+  };
+  private static readonly EMPTY_TRENDS = {
+    weekly: [] as MarketingTrendPoint[],
+    monthly: [] as MarketingTrendPoint[],
+  };
 
   async getMarketingReport(tenantID: string, query: { from?: string; to?: string }) {
     const from = this.safeDate(query?.from, this.firstOfMonth());
     const to = this.safeDate(query?.to, this.todayISO());
 
-    const [acquisition, retention, calls, reviews] = await Promise.all([
-      this.marketingAcquisition(tenantID, from, to).catch(() => ({
-        newClients: 0,
-        returningClients: 0,
-        newRevenue: 0,
-        returningRevenue: 0,
-        bySource: [] as Array<{ source: string; count: number; revenue: number }>,
-      })),
-      this.retentionForWindow(tenantID, from, to).catch(() => ({
-        returningRate: 0,
-        avgLtv: 0,
-        avgDaysBetweenVisits: 0,
-      })),
-      this.marketingCalls(tenantID, from, to).catch(() => ({
-        total: 0,
-        incoming: 0,
-        outgoing: 0,
-        missed: 0,
-        notCalledBack: 0,
-        answerRate: 0,
-        funnel: {
-          uniqueCallers: 0,
-          arrivedClients: 0,
-          createdChecks: 0,
-          conversionRate: 0,
-          repeatClients: 0,
-          revenue: 0,
-        },
-      })),
-      this.periodReviews(tenantID, from, to).catch(() => ({
-        total: 0,
-        avgRating: 0,
-        positive: 0,
-        negative: 0,
-        responseRate: 0,
-        conversionRate: 0,
-        tokensSent: 0,
-        tokensResponded: 0,
-      })),
+    const [acquisition, retention, calls, reviews, loyalty, revenue, trends] = await Promise.all([
+      this.marketingAcquisition(tenantID, from, to).catch(() => ReportsService.EMPTY_ACQUISITION),
+      this.retentionForWindow(tenantID, from, to).catch(() => ReportsService.EMPTY_RETENTION),
+      this.marketingCalls(tenantID, from, to).catch(() => ReportsService.EMPTY_CALLS),
+      this.periodReviews(tenantID, from, to).catch(() => ReportsService.EMPTY_REVIEWS),
+      this.marketingLoyalty(tenantID, from, to).catch(() => ReportsService.EMPTY_LOYALTY),
+      this.marketingRevenue(tenantID, from, to).catch(() => ReportsService.EMPTY_REVENUE),
+      this.marketingTrends(tenantID, from, to).catch(() => ReportsService.EMPTY_TRENDS),
     ]);
 
-    return { period: { from, to }, acquisition, retention, calls, reviews };
+    return { period: { from, to }, acquisition, retention, calls, reviews, loyalty, revenue, trends };
   }
 
   /**
@@ -1050,6 +1112,39 @@ export class ReportsService {
       [tenantID, from, to],
     );
 
+    // First-visit cohort: NEW clients (first ever check inside the window),
+    // bucketed by the ISO WEEK of that first visit, with the revenue of their
+    // in-window checks. Lets the client draw "how many first-timers arrived each
+    // week and what they spent". date_trunc('week') → Monday-start ISO weeks.
+    const { rows: cohortRows } = await this.pool.query(
+      `WITH first_visits AS (
+         SELECT client_id, MIN(date) AS first_date
+           FROM checks
+          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
+            AND deleted_at IS NULL
+          GROUP BY client_id
+       ),
+       new_clients AS (
+         SELECT client_id, first_date
+           FROM first_visits
+          WHERE first_date::date BETWEEN $2::date AND $3::date
+       )
+       SELECT
+         to_char(date_trunc('week', nc.first_date), 'YYYY-MM-DD') AS period_start,
+         COUNT(DISTINCT nc.client_id) AS new_clients,
+         COALESCE(SUM(ch.total_revenue) FILTER (WHERE ch.payment_method IS DISTINCT FROM 'warranty'), 0) AS revenue
+       FROM new_clients nc
+       LEFT JOIN checks ch
+         ON ch.client_id = nc.client_id
+        AND ch.tenant_id = $1
+        AND ch.is_deferred = false
+        AND ch.deleted_at IS NULL
+        AND ch.date::date BETWEEN $2::date AND $3::date
+       GROUP BY date_trunc('week', nc.first_date)
+       ORDER BY date_trunc('week', nc.first_date)`,
+      [tenantID, from, to],
+    );
+
     return {
       newClients: base.newCount,
       returningClients: base.returningCount,
@@ -1058,6 +1153,11 @@ export class ReportsService {
       bySource: rows.map((r) => ({
         source: r.source as string,
         count: parseInt(r.count, 10) || 0,
+        revenue: parseFloat(r.revenue) || 0,
+      })),
+      firstVisitCohort: cohortRows.map((r) => ({
+        periodStart: r.period_start as string,
+        newClients: parseInt(r.new_clients, 10) || 0,
         revenue: parseFloat(r.revenue) || 0,
       })),
     };
@@ -1100,10 +1200,45 @@ export class ReportsService {
     const r = rows[0];
     const total = parseInt(r?.total_in_window) || 0;
     const returning = parseInt(r?.returning) || 0;
+
+    // Repeat-purchase distribution: among clients active in the window, how many
+    // have made 1 / 2 / 3 / 4 / 5+ lifetime (non-deferred) visits. Fixed bucket
+    // labels ('1'..'4','5+') so the client can render a stable histogram; an
+    // empty bucket is simply absent from the array.
+    const { rows: distRows } = await this.pool.query(
+      `WITH visits AS (
+         SELECT client_id, COUNT(*) AS visit_count
+           FROM checks
+          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
+            AND deleted_at IS NULL
+          GROUP BY client_id
+       ),
+       window_clients AS (
+         SELECT DISTINCT client_id
+           FROM checks
+          WHERE tenant_id=$1 AND is_deferred=false
+            AND deleted_at IS NULL
+            AND date::date BETWEEN $2::date AND $3::date
+            AND client_id IS NOT NULL
+       )
+       SELECT
+         CASE WHEN v.visit_count >= 5 THEN '5+' ELSE v.visit_count::text END AS bucket,
+         COUNT(*) AS clients
+       FROM window_clients wc
+       JOIN visits v ON v.client_id = wc.client_id
+       GROUP BY CASE WHEN v.visit_count >= 5 THEN '5+' ELSE v.visit_count::text END
+       ORDER BY MIN(v.visit_count)`,
+      [tenantID, from, to],
+    );
+
     return {
       returningRate: total > 0 ? Math.round((returning / total) * 1000) / 10 : 0,
       avgLtv: Math.round(parseFloat(r?.avg_ltv) || 0),
       avgDaysBetweenVisits: Math.round(parseFloat(r?.avg_days_between) || 0),
+      repeatPurchaseDistribution: distRows.map((d) => ({
+        visits: d.bucket as string,
+        clients: parseInt(d.clients, 10) || 0,
+      })),
     };
   }
 
@@ -1200,6 +1335,238 @@ export class ReportsService {
       tokensSent: sent,
       tokensResponded: responded,
     };
+  }
+
+  /**
+   * Loyalty ROI for the window (loyalty_settings + client_bonuses, migration
+   * 083). ONLY real ledger rows:
+   *   • pointsAccrued / pointsRedeemed = Σ amount of accrual / redemption
+   *     movements CREATED inside [from,to] (a bonus is a money amount).
+   *   • redemption value = pointsRedeemed (each redemption row is money paid with
+   *     bonus).
+   *   • participants = distinct clients with ANY bonus movement in the window.
+   *   • outstandingBalance = ALL-TIME Σ(accrual) − Σ(redemption) across the
+   *     tenant (the live liability — not window-scoped, a balance is a snapshot).
+   * enabled/accrualPercent are copied from loyalty_settings for context. Returns
+   * zeros with enabled=false when the tenant never opened loyalty (no settings
+   * row) — never fabricated.
+   */
+  private async marketingLoyalty(tenantID: string, from: string, to: string) {
+    const {
+      rows: [settings],
+    } = await this.pool.query(`SELECT enabled, accrual_percent FROM loyalty_settings WHERE tenant_id=$1`, [tenantID]);
+
+    // Window movements (accrual vs redemption), by created_at.
+    const {
+      rows: [win],
+    } = await this.pool.query(
+      `SELECT
+         COALESCE(SUM(amount) FILTER (WHERE type='accrual'), 0)    AS accrued,
+         COALESCE(SUM(amount) FILTER (WHERE type='redemption'), 0) AS redeemed,
+         COUNT(*) FILTER (WHERE type='accrual')                    AS accrual_count,
+         COUNT(*) FILTER (WHERE type='redemption')                 AS redemption_count,
+         COUNT(DISTINCT client_id)                                 AS participants
+       FROM client_bonuses
+      WHERE tenant_id=$1
+        AND created_at >= $2::date
+        AND created_at < ($3::date + 1)`,
+      [tenantID, from, to],
+    );
+
+    // All-time outstanding bonus liability (balance is a snapshot, not windowed).
+    const {
+      rows: [bal],
+    } = await this.pool.query(
+      `SELECT COALESCE(SUM(CASE WHEN type='accrual' THEN amount ELSE -amount END), 0) AS balance
+         FROM client_bonuses WHERE tenant_id=$1`,
+      [tenantID],
+    );
+
+    return {
+      enabled: settings?.enabled === true,
+      accrualPercent: parseFloat(settings?.accrual_percent) || 0,
+      participants: parseInt(win?.participants, 10) || 0,
+      pointsAccrued: Math.round((parseFloat(win?.accrued) || 0) * 100) / 100,
+      pointsRedeemed: Math.round((parseFloat(win?.redeemed) || 0) * 100) / 100,
+      accrualCount: parseInt(win?.accrual_count, 10) || 0,
+      redemptionCount: parseInt(win?.redemption_count, 10) || 0,
+      outstandingBalance: Math.round((parseFloat(bal?.balance) || 0) * 100) / 100,
+    };
+  }
+
+  /**
+   * Revenue attribution for the window (checks only). Two independent groupings:
+   *   • bySource — Σ revenue of in-window checks grouped by the CLIENT's
+   *     clients.source (null/empty → «Без источника»). Retail / phoneless
+   *     clients still count (this is revenue, not a segment).
+   *   • byMaster — Σ revenue grouped by checks.master_id → users.full_name
+   *     (null master → «Без мастера»).
+   * Both EXCLUDE warranty checks (payment_method='warranty' = loss, not revenue).
+   * Tenant-scoped, non-deferred, not deleted.
+   */
+  private async marketingRevenue(tenantID: string, from: string, to: string) {
+    const { rows: bySourceRows } = await this.pool.query(
+      `SELECT
+         COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника') AS source,
+         COUNT(*)                       AS checks,
+         COALESCE(SUM(ch.total_revenue), 0) AS revenue
+       FROM checks ch
+       LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = $1
+      WHERE ch.tenant_id=$1 AND ch.is_deferred=false AND ch.deleted_at IS NULL
+        AND ch.payment_method IS DISTINCT FROM 'warranty'
+        AND ch.date::date BETWEEN $2::date AND $3::date
+      GROUP BY COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника')
+      ORDER BY revenue DESC`,
+      [tenantID, from, to],
+    );
+
+    const { rows: byMasterRows } = await this.pool.query(
+      `SELECT
+         ch.master_id                          AS master_id,
+         COALESCE(u.full_name, 'Без мастера')  AS master_name,
+         COUNT(*)                              AS checks,
+         COALESCE(SUM(ch.total_revenue), 0)    AS revenue
+       FROM checks ch
+       LEFT JOIN users u ON u.id = ch.master_id AND u.tenant_id = $1
+      WHERE ch.tenant_id=$1 AND ch.is_deferred=false AND ch.deleted_at IS NULL
+        AND ch.payment_method IS DISTINCT FROM 'warranty'
+        AND ch.date::date BETWEEN $2::date AND $3::date
+      GROUP BY ch.master_id, u.full_name
+      ORDER BY revenue DESC`,
+      [tenantID, from, to],
+    );
+
+    return {
+      bySource: bySourceRows.map((r) => ({
+        source: r.source as string,
+        checks: parseInt(r.checks, 10) || 0,
+        revenue: parseFloat(r.revenue) || 0,
+      })),
+      byMaster: byMasterRows.map((r) => ({
+        masterId: (r.master_id as string) ?? null,
+        masterName: r.master_name as string,
+        checks: parseInt(r.checks, 10) || 0,
+        revenue: parseFloat(r.revenue) || 0,
+      })),
+    };
+  }
+
+  /**
+   * Weekly AND monthly time-series over [from,to] for the chart-able KPIs. Each
+   * bucket carries: newClients (first-ever visit in the bucket), revenue
+   * (non-warranty in-window checks), returningRate (% of bucket-active clients
+   * with >1 lifetime visit), calls (sms_history contact rows — the accurate
+   * per-bucket proxy; the live-call provider isn't historically queryable per
+   * bucket), reviews (review_responses created in the bucket). Buckets with no
+   * activity are still emitted with zeros over the FULL window so the client can
+   * draw a continuous line. `granularity` = 'week' | 'month' (date_trunc).
+   */
+  private async marketingTrendSeries(
+    tenantID: string,
+    from: string,
+    to: string,
+    granularity: 'week' | 'month',
+  ): Promise<MarketingTrendPoint[]> {
+    const { rows } = await this.pool.query(
+      `WITH buckets AS (
+         SELECT generate_series(
+                  date_trunc($4, $2::timestamptz),
+                  date_trunc($4, $3::timestamptz),
+                  ('1 ' || $4)::interval
+                ) AS b
+       ),
+       first_visits AS (
+         SELECT client_id, MIN(date) AS first_date
+           FROM checks
+          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL AND deleted_at IS NULL
+          GROUP BY client_id
+       ),
+       lifetime_visits AS (
+         SELECT client_id, COUNT(*) AS visit_count
+           FROM checks
+          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL AND deleted_at IS NULL
+          GROUP BY client_id
+       ),
+       -- New clients per bucket: first-ever visit lands in the bucket.
+       new_by_bucket AS (
+         SELECT date_trunc($4, first_date) AS b, COUNT(*) AS new_clients
+           FROM first_visits
+          WHERE first_date::date BETWEEN $2::date AND $3::date
+          GROUP BY date_trunc($4, first_date)
+       ),
+       -- Revenue per bucket (non-warranty in-window checks).
+       rev_by_bucket AS (
+         SELECT date_trunc($4, date) AS b,
+                COALESCE(SUM(total_revenue), 0) AS revenue
+           FROM checks
+          WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
+            AND payment_method IS DISTINCT FROM 'warranty'
+            AND date::date BETWEEN $2::date AND $3::date
+          GROUP BY date_trunc($4, date)
+       ),
+       -- Returning rate per bucket: of the DISTINCT clients active in the bucket,
+       -- the share whose lifetime visit_count > 1.
+       ret_by_bucket AS (
+         SELECT b, COUNT(*) AS active, COUNT(*) FILTER (WHERE visit_count > 1) AS returning
+           FROM (
+             SELECT DISTINCT date_trunc($4, ch.date) AS b, ch.client_id, lv.visit_count
+               FROM checks ch
+               JOIN lifetime_visits lv ON lv.client_id = ch.client_id
+              WHERE ch.tenant_id=$1 AND ch.is_deferred=false AND ch.deleted_at IS NULL
+                AND ch.client_id IS NOT NULL
+                AND ch.date::date BETWEEN $2::date AND $3::date
+           ) d
+          GROUP BY b
+       ),
+       -- Calls per bucket: sms_history contact rows (accurate historical proxy).
+       calls_by_bucket AS (
+         SELECT date_trunc($4, created_at) AS b, COUNT(*) AS calls
+           FROM sms_history
+          WHERE tenant_id=$1 AND created_at::date BETWEEN $2::date AND $3::date
+          GROUP BY date_trunc($4, created_at)
+       ),
+       -- Reviews per bucket: review_responses created in the bucket.
+       reviews_by_bucket AS (
+         SELECT date_trunc($4, created_at) AS b, COUNT(*) AS reviews
+           FROM review_responses
+          WHERE tenant_id=$1 AND created_at::date BETWEEN $2::date AND $3::date
+          GROUP BY date_trunc($4, created_at)
+       )
+       SELECT
+         to_char(bk.b, 'YYYY-MM-DD') AS period_start,
+         COALESCE(nb.new_clients, 0) AS new_clients,
+         COALESCE(rb.revenue, 0)     AS revenue,
+         CASE WHEN COALESCE(rt.active, 0) > 0
+              THEN round((rt.returning::numeric / rt.active) * 1000) / 10
+              ELSE 0 END            AS returning_rate,
+         COALESCE(cb.calls, 0)       AS calls,
+         COALESCE(rvb.reviews, 0)    AS reviews
+       FROM buckets bk
+       LEFT JOIN new_by_bucket     nb  ON nb.b  = bk.b
+       LEFT JOIN rev_by_bucket     rb  ON rb.b  = bk.b
+       LEFT JOIN ret_by_bucket     rt  ON rt.b  = bk.b
+       LEFT JOIN calls_by_bucket   cb  ON cb.b  = bk.b
+       LEFT JOIN reviews_by_bucket rvb ON rvb.b = bk.b
+       ORDER BY bk.b`,
+      [tenantID, from, to, granularity],
+    );
+
+    return rows.map((r) => ({
+      periodStart: r.period_start as string,
+      newClients: parseInt(r.new_clients, 10) || 0,
+      revenue: parseFloat(r.revenue) || 0,
+      returningRate: parseFloat(r.returning_rate) || 0,
+      calls: parseInt(r.calls, 10) || 0,
+      reviews: parseInt(r.reviews, 10) || 0,
+    }));
+  }
+
+  private async marketingTrends(tenantID: string, from: string, to: string) {
+    const [weekly, monthly] = await Promise.all([
+      this.marketingTrendSeries(tenantID, from, to, 'week'),
+      this.marketingTrendSeries(tenantID, from, to, 'month'),
+    ]);
+    return { weekly, monthly };
   }
 
   async returnsSummaryForDashboard(tenantID: string) {

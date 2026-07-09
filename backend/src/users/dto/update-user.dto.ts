@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsObject, IsBoolean, IsArray, IsUUID, MinLength } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsBoolean, IsArray, IsUUID, MinLength } from 'class-validator';
 
 export class UpdateUserDto {
   @IsString()
@@ -26,9 +26,10 @@ export class UpdateUserDto {
   @IsOptional()
   productSalaryPercent?: number;
 
-  @IsObject()
-  @IsOptional()
-  permissions?: Record<string, boolean>;
+  // ROLE-ONLY (консолидация 2026-07): персональные users.permissions удалены —
+  // права меняются ТОЛЬКО через назначение роли (roleId ниже). Поле `permissions`
+  // снято из контракта; ValidationPipe(whitelist) отбросит его, если пришлёт
+  // старый клиент.
 
   @IsBoolean()
   @IsOptional()

@@ -7,7 +7,6 @@ import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateSectionVisibilityDto } from './dto/section-visibility.dto';
 import { UpdateItemVisibilityDto } from './dto/item-visibility.dto';
-import { UpdatePermissionsDto } from './dto/update-permissions.dto';
 
 // Roles allowed to manage other users (create / update / delete / reorder /
 // edit per-product commissions). Masters and admin-light users CANNOT touch
@@ -138,29 +137,14 @@ export class UsersController {
     return this.usersService.updateItemVisibility(id, tenantID, dto.items);
   }
 
-  // ─── Action Permissions (server-enforced) ──────────────────────────
-  // Owner-class roles set another user's action-permission map. Tenant-scoped
-  // in the service (a foreign id 404s); self-lockout protection lives there too
-  // (you can't strip your own user_management). This is ADDITIVE to the legacy
-  // PATCH /users/:id which also accepts a `permissions` field.
+  // ─── Action Permissions (server-enforced, ROLE-ONLY) ───────────────
+  // Персональные users.permissions удалены (консолидация 2026-07). Права
+  // сотрудника задаёт назначенная роль — PATCH /users/:id { roleId }. Эндпоинты
+  // GET/PATCH /users/:id/permissions (per-user override) сняты. Осталось только
+  // чтение ЭФФЕКТИВНЫХ прав ниже — для UI экрана роли / карточки сотрудника.
 
-  @Roles(...MANAGER_ROLES)
-  @Get(':id/permissions')
-  async getPermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
-    return this.usersService.getPermissions(id, tenantID);
-  }
-
-  @Roles(...MANAGER_ROLES)
-  @Patch(':id/permissions')
-  async updatePermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdatePermissionsDto) {
-    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
-    return this.usersService.updatePermissions(id, tenantID, user.userID, dto.permissions);
-  }
-
-  // 114 — ЭФФЕКТИВНЫЕ права (плоско): flatten(матрицы назначенной роли) ⊕
-  // персональные overrides, прогнанные через ту же userHasPermission, что и
-  // enforcement. Для UI волны 2 (экран роли / карточка сотрудника).
+  // ЭФФЕКТИВНЫЕ права (плоско): flatten(матрицы назначенной роли), прогнанные
+  // через ту же userHasPermission, что и серверный enforcement.
   @Roles(...MANAGER_ROLES)
   @Get(':id/effective-permissions')
   async getEffectivePermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {

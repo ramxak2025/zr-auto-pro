@@ -39,6 +39,39 @@ export const AUTH_CACHE_TTL_MS = 30_000;
  */
 export const NO_TENANT_ID = '00000000-0000-0000-0000-000000000000';
 
+/**
+ * True when a caller has NO real tenant — i.e. a global `superadmin` browsing
+ * the /admin cabinet without impersonating any tenant. Their `tenantID` is
+ * either falsy (defensive) or the nil-UUID sentinel (`NO_TENANT_ID`), which is
+ * a valid uuid that no real `tenants` row ever owns.
+ *
+ * Why this is the ONE predicate every tenant-scoped write/seed path checks:
+ *   • tenant-scoped SELECTs are already safe — the sentinel simply matches no
+ *     rows and returns an empty set (see NO_TENANT_ID).
+ *   • tenant-scoped WRITES (INSERT/UPSERT, including the "seed a default row on
+ *     first access" pattern hidden inside some GET handlers) are NOT safe: an
+ *     INSERT with `tenant_id = NO_TENANT_ID` FK-violates
+ *     `<table>_tenant_id_fkey` (no such tenant) → an unhandled 500. This helper
+ *     lets both the global TenantWriteGuardInterceptor and the per-service
+ *     lazy-seed guards short-circuit on exactly the same condition.
+ *
+ * Accepts either the whole validated user or a bare tenantID string so callers
+ * can use whichever they have in hand. A NON-superadmin with a real tenant is
+ * never tenant-less; a superadmin acting WITHIN a tenant (real uuid tenantID,
+ * e.g. impersonation) is likewise never tenant-less — the guard must not fire.
+ */
+export function isTenantLess(input: { role?: string; tenantID?: string } | string | null | undefined): boolean {
+  if (input == null) return false;
+  if (typeof input === 'string') {
+    // Bare tenantID: tenant-less iff falsy or the sentinel. (Used by service
+    // lazy-seed guards that already know the caller is tenant-scoped.)
+    return !input || input === NO_TENANT_ID;
+  }
+  if (input.role !== 'superadmin') return false;
+  const t = input.tenantID;
+  return !t || t === NO_TENANT_ID;
+}
+
 /** Shape returned by JwtStrategy.validate and attached to the request user. */
 export interface ValidatedUser {
   userID: string;

@@ -288,14 +288,20 @@ export default function ProductsScreen() {
   );
   const { hasPermission, user } = useAuth();
   const isOwner = user?.role === 'director' || user?.role === 'superadmin';
-  const canManageWarehouse = hasPermission('warehouse_access');
-  // Directors, admins, superadmins see cost price. Masters don't.
-  const canSeeCostPrice = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
-  // #60 — «Удаление на складе». Owner-class (superadmin/director/admin) всегда
-  // разрешено — бэкенд PermissionsGuard так же байпасит их; мастеру право
-  // выдаёт владелец на экране «Сотрудники». Удаление мягкое → в Корзину.
+  // #60 — Owner-class (superadmin/director/admin) минует все склад-гейты — бэкенд
+  // PermissionsGuard так же байпасит их по строковой роли.
   const isOwnerClass = user?.role === 'superadmin' || user?.role === 'director' || user?.role === 'admin';
-  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_delete');
+  // ROLE-ONLY (консолидация 2026-07): УПРАВЛЕНИЕ складом (себестоимость + создание/
+  // редактирование/цены/сток/инвентаризация/операции) — только warehouse_manage.
+  // Просмотр товаров + добавление в чек — warehouse_access (гейт входа в раздел).
+  // Бэкенд шлёт costPrice:0 и 403 на мутации не-менеджеру → прячем UT/кнопки,
+  // чтобы не было «0 ₽ себестоимости» и мёртвых кнопок.
+  const canManageWarehouse = isOwnerClass || hasPermission('warehouse_manage');
+  // Себестоимость видит только тот, кто управляет складом (manage ⇒ backend
+  // отдаёт реальную costPrice; иначе costPrice:0 — показывать нельзя).
+  const canSeeCostPrice = canManageWarehouse;
+  // #60 — «Удаление на складе». manage ⇒ delete; либо явное warehouse_delete.
+  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
 
   const [search, setSearch] = useState('');
   const limit = 500;
@@ -1148,7 +1154,7 @@ export default function ProductsScreen() {
       haptic('warning');
       Alert.alert('Товар не найден', `Штрих-код ${needle} не привязан ни к одному товару этого склада.`, [
         { text: 'Отмена', style: 'cancel' },
-        ...(hasPermission('warehouse_access') && activeWarehouse?.kind === 'main'
+        ...(canManageWarehouse && activeWarehouse?.kind === 'main'
           ? [{ text: 'Создать товар', onPress: openCreate }]
           : []),
       ]);
@@ -1786,7 +1792,7 @@ export default function ProductsScreen() {
             >
               <Ionicons name="barcode-outline" size={18} color={colors.primary[600]} />
             </TouchableOpacity>
-            {hasPermission('warehouse_access') && (
+            {canManageWarehouse && (
               <TouchableOpacity
                 style={[
                   styles.opsBtn,
@@ -1805,7 +1811,7 @@ export default function ProductsScreen() {
                 кнопку, чтобы UI не путал владельца. На used (Б/У) товары
                 заводятся через «Покупка б/у» у системного поставщика,
                 поэтому на used-складе тоже прячем создание. */}
-            {hasPermission('warehouse_access') && activeWarehouse?.kind === 'main' && (
+            {canManageWarehouse && activeWarehouse?.kind === 'main' && (
               <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
                 <Ionicons name="add" size={18} color={colors.white} />
               </TouchableOpacity>

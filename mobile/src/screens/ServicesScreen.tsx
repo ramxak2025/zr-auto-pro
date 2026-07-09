@@ -16,6 +16,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { servicesApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import SearchInput from '../components/SearchInput';
 import LoadingSpinner from '../components/LoadingSpinner';
@@ -27,6 +28,7 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { UserRole } from '../../../shared/types';
 import type { Service, PaginatedResponse } from '../../../shared/types';
 
 function formatMoney(v: number) {
@@ -46,14 +48,16 @@ interface ServiceRowProps {
   item: Service;
   index: number;
   onOpen: (s: Service) => void;
+  /** ROLE-ONLY: без services_manage строка не открывает редактор (только просмотр). */
+  canManage: boolean;
   palette: ReturnType<typeof useColors>;
 }
-const ServiceRow = React.memo(function ServiceRow({ item, index, onOpen, palette }: ServiceRowProps) {
+const ServiceRow = React.memo(function ServiceRow({ item, index, onOpen, canManage, palette }: ServiceRowProps) {
   return (
     <AnimatedCard
       style={[styles.serviceCard, { backgroundColor: palette.bg.card, borderBottomColor: palette.border.subtle }]}
       index={index}
-      onPress={() => onOpen(item)}
+      onPress={canManage ? () => onOpen(item) : undefined}
     >
       <View style={styles.serviceRow}>
         <View
@@ -86,6 +90,14 @@ export default function ServicesScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
+  const { hasPermission, isRole } = useAuth();
+  // ROLE-ONLY (консолидация 2026-07): управление каталогом (создать/редактировать/
+  // удалить, менять %+гарантию) — только с services_manage. Owner-class
+  // (superadmin/director/admin) минует, как на сервере. Без права — просмотр
+  // (screen открыт по services_view) + добавление в чек (в Кассе). Бэкенд шлёт
+  // 403 на мутации, поэтому кнопки прячем — никаких мёртвых кнопок.
+  const canManageServices =
+    isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('services_manage');
   const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -276,9 +288,9 @@ export default function ServicesScreen() {
 
   const renderService = useCallback(
     ({ item, index }: { item: Service; index: number }) => (
-      <ServiceRow item={item} index={index} onOpen={openEdit} palette={palette} />
+      <ServiceRow item={item} index={index} onOpen={openEdit} canManage={canManageServices} palette={palette} />
     ),
-    [openEdit, palette],
+    [openEdit, canManageServices, palette],
   );
 
   return (
@@ -288,9 +300,11 @@ export default function ServicesScreen() {
         subtitle={total > 0 ? `Услуг: ${total}` : undefined}
         onBack={() => navigation.goBack()}
         trailing={
-          <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
-            <Text style={styles.addBtnText}>+ Новая</Text>
-          </TouchableOpacity>
+          canManageServices ? (
+            <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
+              <Text style={styles.addBtnText}>+ Новая</Text>
+            </TouchableOpacity>
+          ) : undefined
         }
       />
 
@@ -343,8 +357,8 @@ export default function ServicesScreen() {
       ) : !search && folders.length === 0 && currentServices.length === 0 && !isLoading ? (
         <EmptyState
           title="Нет услуг"
-          description="Добавьте первую услугу"
-          action={{ label: 'Добавить', onPress: openCreate }}
+          description={canManageServices ? 'Добавьте первую услугу' : 'Каталог услуг пуст'}
+          action={canManageServices ? { label: 'Добавить', onPress: openCreate } : undefined}
         />
       ) : (
         <FlashList

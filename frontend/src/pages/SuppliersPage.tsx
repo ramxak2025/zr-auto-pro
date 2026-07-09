@@ -5,13 +5,14 @@ import { Plus, Truck, Phone, User } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { suppliersApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
 import PhoneInput from '../components/PhoneInput';
-import { Supplier, PaginatedResponse } from '../types';
+import { Supplier, PaginatedResponse, UserRole } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 
 interface SupplierFormData {
@@ -31,6 +32,12 @@ const emptyForm: SupplierFormData = {
 export default function SuppliersPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { hasPermission, user } = useAuth();
+  // ROLE-ONLY: создание/редактирование/удаление поставщиков — только с
+  // suppliers_manage. Просмотр (suppliers_access) — у всех, кто сюда попал.
+  const isOwnerClass =
+    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
+  const canManage = isOwnerClass || hasPermission('suppliers_manage');
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -115,10 +122,12 @@ export default function SuppliersPage() {
       {/* Header */}
       <div className="page-header">
         <h1 className="page-title">Поставщики</h1>
-        <button onClick={openCreateModal} className="btn-primary">
-          <Plus className="w-4 h-4" />
-          Новый поставщик
-        </button>
+        {canManage && (
+          <button onClick={openCreateModal} className="btn-primary">
+            <Plus className="w-4 h-4" />
+            Новый поставщик
+          </button>
+        )}
       </div>
 
       {/* Search */}
@@ -159,7 +168,7 @@ export default function SuppliersPage() {
           icon={Truck}
           title="Нет поставщиков"
           description="Добавьте первого поставщика для учета закупок"
-          action={{ label: 'Новый поставщик', onClick: openCreateModal }}
+          action={canManage ? { label: 'Новый поставщик', onClick: openCreateModal } : undefined}
         />
       ) : (
         <>

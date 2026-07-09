@@ -25,11 +25,21 @@ import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 import { suppliersApi, productsApi, stockMovementsApi, warehousesApi, warehouseCategoriesApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
-import { Supplier, Delivery, SupplierPayment, Product, PaginatedResponse, StockMovement, Warehouse } from '../types';
+import {
+  Supplier,
+  Delivery,
+  SupplierPayment,
+  Product,
+  PaginatedResponse,
+  StockMovement,
+  Warehouse,
+  UserRole,
+} from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -245,6 +255,12 @@ export default function SupplierDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { hasPermission, user } = useAuth();
+  // ROLE-ONLY: редактирование поставщика + приход/оплата/возврат/б/у-закупка —
+  // только с suppliers_manage. Просмотр карточки — suppliers_access.
+  const isOwnerClass =
+    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
+  const canManage = isOwnerClass || hasPermission('suppliers_manage');
 
   const [activeTab, setActiveTab] = useState<TabType>('deliveries');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
@@ -373,8 +389,7 @@ export default function SupplierDetailPage() {
   const { data: returnsData } = useQuery({
     queryKey: ['supplier-returns', id],
     queryFn: () => stockMovementsApi.list({ type: 'defect_return_to_supplier' }),
-    select: (res) =>
-      (res.data || []).filter((m: StockMovement) => m.supplierId === id),
+    select: (res) => (res.data || []).filter((m: StockMovement) => m.supplierId === id),
     enabled: !!id,
     staleTime: 30_000,
   });
@@ -630,9 +645,15 @@ export default function SupplierDetailPage() {
 
   const handleReturnSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!returnForm.productId) { toast.error('Выберите товар из склада брака'); return; }
+    if (!returnForm.productId) {
+      toast.error('Выберите товар из склада брака');
+      return;
+    }
     const qty = Number(returnForm.qty);
-    if (!qty || qty <= 0) { toast.error('Введите количество'); return; }
+    if (!qty || qty <= 0) {
+      toast.error('Введите количество');
+      return;
+    }
     if (qty > returnForm.productStock) {
       toast.error(`Количество превышает остаток на складе брака (${returnForm.productStock})`);
       return;
@@ -709,28 +730,30 @@ export default function SupplierDetailPage() {
                 </>
               )}
             </div>
-            {/* System suppliers are uneditable; backend would 403 anyway. */}
-            {supplier.isSystem ? (
-              <button
-                onClick={() => {
-                  if (!usedWarehouse) {
-                    toast.error('Склад Б/У не найден');
-                    return;
-                  }
-                  setUsedPurchaseForm({ productName: '', qty: '', purchasePrice: '', category: '', note: '' });
-                  setIsUsedPurchaseModalOpen(true);
-                }}
-                className="btn-primary flex-shrink-0"
-              >
-                <Package className="w-4 h-4" />
-                Покупка б/у товара
-              </button>
-            ) : (
-              <button onClick={openEditModal} className="btn-secondary flex-shrink-0">
-                <Edit2 className="w-4 h-4" />
-                Редактировать
-              </button>
-            )}
+            {/* System suppliers are uneditable; backend would 403 anyway.
+                Manage actions gated by suppliers_manage (owner-class bypass). */}
+            {canManage &&
+              (supplier.isSystem ? (
+                <button
+                  onClick={() => {
+                    if (!usedWarehouse) {
+                      toast.error('Склад Б/У не найден');
+                      return;
+                    }
+                    setUsedPurchaseForm({ productName: '', qty: '', purchasePrice: '', category: '', note: '' });
+                    setIsUsedPurchaseModalOpen(true);
+                  }}
+                  className="btn-primary flex-shrink-0"
+                >
+                  <Package className="w-4 h-4" />
+                  Покупка б/у товара
+                </button>
+              ) : (
+                <button onClick={openEditModal} className="btn-secondary flex-shrink-0">
+                  <Edit2 className="w-4 h-4" />
+                  Редактировать
+                </button>
+              ))}
           </div>
         </div>
       </div>
@@ -795,8 +818,9 @@ export default function SupplierDetailPage() {
         <div className="space-y-4">
           {/* The "Новая поставка" action is hidden for the pinned
               used_purchase supplier — deliveries against that row are
-              created via the dedicated "Покупка б/у товара" CTA above. */}
-          {isUsedPurchaseSupplier ? null : (
+              created via the dedicated "Покупка б/у товара" CTA above.
+              Gated by suppliers_manage (owner-class bypass). */}
+          {canManage && !isUsedPurchaseSupplier && (
             <div className="flex justify-end">
               <button onClick={openDeliveryModal} className="btn-primary">
                 <Plus className="w-4 h-4" />
@@ -810,7 +834,7 @@ export default function SupplierDetailPage() {
               icon={Truck}
               title="Нет поставок"
               description="Создайте первую поставку от этого поставщика"
-              action={{ label: 'Новая поставка', onClick: openDeliveryModal }}
+              action={canManage ? { label: 'Новая поставка', onClick: openDeliveryModal } : undefined}
             />
           ) : (
             <div className="space-y-2">
@@ -841,19 +865,21 @@ export default function SupplierDetailPage() {
       {/* Payments Tab */}
       {activeTab === 'payments' && (
         <div className="space-y-4">
-          <div className="flex justify-end">
-            <button onClick={openPaymentModal} className="btn-primary">
-              <Plus className="w-4 h-4" />
-              Новая оплата
-            </button>
-          </div>
+          {canManage && (
+            <div className="flex justify-end">
+              <button onClick={openPaymentModal} className="btn-primary">
+                <Plus className="w-4 h-4" />
+                Новая оплата
+              </button>
+            </div>
+          )}
 
           {payments.length === 0 ? (
             <EmptyState
               icon={CreditCard}
               title="Нет оплат"
               description="Запишите первую оплату поставщику"
-              action={{ label: 'Новая оплата', onClick: openPaymentModal }}
+              action={canManage ? { label: 'Новая оплата', onClick: openPaymentModal } : undefined}
             />
           ) : (
             <div className="space-y-2">
@@ -884,8 +910,8 @@ export default function SupplierDetailPage() {
       {activeTab === 'returns' && (
         <div className="space-y-4">
           {/* Same rationale as deliveries — defect returns make no
-              sense against the used_purchase row. */}
-          {isUsedPurchaseSupplier ? null : (
+              sense against the used_purchase row. Gated by suppliers_manage. */}
+          {canManage && !isUsedPurchaseSupplier && (
             <div className="flex justify-end">
               <button onClick={openReturnModal} className="btn-secondary" disabled={!defectWarehouse}>
                 <Undo2 className="w-4 h-4" />
@@ -899,11 +925,9 @@ export default function SupplierDetailPage() {
               icon={Undo2}
               title="Нет возвратов"
               description={
-                defectWarehouse
-                  ? 'Здесь будет история возвратов брака этому поставщику'
-                  : 'Склад брака ещё не создан'
+                defectWarehouse ? 'Здесь будет история возвратов брака этому поставщику' : 'Склад брака ещё не создан'
               }
-              action={defectWarehouse ? { label: 'Возврат брака', onClick: openReturnModal } : undefined}
+              action={canManage && defectWarehouse ? { label: 'Возврат брака', onClick: openReturnModal } : undefined}
             />
           ) : (
             <div className="space-y-2">
@@ -919,12 +943,8 @@ export default function SupplierDetailPage() {
                             {format(new Date(m.createdAt), 'dd MMM yyyy', { locale: ru })}
                           </p>
                         </div>
-                        <p className="text-sm font-medium text-gray-900 mt-1.5">
-                          {m.product?.name || '—'}
-                        </p>
-                        {m.reason && (
-                          <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{m.reason}</p>
-                        )}
+                        <p className="text-sm font-medium text-gray-900 mt-1.5">{m.product?.name || '—'}</p>
+                        {m.reason && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{m.reason}</p>}
                       </div>
                       <div className="text-right flex-shrink-0">
                         <p className="text-base font-bold text-rose-600">−{qty} шт</p>
@@ -1171,11 +1191,7 @@ export default function SupplierDetailPage() {
       </Modal>
 
       {/* Return Defect Modal */}
-      <Modal
-        isOpen={isReturnModalOpen}
-        onClose={() => setIsReturnModalOpen(false)}
-        title="Возврат брака поставщику"
-      >
+      <Modal isOpen={isReturnModalOpen} onClose={() => setIsReturnModalOpen(false)} title="Возврат брака поставщику">
         <form onSubmit={handleReturnSubmit} className="space-y-4">
           <p className="text-xs text-gray-500">
             Возврат уменьшает остаток на складе брака и снижает долг перед поставщиком на сумму закупки.
@@ -1278,7 +1294,8 @@ export default function SupplierDetailPage() {
       >
         <form onSubmit={handleUsedPurchaseSubmit} className="space-y-4">
           <p className="text-xs text-gray-500">
-            Товар будет добавлен на склад Б/У. Долг поставщику вырастет на сумму закупки — погасите его позже через «Новая оплата».
+            Товар будет добавлен на склад Б/У. Долг поставщику вырастет на сумму закупки — погасите его позже через
+            «Новая оплата».
           </p>
 
           <div>
@@ -1287,9 +1304,7 @@ export default function SupplierDetailPage() {
               type="text"
               className="input"
               value={usedPurchaseForm.productName}
-              onChange={(e) =>
-                setUsedPurchaseForm({ ...usedPurchaseForm, productName: e.target.value })
-              }
+              onChange={(e) => setUsedPurchaseForm({ ...usedPurchaseForm, productName: e.target.value })}
               placeholder="Например: Капот"
               autoFocus
             />
@@ -1316,9 +1331,7 @@ export default function SupplierDetailPage() {
                 min={0}
                 step="0.01"
                 value={usedPurchaseForm.purchasePrice}
-                onChange={(e) =>
-                  setUsedPurchaseForm({ ...usedPurchaseForm, purchasePrice: e.target.value })
-                }
+                onChange={(e) => setUsedPurchaseForm({ ...usedPurchaseForm, purchasePrice: e.target.value })}
                 placeholder="0"
               />
             </div>
@@ -1341,9 +1354,7 @@ export default function SupplierDetailPage() {
                     <button
                       type="button"
                       key={cat.id}
-                      onClick={() =>
-                        setUsedPurchaseForm({ ...usedPurchaseForm, category: cat.path })
-                      }
+                      onClick={() => setUsedPurchaseForm({ ...usedPurchaseForm, category: cat.path })}
                       className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
                         active
                           ? 'border-primary-500 bg-primary-50 text-primary-700 font-semibold'
@@ -1362,10 +1373,7 @@ export default function SupplierDetailPage() {
             <div className="flex items-center justify-between text-sm font-semibold pt-3 border-t border-gray-200">
               <span className="text-gray-700">Долг вырастет на:</span>
               <span className="text-rose-600">
-                +
-                {formatMoney(
-                  Number(usedPurchaseForm.qty) * Number(usedPurchaseForm.purchasePrice),
-                )}
+                +{formatMoney(Number(usedPurchaseForm.qty) * Number(usedPurchaseForm.purchasePrice))}
               </span>
             </div>
           ) : null}
@@ -1382,11 +1390,7 @@ export default function SupplierDetailPage() {
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
-            <button
-              type="button"
-              onClick={() => setIsUsedPurchaseModalOpen(false)}
-              className="btn-secondary"
-            >
+            <button type="button" onClick={() => setIsUsedPurchaseModalOpen(false)} className="btn-secondary">
               Отмена
             </button>
             <button type="submit" disabled={usedPurchaseMutation.isPending} className="btn-primary">

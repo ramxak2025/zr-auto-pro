@@ -18,8 +18,6 @@ interface HttpClient {
 }
 import type {
   User,
-  UserPermissions,
-  PermissionTemplate,
   Role,
   RoleMatrix,
   EffectivePermissionsResult,
@@ -319,14 +317,10 @@ export function createUsersApi(api: HttpClient) {
     getItemVisibility: (userId: string) => api.get<ItemVisibility[]>(`/users/${userId}/item-visibility`),
     updateItemVisibility: (userId: string, items: ItemVisibility[]) =>
       api.patch<ItemVisibility[]>(`/users/${userId}/item-visibility`, { items }),
-    // Server-enforced action permissions. getPermissions returns the stored map
-    // (may be partial / empty for an existing master); updatePermissions replaces
-    // it. The server applies self-lockout protection (you can't strip your own
-    // user_management) and tenant-scopes the target. Additive to update() above,
-    // which also accepts a `permissions` field.
-    getPermissions: (userId: string) => api.get<UserPermissions>(`/users/${userId}/permissions`),
-    updatePermissions: (userId: string, permissions: UserPermissions) =>
-      api.patch<UserPermissions>(`/users/${userId}/permissions`, { permissions }),
+    // ROLE-ONLY (консолидация 2026-07): per-user permission overrides удалены.
+    // Права сотрудника меняются ТОЛЬКО назначением роли — usersApi.update(id,
+    // { roleId }). Эффективные права для UI — rolesApi.effectivePermissions(userId).
+    // (Сняты: GET/PATCH /users/:id/permissions.)
     getProductCommissions: (id: string) => api.get(`/users/${id}/product-commissions`),
     setProductCommissions: (
       id: string,
@@ -1122,6 +1116,9 @@ export function createMarketingApi(api: HttpClient) {
       // Telegram owner/staff chat_id (087).
       chatId?: string;
       isActive?: boolean;
+      // Independent outbound-SMS switch (127). Omitted → server keeps the
+      // stored value (default true). Decoupled from isActive.
+      smsNotificationsEnabled?: boolean;
     }) => api.post<MessagingIntegration[]>('/marketing/integrations', data),
     removeIntegration: (id: string) => api.delete(`/marketing/integrations/${id}`),
     getPlatformLinks: () => api.get<ReviewPlatformLink[]>('/marketing/platform-links'),
@@ -1536,35 +1533,18 @@ export function createBookingsApi(api: HttpClient) {
   };
 }
 
-// ───────────────────────────────────────────────────────────────────────
-//  Permission templates («роли») — tenant-defined, reusable permission sets.
-//  All routes are director/admin/superadmin-gated and tenant-scoped server-side
-//  (same gate as the user permissions editor). `apply` copies a template's
-//  permission map onto a user; the server reuses updatePermissions there, so
-//  the self-lockout guard (you can't strip your own user_management) applies —
-//  apply() echoes back the user's RESULTING permission map.
-// ───────────────────────────────────────────────────────────────────────
-
-export function createPermissionTemplatesApi(api: HttpClient) {
-  return {
-    list: () => api.get<PermissionTemplate[]>('/permission-templates'),
-    create: (data: { name: string; permissions: Record<string, boolean> }) =>
-      api.post<PermissionTemplate>('/permission-templates', data),
-    update: (id: string, data: { name?: string; permissions?: Record<string, boolean> }) =>
-      api.patch<PermissionTemplate>(`/permission-templates/${id}`, data),
-    remove: (id: string) => api.delete<{ success: true }>(`/permission-templates/${id}`),
-    apply: (id: string, userId: string) => api.post<UserPermissions>(`/permission-templates/${id}/apply/${userId}`),
-  };
-}
+// createPermissionTemplatesApi удалён (ROLE-ONLY, консолидация 2026-07):
+// permission_templates заменены ролями (createRolesApi выше/ниже). Клиенты,
+// использовавшие permissionTemplatesApi, должны перейти на rolesApi.
 
 // ───────────────────────────────────────────────────────────────────────
-//  Роли (Bitrix24-style, миграция 114) — матрица «право × охват». В отличие
-//  от permission-templates (одноразовая копия карты в пользователя) роль —
-//  живая база: сервер строит эффективные права назначенного пользователя как
-//  «flatten(matrix) ⊕ персональные overrides». Все маршруты
-//  director/admin/superadmin-gated; системные роли read-only (403 — создайте
-//  копию: create c copyFromRoleId). remove роли с сотрудниками → 400 с count.
-//  Назначение роли пользователю — существующий usersApi.update(id, { roleId }).
+//  Роли (Bitrix24-style, миграция 114) — матрица «право × охват». ROLE-ONLY
+//  (консолидация 2026-07): роль — ЕДИНСТВЕННЫЙ источник прав. Сервер строит
+//  эффективные права назначенного пользователя как flatten(matrix) (персональные
+//  overrides и permission-templates удалены). Все маршруты
+//  director/admin/superadmin-gated; системные роли редактируются copy-on-write
+//  («Мастер»/«Администратор») либо read-only («Директор»). remove роли с
+//  сотрудниками → 400 с count. Назначение роли — usersApi.update(id, { roleId }).
 // ───────────────────────────────────────────────────────────────────────
 
 export function createRolesApi(api: HttpClient) {
@@ -1579,7 +1559,7 @@ export function createRolesApi(api: HttpClient) {
       api.patch<Role>(`/roles/${id}`, data),
     /** Удалить свою роль. С назначенными сотрудниками → 400 { count }. */
     remove: (id: string) => api.delete<{ success: true }>(`/roles/${id}`),
-    /** Плоские ЭФФЕКТИВНЫЕ права пользователя (роль ⊕ overrides) — UI волны 2. */
+    /** Плоские ЭФФЕКТИВНЫЕ права пользователя = flatten(матрицы роли) (ROLE-ONLY). */
     effectivePermissions: (userId: string) =>
       api.get<EffectivePermissionsResult>(`/users/${userId}/effective-permissions`),
   };

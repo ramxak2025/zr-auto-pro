@@ -99,7 +99,15 @@ export default function ClientsScreen() {
   const queryClient = useQueryClient();
   const { hasPermission, isRole } = useAuth();
   const palette = useColors();
-  const canDelete = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR) || hasPermission('clients_edit');
+  // Свайп-действия строки клиента — «Изменить» (правка существующего профиля) и
+  // «Удалить». И то и другое — операции над СУЩЕСТВУЮЩИМ клиентом, поэтому гейт
+  // единый: `clients_edit`, а owner-class (superadmin/director/admin) минует его,
+  // как остальные per-screen гейты этого батча (зеркалит серверный
+  // PermissionsGuard). Без права строка — статичная карточка без свайпа (см.
+  // ClientListRow). Создание НОВОГО клиента (openCreateModal / FAB «+») и подбор
+  // клиента в чек НЕ гейтятся — мастерам это нужно в Кассе.
+  const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+  const canDelete = isOwnerClass || hasPermission('clients_edit');
   const tabBarHeight = useTabBarHeight();
 
   // Mode — see ClientsMode. Default: plate (госномер) search.

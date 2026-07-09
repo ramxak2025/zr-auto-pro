@@ -28,8 +28,14 @@ const clientInitials = (name: string) =>
 export default function ClientsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const isDirector = user?.role === 'director' || user?.role === 'superadmin';
+
+  // ROLE/PERMISSION: inline "edit existing client" requires `clients_edit`.
+  // Owner-class roles bypass. Creating a new client (openCreateModal) and
+  // attaching a car stay ungated.
+  const isOwnerClass = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
+  const canEditClient = isOwnerClass || hasPermission('clients_edit');
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -311,12 +317,14 @@ export default function ClientsPage() {
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-semibold text-gray-900 text-sm">{client.fullName}</span>
                   <div className="flex items-center gap-1">
-                    <button
-                      onClick={(e) => openEditModal(client, e)}
-                      className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
-                    >
-                      <Edit2 className="w-3.5 h-3.5" />
-                    </button>
+                    {canEditClient && (
+                      <button
+                        onClick={(e) => openEditModal(client, e)}
+                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
+                      >
+                        <Edit2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => handleDelete(client.id, e)}
                       className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
@@ -413,13 +421,15 @@ export default function ClientsPage() {
                       </td>
                       <td>
                         <div className="flex items-center justify-end gap-1">
-                          <button
-                            onClick={(e) => openEditModal(client, e)}
-                            className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
-                            title="Редактировать"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
+                          {canEditClient && (
+                            <button
+                              onClick={(e) => openEditModal(client, e)}
+                              className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
+                              title="Редактировать"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </button>
+                          )}
                           <button
                             onClick={(e) => handleDelete(client.id, e)}
                             className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"

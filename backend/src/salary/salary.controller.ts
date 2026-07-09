@@ -2,6 +2,7 @@ import { Controller, Get, Post, Delete, Body, Query, Param, UseGuards } from '@n
 import { SalaryService } from './salary.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission, userHasPermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateSalaryPaymentDto } from './dto/create-payment.dto';
 import { CreatePremiumDto } from './dto/create-premium.dto';
@@ -14,29 +15,38 @@ import { DecidePayoutDto } from './dto/decide-payout.dto';
 // always allowed via the RolesGuard bypass; listed explicitly for clarity.
 const OWNER_ROLES = ['director', 'superadmin'];
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+// ROLE-ONLY (консолидация 2026-07). Охват просмотра ЧУЖОЙ зарплаты решает матрица:
+// 'salary_view_all' → вся команда; иначе (и для 'salary_view' own) — только своё.
+// Owner-class (director/admin/superadmin) — всегда true через userHasPermission.
+function canViewAllSalary(user: JwtPayload): boolean {
+  return userHasPermission(user, 'salary_view_all');
+}
+
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('salary')
 export class SalaryController {
   constructor(private salaryService: SalaryService) {}
 
   // Listing every master's earnings + paid-out amounts reveals what every
-  // colleague is getting paid — that is owner / director / admin level data.
-  @Roles('director', 'admin', 'superadmin')
+  // colleague is getting paid — охват «все» → 'salary_view_all'. Owner-class
+  // обходит через PermissionsGuard; сотрудник со «свои» видит только своё
+  // через /salary/my и /salary/employee/:id/month (self-scoped ниже).
+  @RequirePermission('salary_view_all')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.salaryService.getAll(user.tenantID, query);
   }
 
   // `getMy` filters by the JWT subject inside the service — every authenticated
-  // user is allowed to see their OWN earnings. No role gate.
+  // user is allowed to see their OWN earnings. No permission gate.
   @Get('my')
   getMy(@CurrentUser() user: JwtPayload) {
     return this.salaryService.getMy(user.tenantID, user.userID);
   }
 
   // Same reasoning as getAll — payment history of every employee is internal
-  // finance data.
-  @Roles('director', 'admin', 'superadmin')
+  // finance data (охват «все» → 'salary_view_all').
+  @RequirePermission('salary_view_all')
   @Get('payments')
   getPayments(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.salaryService.getPayments(user.tenantID, query);
@@ -82,7 +92,8 @@ export class SalaryController {
     @CurrentUser() user: JwtPayload,
     @Query() query: { employeeId?: string; status?: 'pending' | 'accepted' | 'rejected'; monthYear?: string },
   ) {
-    const privileged = OWNER_ROLES.includes(user.role);
+    // Охват «все» → 'salary_view_all' (owner-class тоже true); иначе self-scope.
+    const privileged = canViewAllSalary(user);
     const q = { ...(query || {}) };
     if (!privileged) q.employeeId = user.userID;
     return this.salaryService.listPayouts(user.tenantID, q);
@@ -96,7 +107,8 @@ export class SalaryController {
     @CurrentUser() user: JwtPayload,
     @Query('month') month?: string,
   ) {
-    const privileged = OWNER_ROLES.includes(user.role);
+    // «Все» → 'salary_view_all' может смотреть любого; иначе — только себя.
+    const privileged = canViewAllSalary(user);
     const target = privileged ? employeeId : user.userID;
     return this.salaryService.getEmployeeMonth(user.tenantID, target, month);
   }
@@ -119,8 +131,8 @@ export class SalaryController {
     // A non-privileged user may only see their OWN premiums — force the userId
     // filter to themselves so a master can't pass ?userId=<colleague> (read a
     // colleague's bonuses) or omit it to dump the whole tenant's premium
-    // history. Director / admin / superadmin keep the full audit view.
-    const privileged = ['director', 'admin', 'superadmin'].includes(user.role);
+    // history. Охват «все» → 'salary_view_all' (owner-class тоже) keeps the full view.
+    const privileged = canViewAllSalary(user);
     const q = { ...(query || {}) };
     if (!privileged) q.userId = user.userID;
     return this.salaryService.listPremiums(user.tenantID, q);

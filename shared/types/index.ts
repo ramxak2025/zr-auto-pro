@@ -690,6 +690,25 @@ export interface UserPermissions {
   schedule_view: boolean;
   salary_view: boolean;
   marketing_access: boolean;
+  // ── ROLE-ONLY vocabulary (консолидация 2026-07) — view-vs-manage granularity ─
+  // Optional так же, как ключи ниже: старые literal-карты остаются валидны, а
+  // enforcement берёт строковый ключ. Все выводятся из матрицы роли (flatten).
+  /** Услуги: смотреть каталог + добавлять в чек (manage ⇒ view). */
+  services_view?: boolean;
+  /** Услуги: создавать/редактировать/менять %+гарантию/удалять. */
+  services_manage?: boolean;
+  /** Склад: полное управление (себестоимость + add/edit/цены/сток/инвентаризация); manage ⇒ view И delete. */
+  warehouse_manage?: boolean;
+  /** Поставщики: создавать/редактировать/удалять + поставки/оплаты (manage ⇒ view). */
+  suppliers_manage?: boolean;
+  /** Имущество: смотреть справочник (manage ⇒ view). */
+  equipment_view?: boolean;
+  /** Имущество: create/update/delete/issue/replace/trash/restore. */
+  equipment_manage?: boolean;
+  /** Зарплата: видеть ЧУЖУЮ зарплату (вся команда). Own → salary_view. Derived from salary.view === 'all'. */
+  salary_view_all?: boolean;
+  /** Касса: редактировать ЧУЖИЕ чеки (охват 'all'). Own → checks_edit. Derived from checks.edit === 'all'. */
+  checks_edit_all?: boolean;
   // ── Additive keys (server-enforced permissions foundation) ──────────────
   // Kept OPTIONAL so existing `defaultPermissions: UserPermissions = { …16 keys }`
   // literals in web/mobile keep compiling. A new permission defaults to
@@ -798,11 +817,17 @@ export interface UserPermissions {
 //  account may perform.
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** Action-permission key. A subset of `keyof UserPermissions`. */
+/**
+ * Action-permission key. A subset of `keyof UserPermissions`. Каждый ключ
+ * выводится ровно из одной ячейки {@link RoleMatrix} (см.
+ * backend/src/common/role-matrix.ts flattenRoleMatrix). ROLE-ONLY (консолидация
+ * 2026-07): это единственный словарь enforcement.
+ */
 export type PermissionKey =
   | 'checks_view'
   | 'checks_create'
   | 'checks_edit'
+  | 'checks_edit_all'
   | 'checks_delete'
   | 'checks_change_datetime'
   | 'checks_view_all'
@@ -810,19 +835,26 @@ export type PermissionKey =
   | 'accept_payment'
   | 'sell_installment'
   | 'edit_closed_check'
+  | 'services_view'
+  | 'services_manage'
   | 'profit_view'
   | 'financial_reports'
   | 'export_data'
   | 'cashflow_view'
   | 'cashflow_view_all'
   | 'can_add_expenses'
+  | 'salary_view'
+  | 'salary_view_all'
   | 'warehouse_access'
-  | 'suppliers_access'
+  | 'warehouse_manage'
   | 'warehouse_delete'
+  | 'suppliers_access'
+  | 'suppliers_manage'
+  | 'equipment_view'
+  | 'equipment_manage'
   | 'clients_view'
   | 'clients_edit'
   | 'schedule_view'
-  | 'salary_view'
   | 'bookings_access'
   | 'marketing_access'
   | 'calls_view'
@@ -830,23 +862,25 @@ export type PermissionKey =
   | 'user_management';
 
 /**
- * Permission keys grouped for UI rendering (Касса / Финансы / Склад / CRM /
- * Управление). The grouping drives the permissions editor; enforcement only
- * cares about the flat key.
+ * Permission keys grouped for UI rendering (Касса / Услуги / Финансы / Склад /
+ * Поставщики / Имущество / CRM / Управление). The grouping drives the permissions
+ * editor; enforcement only cares about the flat key.
  */
 export const PERMISSION_GROUPS = {
   Касса: [
     'checks_view',
+    'checks_view_all',
     'checks_create',
     'checks_edit',
+    'checks_edit_all',
     'checks_delete',
     'checks_change_datetime',
-    'checks_view_all',
     'payment_edit',
     'accept_payment',
     'sell_installment',
     'edit_closed_check',
   ],
+  Услуги: ['services_view', 'services_manage'],
   Финансы: [
     'profit_view',
     'financial_reports',
@@ -855,8 +889,11 @@ export const PERMISSION_GROUPS = {
     'cashflow_view_all',
     'can_add_expenses',
     'salary_view',
+    'salary_view_all',
   ],
-  Склад: ['warehouse_access', 'suppliers_access', 'warehouse_delete'],
+  Склад: ['warehouse_access', 'warehouse_manage', 'warehouse_delete'],
+  Поставщики: ['suppliers_access', 'suppliers_manage'],
+  Имущество: ['equipment_view', 'equipment_manage'],
   CRM: [
     'clients_view',
     'clients_edit',
@@ -895,6 +932,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     checks_view: true,
     checks_create: true,
     checks_edit: true,
+    checks_edit_all: false, // редактирует только СВОИ чеки по умолчанию
     checks_delete: false,
     checks_change_datetime: false,
     checks_view_all: false, // sees only their own checks by default
@@ -902,6 +940,9 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     accept_payment: false, // not a cashier by default — owner grants it explicitly
     sell_installment: false, // продажа в рассрочку — owner grants it explicitly
     edit_closed_check: false, // #61 — редактирование проведённого чека выключено по умолчанию; владелец выдаёт явно
+    // Услуги — мастер СМОТРИТ услуги и добавляет их в чек; каталог не редактирует.
+    services_view: true,
+    services_manage: false,
     // Финансы — NONE by default.
     profit_view: false,
     financial_reports: false,
@@ -910,10 +951,17 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     cashflow_view_all: false,
     can_add_expenses: false,
     salary_view: false,
-    // Склад — reads are open elsewhere; mutations are role-gated. No access flag by default.
-    warehouse_access: false,
-    suppliers_access: false,
+    salary_view_all: false,
+    // Склад — мастер СМОТРИТ товары (без себестоимости) и добавляет их в чек;
+    // управление (себестоимость/CRUD/инвентаризация) и удаление — off.
+    warehouse_access: true,
+    warehouse_manage: false,
     warehouse_delete: false, // #60 — удаление товаров/папок выключено по умолчанию; владелец выдаёт явно
+    // Поставщики / Имущество — none by default.
+    suppliers_access: false,
+    suppliers_manage: false,
+    equipment_view: false,
+    equipment_manage: false,
 
     // CRM — masters can see their own clients/cars; broad CRM editing off.
     clients_view: true,
@@ -928,31 +976,19 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
   },
 };
 
-/**
- * Named permission template («роль»): a tenant-defined, reusable set of
- * action-permissions. A template is just a saved blueprint — applying it to an
- * employee COPIES `permissions` into that user's `permissions` map (a one-shot
- * copy, exactly like PATCH /users/:id/permissions; there is no live link back).
- * `permissions` is the SAME shape as {@link UserPermissions}. Backend table:
- * migration 077_permission_templates.sql; API: createPermissionTemplatesApi.
- */
-export interface PermissionTemplate {
-  id: string;
-  name: string;
-  permissions: Record<string, boolean>;
-  createdAt?: string;
-  updatedAt?: string;
-}
+// PermissionTemplate удалён (ROLE-ONLY, консолидация 2026-07): шаблоны прав
+// (permission_templates) и per-user override заменены единственным механизмом —
+// ролями (см. {@link Role} ниже). Роль — живая база прав (не одноразовая копия).
 
 // ═══════════════════════════════════════════════════════════════════════════
 //  Роли (Bitrix24-style, миграция 114) — матрица «право × охват»
 //
-//  Роль — это НЕ шаблон-копия (как PermissionTemplate), а живая база прав:
-//  назначенному пользователю (User.roleId) сервер строит эффективные права как
-//  «flatten(Role.matrix) ⊕ User.permissions» (персональные overrides поверх).
-//  Enforcement не меняется — guards по-прежнему смотрят плоские ключи
-//  PermissionKey; таблица соответствия «ключ → ячейка матрицы» зафиксирована
-//  в backend/src/common/role-matrix.ts.
+//  ROLE-ONLY (консолидация 2026-07): роль — ЕДИНСТВЕННЫЙ источник прав.
+//  Назначенному пользователю (User.roleId) сервер строит эффективные права как
+//  flatten(Role.matrix) (персональные User.permissions удалены из модели).
+//  Enforcement — guards смотрят плоские ключи PermissionKey; таблица
+//  соответствия «ключ → ячейка матрицы» зафиксирована в
+//  backend/src/common/role-matrix.ts.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /** Охват действия в матрице роли: нет / только своё / всё по автосервису. */
@@ -962,19 +998,27 @@ export type RoleScope = 'none' | 'own' | 'all';
  * Матрица роли: секции × действия. Scope-действия ('none'|'own'|'all') —
  * checks.view, checks.edit, salary.view; остальные — boolean-тумблеры.
  * Отсутствующее действие читается сервером как 'none'/false (fail-closed).
- * Каждая ячейка соответствует ровно одному сегодняшнему {@link PermissionKey}:
+ * Каждая ячейка соответствует ровно одному {@link PermissionKey}:
  *   checks.view→checks_view(+checks_view_all при 'all'), checks.create→checks_create,
- *   checks.edit→checks_edit, checks.delete→checks_delete,
+ *   checks.edit→checks_edit(+checks_edit_all при 'all'), checks.delete→checks_delete,
  *   checks.changeDatetime→checks_change_datetime, checks.editClosed→edit_closed_check,
  *   checks.editPayment→payment_edit, checks.acceptPayment→accept_payment,
- *   checks.sellInstallment→sell_installment, warehouse.view→warehouse_access,
- *   warehouse.delete→warehouse_delete, suppliers.view→suppliers_access,
+ *   checks.sellInstallment→sell_installment,
+ *   services.view→services_view (manage⇒view), services.manage→services_manage,
+ *   warehouse.view→warehouse_access (manage⇒view), warehouse.manage→warehouse_manage,
+ *   warehouse.delete→warehouse_delete (manage⇒delete),
+ *   suppliers.view→suppliers_access (manage⇒view), suppliers.manage→suppliers_manage,
+ *   equipment.view→equipment_view (manage⇒view), equipment.manage→equipment_manage,
  *   clients.view→clients_view, clients.edit→clients_edit, schedule.view→schedule_view,
- *   bookings.view→bookings_access, salary.view→salary_view, reports.view→financial_reports,
- *   reports.profit→profit_view, reports.export→export_data,
+ *   bookings.view→bookings_access, salary.view→salary_view(+salary_view_all при 'all'),
+ *   reports.view→financial_reports, reports.profit→profit_view, reports.export→export_data,
  *   reports.cashflow→cashflow_view(+cashflow_view_all при 'all'), expenses.add→can_add_expenses,
  *   marketing.view→marketing_access, calls.view→calls_view, calls.listen→calls_listen,
  *   employees.manage→user_management.
+ *
+ * «manage ⇒ view/delete»: manage — надмножество view (и для склада delete):
+ * ячейка { manage: true } проходит и view-гейты (add-to-check, list) — сервер
+ * раскладывает это автоматически (flattenRoleMatrix).
  */
 export interface RoleMatrix {
   checks?: {
@@ -988,11 +1032,24 @@ export interface RoleMatrix {
     acceptPayment?: boolean;
     sellInstallment?: boolean;
   };
-  warehouse?: { view?: boolean; delete?: boolean };
-  suppliers?: { view?: boolean };
+  /** Услуги: view (смотреть + в чек) / manage (CRUD + %/гарантия). manage ⇒ view. */
+  services?: { view?: boolean; manage?: boolean };
+  /**
+   * Склад: view (товары БЕЗ себестоимости + в чек) / manage (себестоимость +
+   * add/edit/цены/сток/инвентаризация) / delete (удаление). manage ⇒ view И delete.
+   */
+  warehouse?: { view?: boolean; manage?: boolean; delete?: boolean };
+  /** Поставщики: view / manage. manage ⇒ view. */
+  suppliers?: { view?: boolean; manage?: boolean };
+  /** Имущество: view (справочник) / manage (выдача/CRUD). manage ⇒ view. */
+  equipment?: { view?: boolean; manage?: boolean };
   clients?: { view?: boolean; edit?: boolean };
   schedule?: { view?: boolean };
   bookings?: { view?: boolean };
+  /**
+   * Зарплата: охват 'own' → только своя ЗП (salary_view), 'all' → вся команда
+   * (salary_view + salary_view_all). Отсутствует → 'none' (fail-closed).
+   */
   salary?: { view?: RoleScope };
   reports?: {
     view?: boolean;
@@ -2276,6 +2333,14 @@ export interface MessagingIntegration {
   // providerType === 'telegram'.
   chatId?: string;
   isActive: boolean;
+  /**
+   * Independent outbound-SMS switch (migration 127), decoupled from `isActive`.
+   * When false the integration stays CONNECTED (for «Мои Звонки» call sync it
+   * keeps syncing calls) but is never chosen as a client-SMS sender — the send
+   * is skipped. Defaults to true (server backfills legacy rows to true), so an
+   * integration keeps sending SMS unless the owner explicitly mutes it.
+   */
+  smsNotificationsEnabled: boolean;
   createdAt: string;
 }
 
@@ -2702,12 +2767,86 @@ export interface MarketingAcquisitionSource {
   revenue: number;
 }
 
+/**
+ * One weekly cohort of first-time clients (their first-ever visit fell inside
+ * this ISO week within the window). `periodStart` = Monday of that week (ISO
+ * YYYY-MM-DD). Only weeks with ≥1 new client are present.
+ */
+export interface MarketingFirstVisitCohort {
+  periodStart: string;
+  newClients: number;
+  /** Revenue those first-timers generated on their in-window checks. */
+  revenue: number;
+}
+
+/** One bucket of the repeat-purchase histogram (visit count → client count). */
+export interface MarketingRepeatBucket {
+  /** Lifetime non-deferred visit count: '1'..'4' or '5+'. */
+  visits: string;
+  /** Clients (active in the window) with exactly this many lifetime visits. */
+  clients: number;
+}
+
+/** Revenue grouped by client acquisition source (warranty checks excluded). */
+export interface MarketingRevenueBySource {
+  /** clients.source, or «Без источника». */
+  source: string;
+  checks: number;
+  revenue: number;
+}
+
+/** Revenue grouped by the check's master (warranty checks excluded). */
+export interface MarketingRevenueByMaster {
+  /** users.id, or null when the check has no master. */
+  masterId: string | null;
+  /** users.full_name, or «Без мастера». */
+  masterName: string;
+  checks: number;
+  revenue: number;
+}
+
+/**
+ * One point of a marketing time-series (weekly or monthly). `periodStart` is the
+ * ISO date (YYYY-MM-DD) of the bucket's first day (Monday for weeks, 1st for
+ * months). Every bucket over the window is emitted, zero-filled where there was
+ * no activity, so a chart draws a continuous line.
+ */
+export interface MarketingTrendPoint {
+  periodStart: string;
+  /** Clients whose first-ever visit fell in this bucket. */
+  newClients: number;
+  /** Non-warranty check revenue in this bucket. */
+  revenue: number;
+  /** % of bucket-active clients with >1 lifetime visit (0..100, 1 decimal). */
+  returningRate: number;
+  /** sms_history contact rows in this bucket (accurate per-bucket call proxy). */
+  calls: number;
+  /** review_responses created in this bucket. */
+  reviews: number;
+}
+
+/**
+ * Consolidated «Маркетинговые отчёты» (GET /reports/marketing?from&to).
+ *
+ * REDESIGNED contract: every field is derived from real rows in existing tables
+ * — nothing invented or forward-accumulated. Directions and their backing data:
+ *   • acquisition — checks + clients.source
+ *   • retention   — checks
+ *   • calls       — CallsService (live) + sms_history (funnel); zeros w/o telephony
+ *   • reviews     — review_responses + review_tokens
+ *   • loyalty     — loyalty_settings + client_bonuses (migration 083)
+ *   • revenue     — checks (by source, by master; warranty excluded)
+ *   • trends      — checks + sms_history + review_responses (weekly + monthly)
+ * Every sub-section is computed best-effort server-side; a failure in one (e.g.
+ * no telephony) degrades to zeros/empty instead of failing the whole report.
+ */
 export interface MarketingReport {
   period: { from: string; to: string };
   /**
    * New vs returning acquisition. new = client's FIRST check falls inside the
    * window; returning = client's first check predates the window. Plus a
-   * by-source breakdown of the NEW clients (clients.source).
+   * by-source breakdown of the NEW clients (clients.source) and a weekly
+   * first-visit cohort.
    */
   acquisition: {
     newClients: number;
@@ -2715,18 +2854,19 @@ export interface MarketingReport {
     newRevenue: number;
     returningRevenue: number;
     bySource: MarketingAcquisitionSource[];
+    firstVisitCohort: MarketingFirstVisitCohort[];
   };
   /**
    * Retention over the window. returningRate/avgLtv/avgDaysBetweenVisits are
-   * computed over the ALL-TIME visit history of clients who had at least one
-   * check inside [from,to] (windowed client selection, all-time per-client
-   * aggregates — same semantics as /reports/retention, but anchored to the
-   * window instead of a rolling now()-interval).
+   * computed over the ALL-TIME visit history of clients who had ≥1 check inside
+   * [from,to]. repeatPurchaseDistribution is a histogram of those clients'
+   * lifetime visit counts.
    */
   retention: {
     returningRate: number;
     avgLtv: number;
     avgDaysBetweenVisits: number;
+    repeatPurchaseDistribution: MarketingRepeatBucket[];
   };
   /**
    * Calls for the window. total/incoming/outgoing/missed/notCalledBack come
@@ -2760,6 +2900,33 @@ export interface MarketingReport {
     conversionRate: number;
     tokensSent: number;
     tokensResponded: number;
+  };
+  /**
+   * Loyalty ROI (loyalty_settings + client_bonuses, migration 083). pointsAccrued
+   * / pointsRedeemed are money amounts of accrual / redemption movements CREATED
+   * in the window; outstandingBalance is the ALL-TIME live liability
+   * (Σaccrual − Σredemption). enabled=false + zeros when the tenant never used
+   * loyalty. Nothing here is fabricated.
+   */
+  loyalty: {
+    enabled: boolean;
+    accrualPercent: number;
+    participants: number;
+    pointsAccrued: number;
+    pointsRedeemed: number;
+    accrualCount: number;
+    redemptionCount: number;
+    outstandingBalance: number;
+  };
+  /** Revenue attribution (checks, warranty excluded) by client source and master. */
+  revenue: {
+    bySource: MarketingRevenueBySource[];
+    byMaster: MarketingRevenueByMaster[];
+  };
+  /** Time-series for charts: weekly AND monthly buckets over the window. */
+  trends: {
+    weekly: MarketingTrendPoint[];
+    monthly: MarketingTrendPoint[];
   };
 }
 

@@ -1,6 +1,7 @@
 import { BadRequestException, ForbiddenException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { isTenantLess } from '../common/auth-cache';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { MarketingService } from '../marketing/marketing.service';
 import { PushService } from '../push/push.service';
@@ -370,6 +371,13 @@ export class BookingsService {
 
   // ─── Settings (lazy-create defaults) ───────────────────────────────
   async getSettings(tenantId: string) {
+    // Tenant-less caller (superadmin, nil-UUID sentinel): return the column
+    // defaults WITHOUT seeding — the lazy-create below would FK-violate
+    // booking_settings_tenant_id_fkey (no such tenant) → 500 on GET
+    // /bookings/settings. Shape mirrors a fresh row (076 defaults).
+    if (isTenantLess(tenantId)) {
+      return { notifyClientOnCreate: true, reminderEnabled: true, reminderHours: 2, channel: 'auto' };
+    }
     const { rows } = await this.pool.query(
       `SELECT notify_client_on_create, reminder_enabled, reminder_hours, channel
          FROM booking_settings WHERE tenant_id = $1`,

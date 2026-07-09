@@ -30,10 +30,12 @@ describe('MATRIX_GROUPS — покрытие словаря редактора',
     expect([...groupKeys].sort()).toEqual([...EDITOR_PERMISSION_KEYS].sort()); // полное покрытие
   });
 
-  it('28 канонических ключей − 2 свёрнутых (checks_view_all + cashflow_view_all) = 26 строк редактора', () => {
-    expect(ALL_MATRIX_ROWS).toHaveLength(26);
+  it('36 канонических ключей − 4 свёрнутых (checks_view_all + checks_edit_all + cashflow_view_all + salary_view_all) = 32 строки редактора', () => {
+    expect(ALL_MATRIX_ROWS).toHaveLength(32);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'checks_view_all')).toBe(false);
+    expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'checks_edit_all')).toBe(false);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'cashflow_view_all')).toBe(false);
+    expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'salary_view_all')).toBe(false);
   });
 
   it('scope-строки — ровно четыре ячейки охвата (+reports.cashflow) из role-matrix.ts', () => {
@@ -42,7 +44,16 @@ describe('MATRIX_GROUPS — покрытие словаря редактора',
   });
 
   it('порядок и названия секций — из PERMISSION_GROUPS', () => {
-    expect(MATRIX_GROUPS.map((g) => g.title)).toEqual(['Касса', 'Финансы', 'Склад', 'CRM', 'Управление']);
+    expect(MATRIX_GROUPS.map((g) => g.title)).toEqual([
+      'Касса',
+      'Услуги',
+      'Финансы',
+      'Склад',
+      'Поставщики',
+      'Имущество',
+      'CRM',
+      'Управление',
+    ]);
   });
 });
 
@@ -107,7 +118,7 @@ describe('matrixFromDraft — полная материализация и round
 
   it('каждая ячейка записана явно — PATCH заменяет матрицу без «дыр»', () => {
     const matrix = matrixFromDraft(emptyDraft());
-    // Все 12 секций матрицы присутствуют, scope-ячейки материализованы.
+    // Все 14 секций матрицы присутствуют, scope-ячейки материализованы.
     expect(Object.keys(matrix).sort()).toEqual(
       [
         'bookings',
@@ -115,10 +126,12 @@ describe('matrixFromDraft — полная материализация и round
         'checks',
         'clients',
         'employees',
+        'equipment',
         'expenses',
         'marketing',
         'reports',
         'salary',
+        'services',
         'schedule',
         'suppliers',
         'warehouse',

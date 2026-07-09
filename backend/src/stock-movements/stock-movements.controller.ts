@@ -2,7 +2,8 @@ import { Controller, Get, Post, Body, Query, UseGuards } from '@nestjs/common';
 import { IsString, IsNotEmpty, IsOptional, IsNumber, IsBoolean, IsIn } from 'class-validator';
 import { StockMovementsService, StockMovementType } from './stock-movements.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
 const TYPES: StockMovementType[] = [
@@ -57,11 +58,17 @@ class CreateStockMovementDto {
   recordAsExpense?: boolean;
 }
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+// ROLE-ONLY (консолидация 2026-07). Движения склада (инвентаризация, списание,
+// приход, перемещения) — часть управления складом:
+//   • view   — журнал движений → 'warehouse_access';
+//   • manage — создание любого движения (инвентаризация и т.д.) → 'warehouse_manage'.
+// Owner-class (director/admin/superadmin) обходит гейты через PermissionsGuard.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('stock-movements')
 export class StockMovementsController {
   constructor(private movementsService: StockMovementsService) {}
 
+  @RequirePermission('warehouse_access')
   @Get()
   list(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.movementsService.list(user.tenantID, {
@@ -73,10 +80,8 @@ export class StockMovementsController {
     });
   }
 
-  // Director / admin / superadmin only — masters use the per-product
-  // `/products/:id/stock` endpoint which is locked to the simple income /
-  // expense / writeoff / inventory set on the "main" warehouse.
-  @Roles('director', 'admin', 'superadmin')
+  // Инвентаризация / списание / перемещения — требуют управления складом.
+  @RequirePermission('warehouse_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateStockMovementDto) {
     return this.movementsService.create(user.tenantID, user.userID, dto);
@@ -87,7 +92,7 @@ export class StockMovementsController {
   // generic POST /. Body is intentionally minimal (productId, source,
   // qty, reason). Reason is required by the underlying service for
   // defect_transfer movements.
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('warehouse_manage')
   @Post('transfer-to-defect')
   transferToDefect(
     @CurrentUser() user: JwtPayload,

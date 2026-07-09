@@ -11,13 +11,15 @@
  * зафиксирована в backend/src/common/role-matrix.ts — этот модуль её повторяет:
  *
  *   • четыре scope-ячейки: checks.view (checks_view + checks_view_all),
- *     checks.edit (checks_edit), salary.view (salary_view), reports.cashflow
- *     (cashflow_view + cashflow_view_all) — в UI сегмент [Нет | Свои | Все];
- *   • остальные 22 ключа — boolean-тумблеры, 1:1 с ячейками.
+ *     checks.edit (checks_edit + checks_edit_all), salary.view (salary_view +
+ *     salary_view_all), reports.cashflow (cashflow_view + cashflow_view_all) —
+ *     в UI сегмент [Нет | Свои | Все];
+ *   • остальные ключи — boolean-тумблеры, 1:1 с ячейками.
  *
- * ВАЖНО: `checks_view_all` и `cashflow_view_all` НЕ являются отдельными
- * строками редактора — это значение 'all' сегментов checks.view /
- * reports.cashflow (сервер флаттенит view/cashflow==='all' → оба плоских ключа).
+ * ВАЖНО: `checks_view_all`, `checks_edit_all`, `salary_view_all` и
+ * `cashflow_view_all` НЕ являются отдельными строками редактора — это значение
+ * 'all' сегментов checks.view / checks.edit / salary.view / reports.cashflow
+ * (сервер флаттенит view/edit/cashflow==='all' → оба плоских ключа).
  *
  * Защита от дрейфа со shared (runtime-импорт shared/types под babel-jest
  * невозможен — @babel/runtime не резолвится из-за пределов mobile/, поэтому
@@ -45,17 +47,17 @@ type PermissionGroups = SharedTypesModule['PERMISSION_GROUPS'];
 /** Название секции-аккордеона — ровно ключи PERMISSION_GROUPS. */
 export type PermissionGroupTitle = keyof PermissionGroups;
 
-/** Ключи одной shared-группы за вычетом свёрнутых checks_view_all / cashflow_view_all. */
-type EditorKeysOf<T extends PermissionGroupTitle> = Exclude<
-  PermissionGroups[T][number],
-  'checks_view_all' | 'cashflow_view_all'
->;
+/** Ключи, свёрнутые в 'all' scope-сегментов (не отдельные строки редактора). */
+type CollapsedAllKey = 'checks_view_all' | 'checks_edit_all' | 'cashflow_view_all' | 'salary_view_all';
+
+/** Ключи одной shared-группы за вычетом свёрнутых *_all-ключей. */
+type EditorKeysOf<T extends PermissionGroupTitle> = Exclude<PermissionGroups[T][number], CollapsedAllKey>;
 
 /** Ключи, чья ячейка — охват (сегмент [Нет | Свои | Все]). */
 export type ScopePermissionKey = 'checks_view' | 'checks_edit' | 'salary_view' | 'cashflow_view';
 
-/** Все ключи редактора (канонические минус свёрнутые checks_view_all / cashflow_view_all). */
-export type EditorPermissionKey = Exclude<PermissionKey, 'checks_view_all' | 'cashflow_view_all'>;
+/** Все ключи редактора (канонические минус свёрнутые *_all-ключи). */
+export type EditorPermissionKey = Exclude<PermissionKey, CollapsedAllKey>;
 
 /** Ключи-тумблеры (всё, что не охват). */
 export type BoolPermissionKey = Exclude<EditorPermissionKey, ScopePermissionKey>;
@@ -84,10 +86,14 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   checks_delete: 'Удаляет чеки',
   checks_change_datetime: 'Меняет дату и время чека',
   checks_view_all: 'Видит чеки всех мастеров',
+  checks_edit_all: 'Редактирует чужие чеки',
   payment_edit: 'Меняет оплату чека',
   accept_payment: 'Кассир смены (принимает оплату)',
   sell_installment: 'Продаёт в рассрочку',
   edit_closed_check: 'Редактирование проведённого чека',
+  // Услуги
+  services_view: 'Смотрит услуги и добавляет в чек',
+  services_manage: 'Управляет каталогом услуг',
   // Финансы
   profit_view: 'Видит прибыль',
   financial_reports: 'Финансовые отчёты',
@@ -96,10 +102,17 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   cashflow_view_all: 'Движение денег: все',
   can_add_expenses: 'Вносит расходы',
   salary_view: 'Видит зарплаты',
+  salary_view_all: 'Видит зарплаты всей команды',
   // Склад
   warehouse_access: 'Доступ к складу',
-  suppliers_access: 'Доступ к поставщикам',
+  warehouse_manage: 'Управляет складом (себестоимость, товары)',
   warehouse_delete: 'Удаление на складе',
+  // Поставщики
+  suppliers_access: 'Смотрит поставщиков',
+  suppliers_manage: 'Управляет поставщиками и поставками',
+  // Имущество
+  equipment_view: 'Смотрит имущество',
+  equipment_manage: 'Управляет имуществом',
   // CRM
   clients_view: 'Видит клиентов',
   clients_edit: 'Редактирует клиентов',
@@ -128,6 +141,9 @@ const CELL_KIND: Record<EditorPermissionKey, 'scope' | 'bool'> = {
   accept_payment: 'bool',
   sell_installment: 'bool',
   edit_closed_check: 'bool',
+  // Услуги
+  services_view: 'bool',
+  services_manage: 'bool',
   // Финансы
   profit_view: 'bool',
   financial_reports: 'bool',
@@ -137,8 +153,14 @@ const CELL_KIND: Record<EditorPermissionKey, 'scope' | 'bool'> = {
   salary_view: 'scope',
   // Склад
   warehouse_access: 'bool',
-  suppliers_access: 'bool',
+  warehouse_manage: 'bool',
   warehouse_delete: 'bool',
+  // Поставщики
+  suppliers_access: 'bool',
+  suppliers_manage: 'bool',
+  // Имущество
+  equipment_view: 'bool',
+  equipment_manage: 'bool',
   // CRM
   clients_view: 'bool',
   clients_edit: 'bool',
@@ -168,13 +190,17 @@ export interface MatrixGroupDef {
 
 /**
  * Порядок групп и порядок ключей внутри — зеркало PERMISSION_GROUPS
- * (Касса / Финансы / Склад / CRM / Управление). Каждый массив типизирован
- * срезом СВОЕЙ shared-группы: ключ из чужой группы не скомпилируется.
+ * (Касса / Услуги / Финансы / Склад / Поставщики / Имущество / CRM /
+ * Управление). Каждый массив типизирован срезом СВОЕЙ shared-группы: ключ из
+ * чужой группы не скомпилируется.
  */
 const GROUP_SPECS: readonly [
   { title: 'Касса'; keys: readonly EditorKeysOf<'Касса'>[] },
+  { title: 'Услуги'; keys: readonly EditorKeysOf<'Услуги'>[] },
   { title: 'Финансы'; keys: readonly EditorKeysOf<'Финансы'>[] },
   { title: 'Склад'; keys: readonly EditorKeysOf<'Склад'>[] },
+  { title: 'Поставщики'; keys: readonly EditorKeysOf<'Поставщики'>[] },
+  { title: 'Имущество'; keys: readonly EditorKeysOf<'Имущество'>[] },
   { title: 'CRM'; keys: readonly EditorKeysOf<'CRM'>[] },
   { title: 'Управление'; keys: readonly EditorKeysOf<'Управление'>[] },
 ] = [
@@ -192,11 +218,14 @@ const GROUP_SPECS: readonly [
       'edit_closed_check',
     ],
   },
+  { title: 'Услуги', keys: ['services_view', 'services_manage'] },
   {
     title: 'Финансы',
     keys: ['profit_view', 'financial_reports', 'export_data', 'cashflow_view', 'can_add_expenses', 'salary_view'],
   },
-  { title: 'Склад', keys: ['warehouse_access', 'suppliers_access', 'warehouse_delete'] },
+  { title: 'Склад', keys: ['warehouse_access', 'warehouse_manage', 'warehouse_delete'] },
+  { title: 'Поставщики', keys: ['suppliers_access', 'suppliers_manage'] },
+  { title: 'Имущество', keys: ['equipment_view', 'equipment_manage'] },
   {
     title: 'CRM',
     keys: [
@@ -267,9 +296,15 @@ export function draftFromMatrix(matrix: RoleMatrix | null | undefined): RoleMatr
       payment_edit: readBool(m.checks?.editPayment),
       accept_payment: readBool(m.checks?.acceptPayment),
       sell_installment: readBool(m.checks?.sellInstallment),
+      services_view: readBool(m.services?.view),
+      services_manage: readBool(m.services?.manage),
       warehouse_access: readBool(m.warehouse?.view),
+      warehouse_manage: readBool(m.warehouse?.manage),
       warehouse_delete: readBool(m.warehouse?.delete),
       suppliers_access: readBool(m.suppliers?.view),
+      suppliers_manage: readBool(m.suppliers?.manage),
+      equipment_view: readBool(m.equipment?.view),
+      equipment_manage: readBool(m.equipment?.manage),
       clients_view: readBool(m.clients?.view),
       clients_edit: readBool(m.clients?.edit),
       schedule_view: readBool(m.schedule?.view),
@@ -305,8 +340,10 @@ export function matrixFromDraft(draft: RoleMatrixDraft): RoleMatrix {
       acceptPayment: b.accept_payment,
       sellInstallment: b.sell_installment,
     },
-    warehouse: { view: b.warehouse_access, delete: b.warehouse_delete },
-    suppliers: { view: b.suppliers_access },
+    services: { view: b.services_view, manage: b.services_manage },
+    warehouse: { view: b.warehouse_access, manage: b.warehouse_manage, delete: b.warehouse_delete },
+    suppliers: { view: b.suppliers_access, manage: b.suppliers_manage },
+    equipment: { view: b.equipment_view, manage: b.equipment_manage },
     clients: { view: b.clients_view, edit: b.clients_edit },
     schedule: { view: b.schedule_view },
     bookings: { view: b.bookings_access },
