@@ -142,7 +142,7 @@ export default function LoginScreen() {
               <CachedImage source={require('../../assets/logo.png')} style={styles.logoImage} resizeMode="contain" />
             </Animated.View>
             <Animated.Text style={[styles.subtitle, { opacity: logoFade, color: palette.text.tertiary }]}>
-              Система управления автосервисом
+              Система управления автосервисом для организаций
             </Animated.Text>
 
             {/* Phone */}
