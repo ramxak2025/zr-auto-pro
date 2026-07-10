@@ -1,14 +1,18 @@
 import { useEffect } from 'react';
 import { Link } from 'react-router-dom';
-import { ArrowLeft } from 'lucide-react';
+import { ArrowLeft, Building2 } from 'lucide-react';
 import RegisterForm from '../components/RegisterForm';
+import { b2bNotice } from './landing/content';
 
 /**
- * Standalone self-service registration page (/register). Public — a logged-out
- * prospect reaches it directly from the landing's primary CTAs («Получить
- * доступ» / «Начать бесплатно»), so it lives outside the auth-gated routes in
- * App.tsx. It reuses the exact same `RegisterForm` as the login modal; only the
- * chrome (full-page light-brand shell) and the action links differ.
+ * Standalone B2B «Заявка на подключение автосервиса» page (/register). Public —
+ * a logged-out prospect reaches it from the landing's primary CTAs («Оставить
+ * заявку»), so it lives outside the auth-gated routes in App.tsx. This is NOT
+ * self-serve consumer checkout: Autexa is sold only to organisations (юрлица/ИП)
+ * and the request goes through the moderated `registrationApi.submit` pipeline
+ * (manager/superadmin approves). It reuses the exact same `RegisterForm` as the
+ * login modal; only the chrome (full-page light-brand shell) and the action
+ * links differ.
  *
  * Light landing theme: #FAFAFA background + light browser theme-color, both
  * restored on unmount so the authed app / login chrome isn't affected.
@@ -16,7 +20,7 @@ import RegisterForm from '../components/RegisterForm';
 export default function RegisterPage() {
   useEffect(() => {
     const prevTitle = document.title;
-    document.title = 'Регистрация — Autexa';
+    document.title = 'Заявка на подключение — Autexa';
 
     const prevBodyBg = document.body.style.backgroundColor;
     document.body.style.backgroundColor = '#FAFAFA';
@@ -69,11 +73,20 @@ export default function RegisterPage() {
 
         <div className="mt-4">
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl text-balance">
-            Подключить автосервис
+            Заявка на подключение автосервиса
           </h1>
           <p className="mt-2 text-base text-slate-600">
-            Первые 14 дней — бесплатно, все возможности. Оставьте заявку — после одобрения войдёте под своим телефоном.
+            Autexa предоставляется автосервисам — юридическим лицам и ИП. Оставьте заявку: менеджер свяжется и подключит
+            вашу организацию.
           </p>
+        </div>
+
+        {/* B2B-плашка: доступ — только для организаций, не для личного использования */}
+        <div className="mt-5 flex items-start gap-3 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
+          <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary-50">
+            <Building2 className="h-5 w-5 text-primary-600" aria-hidden />
+          </span>
+          <p className="text-sm leading-relaxed text-slate-600">{b2bNotice}</p>
         </div>
 
         {/* Карточка формы — общий RegisterForm со стилем приложения (input / btn-*) */}

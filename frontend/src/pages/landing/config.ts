@@ -23,15 +23,15 @@ export const LANDING_CONTACTS: LandingContacts = {
   phone: undefined,
 };
 
-/** Текст первого сообщения в WhatsApp для CTA «Получить доступ». */
-export const WHATSAPP_ACCESS_MESSAGE = 'Здравствуйте! Хочу подключить Autexa для своего автосервиса';
+/** Текст первого сообщения в WhatsApp для CTA «Оставить заявку». */
+export const WHATSAPP_ACCESS_MESSAGE = 'Здравствуйте! Хочу оставить заявку на подключение своего автосервиса к Autexa';
 
 /** Текст первого сообщения в WhatsApp для «Скачать через поддержку». */
 export const WHATSAPP_INSTALL_MESSAGE = 'Здравствуйте! Хочу установить приложение Autexa';
 
 /** Текст первого сообщения в WhatsApp для CTA «Подключить» на карточке тарифа. */
 export function getPlanConnectMessage(planName: string): string {
-  return `Здравствуйте! Хочу попробовать Autexa 14 дней бесплатно, тариф «${planName}»`;
+  return `Здравствуйте! Хочу подключить свой автосервис к Autexa, тариф «${planName}»`;
 }
 
 /** Текст первого сообщения в WhatsApp для «Обсудить внедрение» (внедрение под ключ). */
@@ -54,7 +54,7 @@ export function getTelegramUrl(contacts: LandingContacts = LANDING_CONTACTS): st
   return `https://t.me/${contacts.telegram.replace(/^@/, '')}`;
 }
 
-/** Ссылка для primary-CTA «Получить доступ»; null — контактов нет, рендерим «Войти». */
+/** Ссылка для primary-CTA «Оставить заявку»; null — контактов нет, рендерим «Войти». */
 export function getAccessContactUrl(contacts: LandingContacts = LANDING_CONTACTS): string | null {
   const whatsapp = getWhatsAppUrl(WHATSAPP_ACCESS_MESSAGE, contacts);
   if (whatsapp) return whatsapp;

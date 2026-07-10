@@ -151,15 +151,15 @@ export default function LoginPage() {
             </button>
           </form>
 
-          {/* Registration entry point — secondary, unobtrusive */}
+          {/* B2B request-access entry point — secondary, unobtrusive */}
           <div className="mt-6 text-center">
-            <span className="text-sm text-gray-400">Нет аккаунта? </span>
+            <span className="text-sm text-gray-400">Подключить автосервис? </span>
             <button
               type="button"
               onClick={() => setRegisterOpen(true)}
               className="text-sm font-semibold text-primary-600 transition-colors hover:text-primary-700"
             >
-              Регистрация
+              Оставить заявку
             </button>
           </div>
         </div>

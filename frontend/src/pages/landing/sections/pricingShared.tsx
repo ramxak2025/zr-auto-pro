@@ -16,7 +16,7 @@ export type Billing = 'monthly' | 'yearly';
 const CTA_BASE =
   'inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl px-5 text-sm font-semibold transition motion-safe:active:scale-[0.98]';
 
-/** CTA «Начать бесплатно» → self-service регистрация (/register). */
+/** CTA «Оставить заявку» → B2B-заявка на подключение автосервиса (/register). */
 function PlanCta({ plan }: { plan: PricingPlan }) {
   const cls = `${CTA_BASE} ${
     plan.highlighted
@@ -25,7 +25,7 @@ function PlanCta({ plan }: { plan: PricingPlan }) {
   }`;
   return (
     <Link to="/register" className={cls}>
-      Начать бесплатно
+      Оставить заявку
     </Link>
   );
 }
@@ -93,7 +93,7 @@ export function PlanCard({ plan, billing }: { plan: PricingPlan; billing: Billin
       </ul>
       <div className="mt-auto pt-6">
         <PlanCta plan={plan} />
-        <p className="mt-2 text-center text-xs text-slate-400">14 дней бесплатно · отмена в любой момент</p>
+        <p className="mt-2 text-center text-xs text-slate-400">Для организаций — юрлиц и ИП · менеджер подключит</p>
       </div>
     </div>
   );

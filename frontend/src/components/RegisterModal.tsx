@@ -8,7 +8,9 @@ interface RegisterModalProps {
 }
 
 /**
- * Self-service registration in a modal — the entry point from the login screen.
+ * B2B «Заявка на подключение автосервиса» in a modal — the entry point from the
+ * login screen. Not self-serve consumer signup: the form goes through the
+ * moderated `registrationApi.submit` pipeline (manager/superadmin approves).
  * The form itself (fields / validation / submit / success) lives in the shared
  * `RegisterForm`, reused by the standalone `/register` page. This wrapper only
  * supplies the Modal chrome, swaps the header title on success, and provides the
@@ -27,7 +29,7 @@ export default function RegisterModal({ isOpen, onClose }: RegisterModalProps) {
     <Modal
       isOpen={isOpen}
       onClose={onClose}
-      title={submitted ? 'Заявка отправлена' : 'Регистрация автосервиса'}
+      title={submitted ? 'Заявка отправлена' : 'Заявка на подключение автосервиса'}
       size="md"
     >
       <RegisterForm

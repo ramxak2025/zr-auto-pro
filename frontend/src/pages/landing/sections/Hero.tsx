@@ -1,9 +1,9 @@
 import { useState, useSyncExternalStore, type CSSProperties } from 'react';
 import { Link } from 'react-router-dom';
 import { motion, useReducedMotion, type Variants } from 'framer-motion';
-import { ArrowRight, Banknote, CheckCircle2, TrendingUp, Gauge, Sparkles } from 'lucide-react';
+import { ArrowRight, Banknote, Building2, CheckCircle2, TrendingUp, Gauge } from 'lucide-react';
 import CtaButton from './CtaButton';
-import { hero, heroLightReady } from '../content';
+import { b2bNotice, hero, heroLightReady } from '../content';
 
 /* ---------- Атмосфера: сетка + шум (только CSS/data-uri, ноль запросов) ---------- */
 
@@ -195,13 +195,26 @@ function MobileHeroPhotoCard({
 const PRIMARY_CTA =
   'inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-primary-600 px-8 text-base font-semibold text-white shadow-lg shadow-primary-600/25 transition hover:bg-primary-500 motion-safe:active:scale-[0.98] active:bg-primary-700';
 
-/** Primary-CTA мобильного hero: «Получить доступ» → self-service регистрация (/register). */
+/** Primary-CTA мобильного hero: «Оставить заявку» → B2B-заявка на подключение (/register). */
 function MobileAccessCta() {
   return (
     <Link to="/register" className={PRIMARY_CTA}>
-      Получить доступ
+      Оставить заявку
       <ArrowRight className="h-5 w-5" aria-hidden />
     </Link>
+  );
+}
+
+/**
+ * B2B-плашка под CTA: Autexa — инструмент для организаций (юрлиц и ИП),
+ * не потребительский сервис. Спокойная, on-brand, без legalese-спама.
+ */
+function B2bNotice({ className = '' }: { className?: string }) {
+  return (
+    <p className={`flex items-start gap-2 text-sm leading-relaxed text-slate-500 ${className}`}>
+      <Building2 className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" aria-hidden />
+      {b2bNotice}
+    </p>
   );
 }
 
@@ -269,10 +282,9 @@ function MobileHero() {
           </a>
         </motion.div>
 
-        <motion.p variants={item} className="mt-3 flex items-center gap-1.5 text-sm text-slate-500">
-          <Sparkles className="h-4 w-4 text-emerald-500" aria-hidden />
-          14 дней бесплатно · все возможности
-        </motion.p>
+        <motion.div variants={item} className="mt-3">
+          <B2bNotice />
+        </motion.div>
 
         <motion.div variants={item} className="mt-8">
           <MobileHeroPhotoCard status={photoStatus} onStatus={setPhotoStatus} />
@@ -352,13 +364,9 @@ function DesktopHero() {
             </a>
           </motion.div>
 
-          <motion.p
-            variants={item}
-            className="mt-4 flex items-center justify-center gap-1.5 text-sm text-slate-500 lg:justify-start"
-          >
-            <Sparkles className="h-4 w-4 text-emerald-500" aria-hidden />
-            14 дней бесплатно · все возможности
-          </motion.p>
+          <motion.div variants={item} className="mt-4">
+            <B2bNotice className="justify-center lg:justify-start" />
+          </motion.div>
         </div>
 
         <motion.div variants={item}>

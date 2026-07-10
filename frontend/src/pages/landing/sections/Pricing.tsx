@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight, Sparkles, Wrench } from 'lucide-react';
+import { ArrowRight, Building2, Wrench } from 'lucide-react';
 import Reveal from './Reveal';
-import { formatRub, pricing, yearlyMonthly } from '../content';
+import { b2bNotice, formatRub, pricing, yearlyMonthly } from '../content';
 
 /**
  * Компактный тизер тарифов на главной. id="pricing" сохранён — старые якоря
@@ -64,9 +64,9 @@ export default function Pricing() {
                 Смотреть тарифы
                 <ArrowRight className="h-5 w-5" aria-hidden />
               </Link>
-              <p className="mt-4 flex items-center justify-center gap-2 text-center text-sm text-slate-500">
-                <Sparkles aria-hidden className="h-4 w-4 shrink-0 text-emerald-500" />
-                Первые 14 дней — бесплатно
+              <p className="mt-4 flex items-start justify-center gap-2 text-center text-sm text-slate-500">
+                <Building2 aria-hidden className="mt-0.5 h-4 w-4 shrink-0 text-slate-400" />
+                {b2bNotice}
               </p>
             </div>
           </div>

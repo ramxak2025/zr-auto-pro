@@ -53,8 +53,9 @@ function Breadcrumbs({ title }: { title: string }) {
 }
 
 /**
- * CTA раздела: primary «Начать бесплатно» → self-service регистрация (/register);
- * ниже — живой контакт WhatsApp/Telegram (secondary, «написать нам»).
+ * CTA раздела: primary «Оставить заявку» → B2B-заявка на подключение
+ * автосервиса (/register); ниже — живой контакт WhatsApp/Telegram (secondary,
+ * «написать нам»).
  */
 function CtaButtons() {
   const whatsapp = getWhatsAppUrl(WHATSAPP_ACCESS_MESSAGE);
@@ -68,7 +69,7 @@ function CtaButtons() {
         to="/register"
         className="inline-flex min-h-[52px] w-full items-center justify-center gap-2 rounded-2xl bg-primary-600 px-8 text-base font-semibold text-white shadow-lg shadow-primary-600/25 transition hover:bg-primary-500 motion-safe:active:scale-[0.98] active:bg-primary-700 sm:w-auto"
       >
-        Начать бесплатно
+        Оставить заявку
         <ArrowRight className="h-5 w-5" />
       </Link>
 

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigationType } from 'react-router-dom';
-import { ChevronDown, ChevronRight, Sparkles } from 'lucide-react';
+import { Building2, ChevronDown, ChevronRight } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import Reveal from './sections/Reveal';
 import CtaSection from './sections/CtaSection';
@@ -13,7 +13,7 @@ import {
   ImplementationCard,
   PlanCard,
 } from './sections/pricingShared';
-import { pricing, pricingFaq, tarifyHero } from './content';
+import { b2bNotice, pricing, pricingFaq, tarifyHero } from './content';
 
 /** Сегмент-контрол «Помесячно | На год −20%» с перетекающим ползунком. */
 function BillingToggle({ value, onChange }: { value: Billing; onChange: (b: Billing) => void }) {
@@ -178,15 +178,15 @@ export default function TarifyPage() {
           <p className="mt-3 text-lg text-slate-600">{tarifyHero.subtitle}</p>
         </Reveal>
 
-        {/* Плашка «14 дней бесплатно» */}
+        {/* Плашка B2B-позиционирования: доступ — для организаций */}
         <Reveal delay={0.05}>
-          <div className="mt-6 flex items-start gap-3 rounded-2xl border border-emerald-200/70 bg-emerald-50 p-4">
-            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-emerald-100">
-              <Sparkles className="h-5 w-5 text-emerald-600" aria-hidden />
+          <div className="mt-6 flex items-start gap-3 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
+            <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary-50">
+              <Building2 className="h-5 w-5 text-primary-600" aria-hidden />
             </span>
-            <p className="text-sm leading-relaxed text-emerald-900">
-              <span className="font-semibold">Первые 14 дней — бесплатно.</span> Полный доступ ко всем возможностям —
-              решите на своих цифрах, а не на обещаниях.
+            <p className="text-sm leading-relaxed text-slate-600">
+              <span className="font-semibold text-slate-900">Для организаций — юрлиц и ИП.</span> {b2bNotice} Оставьте
+              заявку — менеджер подберёт тариф под вашу команду и подключит организацию.
             </p>
           </div>
         </Reveal>

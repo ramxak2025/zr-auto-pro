@@ -32,12 +32,15 @@ interface RegisterFormProps {
 }
 
 /**
- * Self-service registration form (migration 123) shared by BOTH the login
- * modal (`RegisterModal`) and the standalone `/register` page (`RegisterPage`).
- * The prospective autoservice owner submits an UNAUTHENTICATED request; on
- * success the form flips to a confirmation state (no auto-login — the account
- * exists only after a superadmin approves). Business errors (уже зарегистрирован
- * / заявка уже отправлена) surface via toast from `err.response.data.message`.
+ * B2B «Заявка на подключение автосервиса» (migration 123) shared by BOTH the
+ * login modal (`RegisterModal`) and the standalone `/register` page
+ * (`RegisterPage`). This is NOT self-serve consumer checkout: Autexa is sold
+ * only to organisations (юрлица/ИП). A prospective autoservice submits an
+ * UNAUTHENTICATED request via the moderated `registrationApi.submit` pipeline;
+ * on success the form flips to a confirmation state (no auto-login, no instant
+ * access — the organisation is connected only after a manager/superadmin
+ * approves). Business errors (уже зарегистрирован / заявка уже отправлена)
+ * surface via toast from `err.response.data.message`.
  *
  * Only the surrounding chrome and the two action slots (`footerSecondary`,
  * `successActions`) differ between the modal and the page — the fields,
@@ -57,8 +60,8 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const next: FieldErrors = {};
-    if (!companyName.trim()) next.company = 'Введите название автосервиса';
-    if (!ownerName.trim()) next.owner = 'Введите имя владельца';
+    if (!companyName.trim()) next.company = 'Укажите название организации';
+    if (!ownerName.trim()) next.owner = 'Укажите имя владельца или руководителя';
     if (!isValidPhone(phone)) next.phone = 'Введите корректный телефон';
     if (password.length < 8) next.password = 'Минимум 8 символов';
     setErrors(next);
@@ -94,7 +97,7 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
         </div>
         <h3 className="mb-2 text-base font-semibold text-gray-900">Заявка отправлена</h3>
         <p className="mb-6 max-w-xs text-sm text-gray-500">
-          После одобрения вы сможете войти под своим телефоном и паролем.
+          Менеджер свяжется с вами, подключит вашу организацию, и вы войдёте под своим телефоном и паролем.
         </p>
         {successActions}
       </div>
@@ -104,28 +107,30 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <p className="text-sm text-gray-500">
-        Оставьте заявку — после одобрения вы получите доступ к системе под указанным телефоном.
+        Autexa предоставляется автосервисам — юридическим лицам и ИП. Оставьте заявку: менеджер свяжется и подключит
+        вашу организацию. Мгновенного самостоятельного доступа нет.
       </p>
 
-      {/* Company */}
+      {/* Company — обязательное, бизнес-поле */}
       <div>
-        <label className="label">Название автосервиса</label>
+        <label className="label">Название организации (автосервиса)</label>
         <input
           type="text"
+          required
           className={`input ${errors.company ? 'input-error' : ''}`}
           value={companyName}
           onChange={(e) => {
             setCompanyName(e.target.value);
             setErrors((p) => ({ ...p, company: undefined }));
           }}
-          placeholder="Автосервис на Ленина"
+          placeholder="ООО «Автосервис на Ленина» / ИП Иванов"
         />
         {errors.company && <p className="mt-1 text-xs text-red-500">{errors.company}</p>}
       </div>
 
       {/* Owner */}
       <div>
-        <label className="label">Имя владельца</label>
+        <label className="label">Имя владельца / руководителя</label>
         <input
           type="text"
           className={`input ${errors.owner ? 'input-error' : ''}`}

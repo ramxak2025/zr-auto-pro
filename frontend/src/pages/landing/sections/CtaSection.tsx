@@ -33,10 +33,10 @@ export default function CtaSection() {
                   {ctaSection.title}
                 </h2>
 
-                {/* Primary — self-service регистрация */}
+                {/* Primary — B2B-заявка на подключение автосервиса */}
                 <div className="mt-8 flex justify-center">
                   <Link to="/register" className={PRIMARY_BTN}>
-                    Начать бесплатно
+                    Оставить заявку
                     <ArrowRight className="h-5 w-5" />
                   </Link>
                 </div>
