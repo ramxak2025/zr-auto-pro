@@ -7,9 +7,10 @@ import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import SearchInput from '../components/SearchInput';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
+import IconButton from '../components/IconButton';
 import { Service, PaginatedResponse, UserRole } from '../types';
 
 const SERVICE_CATEGORIES: string[] = [];
@@ -45,7 +46,7 @@ export default function ServicesPage() {
   const [confirmOpen, setConfirmOpen] = useState(false);
 
   // Query
-  const { data, isLoading } = useQuery<PaginatedResponse<Service>>({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery<PaginatedResponse<Service>>({
     queryKey: ['services', { search, page, limit, category: categoryFilter === 'Все' ? undefined : categoryFilter }],
     queryFn: async () => {
       const params: any = { search, page, limit };
@@ -184,15 +185,18 @@ export default function ServicesPage() {
   return (
     <div>
       {/* Header */}
-      <div className="page-header">
-        <h1 className="page-title">Услуги</h1>
-        {canManage && (
-          <button onClick={openCreateModal} className="btn-primary">
-            <Plus className="w-4 h-4" />
-            Новая услуга
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title="Услуги"
+        icon={Wrench}
+        actions={
+          canManage ? (
+            <button onClick={openCreateModal} className="btn-primary">
+              <Plus className="w-4 h-4" />
+              Новая услуга
+            </button>
+          ) : undefined
+        }
+      />
 
       {/* Search */}
       <div className="mb-4 max-w-md">
@@ -217,36 +221,40 @@ export default function ServicesPage() {
         <div className="grid grid-cols-3 gap-2.5 mb-4">
           <div className="rounded-xl bg-indigo-50 p-3">
             <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Всего услуг</p>
-            <p className="text-base sm:text-lg font-bold text-indigo-700 mt-0.5">{total}</p>
+            <p className="text-base sm:text-lg font-bold text-indigo-700 mt-0.5 tabular-nums">{total}</p>
           </div>
           <div className="rounded-xl bg-green-50 p-3">
             <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">Средняя цена</p>
-            <p className="text-base sm:text-lg font-bold text-green-700 mt-0.5">{formatCurrency(avgPrice)} ₽</p>
+            <p className="text-base sm:text-lg font-bold text-green-700 mt-0.5 tabular-nums">
+              {formatCurrency(avgPrice)} ₽
+            </p>
           </div>
           <div className="rounded-xl bg-orange-50 p-3">
             <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-wider">С гарантией</p>
-            <p className="text-base sm:text-lg font-bold text-orange-700 mt-0.5">{withWarranty}</p>
+            <p className="text-base sm:text-lg font-bold text-orange-700 mt-0.5 tabular-nums">{withWarranty}</p>
           </div>
         </div>
       )}
 
       {/* Content */}
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : services.length === 0 ? (
-        <EmptyState
-          icon={Wrench}
-          title="Нет услуг"
-          description={
-            search || categoryFilter !== 'Все' ? 'По вашему запросу ничего не найдено' : 'Добавьте первую услугу'
-          }
-          action={
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        isFetching={isFetching}
+        isEmpty={services.length === 0}
+        empty={{
+          icon: Wrench,
+          title: 'Нет услуг',
+          description:
+            search || categoryFilter !== 'Все' ? 'По вашему запросу ничего не найдено' : 'Добавьте первую услугу',
+          action:
             canManage && !search && categoryFilter === 'Все'
               ? { label: 'Добавить услугу', onClick: openCreateModal }
-              : undefined
-          }
-        />
-      ) : (
+              : undefined,
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <>
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
@@ -256,24 +264,28 @@ export default function ServicesPage() {
                   <span className="font-semibold text-gray-900 text-sm">{service.name}</span>
                   {canManage && (
                     <div className="flex items-center gap-1 flex-shrink-0">
-                      <button
+                      <IconButton
+                        label="Редактировать услугу"
+                        icon={Edit2}
+                        variant="ghost"
+                        size="sm"
                         onClick={(e) => openEditModal(service, e)}
-                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
-                      <button
+                      />
+                      <IconButton
+                        label="Удалить услугу"
+                        icon={Trash2}
+                        variant="danger"
+                        size="sm"
                         onClick={(e) => handleDelete(service.id, e)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      />
                     </div>
                   )}
                 </div>
                 <div className="flex items-center gap-3">
                   {service.category && <span className="badge-default text-[11px]">{service.category}</span>}
-                  <span className="text-sm font-medium text-gray-900">{formatCurrency(service.defaultPrice)}</span>
+                  <span className="text-sm font-medium text-gray-900 tabular-nums">
+                    {formatCurrency(service.defaultPrice)}
+                  </span>
                 </div>
               </div>
             ))}
@@ -308,13 +320,15 @@ export default function ServicesPage() {
                         <span className="text-gray-400">—</span>
                       )}
                     </td>
-                    <td className="text-right font-medium text-gray-900">{formatCurrency(service.defaultPrice)} ₽</td>
+                    <td className="text-right font-medium text-gray-900 tabular-nums">
+                      {formatCurrency(service.defaultPrice)} ₽
+                    </td>
                     {canManage && (
-                      <td className="text-right">
+                      <td className="text-right tabular-nums">
                         {service.masterPercent != null ? (
                           <span className="font-medium text-gray-700">{service.masterPercent}%</span>
                         ) : (
-                          <span className="text-gray-400">стандарт</span>
+                          <span className="text-gray-500">стандарт</span>
                         )}
                       </td>
                     )}
@@ -322,26 +336,26 @@ export default function ServicesPage() {
                       {service.warrantyDays != null && service.warrantyDays > 0 ? (
                         <span className="badge-default">{service.warrantyDays} дн.</span>
                       ) : (
-                        <span className="text-gray-300">—</span>
+                        <span className="text-gray-400">—</span>
                       )}
                     </td>
                     {canManage && (
                       <td>
                         <div className="flex items-center justify-end gap-1">
-                          <button
+                          <IconButton
+                            label="Редактировать услугу"
+                            icon={Edit2}
+                            variant="ghost"
+                            size="sm"
                             onClick={(e) => openEditModal(service, e)}
-                            className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
-                            title="Редактировать"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </button>
-                          <button
+                          />
+                          <IconButton
+                            label="Удалить услугу"
+                            icon={Trash2}
+                            variant="danger"
+                            size="sm"
                             onClick={(e) => handleDelete(service.id, e)}
-                            className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                            title="Удалить"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          />
                         </div>
                       </td>
                     )}
@@ -353,7 +367,7 @@ export default function ServicesPage() {
 
           <Pagination page={page} total={total} limit={limit} onChange={setPage} />
         </>
-      )}
+      </QueryState>
 
       {/* Create/Edit Service Modal */}
       <Modal isOpen={modalOpen} onClose={closeModal} title={editingService ? 'Редактировать услугу' : 'Новая услуга'}>

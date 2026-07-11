@@ -20,8 +20,8 @@ import { useAuth } from '../contexts/AuthContext';
 import { UserRole } from '../types';
 import type { CashShift, CashShiftReport } from '../../../shared/types';
 import { formatMoney, formatDateTime } from '../../../shared/utils/formatters';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
+import QueryState from '../components/QueryState';
+import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Pagination from '../components/Pagination';
 
@@ -167,7 +167,7 @@ function StatCard({
         <Icon className={`w-4 h-4 ${color}`} />
         <div className="stat-label">{label}</div>
       </div>
-      <div className={`stat-value ${valueColor}`}>{value}</div>
+      <div className={`stat-value tabular-nums ${valueColor}`}>{value}</div>
     </div>
   );
 }
@@ -190,17 +190,35 @@ export default function CashShiftPage() {
   const [noteInput, setNoteInput] = useState('');
 
   // ─── Queries ───────────────────────────────────────────────────────────────
-  const { data: currentReport, isLoading: currentLoading } = useQuery({
+  const {
+    data: currentReport,
+    isLoading: currentLoading,
+    isError: currentError,
+    isFetching: currentFetching,
+    refetch: refetchCurrent,
+  } = useQuery({
     queryKey: ['cash-shift', 'current'],
     queryFn: () => cashShiftsApi.current().then((r) => r.data),
   });
 
-  const { data: history, isLoading: historyLoading } = useQuery({
+  const {
+    data: history,
+    isLoading: historyLoading,
+    isError: historyError,
+    isFetching: historyFetching,
+    refetch: refetchHistory,
+  } = useQuery({
     queryKey: ['cash-shift', 'list', page],
     queryFn: () => cashShiftsApi.list({ page, limit: HISTORY_LIMIT }).then((r) => r.data),
   });
 
-  const { data: selectedReport, isLoading: reportLoading } = useQuery({
+  const {
+    data: selectedReport,
+    isLoading: reportLoading,
+    isError: reportError,
+    isFetching: reportFetching,
+    refetch: refetchReport,
+  } = useQuery({
     queryKey: ['cash-shift', 'report', reportShiftId],
     queryFn: () => cashShiftsApi.report(reportShiftId as string).then((r) => r.data),
     enabled: !!reportShiftId,
@@ -266,158 +284,165 @@ export default function CashShiftPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="p-2 bg-primary-50 rounded-xl">
-          <Wallet className="w-6 h-6 text-primary-600" />
-        </div>
-        <h1 className="text-2xl font-bold text-gray-900">Кассовая смена</h1>
-      </div>
+      <PageHeader title="Кассовая смена" icon={Wallet} />
 
-      {/* Current shift */}
-      {currentLoading ? (
-        <LoadingSpinner />
-      ) : hasOpenShift && currentReport ? (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
-                <Unlock className="h-3 w-3" /> Смена открыта
-              </span>
-              <span className="text-sm text-gray-500">
-                {shift?.openedByName ? `${shift.openedByName} · ` : ''}
-                {shift ? formatDateTime(shift.openedAt) : ''}
-              </span>
-            </div>
-            <button onClick={() => setReportShiftId(currentReport.shift.id)} className="btn-ghost btn-sm">
-              <Receipt className="w-4 h-4" /> Подробный Z-отчёт
-            </button>
-          </div>
-
-          {/* Live Z-report cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
-            <StatCard
-              icon={Banknote}
-              label="Нал. выручка"
-              value={formatMoney(currentReport.cashSales)}
-              color="text-green-500"
-              valueColor="text-green-600"
-            />
-            <StatCard
-              icon={CreditCard}
-              label="Карта"
-              value={formatMoney(currentReport.cardSales)}
-              color="text-blue-500"
-              valueColor="text-blue-600"
-            />
-            <StatCard
-              icon={ArrowDownToLine}
-              label="Инкассация"
-              value={formatMoney(currentReport.collectionsTotal)}
-              color="text-amber-500"
-              valueColor="text-amber-600"
-            />
-            <StatCard
-              icon={Wallet}
-              label="Расходы"
-              value={formatMoney(currentReport.cashExpenses)}
-              color="text-rose-500"
-              valueColor="text-rose-600"
-            />
-            <StatCard
-              icon={Receipt}
-              label="Чеков"
-              value={String(currentReport.checksCount)}
-              color="text-gray-500"
-              valueColor="text-gray-900"
-            />
-            <StatCard
-              icon={Unlock}
-              label="Разменная"
-              value={formatMoney(currentReport.openingAmount)}
-              color="text-gray-500"
-              valueColor="text-gray-900"
-            />
-            <StatCard
-              icon={Scale}
-              label="Расчётный остаток"
-              value={formatMoney(currentReport.expectedAmount)}
-              color="text-primary-500"
-              valueColor="text-primary-700"
-            />
-            <StatCard
-              icon={TrendingUp}
-              label="Общая выручка"
-              value={formatMoney(currentReport.totalRevenue)}
-              color="text-indigo-500"
-              valueColor="text-indigo-700"
-            />
-          </div>
-
-          {/* Actions */}
-          {canManage ? (
-            <div className="flex flex-col sm:flex-row gap-3">
-              <button
-                onClick={() => {
-                  setCollectInput('');
-                  setNoteInput('');
-                  setCollectModal(true);
-                }}
-                className="btn-secondary flex-1 justify-center"
-              >
-                <ArrowDownToLine className="w-4 h-4" /> Инкассация
-              </button>
-              <button
-                onClick={() => {
-                  setClosingInput('');
-                  setNoteInput('');
-                  setCloseModal(true);
-                }}
-                className="btn-primary flex-1 justify-center"
-              >
-                <Lock className="w-4 h-4" /> Закрыть смену
+      {/* Current shift — a fetch FAILURE must show error+retry, never fall
+          through to «Открытая смена отсутствует» (which invites opening a
+          second shift while one may already be open on the server). */}
+      <QueryState
+        isLoading={currentLoading}
+        isError={currentError}
+        onRetry={refetchCurrent}
+        isFetching={currentFetching}
+        minHeight="min-h-[30vh]"
+      >
+        {hasOpenShift && currentReport ? (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="flex items-center gap-2">
+                <span className="inline-flex items-center gap-1 rounded-full bg-green-50 px-2.5 py-0.5 text-xs font-medium text-green-700">
+                  <Unlock className="h-3 w-3" /> Смена открыта
+                </span>
+                <span className="text-sm text-gray-500">
+                  {shift?.openedByName ? `${shift.openedByName} · ` : ''}
+                  {shift ? formatDateTime(shift.openedAt) : ''}
+                </span>
+              </div>
+              <button onClick={() => setReportShiftId(currentReport.shift.id)} className="btn-ghost btn-sm">
+                <Receipt className="w-4 h-4" /> Подробный Z-отчёт
               </button>
             </div>
-          ) : (
-            <p className="text-xs text-gray-400">Открытие и закрытие смены доступно директору и администратору.</p>
-          )}
-        </div>
-      ) : (
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center space-y-4">
-          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
-            <Lock className="h-6 w-6 text-gray-400" />
+
+            {/* Live Z-report cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
+              <StatCard
+                icon={Banknote}
+                label="Нал. выручка"
+                value={formatMoney(currentReport.cashSales)}
+                color="text-green-500"
+                valueColor="text-green-600"
+              />
+              <StatCard
+                icon={CreditCard}
+                label="Карта"
+                value={formatMoney(currentReport.cardSales)}
+                color="text-blue-500"
+                valueColor="text-blue-600"
+              />
+              <StatCard
+                icon={ArrowDownToLine}
+                label="Инкассация"
+                value={formatMoney(currentReport.collectionsTotal)}
+                color="text-amber-500"
+                valueColor="text-amber-600"
+              />
+              <StatCard
+                icon={Wallet}
+                label="Расходы"
+                value={formatMoney(currentReport.cashExpenses)}
+                color="text-rose-500"
+                valueColor="text-rose-600"
+              />
+              <StatCard
+                icon={Receipt}
+                label="Чеков"
+                value={String(currentReport.checksCount)}
+                color="text-gray-500"
+                valueColor="text-gray-900"
+              />
+              <StatCard
+                icon={Unlock}
+                label="Разменная"
+                value={formatMoney(currentReport.openingAmount)}
+                color="text-gray-500"
+                valueColor="text-gray-900"
+              />
+              <StatCard
+                icon={Scale}
+                label="Расчётный остаток"
+                value={formatMoney(currentReport.expectedAmount)}
+                color="text-primary-500"
+                valueColor="text-primary-700"
+              />
+              <StatCard
+                icon={TrendingUp}
+                label="Общая выручка"
+                value={formatMoney(currentReport.totalRevenue)}
+                color="text-indigo-500"
+                valueColor="text-indigo-700"
+              />
+            </div>
+
+            {/* Actions */}
+            {canManage ? (
+              <div className="flex flex-col sm:flex-row gap-3">
+                <button
+                  onClick={() => {
+                    setCollectInput('');
+                    setNoteInput('');
+                    setCollectModal(true);
+                  }}
+                  className="btn-secondary flex-1 justify-center"
+                >
+                  <ArrowDownToLine className="w-4 h-4" /> Инкассация
+                </button>
+                <button
+                  onClick={() => {
+                    setClosingInput('');
+                    setNoteInput('');
+                    setCloseModal(true);
+                  }}
+                  className="btn-primary flex-1 justify-center"
+                >
+                  <Lock className="w-4 h-4" /> Закрыть смену
+                </button>
+              </div>
+            ) : (
+              <p className="text-xs text-gray-400">Открытие и закрытие смены доступно директору и администратору.</p>
+            )}
           </div>
-          <div>
-            <p className="text-base font-semibold text-gray-900">Открытая смена отсутствует</p>
-            <p className="text-sm text-gray-500 mt-1">Откройте смену, чтобы вести Z-отчёт и инкассацию.</p>
+        ) : (
+          <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-8 text-center space-y-4">
+            <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-gray-100">
+              <Lock className="h-6 w-6 text-gray-400" />
+            </div>
+            <div>
+              <p className="text-base font-semibold text-gray-900">Открытая смена отсутствует</p>
+              <p className="text-sm text-gray-500 mt-1">Откройте смену, чтобы вести Z-отчёт и инкассацию.</p>
+            </div>
+            {canManage ? (
+              <button
+                onClick={() => {
+                  setOpeningInput('');
+                  setNoteInput('');
+                  setOpenModal(true);
+                }}
+                className="btn-primary mx-auto"
+              >
+                <Unlock className="w-4 h-4" /> Открыть смену
+              </button>
+            ) : (
+              <p className="text-xs text-gray-400">Открытие смены доступно директору и администратору.</p>
+            )}
           </div>
-          {canManage ? (
-            <button
-              onClick={() => {
-                setOpeningInput('');
-                setNoteInput('');
-                setOpenModal(true);
-              }}
-              className="btn-primary mx-auto"
-            >
-              <Unlock className="w-4 h-4" /> Открыть смену
-            </button>
-          ) : (
-            <p className="text-xs text-gray-400">Открытие смены доступно директору и администратору.</p>
-          )}
-        </div>
-      )}
+        )}
+      </QueryState>
 
       {/* History */}
       <div className="space-y-3">
         <h2 className="text-lg font-semibold text-gray-900">История смен</h2>
-        {historyLoading ? (
-          <LoadingSpinner />
-        ) : !history || history.data.length === 0 ? (
-          <EmptyState icon={Wallet} title="Нет смен" description="Закрытые смены появятся здесь" />
-        ) : (
+        <QueryState
+          isLoading={historyLoading}
+          isError={historyError}
+          onRetry={refetchHistory}
+          isFetching={historyFetching}
+          isEmpty={!history || history.data.length === 0}
+          empty={{ icon: Wallet, title: 'Нет смен', description: 'Закрытые смены появятся здесь' }}
+          minHeight="min-h-[30vh]"
+        >
           <>
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-100 overflow-hidden">
-              {history.data.map((s: CashShift) => {
+              {history?.data.map((s: CashShift) => {
                 const closed = s.status === 'closed';
                 const diff = s.difference;
                 return (
@@ -460,9 +485,14 @@ export default function CashShiftPage() {
                 );
               })}
             </div>
-            <Pagination page={page} total={history.total} limit={history.limit} onChange={setPage} />
+            <Pagination
+              page={page}
+              total={history?.total ?? 0}
+              limit={history?.limit ?? HISTORY_LIMIT}
+              onChange={setPage}
+            />
           </>
-        )}
+        </QueryState>
       </div>
 
       {/* ─── Open shift modal ─── */}
@@ -600,18 +630,25 @@ export default function CashShiftPage() {
 
       {/* ─── Z-report modal ─── */}
       <Modal isOpen={!!reportShiftId} onClose={() => setReportShiftId(null)} title="Z-отчёт" size="lg">
-        {reportLoading || !selectedReport ? (
-          <LoadingSpinner />
-        ) : (
-          <div className="space-y-4">
-            <div id="z-report-print">
-              <ZReportDocument report={selectedReport} />
+        <QueryState
+          isLoading={reportLoading || (!!reportShiftId && !selectedReport && !reportError)}
+          isError={reportError}
+          onRetry={refetchReport}
+          isFetching={reportFetching}
+          minHeight="min-h-[30vh]"
+          errorTitle="Не удалось загрузить Z-отчёт"
+        >
+          {selectedReport && (
+            <div className="space-y-4">
+              <div id="z-report-print">
+                <ZReportDocument report={selectedReport} />
+              </div>
+              <button onClick={() => window.print()} className="btn-secondary w-full justify-center print:hidden">
+                <Printer className="w-4 h-4" /> Печать
+              </button>
             </div>
-            <button onClick={() => window.print()} className="btn-secondary w-full justify-center print:hidden">
-              <Printer className="w-4 h-4" /> Печать
-            </button>
-          </div>
-        )}
+          )}
+        </QueryState>
       </Modal>
     </div>
   );

@@ -1121,7 +1121,7 @@ export default function CheckCreatePage() {
       {/* Header */}
       <div className="page-header mb-4">
         <div className="flex items-center gap-3">
-          <button onClick={() => navigate(-1)} className="btn-ghost btn-sm">
+          <button onClick={() => navigate(-1)} className="btn-ghost btn-sm" aria-label="Назад" title="Назад">
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="flex items-center gap-2">
@@ -1169,6 +1169,8 @@ export default function CheckCreatePage() {
                         type="button"
                         onClick={() => setEditingDate(true)}
                         className="p-0.5 rounded hover:bg-gray-700 transition-colors"
+                        aria-label="Изменить дату"
+                        title="Изменить дату"
                       >
                         <Pencil className="h-3 w-3 text-gray-500 hover:text-gray-300" />
                       </button>

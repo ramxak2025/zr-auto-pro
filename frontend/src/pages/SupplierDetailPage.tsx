@@ -27,7 +27,7 @@ import { ru } from 'date-fns/locale';
 import { suppliersApi, productsApi, stockMovementsApi, warehousesApi, warehouseCategoriesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
-import LoadingSpinner from '../components/LoadingSpinner';
+import InlineLoader from '../components/InlineLoader';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
 import {
@@ -286,6 +286,7 @@ export default function SupplierDetailPage() {
     isLoading,
     isError,
     error,
+    refetch,
   } = useQuery({
     queryKey: ['supplier', id],
     queryFn: () => suppliersApi.getById(id!),
@@ -667,7 +668,7 @@ export default function SupplierDetailPage() {
     });
   };
 
-  if (isLoading) return <LoadingSpinner />;
+  if (isLoading) return <InlineLoader minHeight="min-h-[60vh]" />;
 
   if (isError || !supplier) {
     const is404 = (error as any)?.response?.status === 404;
@@ -681,7 +682,7 @@ export default function SupplierDetailPage() {
           icon={Truck}
           title={is404 ? 'Поставщик не найден' : 'Ошибка загрузки'}
           description={is404 ? 'Возможно, он был удалён' : 'Проверьте подключение и попробуйте ещё раз'}
-          action={!is404 ? { label: 'Повторить', onClick: () => window.location.reload() } : undefined}
+          action={!is404 ? { label: 'Повторить', onClick: () => refetch() } : undefined}
         />
       </div>
     );
@@ -762,15 +763,15 @@ export default function SupplierDetailPage() {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="stat-card">
           <div className="stat-label">Закупки всего</div>
-          <div className="stat-value text-blue-600">{formatMoney(supplier.totalPurchases)}</div>
+          <div className="stat-value text-blue-600 tabular-nums">{formatMoney(supplier.totalPurchases)}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Оплачено</div>
-          <div className="stat-value text-green-600">{formatMoney(supplier.totalPaid)}</div>
+          <div className="stat-value text-green-600 tabular-nums">{formatMoney(supplier.totalPaid)}</div>
         </div>
         <div className="stat-card">
           <div className="stat-label">Текущий долг</div>
-          <div className={`stat-value ${supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'}`}>
+          <div className={`stat-value tabular-nums ${supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'}`}>
             {formatMoney(supplier.currentDebt)}
           </div>
         </div>
@@ -851,7 +852,9 @@ export default function SupplierDetailPage() {
                       {delivery.comment && <p className="text-xs text-gray-500 mt-1.5 truncate">{delivery.comment}</p>}
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <p className="text-base font-bold text-primary-600">{formatMoney(delivery.totalAmount)}</p>
+                      <p className="text-base font-bold text-primary-600 tabular-nums">
+                        {formatMoney(delivery.totalAmount)}
+                      </p>
                       <div className="mt-1">{statusBadge(delivery.paymentStatus)}</div>
                     </div>
                   </div>
@@ -896,7 +899,7 @@ export default function SupplierDetailPage() {
                       {payment.comment && <p className="text-xs text-gray-500 mt-1.5 truncate">{payment.comment}</p>}
                     </div>
                     <div className="text-right flex-shrink-0">
-                      <p className="text-base font-bold text-green-600">{formatMoney(payment.amount)}</p>
+                      <p className="text-base font-bold text-green-600 tabular-nums">{formatMoney(payment.amount)}</p>
                     </div>
                   </div>
                 </div>
@@ -947,7 +950,7 @@ export default function SupplierDetailPage() {
                         {m.reason && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{m.reason}</p>}
                       </div>
                       <div className="text-right flex-shrink-0">
-                        <p className="text-base font-bold text-rose-600">−{qty} шт</p>
+                        <p className="text-base font-bold text-rose-600 tabular-nums">−{qty} шт</p>
                       </div>
                     </div>
                   </div>

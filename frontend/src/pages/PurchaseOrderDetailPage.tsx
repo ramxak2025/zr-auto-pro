@@ -6,7 +6,8 @@ import toast from 'react-hot-toast';
 
 import { purchaseOrdersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import LoadingSpinner from '../components/LoadingSpinner';
+import InlineLoader from '../components/InlineLoader';
+import QueryState from '../components/QueryState';
 import EmptyState from '../components/EmptyState';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
@@ -27,7 +28,13 @@ export default function PurchaseOrderDetailPage() {
   const [deltas, setDeltas] = useState<Record<string, number>>({});
   const [cancelOpen, setCancelOpen] = useState(false);
 
-  const { data: po, isLoading } = useQuery({
+  const {
+    data: po,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['purchase-order', id],
     queryFn: () => purchaseOrdersApi.getById(id!),
     select: (res) => res.data as PurchaseOrder,
@@ -104,7 +111,16 @@ export default function PurchaseOrderDetailPage() {
     receiveMutation.mutate({ items: payloadItems });
   };
 
-  if (isLoading) return <LoadingSpinner />;
+  if (isLoading) return <InlineLoader minHeight="min-h-[60vh]" />;
+  // A network failure (or a 404 that threw) — offer an explicit, recoverable error
+  // instead of falling through to the "not found" empty state.
+  if (isError) {
+    return (
+      <QueryState isLoading={false} isError onRetry={refetch} isFetching={isFetching} minHeight="min-h-[60vh]">
+        <></>
+      </QueryState>
+    );
+  }
   if (!po) {
     return (
       <EmptyState
@@ -181,8 +197,8 @@ export default function PurchaseOrderDetailPage() {
             {items.map((it) => (
               <tr key={it.id}>
                 <td className="font-medium text-gray-900">{it.name}</td>
-                <td className="text-center text-gray-600">{it.quantity}</td>
-                <td className="text-center text-gray-600">{it.receivedQuantity}</td>
+                <td className="text-center text-gray-600 tabular-nums">{it.quantity}</td>
+                <td className="text-center text-gray-600 tabular-nums">{it.receivedQuantity}</td>
                 {receiveMode && (
                   <td className="text-center">
                     <input
@@ -203,15 +219,15 @@ export default function PurchaseOrderDetailPage() {
                     />
                   </td>
                 )}
-                <td className="text-right text-gray-600">{formatMoney(it.costPrice)}</td>
-                <td className="text-right font-medium text-gray-900">{formatMoney(it.total)}</td>
+                <td className="text-right text-gray-600 tabular-nums">{formatMoney(it.costPrice)}</td>
+                <td className="text-right font-medium text-gray-900 tabular-nums">{formatMoney(it.total)}</td>
               </tr>
             ))}
           </tbody>
         </table>
         <div className="flex items-center justify-between px-4 py-3 border-t border-gray-100 bg-gray-50">
           <span className="text-sm font-medium text-gray-600">Итого</span>
-          <span className="text-lg font-bold text-gray-900">{formatMoney(po.total)}</span>
+          <span className="text-lg font-bold text-gray-900 tabular-nums">{formatMoney(po.total)}</span>
         </div>
       </div>
 

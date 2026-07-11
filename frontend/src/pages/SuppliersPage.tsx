@@ -8,12 +8,17 @@ import { suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import SearchInput from '../components/SearchInput';
 import Modal from '../components/Modal';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
 import Pagination from '../components/Pagination';
 import PhoneInput from '../components/PhoneInput';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
+import { useClickableRow } from '../hooks/useClickableRow';
 import { Supplier, PaginatedResponse, UserRole } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
+
+// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
+// us apply it per-row inside `.map()` without tripping rules-of-hooks.
+const clickableRowProps = useClickableRow;
 
 interface SupplierFormData {
   name: string;
@@ -47,7 +52,7 @@ export default function SuppliersPage() {
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [form, setForm] = useState<SupplierFormData>(emptyForm);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['suppliers', search, page],
     queryFn: () => suppliersApi.getAll({ search, page, limit }),
     select: (res) => res.data as PaginatedResponse<Supplier>,
@@ -120,15 +125,18 @@ export default function SuppliersPage() {
   return (
     <div>
       {/* Header */}
-      <div className="page-header">
-        <h1 className="page-title">Поставщики</h1>
-        {canManage && (
-          <button onClick={openCreateModal} className="btn-primary">
-            <Plus className="w-4 h-4" />
-            Новый поставщик
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title="Поставщики"
+        icon={Truck}
+        actions={
+          canManage ? (
+            <button onClick={openCreateModal} className="btn-primary">
+              <Plus className="w-4 h-4" />
+              Новый поставщик
+            </button>
+          ) : undefined
+        }
+      />
 
       {/* Search */}
       <div className="mb-4 max-w-md">
@@ -147,37 +155,43 @@ export default function SuppliersPage() {
         <div className="grid grid-cols-3 gap-2.5 mb-4">
           <div className="rounded-xl bg-primary-50 p-3">
             <p className="text-[10px] font-semibold text-primary-500 uppercase tracking-wider">Поставщиков</p>
-            <p className="text-base sm:text-lg font-bold text-primary-700 mt-0.5">{total}</p>
+            <p className="text-base sm:text-lg font-bold text-primary-700 mt-0.5 tabular-nums">{total}</p>
           </div>
           <div className="rounded-xl bg-red-50 p-3">
             <p className="text-[10px] font-semibold text-red-500 uppercase tracking-wider">Общий долг</p>
-            <p className="text-base sm:text-lg font-bold text-red-700 mt-0.5">{formatMoney(totalDebt)}</p>
+            <p className="text-base sm:text-lg font-bold text-red-700 mt-0.5 tabular-nums">{formatMoney(totalDebt)}</p>
           </div>
           <div className="rounded-xl bg-gray-50 p-3">
             <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Оборот закупок</p>
-            <p className="text-base sm:text-lg font-bold text-gray-700 mt-0.5">{formatMoney(totalPurchasesSum)}</p>
+            <p className="text-base sm:text-lg font-bold text-gray-700 mt-0.5 tabular-nums">
+              {formatMoney(totalPurchasesSum)}
+            </p>
           </div>
         </div>
       )}
 
       {/* Table */}
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : suppliers.length === 0 ? (
-        <EmptyState
-          icon={Truck}
-          title="Нет поставщиков"
-          description="Добавьте первого поставщика для учета закупок"
-          action={canManage ? { label: 'Новый поставщик', onClick: openCreateModal } : undefined}
-        />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={() => refetch()}
+        isFetching={isFetching}
+        isEmpty={suppliers.length === 0}
+        empty={{
+          icon: Truck,
+          title: 'Нет поставщиков',
+          description: 'Добавьте первого поставщика для учета закупок',
+          action: canManage ? { label: 'Новый поставщик', onClick: openCreateModal } : undefined,
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <>
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
             {suppliers.map((supplier) => (
               <div
                 key={supplier.id}
-                onClick={() => navigate(`/suppliers/${supplier.id}`)}
+                {...clickableRowProps(() => navigate(`/suppliers/${supplier.id}`), { label: supplier.name })}
                 className={`rounded-xl border shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer ${
                   supplier.isSystem ? 'bg-primary-50/30 border-primary-200' : 'bg-white border-gray-100'
                 }`}
@@ -231,8 +245,8 @@ export default function SuppliersPage() {
                 {suppliers.map((supplier) => (
                   <tr
                     key={supplier.id}
+                    {...clickableRowProps(() => navigate(`/suppliers/${supplier.id}`), { label: supplier.name })}
                     className={`cursor-pointer hover:bg-gray-50 ${supplier.isSystem ? 'bg-primary-50/30' : ''}`}
-                    onClick={() => navigate(`/suppliers/${supplier.id}`)}
                   >
                     <td className="font-medium text-gray-900">
                       <div className="flex items-center gap-3">
@@ -259,10 +273,10 @@ export default function SuppliersPage() {
                         : supplier.contactPerson || '\u2014'}
                     </td>
                     <td className="text-gray-600">{supplier.isSystem ? '\u2014' : supplier.phone || '\u2014'}</td>
-                    <td className="text-right text-gray-900">{formatMoney(supplier.totalPurchases)}</td>
-                    <td className="text-right text-gray-900">{formatMoney(supplier.totalPaid)}</td>
+                    <td className="text-right text-gray-900 tabular-nums">{formatMoney(supplier.totalPurchases)}</td>
+                    <td className="text-right text-gray-900 tabular-nums">{formatMoney(supplier.totalPaid)}</td>
                     <td
-                      className={`text-right font-medium ${
+                      className={`text-right font-medium tabular-nums ${
                         supplier.currentDebt > 0 ? 'text-red-600' : 'text-gray-900'
                       }`}
                     >
@@ -283,7 +297,7 @@ export default function SuppliersPage() {
 
           <Pagination page={page} total={total} limit={limit} onChange={setPage} />
         </>
-      )}
+      </QueryState>
 
       {/* Create / Edit Modal */}
       <Modal

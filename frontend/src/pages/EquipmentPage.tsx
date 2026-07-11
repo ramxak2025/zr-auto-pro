@@ -25,6 +25,8 @@ import toast from 'react-hot-toast';
 import { equipmentApi, usersApi, uploadsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
 import { formatMoney } from '../../../shared/utils/formatters';
 import type { User as UserType } from '../types';
 
@@ -40,6 +42,9 @@ function PhotoViewer({ url, onClose }: { url: string; onClose: () => void }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80" onClick={onClose}>
       <button
+        type="button"
+        aria-label="Закрыть"
+        title="Закрыть"
         onClick={onClose}
         className="absolute top-4 right-4 p-2 rounded-full bg-white/20 text-white hover:bg-white/40"
       >
@@ -145,7 +150,13 @@ function EmployeeDetail({
               className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm"
             >
               {item.photo ? (
-                <button onClick={() => setPhotoUrl(item.photo)} className="flex-shrink-0 group relative">
+                <button
+                  type="button"
+                  aria-label="Открыть фото"
+                  title="Открыть фото"
+                  onClick={() => setPhotoUrl(item.photo)}
+                  className="flex-shrink-0 group relative"
+                >
                   <img src={item.photo} alt="" className="h-14 w-14 rounded-lg object-cover" />
                   <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-lg flex items-center justify-center transition-all">
                     <Eye className="h-4 w-4 text-white opacity-0 group-hover:opacity-100" />
@@ -158,7 +169,7 @@ function EmployeeDetail({
               )}
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-semibold text-gray-900 truncate">{item.name}</p>
-                <p className="text-xs font-medium text-primary-600">{formatMoney(item.cost)}</p>
+                <p className="text-xs font-medium text-primary-600 tabular-nums">{formatMoney(item.cost)}</p>
                 {item.serviceLifeMonths && (
                   <p className={`text-[10px] mt-0.5 ${expired ? 'text-orange-600 font-medium' : 'text-gray-400'}`}>
                     <Clock className="inline h-3 w-3 mr-0.5" />
@@ -169,15 +180,19 @@ function EmployeeDetail({
               {canEdit && (
                 <div className="flex gap-1 flex-shrink-0">
                   <button
+                    type="button"
                     onClick={() => returnMutation.mutate(item.id)}
-                    className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-400"
+                    className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-500"
+                    aria-label="Вернуть на склад"
                     title="На склад"
                   >
                     <RotateCcw className="h-3.5 w-3.5" />
                   </button>
                   <button
+                    type="button"
                     onClick={() => trashMutation.mutate(item.id)}
-                    className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"
+                    className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"
+                    aria-label="Списать"
                     title="Списать"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
@@ -212,7 +227,7 @@ function EmployeeDetail({
             <h2 className="text-lg font-bold text-gray-900">{userName}</h2>
             <div className="flex items-center gap-4 mt-1">
               <span className="text-sm text-gray-500">{activeItems.length} предметов</span>
-              <span className="text-sm font-bold text-primary-600">{formatMoney(totalCost)}</span>
+              <span className="text-sm font-bold text-primary-600 tabular-nums">{formatMoney(totalCost)}</span>
             </div>
           </div>
           {canEdit && (
@@ -549,8 +564,14 @@ function StorageTab() {
                 className="flex items-center gap-3 p-3 bg-white rounded-xl border border-gray-100 shadow-sm hover:shadow-md transition-shadow"
               >
                 {item.photo ? (
-                  <button onClick={() => setPhotoUrl(item.photo)} className="flex-shrink-0 group relative">
-                    <img src={item.photo} className="h-14 w-14 rounded-lg object-cover" />
+                  <button
+                    type="button"
+                    aria-label="Открыть фото"
+                    title="Открыть фото"
+                    onClick={() => setPhotoUrl(item.photo)}
+                    className="flex-shrink-0 group relative"
+                  >
+                    <img src={item.photo} alt="" className="h-14 w-14 rounded-lg object-cover" />
                     <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 rounded-lg flex items-center justify-center transition-all">
                       <Eye className="h-4 w-4 text-white opacity-0 group-hover:opacity-100" />
                     </div>
@@ -563,7 +584,7 @@ function StorageTab() {
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-semibold text-gray-900 truncate">{item.name}</p>
                   <div className="flex items-center gap-3 text-xs mt-0.5">
-                    <span className="text-emerald-600 font-bold">{formatMoney(item.purchasePrice)}</span>
+                    <span className="text-emerald-600 font-bold tabular-nums">{formatMoney(item.purchasePrice)}</span>
                     <span className="text-gray-400">
                       В наличии: {item.quantity} {item.unit}
                     </span>
@@ -576,8 +597,11 @@ function StorageTab() {
                   )}
                 </div>
                 <button
+                  type="button"
+                  aria-label={`Удалить ${item.name}`}
+                  title="Удалить"
                   onClick={() => removeItemMut.mutate(item.id)}
-                  className="p-2 rounded-lg hover:bg-red-50 text-red-300 hover:text-red-500 transition-colors"
+                  className="p-2 rounded-lg hover:bg-red-50 text-red-400 hover:text-red-600 transition-colors"
                 >
                   <Trash2 className="h-4 w-4" />
                 </button>
@@ -733,15 +757,19 @@ function TrashTab() {
               </p>
             </div>
             <button
+              type="button"
               onClick={() => restoreMut.mutate(item.id)}
               className="p-1.5 rounded-lg hover:bg-green-50 text-green-500"
+              aria-label="Восстановить"
               title="Восстановить"
             >
               <RotateCcw className="h-4 w-4" />
             </button>
             <button
+              type="button"
               onClick={() => deleteMut.mutate(item.id)}
-              className="p-1.5 rounded-lg hover:bg-red-50 text-red-400"
+              className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"
+              aria-label="Удалить навсегда"
               title="Удалить навсегда"
             >
               <X className="h-4 w-4" />
@@ -763,7 +791,13 @@ export default function EquipmentPage() {
   const canEdit = isRole('director' as any, 'admin' as any, 'superadmin' as any) || hasPermission('equipment_manage');
   const isMaster = user?.role === 'master';
 
-  const { data: summary = [] } = useQuery({
+  const {
+    data: summary = [],
+    isLoading: summaryLoading,
+    isError: summaryError,
+    refetch: refetchSummary,
+    isFetching: summaryFetching,
+  } = useQuery({
     queryKey: ['equipment-summary'],
     queryFn: async () => {
       const res = await equipmentApi.getSummary();
@@ -772,7 +806,13 @@ export default function EquipmentPage() {
     enabled: !isMaster,
   });
 
-  const { data: myEquipment } = useQuery({
+  const {
+    data: myEquipment,
+    isLoading: myLoading,
+    isError: myError,
+    refetch: refetchMy,
+    isFetching: myFetching,
+  } = useQuery({
     queryKey: ['equipment-my'],
     queryFn: async () => {
       const res = await equipmentApi.getMyEquipment();
@@ -787,37 +827,41 @@ export default function EquipmentPage() {
     const total = items.reduce((s: number, i: any) => s + i.cost, 0);
     return (
       <div className="space-y-5">
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">Моё имущество</h1>
-          <p className="text-xs text-gray-400">
-            {items.length} предметов на {formatMoney(total)}
-          </p>
-        </div>
-        {items.length === 0 ? (
-          <div className="text-center py-12">
-            <Package className="h-10 w-10 text-gray-200 mx-auto mb-3" />
-            <p className="text-sm text-gray-400">Нет выданного имущества</p>
-          </div>
-        ) : (
-          items.map((item: any) => (
-            <div
-              key={item.id}
-              className="flex items-center gap-3 p-4 bg-white rounded-xl border border-gray-100 shadow-sm"
-            >
-              {item.photo ? (
-                <img src={item.photo} className="h-14 w-14 rounded-lg object-cover" />
-              ) : (
-                <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-gray-50">
-                  <Package className="h-6 w-6 text-gray-200" />
+        <PageHeader
+          title="Моё имущество"
+          icon={Package}
+          subtitle={`${items.length} предметов на ${formatMoney(total)}`}
+        />
+        <QueryState
+          isLoading={myLoading}
+          isError={myError}
+          onRetry={refetchMy}
+          isFetching={myFetching}
+          isEmpty={items.length === 0}
+          empty={{ icon: Package, title: 'Нет выданного имущества' }}
+          minHeight="min-h-[40vh]"
+        >
+          <div className="space-y-3">
+            {items.map((item: any) => (
+              <div
+                key={item.id}
+                className="flex items-center gap-3 p-4 bg-white rounded-xl border border-gray-100 shadow-sm"
+              >
+                {item.photo ? (
+                  <img src={item.photo} alt="" className="h-14 w-14 rounded-lg object-cover" />
+                ) : (
+                  <div className="flex h-14 w-14 items-center justify-center rounded-lg bg-gray-50">
+                    <Package className="h-6 w-6 text-gray-200" />
+                  </div>
+                )}
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-gray-900">{item.name}</p>
+                  <p className="text-xs text-primary-600 font-medium tabular-nums">{formatMoney(item.cost)}</p>
                 </div>
-              )}
-              <div className="flex-1">
-                <p className="text-sm font-semibold text-gray-900">{item.name}</p>
-                <p className="text-xs text-primary-600 font-medium">{formatMoney(item.cost)}</p>
               </div>
-            </div>
-          ))
-        )}
+            ))}
+          </div>
+        </QueryState>
       </div>
     );
   }
@@ -843,7 +887,7 @@ export default function EquipmentPage() {
 
   return (
     <div className="space-y-5">
-      <h1 className="text-xl font-bold text-gray-900">Имущество</h1>
+      <PageHeader title="Имущество" icon={Package} />
 
       {/* Tabs */}
       <div className="flex gap-1 bg-gray-100 rounded-xl p-1">
@@ -860,51 +904,65 @@ export default function EquipmentPage() {
       </div>
 
       {tab === 'employees' && (
-        <div className="space-y-3">
-          {summary.map((emp: any) => (
-            <button
-              key={emp.userId}
-              onClick={() => setSelectedEmployee(emp)}
-              className="w-full flex items-center gap-4 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm hover:border-primary-200 hover:shadow-md transition-all text-left"
-            >
-              {emp.avatar ? (
-                <img src={emp.avatar} alt="" className="h-12 w-12 rounded-full object-cover border-2 border-gray-100" />
-              ) : (
-                <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-100 text-primary-700 font-bold">
-                  {emp.fullName?.charAt(0)}
+        <QueryState
+          isLoading={summaryLoading}
+          isError={summaryError}
+          onRetry={refetchSummary}
+          isFetching={summaryFetching}
+          isEmpty={summary.length === 0}
+          empty={{ icon: Users, title: 'Нет сотрудников', description: 'Имущество появится после выдачи сотрудникам' }}
+          minHeight="min-h-[40vh]"
+        >
+          <div className="space-y-3">
+            {summary.map((emp: any) => (
+              <button
+                key={emp.userId}
+                onClick={() => setSelectedEmployee(emp)}
+                className="w-full flex items-center gap-4 p-4 bg-white rounded-2xl border border-gray-100 shadow-sm hover:border-primary-200 hover:shadow-md transition-all text-left"
+              >
+                {emp.avatar ? (
+                  <img
+                    src={emp.avatar}
+                    alt=""
+                    className="h-12 w-12 rounded-full object-cover border-2 border-gray-100"
+                  />
+                ) : (
+                  <div className="flex h-12 w-12 items-center justify-center rounded-full bg-primary-100 text-primary-700 font-bold">
+                    {emp.fullName?.charAt(0)}
+                  </div>
+                )}
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-900">{emp.fullName}</p>
+                  <div className="flex items-center gap-3 mt-0.5 flex-wrap">
+                    {emp.toolsCount > 0 && (
+                      <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full">
+                        <Wrench className="inline h-3 w-3 mr-0.5" />
+                        {emp.toolsCount}
+                      </span>
+                    )}
+                    {emp.uniformCount > 0 && (
+                      <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded-full">
+                        <Shirt className="inline h-3 w-3 mr-0.5" />
+                        {emp.uniformCount}
+                      </span>
+                    )}
+                    {emp.expiredCount > 0 && (
+                      <span className="text-[10px] text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded-full">
+                        <AlertTriangle className="inline h-3 w-3 mr-0.5" />
+                        {emp.expiredCount}
+                      </span>
+                    )}
+                  </div>
                 </div>
-              )}
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-semibold text-gray-900">{emp.fullName}</p>
-                <div className="flex items-center gap-3 mt-0.5 flex-wrap">
-                  {emp.toolsCount > 0 && (
-                    <span className="text-[10px] text-blue-600 bg-blue-50 px-1.5 py-0.5 rounded-full">
-                      <Wrench className="inline h-3 w-3 mr-0.5" />
-                      {emp.toolsCount}
-                    </span>
-                  )}
-                  {emp.uniformCount > 0 && (
-                    <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded-full">
-                      <Shirt className="inline h-3 w-3 mr-0.5" />
-                      {emp.uniformCount}
-                    </span>
-                  )}
-                  {emp.expiredCount > 0 && (
-                    <span className="text-[10px] text-orange-600 bg-orange-50 px-1.5 py-0.5 rounded-full">
-                      <AlertTriangle className="inline h-3 w-3 mr-0.5" />
-                      {emp.expiredCount}
-                    </span>
-                  )}
+                <div className="text-right flex-shrink-0">
+                  <p className="text-sm font-bold text-primary-600 tabular-nums">{formatMoney(emp.totalCost)}</p>
+                  <p className="text-[10px] text-gray-500">{emp.activeCount} предм.</p>
                 </div>
-              </div>
-              <div className="text-right flex-shrink-0">
-                <p className="text-sm font-bold text-primary-600">{formatMoney(emp.totalCost)}</p>
-                <p className="text-[10px] text-gray-400">{emp.activeCount} предм.</p>
-              </div>
-              <ChevronRight className="h-5 w-5 text-gray-300 flex-shrink-0" />
-            </button>
-          ))}
-        </div>
+                <ChevronRight className="h-5 w-5 text-gray-300 flex-shrink-0" />
+              </button>
+            ))}
+          </div>
+        </QueryState>
       )}
 
       {tab === 'storage' && <StorageTab />}

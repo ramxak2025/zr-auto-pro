@@ -16,10 +16,11 @@ import {
 import toast from 'react-hot-toast';
 import { installmentsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import { useClickableRow } from '../hooks/useClickableRow';
 import { dueLabel } from '../components/InstallmentsWidget';
 import { UserRole } from '../types';
 import type { InstallmentPlan, InstallmentClientLedger, InstallmentReminderSettings } from '../types';
@@ -52,6 +53,10 @@ function fmtDateTime(d?: string | null): string {
   return `${dd}.${mm}.${yy} ${hh}:${mi}`;
 }
 
+// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
+// us spread it inside a `.map()` without tripping react-hooks/rules-of-hooks.
+const clickableRowProps = useClickableRow;
+
 function StatusBadge({ plan }: { plan: InstallmentPlan }) {
   if (plan.status === 'closed') return <span className="badge-green">Закрыта</span>;
   if (plan.overdue) return <span className="badge-red">Просрочена</span>;
@@ -71,7 +76,7 @@ export default function InstallmentsPage() {
   const [selected, setSelected] = useState<InstallmentPlan | null>(null);
   const [remindersOpen, setRemindersOpen] = useState(false);
 
-  const { data, isLoading, isError } = useQuery<InstallmentPlan[]>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<InstallmentPlan[]>({
     queryKey: ['installments', 'list', segment],
     queryFn: async () => {
       const res = await installmentsApi.list({ status: segment });
@@ -90,32 +95,34 @@ export default function InstallmentsPage() {
   return (
     <div>
       {/* Header */}
-      <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h1 className="page-title">Рассрочка</h1>
-          <p className="mt-0.5 text-sm text-gray-500">Заказ-наряды, проданные в рассрочку, и график платежей</p>
-        </div>
-        {canManage && (
-          <button type="button" onClick={() => setRemindersOpen(true)} className="btn-secondary btn-sm">
-            <Bell className="h-4 w-4" />
-            Напоминания
-          </button>
-        )}
-      </div>
+      <PageHeader
+        className="mb-6"
+        title="Рассрочка"
+        icon={CreditCard}
+        subtitle="Заказ-наряды, проданные в рассрочку, и график платежей"
+        actions={
+          canManage ? (
+            <button type="button" onClick={() => setRemindersOpen(true)} className="btn-secondary btn-sm">
+              <Bell className="h-4 w-4" />
+              Напоминания
+            </button>
+          ) : undefined
+        }
+      />
 
       {/* Summary cards */}
       <div className="mb-5 grid grid-cols-1 gap-3 sm:grid-cols-3">
         <div className="card card-body">
           <p className="stat-label">Остаток к оплате</p>
-          <p className="stat-value">{formatMoney(totals.remaining)}</p>
+          <p className="stat-value tabular-nums">{formatMoney(totals.remaining)}</p>
         </div>
         <div className="card card-body">
           <p className="stat-label">Просроченных</p>
-          <p className={`stat-value ${totals.overdue > 0 ? 'text-red-600' : ''}`}>{totals.overdue}</p>
+          <p className={`stat-value tabular-nums ${totals.overdue > 0 ? 'text-red-600' : ''}`}>{totals.overdue}</p>
         </div>
         <div className="card card-body">
           <p className="stat-label">Всего в разделе</p>
-          <p className="stat-value">{totals.count}</p>
+          <p className="stat-value tabular-nums">{totals.count}</p>
         </div>
       </div>
 
@@ -135,21 +142,20 @@ export default function InstallmentsPage() {
         ))}
       </div>
 
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : isError ? (
-        <EmptyState
-          icon={CreditCard}
-          title="Не удалось загрузить рассрочки"
-          description="Попробуйте обновить страницу"
-        />
-      ) : plans.length === 0 ? (
-        <EmptyState
-          icon={CreditCard}
-          title={segment === 'closed' ? 'Закрытых рассрочек нет' : 'Активных рассрочек нет'}
-          description="Рассрочка создаётся при продаже заказ-наряда со способом оплаты «Рассрочка»"
-        />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        errorTitle="Не удалось загрузить рассрочки"
+        isEmpty={plans.length === 0}
+        empty={{
+          icon: CreditCard,
+          title: segment === 'closed' ? 'Закрытых рассрочек нет' : 'Активных рассрочек нет',
+          description: 'Рассрочка создаётся при продаже заказ-наряда со способом оплаты «Рассрочка»',
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <>
           {/* Desktop / tablet table */}
           <div className="table-container hidden md:block">
@@ -170,15 +176,19 @@ export default function InstallmentsPage() {
                 {plans.map((p) => {
                   const due = dueLabel(p.dueInDays);
                   return (
-                    <tr key={p.id} onClick={() => setSelected(p)} className="cursor-pointer">
+                    <tr
+                      key={p.id}
+                      {...clickableRowProps(() => setSelected(p), { label: `Рассрочка · ${p.clientName || 'Клиент'}` })}
+                      className="cursor-pointer"
+                    >
                       <td>
                         <p className="font-medium text-gray-900">{p.clientName || 'Клиент'}</p>
-                        {p.clientPhone && <p className="mt-0.5 text-xs text-gray-400">{formatPhone(p.clientPhone)}</p>}
+                        {p.clientPhone && <p className="mt-0.5 text-xs text-gray-500">{formatPhone(p.clientPhone)}</p>}
                       </td>
                       <td className="text-gray-600">{p.checkNumber ? `#${p.checkNumber}` : '—'}</td>
-                      <td className="text-right text-gray-700">{formatMoney(p.total)}</td>
-                      <td className="text-right text-gray-700">{formatMoney(p.paid)}</td>
-                      <td className="whitespace-nowrap text-right font-bold text-gray-900">
+                      <td className="text-right text-gray-700 tabular-nums">{formatMoney(p.total)}</td>
+                      <td className="text-right text-gray-700 tabular-nums">{formatMoney(p.paid)}</td>
+                      <td className="whitespace-nowrap text-right font-bold text-gray-900 tabular-nums">
                         {formatMoney(p.remaining)}
                       </td>
                       <td>
@@ -190,10 +200,10 @@ export default function InstallmentsPage() {
                             <span
                               className={`ml-1.5 text-xs ${
                                 due.tone === 'red'
-                                  ? 'text-red-500'
+                                  ? 'text-red-600'
                                   : due.tone === 'amber'
                                     ? 'text-amber-600'
-                                    : 'text-gray-400'
+                                    : 'text-gray-500'
                               }`}
                             >
                               {due.text}
@@ -240,7 +250,7 @@ export default function InstallmentsPage() {
                       </div>
                       <div className="min-w-0">
                         <p className="truncate text-sm font-semibold text-gray-900">{p.clientName || 'Клиент'}</p>
-                        <p className="text-xs text-gray-400">
+                        <p className="text-xs text-gray-500">
                           {p.checkNumber ? `Заказ-наряд #${p.checkNumber}` : 'Без заказ-наряда'}
                         </p>
                       </div>
@@ -250,14 +260,14 @@ export default function InstallmentsPage() {
                   <div className="mt-3 flex items-end justify-between">
                     <div className="text-xs text-gray-500">
                       {p.status !== 'closed' && (
-                        <span className={due.tone === 'red' ? 'text-red-500' : undefined}>
+                        <span className={due.tone === 'red' ? 'text-red-600' : undefined}>
                           {fmtDate(p.nextPaymentDate)} · {due.text}
                         </span>
                       )}
                     </div>
                     <div className="text-right">
-                      <p className="text-[11px] text-gray-400">Остаток</p>
-                      <p className="text-base font-bold text-gray-900">{formatMoney(p.remaining)}</p>
+                      <p className="text-[11px] text-gray-500">Остаток</p>
+                      <p className="text-base font-bold text-gray-900 tabular-nums">{formatMoney(p.remaining)}</p>
                     </div>
                   </div>
                 </button>
@@ -265,7 +275,7 @@ export default function InstallmentsPage() {
             })}
           </div>
         </>
-      )}
+      </QueryState>
 
       <InstallmentDetailModal
         plan={selected}
@@ -403,15 +413,15 @@ function InstallmentDetailModal({
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-xl bg-gray-50 p-3 text-center">
             <p className="text-[11px] text-gray-500">Сумма</p>
-            <p className="mt-0.5 text-sm font-bold text-gray-900">{formatMoney(plan.total)}</p>
+            <p className="mt-0.5 text-sm font-bold text-gray-900 tabular-nums">{formatMoney(plan.total)}</p>
           </div>
           <div className="rounded-xl bg-green-50 p-3 text-center">
             <p className="text-[11px] text-gray-500">Внесено</p>
-            <p className="mt-0.5 text-sm font-bold text-green-700">{formatMoney(plan.paid)}</p>
+            <p className="mt-0.5 text-sm font-bold text-green-700 tabular-nums">{formatMoney(plan.paid)}</p>
           </div>
           <div className="rounded-xl bg-rose-50 p-3 text-center">
             <p className="text-[11px] text-gray-500">Остаток</p>
-            <p className="mt-0.5 text-sm font-bold text-rose-700">{formatMoney(plan.remaining)}</p>
+            <p className="mt-0.5 text-sm font-bold text-rose-700 tabular-nums">{formatMoney(plan.remaining)}</p>
           </div>
         </div>
 
@@ -559,8 +569,8 @@ function InstallmentDetailModal({
                     <CheckCircle2 className="h-4 w-4 text-green-600" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-900">{formatMoney(pm.amount)}</p>
-                    <p className="text-xs text-gray-400">
+                    <p className="text-sm font-medium text-gray-900 tabular-nums">{formatMoney(pm.amount)}</p>
+                    <p className="text-xs text-gray-500">
                       {fmtDateTime(pm.paidAt)}
                       {pm.createdByName ? ` · ${pm.createdByName}` : ''}
                       {pm.comment ? ` · ${pm.comment}` : ''}

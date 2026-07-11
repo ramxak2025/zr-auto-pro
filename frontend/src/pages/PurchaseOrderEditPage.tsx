@@ -6,7 +6,7 @@ import toast from 'react-hot-toast';
 
 import { purchaseOrdersApi, suppliersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import LoadingSpinner from '../components/LoadingSpinner';
+import InlineLoader from '../components/InlineLoader';
 import Modal from '../components/Modal';
 import { UserRole } from '../types';
 import type { PurchaseOrder, PaginatedResponse, Supplier, Product, PurchaseOrderSuggestionGroup } from '../types';
@@ -197,7 +197,7 @@ export default function PurchaseOrderEditPage() {
   };
 
   if (isEdit && loadingExisting) {
-    return <LoadingSpinner />;
+    return <InlineLoader minHeight="min-h-[60vh]" />;
   }
 
   return (
@@ -260,7 +260,7 @@ export default function PurchaseOrderEditPage() {
         </div>
 
         {items.length === 0 ? (
-          <div className="text-center py-8 text-gray-400">
+          <div className="text-center py-8 text-gray-500">
             <Package className="w-10 h-10 mx-auto mb-2 opacity-50" />
             <p className="text-sm">Нет товаров в заказе</p>
           </div>
@@ -287,7 +287,8 @@ export default function PurchaseOrderEditPage() {
                       min={0}
                       step="any"
                       inputMode="decimal"
-                      className="input"
+                      className="input tabular-nums"
+                      aria-label={`Количество — ${it.name}`}
                       value={it.quantity}
                       onChange={(e) => updateLine(idx, { quantity: e.target.valueAsNumber || 0 })}
                     />
@@ -299,14 +300,15 @@ export default function PurchaseOrderEditPage() {
                       min={0}
                       step="any"
                       inputMode="decimal"
-                      className="input"
+                      className="input tabular-nums"
+                      aria-label={`Цена закупки — ${it.name}`}
                       value={it.costPrice}
                       onChange={(e) => updateLine(idx, { costPrice: e.target.valueAsNumber || 0 })}
                     />
                   </div>
                   <div className="flex-1 text-right">
-                    <p className="text-xs text-gray-400 mb-1">Сумма</p>
-                    <p className="text-sm font-semibold text-gray-900">
+                    <p className="text-xs text-gray-500 mb-1">Сумма</p>
+                    <p className="text-sm font-semibold text-gray-900 tabular-nums">
                       {formatMoney((Number(it.quantity) || 0) * (Number(it.costPrice) || 0))}
                     </p>
                   </div>
@@ -319,7 +321,7 @@ export default function PurchaseOrderEditPage() {
         {items.length > 0 && (
           <div className="flex items-center justify-between border-t border-gray-100 pt-3">
             <span className="text-sm font-medium text-gray-600">Итого</span>
-            <span className="text-lg font-bold text-gray-900">{formatMoney(total)}</span>
+            <span className="text-lg font-bold text-gray-900 tabular-nums">{formatMoney(total)}</span>
           </div>
         )}
       </div>
@@ -396,7 +398,7 @@ function ProductPickerModal({ isOpen, onClose, products, selectedIds, onSelect }
 
         <div className="max-h-[55vh] overflow-y-auto -mx-1 px-1 space-y-1.5">
           {results.length === 0 ? (
-            <div className="text-center py-10 text-gray-400">
+            <div className="text-center py-10 text-gray-500">
               <Package className="w-10 h-10 mx-auto mb-2 opacity-50" />
               <p className="text-sm">Ничего не найдено</p>
             </div>
@@ -417,7 +419,7 @@ function ProductPickerModal({ isOpen, onClose, products, selectedIds, onSelect }
                 >
                   <div className="min-w-0">
                     <p className="text-sm font-medium text-gray-900 truncate">{p.name}</p>
-                    <p className="text-xs text-gray-500">
+                    <p className="text-xs text-gray-500 tabular-nums">
                       Остаток: {p.stock} {p.unit || 'шт'} · закупка {formatMoney(p.costPrice)}
                     </p>
                   </div>
@@ -456,9 +458,9 @@ function SuggestionsModal({ isOpen, onClose, onApply }: SuggestionsModalProps) {
   return (
     <Modal isOpen={isOpen} onClose={onClose} title="Дозаказ по дефициту" size="lg">
       {isLoading ? (
-        <LoadingSpinner />
+        <InlineLoader />
       ) : !groups || groups.length === 0 ? (
-        <div className="text-center py-10 text-gray-400">
+        <div className="text-center py-10 text-gray-500">
           <Sparkles className="w-10 h-10 mx-auto mb-2 opacity-50" />
           <p className="text-sm">Нет товаров ниже минимального остатка</p>
         </div>
@@ -476,7 +478,7 @@ function SuggestionsModal({ isOpen, onClose, onApply }: SuggestionsModalProps) {
                 {group.items.map((it) => (
                   <li key={it.productId} className="flex items-center justify-between text-xs text-gray-600">
                     <span className="truncate">{it.name}</span>
-                    <span className="flex-shrink-0 ml-2">
+                    <span className="flex-shrink-0 ml-2 tabular-nums">
                       {it.stock}/{it.minStock} → +{it.suggestedQuantity}
                     </span>
                   </li>

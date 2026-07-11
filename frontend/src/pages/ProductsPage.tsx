@@ -40,6 +40,8 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import VirtualProductGrid from '../components/VirtualProductGrid';
 import VirtualList from '../components/VirtualList';
 import BulkPriceAdjustModal from '../components/BulkPriceAdjustModal';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { DEFAULT_UNIT, UNIT_PRESETS, formatQty, unitLabel } from '../utils/units';
 import * as XLSX from 'xlsx';
@@ -1654,7 +1656,13 @@ export default function ProductsPage() {
     return warehouses?.find((w) => w.id === activeWarehouseId)?.kind ?? null;
   }, [warehouses, activeWarehouseId]);
 
-  const { data: productsData, isLoading } = useQuery<PaginatedResponse<Product>>({
+  const {
+    data: productsData,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery<PaginatedResponse<Product>>({
     queryKey: ['products', { limit: 1000, warehouseId: activeWarehouseId || 'all' }],
     queryFn: async () => {
       const params: { limit: number; warehouseId?: string } = { limit: 1000 };
@@ -2464,76 +2472,83 @@ export default function ProductsPage() {
   return (
     <div className="space-y-4 pb-2">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <div className="min-w-0">
-          <h1 className="text-xl font-bold text-gray-900">Склад</h1>
-          <p className="text-xs text-gray-400 mt-0.5">{allProducts.length} товаров</p>
-        </div>
-        {canManageWarehouse && (
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <button
-              type="button"
-              onClick={handleExport}
-              className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
-              title="Экспорт CSV"
-            >
-              <Download className="h-4 w-4" />
-              <span className="hidden xl:inline">Экспорт</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => fileInputRef.current?.click()}
-              className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
-              title="Импорт из Excel / CSV"
-            >
-              <Upload className="h-4 w-4" />
-              <span className="hidden xl:inline">Импорт</span>
-            </button>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".xlsx,.xls,.csv,.txt"
-              onChange={handleImportFile}
-              className="hidden"
-            />
-            <button
-              type="button"
-              onClick={() => setBulkPriceOpen(true)}
-              className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
-              title="Массовая корректировка цен"
-            >
-              <Percent className="h-4 w-4" />
-              <span className="hidden xl:inline">Цены</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setTrashOpen(true)}
-              className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
-              title="Корзина"
-            >
-              <Trash2 className="h-4 w-4" />
-              <span className="hidden xl:inline">Корзина</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setWarehouseOpsOpen(true)}
-              className="flex items-center gap-2 rounded-xl bg-amber-500 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-amber-600 active:scale-[0.97] transition-all"
-              title="Складские операции"
-            >
-              <Warehouse className="h-4 w-4" />
-              <span className="hidden xl:inline">Операции</span>
-            </button>
-            <button
-              type="button"
-              onClick={openCreate}
-              className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 active:scale-[0.97] transition-all"
-            >
-              <Plus className="h-4 w-4" />
-              <span className="hidden sm:inline">Добавить</span>
-            </button>
-          </div>
-        )}
-      </div>
+      <PageHeader
+        title="Склад"
+        icon={Warehouse}
+        subtitle={`${allProducts.length} товаров`}
+        actions={
+          canManageWarehouse ? (
+            <>
+              <button
+                type="button"
+                onClick={handleExport}
+                aria-label="Экспорт CSV"
+                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
+                title="Экспорт CSV"
+              >
+                <Download className="h-4 w-4" />
+                <span className="hidden xl:inline">Экспорт</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                aria-label="Импорт из Excel / CSV"
+                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
+                title="Импорт из Excel / CSV"
+              >
+                <Upload className="h-4 w-4" />
+                <span className="hidden xl:inline">Импорт</span>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xlsx,.xls,.csv,.txt"
+                onChange={handleImportFile}
+                className="hidden"
+              />
+              <button
+                type="button"
+                onClick={() => setBulkPriceOpen(true)}
+                aria-label="Массовая корректировка цен"
+                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
+                title="Массовая корректировка цен"
+              >
+                <Percent className="h-4 w-4" />
+                <span className="hidden xl:inline">Цены</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setTrashOpen(true)}
+                aria-label="Корзина"
+                className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm font-medium text-gray-700 shadow-sm hover:bg-gray-50 active:scale-[0.97] transition-all"
+                title="Корзина"
+              >
+                <Trash2 className="h-4 w-4" />
+                <span className="hidden xl:inline">Корзина</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setWarehouseOpsOpen(true)}
+                aria-label="Складские операции"
+                className="flex items-center gap-2 rounded-xl bg-amber-500 px-3 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-amber-600 active:scale-[0.97] transition-all"
+                title="Складские операции"
+              >
+                <Warehouse className="h-4 w-4" />
+                <span className="hidden xl:inline">Операции</span>
+              </button>
+              <button
+                type="button"
+                onClick={openCreate}
+                aria-label="Добавить товар"
+                className="flex items-center gap-2 rounded-xl bg-primary-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-primary-700 active:scale-[0.97] transition-all"
+              >
+                <Plus className="h-4 w-4" />
+                <span className="hidden sm:inline">Добавить</span>
+              </button>
+            </>
+          ) : undefined
+        }
+      />
 
       {/* Warehouse switcher — main / defect / used */}
       {warehouses && warehouses.length > 1 && (
@@ -2569,19 +2584,25 @@ export default function ProductsPage() {
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
           <div className="rounded-xl bg-indigo-50 p-3">
             <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Себестоимость склада</p>
-            <p className="text-base font-bold text-indigo-700 mt-0.5">{formatMoney(warehouseStats.totalCostValue)}</p>
+            <p className="text-base font-bold text-indigo-700 mt-0.5 tabular-nums">
+              {formatMoney(warehouseStats.totalCostValue)}
+            </p>
           </div>
           <div className="rounded-xl bg-green-50 p-3">
             <p className="text-[10px] font-semibold text-green-500 uppercase tracking-wider">В розн. ценах</p>
-            <p className="text-base font-bold text-green-700 mt-0.5">{formatMoney(warehouseStats.totalSellValue)}</p>
+            <p className="text-base font-bold text-green-700 mt-0.5 tabular-nums">
+              {formatMoney(warehouseStats.totalSellValue)}
+            </p>
           </div>
           <div className="rounded-xl bg-orange-50 p-3">
             <p className="text-[10px] font-semibold text-orange-500 uppercase tracking-wider">Расход за месяц</p>
-            <p className="text-base font-bold text-orange-700 mt-0.5">{formatMoney(warehouseStats.monthProductCost)}</p>
+            <p className="text-base font-bold text-orange-700 mt-0.5 tabular-nums">
+              {formatMoney(warehouseStats.monthProductCost)}
+            </p>
           </div>
           <div className="rounded-xl bg-gray-50 p-3">
             <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Расход пред. мес.</p>
-            <p className="text-base font-bold text-gray-700 mt-0.5">
+            <p className="text-base font-bold text-gray-700 mt-0.5 tabular-nums">
               {formatMoney(warehouseStats.lastMonthProductCost)}
             </p>
           </div>
@@ -2649,11 +2670,13 @@ export default function ProductsPage() {
         </div>
       )}
 
-      {isLoading ? (
-        <div className="flex items-center justify-center py-20">
-          <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
-        </div>
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError && allProducts.length === 0}
+        onRetry={() => refetch()}
+        isFetching={isFetching}
+        minHeight="py-20"
+      >
         <>
           {/* Breadcrumb + select toggle when inside a folder */}
           {showingFolderContents && (
@@ -2765,7 +2788,7 @@ export default function ProductsPage() {
                   <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100 flex-shrink-0">
                     <FolderPlus className="h-4.5 w-4.5 text-gray-400" />
                   </div>
-                  <p className="text-sm font-medium text-gray-400">Новая папка</p>
+                  <p className="text-sm font-medium text-gray-500">Новая папка</p>
                 </div>
               )}
             </div>
@@ -2783,7 +2806,7 @@ export default function ProductsPage() {
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gray-100 flex-shrink-0">
                 <FolderPlus className="h-4.5 w-4.5 text-gray-400" />
               </div>
-              <p className="text-sm font-medium text-gray-400">Новая папка</p>
+              <p className="text-sm font-medium text-gray-500">Новая папка</p>
             </div>
           )}
 
@@ -2792,8 +2815,8 @@ export default function ProductsPage() {
 
           {/* Empty state */}
           {showingFolderContents && subfolders.length === 0 && currentProducts.length === 0 && (
-            <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-              <Package className="h-12 w-12 mb-3" />
+            <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+              <Package className="h-12 w-12 mb-3 text-gray-400" />
               <p className="text-sm">В этой папке пока нет товаров</p>
             </div>
           )}
@@ -2801,15 +2824,15 @@ export default function ProductsPage() {
           {/* Search results */}
           {showingSearch &&
             (searchResults.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-16 text-gray-400">
-                <Package className="h-12 w-12 mb-3" />
+              <div className="flex flex-col items-center justify-center py-16 text-gray-500">
+                <Package className="h-12 w-12 mb-3 text-gray-400" />
                 <p className="text-sm">Товары не найдены</p>
               </div>
             ) : (
               renderProductList(searchResults, true)
             ))}
         </>
-      )}
+      </QueryState>
 
       {/* Floating action bar — visible whenever anything (products or folders)
           is selected. «Переместить» applies to products only; «Удалить» opens

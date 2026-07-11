@@ -7,8 +7,8 @@ import toast from 'react-hot-toast';
 import { expensesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import DatePeriodPicker from '../components/DatePeriodPicker';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 
@@ -47,7 +47,13 @@ export default function ExpensesPage() {
     },
   });
 
-  const { data: expenses = [], isLoading } = useQuery({
+  const {
+    data: expenses = [],
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['expenses', dateFrom, dateTo],
     queryFn: async () => {
       const res = await expensesApi.getAll({ dateFrom, dateTo });
@@ -123,30 +129,23 @@ export default function ExpensesPage() {
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-rose-100">
-            <Wallet className="h-5 w-5 text-rose-600" />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-gray-900">Расходы</h1>
-            <p className="text-xs text-gray-400">Учёт расходов по статьям</p>
-          </div>
-        </div>
-        {isDirector && (
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => setCatModalOpen(true)}
-              className="btn-secondary text-xs flex-1 sm:flex-none justify-center"
-            >
-              <Tag className="w-3.5 h-3.5" /> Категории
-            </button>
-            <button onClick={() => setModalOpen(true)} className="btn-primary flex-1 sm:flex-none justify-center">
-              <Plus className="w-4 h-4" /> Добавить
-            </button>
-          </div>
-        )}
-      </div>
+      <PageHeader
+        title="Расходы"
+        icon={Wallet}
+        subtitle="Учёт расходов по статьям"
+        actions={
+          isDirector ? (
+            <>
+              <button onClick={() => setCatModalOpen(true)} className="btn-secondary text-xs justify-center">
+                <Tag className="w-3.5 h-3.5" /> Категории
+              </button>
+              <button onClick={() => setModalOpen(true)} className="btn-primary justify-center">
+                <Plus className="w-4 h-4" /> Добавить
+              </button>
+            </>
+          ) : undefined
+        }
+      />
 
       <DatePeriodPicker
         dateFrom={dateFrom}
@@ -157,39 +156,44 @@ export default function ExpensesPage() {
         }}
       />
 
-      {/* Summary */}
-      <div className="rounded-2xl bg-gradient-to-br from-rose-500 to-rose-700 p-5 text-white">
-        <p className="text-xs font-semibold text-white/70 uppercase tracking-wider">Итого расходов</p>
-        <p className="text-3xl font-bold mt-1">{formatCurrency(totalExpenses)}</p>
-      </div>
-
-      {/* Category breakdown */}
-      {categoryBreakdown.length > 0 && (
-        <div className="card overflow-hidden">
-          <div className="px-4 py-3 border-b border-gray-100">
-            <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">По категориям</p>
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        isEmpty={expenses.length === 0}
+        empty={{ icon: Wallet, title: 'Нет расходов', description: 'Добавьте расходы за выбранный период' }}
+        minHeight="min-h-[40vh]"
+      >
+        <div className="space-y-4">
+          {/* Summary */}
+          <div className="rounded-2xl bg-gradient-to-br from-rose-500 to-rose-700 p-5 text-white">
+            <p className="text-xs font-semibold text-white/70 uppercase tracking-wider">Итого расходов</p>
+            <p className="text-3xl font-bold mt-1 tabular-nums">{formatCurrency(totalExpenses)}</p>
           </div>
-          <div className="grid grid-cols-1 gap-px bg-gray-100 sm:grid-cols-2 lg:grid-cols-3">
-            {categoryBreakdown.map((cat) => (
-              <div key={cat.name} className="flex items-center justify-between gap-3 bg-white px-4 py-3">
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <div className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0" />
-                  <span className="text-sm font-medium text-gray-800 truncate">{cat.name}</span>
-                </div>
-                <span className="text-sm font-bold text-gray-900 whitespace-nowrap">{formatCurrency(cat.total)}</span>
+
+          {/* Category breakdown */}
+          {categoryBreakdown.length > 0 && (
+            <div className="card overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-100">
+                <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">По категориям</p>
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+              <div className="grid grid-cols-1 gap-px bg-gray-100 sm:grid-cols-2 lg:grid-cols-3">
+                {categoryBreakdown.map((cat) => (
+                  <div key={cat.name} className="flex items-center justify-between gap-3 bg-white px-4 py-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0" />
+                      <span className="text-sm font-medium text-gray-800 truncate">{cat.name}</span>
+                    </div>
+                    <span className="text-sm font-bold text-gray-900 whitespace-nowrap tabular-nums">
+                      {formatCurrency(cat.total)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
-      {/* Expenses list */}
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : expenses.length === 0 ? (
-        <EmptyState icon={Wallet} title="Нет расходов" description="Добавьте расходы за выбранный период" />
-      ) : (
-        <>
           {/* Mobile cards */}
           <div className="md:hidden space-y-2">
             {expenses.map((exp: any) => {
@@ -203,7 +207,9 @@ export default function ExpensesPage() {
                 >
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                      <span className={`text-sm font-bold ${isWarranty ? 'text-amber-700' : 'text-gray-900'}`}>
+                      <span
+                        className={`text-sm font-bold tabular-nums ${isWarranty ? 'text-amber-700' : 'text-gray-900'}`}
+                      >
                         {formatCurrency(exp.amount)}
                       </span>
                       {isWarranty ? (
@@ -220,15 +226,18 @@ export default function ExpensesPage() {
                       )}
                     </div>
                     {exp.description && <p className="text-xs text-gray-500 truncate">{exp.description}</p>}
-                    <p className="text-[10px] text-gray-400 mt-0.5">
+                    <p className="text-[10px] text-gray-500 mt-0.5">
                       {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
                       {exp.userName ? ` · ${exp.userName}` : ''}
                     </p>
                   </div>
                   {isDirector && !isWarranty && (
                     <button
+                      type="button"
+                      aria-label="Удалить расход"
+                      title="Удалить расход"
                       onClick={() => setDeleteId(exp.id)}
-                      className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors flex-shrink-0"
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -257,7 +266,7 @@ export default function ExpensesPage() {
                   return (
                     <tr key={exp.id} className={isWarranty ? 'bg-amber-50/50' : ''}>
                       <td
-                        className={`font-semibold whitespace-nowrap ${isWarranty ? 'text-amber-700' : 'text-gray-900'}`}
+                        className={`font-semibold whitespace-nowrap tabular-nums ${isWarranty ? 'text-amber-700' : 'text-gray-900'}`}
                       >
                         {formatCurrency(exp.amount)}
                       </td>
@@ -287,8 +296,10 @@ export default function ExpensesPage() {
                           {!isWarranty && (
                             <button
                               type="button"
+                              aria-label="Удалить расход"
+                              title="Удалить расход"
                               onClick={() => setDeleteId(exp.id)}
-                              className="p-1.5 rounded-lg text-gray-300 hover:text-red-500 hover:bg-red-50 transition-colors"
+                              className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
                             >
                               <Trash2 className="w-4 h-4" />
                             </button>
@@ -301,8 +312,8 @@ export default function ExpensesPage() {
               </tbody>
             </table>
           </div>
-        </>
-      )}
+        </div>
+      </QueryState>
 
       {/* Add expense modal */}
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="Новый расход" size="md">
@@ -396,8 +407,11 @@ export default function ExpensesPage() {
                 <div key={c.id} className="flex items-center justify-between py-2.5">
                   <span className="text-sm font-medium text-gray-800">{c.name}</span>
                   <button
+                    type="button"
+                    aria-label={`Удалить категорию ${c.name}`}
+                    title="Удалить категорию"
                     onClick={() => deleteCatMutation.mutate(c.id)}
-                    className="p-1 rounded text-gray-300 hover:text-red-500 transition-colors"
+                    className="p-1 rounded text-gray-400 hover:text-red-600 transition-colors"
                   >
                     <X className="w-4 h-4" />
                   </button>

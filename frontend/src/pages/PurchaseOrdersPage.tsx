@@ -5,13 +5,18 @@ import { Plus, ShoppingCart } from 'lucide-react';
 
 import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
 import Pagination from '../components/Pagination';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
+import { useClickableRow } from '../hooks/useClickableRow';
 import { UserRole } from '../types';
 import type { PurchaseOrder, PurchaseOrderStatus, PaginatedResponse, Supplier } from '../types';
 import { formatMoney, formatDateShort } from '../../../shared/utils/formatters';
+
+// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
+// us call it per-row inside `.map` without tripping react-hooks/rules-of-hooks.
+const clickableRowProps = useClickableRow;
 
 const STATUS_TABS: { value: '' | PurchaseOrderStatus; label: string }[] = [
   { value: '', label: 'Все' },
@@ -31,7 +36,7 @@ export default function PurchaseOrdersPage() {
   const [page, setPage] = useState(1);
   const limit = 20;
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['purchase-orders', { status, supplierId, page }],
     queryFn: () =>
       purchaseOrdersApi.list({
@@ -59,15 +64,18 @@ export default function PurchaseOrdersPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between gap-3">
-        <h1 className="text-2xl font-bold text-gray-900">Заказы поставщикам</h1>
-        {canWrite && (
-          <button onClick={() => navigate('/purchase-orders/new')} className="btn-primary">
-            <Plus className="w-4 h-4" />
-            Создать заказ
-          </button>
-        )}
-      </div>
+      <PageHeader
+        title="Заказы поставщикам"
+        icon={ShoppingCart}
+        actions={
+          canWrite ? (
+            <button onClick={() => navigate('/purchase-orders/new')} className="btn-primary">
+              <Plus className="w-4 h-4" />
+              Создать заказ
+            </button>
+          ) : undefined
+        }
+      />
 
       {/* Filters */}
       <div className="space-y-3">
@@ -113,76 +121,82 @@ export default function PurchaseOrdersPage() {
       </div>
 
       {/* List */}
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : orders.length === 0 ? (
-        <EmptyState
-          icon={ShoppingCart}
-          title="Нет заказов"
-          description="Создайте заказ поставщику, чтобы пополнить склад"
-          action={canWrite ? { label: 'Создать заказ', onClick: () => navigate('/purchase-orders/new') } : undefined}
-        />
-      ) : (
-        <>
-          {/* Mobile cards */}
-          <div className="md:hidden space-y-3">
-            {orders.map((po) => (
-              <div
-                key={po.id}
-                onClick={() => navigate(`/purchase-orders/${po.id}`)}
-                className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
-              >
-                <div className="flex items-center justify-between gap-2 mb-2">
-                  <span className="font-semibold text-gray-900 text-sm truncate">
-                    {po.supplierName || 'Без поставщика'}
-                  </span>
-                  <PurchaseOrderStatusBadge status={po.status} />
-                </div>
-                <div className="flex items-center justify-between text-xs text-gray-500">
-                  <span>
-                    {formatDateShort(po.createdAt)} · {po.itemCount ?? 0} поз.
-                  </span>
-                  <span className="font-semibold text-gray-900">{formatMoney(po.total)}</span>
-                </div>
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        isEmpty={orders.length === 0}
+        empty={{
+          icon: ShoppingCart,
+          title: 'Нет заказов',
+          description: 'Создайте заказ поставщику, чтобы пополнить склад',
+          action: canWrite ? { label: 'Создать заказ', onClick: () => navigate('/purchase-orders/new') } : undefined,
+        }}
+        minHeight="min-h-[40vh]"
+      >
+        {/* Mobile cards */}
+        <div className="md:hidden space-y-3">
+          {orders.map((po) => (
+            <div
+              key={po.id}
+              {...clickableRowProps(() => navigate(`/purchase-orders/${po.id}`), {
+                label: po.supplierName || 'Без поставщика',
+              })}
+              className="rounded-xl border border-gray-100 bg-white shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
+            >
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="font-semibold text-gray-900 text-sm truncate">
+                  {po.supplierName || 'Без поставщика'}
+                </span>
+                <PurchaseOrderStatusBadge status={po.status} />
               </div>
-            ))}
-          </div>
+              <div className="flex items-center justify-between text-xs text-gray-500">
+                <span>
+                  {formatDateShort(po.createdAt)} · {po.itemCount ?? 0} поз.
+                </span>
+                <span className="font-semibold text-gray-900 tabular-nums">{formatMoney(po.total)}</span>
+              </div>
+            </div>
+          ))}
+        </div>
 
-          {/* Desktop table */}
-          <div className="hidden md:block table-container">
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Поставщик</th>
-                  <th>Дата</th>
-                  <th className="text-center">Позиций</th>
-                  <th>Статус</th>
-                  <th className="text-right">Сумма</th>
+        {/* Desktop table */}
+        <div className="hidden md:block table-container">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Поставщик</th>
+                <th>Дата</th>
+                <th className="text-center">Позиций</th>
+                <th>Статус</th>
+                <th className="text-right">Сумма</th>
+              </tr>
+            </thead>
+            <tbody>
+              {orders.map((po) => (
+                <tr
+                  key={po.id}
+                  className="cursor-pointer hover:bg-gray-50"
+                  {...clickableRowProps(() => navigate(`/purchase-orders/${po.id}`), {
+                    label: po.supplierName || 'Без поставщика',
+                  })}
+                >
+                  <td className="font-medium text-gray-900">{po.supplierName || 'Без поставщика'}</td>
+                  <td className="text-gray-600">{formatDateShort(po.createdAt)}</td>
+                  <td className="text-center text-gray-600 tabular-nums">{po.itemCount ?? 0}</td>
+                  <td>
+                    <PurchaseOrderStatusBadge status={po.status} />
+                  </td>
+                  <td className="text-right font-medium text-gray-900 tabular-nums">{formatMoney(po.total)}</td>
                 </tr>
-              </thead>
-              <tbody>
-                {orders.map((po) => (
-                  <tr
-                    key={po.id}
-                    className="cursor-pointer hover:bg-gray-50"
-                    onClick={() => navigate(`/purchase-orders/${po.id}`)}
-                  >
-                    <td className="font-medium text-gray-900">{po.supplierName || 'Без поставщика'}</td>
-                    <td className="text-gray-600">{formatDateShort(po.createdAt)}</td>
-                    <td className="text-center text-gray-600">{po.itemCount ?? 0}</td>
-                    <td>
-                      <PurchaseOrderStatusBadge status={po.status} />
-                    </td>
-                    <td className="text-right font-medium text-gray-900">{formatMoney(po.total)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+              ))}
+            </tbody>
+          </table>
+        </div>
 
-          <Pagination page={page} total={total} limit={limit} onChange={setPage} />
-        </>
-      )}
+        <Pagination page={page} total={total} limit={limit} onChange={setPage} />
+      </QueryState>
     </div>
   );
 }

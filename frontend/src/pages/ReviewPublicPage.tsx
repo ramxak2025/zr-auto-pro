@@ -32,7 +32,8 @@ export default function ReviewPublicPage() {
 
   useEffect(() => {
     if (!token) return;
-    publicReviewApi.getByToken(token)
+    publicReviewApi
+      .getByToken(token)
       .then((res: any) => setData(res.data))
       .catch((err: any) => {
         const msg = err.response?.data?.message || 'Ссылка недействительна';
@@ -48,7 +49,7 @@ export default function ReviewPublicPage() {
       await publicReviewApi.submit(token, { rating, comment: comment.trim() || undefined });
       setSubmitted(true);
       // If rating >= 4, show redirect options
-      if (rating >= 4 && data?.platformLinks && data.platformLinks.filter(l => l.isActive).length > 0) {
+      if (rating >= 4 && data?.platformLinks && data.platformLinks.filter((l) => l.isActive).length > 0) {
         setShowRedirect(true);
       }
     } catch (err: any) {
@@ -85,18 +86,20 @@ export default function ReviewPublicPage() {
   }
 
   if (submitted && showRedirect) {
-    const activeLinks = data?.platformLinks?.filter(l => l.isActive) || [];
+    const activeLinks = data?.platformLinks?.filter((l) => l.isActive) || [];
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center px-4">
         <div className="w-full max-w-sm text-center">
           <CheckCircle className="h-16 w-16 text-green-500 mx-auto mb-4" />
           <h1 className="text-xl font-bold text-gray-900 mb-2">Спасибо за отзыв!</h1>
-          <p className="text-sm text-gray-500 mb-6">
-            Будем благодарны, если оставите отзыв на одной из площадок
-          </p>
+          <p className="text-sm text-gray-500 mb-6">Будем благодарны, если оставите отзыв на одной из площадок</p>
           <div className="space-y-3">
-            {activeLinks.map(l => {
-              const colors = platformColors[l.platform] || { bg: 'bg-gray-50', text: 'text-gray-700', border: 'border-gray-200' };
+            {activeLinks.map((l) => {
+              const colors = platformColors[l.platform] || {
+                bg: 'bg-gray-50',
+                text: 'text-gray-700',
+                border: 'border-gray-200',
+              };
               return (
                 <button
                   key={l.id}
@@ -136,13 +139,9 @@ export default function ReviewPublicPage() {
           </div>
           <h1 className="text-xl font-bold text-gray-900 mb-1">{data?.tenantName}</h1>
           {data?.clientName && (
-            <p className="text-sm text-gray-500">
-              {data.clientName}, оцените качество обслуживания
-            </p>
+            <p className="text-sm text-gray-500">{data.clientName}, оцените качество обслуживания</p>
           )}
-          {!data?.clientName && (
-            <p className="text-sm text-gray-500">Оцените качество обслуживания</p>
-          )}
+          {!data?.clientName && <p className="text-sm text-gray-500">Оцените качество обслуживания</p>}
         </div>
 
         {/* Motivational gift banner — set by the owner in MarketingScreen */}
@@ -152,12 +151,8 @@ export default function ReviewPublicPage() {
               <Gift className="w-4 h-4 text-amber-700" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700 mb-1">
-                Подарок за отзыв
-              </p>
-              <p className="text-sm font-semibold text-amber-900 leading-snug">
-                {data.motivationMessage}
-              </p>
+              <p className="text-[10px] font-bold uppercase tracking-wide text-amber-700 mb-1">Подарок за отзыв</p>
+              <p className="text-sm font-semibold text-amber-900 leading-snug">{data.motivationMessage}</p>
             </div>
           </div>
         ) : null}
@@ -166,40 +161,36 @@ export default function ReviewPublicPage() {
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6 mb-4">
           <p className="text-sm font-medium text-gray-700 text-center mb-4">Ваша оценка</p>
           <div className="flex justify-center gap-2 mb-6">
-            {[1, 2, 3, 4, 5].map(i => (
+            {[1, 2, 3, 4, 5].map((i) => (
               <button
                 key={i}
+                type="button"
+                aria-label={`Оценить на ${i} из 5`}
+                aria-pressed={rating === i}
                 onClick={() => setRating(i)}
                 onMouseEnter={() => setHoverRating(i)}
                 onMouseLeave={() => setHoverRating(0)}
                 className="transition-transform hover:scale-110 active:scale-95"
               >
                 <Star
+                  aria-hidden="true"
                   className={`h-10 w-10 transition-colors ${
-                    i <= (hoverRating || rating)
-                      ? 'fill-amber-400 text-amber-400'
-                      : 'text-gray-200'
+                    i <= (hoverRating || rating) ? 'fill-amber-400 text-amber-400' : 'text-gray-200'
                   }`}
                 />
               </button>
             ))}
           </div>
           {rating > 0 && rating <= 3 && (
-            <p className="text-xs text-center text-gray-500 mb-4">
-              Расскажите, что можно улучшить
-            </p>
+            <p className="text-xs text-center text-gray-500 mb-4">Расскажите, что можно улучшить</p>
           )}
-          {rating >= 4 && (
-            <p className="text-xs text-center text-green-600 mb-4">
-              Отлично! Спасибо за высокую оценку
-            </p>
-          )}
+          {rating >= 4 && <p className="text-xs text-center text-green-600 mb-4">Отлично! Спасибо за высокую оценку</p>}
 
           {/* Comment */}
           {rating > 0 && (
             <textarea
               value={comment}
-              onChange={e => setComment(e.target.value)}
+              onChange={(e) => setComment(e.target.value)}
               placeholder={rating <= 3 ? 'Что пошло не так?' : 'Оставьте комментарий (необязательно)'}
               rows={3}
               className="w-full rounded-xl border border-gray-200 px-4 py-3 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-violet-500 focus:border-transparent"
@@ -214,19 +205,11 @@ export default function ReviewPublicPage() {
             disabled={submitting}
             className="w-full bg-violet-600 text-white rounded-xl py-3.5 text-sm font-semibold hover:bg-violet-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
           >
-            {submitting ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              'Отправить отзыв'
-            )}
+            {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Отправить отзыв'}
           </button>
         )}
 
-        {data?.employeeName && (
-          <p className="text-xs text-gray-400 text-center mt-4">
-            Мастер: {data.employeeName}
-          </p>
-        )}
+        {data?.employeeName && <p className="text-xs text-gray-500 text-center mt-4">Мастер: {data.employeeName}</p>}
       </div>
     </div>
   );
