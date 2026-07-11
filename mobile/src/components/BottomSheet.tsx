@@ -13,7 +13,8 @@
  * one rename.
  */
 import React from 'react';
-import { KeyboardAvoidingView, Modal as RNModal, Platform, StyleSheet, View } from 'react-native';
+import { Modal as RNModal, StyleSheet, View } from 'react-native';
+import { KeyboardAvoidingView, KeyboardProvider } from 'react-native-keyboard-controller';
 import {
   Gesture,
   GestureDetector,
@@ -102,71 +103,82 @@ export function BottomSheet({ visible, onClose, title, heightRatio = 0.7, childr
 
   return (
     <RNModal visible={visible} transparent onRequestClose={close} statusBarTranslucent animationType="none">
-      {/* Nested gesture root so the header pan (drag-to-dismiss) works on
-          Android — RNGH needs a GestureHandlerRootView inside the RN core
-          <Modal>, which mounts its own window tree without the app's root. */}
-      <GestureHandlerRootView style={styles.host}>
-        {/* Static premium blur backdrop + tap-outside-to-close. */}
-        <ModalBlurBackdrop onPress={close} />
-        {/* Light dim layer tied to drag position — keeps a sense of depth. */}
-        <Animated.View pointerEvents="none" style={[styles.dim, dimStyle]} />
+      {/* Nested KeyboardProvider + gesture root — RN core <Modal> mounts its
+          OWN native window tree, so neither RNGH's root nor keyboard-controller's
+          root from App.tsx reach inside. Without the nested KeyboardProvider the
+          KeyboardAvoidingView below silently no-ops (defaultContext) and поле
+          снова прячется под клавиатурой (Round 11 #1). */}
+      <KeyboardProvider>
+        <GestureHandlerRootView style={styles.host}>
+          {/* Static premium blur backdrop + tap-outside-to-close. */}
+          <ModalBlurBackdrop onPress={close} />
+          {/* Light dim layer tied to drag position — keeps a sense of depth. */}
+          <Animated.View pointerEvents="none" style={[styles.dim, dimStyle]} />
 
-        <Animated.View
-          onLayout={(e) => {
-            sheetHeight.value = e.nativeEvent.layout.height;
-          }}
-          style={[
-            styles.sheet,
-            {
-              backgroundColor: palette.bg.elevated,
-              maxHeight: `${heightRatio * 100}%` as `${number}%`,
-              paddingBottom: Math.max(insets.bottom, 12),
-            },
-            sheetStyle,
-          ]}
-        >
-          <GestureDetector gesture={pan}>
-            <View style={styles.headerArea}>
-              <View style={[styles.handle, { backgroundColor: palette.border.strong }]} />
-              {(title || true) && (
-                <View style={styles.header}>
-                  {title ? (
-                    <Text variant="title3" style={{ flex: 1, color: palette.text.primary }}>
-                      {title}
-                    </Text>
-                  ) : (
-                    <View style={{ flex: 1 }} />
-                  )}
-                  <PressableScale
-                    onPress={close}
-                    style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
-                    hapticIntent={null}
-                  >
-                    <Icon name="close" size={18} color={palette.text.tertiary} />
-                  </PressableScale>
-                </View>
-              )}
-            </View>
-          </GestureDetector>
-          {/* Keyboard-aware + scrollable body. autoFocus'd inputs (Warehouse
-              forms) pop the keyboard; the GH ScrollView keeps the submit
-              button + multiline reason reachable, and composes with the
-              header pan above (header drag dismisses, inner content scrolls). */}
-          <KeyboardAvoidingView
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            style={styles.bodyFlex}
+          <Animated.View
+            onLayout={(e) => {
+              sheetHeight.value = e.nativeEvent.layout.height;
+            }}
+            style={[
+              styles.sheet,
+              {
+                backgroundColor: palette.bg.elevated,
+                maxHeight: `${heightRatio * 100}%` as `${number}%`,
+                paddingBottom: Math.max(insets.bottom, 12),
+              },
+              sheetStyle,
+            ]}
           >
-            <GHScrollView
+            <GestureDetector gesture={pan}>
+              <View style={styles.headerArea}>
+                <View style={[styles.handle, { backgroundColor: palette.border.strong }]} />
+                {(title || true) && (
+                  <View style={styles.header}>
+                    {title ? (
+                      <Text variant="title3" style={{ flex: 1, color: palette.text.primary }}>
+                        {title}
+                      </Text>
+                    ) : (
+                      <View style={{ flex: 1 }} />
+                    )}
+                    <PressableScale
+                      onPress={close}
+                      style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
+                      hapticIntent={null}
+                    >
+                      <Icon name="close" size={18} color={palette.text.tertiary} />
+                    </PressableScale>
+                  </View>
+                )}
+              </View>
+            </GestureDetector>
+            {/* Keyboard-aware + scrollable body (Round 11 #1). autoFocus'd inputs
+              (Warehouse forms) pop the keyboard; keyboard-controller's
+              KeyboardAvoidingView lifts the body над клавиатурой ОДИНАКОВО на
+              iOS И Android (RN-core `behavior` был no-op на Android), а
+              `keyboardVerticalOffset` компенсирует нижний safe-area отступ
+              самого листа, чтобы поле не оказалось под клавиатурой. Пан-жест
+              drag-to-dismiss живёт на ШАПКЕ (GestureDetector выше), поэтому он
+              сосуществует с клавиатурным инсетом — тело скроллит, шапка
+              закрывает. GH ScrollView держит submit-кнопку достижимой. */}
+            <KeyboardAvoidingView
+              behavior="padding"
+              keyboardVerticalOffset={Math.max(insets.bottom, 12)}
               style={styles.bodyFlex}
-              contentContainerStyle={styles.bodyContent}
-              keyboardShouldPersistTaps="handled"
-              showsVerticalScrollIndicator={false}
             >
-              {children}
-            </GHScrollView>
-          </KeyboardAvoidingView>
-        </Animated.View>
-      </GestureHandlerRootView>
+              <GHScrollView
+                style={styles.bodyFlex}
+                contentContainerStyle={styles.bodyContent}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                showsVerticalScrollIndicator={false}
+              >
+                {children}
+              </GHScrollView>
+            </KeyboardAvoidingView>
+          </Animated.View>
+        </GestureHandlerRootView>
+      </KeyboardProvider>
     </RNModal>
   );
 }

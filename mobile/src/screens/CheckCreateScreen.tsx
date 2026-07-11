@@ -8,7 +8,6 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
-  KeyboardAvoidingView,
   Platform,
   Dimensions,
   LayoutAnimation,
@@ -44,6 +43,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { formatQty, roundQty, unitLabel } from '../utils/units';
 import Modal from '../components/Modal';
+import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import QtyInput from '../components/QtyInput';
 import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
@@ -2206,123 +2206,126 @@ export default function CheckCreateScreen() {
         </TouchableOpacity>
       )}
 
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={[
-            styles.scrollContent,
-            { paddingTop: insetsTop + spacing[2] },
-            openedFromTab && { paddingBottom: tabBarHeight + spacing[4] },
-          ]}
-          keyboardShouldPersistTaps="handled"
-        >
-          {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
-          <View
-            style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-          >
-            <View style={styles.sectionHeader}>
-              <Ionicons name="person-circle-outline" size={18} color={colors.blue[600]} />
-              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Информация о клиенте</Text>
-            </View>
+      {/* KeyboardAwareScroll (Round 11 #1): активное поле Кассы (имя/телефон
+          клиента, пробег, комментарий) держится над клавиатурой на iOS И
+          Android — авто-скролл к фокусу, а не «поднять весь блок». Резерв под
+          плавающий tab bar включаем только когда Касса открыта как таб
+          (openedFromTab); в edit-режиме (push поверх бара) — reserveTabBar
+          false, свой paddingBottom не нужен. */}
+      <KeyboardAwareScroll
+        style={styles.scroll}
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: insetsTop + spacing[2] },
+          openedFromTab && { paddingBottom: tabBarHeight + spacing[4] },
+        ]}
+        reserveTabBar={openedFromTab}
+      >
+        {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
+        <View style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="person-circle-outline" size={18} color={colors.blue[600]} />
+            <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Информация о клиенте</Text>
+          </View>
 
-            {/* Хинт «Редактируется отложенный чек» — виден только когда мы
+          {/* Хинт «Редактируется отложенный чек» — виден только когда мы
                 открыли черновик по «Продолжить» из деталки. Подсказывает, что
                 снятие галочки «Отложить» внизу + сохранение закроет черновик
                 и проведёт его в выручку (бэк спишет склад/гарантии). */}
-            {isEditingDeferred && (
-              <View
-                style={[
-                  styles.deferredEditHint,
-                  isDark && {
-                    backgroundColor: softTint(colors.amber[600], 'dark'),
-                    borderColor: 'rgba(217, 119, 6, 0.32)',
-                  },
-                ]}
-              >
-                <Ionicons name="pause-circle" size={16} color={colors.amber[600]} />
-                <Text style={[styles.deferredEditHintText, isDark && { color: colors.amber[200] }]}>
-                  Редактируется отложенный чек
-                </Text>
-              </View>
-            )}
+          {isEditingDeferred && (
+            <View
+              style={[
+                styles.deferredEditHint,
+                isDark && {
+                  backgroundColor: softTint(colors.amber[600], 'dark'),
+                  borderColor: 'rgba(217, 119, 6, 0.32)',
+                },
+              ]}
+            >
+              <Ionicons name="pause-circle" size={16} color={colors.amber[600]} />
+              <Text style={[styles.deferredEditHintText, isDark && { color: colors.amber[200] }]}>
+                Редактируется отложенный чек
+              </Text>
+            </View>
+          )}
 
-            {/* Хинт «Редактируется проведённый чек» (#61) — виден только когда
+          {/* Хинт «Редактируется проведённый чек» (#61) — виден только когда
                 открыли ЗАКРЫТЫЙ чек по «Редактировать» из деталки. Предупреждает,
                 что при сохранении сервер пересчитает склад, зарплату, кассу и
                 прибыль (каскадный editClosedCheck); чек остаётся проведённым.
                 Синий info-тон, чтобы не путать с янтарным «отложен». */}
-            {isEditingClosed && (
-              <View
-                style={[
-                  styles.deferredEditHint,
-                  {
-                    backgroundColor: isDark ? softTint(colors.blue[600], 'dark') : colors.blue[50],
-                    borderColor: isDark ? 'rgba(37, 99, 235, 0.32)' : colors.blue[200],
-                  },
-                ]}
-              >
-                <Ionicons name="sync-circle" size={16} color={colors.blue[600]} />
-                <Text style={[styles.deferredEditHintText, { color: isDark ? colors.blue[200] : colors.blue[600] }]}>
-                  Редактируется проведённый чек — при сохранении всё пересчитается
-                </Text>
-              </View>
-            )}
+          {isEditingClosed && (
+            <View
+              style={[
+                styles.deferredEditHint,
+                {
+                  backgroundColor: isDark ? softTint(colors.blue[600], 'dark') : colors.blue[50],
+                  borderColor: isDark ? 'rgba(37, 99, 235, 0.32)' : colors.blue[200],
+                },
+              ]}
+            >
+              <Ionicons name="sync-circle" size={16} color={colors.blue[600]} />
+              <Text style={[styles.deferredEditHintText, { color: isDark ? colors.blue[200] : colors.blue[600] }]}>
+                Редактируется проведённый чек — при сохранении всё пересчитается
+              </Text>
+            </View>
+          )}
 
-            {/* Date/Time — only when editing an existing check.
+          {/* Date/Time — only when editing an existing check.
                 For new checks the timestamp is set automatically on save
                 (checkDate stays as 'now'), so we hide the noisy picker
                 pair to keep the form focused on what really matters:
                 the client, the car, the line items, the payment. */}
-            {editId && (
-              <View style={styles.dateTimeCard}>
-                <TouchableOpacity
-                  style={[styles.dateBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-                  onPress={() => setShowDatePicker(true)}
-                >
-                  <Ionicons name="calendar-outline" size={16} color={colors.blue[600]} />
-                  <Text style={[styles.dateBtnText, { color: palette.text.primary }]}>{dateStr}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.timeBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-                  onPress={() => setShowTimePicker(true)}
-                >
-                  <Ionicons name="time-outline" size={16} color={colors.blue[600]} />
-                  <Text style={[styles.timeBtnText, { color: palette.text.primary }]}>{timeStr}</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+          {editId && (
+            <View style={styles.dateTimeCard}>
+              <TouchableOpacity
+                style={[styles.dateBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                onPress={() => setShowDatePicker(true)}
+              >
+                <Ionicons name="calendar-outline" size={16} color={colors.blue[600]} />
+                <Text style={[styles.dateBtnText, { color: palette.text.primary }]}>{dateStr}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.timeBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                onPress={() => setShowTimePicker(true)}
+              >
+                <Ionicons name="time-outline" size={16} color={colors.blue[600]} />
+                <Text style={[styles.timeBtnText, { color: palette.text.primary }]}>{timeStr}</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
-            {editId && (
-              <>
-                <DateTimePickerModal
-                  visible={showDatePicker}
-                  value={checkDate}
-                  mode="date"
-                  onConfirm={(d) => {
-                    setShowDatePicker(false);
-                    const u = new Date(checkDate);
-                    u.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
-                    setCheckDate(u);
-                  }}
-                  onCancel={() => setShowDatePicker(false)}
-                />
-                <DateTimePickerModal
-                  visible={showTimePicker}
-                  value={checkDate}
-                  mode="time"
-                  onConfirm={(d) => {
-                    setShowTimePicker(false);
-                    const u = new Date(checkDate);
-                    u.setHours(d.getHours(), d.getMinutes());
-                    setCheckDate(u);
-                  }}
-                  onCancel={() => setShowTimePicker(false)}
-                />
-              </>
-            )}
+          {editId && (
+            <>
+              <DateTimePickerModal
+                visible={showDatePicker}
+                value={checkDate}
+                mode="date"
+                onConfirm={(d) => {
+                  setShowDatePicker(false);
+                  const u = new Date(checkDate);
+                  u.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
+                  setCheckDate(u);
+                }}
+                onCancel={() => setShowDatePicker(false)}
+              />
+              <DateTimePickerModal
+                visible={showTimePicker}
+                value={checkDate}
+                mode="time"
+                onConfirm={(d) => {
+                  setShowTimePicker(false);
+                  const u = new Date(checkDate);
+                  u.setHours(d.getHours(), d.getMinutes());
+                  setCheckDate(u);
+                }}
+                onCancel={() => setShowTimePicker(false)}
+              />
+            </>
+          )}
 
-            {clientId && selectedClient ? (
-              /* ═══ SELECTED CLIENT — PREMIUM iOS CARD ═══
+          {clientId && selectedClient ? (
+            /* ═══ SELECTED CLIENT — PREMIUM iOS CARD ═══
                  Three-section composite, modeled after Apple's Wallet
                  card detail screen:
                    1. CLIENT HEADER — avatar + name + phone + X.
@@ -2332,91 +2335,91 @@ export default function CheckCreateScreen() {
                  The car gets its own labeled section ("АВТОМОБИЛЬ") so
                  it's structurally tied to the card instead of floating
                  as random text under the plate. */
-              <View
-                style={[
-                  styles.selectedCard,
-                  buildShadow(palette),
-                  { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
-                ]}
-              >
-                {/* — Section 1: client header — */}
-                <View style={styles.selectedCardTop}>
-                  <View
-                    style={[
-                      styles.selectedCardAvatar,
-                      isDark && {
-                        backgroundColor: softTint(colors.primary[600], 'dark'),
-                        borderColor: 'rgba(79, 131, 232, 0.35)',
-                      },
-                    ]}
-                  >
-                    <Ionicons name="person" size={22} color={isDark ? colors.primary[300] : colors.primary[700]} />
-                  </View>
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.selectedCardName, { color: palette.text.primary }]} numberOfLines={1}>
-                      {selectedClient.fullName}
-                    </Text>
-                    {!!selectedClient.phone && (
-                      <Text style={[styles.selectedCardPhone, { color: palette.text.tertiary }]} numberOfLines={1}>
-                        {formatPhone(selectedClient.phone)}
-                      </Text>
-                    )}
-                  </View>
-                  <TouchableOpacity
-                    onPress={() => {
-                      animateClientToggle();
-                      setClientId('');
-                      setCarId('');
-                      setPlateSearch('');
-                      setPhoneSearch('');
-                    }}
-                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                    style={[styles.selectedCardClose, { backgroundColor: palette.bg.muted }]}
-                    accessibilityLabel="Сбросить клиента"
-                  >
-                    <Ionicons name="close" size={18} color={palette.text.secondary} />
-                  </TouchableOpacity>
+            <View
+              style={[
+                styles.selectedCard,
+                buildShadow(palette),
+                { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+              ]}
+            >
+              {/* — Section 1: client header — */}
+              <View style={styles.selectedCardTop}>
+                <View
+                  style={[
+                    styles.selectedCardAvatar,
+                    isDark && {
+                      backgroundColor: softTint(colors.primary[600], 'dark'),
+                      borderColor: 'rgba(79, 131, 232, 0.35)',
+                    },
+                  ]}
+                >
+                  <Ionicons name="person" size={22} color={isDark ? colors.primary[300] : colors.primary[700]} />
                 </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.selectedCardName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {selectedClient.fullName}
+                  </Text>
+                  {!!selectedClient.phone && (
+                    <Text style={[styles.selectedCardPhone, { color: palette.text.tertiary }]} numberOfLines={1}>
+                      {formatPhone(selectedClient.phone)}
+                    </Text>
+                  )}
+                </View>
+                <TouchableOpacity
+                  onPress={() => {
+                    animateClientToggle();
+                    setClientId('');
+                    setCarId('');
+                    setPlateSearch('');
+                    setPhoneSearch('');
+                  }}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  style={[styles.selectedCardClose, { backgroundColor: palette.bg.muted }]}
+                  accessibilityLabel="Сбросить клиента"
+                >
+                  <Ionicons name="close" size={18} color={palette.text.secondary} />
+                </TouchableOpacity>
+              </View>
 
-                {selectedCar && (
-                  /* — Compact plate (48pt, proportional ГОСТ preset)
+              {selectedCar && (
+                /* — Compact plate (48pt, proportional ГОСТ preset)
                        centered + label row "Автомобиль: <make/model>"
                        under. */
-                  <View style={[styles.selectedCarStack, { borderTopColor: palette.border.subtle }]}>
-                    <PlateBadge plate={selectedCar.plateNumber || ''} active={true} size="compact" />
-                    <Text style={[styles.selectedCarLabel, { color: palette.text.primary }]} numberOfLines={1}>
-                      <Text style={[styles.selectedCarLabelKey, { color: palette.text.tertiary }]}>Автомобиль: </Text>
-                      {selectedCar.makeModel || '—'}
+                <View style={[styles.selectedCarStack, { borderTopColor: palette.border.subtle }]}>
+                  <PlateBadge plate={selectedCar.plateNumber || ''} active={true} size="compact" />
+                  <Text style={[styles.selectedCarLabel, { color: palette.text.primary }]} numberOfLines={1}>
+                    <Text style={[styles.selectedCarLabelKey, { color: palette.text.tertiary }]}>Автомобиль: </Text>
+                    {selectedCar.makeModel || '—'}
+                  </Text>
+                  {selectedCar.comment && (
+                    <Text style={[styles.selectedCarComment, { color: palette.text.tertiary }]} numberOfLines={1}>
+                      {selectedCar.comment}
                     </Text>
-                    {selectedCar.comment && (
-                      <Text style={[styles.selectedCarComment, { color: palette.text.tertiary }]} numberOfLines={1}>
-                        {selectedCar.comment}
-                      </Text>
-                    )}
-                    {/* Round 8 #1 — машина выбрана: показываем ТОЛЬКО её, без
+                  )}
+                  {/* Round 8 #1 — машина выбрана: показываем ТОЛЬКО её, без
                         постоянного ряда «пилюль». Смена — осознанный тап по
                         «Сменить» → ClientCarPickerSheet со всеми авто клиента.
                         Чип виден только когда выбор явный (carId) и машин ≥2. */}
-                    {!!carId && clientCars && clientCars.length > 1 && (
-                      <TouchableOpacity
-                        onPress={openCarSwitch}
-                        style={[
-                          styles.changeCarChip,
-                          { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                        ]}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel="Сменить автомобиль"
-                      >
-                        <Ionicons name="swap-horizontal" size={13} color={palette.text.secondary} />
-                        <Text style={[styles.changeCarChipText, { color: palette.text.secondary }]}>Сменить</Text>
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                )}
+                  {!!carId && clientCars && clientCars.length > 1 && (
+                    <TouchableOpacity
+                      onPress={openCarSwitch}
+                      style={[
+                        styles.changeCarChip,
+                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      ]}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      activeOpacity={0.7}
+                      accessibilityRole="button"
+                      accessibilityLabel="Сменить автомобиль"
+                    >
+                      <Ionicons name="swap-horizontal" size={13} color={palette.text.secondary} />
+                      <Text style={[styles.changeCarChipText, { color: palette.text.secondary }]}>Сменить</Text>
+                    </TouchableOpacity>
+                  )}
+                </View>
+              )}
 
-                {/* ═══ CLIENT-scoped meta — last visit + active warranties ═══
+              {/* ═══ CLIENT-scoped meta — last visit + active warranties ═══
                     Rendered for ANY selected client, regardless of whether a
                     car is selected. Warranties are keyed by CLIENT (across all
                     the client's cars), not by the single default-selected car,
@@ -2429,297 +2432,291 @@ export default function CheckCreateScreen() {
                     the parent `selectedCard` uses flex `gap` — which adds no
                     space for null children — so this never leaves an empty
                     band for first-time / out-of-warranty clients. */}
-                <LastVisitBadge clientId={selectedClient.id} />
-                <ActiveWarrantiesSection clientId={selectedClient.id} />
-              </View>
-            ) : (
-              <>
-                {/* ═══ ПОИСК ПО ГОСНОМЕРУ / ПО ТЕЛЕФОНУ (Round 7 #8) ═══ */}
-                <View style={styles.plateLabelRow}>
-                  {/* flexShrink + numberOfLines: на узких iPhone (SE/mini)
+              <LastVisitBadge clientId={selectedClient.id} />
+              <ActiveWarrantiesSection clientId={selectedClient.id} />
+            </View>
+          ) : (
+            <>
+              {/* ═══ ПОИСК ПО ГОСНОМЕРУ / ПО ТЕЛЕФОНУ (Round 7 #8) ═══ */}
+              <View style={styles.plateLabelRow}>
+                {/* flexShrink + numberOfLines: на узких iPhone (SE/mini)
                       подпись ужимается, а трёхсекционный переключатель
                       (RU|INT|ТЕЛ) остаётся целиком на экране, не уезжая
                       вправо. */}
-                  <Text
-                    style={[styles.sectionSubLabel, styles.plateLabelShrink, { color: palette.text.secondary }]}
-                    numberOfLines={1}
-                  >
-                    {isPhoneMode ? 'ПОИСК ПО ТЕЛЕФОНУ' : 'ПОИСК ПО ГОСНОМЕРУ'}
-                  </Text>
-                  <PlateModeSwitcher
-                    value={plateMode}
-                    onChange={(m) => {
-                      // Тап по RU/INT из phone-режима возвращает поиск по
-                      // номеру (switch no-op'ится, когда режим уже 'plate').
-                      switchSearchMode('plate');
-                      setPlateMode(m);
-                    }}
-                    phoneActive={isPhoneMode}
-                    onPhoneSelect={() => switchSearchMode('phone')}
-                  />
-                </View>
+                <Text
+                  style={[styles.sectionSubLabel, styles.plateLabelShrink, { color: palette.text.secondary }]}
+                  numberOfLines={1}
+                >
+                  {isPhoneMode ? 'ПОИСК ПО ТЕЛЕФОНУ' : 'ПОИСК ПО ГОСНОМЕРУ'}
+                </Text>
+                <PlateModeSwitcher
+                  value={plateMode}
+                  onChange={(m) => {
+                    // Тап по RU/INT из phone-режима возвращает поиск по
+                    // номеру (switch no-op'ится, когда режим уже 'plate').
+                    switchSearchMode('plate');
+                    setPlateMode(m);
+                  }}
+                  phoneActive={isPhoneMode}
+                  onPhoneSelect={() => switchSearchMode('phone')}
+                />
+              </View>
 
-                {isPhoneMode ? (
-                  /* Числовой поиск по телефону — отдельный TextInput МИМО
+              {isPhoneMode ? (
+                /* Числовой поиск по телефону — отдельный TextInput МИМО
                      маски номера. Форматирование не навязываем: владелец может
                      набрать и «8988…», и хвост номера — trunk-варианты (TASK C)
                      находят клиента в любом виде. */
-                  <View
-                    style={[
-                      styles.phoneSearchRow,
-                      { backgroundColor: palette.bg.elevated, borderColor: palette.border.strong },
-                    ]}
-                  >
-                    <Ionicons name="call-outline" size={18} color={colors.blue[500]} />
-                    <TextInput
-                      value={phoneSearch}
-                      onChangeText={setPhoneSearch}
-                      style={[styles.phoneSearchInput, { color: palette.text.primary }]}
-                      keyboardType="phone-pad"
-                      placeholder="Телефон клиента"
-                      placeholderTextColor={palette.text.tertiary}
-                      autoCorrect={false}
-                      maxLength={18}
-                    />
-                    {phoneSearch.length > 0 && (
-                      <TouchableOpacity
-                        onPress={() => setPhoneSearch('')}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        accessibilityLabel="Очистить телефон"
-                      >
-                        <Ionicons name="close-circle" size={18} color={palette.text.tertiary} />
-                      </TouchableOpacity>
-                    )}
-                  </View>
-                ) : (
-                  /* Realistic license plate input — controlled mode */
-                  <RussianPlateInput
-                    value={plateSearch}
-                    onChangeText={setPlateSearch}
-                    autoFocus={false}
-                    mode={plateMode}
+                <View
+                  style={[
+                    styles.phoneSearchRow,
+                    { backgroundColor: palette.bg.elevated, borderColor: palette.border.strong },
+                  ]}
+                >
+                  <Ionicons name="call-outline" size={18} color={colors.blue[500]} />
+                  <TextInput
+                    value={phoneSearch}
+                    onChangeText={setPhoneSearch}
+                    style={[styles.phoneSearchInput, { color: palette.text.primary }]}
+                    keyboardType="phone-pad"
+                    placeholder="Телефон клиента"
+                    placeholderTextColor={palette.text.tertiary}
+                    autoCorrect={false}
+                    maxLength={18}
                   />
-                )}
+                  {phoneSearch.length > 0 && (
+                    <TouchableOpacity
+                      onPress={() => setPhoneSearch('')}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                      accessibilityLabel="Очистить телефон"
+                    >
+                      <Ionicons name="close-circle" size={18} color={palette.text.tertiary} />
+                    </TouchableOpacity>
+                  )}
+                </View>
+              ) : (
+                /* Realistic license plate input — controlled mode */
+                <RussianPlateInput
+                  value={plateSearch}
+                  onChangeText={setPlateSearch}
+                  autoFocus={false}
+                  mode={plateMode}
+                />
+              )}
 
-                {/* Inline search results — appear right below the input.
+              {/* Inline search results — appear right below the input.
                     Phone mode: строки-КЛИЕНТЫ (имя + телефон, счётчик авто);
                     plate mode: прежние пары клиент+авто. */}
-                {isPhoneMode && phoneClientResults.length > 0 && (
-                  <View
-                    style={[
-                      styles.inlineResults,
-                      { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
-                    ]}
-                  >
-                    {phoneClientResults.slice(0, 5).map((client) => {
-                      const carCount = client.cars?.length ?? 0;
-                      return (
-                        <TouchableOpacity
-                          key={client.id}
-                          style={[styles.inlineResultItem, { borderBottomColor: palette.border.subtle }]}
-                          onPress={() => handlePhoneClientTap(client)}
-                          activeOpacity={0.7}
-                        >
-                          <View
-                            style={[
-                              styles.phoneResultAvatar,
-                              isDark
-                                ? {
-                                    backgroundColor: softTint(colors.primary[600], 'dark'),
-                                    borderColor: 'rgba(79, 131, 232, 0.35)',
-                                  }
-                                : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
-                            ]}
-                          >
-                            <Ionicons
-                              name="person"
-                              size={15}
-                              color={isDark ? colors.primary[300] : colors.primary[700]}
-                            />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={[styles.inlineResultName, { color: palette.text.primary }]} numberOfLines={1}>
-                              {client.fullName}
-                            </Text>
-                            <Text style={[styles.inlineResultSub, { color: palette.text.tertiary }]} numberOfLines={1}>
-                              {formatPhone(client.phone || '')}
-                            </Text>
-                          </View>
-                          {carCount > 0 && (
-                            <View style={[styles.carCountChip, { backgroundColor: palette.bg.muted }]}>
-                              <Ionicons name="car-sport-outline" size={12} color={palette.text.secondary} />
-                              <Text style={[styles.carCountChipText, { color: palette.text.secondary }]}>
-                                {carCount}
-                              </Text>
-                            </View>
-                          )}
-                          <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-                {!isPhoneMode && (normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length > 0 && (
-                  <View
-                    style={[
-                      styles.inlineResults,
-                      { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
-                    ]}
-                  >
-                    {plateResults.slice(0, 5).map(({ client, car }) => (
+              {isPhoneMode && phoneClientResults.length > 0 && (
+                <View
+                  style={[
+                    styles.inlineResults,
+                    { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                  ]}
+                >
+                  {phoneClientResults.slice(0, 5).map((client) => {
+                    const carCount = client.cars?.length ?? 0;
+                    return (
                       <TouchableOpacity
-                        key={`${client.id}-${car?.id ?? 'nocar'}`}
+                        key={client.id}
                         style={[styles.inlineResultItem, { borderBottomColor: palette.border.subtle }]}
-                        onPress={() => {
-                          animateClientToggle();
-                          setClientId(client.id);
-                          setCarId(car?.id ?? '');
-                          setPlateSearch('');
-                        }}
+                        onPress={() => handlePhoneClientTap(client)}
                         activeOpacity={0.7}
                       >
-                        {car?.plateNumber && (
-                          <View
-                            style={[
-                              styles.plateChip,
-                              isDark && {
-                                backgroundColor: softTint(colors.primary[600], 'dark'),
-                                borderColor: 'rgba(79, 131, 232, 0.35)',
-                              },
-                            ]}
-                          >
-                            <Text style={[styles.plateChipText, isDark && { color: colors.primary[300] }]}>
-                              {car.plateNumber}
-                            </Text>
-                          </View>
-                        )}
+                        <View
+                          style={[
+                            styles.phoneResultAvatar,
+                            isDark
+                              ? {
+                                  backgroundColor: softTint(colors.primary[600], 'dark'),
+                                  borderColor: 'rgba(79, 131, 232, 0.35)',
+                                }
+                              : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+                          ]}
+                        >
+                          <Ionicons
+                            name="person"
+                            size={15}
+                            color={isDark ? colors.primary[300] : colors.primary[700]}
+                          />
+                        </View>
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.inlineResultName, { color: palette.text.primary }]} numberOfLines={1}>
-                            {car?.makeModel || client.fullName}
+                            {client.fullName}
                           </Text>
                           <Text style={[styles.inlineResultSub, { color: palette.text.tertiary }]} numberOfLines={1}>
-                            {car ? client.fullName : formatPhone(client.phone || '')}
+                            {formatPhone(client.phone || '')}
                           </Text>
                         </View>
+                        {carCount > 0 && (
+                          <View style={[styles.carCountChip, { backgroundColor: palette.bg.muted }]}>
+                            <Ionicons name="car-sport-outline" size={12} color={palette.text.secondary} />
+                            <Text style={[styles.carCountChipText, { color: palette.text.secondary }]}>{carCount}</Text>
+                          </View>
+                        )}
                         <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
                       </TouchableOpacity>
-                    ))}
-                  </View>
-                )}
-                {/* Show "not found" only after search completed — i.e. the
+                    );
+                  })}
+                </View>
+              )}
+              {!isPhoneMode && (normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length > 0 && (
+                <View
+                  style={[
+                    styles.inlineResults,
+                    { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                  ]}
+                >
+                  {plateResults.slice(0, 5).map(({ client, car }) => (
+                    <TouchableOpacity
+                      key={`${client.id}-${car?.id ?? 'nocar'}`}
+                      style={[styles.inlineResultItem, { borderBottomColor: palette.border.subtle }]}
+                      onPress={() => {
+                        animateClientToggle();
+                        setClientId(client.id);
+                        setCarId(car?.id ?? '');
+                        setPlateSearch('');
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      {car?.plateNumber && (
+                        <View
+                          style={[
+                            styles.plateChip,
+                            isDark && {
+                              backgroundColor: softTint(colors.primary[600], 'dark'),
+                              borderColor: 'rgba(79, 131, 232, 0.35)',
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.plateChipText, isDark && { color: colors.primary[300] }]}>
+                            {car.plateNumber}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.inlineResultName, { color: palette.text.primary }]} numberOfLines={1}>
+                          {car?.makeModel || client.fullName}
+                        </Text>
+                        <Text style={[styles.inlineResultSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                          {car ? client.fullName : formatPhone(client.phone || '')}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+              {/* Show "not found" only after search completed — i.e. the
                     debounced snapshot has caught up with what's typed AND the
                     request settled. During the 300ms debounce window the
                     state must not flash (RNPERF-5). */}
-                {(isPhoneMode
-                  ? isPhoneSearch && phoneClientResults.length === 0
-                  : (normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length === 0) &&
-                  networkSearch === currentSearch &&
-                  !isFetchingPlate &&
-                  !isFetchingCars && (
-                    <View style={styles.notFoundBox}>
-                      <Text style={[styles.inlineNoResults, { color: palette.text.tertiary }]}>Клиент не найден</Text>
-                      {/* M2: не тупик — создаём клиента с этим номером прямо из кассы. */}
-                      <TouchableOpacity
-                        style={[
-                          styles.createClientBtn,
-                          isDark
-                            ? {
-                                backgroundColor: softTint(colors.primary[600], 'dark'),
-                                borderColor: 'rgba(79, 131, 232, 0.35)',
-                              }
-                            : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
-                        ]}
-                        onPress={() => setShowQuickCreate(true)}
-                        activeOpacity={0.8}
-                      >
-                        <Ionicons name="person-add-outline" size={15} color={colors.primary[600]} />
-                        <Text style={[styles.createClientBtnText, isDark && { color: colors.primary[300] }]}>
-                          Создать клиента
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  )}
-
-                <View
-                  style={[
-                    styles.retailDefault,
-                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                  ]}
-                >
-                  <Ionicons name="storefront-outline" size={16} color={colors.blue[500]} />
-                  <View style={{ flex: 1 }}>
-                    <Text style={[styles.retailDefaultText, { color: palette.text.primary }]}>
-                      Розничный покупатель
-                    </Text>
-                    <Text style={[styles.retailDefaultHint, { color: palette.text.tertiary }]}>
-                      {isPhoneMode
-                        ? 'Наберите телефон, чтобы привязать клиента'
-                        : 'Наберите госномер — или телефон через переключатель ТЕЛ'}
-                    </Text>
+              {(isPhoneMode
+                ? isPhoneSearch && phoneClientResults.length === 0
+                : (normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length === 0) &&
+                networkSearch === currentSearch &&
+                !isFetchingPlate &&
+                !isFetchingCars && (
+                  <View style={styles.notFoundBox}>
+                    <Text style={[styles.inlineNoResults, { color: palette.text.tertiary }]}>Клиент не найден</Text>
+                    {/* M2: не тупик — создаём клиента с этим номером прямо из кассы. */}
+                    <TouchableOpacity
+                      style={[
+                        styles.createClientBtn,
+                        isDark
+                          ? {
+                              backgroundColor: softTint(colors.primary[600], 'dark'),
+                              borderColor: 'rgba(79, 131, 232, 0.35)',
+                            }
+                          : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+                      ]}
+                      onPress={() => setShowQuickCreate(true)}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="person-add-outline" size={15} color={colors.primary[600]} />
+                      <Text style={[styles.createClientBtnText, isDark && { color: colors.primary[300] }]}>
+                        Создать клиента
+                      </Text>
+                    </TouchableOpacity>
                   </View>
-                </View>
-              </>
-            )}
+                )}
 
-            {/* Car picker — ТОЛЬКО пока машина ещё НЕ выбрана (carId пуст) и
+              <View
+                style={[
+                  styles.retailDefault,
+                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                ]}
+              >
+                <Ionicons name="storefront-outline" size={16} color={colors.blue[500]} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.retailDefaultText, { color: palette.text.primary }]}>Розничный покупатель</Text>
+                  <Text style={[styles.retailDefaultHint, { color: palette.text.tertiary }]}>
+                    {isPhoneMode
+                      ? 'Наберите телефон, чтобы привязать клиента'
+                      : 'Наберите госномер — или телефон через переключатель ТЕЛ'}
+                  </Text>
+                </View>
+              </View>
+            </>
+          )}
+
+          {/* Car picker — ТОЛЬКО пока машина ещё НЕ выбрана (carId пуст) и
                 у клиента ≥2 авто: первичный выбор. Round 8 #1 — после выбора
                 ряд исчезает (карточка выше показывает только выбранную
                 машину), смена — через чип «Сменить» → ClientCarPickerSheet. */}
-            {clientId && !carId && clientCars && clientCars.length > 1 && (
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={{ gap: spacing[2], paddingVertical: spacing[1] }}
-              >
-                {clientCars.map((car) => {
-                  const active = carId === car.id;
-                  return (
-                    <TouchableOpacity
-                      key={car.id}
-                      onPress={() => setCarId(car.id)}
-                      style={{ alignItems: 'center', gap: 4, opacity: active ? 1 : 0.55 }}
-                      activeOpacity={0.85}
-                    >
-                      <PlateBadge plate={car.plateNumber || ''} active={active} />
-                      <Text
-                        style={{
-                          fontSize: 11,
-                          fontWeight: active ? '600' : '500',
-                          color: active ? palette.text.primary : palette.text.tertiary,
-                          maxWidth: 140,
-                        }}
-                        numberOfLines={1}
-                      >
-                        {car.makeModel || '—'}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            )}
-
-            {/* Mileage */}
-            <View
-              style={[styles.mileageRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          {clientId && !carId && clientCars && clientCars.length > 1 && (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={{ gap: spacing[2], paddingVertical: spacing[1] }}
             >
-              <Ionicons name="speedometer-outline" size={16} color={colors.blue[400]} />
-              <TextInput
-                value={mileage}
-                // Только цифры и максимум 7 знаков (< 10 000 000) — сервер
-                // отбивает пробег больше 10 млн (DTO @Max), а живой мастер уже
-                // напоролся на это, случайно набрав лишние цифры. Клампим на
-                // вводе, чтобы до ошибки просто не доходило.
-                onChangeText={(v) => setMileage(v.replace(/\D/g, '').slice(0, 7))}
-                maxLength={7}
-                style={[styles.mileageInput, { color: palette.text.primary }]}
-                keyboardType="numeric"
-                placeholder="Пробег, км"
-                placeholderTextColor={palette.text.tertiary}
-              />
-            </View>
-          </View>
+              {clientCars.map((car) => {
+                const active = carId === car.id;
+                return (
+                  <TouchableOpacity
+                    key={car.id}
+                    onPress={() => setCarId(car.id)}
+                    style={{ alignItems: 'center', gap: 4, opacity: active ? 1 : 0.55 }}
+                    activeOpacity={0.85}
+                  >
+                    <PlateBadge plate={car.plateNumber || ''} active={active} />
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        fontWeight: active ? '600' : '500',
+                        color: active ? palette.text.primary : palette.text.tertiary,
+                        maxWidth: 140,
+                      }}
+                      numberOfLines={1}
+                    >
+                      {car.makeModel || '—'}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+          )}
 
-          {/* ═══ SECTION 1.5: COMMENT — separate purple block right after
+          {/* Mileage */}
+          <View style={[styles.mileageRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <Ionicons name="speedometer-outline" size={16} color={colors.blue[400]} />
+            <TextInput
+              value={mileage}
+              // Только цифры и максимум 7 знаков (< 10 000 000) — сервер
+              // отбивает пробег больше 10 млн (DTO @Max), а живой мастер уже
+              // напоролся на это, случайно набрав лишние цифры. Клампим на
+              // вводе, чтобы до ошибки просто не доходило.
+              onChangeText={(v) => setMileage(v.replace(/\D/g, '').slice(0, 7))}
+              maxLength={7}
+              style={[styles.mileageInput, { color: palette.text.primary }]}
+              keyboardType="numeric"
+              placeholder="Пробег, км"
+              placeholderTextColor={palette.text.tertiary}
+            />
+          </View>
+        </View>
+
+        {/* ═══ SECTION 1.5: COMMENT — separate purple block right after
               client info / mileage but BEFORE services & products. The
               comment is about what the masters did / warned the client
               about, so it belongs to the receipt as a whole — not nested
@@ -2728,511 +2725,496 @@ export default function CheckCreateScreen() {
               The photo strip lives INSIDE this section (below the textarea)
               so the "notes" block stays a single visual unit: text + photos
               describe the same thing — what happened during the work. */}
-          <View
-            style={[styles.sectionComment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-          >
-            <View style={styles.sectionHeader}>
-              <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.purple[600]} />
-              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Комментарий</Text>
-              {voiceReady && (
-                <>
-                  <View style={{ flex: 1 }} />
-                  <PressableScale
-                    onPress={() => {
-                      haptic('tap');
-                      setVoiceSheetOpen(true);
-                    }}
-                    hapticIntent={null}
-                    hitSlop={8}
-                    scaleTo={0.9}
-                    style={[
-                      styles.voiceMicBtn,
-                      {
-                        backgroundColor: softTint(colors.purple[600], palette.mode),
-                        borderColor: isDark ? palette.border.subtle : colors.purple[200],
-                      },
-                    ]}
-                    accessibilityRole="button"
-                    accessibilityLabel="Голосовой ввод комментария"
-                  >
-                    <Ionicons name="mic" size={17} color={isDark ? colors.purple[300] : colors.purple[600]} />
-                  </PressableScale>
-                </>
-              )}
-            </View>
-            <TextInput
-              value={comment}
-              onChangeText={setComment}
-              style={[
-                styles.commentInput,
-                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
-              ]}
-              multiline
-              placeholder="Введите сюда ваш коментарий..."
-              placeholderTextColor={palette.text.tertiary}
-            />
-
-            {/* ── Photo strip (feature-gated inline) ─────────────────────── */}
-            {canAttachPhotos && (
-              <View style={styles.photoBlock}>
-                <View style={styles.photoBlockHeader}>
-                  <Ionicons name="camera-outline" size={14} color={colors.teal[600]} />
-                  <Text style={[styles.photoBlockTitle, { color: palette.text.secondary }]}>Фото к заказ-наряду</Text>
-                  <Text style={[styles.photoBlockCount, { color: palette.text.tertiary }]}>
-                    {pendingPhotos.length + existingPhotos.length}/{MAX_PHOTOS}
-                  </Text>
-                </View>
-                <ScrollView
-                  horizontal
-                  showsHorizontalScrollIndicator={false}
-                  contentContainerStyle={styles.photoStripContent}
-                  keyboardShouldPersistTaps="handled"
+        <View style={[styles.sectionComment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View style={styles.sectionHeader}>
+            <Ionicons name="chatbubble-ellipses-outline" size={16} color={colors.purple[600]} />
+            <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Комментарий</Text>
+            {voiceReady && (
+              <>
+                <View style={{ flex: 1 }} />
+                <PressableScale
+                  onPress={() => {
+                    haptic('tap');
+                    setVoiceSheetOpen(true);
+                  }}
+                  hapticIntent={null}
+                  hitSlop={8}
+                  scaleTo={0.9}
+                  style={[
+                    styles.voiceMicBtn,
+                    {
+                      backgroundColor: softTint(colors.purple[600], palette.mode),
+                      borderColor: isDark ? palette.border.subtle : colors.purple[200],
+                    },
+                  ]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Голосовой ввод комментария"
                 >
-                  {existingPhotos.map((photo) => (
-                    <TouchableOpacity
-                      key={photo.id}
-                      activeOpacity={0.85}
-                      onPress={() => pickAndAddPhoto({ kind: 'existing', photo })}
-                      onLongPress={() => removeExistingPhoto(photo.id)}
-                      delayLongPress={400}
-                      style={[styles.photoThumbWrap, { borderColor: palette.border.subtle }]}
-                    >
-                      <ExpoImage
-                        source={{ uri: photo.photoUrl }}
-                        style={styles.photoThumbImg}
-                        contentFit="cover"
-                        transition={200}
-                        placeholder={{ blurhash: 'L4SY{q?b00?b~q?b?b?b?b?b?b?b' }}
-                        placeholderContentFit="cover"
-                        cachePolicy="memory-disk"
-                      />
-                    </TouchableOpacity>
-                  ))}
-                  {pendingPhotos.map((uri) => (
-                    <TouchableOpacity
-                      key={uri}
-                      activeOpacity={0.85}
-                      onPress={() => pickAndAddPhoto({ kind: 'pending', uri })}
-                      onLongPress={() => removePendingPhoto(uri)}
-                      delayLongPress={400}
-                      style={[styles.photoThumbWrap, { borderColor: palette.border.subtle }]}
-                    >
-                      <ExpoImage
-                        source={{ uri }}
-                        style={styles.photoThumbImg}
-                        contentFit="cover"
-                        transition={200}
-                        placeholder={{ blurhash: 'L4SY{q?b00?b~q?b?b?b?b?b?b?b' }}
-                        placeholderContentFit="cover"
-                        cachePolicy="memory-disk"
-                      />
-                      {uploadingUris.has(uri) && (
-                        <View style={styles.photoUploadOverlay}>
-                          <ActivityIndicator size="small" color="#fff" />
-                        </View>
-                      )}
-                    </TouchableOpacity>
-                  ))}
-                  {pendingPhotos.length + existingPhotos.length < MAX_PHOTOS && (
-                    <TouchableOpacity
-                      activeOpacity={0.7}
-                      onPress={() => pickAndAddPhoto()}
-                      style={[
-                        styles.photoAddTile,
-                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                      ]}
-                      accessibilityLabel="Добавить фото"
-                    >
-                      <Ionicons name="add" size={28} color={colors.primary[600]} />
-                    </TouchableOpacity>
-                  )}
-                </ScrollView>
-              </View>
+                  <Ionicons name="mic" size={17} color={isDark ? colors.purple[300] : colors.purple[600]} />
+                </PressableScale>
+              </>
             )}
           </View>
-
-          {/* ═══ SECTION 2: SERVICES & PRODUCTS — white ═══ */}
-          <View
+          <TextInput
+            value={comment}
+            onChangeText={setComment}
             style={[
-              styles.sectionItems,
-              buildShadow(palette),
-              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+              styles.commentInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
             ]}
-          >
-            <View style={[styles.sectionHeader, { justifyContent: 'space-between' }]}>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                <Ionicons name="receipt-outline" size={18} color={colors.orange[600]} />
-                <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Товары и услуги</Text>
-              </View>
-              <TouchableOpacity
-                style={[
-                  styles.templateChip,
-                  isDark
-                    ? {
-                        backgroundColor: softTint(colors.primary[600], 'dark'),
-                        borderColor: 'rgba(79, 131, 232, 0.35)',
-                      }
-                    : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
-                ]}
-                onPress={openTemplatesPicker}
-                hitSlop={8}
-              >
-                <Ionicons name="copy-outline" size={13} color={colors.primary[600]} />
-                <Text style={[styles.templateChipText, isDark && { color: colors.primary[300] }]}>Шаблоны</Text>
-              </TouchableOpacity>
-            </View>
+            multiline
+            placeholder="Введите сюда ваш коментарий..."
+            placeholderTextColor={palette.text.tertiary}
+          />
 
-            {/* Services */}
-            <View
-              style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-            >
-              <View style={styles.linesSectionHeader}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                  <View
-                    style={[
-                      styles.sectionIcon,
-                      { backgroundColor: isDark ? softTint(colors.orange[500], 'dark') : colors.orange[50] },
-                    ]}
-                  >
-                    <Ionicons name="build-outline" size={14} color={colors.orange[500]} />
-                  </View>
-                  <Text style={[styles.linesSectionTitle, { color: palette.text.primary }]}>Услуги</Text>
-                  {serviceLines.length > 0 && (
-                    <View
-                      style={[styles.lineBadge, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
-                    >
-                      <Text style={[styles.lineBadgeText, isDark && { color: colors.primary[300] }]}>
-                        {serviceLines.length}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <TouchableOpacity
-                  style={[styles.addLineBtn, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
-                  onPress={() => {
-                    setServiceSearch('');
-                    setShowServicePicker(true);
-                  }}
-                >
-                  <Ionicons name="add" size={16} color={colors.primary[600]} />
-                </TouchableOpacity>
+          {/* ── Photo strip (feature-gated inline) ─────────────────────── */}
+          {canAttachPhotos && (
+            <View style={styles.photoBlock}>
+              <View style={styles.photoBlockHeader}>
+                <Ionicons name="camera-outline" size={14} color={colors.teal[600]} />
+                <Text style={[styles.photoBlockTitle, { color: palette.text.secondary }]}>Фото к заказ-наряду</Text>
+                <Text style={[styles.photoBlockCount, { color: palette.text.tertiary }]}>
+                  {pendingPhotos.length + existingPhotos.length}/{MAX_PHOTOS}
+                </Text>
               </View>
-              {serviceLines.map((line, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.lineItem,
-                    { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
-                  ]}
-                >
-                  <View style={styles.lineTop}>
-                    <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={1}>
-                      {line.name}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => removeServiceLine(idx)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Ionicons name="close-circle-outline" size={18} color={colors.red[400]} />
-                    </TouchableOpacity>
-                  </View>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.photoStripContent}
+                keyboardShouldPersistTaps="handled"
+              >
+                {existingPhotos.map((photo) => (
                   <TouchableOpacity
-                    style={[styles.lineMasterRow, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
-                    onPress={() => setShowMasterPicker(idx)}
+                    key={photo.id}
+                    activeOpacity={0.85}
+                    onPress={() => pickAndAddPhoto({ kind: 'existing', photo })}
+                    onLongPress={() => removeExistingPhoto(photo.id)}
+                    delayLongPress={400}
+                    style={[styles.photoThumbWrap, { borderColor: palette.border.subtle }]}
                   >
-                    <Ionicons name="person-outline" size={12} color={colors.primary[500]} />
-                    <Text style={[styles.lineMasterText, isDark && { color: colors.primary[300] }]}>
-                      {getMasterName(line.lineMasterId || line.masterId)}
-                    </Text>
-                    <Ionicons name="chevron-down" size={10} color={palette.text.tertiary} />
+                    <ExpoImage
+                      source={{ uri: photo.photoUrl }}
+                      style={styles.photoThumbImg}
+                      contentFit="cover"
+                      transition={200}
+                      placeholder={{ blurhash: 'L4SY{q?b00?b~q?b?b?b?b?b?b?b' }}
+                      placeholderContentFit="cover"
+                      cachePolicy="memory-disk"
+                    />
                   </TouchableOpacity>
-                  <View style={styles.lineInputs}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
-                      <TextInput
-                        value={String(line.price)}
-                        onChangeText={(v) => updateServiceLine(idx, 'price', parseMoneyInput(v))}
-                        style={[
-                          styles.lineInput,
-                          {
-                            backgroundColor: palette.bg.muted,
-                            borderColor: palette.border.subtle,
-                            color: palette.text.primary,
-                          },
-                        ]}
-                        keyboardType="numeric"
-                        selectTextOnFocus
-                      />
-                    </View>
-                    <View style={{ width: 60 }}>
-                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Кол.</Text>
-                      <TextInput
-                        value={String(line.quantity)}
-                        onChangeText={(v) => updateServiceLine(idx, 'quantity', parseMoneyInput(v) || 1)}
-                        style={[
-                          styles.lineInput,
-                          {
-                            backgroundColor: palette.bg.muted,
-                            borderColor: palette.border.subtle,
-                            color: palette.text.primary,
-                          },
-                        ]}
-                        keyboardType="numeric"
-                        selectTextOnFocus
-                      />
-                    </View>
-                    <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
-                      {formatMoney(line.price * line.quantity)}
-                    </Text>
-                  </View>
-                </View>
-              ))}
-              {serviceLines.length === 0 && (
-                <TouchableOpacity
-                  style={[styles.emptyAddBtn, { borderColor: palette.border.subtle }]}
-                  onPress={() => {
-                    setServiceSearch('');
-                    setShowServicePicker(true);
-                  }}
-                >
-                  <Ionicons name="add-circle-outline" size={18} color={palette.text.tertiary} />
-                  <Text style={[styles.emptyAddText, { color: palette.text.tertiary }]}>Добавить услугу</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Products */}
-            <View
-              style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-            >
-              <View style={styles.linesSectionHeader}>
-                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                  <View
-                    style={[
-                      styles.sectionIcon,
-                      { backgroundColor: isDark ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
-                    ]}
+                ))}
+                {pendingPhotos.map((uri) => (
+                  <TouchableOpacity
+                    key={uri}
+                    activeOpacity={0.85}
+                    onPress={() => pickAndAddPhoto({ kind: 'pending', uri })}
+                    onLongPress={() => removePendingPhoto(uri)}
+                    delayLongPress={400}
+                    style={[styles.photoThumbWrap, { borderColor: palette.border.subtle }]}
                   >
-                    <Ionicons name="cube-outline" size={14} color={colors.blue[600]} />
-                  </View>
-                  <Text style={[styles.linesSectionTitle, { color: palette.text.primary }]}>Товары</Text>
-                  {productLines.length > 0 && (
-                    <View
-                      style={[styles.lineBadge, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
-                    >
-                      <Text style={[styles.lineBadgeText, isDark && { color: colors.primary[300] }]}>
-                        {productLines.length}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <TouchableOpacity
-                  style={[styles.addLineBtn, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
-                  onPress={openProductPicker}
-                >
-                  <Ionicons name="add" size={16} color={colors.primary[600]} />
-                </TouchableOpacity>
-              </View>
-              {productLines.map((line, idx) => (
-                <View
-                  key={idx}
-                  style={[
-                    styles.lineItem,
-                    { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
-                  ]}
-                >
-                  <View style={styles.lineTop}>
-                    <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={1}>
-                      {line.name}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => removeProductLine(idx)}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                      <Ionicons name="close-circle-outline" size={18} color={colors.red[400]} />
-                    </TouchableOpacity>
-                  </View>
-                  <View style={styles.lineInputs}>
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
-                      <TextInput
-                        value={String(line.sellPrice)}
-                        onChangeText={(v) => updateProductLine(idx, 'sellPrice', parseMoneyInput(v))}
-                        style={[
-                          styles.lineInput,
-                          {
-                            backgroundColor: palette.bg.muted,
-                            borderColor: palette.border.subtle,
-                            color: palette.text.primary,
-                          },
-                        ]}
-                        keyboardType="numeric"
-                        selectTextOnFocus
-                      />
-                    </View>
-                    <View style={{ width: 60 }}>
-                      <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>
-                        {`Кол. (${unitLabel(line.unit)})`}
-                      </Text>
-                      {/* 120: дробное количество всегда разрешено — 0.5 м шланга.
-                          Черновик текста живёт в QtyInput, чтобы «0.» и «2,» не
-                          съедались контролируемым value на каждом символе. */}
-                      <QtyInput
-                        value={line.quantity}
-                        onCommit={(n) => updateProductLine(idx, 'quantity', n)}
-                        style={[
-                          styles.lineInput,
-                          {
-                            backgroundColor: palette.bg.muted,
-                            borderColor: palette.border.subtle,
-                            color: palette.text.primary,
-                          },
-                        ]}
-                      />
-                    </View>
-                    <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
-                      {formatMoney(line.sellPrice * line.quantity)}
-                    </Text>
-                  </View>
-                  {/* M4: мягкое предупреждение об оверселле — по кешу склада. */}
-                  {!!line.productId && oversoldByProductId.has(line.productId) && (
-                    <View style={styles.stockWarnRow}>
-                      <Ionicons name="alert-circle-outline" size={13} color={colors.amber[600]} />
-                      <Text style={styles.stockWarnText}>
-                        На складе только {formatQty(Math.max(oversoldByProductId.get(line.productId)!.stock, 0))}{' '}
-                        {unitLabel(line.unit)}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-              ))}
-              {productLines.length === 0 && (
-                <TouchableOpacity
-                  style={[styles.emptyAddBtn, { borderColor: palette.border.subtle }]}
-                  onPress={openProductPicker}
-                >
-                  <Ionicons name="add-circle-outline" size={18} color={palette.text.tertiary} />
-                  <Text style={[styles.emptyAddText, { color: palette.text.tertiary }]}>Добавить товар</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Сохранить как шаблон */}
-            {(serviceLines.length > 0 || productLines.length > 0) && (
-              <TouchableOpacity
-                style={[styles.saveTemplateBtn, { borderColor: palette.border.subtle }]}
-                onPress={openSaveTemplate}
-              >
-                <Ionicons name="bookmark-outline" size={14} color={palette.text.tertiary} />
-                <Text style={[styles.saveTemplateBtnText, { color: palette.text.tertiary }]}>Сохранить как шаблон</Text>
-              </TouchableOpacity>
-            )}
-
-            {/* Discount — вся строка (иконка/надпись/валюта) фокусирует ввод */}
-            <TouchableOpacity
-              activeOpacity={1}
-              onPress={() => discountInputRef.current?.focus()}
-              style={[styles.discountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-            >
-              <Ionicons name="pricetag-outline" size={16} color={colors.orange[500]} />
-              <Text style={[styles.discountLabel, { color: palette.text.secondary }]}>Скидка</Text>
-              <TextInput
-                ref={discountInputRef}
-                value={discount}
-                onChangeText={setDiscount}
-                style={[styles.discountInput, { color: palette.text.primary }]}
-                keyboardType="numeric"
-                placeholder="0"
-                placeholderTextColor={palette.text.tertiary}
-              />
-              <Text style={[styles.discountCurrency, { color: palette.text.tertiary }]}>₽</Text>
-            </TouchableOpacity>
-            {/* MOB-02: та же семантика, что на сервере и в вебе. */}
-            <Text style={[styles.discountHint, { color: palette.text.tertiary }]}>Скидка применяется к товарам</Text>
-          </View>
-
-          {/* ═══ SECTION 3 (was COMMENT — moved into client section above) ═══ */}
-
-          {/* ═══ SECTION 4: SUMMARY — special card ═══ */}
-          {(serviceLines.length > 0 || productLines.length > 0) && (
-            <View
-              style={[
-                styles.summaryCard,
-                { backgroundColor: palette.bg.card, borderColor: palette.accent.primarySoft },
-              ]}
-            >
-              <Text style={[styles.summaryTitle, { color: palette.text.tertiary }]}>ИТОГО</Text>
-              {serviceLines.length > 0 && (
-                <View style={styles.summaryRow}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                    <Ionicons name="build-outline" size={14} color={palette.text.tertiary} />
-                    <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>
-                      Услуги ({serviceLines.length})
-                    </Text>
-                  </View>
-                  <Text style={[styles.summaryValue, { color: palette.text.primary }]}>
-                    {formatMoney(serviceTotal)}
-                  </Text>
-                </View>
-              )}
-              {productLines.length > 0 && (
-                <View style={styles.summaryRow}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                    <Ionicons name="cube-outline" size={14} color={palette.text.tertiary} />
-                    <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>
-                      Товары ({productLines.length})
-                    </Text>
-                  </View>
-                  <Text style={[styles.summaryValue, { color: palette.text.primary }]}>
-                    {formatMoney(productTotal)}
-                  </Text>
-                </View>
-              )}
-              {serviceLines.length > 0 && productLines.length > 0 && (
-                <>
-                  <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
-                  <View style={styles.summaryRow}>
-                    <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>Подитог</Text>
-                    <Text style={[styles.summaryValue, { color: palette.text.primary }]}>{formatMoney(subtotal)}</Text>
-                  </View>
-                </>
-              )}
-              {discountNum > 0 && (
-                <View style={styles.summaryRow}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-                    <Ionicons name="pricetag-outline" size={14} color={colors.orange[500]} />
-                    <Text style={[styles.summaryLabel, { color: colors.orange[600] }]}>Скидка</Text>
-                  </View>
-                  {/* MOB-02: показываем ПРИМЕНЁННУЮ скидку (≤ суммы товаров),
-                      чтобы строки сходились с «К оплате» копейка в копейку. */}
-                  <Text style={[styles.summaryValue, { color: colors.orange[600] }]}>
-                    -{formatMoney(effectiveDiscount)}
-                  </Text>
-                </View>
-              )}
-              <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
-              <View style={styles.summaryRow}>
-                <Text style={[styles.summaryTotalLabel, { color: palette.text.primary }]}>К оплате</Text>
-                <Text style={styles.summaryTotalValue}>{formatMoney(total)}</Text>
-              </View>
+                    <ExpoImage
+                      source={{ uri }}
+                      style={styles.photoThumbImg}
+                      contentFit="cover"
+                      transition={200}
+                      placeholder={{ blurhash: 'L4SY{q?b00?b~q?b?b?b?b?b?b?b' }}
+                      placeholderContentFit="cover"
+                      cachePolicy="memory-disk"
+                    />
+                    {uploadingUris.has(uri) && (
+                      <View style={styles.photoUploadOverlay}>
+                        <ActivityIndicator size="small" color="#fff" />
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                ))}
+                {pendingPhotos.length + existingPhotos.length < MAX_PHOTOS && (
+                  <TouchableOpacity
+                    activeOpacity={0.7}
+                    onPress={() => pickAndAddPhoto()}
+                    style={[
+                      styles.photoAddTile,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    ]}
+                    accessibilityLabel="Добавить фото"
+                  >
+                    <Ionicons name="add" size={28} color={colors.primary[600]} />
+                  </TouchableOpacity>
+                )}
+              </ScrollView>
             </View>
           )}
+        </View>
 
-          {/* ═══ SECTION 5: PAYMENT — green tint ═══
+        {/* ═══ SECTION 2: SERVICES & PRODUCTS — white ═══ */}
+        <View
+          style={[
+            styles.sectionItems,
+            buildShadow(palette),
+            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          ]}
+        >
+          <View style={[styles.sectionHeader, { justifyContent: 'space-between' }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+              <Ionicons name="receipt-outline" size={18} color={colors.orange[600]} />
+              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Товары и услуги</Text>
+            </View>
+            <TouchableOpacity
+              style={[
+                styles.templateChip,
+                isDark
+                  ? {
+                      backgroundColor: softTint(colors.primary[600], 'dark'),
+                      borderColor: 'rgba(79, 131, 232, 0.35)',
+                    }
+                  : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+              ]}
+              onPress={openTemplatesPicker}
+              hitSlop={8}
+            >
+              <Ionicons name="copy-outline" size={13} color={colors.primary[600]} />
+              <Text style={[styles.templateChipText, isDark && { color: colors.primary[300] }]}>Шаблоны</Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Services */}
+          <View
+            style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          >
+            <View style={styles.linesSectionHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <View
+                  style={[
+                    styles.sectionIcon,
+                    { backgroundColor: isDark ? softTint(colors.orange[500], 'dark') : colors.orange[50] },
+                  ]}
+                >
+                  <Ionicons name="build-outline" size={14} color={colors.orange[500]} />
+                </View>
+                <Text style={[styles.linesSectionTitle, { color: palette.text.primary }]}>Услуги</Text>
+                {serviceLines.length > 0 && (
+                  <View
+                    style={[styles.lineBadge, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+                  >
+                    <Text style={[styles.lineBadgeText, isDark && { color: colors.primary[300] }]}>
+                      {serviceLines.length}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <TouchableOpacity
+                style={[styles.addLineBtn, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+                onPress={() => {
+                  setServiceSearch('');
+                  setShowServicePicker(true);
+                }}
+              >
+                <Ionicons name="add" size={16} color={colors.primary[600]} />
+              </TouchableOpacity>
+            </View>
+            {serviceLines.map((line, idx) => (
+              <View
+                key={idx}
+                style={[styles.lineItem, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
+              >
+                <View style={styles.lineTop}>
+                  <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {line.name}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => removeServiceLine(idx)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="close-circle-outline" size={18} color={colors.red[400]} />
+                  </TouchableOpacity>
+                </View>
+                <TouchableOpacity
+                  style={[styles.lineMasterRow, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+                  onPress={() => setShowMasterPicker(idx)}
+                >
+                  <Ionicons name="person-outline" size={12} color={colors.primary[500]} />
+                  <Text style={[styles.lineMasterText, isDark && { color: colors.primary[300] }]}>
+                    {getMasterName(line.lineMasterId || line.masterId)}
+                  </Text>
+                  <Ionicons name="chevron-down" size={10} color={palette.text.tertiary} />
+                </TouchableOpacity>
+                <View style={styles.lineInputs}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
+                    <TextInput
+                      value={String(line.price)}
+                      onChangeText={(v) => updateServiceLine(idx, 'price', parseMoneyInput(v))}
+                      style={[
+                        styles.lineInput,
+                        {
+                          backgroundColor: palette.bg.muted,
+                          borderColor: palette.border.subtle,
+                          color: palette.text.primary,
+                        },
+                      ]}
+                      keyboardType="numeric"
+                      selectTextOnFocus
+                    />
+                  </View>
+                  <View style={{ width: 60 }}>
+                    <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Кол.</Text>
+                    <TextInput
+                      value={String(line.quantity)}
+                      onChangeText={(v) => updateServiceLine(idx, 'quantity', parseMoneyInput(v) || 1)}
+                      style={[
+                        styles.lineInput,
+                        {
+                          backgroundColor: palette.bg.muted,
+                          borderColor: palette.border.subtle,
+                          color: palette.text.primary,
+                        },
+                      ]}
+                      keyboardType="numeric"
+                      selectTextOnFocus
+                    />
+                  </View>
+                  <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
+                    {formatMoney(line.price * line.quantity)}
+                  </Text>
+                </View>
+              </View>
+            ))}
+            {serviceLines.length === 0 && (
+              <TouchableOpacity
+                style={[styles.emptyAddBtn, { borderColor: palette.border.subtle }]}
+                onPress={() => {
+                  setServiceSearch('');
+                  setShowServicePicker(true);
+                }}
+              >
+                <Ionicons name="add-circle-outline" size={18} color={palette.text.tertiary} />
+                <Text style={[styles.emptyAddText, { color: palette.text.tertiary }]}>Добавить услугу</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Products */}
+          <View
+            style={[styles.linesSection, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          >
+            <View style={styles.linesSectionHeader}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                <View
+                  style={[
+                    styles.sectionIcon,
+                    { backgroundColor: isDark ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
+                  ]}
+                >
+                  <Ionicons name="cube-outline" size={14} color={colors.blue[600]} />
+                </View>
+                <Text style={[styles.linesSectionTitle, { color: palette.text.primary }]}>Товары</Text>
+                {productLines.length > 0 && (
+                  <View
+                    style={[styles.lineBadge, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+                  >
+                    <Text style={[styles.lineBadgeText, isDark && { color: colors.primary[300] }]}>
+                      {productLines.length}
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <TouchableOpacity
+                style={[styles.addLineBtn, isDark && { backgroundColor: softTint(colors.primary[600], 'dark') }]}
+                onPress={openProductPicker}
+              >
+                <Ionicons name="add" size={16} color={colors.primary[600]} />
+              </TouchableOpacity>
+            </View>
+            {productLines.map((line, idx) => (
+              <View
+                key={idx}
+                style={[styles.lineItem, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
+              >
+                <View style={styles.lineTop}>
+                  <Text style={[styles.lineName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {line.name}
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => removeProductLine(idx)}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="close-circle-outline" size={18} color={colors.red[400]} />
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.lineInputs}>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
+                    <TextInput
+                      value={String(line.sellPrice)}
+                      onChangeText={(v) => updateProductLine(idx, 'sellPrice', parseMoneyInput(v))}
+                      style={[
+                        styles.lineInput,
+                        {
+                          backgroundColor: palette.bg.muted,
+                          borderColor: palette.border.subtle,
+                          color: palette.text.primary,
+                        },
+                      ]}
+                      keyboardType="numeric"
+                      selectTextOnFocus
+                    />
+                  </View>
+                  <View style={{ width: 60 }}>
+                    <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>
+                      {`Кол. (${unitLabel(line.unit)})`}
+                    </Text>
+                    {/* 120: дробное количество всегда разрешено — 0.5 м шланга.
+                          Черновик текста живёт в QtyInput, чтобы «0.» и «2,» не
+                          съедались контролируемым value на каждом символе. */}
+                    <QtyInput
+                      value={line.quantity}
+                      onCommit={(n) => updateProductLine(idx, 'quantity', n)}
+                      style={[
+                        styles.lineInput,
+                        {
+                          backgroundColor: palette.bg.muted,
+                          borderColor: palette.border.subtle,
+                          color: palette.text.primary,
+                        },
+                      ]}
+                    />
+                  </View>
+                  <Text style={[styles.lineTotal, { color: palette.text.primary }]}>
+                    {formatMoney(line.sellPrice * line.quantity)}
+                  </Text>
+                </View>
+                {/* M4: мягкое предупреждение об оверселле — по кешу склада. */}
+                {!!line.productId && oversoldByProductId.has(line.productId) && (
+                  <View style={styles.stockWarnRow}>
+                    <Ionicons name="alert-circle-outline" size={13} color={colors.amber[600]} />
+                    <Text style={styles.stockWarnText}>
+                      На складе только {formatQty(Math.max(oversoldByProductId.get(line.productId)!.stock, 0))}{' '}
+                      {unitLabel(line.unit)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            ))}
+            {productLines.length === 0 && (
+              <TouchableOpacity
+                style={[styles.emptyAddBtn, { borderColor: palette.border.subtle }]}
+                onPress={openProductPicker}
+              >
+                <Ionicons name="add-circle-outline" size={18} color={palette.text.tertiary} />
+                <Text style={[styles.emptyAddText, { color: palette.text.tertiary }]}>Добавить товар</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Сохранить как шаблон */}
+          {(serviceLines.length > 0 || productLines.length > 0) && (
+            <TouchableOpacity
+              style={[styles.saveTemplateBtn, { borderColor: palette.border.subtle }]}
+              onPress={openSaveTemplate}
+            >
+              <Ionicons name="bookmark-outline" size={14} color={palette.text.tertiary} />
+              <Text style={[styles.saveTemplateBtnText, { color: palette.text.tertiary }]}>Сохранить как шаблон</Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Discount — вся строка (иконка/надпись/валюта) фокусирует ввод */}
+          <TouchableOpacity
+            activeOpacity={1}
+            onPress={() => discountInputRef.current?.focus()}
+            style={[styles.discountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          >
+            <Ionicons name="pricetag-outline" size={16} color={colors.orange[500]} />
+            <Text style={[styles.discountLabel, { color: palette.text.secondary }]}>Скидка</Text>
+            <TextInput
+              ref={discountInputRef}
+              value={discount}
+              onChangeText={setDiscount}
+              style={[styles.discountInput, { color: palette.text.primary }]}
+              keyboardType="numeric"
+              placeholder="0"
+              placeholderTextColor={palette.text.tertiary}
+            />
+            <Text style={[styles.discountCurrency, { color: palette.text.tertiary }]}>₽</Text>
+          </TouchableOpacity>
+          {/* MOB-02: та же семантика, что на сервере и в вебе. */}
+          <Text style={[styles.discountHint, { color: palette.text.tertiary }]}>Скидка применяется к товарам</Text>
+        </View>
+
+        {/* ═══ SECTION 3 (was COMMENT — moved into client section above) ═══ */}
+
+        {/* ═══ SECTION 4: SUMMARY — special card ═══ */}
+        {(serviceLines.length > 0 || productLines.length > 0) && (
+          <View
+            style={[styles.summaryCard, { backgroundColor: palette.bg.card, borderColor: palette.accent.primarySoft }]}
+          >
+            <Text style={[styles.summaryTitle, { color: palette.text.tertiary }]}>ИТОГО</Text>
+            {serviceLines.length > 0 && (
+              <View style={styles.summaryRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <Ionicons name="build-outline" size={14} color={palette.text.tertiary} />
+                  <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>
+                    Услуги ({serviceLines.length})
+                  </Text>
+                </View>
+                <Text style={[styles.summaryValue, { color: palette.text.primary }]}>{formatMoney(serviceTotal)}</Text>
+              </View>
+            )}
+            {productLines.length > 0 && (
+              <View style={styles.summaryRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <Ionicons name="cube-outline" size={14} color={palette.text.tertiary} />
+                  <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>
+                    Товары ({productLines.length})
+                  </Text>
+                </View>
+                <Text style={[styles.summaryValue, { color: palette.text.primary }]}>{formatMoney(productTotal)}</Text>
+              </View>
+            )}
+            {serviceLines.length > 0 && productLines.length > 0 && (
+              <>
+                <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
+                <View style={styles.summaryRow}>
+                  <Text style={[styles.summaryLabel, { color: palette.text.secondary }]}>Подитог</Text>
+                  <Text style={[styles.summaryValue, { color: palette.text.primary }]}>{formatMoney(subtotal)}</Text>
+                </View>
+              </>
+            )}
+            {discountNum > 0 && (
+              <View style={styles.summaryRow}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <Ionicons name="pricetag-outline" size={14} color={colors.orange[500]} />
+                  <Text style={[styles.summaryLabel, { color: colors.orange[600] }]}>Скидка</Text>
+                </View>
+                {/* MOB-02: показываем ПРИМЕНЁННУЮ скидку (≤ суммы товаров),
+                      чтобы строки сходились с «К оплате» копейка в копейку. */}
+                <Text style={[styles.summaryValue, { color: colors.orange[600] }]}>
+                  -{formatMoney(effectiveDiscount)}
+                </Text>
+              </View>
+            )}
+            <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
+            <View style={styles.summaryRow}>
+              <Text style={[styles.summaryTotalLabel, { color: palette.text.primary }]}>К оплате</Text>
+              <Text style={styles.summaryTotalValue}>{formatMoney(total)}</Text>
+            </View>
+          </View>
+        )}
+
+        {/* ═══ SECTION 5: PAYMENT — green tint ═══
               В order-режиме (092) оплату принимает кассир, а не мастер: секцию
               оплаты целиком прячем (нал / карта / смешанная / СБП / отложить).
               Бэк коэрсит заказ в отложенный без оплаты. orderMode=false →
               секция видна и работает байт-в-байт как сейчас. */}
-          {!orderMode && (
-            <View
-              style={[styles.sectionPayment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            >
-              <View style={styles.sectionHeader}>
-                <Ionicons name="wallet-outline" size={18} color={colors.green[600]} />
-                <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Оплата</Text>
-              </View>
+        {!orderMode && (
+          <View
+            style={[styles.sectionPayment, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
+            <View style={styles.sectionHeader}>
+              <Ionicons name="wallet-outline" size={18} color={colors.green[600]} />
+              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Оплата</Text>
+            </View>
 
-              {/* Способ оплаты — ЕДИНЫЙ селектор: Наличные / Карта / Смешанная /
+            {/* Способ оплаты — ЕДИНЫЙ селектор: Наличные / Карта / Смешанная /
                   По гарантии и — при праве sell_installment на НОВОМ чеке —
                   «Рассрочка» одним пунктом в ТОЙ ЖЕ модалке, выбирается тем же
                   тапом, что и остальные (отдельного тоггла больше нет). Кнопка
@@ -3240,275 +3222,272 @@ export default function CheckCreateScreen() {
                   (цветной тайл-иконка + подпись). Скрыта только при правке уже
                   оформленной рассрочки — там ниже read-only баннер, способ
                   менять нельзя. */}
-              {!(isInstallment && !canOfferInstallment) &&
-                (() => {
-                  const visual = paymentMethodVisual(paymentMethod);
-                  return (
-                    <TouchableOpacity
-                      style={[styles.paymentSelector, { backgroundColor: palette.bg.muted, borderColor: visual.color }]}
-                      onPress={() => {
-                        haptic('tap');
-                        setShowPaymentPicker(true);
-                      }}
-                      activeOpacity={0.8}
-                      accessibilityRole="button"
-                      accessibilityLabel={`Способ оплаты: ${paymentMethodLabel(paymentMethod)}`}
-                    >
-                      <View style={[styles.paymentSelectorIcon, { backgroundColor: visual.tint }]}>
-                        <Ionicons name={visual.icon} size={20} color={visual.color} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.paymentSelectorHint, { color: palette.text.tertiary }]}>
-                          Способ оплаты
-                        </Text>
-                        <Text style={[styles.paymentSelectorValue, { color: palette.text.primary }]} numberOfLines={1}>
-                          {paymentMethodLabel(paymentMethod)}
-                        </Text>
-                      </View>
-                      <Ionicons name="chevron-down" size={18} color={palette.text.tertiary} />
-                    </TouchableOpacity>
-                  );
-                })()}
+            {!(isInstallment && !canOfferInstallment) &&
+              (() => {
+                const visual = paymentMethodVisual(paymentMethod);
+                return (
+                  <TouchableOpacity
+                    style={[styles.paymentSelector, { backgroundColor: palette.bg.muted, borderColor: visual.color }]}
+                    onPress={() => {
+                      haptic('tap');
+                      setShowPaymentPicker(true);
+                    }}
+                    activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Способ оплаты: ${paymentMethodLabel(paymentMethod)}`}
+                  >
+                    <View style={[styles.paymentSelectorIcon, { backgroundColor: visual.tint }]}>
+                      <Ionicons name={visual.icon} size={20} color={visual.color} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={[styles.paymentSelectorHint, { color: palette.text.tertiary }]}>Способ оплаты</Text>
+                      <Text style={[styles.paymentSelectorValue, { color: palette.text.primary }]} numberOfLines={1}>
+                        {paymentMethodLabel(paymentMethod)}
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-down" size={18} color={palette.text.tertiary} />
+                  </TouchableOpacity>
+                );
+              })()}
 
-              {isInstallment ? (
-                <InstallmentSaleFields
-                  palette={palette}
-                  total={total}
-                  firstPayment={installmentFirst}
-                  onFirstPaymentChange={setInstallmentFirst}
-                  remaining={Math.max(total - parseMoneyInput(installmentFirst), 0)}
-                  nextDateLabel={formatYmdHuman(toYmd(installmentNextDate))}
-                  onOpenDatePicker={() => {
-                    haptic('tap');
-                    setShowInstallmentDatePicker(true);
-                  }}
-                  readOnly={!canOfferInstallment}
-                />
-              ) : (
-                <>
-                  {paymentMethod === ('cash' as PaymentMethod) && (
-                    <View
-                      style={[
-                        styles.splitWrap,
-                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                      ]}
-                    >
-                      <View style={styles.splitRow}>
-                        <View style={styles.splitIconRow}>
-                          <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
-                          <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Клиент дал</Text>
-                        </View>
-                        <TextInput
-                          value={cashGiven}
-                          onChangeText={setCashGiven}
-                          style={[
-                            styles.splitInput,
-                            {
-                              backgroundColor: palette.bg.card,
-                              borderColor: palette.border.subtle,
-                              color: palette.text.primary,
-                            },
-                          ]}
-                          keyboardType="numeric"
-                          placeholder="0"
-                          placeholderTextColor={palette.text.tertiary}
-                        />
+            {isInstallment ? (
+              <InstallmentSaleFields
+                palette={palette}
+                total={total}
+                firstPayment={installmentFirst}
+                onFirstPaymentChange={setInstallmentFirst}
+                remaining={Math.max(total - parseMoneyInput(installmentFirst), 0)}
+                nextDateLabel={formatYmdHuman(toYmd(installmentNextDate))}
+                onOpenDatePicker={() => {
+                  haptic('tap');
+                  setShowInstallmentDatePicker(true);
+                }}
+                readOnly={!canOfferInstallment}
+              />
+            ) : (
+              <>
+                {paymentMethod === ('cash' as PaymentMethod) && (
+                  <View
+                    style={[
+                      styles.splitWrap,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    ]}
+                  >
+                    <View style={styles.splitRow}>
+                      <View style={styles.splitIconRow}>
+                        <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
+                        <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Клиент дал</Text>
                       </View>
-                      {parseMoneyInput(cashGiven) > total && (
-                        <>
-                          <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
-                          <View style={styles.splitRow}>
-                            <View style={styles.splitIconRow}>
-                              <Ionicons name="arrow-undo-outline" size={16} color={colors.green[700]} />
-                              <Text
-                                style={[
-                                  styles.splitLabel,
-                                  { color: palette.text.secondary, fontWeight: fontWeight.bold },
-                                ]}
-                              >
-                                Сдача
-                              </Text>
-                            </View>
+                      <TextInput
+                        value={cashGiven}
+                        onChangeText={setCashGiven}
+                        style={[
+                          styles.splitInput,
+                          {
+                            backgroundColor: palette.bg.card,
+                            borderColor: palette.border.subtle,
+                            color: palette.text.primary,
+                          },
+                        ]}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        placeholderTextColor={palette.text.tertiary}
+                      />
+                    </View>
+                    {parseMoneyInput(cashGiven) > total && (
+                      <>
+                        <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
+                        <View style={styles.splitRow}>
+                          <View style={styles.splitIconRow}>
+                            <Ionicons name="arrow-undo-outline" size={16} color={colors.green[700]} />
                             <Text
-                              style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.green[700] }}
+                              style={[
+                                styles.splitLabel,
+                                { color: palette.text.secondary, fontWeight: fontWeight.bold },
+                              ]}
                             >
-                              {formatMoney(parseMoneyInput(cashGiven) - total)}
+                              Сдача
                             </Text>
                           </View>
-                        </>
-                      )}
-                    </View>
-                  )}
-
-                  {paymentMethod === ('cash_card' as PaymentMethod) && (
-                    <View
-                      style={[
-                        styles.splitWrap,
-                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                      ]}
-                    >
-                      <View style={styles.splitRow}>
-                        <View style={styles.splitIconRow}>
-                          <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
-                          <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Наличные</Text>
+                          <Text
+                            style={{ fontSize: fontSize.base, fontWeight: fontWeight.bold, color: colors.green[700] }}
+                          >
+                            {formatMoney(parseMoneyInput(cashGiven) - total)}
+                          </Text>
                         </View>
-                        <TextInput
-                          value={cashAmount}
-                          onChangeText={setCashAmount}
-                          style={[
-                            styles.splitInput,
-                            {
-                              backgroundColor: palette.bg.card,
-                              borderColor: palette.border.subtle,
-                              color: palette.text.primary,
-                            },
-                          ]}
-                          keyboardType="numeric"
-                          placeholder="0"
-                          placeholderTextColor={palette.text.tertiary}
-                        />
-                      </View>
-                      <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
-                      <View style={styles.splitRow}>
-                        <View style={styles.splitIconRow}>
-                          <Ionicons name="card-outline" size={16} color={colors.blue[600]} />
-                          <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Карта</Text>
-                        </View>
-                        <Text style={styles.splitCardAmount}>{formatMoney(cardAmountCalc)}</Text>
-                      </View>
-                    </View>
-                  )}
+                      </>
+                    )}
+                  </View>
+                )}
 
-                  {/* Оплата по СБП / QR — ДОБАВОЧНЫЙ эквайринг. Виден, когда есть что
+                {paymentMethod === ('cash_card' as PaymentMethod) && (
+                  <View
+                    style={[
+                      styles.splitWrap,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    ]}
+                  >
+                    <View style={styles.splitRow}>
+                      <View style={styles.splitIconRow}>
+                        <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
+                        <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Наличные</Text>
+                      </View>
+                      <TextInput
+                        value={cashAmount}
+                        onChangeText={setCashAmount}
+                        style={[
+                          styles.splitInput,
+                          {
+                            backgroundColor: palette.bg.card,
+                            borderColor: palette.border.subtle,
+                            color: palette.text.primary,
+                          },
+                        ]}
+                        keyboardType="numeric"
+                        placeholder="0"
+                        placeholderTextColor={palette.text.tertiary}
+                      />
+                    </View>
+                    <View style={[styles.splitDivider, { backgroundColor: palette.border.subtle }]} />
+                    <View style={styles.splitRow}>
+                      <View style={styles.splitIconRow}>
+                        <Ionicons name="card-outline" size={16} color={colors.blue[600]} />
+                        <Text style={[styles.splitLabel, { color: palette.text.secondary }]}>Карта</Text>
+                      </View>
+                      <Text style={styles.splitCardAmount}>{formatMoney(cardAmountCalc)}</Text>
+                    </View>
+                  </View>
+                )}
+
+                {/* Оплата по СБП / QR — ДОБАВОЧНЫЙ эквайринг. Виден, когда есть что
                 проводить и чек не откладывается. Открывает модалку: создаёт
                 онлайн-платёж, показывает ссылку СБП, опрашивает статус; при
                 успехе проводит чек по карточному (электронному) тендеру.
                 нал/карта/смешанная/отложенный — без изменений. */}
-                  {!isDeferred && total > 0 && (serviceLines.length > 0 || productLines.length > 0) && (
-                    <TouchableOpacity
+                {!isDeferred && total > 0 && (serviceLines.length > 0 || productLines.length > 0) && (
+                  <TouchableOpacity
+                    style={[
+                      styles.sbpButton,
+                      { backgroundColor: getBadgeColors(palette.mode).purple.bg, borderColor: colors.purple[600] },
+                    ]}
+                    onPress={openSbpPayment}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel="Оплата по СБП или QR-коду"
+                  >
+                    <View
                       style={[
-                        styles.sbpButton,
-                        { backgroundColor: getBadgeColors(palette.mode).purple.bg, borderColor: colors.purple[600] },
+                        styles.sbpButtonIcon,
+                        { backgroundColor: palette.mode === 'dark' ? palette.bg.card : '#FFFFFF' },
                       ]}
-                      onPress={openSbpPayment}
-                      activeOpacity={0.85}
-                      accessibilityRole="button"
-                      accessibilityLabel="Оплата по СБП или QR-коду"
                     >
-                      <View
-                        style={[
-                          styles.sbpButtonIcon,
-                          { backgroundColor: palette.mode === 'dark' ? palette.bg.card : '#FFFFFF' },
-                        ]}
+                      <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={[styles.sbpButtonTitle, { color: getBadgeColors(palette.mode).purple.text }]}
+                        numberOfLines={1}
                       >
-                        <Ionicons name="qr-code-outline" size={20} color={colors.purple[600]} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text
-                          style={[styles.sbpButtonTitle, { color: getBadgeColors(palette.mode).purple.text }]}
-                          numberOfLines={1}
-                        >
-                          Оплата по СБП / QR
-                        </Text>
-                        <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
-                          Система быстрых платежей — оплата по QR
-                        </Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={18} color={colors.purple[600]} />
-                    </TouchableOpacity>
-                  )}
+                        Оплата по СБП / QR
+                      </Text>
+                      <Text style={[styles.sbpButtonHint, { color: palette.text.tertiary }]} numberOfLines={1}>
+                        Система быстрых платежей — оплата по QR
+                      </Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.purple[600]} />
+                  </TouchableOpacity>
+                )}
 
-                  {/* Deferred toggle — скрыт при правке ПРОВЕДЁННОГО чека (#61):
+                {/* Deferred toggle — скрыт при правке ПРОВЕДЁННОГО чека (#61):
                       закрытый чек не возвращают в черновик (бэк editClosedCheck
                       не трогает is_deferred). Для нового/отложенного — как раньше. */}
-                  {!isEditingClosed && (
-                    <TouchableOpacity
-                      style={[
-                        styles.deferToggle,
-                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                        isDeferred &&
-                          (isDark
-                            ? {
-                                backgroundColor: softTint(colors.amber[600], 'dark'),
-                                borderColor: 'rgba(217, 119, 6, 0.4)',
-                              }
-                            : styles.deferToggleActive),
-                      ]}
-                      onPress={() => setIsDeferred(!isDeferred)}
-                    >
-                      <Ionicons
-                        name={isDeferred ? 'checkbox' : 'square-outline'}
-                        size={20}
-                        color={isDeferred ? colors.amber[600] : palette.text.tertiary}
-                      />
-                      <View style={{ flex: 1 }}>
-                        <Text
-                          style={[
-                            styles.deferLabel,
-                            { color: palette.text.secondary },
-                            isDeferred && { color: colors.amber[600] },
-                          ]}
-                        >
-                          Отложить чек
-                        </Text>
-                        <Text style={[styles.deferHint, { color: palette.text.tertiary }]}>Сохранить как черновик</Text>
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                </>
-              )}
-            </View>
-          )}
+                {!isEditingClosed && (
+                  <TouchableOpacity
+                    style={[
+                      styles.deferToggle,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                      isDeferred &&
+                        (isDark
+                          ? {
+                              backgroundColor: softTint(colors.amber[600], 'dark'),
+                              borderColor: 'rgba(217, 119, 6, 0.4)',
+                            }
+                          : styles.deferToggleActive),
+                    ]}
+                    onPress={() => setIsDeferred(!isDeferred)}
+                  >
+                    <Ionicons
+                      name={isDeferred ? 'checkbox' : 'square-outline'}
+                      size={20}
+                      color={isDeferred ? colors.amber[600] : palette.text.tertiary}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text
+                        style={[
+                          styles.deferLabel,
+                          { color: palette.text.secondary },
+                          isDeferred && { color: colors.amber[600] },
+                        ]}
+                      >
+                        Отложить чек
+                      </Text>
+                      <Text style={[styles.deferHint, { color: palette.text.tertiary }]}>Сохранить как черновик</Text>
+                    </View>
+                  </TouchableOpacity>
+                )}
+              </>
+            )}
+          </View>
+        )}
 
-          {/* Submit — PressableScale gives the iOS scale-press (Android ripple),
+        {/* Submit — PressableScale gives the iOS scale-press (Android ripple),
               matching the app's CTA convention (see platform/PressableScale).
               hapticIntent is null on purpose: the meaningful feedback is the
               'success' haptic fired in createMutation.onSuccess (only when the
               check is actually saved) and the 'warning' haptic on a validation
               early-return — a bare tap should not feel like a confirmation. */}
-          <PressableScale
-            style={[styles.submitBtn, createMutation.isPending && { opacity: 0.5 }]}
-            onPress={() => handleSubmit()}
-            disabled={createMutation.isPending}
-            hapticIntent={null}
-          >
-            {createMutation.isPending ? (
-              <ActivityIndicator color={colors.white} />
-            ) : (
-              <LinearGradient
-                colors={
-                  isDeferred && !orderMode ? [colors.amber[600], '#b45309'] : [colors.primary[600], colors.primary[700]]
+        <PressableScale
+          style={[styles.submitBtn, createMutation.isPending && { opacity: 0.5 }]}
+          onPress={() => handleSubmit()}
+          disabled={createMutation.isPending}
+          hapticIntent={null}
+        >
+          {createMutation.isPending ? (
+            <ActivityIndicator color={colors.white} />
+          ) : (
+            <LinearGradient
+              colors={
+                isDeferred && !orderMode ? [colors.amber[600], '#b45309'] : [colors.primary[600], colors.primary[700]]
+              }
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.submitGradient}
+            >
+              <Ionicons
+                name={
+                  orderMode ? 'clipboard-outline' : isDeferred ? 'pause-circle-outline' : 'checkmark-circle-outline'
                 }
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 1 }}
-                style={styles.submitGradient}
-              >
-                <Ionicons
-                  name={
-                    orderMode ? 'clipboard-outline' : isDeferred ? 'pause-circle-outline' : 'checkmark-circle-outline'
-                  }
-                  size={20}
-                  color={colors.white}
-                />
-                {/* В order-режиме (092) мастер создаёт заказ-наряд — кассир
+                size={20}
+                color={colors.white}
+              />
+              {/* В order-режиме (092) мастер создаёт заказ-наряд — кассир
                     пробьёт оплату позже. CTA и цвет переименованы; бэк коэрсит
                     чек в отложенный. orderMode=false → текст байт-в-байт как был. */}
-                <Text style={styles.submitBtnText}>
-                  {orderMode
-                    ? editId
-                      ? 'Сохранить заказ-наряд'
-                      : 'Создать заказ-наряд'
-                    : isDeferred
-                      ? 'Отложить'
-                      : editId
-                        ? 'Сохранить'
-                        : `Пробить — ${formatMoney(total)}`}
-                </Text>
-              </LinearGradient>
-            )}
-          </PressableScale>
-        </ScrollView>
-      </KeyboardAvoidingView>
+              <Text style={styles.submitBtnText}>
+                {orderMode
+                  ? editId
+                    ? 'Сохранить заказ-наряд'
+                    : 'Создать заказ-наряд'
+                  : isDeferred
+                    ? 'Отложить'
+                    : editId
+                      ? 'Сохранить'
+                      : `Пробить — ${formatMoney(total)}`}
+              </Text>
+            </LinearGradient>
+          )}
+        </PressableScale>
+      </KeyboardAwareScroll>
 
       {/* Master Picker */}
       <Modal visible={showMasterPicker !== null} onClose={() => setShowMasterPicker(null)} title="Выберите мастера">

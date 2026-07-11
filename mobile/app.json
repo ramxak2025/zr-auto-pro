@@ -39,7 +39,7 @@
       },
       "package": "com.autexa.mobile",
       "versionCode": 13,
-      "softwareKeyboardLayoutMode": "pan",
+      "softwareKeyboardLayoutMode": "resize",
       "edgeToEdgeEnabled": true,
       "permissions": [
         "android.permission.INTERNET",

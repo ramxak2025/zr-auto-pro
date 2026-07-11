@@ -27,17 +27,7 @@
  * ~30 секунд (сервер сбрасывает их auth-кэш) или при следующем действии.
  */
 import React, { useEffect, useRef, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  ScrollView,
-  StyleSheet,
-  Switch,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  View,
-} from 'react-native';
+import { ActivityIndicator, Alert, StyleSheet, Switch, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -47,6 +37,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import { useRoles, ROLES_QUERY_KEY } from '../hooks/useRoles';
 import {
   MATRIX_GROUPS,
@@ -406,10 +397,9 @@ export default function RoleEditorScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title={headerTitle} subtitle={headerSubtitle} onBack={() => navigation.goBack()} />
 
-      <ScrollView
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
-        keyboardShouldPersistTaps="handled"
-      >
+      {/* KeyboardAwareScroll (Round 11 #1): поле названия роли держится над
+          клавиатурой на iOS И Android. */}
+      <KeyboardAwareScroll contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
         {/* Заблокированный «Директор» — вечно read-only плашка + «Создать копию». */}
         {isLocked && (
           <View
@@ -598,7 +588,7 @@ export default function RoleEditorScreen() {
             )}
           </TouchableOpacity>
         )}
-      </ScrollView>
+      </KeyboardAwareScroll>
     </View>
   );
 }

@@ -8,7 +8,7 @@ interface ModalProps {
   onClose: () => void;
   title: string;
   children: ReactNode;
-  size?: 'sm' | 'md' | 'lg' | 'xl';
+  size?: 'sm' | 'md' | 'lg' | 'xl' | '2xl' | '4xl';
 }
 
 const sizeClasses: Record<string, string> = {
@@ -16,6 +16,8 @@ const sizeClasses: Record<string, string> = {
   md: 'max-w-md',
   lg: 'max-w-lg',
   xl: 'max-w-xl',
+  '2xl': 'max-w-2xl',
+  '4xl': 'max-w-4xl',
 };
 
 // Track how many modals are currently open to avoid premature overflow restore.
@@ -23,13 +25,7 @@ const sizeClasses: Record<string, string> = {
 // a modal unmounts during navigation.
 let openModalCount = 0;
 
-export default function Modal({
-  isOpen,
-  onClose,
-  title,
-  children,
-  size = 'md',
-}: ModalProps) {
+export default function Modal({ isOpen, onClose, title, children, size = 'md' }: ModalProps) {
   const didLock = useRef(false);
 
   useEffect(() => {

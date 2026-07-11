@@ -231,6 +231,22 @@ export class AuthService {
         [phone, hash, dto.fullName, tenantID, ALL_PERMISSIONS],
       );
 
+      // Seed the three default warehouses for this self-registered tenant —
+      // mirrors TenantsService.create so registration and admin-created
+      // tenants behave identically. Without this a self-registered tenant had
+      // NO warehouses, so `resolveWarehouseId` returned null and every product
+      // (manual create AND CSV import) landed with warehouse_id = NULL, hidden
+      // from the default warehouse view. Idempotent via the (tenant_id, kind)
+      // unique constraint.
+      await client.query(
+        `INSERT INTO warehouses (tenant_id, name, kind, sort_order) VALUES
+           ($1, 'Основной склад', 'main',   0),
+           ($1, 'Склад брака',    'defect', 1),
+           ($1, 'Склад Б/У',      'used',   2)
+         ON CONFLICT (tenant_id, kind) DO NOTHING`,
+        [tenantID],
+      );
+
       await client.query('COMMIT');
 
       const token = this.generateToken(userRows[0].id, tenantID);

@@ -1,15 +1,6 @@
 import React, { ReactNode } from 'react';
-import {
-  Modal as RNModal,
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  StyleSheet,
-  KeyboardAvoidingView,
-  Platform,
-  Dimensions,
-} from 'react-native';
+import { Modal as RNModal, View, Text, TouchableOpacity, StyleSheet, Platform, Dimensions } from 'react-native';
+import { KeyboardAvoidingView, KeyboardAwareScrollView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
@@ -24,30 +15,65 @@ interface ModalProps {
   children: ReactNode;
 }
 
+/**
+ * Modal — общий центрированный диалог (комментарий к чеку, форма возврата,
+ * смена статуса и т.п.).
+ *
+ * КЛАВИАТУРА (Round 11 #1). Раньше это был центрированный блок в RN-core
+ * `KeyboardAvoidingView behavior='padding'` без `keyboardVerticalOffset`: он
+ * поднимал ВЕСЬ блок целиком (на iOS), из-за чего высокая модалка клипалась
+ * сверху, а активное поле НЕ гарантированно оказывалось над клавиатурой —
+ * это и был баг «пишу комментарий, поля не видно» на iPhone (поле
+ * комментария живёт внутри этой модалки). На Android этот `behavior` был
+ * вообще no-op.
+ *
+ * ТЕПЕРЬ — два слоя от keyboard-controller (одинаково iOS + Android, синхронно
+ * с реальными кадрами клавиатуры):
+ *   1. `KeyboardAvoidingView behavior="padding"` вокруг центрированного хоста —
+ *      добавляет снизу отступ на высоту клавиатуры, поэтому центрированная
+ *      карточка ПОДНИМАЕТСЯ и её низ выходит из-под клавиатуры (карточка
+ *      capped `maxHeight: 0.85`, так что вверх не упирается в статус-бар).
+ *   2. Тело — `KeyboardAwareScrollView`: авто-скроллит к активному `TextInput`,
+ *      удерживая его ВИДИМЫМ над клавиатурой ВНУТРИ карточки (поведение
+ *      WhatsApp/Telegram). `bottomOffset` держит запас под полем.
+ * `keyboardDismissMode="interactive"` — клавиатура «оттягивается» жестом.
+ *
+ * ВЛОЖЕННЫЙ `KeyboardProvider`. RN-core `<Modal>` монтирует ОТДЕЛЬНОЕ нативное
+ * окно — корневой `KeyboardProvider` из App.tsx туда НЕ дотягивается, и без
+ * своего провайдера keyboard-controller тихо падает на defaultContext (в dev —
+ * warning, в prod — просто no-op, поле снова прячется под клавиатурой). Поэтому
+ * оборачиваем содержимое модалки в собственный `KeyboardProvider`.
+ */
 export default function Modal({ visible, onClose, title, children }: ModalProps) {
   const palette = useColors();
   return (
-    <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.overlay}>
+    <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose} statusBarTranslucent>
+      <KeyboardProvider>
         <ModalBlurBackdrop onPress={onClose} />
-        <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
-          <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
-          <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
-            <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
-            <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
-              <Ionicons name="close" size={20} color={palette.text.tertiary} />
-            </TouchableOpacity>
+        <KeyboardAvoidingView behavior="padding" style={styles.overlay}>
+          <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
+            <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
+            <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
+              <Text style={[styles.title, { color: palette.text.primary }]}>{title}</Text>
+              <TouchableOpacity onPress={onClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="close" size={20} color={palette.text.tertiary} />
+              </TouchableOpacity>
+            </View>
+            <KeyboardAwareScrollView
+              style={styles.body}
+              contentContainerStyle={styles.bodyContent}
+              // Активное поле остаётся видимым над клавиатурой с небольшим
+              // запасом (авто-скролл к фокусу, не «поднять весь блок»).
+              bottomOffset={spacing[6]}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="interactive"
+              showsVerticalScrollIndicator={false}
+            >
+              {children}
+            </KeyboardAwareScrollView>
           </View>
-          <ScrollView
-            style={styles.body}
-            contentContainerStyle={styles.bodyContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {children}
-          </ScrollView>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+      </KeyboardProvider>
     </RNModal>
   );
 }

@@ -29,6 +29,7 @@ import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { voiceApi } from '../api/services';
 import { useVoiceRecorder, mapVoiceError, VoicePermissionError, VOICE_MAX_DURATION_SEC } from '../utils/voiceRecorder';
+import type { VoiceUsage } from '../../../shared/types';
 
 interface VoiceCommentSheetProps {
   visible: boolean;
@@ -54,12 +55,24 @@ function formatTimer(ms: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
+// Остаток голосового ввода. Биллинг идёт блоками по 15 сек (0.25 мин), поэтому
+// прежний `Math.floor(seconds / 60)` занижал: 585 сек показывал «~9 мин»
+// вместо честных 9 мин 45 сек, а 45 сек — «меньше минуты», хотя оставалось
+// 3 блока. Формат «M мин SS сек» читается однозначно; «меньше минуты» — только
+// когда не осталось даже одного 15-секундного блока.
 function formatRemaining(seconds?: number): string | null {
   if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return null;
-  const mins = Math.floor(seconds / 60);
   if (seconds <= 0) return 'минуты голосового ввода закончились';
-  if (mins <= 0) return 'осталось меньше минуты';
-  return `осталось ~${mins} мин`;
+  // Округляем ВНИЗ до 15-сек блока — показываем то, что реально можно потратить,
+  // не завышая остаток.
+  const blocks = Math.floor(seconds / 15);
+  if (blocks <= 0) return 'осталось меньше минуты';
+  const usable = blocks * 15;
+  const mins = Math.floor(usable / 60);
+  const secs = usable % 60;
+  if (mins <= 0) return `осталось ${secs} сек`;
+  if (secs === 0) return `осталось ${mins} мин`;
+  return `осталось ${mins} мин ${secs} сек`;
 }
 
 /**
@@ -210,6 +223,32 @@ export default function VoiceCommentSheet({ visible, onClose, onInsert, remainin
       fd.append('sampleRateHertz', String(pcm.sampleRate));
 
       const res = await voiceApi.transcribe(fd);
+
+      // Свежий авторитетный остаток уже в ответе transcribe (контракт
+      // VoiceTranscribeResult.remainingSeconds) — применяем его оптимистично в
+      // кеш ДО фонового refetch. Раньше читали только text и делали слепой
+      // invalidate + сразу закрывали шит: refetch не успевал долететь, и
+      // счётчик «осталось N мин» выглядел устаревшим между подряд идущими
+      // диктовками (['voice','usage'] персистится, staleTime 5 мин).
+      const fresh = res.data?.remainingSeconds;
+      if (typeof fresh === 'number' && Number.isFinite(fresh)) {
+        queryClient.setQueryData<VoiceUsage>(['voice', 'usage'], (prev) => {
+          if (!prev) return prev;
+          const remainingSeconds = Math.max(0, fresh);
+          // Пересчёт минут ровно как на бэке (voice.service.getUsage):
+          // toMinutes(s) = round((s / 60) * 100) / 100. usedSeconds выводим из
+          // лимита, чтобы used/remaining оставались согласованными.
+          const toMinutes = (s: number) => Math.round((s / 60) * 100) / 100;
+          const usedSeconds = Math.max(0, prev.limitMinutes * 60 - remainingSeconds);
+          return {
+            ...prev,
+            remainingSeconds,
+            remainingMinutes: toMinutes(remainingSeconds),
+            usedMinutes: toMinutes(usedSeconds),
+          };
+        });
+      }
+      // Фоновый reconcile с сервером (period rollover, гонки с другого устройства).
       queryClient.invalidateQueries({ queryKey: ['voice', 'usage'] });
 
       // Сессию бросили (закрыли шит во время «Распознаю…») — долетевший ответ

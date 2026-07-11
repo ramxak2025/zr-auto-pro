@@ -811,26 +811,45 @@ export class ProductsService {
       let skipped = 0;
       const errors: string[] = [];
 
+      // Resolve the tenant's "main" warehouse ONCE so imported products land
+      // there exactly like manual `create` does. Without this the INSERT left
+      // warehouse_id NULL, and the default `getAll` view (which filters on the
+      // main warehouse) hid every imported row. Edge case: a tenant with no
+      // main warehouse resolves to null — we still insert (warehouse_id NULL),
+      // matching legacy behaviour, and migration 130 backfills such rows once a
+      // main warehouse exists.
+      const importWarehouseId = await this.resolveWarehouseId(tenantID, null);
+
       const client = await this.pool.connect();
       try {
         await client.query('BEGIN');
 
-        // Batch INSERT new items — chunk by 100 to stay under param limit (65535/8 ≈ 8k max).
+        // Batch INSERT new items — chunk by 100 to stay under param limit (65535/9 ≈ 7k max).
         const newItems = normalized.filter((r) => !existingMap.has(r.name));
         for (let i = 0; i < newItems.length; i += 100) {
           const chunk = newItems.slice(i, i + 100);
           const values: unknown[] = [];
           const placeholders: string[] = [];
           chunk.forEach((it, idx) => {
-            const b = idx * 8;
+            const b = idx * 9;
             placeholders.push(
-              `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8})`,
+              `($${b + 1}, $${b + 2}, $${b + 3}, $${b + 4}, $${b + 5}, $${b + 6}, $${b + 7}, $${b + 8}, $${b + 9})`,
             );
-            values.push(it.name, it.category, it.costPrice, it.sellPrice, it.stock, it.minStock, it.unit, tenantID);
+            values.push(
+              it.name,
+              it.category,
+              it.costPrice,
+              it.sellPrice,
+              it.stock,
+              it.minStock,
+              it.unit,
+              tenantID,
+              importWarehouseId,
+            );
           });
           try {
             await client.query(
-              `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id) VALUES ${placeholders.join(', ')}`,
+              `INSERT INTO products (name, category, cost_price, sell_price, stock, min_stock, unit, tenant_id, warehouse_id) VALUES ${placeholders.join(', ')}`,
               values,
             );
             created += chunk.length;

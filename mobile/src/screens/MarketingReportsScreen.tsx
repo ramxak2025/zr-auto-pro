@@ -38,7 +38,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../contexts/ThemeContext';
 import { reportsApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
-import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useTabBarScrollInsets } from '../hooks/useTabBarHeight';
 import { useIosSurface } from '../platform/iosSurface';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -561,7 +561,10 @@ export default function MarketingReportsScreen() {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const surface = useIosSurface();
-  const tabBarHeight = useTabBarHeight();
+  // Плавающий glass tab bar: на iOS контент скроллится ПОД стеклом через
+  // contentInset (RN игнорирует его на Android), на Android место резервируем
+  // paddingBottom'ом. Единый контракт хука вместо ручного paddingBottom.
+  const { contentInset, contentContainerPaddingBottom, tabBarHeight } = useTabBarScrollInsets();
   const queryClient = useQueryClient();
 
   const [refreshing, setRefreshing] = React.useState(false);
@@ -628,12 +631,17 @@ export default function MarketingReportsScreen() {
 
       <ScrollView
         style={styles.scroll}
-        contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[6] }]}
+        contentContainerStyle={[
+          styles.scrollContent,
+          // iOS резервирует место через contentInset ниже; на Android — здесь.
+          { paddingBottom: contentContainerPaddingBottom + spacing[6] },
+        ]}
+        contentInset={{ bottom: contentInset.bottom + spacing[6] }}
+        scrollIndicatorInsets={{ bottom: tabBarHeight }}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
         showsVerticalScrollIndicator={false}
-        removeClippedSubviews
         scrollEventThrottle={16}
       >
         {/* ── ПЕРИОД ─────────────────────────────────────────────────────── */}
@@ -1291,6 +1299,9 @@ const styles = StyleSheet.create({
   },
   kpiValue: {
     fontSize: fontSize['2xl'],
+    // Явная высота строки: без неё крупный глиф-бокс наследует Typography `body`
+    // lineHeight:22 и обрезается сверху («631К ₽» без верхней кромки).
+    lineHeight: 30,
     fontWeight: fontWeight.bold,
     letterSpacing: -0.5,
     fontVariant: ['tabular-nums'],
@@ -1325,6 +1336,9 @@ const styles = StyleSheet.create({
   },
   trendSummaryValue: {
     fontSize: fontSize['3xl'],
+    // Явная высота строки: иначе крупный глиф-бокс наследует Typography `body`
+    // lineHeight:22 и обрезается сверху («631К ₽» без верхней кромки).
+    lineHeight: 38,
     fontWeight: fontWeight.bold,
     letterSpacing: -0.8,
     fontVariant: ['tabular-nums'],
@@ -1370,7 +1384,7 @@ const styles = StyleSheet.create({
   legendDotRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
   legendDot: { width: 8, height: 8, borderRadius: 4 },
   legendLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
-  splitValue: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+  splitValue: { fontSize: fontSize['2xl'], lineHeight: 30, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
   splitSub: { fontSize: fontSize.xs, fontVariant: ['tabular-nums'] },
 
   // Sub block (source / funnel / cohort)
@@ -1411,7 +1425,7 @@ const styles = StyleSheet.create({
   },
   tileHead: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   tileLabel: { fontSize: 11, fontWeight: fontWeight.medium, flexShrink: 1 },
-  tileValue: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+  tileValue: { fontSize: fontSize.xl, lineHeight: 26, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
   tileSpacer: { flex: 1 },
 
   // No-telephony / disabled zero state
@@ -1440,13 +1454,21 @@ const styles = StyleSheet.create({
   ratingHero: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: spacing[4] },
   ratingBig: {
     fontSize: 40,
+    // Явная высота строки: без неё крупный глиф наследует Typography `body`
+    // lineHeight:22 и обрезается сверху.
+    lineHeight: 46,
     fontWeight: fontWeight.bold,
     letterSpacing: -1,
     marginBottom: 4,
     fontVariant: ['tabular-nums'],
   },
   ratingCount: { alignItems: 'flex-end' },
-  ratingCountValue: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
+  ratingCountValue: {
+    fontSize: fontSize['2xl'],
+    lineHeight: 30,
+    fontWeight: fontWeight.bold,
+    fontVariant: ['tabular-nums'],
+  },
   ratingCountLabel: { fontSize: fontSize.xs, marginTop: 2 },
   sentimentLegend: { flexDirection: 'row', gap: spacing[4], marginTop: spacing[3], marginBottom: spacing[1] },
   reviewTiles: { marginTop: spacing[4] },

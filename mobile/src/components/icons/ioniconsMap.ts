@@ -126,6 +126,9 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   'chatbubble-ellipses': { lucide: 'MessageCircle', solid: true, fill: true },
   'chatbubble-ellipses-outline': { lucide: 'MessageCircle' },
   'chatbubbles-outline': { lucide: 'MessagesSquare' },
+  // IntegrationsScreen — карточка «SMS.RU» (единственная падала в Circle-заглушку:
+  // имя отсутствовало в карте). Строки текста внутри пузыря — fill НЕ ставим.
+  'chatbox-ellipses-outline': { lucide: 'MessageSquareText' },
   'paper-plane-outline': { lucide: 'Send' },
   // Send: линия сгиба проходит внутри корпуса самолётика — fill её прячет.
   send: { lucide: 'Send', solid: true },

@@ -3,6 +3,7 @@ import { Alert, AppState, StatusBar } from 'react-native';
 import { CommonActions, NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
 import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import NetInfo from '@react-native-community/netinfo';
 import * as Font from 'expo-font';
 import * as Notifications from 'expo-notifications';
@@ -475,69 +476,77 @@ function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: Theme
   const { mode, palette } = useThemeMode();
   return (
     <SafeAreaProvider style={{ backgroundColor: palette.bg.canvas }}>
-      <QueryClientProvider client={queryClient}>
-        <AuthProvider queryClient={queryClient} onAuthResolve={onAuthResolve}>
-          {/* SalaryNotificationProvider mounts the global "Деньги пришли"
+      {/* KeyboardProvider (react-native-keyboard-controller) — источник
+          синхронных кадров клавиатуры для KeyboardAvoidingView /
+          KeyboardAwareScrollView (см. components/KeyboardAware.tsx). Живёт
+          высоко, над навигацией и всеми модалками, чтобы «поле над
+          клавиатурой» работало одинаково на iOS и Android (Round 11 #1).
+          JSI-модуль — требует native rebuild. */}
+      <KeyboardProvider>
+        <QueryClientProvider client={queryClient}>
+          <AuthProvider queryClient={queryClient} onAuthResolve={onAuthResolve}>
+            {/* SalaryNotificationProvider mounts the global "Деньги пришли"
               modal that pops up over any tab/screen when the current user
               has an unconfirmed salary payment. Must live INSIDE
               AuthProvider so it can read `useAuth()`, and inside
               QueryClientProvider so it can use the shared queryClient. */}
-          {/* BroadcastNotificationProvider mounts the global superadmin
+            {/* BroadcastNotificationProvider mounts the global superadmin
               broadcast modal — a center-screen blur-behind card that pops
               when «поддержка» sends an announcement. Lives alongside the
               salary modal provider (same AuthProvider + QueryClient scope). */}
-          <SalaryNotificationProvider>
-            <BroadcastNotificationProvider>
-              <NavigationContainer
-                ref={navigationRef}
-                onReady={() => {
-                  // Flush a push-tap that arrived before the navigator
-                  // mounted (cold start from a notification).
-                  if (pendingCheckId) {
-                    const id = pendingCheckId;
-                    pendingCheckId = null;
-                    openCheckFromPush(id);
-                  }
-                }}
-                theme={{
-                  dark: mode === 'dark',
-                  colors: {
-                    primary: palette.accent.primary,
-                    background: palette.bg.canvas,
-                    card: 'transparent',
-                    text: palette.text.primary,
-                    border: palette.border.subtle,
-                    notification: palette.accent.primary,
-                  },
-                  fonts: {
-                    regular: { fontFamily: 'System', fontWeight: '400' },
-                    medium: { fontFamily: 'System', fontWeight: '500' },
-                    bold: { fontFamily: 'System', fontWeight: '700' },
-                    heavy: { fontFamily: 'System', fontWeight: '900' },
-                  },
-                }}
-              >
-                <StatusBar
-                  barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
-                  backgroundColor="transparent"
-                  translucent
-                />
-                {fontsReady && <AppNavigator />}
-                {/* Offline strip mounts BEFORE the splash so the splash
+            <SalaryNotificationProvider>
+              <BroadcastNotificationProvider>
+                <NavigationContainer
+                  ref={navigationRef}
+                  onReady={() => {
+                    // Flush a push-tap that arrived before the navigator
+                    // mounted (cold start from a notification).
+                    if (pendingCheckId) {
+                      const id = pendingCheckId;
+                      pendingCheckId = null;
+                      openCheckFromPush(id);
+                    }
+                  }}
+                  theme={{
+                    dark: mode === 'dark',
+                    colors: {
+                      primary: palette.accent.primary,
+                      background: palette.bg.canvas,
+                      card: 'transparent',
+                      text: palette.text.primary,
+                      border: palette.border.subtle,
+                      notification: palette.accent.primary,
+                    },
+                    fonts: {
+                      regular: { fontFamily: 'System', fontWeight: '400' },
+                      medium: { fontFamily: 'System', fontWeight: '500' },
+                      bold: { fontFamily: 'System', fontWeight: '700' },
+                      heavy: { fontFamily: 'System', fontWeight: '900' },
+                    },
+                  }}
+                >
+                  <StatusBar
+                    barStyle={mode === 'dark' ? 'light-content' : 'dark-content'}
+                    backgroundColor="transparent"
+                    translucent
+                  />
+                  {fontsReady && <AppNavigator />}
+                  {/* Offline strip mounts BEFORE the splash so the splash
                     still covers it during boot. Renders null while online. */}
-                <OfflineBanner />
-                {showSplash && <SplashOverlay />}
-              </NavigationContainer>
-            </BroadcastNotificationProvider>
-          </SalaryNotificationProvider>
-        </AuthProvider>
-      </QueryClientProvider>
-      {/* Kill-switch «минимальная версия клиента» — ПОВЕРХ всего дерева,
-          включая сплеш и навигацию. Рендерит null, пока сервер не выставил
-          минимум выше текущей сборки (см. components/UpdateGate.tsx). Живёт
-          вне QueryClientProvider сознательно: обычный fetch + локальный
-          state, никаких зависимостей от auth/query. */}
-      <UpdateGate />
+                  <OfflineBanner />
+                  {showSplash && <SplashOverlay />}
+                </NavigationContainer>
+              </BroadcastNotificationProvider>
+            </SalaryNotificationProvider>
+          </AuthProvider>
+        </QueryClientProvider>
+        {/* Kill-switch «минимальная версия клиента» — ПОВЕРХ всего дерева,
+            включая сплеш и навигацию. Рендерит null, пока сервер не выставил
+            минимум выше текущей сборки (см. components/UpdateGate.tsx). Живёт
+            вне QueryClientProvider сознательно: обычный fetch + локальный
+            state, никаких зависимостей от auth/query. */}
+        <UpdateGate />
+      </KeyboardProvider>
     </SafeAreaProvider>
   );
 }

@@ -3082,7 +3082,7 @@ export default function ProductsPage() {
             setImportData(null);
           }}
           title="Импорт товаров"
-          size="lg"
+          size="4xl"
         >
           <div className="space-y-4">
             <div className="rounded-xl bg-blue-50 border border-blue-200 p-3">
@@ -3100,28 +3100,42 @@ export default function ProductsPage() {
             </p>
 
             <div className="max-h-80 overflow-auto rounded-xl border border-gray-200">
-              <table className="w-full text-sm">
+              <table className="w-full min-w-[720px] text-sm table-fixed">
                 <thead className="sticky top-0 z-10 bg-gray-50">
                   <tr>
-                    <th className="px-3 py-2 text-left font-medium text-gray-600">Название</th>
-                    <th className="px-3 py-2 text-left font-medium text-gray-600">Группа</th>
-                    <th className="px-3 py-2 text-center font-medium text-gray-600">Ед.</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">Продажа</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">Закупка</th>
-                    <th className="px-3 py-2 text-right font-medium text-gray-600">Остаток</th>
+                    <th className="px-3 py-2 text-left font-medium text-gray-600 whitespace-nowrap">Название</th>
+                    <th className="w-[140px] px-3 py-2 text-left font-medium text-gray-600 whitespace-nowrap">
+                      Группа
+                    </th>
+                    <th className="w-[72px] px-3 py-2 text-center font-medium text-gray-600 whitespace-nowrap">Ед.</th>
+                    <th className="w-[96px] px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">
+                      Продажа
+                    </th>
+                    <th className="w-[96px] px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">
+                      Закупка
+                    </th>
+                    <th className="w-[96px] px-3 py-2 text-right font-medium text-gray-600 whitespace-nowrap">
+                      Остаток
+                    </th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {importData.slice(0, 50).map((item, idx) => (
                     <tr key={idx} className="hover:bg-gray-50">
-                      <td className="px-3 py-2 font-medium text-gray-900">{item.name}</td>
-                      <td className="px-3 py-2 text-gray-500">{item.category || '—'}</td>
-                      <td className="px-3 py-2 text-center text-gray-500">
+                      <td className="px-3 py-2 font-medium text-gray-900 break-words">{item.name}</td>
+                      <td className="px-3 py-2 text-gray-500 truncate">{item.category || '—'}</td>
+                      <td className="px-3 py-2 text-center text-gray-500 whitespace-nowrap">
                         {unitLabel(item.unit) !== DEFAULT_UNIT ? unitLabel(item.unit) : '—'}
                       </td>
-                      <td className="px-3 py-2 text-right text-gray-700">{item.sellPrice || 0}</td>
-                      <td className="px-3 py-2 text-right text-gray-700">{item.costPrice || 0}</td>
-                      <td className="px-3 py-2 text-right text-gray-700">{item.stock || 0}</td>
+                      <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap tabular-nums">
+                        {item.sellPrice || 0}
+                      </td>
+                      <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap tabular-nums">
+                        {item.costPrice || 0}
+                      </td>
+                      <td className="px-3 py-2 text-right text-gray-700 whitespace-nowrap tabular-nums">
+                        {item.stock || 0}
+                      </td>
                     </tr>
                   ))}
                 </tbody>

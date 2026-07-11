@@ -89,6 +89,15 @@ interface ProviderDef {
   needsPhone?: boolean;
   /** Show senderName field. */
   needsName?: boolean;
+  /**
+   * «Мои Звонки» has a DEDICATED two-field form that must match the backend
+   * data contract (getMoiZvonkiConfig): `webhook_url` = the moizvonki SUBDOMAIN
+   * (backend builds `https://<domain>.moizvonki.ru/api/v1`), `sender_name` =
+   * the account EMAIL/login. It uses polling (no inbound autexa webhook), so we
+   * must NOT send/show the auto `webhookUrlFor()` URL for it — doing so
+   * overwrote the domain+login and broke «Мои Звонки». Mirrors the web form.
+   */
+  moizvonkiFields?: boolean;
   /** Show WhatsApp Cloud API «Phone number ID» field → phoneNumberId. */
   needsPhoneNumberId?: boolean;
   /** Show Telegram «Chat ID» field → chatId. */
@@ -113,8 +122,8 @@ const PHONE_PROVIDERS: ProviderDef[] = [
     description: 'Виртуальная АТС, обработка звонков и SMS',
     iconName: 'call-outline',
     tone: { bg: colors.blue[50], fg: colors.blue[600] },
-    apiKeyLabel: 'API ключ',
-    needsName: true,
+    apiKeyLabel: 'Ключ API',
+    moizvonkiFields: true,
     sendsClientSms: true,
   },
   {
@@ -370,6 +379,10 @@ function ProviderModal({
   const [senderName, setSenderName] = useState('');
   const [phoneNumberId, setPhoneNumberId] = useState('');
   const [chatId, setChatId] = useState('');
+  // «Мои Звонки» — поддомен в moizvonki.ru, хранится в webhookUrl (см. бэк
+  // getMoiZvonkiConfig). Отдельный state, т.к. для остальных провайдеров
+  // webhookUrl — авто-URL autexa, который «Мои Звонки» НЕ использует.
+  const [moizvonkiDomain, setMoizvonkiDomain] = useState('');
   const [isActive, setIsActive] = useState(true);
   // Independent outbound-SMS switch (127) — decoupled from isActive. Defaults on.
   const [smsEnabled, setSmsEnabled] = useState(true);
@@ -386,6 +399,8 @@ function ProviderModal({
     setSenderName(existing?.senderName || '');
     setPhoneNumberId(existing?.phoneNumberId || '');
     setChatId(existing?.chatId || '');
+    // Для «Мои Звонки» webhookUrl — это сохранённый поддомен.
+    setMoizvonkiDomain(existing?.webhookUrl || '');
     setIsActive(existing ? existing.isActive : true);
     // Legacy rows are server-backfilled to true; a brand-new integration also
     // starts sending SMS unless the owner mutes it.
@@ -450,6 +465,16 @@ function ProviderModal({
       Alert.alert('Ошибка', 'Введите Chat ID');
       return;
     }
+    if (provider.moizvonkiFields) {
+      if (!moizvonkiDomain.trim()) {
+        Alert.alert('Ошибка', 'Введите домен (поддомен в moizvonki.ru)');
+        return;
+      }
+      if (!senderName.trim()) {
+        Alert.alert('Ошибка', 'Введите Email (логин в Мои Звонки)');
+        return;
+      }
+    }
     save.mutate({
       id: existing?.id,
       providerType: provider.dbType,
@@ -463,7 +488,10 @@ function ProviderModal({
       // Persist the independent client-SMS switch only for SMS-capable providers;
       // omitting it for others leaves the stored value untouched server-side.
       smsNotificationsEnabled: provider.sendsClientSms ? smsEnabled : undefined,
-      webhookUrl,
+      // «Мои Звонки» хранит в webhookUrl СВОЙ поддомен (бэк строит из него
+      // https://<домен>.moizvonki.ru/api/v1) — НЕ авто-URL autexa (он polling,
+      // без входящего webhook). Для всех прочих — авто-URL как раньше.
+      webhookUrl: provider.moizvonkiFields ? moizvonkiDomain.trim() : webhookUrl,
       isActive,
     });
   };
@@ -547,6 +575,69 @@ function ProviderModal({
           placeholderTextColor={palette.text.tertiary}
         />
       </View>
+
+      {/* «Мои Звонки» — домен (поддомен) + email (логин). Совпадает с веб-формой
+          и контрактом бэка getMoiZvonkiConfig: домен → webhookUrl, email →
+          senderName. */}
+      {provider.moizvonkiFields && (
+        <>
+          <View style={styles.formField}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Домен (поддомен в moizvonki.ru)</Text>
+            <View style={styles.moizvonkiDomainRow}>
+              <TextInput
+                value={moizvonkiDomain}
+                onChangeText={(t) => setMoizvonkiDomain(t.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                style={[
+                  styles.formInput,
+                  styles.moizvonkiDomainInput,
+                  {
+                    backgroundColor: palette.bg.muted,
+                    borderColor: palette.border.subtle,
+                    color: palette.text.primary,
+                  },
+                ]}
+                autoCapitalize="none"
+                autoCorrect={false}
+                keyboardType="url"
+                placeholder="mycompany"
+                placeholderTextColor={palette.text.tertiary}
+              />
+              <View
+                style={[
+                  styles.moizvonkiSuffix,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                ]}
+              >
+                <Text style={[styles.moizvonkiSuffixText, { color: palette.text.tertiary }]}>.moizvonki.ru</Text>
+              </View>
+            </View>
+            <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+              Если адрес mycompany.moizvonki.ru — введите mycompany
+            </Text>
+          </View>
+
+          <View style={styles.formField}>
+            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Email (логин в Мои Звонки)</Text>
+            <TextInput
+              value={senderName}
+              onChangeText={setSenderName}
+              style={[
+                styles.formInput,
+                {
+                  backgroundColor: palette.bg.muted,
+                  borderColor: palette.border.subtle,
+                  color: palette.text.primary,
+                },
+              ]}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+              placeholder="user@mail.ru"
+              placeholderTextColor={palette.text.tertiary}
+            />
+          </View>
+        </>
+      )}
 
       {/* WhatsApp Cloud API — Phone number ID (non-secret routing id) */}
       {provider.needsPhoneNumberId && (
@@ -645,31 +736,39 @@ function ProviderModal({
         </View>
       )}
 
-      {/* Webhook */}
-      <View style={styles.formField}>
-        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Webhook URL</Text>
-        <View style={[styles.webhookRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          <Text style={[styles.webhookText, { color: palette.text.primary }]} numberOfLines={1} ellipsizeMode="middle">
-            {webhookUrl}
+      {/* Webhook — авто-URL autexa для входящих webhook'ов провайдера. «Мои
+          Звонки» работает по polling (без входящего webhook) и НЕ показывает
+          этот блок: его webhookUrl занят под поддомен. */}
+      {!provider.moizvonkiFields && (
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Webhook URL</Text>
+          <View style={[styles.webhookRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <Text
+              style={[styles.webhookText, { color: palette.text.primary }]}
+              numberOfLines={1}
+              ellipsizeMode="middle"
+            >
+              {webhookUrl}
+            </Text>
+            <TouchableOpacity
+              onPress={handleCopyWebhook}
+              hitSlop={6}
+              style={[styles.webhookCopy, { backgroundColor: palette.bg.card }]}
+              accessibilityRole="button"
+              accessibilityLabel="Поделиться webhook"
+            >
+              <Ionicons
+                name={copied ? 'checkmark' : 'share-outline'}
+                size={16}
+                color={copied ? colors.green[600] : palette.text.secondary}
+              />
+            </TouchableOpacity>
+          </View>
+          <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
+            Нажмите «Поделиться», чтобы перенести URL в почту или мессенджер и вставить в личный кабинет провайдера
           </Text>
-          <TouchableOpacity
-            onPress={handleCopyWebhook}
-            hitSlop={6}
-            style={[styles.webhookCopy, { backgroundColor: palette.bg.card }]}
-            accessibilityRole="button"
-            accessibilityLabel="Поделиться webhook"
-          >
-            <Ionicons
-              name={copied ? 'checkmark' : 'share-outline'}
-              size={16}
-              color={copied ? colors.green[600] : palette.text.secondary}
-            />
-          </TouchableOpacity>
         </View>
-        <Text style={{ fontSize: 11, color: palette.text.tertiary, marginTop: spacing[1] }}>
-          Нажмите «Поделиться», чтобы перенести URL в почту или мессенджер и вставить в личный кабинет провайдера
-        </Text>
-      </View>
+      )}
 
       {/* Active toggle */}
       <TouchableOpacity
@@ -1377,6 +1476,24 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     paddingTop: spacing[2.5],
   },
+
+  // «Мои Звонки» домен-поле с суффиксом .moizvonki.ru (как в веб-форме)
+  moizvonkiDomainRow: { flexDirection: 'row', alignItems: 'stretch' },
+  moizvonkiDomainInput: {
+    flex: 1,
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+    borderRightWidth: 0,
+  },
+  moizvonkiSuffix: {
+    justifyContent: 'center',
+    paddingHorizontal: spacing[3],
+    borderWidth: 1,
+    borderLeftWidth: 0,
+    borderTopRightRadius: borderRadius.lg,
+    borderBottomRightRadius: borderRadius.lg,
+  },
+  moizvonkiSuffixText: { fontSize: 12 },
 
   // Webhook row
   webhookRow: {

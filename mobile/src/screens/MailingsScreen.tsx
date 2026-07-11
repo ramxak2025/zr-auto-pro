@@ -37,6 +37,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
+import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type {
@@ -823,17 +824,18 @@ export default function MailingsScreen() {
         </View>
       </View>
 
-      <ScrollView
+      {/* KeyboardAwareScroll (Round 11 #1): поле сообщения (multiline) держится
+          над клавиатурой на iOS И Android. paddingBottom >= tabBarHeight —
+          правило плавающего tab bar не нарушено. */}
+      <KeyboardAwareScroll
         style={styles.scroll}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={palette.accent.primary} />
         }
-        keyboardShouldPersistTaps="handled"
-        showsVerticalScrollIndicator={false}
       >
         {activeTab === 'manual' ? <ManualTab /> : <AutoTab />}
-      </ScrollView>
+      </KeyboardAwareScroll>
     </View>
   );
 }
