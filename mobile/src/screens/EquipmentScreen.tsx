@@ -48,8 +48,8 @@ import {
   Platform,
   RefreshControl,
   useWindowDimensions,
-  KeyboardAvoidingView,
 } from 'react-native';
+import { KeyboardAvoidingView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -59,6 +59,7 @@ import * as ImagePicker from 'expo-image-picker';
 import CachedImage from '../components/CachedImage';
 import IosScreenHeader from '../components/IosScreenHeader';
 import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
+import KeyboardDoneToolbar from '../components/KeyboardDoneToolbar';
 import { equipmentApi, uploadsApi } from '../api/services';
 import { UserRole } from '../../../shared/types';
 import { useAuth } from '../contexts/AuthContext';
@@ -141,72 +142,80 @@ function CenteredDialog({
 }: CenteredDialogProps) {
   const palette = useColors();
   return (
+    // Клавиатура (Round 11 D). RN <Modal> — отдельное нативное окно, нужен
+    // вложенный KeyboardProvider. RN-core KeyboardAvoidingView был 'padding'
+    // только на iOS (Android undefined = no-op) → number-pad поля (стоимость,
+    // срок службы) без «Готово» и без подъёма прятались под клавиатурой.
+    // keyboard-controller: 'padding' одинаково iOS+Android + KeyboardDoneToolbar.
     <RNModal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      {/* Frosted blur backdrop (replaces the old rgba(0,0,0,0.45) dark scrim).
-          Tapping it closes the dialog; the inner card stops propagation so
-          taps on the card never close it. */}
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={dialogStyles.kavRoot}>
-        <ModalBlurBackdrop onPress={onClose} />
-        <View style={dialogStyles.scrim} pointerEvents="box-none">
-          <TouchableOpacity
-            activeOpacity={1}
-            style={[dialogStyles.card, { backgroundColor: palette.bg.elevated }]}
-            onPress={() => {}}
-          >
-            <View style={dialogStyles.header}>
-              <View style={dialogStyles.headerSpacer} />
-              <Text style={[dialogStyles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
-                {title}
-              </Text>
-              <TouchableOpacity
-                onPress={onClose}
-                hitSlop={12}
-                accessibilityRole="button"
-                accessibilityLabel="Закрыть"
-                style={[dialogStyles.closeBtn, { backgroundColor: palette.bg.muted }]}
-              >
-                <Ionicons name="close" size={20} color={palette.text.secondary} />
-              </TouchableOpacity>
-            </View>
-
-            <ScrollView
-              style={dialogStyles.bodyScroll}
-              contentContainerStyle={dialogStyles.bodyContent}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
+      <KeyboardProvider>
+        {/* Frosted blur backdrop (replaces the old rgba(0,0,0,0.45) dark scrim).
+            Tapping it closes the dialog; the inner card stops propagation so
+            taps on the card never close it. */}
+        <KeyboardAvoidingView behavior="padding" style={dialogStyles.kavRoot}>
+          <ModalBlurBackdrop onPress={onClose} />
+          <View style={dialogStyles.scrim} pointerEvents="box-none">
+            <TouchableOpacity
+              activeOpacity={1}
+              style={[dialogStyles.card, { backgroundColor: palette.bg.elevated }]}
+              onPress={() => {}}
             >
-              {children}
-            </ScrollView>
-
-            {primaryText && (
-              <View style={[dialogStyles.footer, { borderTopColor: palette.border.subtle }]}>
-                {showCancel && (
-                  <TouchableOpacity
-                    onPress={onClose}
-                    style={[dialogStyles.btn, dialogStyles.btnSecondary, { backgroundColor: palette.bg.muted }]}
-                    activeOpacity={0.85}
-                  >
-                    <Text style={[dialogStyles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
-                  </TouchableOpacity>
-                )}
+              <View style={dialogStyles.header}>
+                <View style={dialogStyles.headerSpacer} />
+                <Text style={[dialogStyles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                  {title}
+                </Text>
                 <TouchableOpacity
-                  onPress={onPrimaryPress}
-                  disabled={primaryDisabled}
-                  style={[
-                    dialogStyles.btn,
-                    dialogStyles.btnPrimary,
-                    danger && dialogStyles.btnDanger,
-                    primaryDisabled && dialogStyles.btnDisabled,
-                  ]}
-                  activeOpacity={0.85}
+                  onPress={onClose}
+                  hitSlop={12}
+                  accessibilityRole="button"
+                  accessibilityLabel="Закрыть"
+                  style={[dialogStyles.closeBtn, { backgroundColor: palette.bg.muted }]}
                 >
-                  <Text style={dialogStyles.btnPrimaryText}>{primaryText}</Text>
+                  <Ionicons name="close" size={20} color={palette.text.secondary} />
                 </TouchableOpacity>
               </View>
-            )}
-          </TouchableOpacity>
-        </View>
-      </KeyboardAvoidingView>
+
+              <ScrollView
+                style={dialogStyles.bodyScroll}
+                contentContainerStyle={dialogStyles.bodyContent}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+              >
+                {children}
+              </ScrollView>
+
+              {primaryText && (
+                <View style={[dialogStyles.footer, { borderTopColor: palette.border.subtle }]}>
+                  {showCancel && (
+                    <TouchableOpacity
+                      onPress={onClose}
+                      style={[dialogStyles.btn, dialogStyles.btnSecondary, { backgroundColor: palette.bg.muted }]}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={[dialogStyles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity
+                    onPress={onPrimaryPress}
+                    disabled={primaryDisabled}
+                    style={[
+                      dialogStyles.btn,
+                      dialogStyles.btnPrimary,
+                      danger && dialogStyles.btnDanger,
+                      primaryDisabled && dialogStyles.btnDisabled,
+                    ]}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={dialogStyles.btnPrimaryText}>{primaryText}</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
+        </KeyboardAvoidingView>
+        <KeyboardDoneToolbar />
+      </KeyboardProvider>
     </RNModal>
   );
 }

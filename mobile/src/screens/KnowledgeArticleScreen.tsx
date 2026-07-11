@@ -22,6 +22,7 @@ import { Linking, Modal, Pressable, ScrollView, StyleSheet, View } from 'react-n
 import { RouteProp, useNavigation, useRoute } from '@react-navigation/native';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -67,6 +68,22 @@ function formatBytes(bytes?: number): string {
   if (bytes < 1024) return `${bytes} Б`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} КБ`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} МБ`;
+}
+
+/**
+ * hexToRgba — превращает 6-значный hex канваса (`#101317` / `#f9fafb`) в
+ * `rgba(...)` с заданной прозрачностью. Нужен для скрима под плавающей пилюлей
+ * «Ознакомлен»: градиент от полностью прозрачного канваса к сплошному, чтобы
+ * контент под пилюлей растворялся без серой плашки. Не-hex значения (rgba/имена)
+ * возвращаются как есть — helper никогда не бросает.
+ */
+function hexToRgba(hex: string, alpha: number): string {
+  const h = hex.trim().replace(/^#/, '');
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return hex;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }
 
 export default function KnowledgeArticleScreen() {
@@ -579,21 +596,23 @@ export default function KnowledgeArticleScreen() {
         <LoadingSpinner />
       )}
 
-      {/* Sticky «Ознакомлен» CTA — a compact bar that floats just above the
-          floating Liquid-Glass tab bar. Anchored at `bottom: tabBarHeight +
-          gap` so the home-indicator safe area (already inside tabBarHeight) is
-          respected exactly once — no doubled inset, no oversized chin. */}
+      {/* Sticky «Ознакомлен» CTA — the brand-primary pill floats DIRECTLY above
+          the tab bar. Раньше пилюля жила в серой полосе (bg.elevated + borderTop)
+          — «уродливый серый блок». Теперь grey chrome убран: под пилюлей —
+          мягкий градиент-скрим transparent → canvas, поэтому контент под ней
+          растворяется, а не обрезается серой плашкой. Anchored at
+          `bottom: tabBarHeight + gap` — home-indicator (внутри tabBarHeight)
+          учтён ровно один раз, без задвоенного инсета. */}
       {showStickyAck ? (
-        <View
-          style={[
-            styles.stickyWrap,
-            {
-              bottom: tabBarHeight + ACK_BAR_GAP,
-              backgroundColor: palette.bg.elevated,
-              borderTopColor: palette.border.subtle,
-            },
-          ]}
-        >
+        <View pointerEvents="box-none" style={[styles.stickyWrap, { bottom: tabBarHeight + ACK_BAR_GAP }]}>
+          {/* Скрим: прозрачный сверху → канвас снизу. pointerEvents none, чтобы
+              тапы проходили мимо (актуальна только сама пилюля). Тянется выше
+              пилюли, давая плавную растворяющую подложку вместо серой полосы. */}
+          <LinearGradient
+            pointerEvents="none"
+            colors={[hexToRgba(palette.bg.canvas, 0), palette.bg.canvas]}
+            style={styles.stickyScrim}
+          />
           <Pressable
             onPress={() => ackMutation.mutate()}
             disabled={ackMutation.isPending}
@@ -788,12 +807,22 @@ const styles = StyleSheet.create({
     position: 'absolute',
     left: 0,
     right: 0,
-    // `bottom` is set inline = tabBarHeight + gap, so the bar floats just
-    // above the tab bar. Compact padding only — no extra safe-area inset here.
+    // `bottom` is set inline = tabBarHeight + gap, so the pill floats just above
+    // the tab bar. No background / borderTop chrome — the pill sits on a soft
+    // gradient scrim (stickyScrim below) instead of a grey band.
     paddingHorizontal: spacing[4],
     paddingTop: spacing[3],
     paddingBottom: spacing[3],
-    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  // Soft fade behind the floating pill: transparent (top) → canvas (bottom).
+  // Extends above the pill (top: -spacing[6]) so scrolling content dissolves
+  // into the pill instead of being clipped by a hard grey band.
+  stickyScrim: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    top: -spacing[6],
+    bottom: 0,
   },
   ackBtn: {
     flexDirection: 'row',

@@ -15,6 +15,7 @@
  */
 import React from 'react';
 import { Alert, Modal, Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -23,6 +24,8 @@ import { spacing, borderRadius, colors } from '../../theme';
 import { useColors } from '../../contexts/ThemeContext';
 import { knowledgeApi } from '../../api/services';
 import { haptic } from '../../platform/haptics';
+import { KeyboardAwareView } from '../KeyboardAware';
+import KeyboardDoneToolbar from '../KeyboardDoneToolbar';
 import { flattenWithDepth } from './folderTree';
 import type { KnowledgeCategory } from '../../../../shared/types';
 
@@ -151,108 +154,119 @@ export default function FolderManagerModal({
   };
 
   return (
+    // Клавиатура (Round 11 D). RN <Modal> — отдельное нативное окно, корневой
+    // KeyboardProvider из App.tsx туда не дотягивается → вложенный провайдер.
+    // Шит прижат к низу и имеет autoFocus-поле «Название» → без подъёма поле
+    // и кнопка «Создать» уходили под клавиатуру. KeyboardAwareView поднимает
+    // весь шит над клавиатурой (iOS+Android одинаково), а KeyboardDoneToolbar
+    // даёт «Готово».
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-      <Pressable style={styles.backdrop} onPress={onClose}>
-        <Pressable
-          style={[
-            styles.sheet,
-            { backgroundColor: palette.bg.elevated, paddingBottom: Math.max(insets.bottom, spacing[4]) },
-          ]}
-          onPress={(e) => e.stopPropagation()}
-        >
-          <View style={[styles.handle, { backgroundColor: palette.border.strong }]} />
-
-          <Text variant="title3" color={palette.text.primary} style={{ marginBottom: spacing[3] }}>
-            {isEdit ? 'Папка' : 'Новая папка'}
-          </Text>
-
-          <Text style={[styles.label, { color: palette.text.secondary }]}>Название</Text>
-          <TextInput
-            value={name}
-            onChangeText={setName}
-            placeholder="Например: Приёмка автомобиля"
-            placeholderTextColor={palette.text.tertiary}
-            autoFocus={!isEdit}
-            returnKeyType="done"
-            onSubmitEditing={onSubmit}
-            style={[
-              styles.input,
-              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, color: palette.text.primary },
-            ]}
-          />
-
-          <Text style={[styles.label, { color: palette.text.secondary, marginTop: spacing[4] }]}>Расположение</Text>
-          <ScrollView
-            style={styles.parentList}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            <ParentRow
-              label="Корень — верхний уровень"
-              icon="home-outline"
-              depth={0}
-              active={parentId === null}
-              onPress={() => {
-                haptic('select');
-                setParentId(null);
-              }}
-              palette={palette}
-            />
-            {flat.map(({ cat, depth }) => (
-              <ParentRow
-                key={cat.id}
-                label={cat.name}
-                icon="folder-outline"
-                depth={depth + 1}
-                active={parentId === cat.id}
-                onPress={() => {
-                  haptic('select');
-                  setParentId(cat.id);
-                }}
-                palette={palette}
-              />
-            ))}
-          </ScrollView>
-
-          <Pressable
-            onPress={onSubmit}
-            disabled={pending}
-            style={({ pressed }) => [
-              styles.createBtn,
-              { backgroundColor: palette.accent.primary, opacity: pressed || pending ? 0.85 : 1 },
-            ]}
-            accessibilityRole="button"
-            accessibilityLabel={isEdit ? 'Сохранить папку' : 'Создать папку'}
-          >
-            <Ionicons name={isEdit ? 'checkmark' : 'folder-open-outline'} size={18} color={colors.white} />
-            <Text variant="callout" color={colors.white}>
-              {pending && !deleteMutation.isPending
-                ? isEdit
-                  ? 'Сохраняем…'
-                  : 'Создаём…'
-                : isEdit
-                  ? 'Сохранить'
-                  : 'Создать папку'}
-            </Text>
-          </Pressable>
-
-          {isEdit ? (
+      <KeyboardProvider>
+        <Pressable style={styles.backdrop} onPress={onClose}>
+          <KeyboardAwareView extraOffset={0}>
             <Pressable
-              onPress={onDelete}
-              disabled={pending}
-              hitSlop={8}
-              style={styles.deleteBtn}
-              accessibilityRole="button"
-              accessibilityLabel="Удалить папку"
+              style={[
+                styles.sheet,
+                { backgroundColor: palette.bg.elevated, paddingBottom: Math.max(insets.bottom, spacing[4]) },
+              ]}
+              onPress={(e) => e.stopPropagation()}
             >
-              <Ionicons name="trash-outline" size={17} color={colors.red[600]} />
-              <Text variant="bodyEmph" style={{ color: colors.red[600] }}>
-                {deleteMutation.isPending ? 'Удаляем…' : 'Удалить папку'}
+              <View style={[styles.handle, { backgroundColor: palette.border.strong }]} />
+
+              <Text variant="title3" color={palette.text.primary} style={{ marginBottom: spacing[3] }}>
+                {isEdit ? 'Папка' : 'Новая папка'}
               </Text>
+
+              <Text style={[styles.label, { color: palette.text.secondary }]}>Название</Text>
+              <TextInput
+                value={name}
+                onChangeText={setName}
+                placeholder="Например: Приёмка автомобиля"
+                placeholderTextColor={palette.text.tertiary}
+                autoFocus={!isEdit}
+                returnKeyType="done"
+                onSubmitEditing={onSubmit}
+                style={[
+                  styles.input,
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle, color: palette.text.primary },
+                ]}
+              />
+
+              <Text style={[styles.label, { color: palette.text.secondary, marginTop: spacing[4] }]}>Расположение</Text>
+              <ScrollView
+                style={styles.parentList}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator={false}
+              >
+                <ParentRow
+                  label="Корень — верхний уровень"
+                  icon="home-outline"
+                  depth={0}
+                  active={parentId === null}
+                  onPress={() => {
+                    haptic('select');
+                    setParentId(null);
+                  }}
+                  palette={palette}
+                />
+                {flat.map(({ cat, depth }) => (
+                  <ParentRow
+                    key={cat.id}
+                    label={cat.name}
+                    icon="folder-outline"
+                    depth={depth + 1}
+                    active={parentId === cat.id}
+                    onPress={() => {
+                      haptic('select');
+                      setParentId(cat.id);
+                    }}
+                    palette={palette}
+                  />
+                ))}
+              </ScrollView>
+
+              <Pressable
+                onPress={onSubmit}
+                disabled={pending}
+                style={({ pressed }) => [
+                  styles.createBtn,
+                  { backgroundColor: palette.accent.primary, opacity: pressed || pending ? 0.85 : 1 },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel={isEdit ? 'Сохранить папку' : 'Создать папку'}
+              >
+                <Ionicons name={isEdit ? 'checkmark' : 'folder-open-outline'} size={18} color={colors.white} />
+                <Text variant="callout" color={colors.white}>
+                  {pending && !deleteMutation.isPending
+                    ? isEdit
+                      ? 'Сохраняем…'
+                      : 'Создаём…'
+                    : isEdit
+                      ? 'Сохранить'
+                      : 'Создать папку'}
+                </Text>
+              </Pressable>
+
+              {isEdit ? (
+                <Pressable
+                  onPress={onDelete}
+                  disabled={pending}
+                  hitSlop={8}
+                  style={styles.deleteBtn}
+                  accessibilityRole="button"
+                  accessibilityLabel="Удалить папку"
+                >
+                  <Ionicons name="trash-outline" size={17} color={colors.red[600]} />
+                  <Text variant="bodyEmph" style={{ color: colors.red[600] }}>
+                    {deleteMutation.isPending ? 'Удаляем…' : 'Удалить папку'}
+                  </Text>
+                </Pressable>
+              ) : null}
             </Pressable>
-          ) : null}
+          </KeyboardAwareView>
         </Pressable>
-      </Pressable>
+        <KeyboardDoneToolbar />
+      </KeyboardProvider>
     </Modal>
   );
 }

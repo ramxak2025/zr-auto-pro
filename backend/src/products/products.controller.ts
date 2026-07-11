@@ -9,6 +9,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { StockUpdateDto } from './dto/stock-update.dto';
 import { BulkAdjustPriceDto } from './dto/bulk-adjust-price.dto';
+import { BulkDeleteDto } from './dto/bulk-delete.dto';
 
 // ROLE-ONLY (консолидация 2026-07). Reads stay open to every authenticated user
 // (a master needs to browse products to build a check) — but the service STRIPS
@@ -77,6 +78,17 @@ export class ProductsController {
   @Post('bulk-adjust-price')
   bulkAdjustPrice(@CurrentUser() user: JwtPayload, @Body() dto: BulkAdjustPriceDto) {
     return this.productsService.bulkAdjustPrice(user.tenantID, dto);
+  }
+
+  // Bulk soft-delete (move to Корзина) — products by id, folders (cascade), or
+  // «удалить весь товар» (deleteAll, scoped to the current warehouseId). Gated by
+  // the same grantable `warehouse_delete` as the single soft-delete (DELETE
+  // /products/:id); owner-class bypasses via PermissionsGuard. NEVER hard-deletes.
+  // Literal path — registered before the `:id` routes so it isn't swallowed as an id.
+  @RequirePermission('warehouse_delete')
+  @Post('bulk-delete')
+  bulkDelete(@CurrentUser() user: JwtPayload, @Body() dto: BulkDeleteDto) {
+    return this.productsService.bulkSoftDelete(user.tenantID, dto);
   }
 
   // ── Trash bin ──────────────────────────────────────────────────────────

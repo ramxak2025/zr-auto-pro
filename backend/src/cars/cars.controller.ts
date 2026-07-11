@@ -1,9 +1,17 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { CarsService } from './cars.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { TransferOwnerDto } from './dto/transfer-owner.dto';
 
-@UseGuards(JwtAuthGuard)
+// RolesGuard + PermissionsGuard added at controller level, but ONLY
+// transfer-owner is decorated with @RequirePermission. Both guards are a no-op
+// for undecorated routes (no @Roles / no @RequirePermission → allow), so
+// create / update / delete stay exactly as open as before — a master must still
+// be able to add cars from the Касса screen. Owner-class bypasses.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('cars')
 export class CarsController {
   constructor(private carsService: CarsService) {}
@@ -50,5 +58,17 @@ export class CarsController {
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.carsService.remove(id, user.tenantID);
+  }
+
+  /**
+   * Reassign a car to a new owner («сменить владельца»). moveHistory (default
+   * true) also carries the car's check history — and the debt / installment /
+   * loyalty rows derived from those checks — to the new client. Gated by
+   * 'clients_edit'; owner-class bypasses via PermissionsGuard.
+   */
+  @RequirePermission('clients_edit')
+  @Post(':id/transfer-owner')
+  transferOwner(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: TransferOwnerDto) {
+    return this.carsService.transferOwner(id, user.tenantID, dto.clientId, dto.moveHistory !== false);
   }
 }

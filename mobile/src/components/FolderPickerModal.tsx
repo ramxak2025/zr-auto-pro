@@ -24,10 +24,12 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Modal as RNModal } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import SearchInput from './SearchInput';
+import KeyboardDoneToolbar from './KeyboardDoneToolbar';
 import { productsApi, warehouseCategoriesApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import { haptic } from '../platform/haptics';
@@ -232,105 +234,112 @@ export default function FolderPickerModal({
   const listData = search ? searchResults : childFolders;
 
   return (
+    // Клавиатура (Round 11 D). RN <Modal> — отдельное нативное окно, поэтому
+    // вложенный KeyboardProvider + «Готово»: поле поиска живёт сверху и не
+    // прячется, но без тулбара клавиатуру нечем свернуть на multiline/крупных
+    // клавиатурах. Тулбар даёт единый способ сворачивания.
     <RNModal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
-      <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top', 'bottom']}>
-        {/* Header */}
-        <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
-          <TouchableOpacity onPress={onClose} style={[styles.headerBtn, { backgroundColor: palette.bg.muted }]}>
-            <Ionicons name="close" size={20} color={palette.text.primary} />
-          </TouchableOpacity>
-          <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
-            {title}
-          </Text>
-          <View style={styles.headerBtn} />
-        </View>
-
-        {/* Search */}
-        <View style={styles.searchWrap}>
-          <SearchInput value={searchRaw} onChange={setSearchRaw} placeholder="Поиск папки..." />
-        </View>
-
-        {/* Breadcrumb (browse mode only) */}
-        {!search && path.length > 0 ? (
-          <View style={styles.breadcrumb}>
-            <TouchableOpacity onPress={() => setPath([])} style={styles.crumbItem}>
-              <Ionicons name="home-outline" size={14} color={palette.accent.primary} />
-              <Text style={[styles.crumbText, { color: palette.accent.primary }]}>Все</Text>
+      <KeyboardProvider>
+        <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top', 'bottom']}>
+          {/* Header */}
+          <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
+            <TouchableOpacity onPress={onClose} style={[styles.headerBtn, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="close" size={20} color={palette.text.primary} />
             </TouchableOpacity>
-            {path.map((seg, i) => (
-              <React.Fragment key={`${seg}-${i}`}>
-                <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
-                <TouchableOpacity onPress={() => setPath((prev) => prev.slice(0, i + 1))} style={styles.crumbItem}>
-                  <Text
-                    style={[
-                      styles.crumbText,
-                      { color: i === path.length - 1 ? palette.text.primary : palette.accent.primary },
-                    ]}
-                    numberOfLines={1}
-                  >
-                    {seg}
-                  </Text>
-                </TouchableOpacity>
-              </React.Fragment>
-            ))}
-          </View>
-        ) : null}
-
-        {/* Folder list */}
-        {isLoading && products.length === 0 ? (
-          <ActivityIndicator color={colors.primary[600]} style={{ marginTop: spacing[8] }} />
-        ) : listData.length === 0 ? (
-          <View style={styles.empty}>
-            <Ionicons name={search ? 'search-outline' : 'folder-outline'} size={40} color={palette.text.tertiary} />
-            <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>
-              {search ? 'Папки не найдены' : 'Здесь нет вложенных папок'}
+            <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
+              {title}
             </Text>
+            <View style={styles.headerBtn} />
           </View>
-        ) : (
-          <FlashList
-            data={listData}
-            keyExtractor={(item) => item.fullPath}
-            renderItem={renderFolder}
-            contentContainerStyle={styles.list}
-            keyboardShouldPersistTaps="handled"
-          />
-        )}
 
-        {/* Confirm bar (browse mode) — drop the product into the current folder. */}
-        {!search ? (
-          <View style={[styles.footer, { backgroundColor: palette.bg.card, borderTopColor: palette.border.subtle }]}>
-            <Text style={[styles.footerTarget, { color: palette.text.tertiary }]} numberOfLines={1}>
-              {path.length === 0 ? 'В корень склада (без папки)' : `Папка: ${targetPath}`}
-            </Text>
-            <TouchableOpacity
-              style={[
-                styles.confirmBtn,
-                { backgroundColor: isHereAlready || busy ? palette.bg.muted : colors.primary[600] },
-              ]}
-              onPress={handleConfirm}
-              disabled={isHereAlready || busy}
-              activeOpacity={0.85}
-            >
-              {busy ? (
-                <ActivityIndicator color={colors.white} size="small" />
-              ) : (
-                <>
-                  <Ionicons
-                    name="arrow-redo-outline"
-                    size={18}
-                    color={isHereAlready ? palette.text.tertiary : colors.white}
-                  />
-                  <Text
-                    style={[styles.confirmBtnText, { color: isHereAlready ? palette.text.tertiary : colors.white }]}
-                  >
-                    {isHereAlready ? 'Товар уже здесь' : 'Перенести сюда'}
-                  </Text>
-                </>
-              )}
-            </TouchableOpacity>
+          {/* Search */}
+          <View style={styles.searchWrap}>
+            <SearchInput value={searchRaw} onChange={setSearchRaw} placeholder="Поиск папки..." />
           </View>
-        ) : null}
-      </SafeAreaView>
+
+          {/* Breadcrumb (browse mode only) */}
+          {!search && path.length > 0 ? (
+            <View style={styles.breadcrumb}>
+              <TouchableOpacity onPress={() => setPath([])} style={styles.crumbItem}>
+                <Ionicons name="home-outline" size={14} color={palette.accent.primary} />
+                <Text style={[styles.crumbText, { color: palette.accent.primary }]}>Все</Text>
+              </TouchableOpacity>
+              {path.map((seg, i) => (
+                <React.Fragment key={`${seg}-${i}`}>
+                  <Ionicons name="chevron-forward" size={12} color={palette.text.tertiary} />
+                  <TouchableOpacity onPress={() => setPath((prev) => prev.slice(0, i + 1))} style={styles.crumbItem}>
+                    <Text
+                      style={[
+                        styles.crumbText,
+                        { color: i === path.length - 1 ? palette.text.primary : palette.accent.primary },
+                      ]}
+                      numberOfLines={1}
+                    >
+                      {seg}
+                    </Text>
+                  </TouchableOpacity>
+                </React.Fragment>
+              ))}
+            </View>
+          ) : null}
+
+          {/* Folder list */}
+          {isLoading && products.length === 0 ? (
+            <ActivityIndicator color={colors.primary[600]} style={{ marginTop: spacing[8] }} />
+          ) : listData.length === 0 ? (
+            <View style={styles.empty}>
+              <Ionicons name={search ? 'search-outline' : 'folder-outline'} size={40} color={palette.text.tertiary} />
+              <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>
+                {search ? 'Папки не найдены' : 'Здесь нет вложенных папок'}
+              </Text>
+            </View>
+          ) : (
+            <FlashList
+              data={listData}
+              keyExtractor={(item) => item.fullPath}
+              renderItem={renderFolder}
+              contentContainerStyle={styles.list}
+              keyboardShouldPersistTaps="handled"
+            />
+          )}
+
+          {/* Confirm bar (browse mode) — drop the product into the current folder. */}
+          {!search ? (
+            <View style={[styles.footer, { backgroundColor: palette.bg.card, borderTopColor: palette.border.subtle }]}>
+              <Text style={[styles.footerTarget, { color: palette.text.tertiary }]} numberOfLines={1}>
+                {path.length === 0 ? 'В корень склада (без папки)' : `Папка: ${targetPath}`}
+              </Text>
+              <TouchableOpacity
+                style={[
+                  styles.confirmBtn,
+                  { backgroundColor: isHereAlready || busy ? palette.bg.muted : colors.primary[600] },
+                ]}
+                onPress={handleConfirm}
+                disabled={isHereAlready || busy}
+                activeOpacity={0.85}
+              >
+                {busy ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <>
+                    <Ionicons
+                      name="arrow-redo-outline"
+                      size={18}
+                      color={isHereAlready ? palette.text.tertiary : colors.white}
+                    />
+                    <Text
+                      style={[styles.confirmBtnText, { color: isHereAlready ? palette.text.tertiary : colors.white }]}
+                    >
+                      {isHereAlready ? 'Товар уже здесь' : 'Перенести сюда'}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </SafeAreaView>
+        <KeyboardDoneToolbar />
+      </KeyboardProvider>
     </RNModal>
   );
 }

@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
+import KeyboardDoneToolbar from './KeyboardDoneToolbar';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
@@ -50,7 +51,12 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose} statusBarTranslucent>
       <KeyboardProvider>
         <ModalBlurBackdrop onPress={onClose} />
-        <KeyboardAvoidingView behavior="padding" style={styles.overlay}>
+        {/* pointerEvents="box-none": сам overlay (flex:1, поверх бэкдропа) НЕ
+            перехватывает тапы — тап МИМО карточки проваливается на
+            ModalBlurBackdrop под ним → закрытие по фону (Round 11 #15,
+            регресс от keyboard-обёртки). Тап по карточке и полям работает
+            как обычно (карточка — дочерний touch-target). */}
+        <KeyboardAvoidingView behavior="padding" style={styles.overlay} pointerEvents="box-none">
           <View style={[styles.sheet, { backgroundColor: palette.bg.elevated }]}>
             <View style={[styles.handle, { backgroundColor: palette.border.subtle }]} />
             <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
@@ -73,6 +79,10 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
             </KeyboardAwareScrollView>
           </View>
         </KeyboardAvoidingView>
+        {/* Единая «Готово» над клавиатурой (Round 11 D). RN <Modal> — отдельное
+            нативное окно, корневой тулбар из App.tsx туда не дотягивается,
+            поэтому монтируем свой экземпляр внутри ЭТОГО KeyboardProvider. */}
+        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </RNModal>
   );

@@ -12,6 +12,8 @@ import { capLimit } from '../common/cap-limit';
 import { parseFields, filterShape } from '../common/field-filter';
 import { NO_TENANT_ID } from '../common/auth-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import { WarehouseService } from '../warehouse/warehouse.service';
+import { BulkDeleteDto } from './dto/bulk-delete.dto';
 
 /** Actor shape (JWT payload subset) needed to decide cost-price visibility. */
 type ProductActor = { role?: string; permissions?: Record<string, boolean> } | undefined;
@@ -20,7 +22,10 @@ type ProductActor = { role?: string; permissions?: Record<string, boolean> } | u
 export class ProductsService {
   private readonly logger = new Logger('ProductsService');
 
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private warehouseService: WarehouseService,
+  ) {}
 
   /**
    * ROLE-ONLY (консолидация 2026-07): себестоимость (costPrice) — чувствительное
@@ -663,6 +668,78 @@ export class ProductsService {
       return { message: 'Уже в корзине' };
     }
     return { message: 'Перемещено в корзину' };
+  }
+
+  /**
+   * Bulk SOFT-delete (move to Корзина) — never hard-deletes. Everything runs in
+   * ONE transaction so a failure leaves nothing half-trashed. All three inputs
+   * are additive; any combination may be sent. Idempotent throughout (already-
+   * trashed rows are skipped by the `deleted_at IS NULL` predicate).
+   *
+   *   • productIds  → soft-delete these live products.
+   *   • categoryIds → reuse WarehouseService.softDeleteCategories (folder + its
+   *     contents + subfolders cascade) on the SAME transaction client — no
+   *     duplicated cascade SQL.
+   *   • deleteAll   → soft-delete every live product of the tenant, scoped to
+   *     `warehouseId` when provided so «удалить весь товар» hits only the current
+   *     warehouse (Б/У + брак are untouched).
+   *
+   * Returns { deletedProducts, deletedCategories }. deletedProducts counts DB
+   * rows actually flipped to trashed across all three paths.
+   */
+  async bulkSoftDelete(
+    tenantID: string,
+    dto: BulkDeleteDto,
+  ): Promise<{ deletedProducts: number; deletedCategories: number }> {
+    const productIds = dto.productIds ?? [];
+    const categoryIds = dto.categoryIds ?? [];
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      let deletedProducts = 0;
+      let deletedCategories = 0;
+
+      // 1) Explicit product ids.
+      if (productIds.length > 0) {
+        const res = await client.query(
+          `UPDATE products SET deleted_at = NOW()
+           WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::uuid[])`,
+          [tenantID, productIds],
+        );
+        deletedProducts += res.rowCount ?? 0;
+      }
+
+      // 2) Folder ids → reuse the WarehouseService cascade on this same client.
+      if (categoryIds.length > 0) {
+        const cat = await this.warehouseService.softDeleteCategories(categoryIds, tenantID, client);
+        deletedProducts += cat.deletedProducts;
+        deletedCategories += cat.deletedCategories;
+      }
+
+      // 3) deleteAll → all live products (optionally scoped to one warehouse).
+      // $2::uuid IS NULL short-circuits the warehouse predicate when unscoped.
+      if (dto.deleteAll) {
+        const warehouseId = dto.warehouseId ?? null;
+        const res = await client.query(
+          `UPDATE products SET deleted_at = NOW()
+           WHERE tenant_id=$1 AND deleted_at IS NULL
+             AND ($2::uuid IS NULL OR warehouse_id = $2::uuid)`,
+          [tenantID, warehouseId],
+        );
+        deletedProducts += res.rowCount ?? 0;
+      }
+
+      await client.query('COMMIT');
+      return { deletedProducts, deletedCategories };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`bulkSoftDelete failed: ${err instanceof Error ? err.message : err}`);
+      throw new InternalServerErrorException({ message: 'Не удалось удалить товары' });
+    } finally {
+      client.release();
+    }
   }
 
   // List items currently in trash, newest first.

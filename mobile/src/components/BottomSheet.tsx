@@ -37,6 +37,7 @@ import { SPRING_TIGHT, TIMING_STANDARD, preferSpring } from '../platform/motion'
 import { Text } from '../platform/Typography';
 import { useColors } from '../contexts/ThemeContext';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
+import KeyboardDoneToolbar from './KeyboardDoneToolbar';
 
 export interface BottomSheetProps {
   visible: boolean;
@@ -178,6 +179,10 @@ export function BottomSheet({ visible, onClose, title, heightRatio = 0.7, childr
             </KeyboardAvoidingView>
           </Animated.View>
         </GestureHandlerRootView>
+        {/* Единая «Готово» над клавиатурой (Round 11 D). Свой экземпляр внутри
+            вложенного KeyboardProvider — RN <Modal> держит отдельное нативное
+            окно, куда корневой тулбар из App.tsx не дотягивается. */}
+        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </RNModal>
   );

@@ -27,16 +27,17 @@ import {
   StyleSheet,
   TextInput,
   View,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import { KeyboardAvoidingView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as ExpoImage } from 'expo-image';
 import { employeesApi } from '../../api/services';
 import ModalBlurBackdrop from '../ModalBlurBackdrop';
+import KeyboardDoneToolbar from '../KeyboardDoneToolbar';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../../theme';
@@ -169,158 +170,166 @@ export function EditProfileModal({ visible, onClose, profile }: EditProfileModal
   };
 
   return (
+    // Клавиатура (Round 11 D). Раньше RN-core KeyboardAvoidingView (behavior
+    // 'padding' только на iOS, на Android undefined = no-op) → number-pad поля
+    // (WhatsApp, план выручки/чеков) уходили под клавиатуру на Android без
+    // способа свернуть (у number-pad нет return). Теперь keyboard-controller:
+    // 'padding' работает ОДИНАКОВО iOS+Android, а вложенный KeyboardProvider +
+    // KeyboardDoneToolbar дают «Готово». RN <Modal> — отдельное нативное окно,
+    // поэтому провайдер обязателен именно здесь.
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      {/* Blurred backdrop — tap the blurred area to close. */}
-      <ModalBlurBackdrop onPress={onClose} />
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.centerRoot}
-        pointerEvents="box-none"
-      >
-        <View style={[styles.card, { backgroundColor: palette.bg.elevated }]}>
-          <View style={styles.header}>
-            <View style={styles.headerSpacer} />
-            <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
-              Профиль сотрудника
-            </Text>
-            <Pressable
-              onPress={onClose}
-              hitSlop={12}
-              accessibilityRole="button"
-              accessibilityLabel="Закрыть"
-              style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
-            >
-              <Ionicons name="close" size={20} color={palette.text.secondary} />
-            </Pressable>
-          </View>
-
-          <ScrollView
-            style={styles.body}
-            contentContainerStyle={styles.bodyContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            <Field label="Фото">
-              <Pressable onPress={pickPhoto} style={styles.photoRow}>
-                <View style={[styles.photoBox, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-                  {photoUrl ? (
-                    <View style={styles.photoCircle}>
-                      <NetImage uri={photoUrl} />
-                    </View>
-                  ) : (
-                    <Ionicons name="camera-outline" size={28} color={palette.text.tertiary} />
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.photoBtn, { color: colors.primary[600] }]}>
-                    {photoMutation.isPending ? 'Загружаем…' : photoUrl ? 'Изменить фото' : 'Загрузить фото'}
-                  </Text>
-                  <Text style={[styles.photoHint, { color: palette.text.tertiary }]}>
-                    Квадратное фото — лучшая обрезка под аватар.
-                  </Text>
-                </View>
+      <KeyboardProvider>
+        {/* Blurred backdrop — tap the blurred area to close. */}
+        <ModalBlurBackdrop onPress={onClose} />
+        <KeyboardAvoidingView behavior="padding" style={styles.centerRoot} pointerEvents="box-none">
+          <View style={[styles.card, { backgroundColor: palette.bg.elevated }]}>
+            <View style={styles.header}>
+              <View style={styles.headerSpacer} />
+              <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                Профиль сотрудника
+              </Text>
+              <Pressable
+                onPress={onClose}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Закрыть"
+                style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
+              >
+                <Ionicons name="close" size={20} color={palette.text.secondary} />
               </Pressable>
-            </Field>
-
-            <Field label="Дата приёма (YYYY-MM-DD)">
-              <Input value={hireDate} onChangeText={setHireDate} placeholder="2024-03-15" palette={palette} />
-            </Field>
-
-            <Field label="Должность">
-              <Input
-                value={positionTitle}
-                onChangeText={setPositionTitle}
-                placeholder="Старший мастер"
-                palette={palette}
-              />
-            </Field>
-
-            <Field label="Кастомный титул (необязательно)">
-              <Input
-                value={customTitle}
-                onChangeText={setCustomTitle}
-                placeholder="Гранд-мастер моторного цеха"
-                palette={palette}
-              />
-            </Field>
-
-            <Field label="WhatsApp (с кодом страны, без +)">
-              <Input
-                value={whatsapp}
-                onChangeText={setWhatsapp}
-                placeholder="79991234567"
-                keyboardType="number-pad"
-                palette={palette}
-              />
-            </Field>
-
-            <Field label="Специализации">
-              <View style={styles.specsRow}>
-                {specs.map((s) => (
-                  <Pressable key={s} onPress={() => removeSpec(s)} style={styles.specChip}>
-                    <Text style={styles.specText}>{s}</Text>
-                    <Ionicons name="close-circle-outline" size={14} color={colors.primary[700]} />
-                  </Pressable>
-                ))}
-              </View>
-              <View style={styles.addRow}>
-                <Input
-                  value={newSpec}
-                  onChangeText={setNewSpec}
-                  placeholder="Двигатель"
-                  palette={palette}
-                  onSubmitEditing={addSpec}
-                  style={{ flex: 1 }}
-                />
-                <Pressable onPress={addSpec} style={styles.addBtn}>
-                  <Ionicons name="add" size={20} color="#fff" />
-                </Pressable>
-              </View>
-            </Field>
-
-            <View style={styles.row2}>
-              <Field label="План выручки / мес." style={styles.flex}>
-                <Input
-                  value={kpiRevenue}
-                  onChangeText={setKpiRevenue}
-                  placeholder="500000"
-                  keyboardType="number-pad"
-                  palette={palette}
-                />
-              </Field>
-              <Field label="План чеков / мес." style={styles.flex}>
-                <Input
-                  value={kpiChecks}
-                  onChangeText={setKpiChecks}
-                  placeholder="30"
-                  keyboardType="number-pad"
-                  palette={palette}
-                />
-              </Field>
             </View>
-          </ScrollView>
 
-          <View style={[styles.footer, { borderTopColor: palette.border.subtle }]}>
-            <Pressable
-              onPress={onClose}
-              style={[styles.btn, styles.btnSecondary, { backgroundColor: palette.bg.muted }]}
+            <ScrollView
+              style={styles.body}
+              contentContainerStyle={styles.bodyContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
             >
-              <Text style={[styles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
-            </Pressable>
-            <Pressable
-              onPress={onSave}
-              disabled={updateMutation.isPending}
-              style={[styles.btn, styles.btnPrimary, updateMutation.isPending && styles.btnDisabled]}
-            >
-              {updateMutation.isPending ? (
-                <ActivityIndicator size="small" color={colors.white} />
-              ) : (
-                <Text style={styles.btnPrimaryText}>Сохранить</Text>
-              )}
-            </Pressable>
+              <Field label="Фото">
+                <Pressable onPress={pickPhoto} style={styles.photoRow}>
+                  <View
+                    style={[styles.photoBox, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                  >
+                    {photoUrl ? (
+                      <View style={styles.photoCircle}>
+                        <NetImage uri={photoUrl} />
+                      </View>
+                    ) : (
+                      <Ionicons name="camera-outline" size={28} color={palette.text.tertiary} />
+                    )}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.photoBtn, { color: colors.primary[600] }]}>
+                      {photoMutation.isPending ? 'Загружаем…' : photoUrl ? 'Изменить фото' : 'Загрузить фото'}
+                    </Text>
+                    <Text style={[styles.photoHint, { color: palette.text.tertiary }]}>
+                      Квадратное фото — лучшая обрезка под аватар.
+                    </Text>
+                  </View>
+                </Pressable>
+              </Field>
+
+              <Field label="Дата приёма (YYYY-MM-DD)">
+                <Input value={hireDate} onChangeText={setHireDate} placeholder="2024-03-15" palette={palette} />
+              </Field>
+
+              <Field label="Должность">
+                <Input
+                  value={positionTitle}
+                  onChangeText={setPositionTitle}
+                  placeholder="Старший мастер"
+                  palette={palette}
+                />
+              </Field>
+
+              <Field label="Кастомный титул (необязательно)">
+                <Input
+                  value={customTitle}
+                  onChangeText={setCustomTitle}
+                  placeholder="Гранд-мастер моторного цеха"
+                  palette={palette}
+                />
+              </Field>
+
+              <Field label="WhatsApp (с кодом страны, без +)">
+                <Input
+                  value={whatsapp}
+                  onChangeText={setWhatsapp}
+                  placeholder="79991234567"
+                  keyboardType="number-pad"
+                  palette={palette}
+                />
+              </Field>
+
+              <Field label="Специализации">
+                <View style={styles.specsRow}>
+                  {specs.map((s) => (
+                    <Pressable key={s} onPress={() => removeSpec(s)} style={styles.specChip}>
+                      <Text style={styles.specText}>{s}</Text>
+                      <Ionicons name="close-circle-outline" size={14} color={colors.primary[700]} />
+                    </Pressable>
+                  ))}
+                </View>
+                <View style={styles.addRow}>
+                  <Input
+                    value={newSpec}
+                    onChangeText={setNewSpec}
+                    placeholder="Двигатель"
+                    palette={palette}
+                    onSubmitEditing={addSpec}
+                    style={{ flex: 1 }}
+                  />
+                  <Pressable onPress={addSpec} style={styles.addBtn}>
+                    <Ionicons name="add" size={20} color="#fff" />
+                  </Pressable>
+                </View>
+              </Field>
+
+              <View style={styles.row2}>
+                <Field label="План выручки / мес." style={styles.flex}>
+                  <Input
+                    value={kpiRevenue}
+                    onChangeText={setKpiRevenue}
+                    placeholder="500000"
+                    keyboardType="number-pad"
+                    palette={palette}
+                  />
+                </Field>
+                <Field label="План чеков / мес." style={styles.flex}>
+                  <Input
+                    value={kpiChecks}
+                    onChangeText={setKpiChecks}
+                    placeholder="30"
+                    keyboardType="number-pad"
+                    palette={palette}
+                  />
+                </Field>
+              </View>
+            </ScrollView>
+
+            <View style={[styles.footer, { borderTopColor: palette.border.subtle }]}>
+              <Pressable
+                onPress={onClose}
+                style={[styles.btn, styles.btnSecondary, { backgroundColor: palette.bg.muted }]}
+              >
+                <Text style={[styles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
+              </Pressable>
+              <Pressable
+                onPress={onSave}
+                disabled={updateMutation.isPending}
+                style={[styles.btn, styles.btnPrimary, updateMutation.isPending && styles.btnDisabled]}
+              >
+                {updateMutation.isPending ? (
+                  <ActivityIndicator size="small" color={colors.white} />
+                ) : (
+                  <Text style={styles.btnPrimaryText}>Сохранить</Text>
+                )}
+              </Pressable>
+            </View>
           </View>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAvoidingView>
+        <KeyboardDoneToolbar />
+      </KeyboardProvider>
     </RNModal>
   );
 }
@@ -329,15 +338,7 @@ function NetImage({ uri }: { uri: string }) {
   return <ExpoImage source={{ uri }} style={{ width: '100%', height: '100%' }} contentFit="cover" />;
 }
 
-function Field({
-  label,
-  children,
-  style,
-}: {
-  label: string;
-  children: React.ReactNode;
-  style?: any;
-}) {
+function Field({ label, children, style }: { label: string; children: React.ReactNode; style?: any }) {
   const palette = useColors();
   return (
     <View style={[styles.field, style]}>

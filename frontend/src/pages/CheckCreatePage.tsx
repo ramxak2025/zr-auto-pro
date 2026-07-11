@@ -765,26 +765,34 @@ export default function CheckCreatePage() {
     },
   });
 
-  // «Сменить владельца» (feature #9): reassign the currently-selected car to
-  // another client, then re-point this (unsaved) check's client to the new
-  // owner in local state. Car id is stable across reassign, so selectedCarId is
-  // preserved. We refetch the target client to get its full record (including
-  // the freshly-attached car) for the selected-client display. Backend guards a
-  // duplicate plate under the target client and answers 400 — surfaced as-is.
+  // «Сменить владельца» (feature #9): reassign the currently-selected car AND
+  // its full history (checks + derived debts / bonuses / installments) to
+  // another client via transferOwner, then re-point this (unsaved) check's
+  // client to the new owner in local state. Car id is stable across reassign,
+  // so selectedCarId is preserved. We refetch the target client to get its full
+  // record (including the freshly-attached car) for the selected-client display.
+  // Backend guards a duplicate plate under the target client and answers 400 —
+  // surfaced as-is. We invalidate BOTH the old and new owner so the car +
+  // history disappear from the old owner and appear under the new one.
   const reassignMutation = useMutation({
     mutationFn: async (target: Client) => {
-      await carsApi.update(selectedCarId, { clientId: target.id });
+      const prevOwnerId = selectedClient?.id;
+      const res = await carsApi.transferOwner(selectedCarId, { clientId: target.id });
       // Fresh target record — has the newly-attached car in its cars[].
-      const res = await clientsApi.getById(target.id);
-      return res.data as Client;
+      const fresh = await clientsApi.getById(target.id);
+      return { freshOwner: fresh.data as Client, prevOwnerId, movedChecks: res.data?.movedChecks ?? 0 };
     },
-    onSuccess: (freshOwner) => {
+    onSuccess: ({ freshOwner, prevOwnerId, movedChecks }) => {
       setSelectedClient(freshOwner);
       // selectedCarId stays the same — the car now lives under freshOwner.
+      if (prevOwnerId) queryClient.invalidateQueries({ queryKey: ['clients', prevOwnerId] });
+      queryClient.invalidateQueries({ queryKey: ['clients', freshOwner.id] });
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
       queryClient.invalidateQueries({ queryKey: ['active-warranties'] });
-      toast.success('Владелец автомобиля изменён');
+      toast.success(
+        movedChecks > 0 ? `Владелец изменён — перенесено чеков: ${movedChecks}` : 'Владелец автомобиля изменён',
+      );
       closeReassignModal();
     },
     onError: (err: unknown) => {
@@ -1948,8 +1956,8 @@ export default function CheckCreatePage() {
             <p className="text-xs text-amber-800 flex items-start gap-1.5">
               <UserCheck className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
               <span>
-                Автомобиль и вся история обслуживания перейдут к новому владельцу. Прошлые чеки остаются за прежним
-                владельцем. Текущий (несохранённый) чек будет переоформлен на нового владельца.
+                Авто и вся его история (чеки, долги, бонусы) будут перенесены новому владельцу. Текущий (несохранённый)
+                чек будет переоформлен на нового владельца.
               </span>
             </p>
           </div>

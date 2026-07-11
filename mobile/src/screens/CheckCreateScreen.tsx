@@ -49,6 +49,7 @@ import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
+import ClientPhonePickerSheet from '../components/ClientPhonePickerSheet';
 import ClientCarPickerSheet from '../components/ClientCarPickerSheet';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PaymentMethodModal, { paymentMethodLabel, paymentMethodVisual } from '../components/PaymentMethodModal';
@@ -125,6 +126,15 @@ function reassignCarLabel(car: Car): string {
   const plate = (car.plateNumber || '').trim().toUpperCase();
   if (makeModel && plate) return `${makeModel} · ${plate}`;
   return makeModel || plate || 'без номера';
+}
+
+/** Русское склонение слова «чек» для счётчика перенесённых чеков (#9). */
+function reassignChecksWord(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'чек';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'чека';
+  return 'чеков';
 }
 
 /**
@@ -556,12 +566,13 @@ export default function CheckCreateScreen() {
   const [showWarehouseSheet, setShowWarehouseSheet] = useState(false);
   // M2: быстрый «Создать клиента» из состояния «Клиент не найден».
   const [showQuickCreate, setShowQuickCreate] = useState(false);
-  // Feature #9 — «Сменить владельца» из карточки выбранного клиента: переносим
-  // авто другому клиенту (carsApi.update {clientId}) и перенацеливаем ТЕКУЩИЙ
-  // (несохранённый) чек на нового владельца. `reassignMode` роутит уже
-  // смонтированный QuickClientCreateSheet в этот поток вместо «добавить в чек».
-  // `reassignConfirm` — выбранный новый владелец, ждёт подтверждения.
-  const [reassignMode, setReassignMode] = useState(false);
+  // Feature #9 — «Сменить владельца» из карточки выбранного клиента: ПОЛНЫЙ
+  // перенос авто и его истории новому владельцу (carsApi.transferOwner) с
+  // перенацеливанием ТЕКУЩЕГО (несохранённого) чека на него. Выбор нового
+  // владельца — отдельный `ClientPhonePickerSheet` (по телефону, без госномера),
+  // не QuickClientCreateSheet. `reassignConfirm` — выбранный новый владелец,
+  // ждёт подтверждения.
+  const [showReassignPicker, setShowReassignPicker] = useState(false);
   const [reassignConfirm, setReassignConfirm] = useState<{ clientId: string; clientName: string } | null>(null);
   // Центральная модалка выбора способа оплаты (заменила инлайновый ряд кнопок).
   const [showPaymentPicker, setShowPaymentPicker] = useState(false);
@@ -1162,22 +1173,19 @@ export default function CheckCreateScreen() {
     setCarPickerClient(clientData);
   }, [clientData]);
 
-  // Feature #9 — «Сменить владельца»: открываем тот же QuickClientCreateSheet,
-  // но в режиме reassign — его onCreated/onSelectExisting уходят в поток
-  // переноса авто, а не «добавить клиента в чек».
+  // Feature #9 — «Сменить владельца»: открываем ClientPhonePickerSheet (выбор
+  // нового владельца по телефону, без ввода госномера — авто уже выбрано).
   const openReassignOwner = React.useCallback(() => {
     if (!selectedCar) return;
     haptic('tap');
-    setReassignMode(true);
-    setShowQuickCreate(true);
+    setShowReassignPicker(true);
   }, [selectedCar]);
 
-  // Пользователь выбрал/создал нового владельца в sheet (режим reassign).
-  // Закрываем sheet и показываем подтверждение перед записью.
+  // Пользователь выбрал/создал нового владельца в пикере.
+  // Закрываем пикер и показываем подтверждение перед записью.
   const onReassignPicked = React.useCallback(
     (newClientId: string, newClientName: string) => {
-      setShowQuickCreate(false);
-      setReassignMode(false);
+      setShowReassignPicker(false);
       if (newClientId === clientId) {
         Alert.alert('Владелец не изменился', 'Это авто уже принадлежит выбранному клиенту.');
         return;
@@ -1195,13 +1203,25 @@ export default function CheckCreateScreen() {
   const handleReassignOwner = React.useCallback(
     async (car: Car, newClientId: string) => {
       try {
-        await carsApi.update(car.id, { clientId: newClientId });
+        // ПОЛНЫЙ перенос: авто И вся его история (чеки, долги, бонусы,
+        // рассрочки) переезжают новому владельцу одной серверной транзакцией.
+        const res = await carsApi.transferOwner(car.id, { clientId: newClientId });
+        const moved = res.data?.movedChecks ?? 0;
         haptic('success');
+        if (moved > 0) {
+          Alert.alert('Готово', `Авто и ${moved} ${reassignChecksWord(moved)} перенесены новому владельцу.`);
+        }
         // Инвалидируем detail-ключ ЭТОГО экрана (['client-detail', ...] — то,
-        // что читает selectedClient/clientCars) для старого и нового владельца,
-        // плюс списки авто и историю по авто.
+        // что читает selectedClient/clientCars) и историю чеков для старого и
+        // нового владельца, плюс списки авто и историю по авто.
         queryClient.invalidateQueries({ queryKey: ['client-detail', clientId] });
         queryClient.invalidateQueries({ queryKey: ['client-detail', newClientId] });
+        queryClient.invalidateQueries({ queryKey: ['client', clientId] });
+        queryClient.invalidateQueries({ queryKey: ['client', newClientId] });
+        queryClient.invalidateQueries({ queryKey: ['client-checks', clientId] });
+        queryClient.invalidateQueries({ queryKey: ['client-checks-full', clientId] });
+        queryClient.invalidateQueries({ queryKey: ['client-checks', newClientId] });
+        queryClient.invalidateQueries({ queryKey: ['client-checks-full', newClientId] });
         queryClient.invalidateQueries({ queryKey: ['cars'] });
         queryClient.invalidateQueries({ queryKey: ['car-checks'] });
         // Перенацеливаем несохранённый чек на нового владельца. carId оставляем
@@ -4011,22 +4031,11 @@ export default function CheckCreateScreen() {
           без повторного поиска. */}
       <QuickClientCreateSheet
         visible={showQuickCreate}
-        onClose={() => {
-          setShowQuickCreate(false);
-          setReassignMode(false);
-        }}
-        // В режиме reassign поля не предзаполняем номером/телефоном из поиска —
-        // выбираем/создаём НОВОГО владельца с чистой формы.
-        initialPlate={reassignMode ? '' : isPhoneMode ? '' : plateSearch}
+        onClose={() => setShowQuickCreate(false)}
+        initialPlate={isPhoneMode ? '' : plateSearch}
         initialPlateMode={plateMode}
-        initialPhone={reassignMode ? '' : isPhoneMode ? phoneSearch : ''}
+        initialPhone={isPhoneMode ? phoneSearch : ''}
         onCreated={(client, car) => {
-          // Feature #9 — режим «Сменить владельца»: не подставляем клиента в
-          // чек, а уходим в поток переноса выбранного авто новому владельцу.
-          if (reassignMode) {
-            onReassignPicked(client.id, client.fullName);
-            return;
-          }
           setShowQuickCreate(false);
           // Засеваем кеш карточки клиента, чтобы selected-card появилась
           // мгновенно (selectedClient читает ['client-detail', clientId]).
@@ -4041,11 +4050,6 @@ export default function CheckCreateScreen() {
           setPhoneSearch('');
         }}
         onSelectExisting={(existingClientId, existingCarId) => {
-          if (reassignMode) {
-            const cached = queryClient.getQueryData<Client>(['client-detail', existingClientId]);
-            onReassignPicked(existingClientId, cached?.fullName || 'выбранному клиенту');
-            return;
-          }
           setShowQuickCreate(false);
           animateClientToggle();
           setClientId(existingClientId);
@@ -4055,9 +4059,18 @@ export default function CheckCreateScreen() {
         }}
       />
 
+      {/* Feature #9 — «Сменить владельца»: выбор нового владельца ПО ТЕЛЕФОНУ
+          (без госномера — авто уже выбрано). */}
+      <ClientPhonePickerSheet
+        visible={showReassignPicker}
+        onClose={() => setShowReassignPicker(false)}
+        excludeClientId={clientId || undefined}
+        onPicked={onReassignPicked}
+      />
+
       {/* Feature #9 — подтверждение «Сменить владельца». Чек не сохранён, так
-          что конфликта в БД нет; при подтверждении переносим авто и
-          перенацеливаем текущий чек на нового владельца. */}
+          что конфликта в БД нет; при подтверждении переносим авто со всей
+          историей и перенацеливаем текущий чек на нового владельца. */}
       <ConfirmDialog
         visible={!!reassignConfirm}
         onClose={() => setReassignConfirm(null)}
@@ -4068,7 +4081,7 @@ export default function CheckCreateScreen() {
         message={
           reassignConfirm && selectedCar
             ? `Автомобиль ${reassignCarLabel(selectedCar)} будет перенесён клиенту «${reassignConfirm.clientName}». ` +
-              'История прошлых чеков останется у текущего владельца.'
+              'Авто и вся его история (чеки, долги, бонусы) будут перенесены новому владельцу.'
             : ''
         }
         confirmText="Перенести"

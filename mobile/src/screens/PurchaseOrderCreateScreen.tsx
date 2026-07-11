@@ -26,21 +26,12 @@
  * Android-safe: ProductPickerModal + inline-пикеры кроссплатформенны.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-  Platform,
-  Alert,
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import ProductPickerModal from '../components/ProductPickerModal';
 import QtyInput from '../components/QtyInput';
 import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
@@ -77,6 +68,12 @@ function parseCost(costText: string): number {
   const n = parseFloat(costText.replace(',', '.'));
   return Number.isNaN(n) ? 0 : n;
 }
+
+// Высота липкой панели «Создать заказ»: paddingTop (12) + строка «Итого» (~24) +
+// gap (10) + кнопка (paddingVertical 14 ×2 + текст ~16) + paddingBottom (12) ≈ 102.
+// Отступ фокуса клавиатуры (чтобы «Комментарий»/поле цены не ушли под панель) И
+// нижний паддинг скролла.
+const SAVE_BAR_HEIGHT = spacing[3] + 24 + spacing[2.5] + spacing[3.5] * 2 + 16 + spacing[3];
 
 export default function PurchaseOrderCreateScreen() {
   const navigation = useNavigation<any>();
@@ -298,21 +295,20 @@ export default function PurchaseOrderCreateScreen() {
         }
       />
 
-      {/* Keyboard handling. На iOS ScrollView сам добавляет нижний inset под
-          клавиатуру (automaticallyAdjustKeyboardInsets) и подкручивает
-          сфокусированное поле «Комментарий» так, чтобы его было видно над
-          клавиатурой. Sticky-бар ниже остаётся у нижнего края экрана (за
-          клавиатурой) и больше НЕ подлетает вверх с огромным отступом, как
-          это делал KeyboardAvoidingView behavior="padding". */}
+      {/* Клавиатура (Round 11 D). Раньше — обычный ScrollView с
+          automaticallyAdjustKeyboardInsets (ТОЛЬКО iOS); на Android поле
+          «Комментарий»/цены прятались под клавиатурой. Теперь общий
+          KeyboardAwareScroll: авто-скролл к активному полю одинаково iOS+Android,
+          extraKeyboardBottomOffset поднимает фокус НАД липкой панелью
+          «Создать заказ» (SAVE_BAR_HEIGHT). Панель — сестра скролла
+          (marginBottom: tabBarHeight держит её над баром); reserveTabBar={false},
+          нижний паддинг задаём сами. */}
       <View style={styles.flexFill}>
-        <ScrollView
+        <KeyboardAwareScroll
           style={styles.flexFill}
-          contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }]}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive"
-          automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
-          contentInset={{ bottom: tabBarHeight }}
-          scrollIndicatorInsets={{ bottom: tabBarHeight }}
+          contentContainerStyle={[styles.scroll, { paddingBottom: SAVE_BAR_HEIGHT + spacing[4] }]}
+          reserveTabBar={false}
+          extraKeyboardBottomOffset={SAVE_BAR_HEIGHT}
         >
           {/* ── Дозаказ panel ── */}
           {showSuggestions ? (
@@ -551,7 +547,7 @@ export default function PurchaseOrderCreateScreen() {
             placeholderTextColor={palette.text.tertiary}
             multiline
           />
-        </ScrollView>
+        </KeyboardAwareScroll>
 
         {/* ── Sticky save bar ── */}
         <View

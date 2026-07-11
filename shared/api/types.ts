@@ -230,6 +230,19 @@ export interface UpdateCarRequest {
   noPlate?: boolean;
 }
 
+/**
+ * Body for POST /cars/:id/transfer-owner («сменить владельца»). Reassigns the car
+ * to `clientId`. `moveHistory` (default true) also carries the car's check history
+ * — and the debt / installment / loyalty rows derived from those checks — to the
+ * new owner. Gated by 'clients_edit'; owner-class bypasses.
+ */
+export interface TransferCarOwnerRequest {
+  /** New owner (client) id — must exist in the tenant. */
+  clientId: string;
+  /** Carry the car's check history to the new owner. Defaults to true. */
+  moveHistory?: boolean;
+}
+
 export interface CreateProductRequest {
   name: string;
   category?: string;
@@ -330,6 +343,27 @@ export interface BulkAdjustPriceResponse {
   affected: number;
   /** Present only on a dry-run — up to 30 «было → стало» rows. */
   examples?: BulkAdjustPriceExample[];
+}
+
+/**
+ * Body for POST /products/bulk-delete — mass SOFT-delete (move to Корзина).
+ * Never hard-deletes. All three inputs are additive; any combination may be sent.
+ *   • productIds  → trash these products (≤2000).
+ *   • categoryIds → trash these folders + their contents/subfolders (cascade).
+ *   • deleteAll   → trash every live product, scoped to `warehouseId` when set
+ *     (UI passes the current warehouse so Б/У + брак are untouched).
+ */
+export interface BulkDeleteRequest {
+  productIds?: string[];
+  categoryIds?: string[];
+  deleteAll?: boolean;
+  warehouseId?: string;
+}
+
+/** Response of POST /products/bulk-delete — counts of rows moved to trash. */
+export interface BulkDeleteResponse {
+  deletedProducts: number;
+  deletedCategories: number;
 }
 
 export interface CreateServiceRequest {

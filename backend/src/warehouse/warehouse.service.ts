@@ -1,5 +1,5 @@
 import { Injectable, Inject, BadRequestException } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 
 @Injectable()
@@ -161,16 +161,14 @@ export class WarehouseService {
       await client.query('BEGIN');
 
       if (deleteContents) {
-        // Soft-delete every live product in this folder (and subfolders).
-        // The trash bin keeps them — owner can restore individually if a
-        // mistake was made.
-        await client.query(
-          `UPDATE products SET deleted_at = NOW()
-           WHERE tenant_id=$1
-             AND deleted_at IS NULL
-             AND (category=$2 OR category LIKE $2 || '/%')`,
-          [tenantID, deletedPath],
-        );
+        // Soft-delete this folder + subfolders + all their live products to the
+        // Корзина, in ONE reusable step (shared with softDeleteCategories so the
+        // cascade SQL lives in exactly one place). Return early — the shared
+        // helper already soft-deletes the folder rows, so the trailing
+        // folder-soft-delete below must not run twice.
+        await this.softDeleteFolderCascade(client, tenantID, deletedPath);
+        await client.query('COMMIT');
+        return { message: 'Папка и товары удалены' };
       } else if (moveProductsTo !== undefined) {
         // Move to specific target folder (or root if empty string)
         const target = moveProductsTo || null;
@@ -189,12 +187,9 @@ export class WarehouseService {
       }
 
       // Soft-delete the folder and all subfolders (reversible — never a hard
-      // DELETE). Only touches live rows so a re-run stays a no-op.
-      await client.query(
-        `UPDATE warehouse_categories SET deleted_at = NOW()
-         WHERE tenant_id=$1 AND deleted_at IS NULL AND (path=$2 OR path LIKE $2 || '/%')`,
-        [tenantID, deletedPath],
-      );
+      // DELETE). Products were moved (not deleted) in the branches above, so
+      // only the folder rows go to trash here.
+      await this.softDeleteFolderRows(client, tenantID, deletedPath);
 
       await client.query('COMMIT');
     } catch (err) {
@@ -204,7 +199,72 @@ export class WarehouseService {
       client.release();
     }
 
-    return { message: deleteContents ? 'Папка и товары удалены' : 'Папка удалена' };
+    return { message: 'Папка удалена' };
+  }
+
+  /**
+   * Soft-delete just the folder row + every subfolder row for `path` (reversible,
+   * never a hard DELETE). Only touches LIVE rows so a re-run stays a no-op. Runs
+   * on the caller-provided transaction client. Single source of the folder
+   * soft-delete SQL.
+   */
+  private async softDeleteFolderRows(client: PoolClient, tenantID: string, path: string): Promise<void> {
+    await client.query(
+      `UPDATE warehouse_categories SET deleted_at = NOW()
+       WHERE tenant_id=$1 AND deleted_at IS NULL AND (path=$2 OR path LIKE $2 || '/%')`,
+      [tenantID, path],
+    );
+  }
+
+  /**
+   * FULL folder cascade: soft-delete every LIVE product under `path` (folder +
+   * subfolders) to the Корзина, then soft-delete the folder rows themselves.
+   * Runs on the caller-provided transaction client. This is the single source of
+   * the "delete folder with contents" SQL — reused by removeCategory(deleteContents)
+   * and by softDeleteCategories (bulk-delete). Returns the number of products moved.
+   */
+  private async softDeleteFolderCascade(client: PoolClient, tenantID: string, path: string): Promise<number> {
+    const res = await client.query(
+      `UPDATE products SET deleted_at = NOW()
+       WHERE tenant_id=$1
+         AND deleted_at IS NULL
+         AND (category=$2 OR category LIKE $2 || '/%')`,
+      [tenantID, path],
+    );
+    await this.softDeleteFolderRows(client, tenantID, path);
+    return res.rowCount ?? 0;
+  }
+
+  /**
+   * Bulk soft-delete of folders BY ID (used by POST /products/bulk-delete).
+   * Resolves the given live folder ids → paths (tenant-scoped), then runs the
+   * shared folder cascade for each path on the caller's transaction client — so
+   * this participates in the SAME transaction as the product bulk-delete and
+   * never duplicates the cascade SQL.
+   *
+   * Returns { deletedProducts, deletedCategories }:
+   *   • deletedProducts   = live products soft-deleted across all folder cascades.
+   *   • deletedCategories = number of resolved top-level folder ids acted upon
+   *     (each id fans out to its own subtree; subfolder rows are counted inside
+   *     the cascade but not returned separately).
+   * Idempotent: already-trashed / unknown ids resolve to nothing → no-op.
+   */
+  async softDeleteCategories(
+    ids: string[],
+    tenantID: string,
+    client: PoolClient,
+  ): Promise<{ deletedProducts: number; deletedCategories: number }> {
+    if (!ids || ids.length === 0) return { deletedProducts: 0, deletedCategories: 0 };
+    const { rows } = await client.query(
+      `SELECT path FROM warehouse_categories
+        WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::uuid[])`,
+      [tenantID, ids],
+    );
+    let deletedProducts = 0;
+    for (const row of rows) {
+      deletedProducts += await this.softDeleteFolderCascade(client, tenantID, row.path as string);
+    }
+    return { deletedProducts, deletedCategories: rows.length };
   }
 
   async updateOrder(tenantID: string, orderedIds: string[]) {

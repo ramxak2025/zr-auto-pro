@@ -33,6 +33,7 @@ import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
 import { BottomSheet } from '../components/BottomSheet';
 import ConfirmDialog from '../components/ConfirmDialog';
+import TypeToConfirmDialog from '../components/TypeToConfirmDialog';
 import AnimatedCard from '../components/AnimatedCard';
 import ProductPickerModal from '../components/ProductPickerModal';
 import type { FolderAnnotation } from '../components/ProductPickerModal';
@@ -64,6 +65,31 @@ function formatMoney(v: number) {
   );
 }
 
+// \u0420\u0443\u0441\u0441\u043A\u043E\u0435 \u0441\u043A\u043B\u043E\u043D\u0435\u043D\u0438\u0435 \u0441\u0447\u0451\u0442\u0447\u0438\u043A\u043E\u0432 \u0434\u043B\u044F \u0441\u043E\u043E\u0431\u0449\u0435\u043D\u0438\u0439 \u043C\u0430\u0441\u0441\u043E\u0432\u043E\u0433\u043E \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u044F.
+function pluralRu(n: number, one: string, few: string, many: string): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return one;
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return few;
+  return many;
+}
+function productsWord(n: number): string {
+  return pluralRu(
+    n,
+    '\u0442\u043E\u0432\u0430\u0440',
+    '\u0442\u043E\u0432\u0430\u0440\u0430',
+    '\u0442\u043E\u0432\u0430\u0440\u043E\u0432',
+  );
+}
+function foldersWord(n: number): string {
+  return pluralRu(
+    n,
+    '\u043F\u0430\u043F\u043A\u0430',
+    '\u043F\u0430\u043F\u043A\u0438',
+    '\u043F\u0430\u043F\u043E\u043A',
+  );
+}
+
 // \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
 // FolderRow \u2014 \u0441\u0442\u0430\u0442\u0438\u0447\u043D\u0430\u044F \u0441\u0442\u0440\u043E\u043A\u0430 \u043F\u0430\u043F\u043A\u0438 (iOS, \u0431\u0435\u0437 swipe).
 //
@@ -90,6 +116,11 @@ interface FolderRowProps {
   /** #60 \u2014 long-press \u043f\u043e \u043f\u0430\u043f\u043a\u0435 \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442 \u0443\u0434\u0430\u043b\u0435\u043d\u0438\u0435 (\u0442\u043e\u043b\u044c\u043a\u043e \u043a\u043e\u0433\u0434\u0430 \u0443 \u043f\u043e\u043b\u044c\u0437\u043e\u0432\u0430\u0442\u0435\u043b\u044f
    *  \u0435\u0441\u0442\u044c \u043f\u0440\u0430\u0432\u043e warehouse_delete / owner-class). undefined \u2192 long-press \u0432\u044b\u043a\u043b\u044e\u0447\u0435\u043d. */
   onLongPress?: (name: string) => void;
+  /** \u041c\u0430\u0441\u0441\u043e\u0432\u043e\u0435 \u0432\u044b\u0434\u0435\u043b\u0435\u043d\u0438\u0435 \u2014 \u043a\u043e\u0433\u0434\u0430 `selectMode`, \u0442\u0430\u043f \u043f\u043e \u0441\u0442\u0440\u043e\u043a\u0435 \u043f\u0435\u0440\u0435\u043a\u043b\u044e\u0447\u0430\u0435\u0442 \u0432\u044b\u0431\u043e\u0440
+   *  (\u0430 \u043d\u0435 \u043e\u0442\u043a\u0440\u044b\u0432\u0430\u0435\u0442 \u043f\u0430\u043f\u043a\u0443), \u0438 \u0441\u043b\u0435\u0432\u0430 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442\u0441\u044f \u0447\u0435\u043a-\u043a\u0440\u0443\u0436\u043e\u043a. */
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (name: string) => void;
   /** Palette tokens \u2014 passed in so the memoised row picks up dark mode
    *  without subscribing to the theme context itself. */
   rowBg: string;
@@ -97,6 +128,7 @@ interface FolderRowProps {
   textPrimary: string;
   textTertiary: string;
   iconBoxBg: string;
+  accentColor: string;
 }
 
 const FolderRow = React.memo(function FolderRow({
@@ -106,19 +138,32 @@ const FolderRow = React.memo(function FolderRow({
   lastCheckIso,
   onOpen,
   onLongPress,
+  selectMode,
+  selected,
+  onToggleSelect,
   rowBg,
   separatorColor,
   textPrimary,
   textTertiary,
   iconBoxBg,
+  accentColor,
 }: FolderRowProps) {
   return (
     <TouchableOpacity
-      onPress={() => onOpen(folderName)}
+      onPress={() => (selectMode && onToggleSelect ? onToggleSelect(folderName) : onOpen(folderName))}
       onLongPress={onLongPress ? () => onLongPress(folderName) : undefined}
       activeOpacity={0.6}
       style={[styles.folderRow, { backgroundColor: rowBg, borderBottomColor: separatorColor }]}
     >
+      {selectMode && (
+        <View style={styles.selectCircleWrap}>
+          <Ionicons
+            name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+            size={24}
+            color={selected ? accentColor : textTertiary}
+          />
+        </View>
+      )}
       <View style={[styles.folderIconBox, { backgroundColor: iconBoxBg }]}>
         <Ionicons name="folder-open-outline" size={18} color={colors.primary[500]} />
       </View>
@@ -147,7 +192,7 @@ const FolderRow = React.memo(function FolderRow({
           <Ionicons name="alert-circle" size={14} color={colors.orange[500]} />
         </View>
       )}
-      <Ionicons name="chevron-forward" size={16} color={textTertiary} />
+      {!selectMode && <Ionicons name="chevron-forward" size={16} color={textTertiary} />}
     </TouchableOpacity>
   );
 });
@@ -172,6 +217,11 @@ interface ProductRowProps {
   /** "Установить цену" — inline-CTA для товаров на складе Б/У без
    *  розничной цены. Когда передан, заменяет sellPrice в карточке. */
   onSetSellPrice?: (product: Product) => void;
+  /** Массовое выделение — когда `selectMode`, тап по карточке переключает
+   *  выбор (а не открывает деталку), и слева показывается чек-кружок. */
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: (product: Product) => void;
   /** Palette tokens — passed in so the memoised row picks up dark mode
    *  without subscribing to the theme context itself. */
   rowBg: string;
@@ -183,6 +233,7 @@ interface ProductRowProps {
    *  a translucent amber glow in dark (washed amber[50] reads dirty on the
    *  dark canvas). Computed by the parent so the row stays prop-driven. */
   pricelessCtaBg: string;
+  accentColor: string;
 }
 const ProductRow = React.memo(function ProductRow({
   item,
@@ -193,12 +244,16 @@ const ProductRow = React.memo(function ProductRow({
   onOpenPhoto,
   onLongPress,
   onSetSellPrice,
+  selectMode,
+  selected,
+  onToggleSelect,
   rowBg,
   separatorColor,
   textPrimary,
   textTertiary,
   photoPlaceholderBg,
   pricelessCtaBg,
+  accentColor,
 }: ProductRowProps) {
   const lowStock = item.stock <= item.minStock && item.minStock > 0;
   const pUri = getImageUrl(item.photo);
@@ -209,12 +264,27 @@ const ProductRow = React.memo(function ProductRow({
     <AnimatedCard
       index={index}
       style={[styles.productCard, { backgroundColor: rowBg, borderBottomColor: separatorColor }]}
-      onPress={() => onOpenDetail(item)}
+      onPress={() => (selectMode && onToggleSelect ? onToggleSelect(item) : onOpenDetail(item))}
       onLongPress={onLongPress ? () => onLongPress(item) : undefined}
     >
       <View style={styles.productRow}>
+        {selectMode && (
+          <View style={styles.selectCircleWrap}>
+            <Ionicons
+              name={selected ? 'checkmark-circle' : 'ellipse-outline'}
+              size={24}
+              color={selected ? accentColor : textTertiary}
+            />
+          </View>
+        )}
         <TouchableOpacity
           onPress={() => {
+            // В режиме выделения тап по фото переключает выбор, а не открывает
+            // лайтбокс — иначе выделить карточку с фото было бы нельзя.
+            if (selectMode && onToggleSelect) {
+              onToggleSelect(item);
+              return;
+            }
             if (pUri) onOpenPhoto(pUri);
           }}
         >
@@ -270,6 +340,7 @@ export default function ProductsScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const insetsTop = useSafeAreaInsets().top;
+  const insetsBottom = useSafeAreaInsets().bottom;
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const palette = useColors();
@@ -339,6 +410,16 @@ export default function ProductsScreen() {
   // rather than a separate "Ещё" tab item, because soft-deleted products are
   // a warehouse concern.
   const [showTrashModal, setShowTrashModal] = useState(false);
+
+  // ── Массовое удаление (REQ A) ─────────────────────────────────────────
+  // Режим множественного выделения: собираем id товаров И папок, затем одним
+  // bulkDelete отправляем всё в Корзину (обратимо). Гейт — canDeleteWarehouse.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedProductIds, setSelectedProductIds] = useState<Set<string>>(new Set());
+  const [selectedFolderNames, setSelectedFolderNames] = useState<Set<string>>(new Set());
+  // Диалог-подтверждение с набором слова: 'selection' — удалить выбранное,
+  // 'all' — удалить весь товар текущего склада.
+  const [confirmBulk, setConfirmBulk] = useState<'selection' | 'all' | null>(null);
 
   // Fullscreen photo view
   const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
@@ -685,6 +766,39 @@ export default function ProductsScreen() {
       Alert.alert(
         '\u041E\u0448\u0438\u0431\u043A\u0430',
         '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u0438',
+      );
+    },
+  });
+
+  // \u041C\u0430\u0441\u0441\u043E\u0432\u043E\u0435 \u043C\u044F\u0433\u043A\u043E\u0435 \u0443\u0434\u0430\u043B\u0435\u043D\u0438\u0435 (REQ A) \u2014 \u0442\u043E\u0432\u0430\u0440\u044B/\u043F\u0430\u043F\u043A\u0438/\u00AB\u0432\u0435\u0441\u044C \u0442\u043E\u0432\u0430\u0440\u00BB \u043E\u0434\u043D\u0438\u043C \u0437\u0430\u043F\u0440\u043E\u0441\u043E\u043C
+  // \u0432 \u041A\u043E\u0440\u0437\u0438\u043D\u0443. \u0418\u043D\u0432\u0430\u043B\u0438\u0434\u0438\u0440\u0443\u0435\u043C \u0442\u0435 \u0436\u0435 \u043A\u043B\u044E\u0447\u0438, \u0447\u0442\u043E \u0438 deleteMutation, \u0447\u0442\u043E\u0431\u044B \u0441\u043F\u0438\u0441\u043E\u043A,
+  // \u043F\u0438\u043A\u0435\u0440 \u041A\u0430\u0441\u0441\u044B, \u0434\u0435\u0440\u0435\u0432\u043E \u043F\u0430\u043F\u043E\u043A \u0438 \u041A\u043E\u0440\u0437\u0438\u043D\u0430 \u043E\u0431\u043D\u043E\u0432\u0438\u043B\u0438\u0441\u044C \u0440\u0430\u0437\u043E\u043C.
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (data: { productIds?: string[]; categoryIds?: string[]; deleteAll?: boolean; warehouseId?: string }) =>
+      productsApi.bulkDelete(data),
+    onSuccess: (res) => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['products-trash'] });
+      exitSelectMode();
+      const dp = res?.data?.deletedProducts ?? 0;
+      const dc = res?.data?.deletedCategories ?? 0;
+      const parts: string[] = [];
+      if (dp > 0) parts.push(`${dp} ${productsWord(dp)}`);
+      if (dc > 0) parts.push(`${dc} ${foldersWord(dc)}`);
+      Alert.alert(
+        '\u041F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u043E \u0432 \u041A\u043E\u0440\u0437\u0438\u043D\u0443',
+        `${parts.length ? parts.join(', ') + ' ' : ''}\u043F\u0435\u0440\u0435\u043C\u0435\u0449\u0435\u043D\u043E \u0432 \u041A\u043E\u0440\u0437\u0438\u043D\u0443. \u041C\u043E\u0436\u043D\u043E \u0432\u043E\u0441\u0441\u0442\u0430\u043D\u043E\u0432\u0438\u0442\u044C.`,
+      );
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert(
+        '\u041E\u0448\u0438\u0431\u043A\u0430',
+        err?.response?.data?.message ||
+          '\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0443\u0434\u0430\u043B\u0438\u0442\u044C',
       );
     },
   });
@@ -1082,6 +1196,92 @@ export default function ProductsScreen() {
       },
     );
   };
+
+  // ── Массовое выделение (REQ A) ────────────────────────────────────────
+  // Вход/выход из режима выделения. Выход всегда чистит оба набора.
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedProductIds(new Set());
+    setSelectedFolderNames(new Set());
+  }, []);
+  const enterSelectMode = useCallback(() => {
+    haptic('impact');
+    setSelectMode(true);
+    setSelectedProductIds(new Set());
+    setSelectedFolderNames(new Set());
+  }, []);
+
+  const toggleProductSelect = useCallback((p: Product) => {
+    haptic('select');
+    setSelectedProductIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(p.id)) next.delete(p.id);
+      else next.add(p.id);
+      return next;
+    });
+  }, []);
+  const toggleFolderSelect = useCallback((name: string) => {
+    haptic('select');
+    setSelectedFolderNames((prev) => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  }, []);
+
+  // Сколько всего выбрано (товары + папки) — драйвит счётчики и disabled-бар.
+  const selectedCount = selectedProductIds.size + selectedFolderNames.size;
+  // «Выбрать всё» / «Снять всё» на текущем уровне (видимые папки + товары).
+  const visibleSelectableCount = sortedFolders.length + currentProducts.length;
+  const allVisibleSelected =
+    visibleSelectableCount > 0 &&
+    selectedFolderNames.size === sortedFolders.length &&
+    selectedProductIds.size === currentProducts.length;
+  const toggleSelectAll = useCallback(() => {
+    haptic('select');
+    if (allVisibleSelected) {
+      setSelectedFolderNames(new Set());
+      setSelectedProductIds(new Set());
+    } else {
+      setSelectedFolderNames(new Set(sortedFolders.map(([name]) => name)));
+      setSelectedProductIds(new Set(currentProducts.map((p) => p.id)));
+    }
+  }, [allVisibleSelected, sortedFolders, currentProducts]);
+
+  // Подтверждённое удаление выбранного. Папки → categoryIds (id строки
+  // warehouse_categories). У «производной» папки (существует только из-за
+  // category-путей товаров) catId пуст — такую отправляем как товары по её
+  // содержимому, чтобы удаление всё равно сработало.
+  const runBulkDeleteSelection = useCallback(() => {
+    const productIds = Array.from(selectedProductIds);
+    const categoryIds: string[] = [];
+    for (const name of selectedFolderNames) {
+      const entry = sortedFolders.find(([n]) => n === name);
+      if (!entry) continue;
+      const info = entry[1];
+      if (info.catId) {
+        categoryIds.push(info.catId);
+      } else {
+        // Производная папка без строки в БД: добавляем все товары этого пути.
+        for (const p of allProducts) {
+          const cat = p.category || '';
+          if (cat === info.fullPath || cat.startsWith(info.fullPath + '/')) productIds.push(p.id);
+        }
+      }
+    }
+    const payload: { productIds?: string[]; categoryIds?: string[] } = {};
+    if (productIds.length) payload.productIds = Array.from(new Set(productIds));
+    if (categoryIds.length) payload.categoryIds = categoryIds;
+    if (!payload.productIds && !payload.categoryIds) return;
+    bulkDeleteMutation.mutate(payload);
+  }, [selectedProductIds, selectedFolderNames, sortedFolders, allProducts, bulkDeleteMutation]);
+
+  // Подтверждённое «удалить весь товар» — scoped на ТЕКУЩИЙ склад, чтобы Б/У и
+  // брак не пострадали.
+  const runBulkDeleteAll = useCallback(() => {
+    bulkDeleteMutation.mutate({ deleteAll: true, ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}) });
+  }, [bulkDeleteMutation, activeWarehouseId]);
 
   // --- Image picking ---
   const pickImage = async () => {
@@ -1665,12 +1865,21 @@ export default function ProductsScreen() {
             hasLow={info.hasLow}
             lastCheckIso={folderLastCheck.get(folderName)}
             onOpen={enterFolder}
-            onLongPress={canDeleteWarehouse ? openFolderActions : undefined}
+            // Long-press по папке в обычном режиме открывает удаление ОДНОЙ
+            // папки (существующий поток). В режиме массового выделения
+            // long-press отключён, чтобы не конфликтовать с тапом-выбором;
+            // войти в выделение можно из ops-sheet «Выбрать» или long-press'ом
+            // по товару.
+            onLongPress={selectMode ? undefined : canDeleteWarehouse ? openFolderActions : undefined}
+            selectMode={selectMode}
+            selected={selectedFolderNames.has(folderName)}
+            onToggleSelect={toggleFolderSelect}
             rowBg={palette.bg.card}
             separatorColor={palette.border.subtle}
             textPrimary={palette.text.primary}
             textTertiary={palette.text.tertiary}
             iconBoxBg={palette.accent.primarySoft}
+            accentColor={palette.accent.primary}
           />
         ))}
       </View>
@@ -1682,10 +1891,14 @@ export default function ProductsScreen() {
     folderLastCheck,
     canDeleteWarehouse,
     openFolderActions,
+    selectMode,
+    selectedFolderNames,
+    toggleFolderSelect,
     palette.bg.card,
     palette.border.subtle,
     palette.text.primary,
     palette.text.tertiary,
+    palette.accent.primary,
     palette.accent.primarySoft,
   ]);
 
@@ -1716,16 +1929,34 @@ export default function ProductsScreen() {
         canSeeCostPrice={canSeeCostPrice}
         onOpenDetail={openDetail}
         onOpenPhoto={setFullscreenPhoto}
-        // Long-press only enabled on the main warehouse — moving FROM
-        // defect/used isn't a defined movement type yet.
-        onLongPress={isMainWarehouse && canManageWarehouse ? openActionsForProduct : undefined}
+        // Long-press: в режиме выделения отключён (тап уже переключает выбор).
+        // Иначе — если есть право удаления, long-press ВХОДИТ в массовое
+        // выделение с уже отмеченным этим товаром (быстрый жест). Если права
+        // удаления нет, но есть управление складом на основном складе —
+        // старый per-product action-sheet (перенос в брак/Б-У).
+        onLongPress={
+          selectMode
+            ? undefined
+            : canDeleteWarehouse
+              ? (p) => {
+                  enterSelectMode();
+                  toggleProductSelect(p);
+                }
+              : isMainWarehouse && canManageWarehouse
+                ? openActionsForProduct
+                : undefined
+        }
         onSetSellPrice={isUsedWarehouse && canManageWarehouse ? openSellPriceEditor : undefined}
+        selectMode={selectMode}
+        selected={selectedProductIds.has(item.id)}
+        onToggleSelect={toggleProductSelect}
         rowBg={palette.bg.card}
         separatorColor={palette.border.subtle}
         textPrimary={palette.text.primary}
         textTertiary={palette.text.tertiary}
         photoPlaceholderBg={palette.bg.muted}
         pricelessCtaBg={palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50]}
+        accentColor={palette.accent.primary}
       />
     ),
     // openEdit is recreated each render (uses local state), and search
@@ -1738,61 +1969,91 @@ export default function ProductsScreen() {
       isMainWarehouse,
       isUsedWarehouse,
       canManageWarehouse,
+      canDeleteWarehouse,
       openActionsForProduct,
       openSellPriceEditor,
+      selectMode,
+      selectedProductIds,
+      enterSelectMode,
+      toggleProductSelect,
       palette.bg.card,
       palette.bg.muted,
       palette.border.subtle,
       palette.text.primary,
       palette.text.tertiary,
+      palette.accent.primary,
       palette.mode,
     ],
   );
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      {/* Unified iOS header \u2014 same component as \u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 / \u0416\u0443\u0440\u043D\u0430\u043B
+      {/* \u0417\u0430\u0433\u043E\u043B\u043E\u0432\u043E\u043A \u0440\u0435\u0436\u0438\u043C\u0430 \u043C\u0430\u0441\u0441\u043E\u0432\u043E\u0433\u043E \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u0438\u044F (REQ A). \u0417\u0430\u043C\u0435\u043D\u044F\u0435\u0442 \u043E\u0431\u044B\u0447\u043D\u0443\u044E \u0448\u0430\u043F\u043A\u0443,
+          \u043F\u043E\u043A\u0430 \u0438\u0434\u0451\u0442 \u0432\u044B\u0431\u043E\u0440: \u0441\u043B\u0435\u0432\u0430 \u00AB\u041E\u0442\u043C\u0435\u043D\u0430\u00BB (\u0432\u044B\u0445\u043E\u0434), \u0432 \u0446\u0435\u043D\u0442\u0440\u0435 \u0441\u0447\u0451\u0442\u0447\u0438\u043A \u00AB\u0412\u044B\u0431\u0440\u0430\u043D\u043E N\u00BB,
+          \u0441\u043F\u0440\u0430\u0432\u0430 \u00AB\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u0432\u0441\u0451\u00BB / \u00AB\u0421\u043D\u044F\u0442\u044C \u0432\u0441\u0451\u00BB. */}
+      {selectMode ? (
+        <SafeAreaView edges={['top']} style={{ backgroundColor: palette.bg.canvas }}>
+          <View style={[styles.selectHeader, { borderBottomColor: palette.border.subtle }]}>
+            <TouchableOpacity onPress={exitSelectMode} hitSlop={8} style={styles.selectHeaderSide}>
+              <Text style={[styles.selectHeaderCancel, { color: palette.accent.primary }]}>
+                \u041E\u0442\u043C\u0435\u043D\u0430
+              </Text>
+            </TouchableOpacity>
+            <Text style={[styles.selectHeaderTitle, { color: palette.text.primary }]} numberOfLines={1}>
+              {selectedCount > 0
+                ? `\u0412\u044B\u0431\u0440\u0430\u043D\u043E ${selectedCount}`
+                : '\u0412\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0442\u043E\u0432\u0430\u0440\u044B'}
+            </Text>
+            <TouchableOpacity
+              onPress={toggleSelectAll}
+              hitSlop={8}
+              style={[styles.selectHeaderSide, { alignItems: 'flex-end' }]}
+              disabled={visibleSelectableCount === 0}
+            >
+              <Text
+                style={[
+                  styles.selectHeaderCancel,
+                  { color: visibleSelectableCount === 0 ? palette.text.tertiary : palette.accent.primary },
+                ]}
+              >
+                {allVisibleSelected
+                  ? '\u0421\u043D\u044F\u0442\u044C \u0432\u0441\u0451'
+                  : '\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u0432\u0441\u0451'}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      ) : (
+        /* Unified iOS header \u2014 same component as \u0420\u0430\u0441\u043F\u0438\u0441\u0430\u043D\u0438\u0435 / \u0416\u0443\u0440\u043D\u0430\u043B
           / \u041F\u043E\u0441\u0442\u0430\u0432\u0449\u0438\u043A\u0438. Title becomes the warehouse name (e.g. "\u0421\u043A\u043B\u0430\u0434
           \u0431\u0440\u0430\u043A\u0430") so the user always knows which warehouse they're
           looking at. A leading layers-glyph button (and a tap on the
           title itself, via `leading` slot + onPress in the title row
-          below) opens the warehouse switcher sheet. */}
-      <IosScreenHeader
-        title={activeWarehouse?.name || '\u0421\u043A\u043B\u0430\u0434'}
-        subtitle={data === undefined ? undefined : `${warehouseStats.count} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`}
-        leading={
-          warehouses && warehouses.length > 1 ? (
-            <TouchableOpacity
-              onPress={() => setShowWarehouseSwitcher(true)}
-              style={[styles.switcherBtn, { backgroundColor: palette.bg.muted }]}
-              accessibilityRole="button"
-              accessibilityLabel={'\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u0441\u043A\u043B\u0430\u0434'}
-              hitSlop={8}
-            >
-              <Ionicons name="layers-outline" size={18} color={palette.text.primary} />
-              <Ionicons name="chevron-down" size={12} color={palette.text.secondary} style={{ marginLeft: -2 }} />
-            </TouchableOpacity>
-          ) : null
-        }
-        trailing={
-          <View style={{ flexDirection: 'row', gap: spacing[2] }}>
-            {/* Сканировать — barcode → найти и открыть товар. Read-only action,
+          below) opens the warehouse switcher sheet. */
+        <IosScreenHeader
+          title={activeWarehouse?.name || '\u0421\u043A\u043B\u0430\u0434'}
+          subtitle={
+            data === undefined ? undefined : `${warehouseStats.count} \u0442\u043E\u0432\u0430\u0440\u043E\u0432`
+          }
+          leading={
+            warehouses && warehouses.length > 1 ? (
+              <TouchableOpacity
+                onPress={() => setShowWarehouseSwitcher(true)}
+                style={[styles.switcherBtn, { backgroundColor: palette.bg.muted }]}
+                accessibilityRole="button"
+                accessibilityLabel={'\u0412\u044B\u0431\u0440\u0430\u0442\u044C \u0441\u043A\u043B\u0430\u0434'}
+                hitSlop={8}
+              >
+                <Ionicons name="layers-outline" size={18} color={palette.text.primary} />
+                <Ionicons name="chevron-down" size={12} color={palette.text.secondary} style={{ marginLeft: -2 }} />
+              </TouchableOpacity>
+            ) : null
+          }
+          trailing={
+            <View style={{ flexDirection: 'row', gap: spacing[2] }}>
+              {/* Сканировать — barcode → найти и открыть товар. Read-only action,
                 shown to everyone who can see the warehouse. The scanner itself
                 degrades gracefully if the camera native module isn't linked. */}
-            <TouchableOpacity
-              style={[
-                styles.opsBtn,
-                { backgroundColor: palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50] },
-              ]}
-              onPress={() => {
-                haptic('tap');
-                setShowScanner(true);
-              }}
-              accessibilityLabel="Сканировать штрих-код"
-            >
-              <Ionicons name="barcode-outline" size={18} color={colors.primary[600]} />
-            </TouchableOpacity>
-            {canManageWarehouse && (
               <TouchableOpacity
                 style={[
                   styles.opsBtn,
@@ -1800,25 +2061,43 @@ export default function ProductsScreen() {
                     backgroundColor: palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
                   },
                 ]}
-                onPress={() => setShowOpsModal(true)}
+                onPress={() => {
+                  haptic('tap');
+                  setShowScanner(true);
+                }}
+                accessibilityLabel="Сканировать штрих-код"
               >
-                <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
+                <Ionicons name="barcode-outline" size={18} color={colors.primary[600]} />
               </TouchableOpacity>
-            )}
-            {/* «+» создаёт товар в текущем складе. На складе брака этого
+              {canManageWarehouse && (
+                <TouchableOpacity
+                  style={[
+                    styles.opsBtn,
+                    {
+                      backgroundColor:
+                        palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                    },
+                  ]}
+                  onPress={() => setShowOpsModal(true)}
+                >
+                  <Ionicons name="swap-horizontal-outline" size={18} color={colors.orange[600]} />
+                </TouchableOpacity>
+              )}
+              {/* «+» создаёт товар в текущем складе. На складе брака этого
                 делать нельзя: товары туда попадают только переводом со
                 склада или возвратом от клиента (бэк бы 400'нул). Скрываем
                 кнопку, чтобы UI не путал владельца. На used (Б/У) товары
                 заводятся через «Покупка б/у» у системного поставщика,
                 поэтому на used-складе тоже прячем создание. */}
-            {canManageWarehouse && activeWarehouse?.kind === 'main' && (
-              <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
-                <Ionicons name="add" size={18} color={colors.white} />
-              </TouchableOpacity>
-            )}
-          </View>
-        }
-      />
+              {canManageWarehouse && activeWarehouse?.kind === 'main' && (
+                <TouchableOpacity style={styles.addBtn} onPress={openCreate}>
+                  <Ionicons name="add" size={18} color={colors.white} />
+                </TouchableOpacity>
+              )}
+            </View>
+          }
+        />
+      )}
       {/* FreshnessBadge \u2014 HYBRID-perf plan. Pinned just under the header,
           driven by the products + warehouses queries. Hidden when there
           is no data yet (cold cache miss + first fetch) so we don't
@@ -2220,7 +2499,7 @@ export default function ProductsScreen() {
         title={
           '\u0421\u043A\u043B\u0430\u0434\u0441\u043A\u0438\u0435 \u043E\u043F\u0435\u0440\u0430\u0446\u0438\u0438'
         }
-        heightRatio={0.62}
+        heightRatio={0.82}
       >
         <TouchableOpacity
           style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
@@ -2318,6 +2597,62 @@ export default function ProductsScreen() {
               <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Массовая корректировка цен'}</Text>
               <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
                 {'Поднять или снизить цены на % с округлением'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        )}
+
+        {/* REQ A — «Выбрать»: вход в режим массового выделения (товары + папки).
+            Гейт canDeleteWarehouse: мастера без права удаления его не видят. */}
+        {canDeleteWarehouse && (
+          <TouchableOpacity
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => {
+              setShowOpsModal(false);
+              enterSelectMode();
+            }}
+          >
+            <View
+              style={[
+                styles.opsIcon,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.blue[600], 'dark') : colors.blue[50] },
+              ]}
+            >
+              <Ionicons name="checkmark-done-outline" size={22} color={colors.blue[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Выбрать'}</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                {'Отметить товары и папки для удаления'}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        )}
+
+        {/* REQ A — «Удалить весь товар»: мягкое удаление всех товаров текущего
+            склада в Корзину (обратимо). Гейт canDeleteWarehouse. */}
+        {canDeleteWarehouse && (
+          <TouchableOpacity
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => {
+              setShowOpsModal(false);
+              setConfirmBulk('all');
+            }}
+          >
+            <View
+              style={[
+                styles.opsIcon,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50] },
+              ]}
+            >
+              <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>{'Удалить весь товар'}</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                {'Весь товар этого склада — в Корзину'}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
@@ -3400,12 +3735,111 @@ export default function ProductsScreen() {
         categories={Array.isArray(extraFolders) ? extraFolders : []}
         products={allProducts}
       />
+
+      {/* REQ A — липкий нижний бар «Удалить (N)». Виден только в режиме
+          выделения; сидит над floating tab bar (учитываем tabBarHeight) и
+          home indicator. Кнопка disabled, пока ничего не выбрано. */}
+      {selectMode && (
+        <View
+          style={[
+            styles.bulkBar,
+            {
+              paddingBottom: Math.max(insetsBottom, spacing[3]),
+              bottom: tabBarHeight,
+              backgroundColor: palette.bg.elevated,
+              borderTopColor: palette.border.subtle,
+            },
+          ]}
+        >
+          <TouchableOpacity
+            style={[styles.bulkDeleteBtn, selectedCount === 0 && styles.bulkDeleteBtnDisabled]}
+            disabled={selectedCount === 0 || bulkDeleteMutation.isPending}
+            onPress={() => {
+              haptic('warning');
+              setConfirmBulk('selection');
+            }}
+          >
+            {bulkDeleteMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <>
+                <Ionicons name="trash-outline" size={18} color={colors.white} />
+                <Text style={styles.bulkDeleteBtnText}>
+                  {selectedCount > 0 ? `Удалить (${selectedCount})` : 'Удалить'}
+                </Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* REQ A — деструктивный шлюз с набором слова «согласен». Один диалог для
+          обоих сценариев: удалить выбранное и удалить весь товар. Всё уходит в
+          Корзину (обратимо) — об этом сказано в тексте. */}
+      <TypeToConfirmDialog
+        visible={confirmBulk !== null}
+        onClose={() => setConfirmBulk(null)}
+        onConfirm={() => {
+          if (confirmBulk === 'all') runBulkDeleteAll();
+          else if (confirmBulk === 'selection') runBulkDeleteSelection();
+          setConfirmBulk(null);
+        }}
+        title={confirmBulk === 'all' ? 'Удалить весь товар?' : 'Удалить выбранное?'}
+        message={
+          confirmBulk === 'all'
+            ? `Весь товар склада «${activeWarehouse?.name || ''}» будет перемещён в Корзину. ` +
+              'Это обратимо — можно восстановить из Корзины.'
+            : `${selectedCount} ${selectedCount === 1 ? 'позиция' : 'позиций'} (товары и папки) будут перемещены ` +
+              'в Корзину. Это обратимо — можно восстановить из Корзины.'
+        }
+        confirmWord="согласен"
+        confirmText="Удалить"
+        count={confirmBulk === 'selection' ? selectedCount : undefined}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
+  // ── Массовое выделение (REQ A) ──────────────────────────────────────
+  selectCircleWrap: {
+    width: 24,
+    height: 24,
+    marginRight: spacing[2.5],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  selectHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[3],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+  },
+  selectHeaderSide: { minWidth: 90 },
+  selectHeaderCancel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  selectHeaderTitle: { fontSize: fontSize.base, fontWeight: fontWeight.bold, flex: 1, textAlign: 'center' },
+  bulkBar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    paddingHorizontal: spacing[4],
+    paddingTop: spacing[3],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  bulkDeleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.red[600],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3.5],
+  },
+  bulkDeleteBtnDisabled: { backgroundColor: colors.gray[300] },
+  bulkDeleteBtnText: { fontSize: fontSize.base, fontWeight: fontWeight.semibold, color: colors.white },
   header: {
     flexDirection: 'row',
     justifyContent: 'space-between',

@@ -713,18 +713,23 @@ export default function ClientDetailPage() {
     },
   });
 
-  // Dedicated «Сменить владельца» mutation (feature #9). Reassigns the car to
-  // the picked client. Backend guards against a duplicate plate under the
-  // TARGET client and answers 400 «У этого клиента уже есть авто с таким
-  // номером» — we surface that message directly.
+  // Dedicated «Сменить владельца» mutation (feature #9). Reassigns the car AND
+  // its full history (checks + derived debts / bonuses / installments) to the
+  // picked client via transferOwner. Backend guards against a duplicate plate
+  // under the TARGET client and answers 400 «У этого клиента уже есть авто с
+  // таким номером» — we surface that message directly. We invalidate BOTH the
+  // old owner (this page, `id`) and the new owner so the car + history vanish
+  // here and appear under the new owner.
   const reassignCarMutation = useMutation({
-    mutationFn: ({ carId, clientId }: { carId: string; clientId: string }) => carsApi.update(carId, { clientId }),
-    onSuccess: (_res, vars) => {
+    mutationFn: ({ carId, clientId }: { carId: string; clientId: string }) =>
+      carsApi.transferOwner(carId, { clientId }),
+    onSuccess: (res, vars) => {
       queryClient.invalidateQueries({ queryKey: ['clients', id] });
       queryClient.invalidateQueries({ queryKey: ['clients', vars.clientId] });
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       queryClient.invalidateQueries({ queryKey: ['cars'] });
-      toast.success('Владелец автомобиля изменён');
+      const moved = res.data?.movedChecks ?? 0;
+      toast.success(moved > 0 ? `Владелец изменён — перенесено чеков: ${moved}` : 'Владелец автомобиля изменён');
       closeReassignModal();
     },
     onError: (err: unknown) => {
@@ -1328,9 +1333,8 @@ export default function ClientDetailPage() {
               <p className="text-xs text-amber-800 flex items-start gap-1.5">
                 <UserCheck className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
                 <span>
-                  Автомобиль и вся история обслуживания перейдут к клиенту{' '}
-                  <span className="font-semibold">{reassignTarget.fullName}</span>. Прошлые чеки остаются за прежним
-                  владельцем.
+                  Авто и вся его история (чеки, долги, бонусы) будут перенесены клиенту{' '}
+                  <span className="font-semibold">{reassignTarget.fullName}</span>.
                 </span>
               </p>
             </div>

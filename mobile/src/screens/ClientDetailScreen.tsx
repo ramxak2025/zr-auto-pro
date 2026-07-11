@@ -26,7 +26,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SourcePickerSheet from '../components/SourcePickerSheet';
-import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
+import ClientPhonePickerSheet from '../components/ClientPhonePickerSheet';
 import CarPlateField from '../components/CarPlateField';
 import type { PlateMode } from '../components/RussianPlateInput';
 import ClientCallsSection from '../components/ClientCallsSection';
@@ -765,22 +765,29 @@ export default function ClientDetailScreen() {
     setReassignTarget({ car, clientId: newClientId, clientName: newClientName });
   };
 
-  // Step 3: confirmed — write clientId onto the car. History is safe: past
-  // checks keep their own client_id (backend never rewrites them). Invalidate
-  // the same keys as updateCarMutation PLUS the NEW owner's detail card so its
-  // garage shows the moved car immediately.
+  // Step 3: confirmed — ПОЛНЫЙ перенос владельца через carsApi.transferOwner:
+  // авто И вся его история (чеки, долги, бонусы, рассрочки) переезжают новому
+  // владельцу одной серверной транзакцией. Инвалидируем историю чеков и
+  // деталь-карточки ОБОИХ клиентов (старого и нового), чтобы гараж и списки
+  // чеков сразу показали переезд.
   const handleReassignOwner = async (car: Car, newClientId: string) => {
     setReassignBusy(true);
     try {
-      await carsApi.update(car.id, { clientId: newClientId });
+      const res = await carsApi.transferOwner(car.id, { clientId: newClientId });
+      const moved = res.data?.movedChecks ?? 0;
       haptic('success');
+      if (moved > 0) {
+        Alert.alert('Готово', `Авто и ${moved} ${checksWord(moved)} перенесены новому владельцу.`);
+      }
       queryClient.invalidateQueries({ queryKey: ['client', id] });
       queryClient.invalidateQueries({ queryKey: ['client', newClientId] });
-      queryClient.invalidateQueries({ queryKey: ['cars'] });
-      queryClient.invalidateQueries({ queryKey: ['car-checks'] });
       queryClient.invalidateQueries({ queryKey: ['client-checks', id] });
       queryClient.invalidateQueries({ queryKey: ['client-checks-full', id] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks', newClientId] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks-full', newClientId] });
       queryClient.invalidateQueries({ queryKey: ['client-checks-by-car', id] });
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
+      queryClient.invalidateQueries({ queryKey: ['car-checks'] });
     } catch (err: any) {
       // Бэкенд может отказать (например, у нового клиента уже есть авто с таким
       // номером — уникальный индекс). Показываем реальную причину, а не глухую
@@ -1620,21 +1627,14 @@ export default function ClientDetailScreen() {
         busy={carSubmitting}
       />
 
-      {/* Feature #9 — «Сменить владельца»: выбор/создание нового владельца
-          (тот же sheet, что и в Кассе — умеет и найти существующего, и завести
-          нового). Подтверждение — в ConfirmDialog ниже. */}
-      <QuickClientCreateSheet
+      {/* Feature #9 — «Сменить владельца»: выбор/создание нового владельца ПО
+          ТЕЛЕФОНУ (без госномера — авто уже выбрано). Подтверждение — в
+          ConfirmDialog ниже. */}
+      <ClientPhonePickerSheet
         visible={!!reassignCar}
         onClose={() => setReassignCar(null)}
-        initialPlate=""
-        initialPlateMode="ru"
-        onCreated={(created) => onReassignPicked(created.id, created.fullName)}
-        onSelectExisting={(existingClientId) => {
-          // Sheet может отдать имя не всегда; тянем его из кеша списков, а иначе
-          // подставляем нейтральную подпись — важен сам факт переноса.
-          const cached = queryClient.getQueryData<Client>(['client', existingClientId]);
-          onReassignPicked(existingClientId, cached?.fullName || 'выбранному клиенту');
-        }}
+        excludeClientId={id}
+        onPicked={(pickedClientId, pickedName) => onReassignPicked(pickedClientId, pickedName)}
       />
 
       <ConfirmDialog
@@ -1649,7 +1649,7 @@ export default function ClientDetailScreen() {
         message={
           reassignTarget
             ? `Автомобиль ${carLabel(reassignTarget.car)} будет перенесён клиенту «${reassignTarget.clientName}». ` +
-              'История прошлых чеков останется у текущего владельца.'
+              'Авто и вся его история (чеки, долги, бонусы) будут перенесены новому владельцу.'
             : ''
         }
         confirmText="Перенести"
@@ -1657,6 +1657,15 @@ export default function ClientDetailScreen() {
       />
     </View>
   );
+}
+
+/** Русское склонение слова «чек» для счётчика перенесённых чеков. */
+function checksWord(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'чек';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'чека';
+  return 'чеков';
 }
 
 /** «Марка/Модель · Госномер» для сообщения подтверждения переноса (#9). */

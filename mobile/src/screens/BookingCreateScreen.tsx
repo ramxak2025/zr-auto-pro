@@ -24,8 +24,6 @@ import {
   StyleSheet,
   ScrollView,
   ActivityIndicator,
-  KeyboardAvoidingView,
-  Platform,
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -36,6 +34,7 @@ import RussianPlateInput from '../components/RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitcher';
 import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { clientsApi, usersApi, bookingsApi } from '../api/services';
@@ -48,6 +47,13 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { UserRole, type Client, type Car, type User } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { formatBookingDay, formatBookingTime } from './bookings/bookingHelpers';
+
+// Высота липкой панели «Сохранить»: paddingTop (spacing[3]=12) + paddingBottom
+// (spacing[3]=12) + кнопка (paddingVertical spacing[3.5]=14 ×2 + текст ~16) ≈ 68.
+// Используется как доп. отступ фокуса клавиатуры (чтобы «Комментарий» не ушёл
+// под панель) И как нижний паддинг скролла (чтобы последний блок не прятался за
+// панелью).
+const SAVE_BAR_HEIGHT = spacing[3] * 2 + spacing[3.5] * 2 + 16;
 
 export default function BookingCreateScreen() {
   const navigation = useNavigation<any>();
@@ -258,16 +264,20 @@ export default function BookingCreateScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Новая запись" onBack={() => navigation.goBack()} />
 
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-      >
-        <ScrollView
-          contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[8] }]}
-          keyboardShouldPersistTaps="handled"
-          contentInset={{ bottom: tabBarHeight }}
-          scrollIndicatorInsets={{ bottom: tabBarHeight }}
+      {/* Клавиатура (Round 11 D). Раньше здесь был RN-core KeyboardAvoidingView
+          (Android — no-op) вокруг обычного ScrollView: поле «Комментарий»
+          пряталось под клавиатурой. Теперь общий KeyboardAwareScroll —
+          авто-скролл к активному полю ОДИНАКОВО на iOS/Android, а
+          extraKeyboardBottomOffset поднимает фокус НАД липкой панелью
+          «Сохранить» (SAVE_BAR_HEIGHT) в добавок к плавающему tab bar. Панель
+          «Сохранить» — сестра скролла (marginBottom: tabBarHeight держит её над
+          баром). reserveTabBar={false}: нижний паддинг задаём сами
+          (SAVE_BAR_HEIGHT + запас), т.к. панель уже перекрывает низ скролла. */}
+      <View style={{ flex: 1 }}>
+        <KeyboardAwareScroll
+          contentContainerStyle={[styles.scroll, { paddingBottom: SAVE_BAR_HEIGHT + spacing[4] }]}
+          reserveTabBar={false}
+          extraKeyboardBottomOffset={SAVE_BAR_HEIGHT}
         >
           {/* ═══ КЛИЕНТ ═══ */}
           <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>КЛИЕНТ</Text>
@@ -555,7 +565,7 @@ export default function BookingCreateScreen() {
               </Text>
             </View>
           ) : null}
-        </ScrollView>
+        </KeyboardAwareScroll>
 
         {/* ── Sticky save bar ── */}
         <View
@@ -571,32 +581,44 @@ export default function BookingCreateScreen() {
           ]}
         >
           {(() => {
-            // Три состояния: после сохранения-с-конфликтом — «Готово» (зелёная),
-            // обычное активное — «Сохранить запись», неактивное — «Выберите клиента».
+            // Три состояния:
+            //   • после сохранения-с-конфликтом — «Готово» (зелёная, активна);
+            //   • клиент выбран — «Сохранить запись» (brand-primary, активна);
+            //   • клиент НЕ выбран — тот же CTA в disabled-виде (мягкий бренд-тинт
+            //     accent.primarySoft + accent.primaryText), НЕ серая плашка.
+            //     Над ним — тихая подпись-подсказка «Сначала выберите клиента».
+            // Раньше здесь была инертная серая кнопка с серым текстом
+            // «Выберите клиента» (bg.muted) — «уродливый серый блок»; убран.
             const enabled = savedConflict || canSave;
-            const bg = savedConflict ? colors.green[600] : canSave ? colors.primary[600] : palette.bg.muted;
-            const fg = enabled ? colors.white : palette.text.tertiary;
-            const label = savedConflict ? 'Готово' : clientId ? 'Сохранить запись' : 'Выберите клиента';
+            const needsClient = !savedConflict && !clientId;
+            const bg = savedConflict ? colors.green[600] : canSave ? colors.primary[600] : palette.accent.primarySoft; // disabled = мягкий бренд-тинт, не серый
+            const fg = enabled ? colors.white : palette.accent.primaryText;
+            const label = savedConflict ? 'Готово' : 'Сохранить запись';
             return (
-              <TouchableOpacity
-                style={[styles.saveBtn, { backgroundColor: bg }]}
-                onPress={handleSave}
-                disabled={!enabled}
-                activeOpacity={0.85}
-              >
-                {createMutation.isPending ? (
-                  <ActivityIndicator color={colors.white} size="small" />
-                ) : (
-                  <>
-                    <Ionicons name="checkmark" size={18} color={fg} />
-                    <Text style={[styles.saveBtnText, { color: fg }]}>{label}</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+              <>
+                {needsClient ? (
+                  <Text style={[styles.saveHelper, { color: palette.text.tertiary }]}>Сначала выберите клиента</Text>
+                ) : null}
+                <TouchableOpacity
+                  style={[styles.saveBtn, { backgroundColor: bg }]}
+                  onPress={handleSave}
+                  disabled={!enabled}
+                  activeOpacity={0.85}
+                >
+                  {createMutation.isPending ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark" size={18} color={fg} />
+                      <Text style={[styles.saveBtnText, { color: fg }]}>{label}</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </>
             );
           })()}
         </View>
-      </KeyboardAvoidingView>
+      </View>
 
       {/* ── Date / time pickers ── */}
       <DateTimePickerModal
@@ -892,6 +914,12 @@ const styles = StyleSheet.create({
     paddingTop: spacing[3],
     paddingBottom: spacing[3],
     borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  saveHelper: {
+    fontSize: 12,
+    fontWeight: '500',
+    textAlign: 'center',
+    marginBottom: spacing[2],
   },
   saveBtn: {
     flexDirection: 'row',

@@ -26,6 +26,9 @@ import {
   ArrowLeftRight,
   Recycle,
   Percent,
+  ListChecks,
+  CheckSquare,
+  Square,
 } from 'lucide-react';
 import { productsApi, uploadsApi, warehouseCategoriesApi, warehousesApi, stockMovementsApi } from '../api/services';
 import type { Product, BundleItem, PaginatedResponse, StockMovement, Warehouse as WarehouseRecord } from '../types';
@@ -1014,6 +1017,9 @@ function FolderTile({
   recentlyChecked,
   lastCheckDate,
   dragHandleProps,
+  selectMode,
+  selected,
+  onToggleSelect,
 }: {
   name: string;
   count: number;
@@ -1025,15 +1031,34 @@ function FolderTile({
   lastCheckDate?: string;
   /** Pointer-down handler that activates the drag — provided by Reorder.Item parent. */
   dragHandleProps?: { onPointerDown: (e: React.PointerEvent) => void };
+  /** Multi-select mode — show a checkbox instead of the drag handle; tap selects. */
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   return (
     <div
       className={`flex items-center gap-3 px-3.5 py-3 rounded-xl border transition-all ${
-        recentlyChecked ? 'border-green-200 bg-green-50/50' : 'border-gray-100 bg-white hover:border-gray-200'
+        selected
+          ? 'border-primary-500 bg-primary-50/50'
+          : recentlyChecked
+            ? 'border-green-200 bg-green-50/50'
+            : 'border-gray-100 bg-white hover:border-gray-200'
       }`}
     >
+      {/* Select checkbox — replaces the drag handle while multi-select is active */}
+      {selectMode && onToggleSelect ? (
+        <div
+          className={`flex h-5 w-5 items-center justify-center rounded-full border-2 flex-shrink-0 ${
+            selected ? 'border-primary-600 bg-primary-600' : 'border-gray-300 bg-white'
+          }`}
+        >
+          {selected && <CheckIcon className="h-3 w-3 text-white" />}
+        </div>
+      ) : null}
+
       {/* Drag handle — long-press / press-and-drag to reorder */}
-      {canManage && dragHandleProps && (
+      {!selectMode && canManage && dragHandleProps && (
         <button
           type="button"
           aria-label="Перетащите чтобы переставить"
@@ -1047,12 +1072,19 @@ function FolderTile({
         </button>
       )}
 
-      {/* Main area — clickable to navigate */}
+      {/* Main area — clickable to navigate, or to toggle selection in select mode */}
       <div
         role="button"
         tabIndex={0}
-        onClick={onClick}
-        onKeyDown={(e) => e.key === 'Enter' && onClick()}
+        onClick={() => {
+          if (selectMode && onToggleSelect) onToggleSelect();
+          else onClick();
+        }}
+        onKeyDown={(e) => {
+          if (e.key !== 'Enter') return;
+          if (selectMode && onToggleSelect) onToggleSelect();
+          else onClick();
+        }}
         className="flex items-center gap-3 flex-1 min-w-0 cursor-pointer active:opacity-70"
       >
         <div
@@ -1080,8 +1112,8 @@ function FolderTile({
         </div>
       </div>
 
-      {/* Delete button */}
-      {canManage && onDelete && (
+      {/* Delete button — hidden in select mode (bulk delete handles it) */}
+      {!selectMode && canManage && onDelete && (
         <button
           type="button"
           onClick={(e) => {
@@ -1110,12 +1142,18 @@ function FolderTileReorderItem({
   canManage,
   onClick,
   onDelete,
+  selectMode,
+  selected,
+  onToggleSelect,
 }: {
   folder: { name: string; count: number; hasLow: boolean; catId: string; fullPath: string };
   checkInfo?: { recentlyChecked: boolean; lastCheckDate?: string };
   canManage?: boolean;
   onClick: () => void;
   onDelete: () => void;
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelect?: () => void;
 }) {
   const dragControls = useDragControls();
   return (
@@ -1136,6 +1174,9 @@ function FolderTileReorderItem({
         recentlyChecked={checkInfo?.recentlyChecked}
         lastCheckDate={checkInfo?.lastCheckDate}
         dragHandleProps={{ onPointerDown: (e) => dragControls.start(e) }}
+        selectMode={selectMode}
+        selected={selected}
+        onToggleSelect={onToggleSelect}
       />
     </Reorder.Item>
   );
@@ -1498,6 +1539,10 @@ export default function ProductsPage() {
   const isOwnerClass =
     user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
   const canManageWarehouse = isOwnerClass || hasPermission('warehouse_manage');
+  // Destructive delete (bulk / «весь товар») is gated separately on
+  // `warehouse_delete` (owner-class bypasses) — matches the backend guard on
+  // POST /products/bulk-delete. Off by default even for warehouse managers.
+  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_delete');
   const isOwner = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
 
   const { data: warehouseStats } = useQuery({
@@ -1537,9 +1582,18 @@ export default function ProductsPage() {
   // Select & move state
   const [selectMode, setSelectMode] = useState(false);
   const [selectedProducts, setSelectedProducts] = useState<Set<string>>(new Set());
+  // Folders selected for bulk delete — keyed by full path (unique per view).
+  const [selectedFolders, setSelectedFolders] = useState<Set<string>>(new Set());
   const [showMoveModal, setShowMoveModal] = useState(false);
   const [showFolderModal, setShowFolderModal] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
+
+  // Destructive bulk-delete confirm.
+  //  - mode 'selection' → trash the currently-selected products + folders.
+  //  - mode 'all'       → «удалить весь товар» in the CURRENT warehouse.
+  // The confirm button stays disabled until the user types «согласен».
+  const [bulkDeleteMode, setBulkDeleteMode] = useState<'selection' | 'all' | null>(null);
+  const [bulkConfirmText, setBulkConfirmText] = useState('');
 
   // Import/Export
   const [showImportModal, setShowImportModal] = useState(false);
@@ -1561,6 +1615,7 @@ export default function ProductsPage() {
         setActivePath(newPath);
         setSelectMode(false);
         setSelectedProducts(new Set());
+        setSelectedFolders(new Set());
       }
       window.history.pushState({ warehouseGuard: true }, '');
     };
@@ -1843,6 +1898,58 @@ export default function ProductsPage() {
     return allProducts.filter((p) => p.name.toLowerCase().includes(q));
   }, [searchText, allProducts]);
 
+  // ---- Multi-select / bulk-delete helpers ----
+
+  // Exit multi-select and drop every selection. Called on navigation, warehouse
+  // switch, cancel, and after a successful bulk operation.
+  const exitSelectMode = useCallback(() => {
+    setSelectMode(false);
+    setSelectedProducts(new Set());
+    setSelectedFolders(new Set());
+  }, []);
+
+  const closeBulkDelete = useCallback(() => {
+    setBulkDeleteMode(null);
+    setBulkConfirmText('');
+  }, []);
+
+  // Resolve the current selection into the { productIds, categoryIds } payload
+  // for productsApi.bulkDelete, plus human-readable counts for the confirm copy.
+  //  - Folders backed by a real warehouse_categories row → categoryIds (backend
+  //    cascades their contents + subfolders).
+  //  - "Path-only" folders (no catId — inferred from product.category) can't be
+  //    hit by id, so we expand them into the product ids that live under that
+  //    path and send those instead.
+  const bulkDeleteSelection = useMemo(() => {
+    const categoryIds: string[] = [];
+    const productIds = new Set<string>(selectedProducts);
+
+    for (const folder of subfolders) {
+      if (!selectedFolders.has(folder.fullPath)) continue;
+      if (folder.catId) {
+        categoryIds.push(folder.catId);
+      } else {
+        // Path-only folder: soft-delete every product under this path.
+        for (const p of allProducts) {
+          const cat = p.category || '';
+          if (cat === folder.fullPath || cat.startsWith(folder.fullPath + '/')) productIds.add(p.id);
+        }
+      }
+    }
+
+    return {
+      productIds: Array.from(productIds),
+      categoryIds,
+      // Product count shown to the user counts explicitly-picked products plus
+      // any pulled in by a path-only folder; id-backed folders cascade on the
+      // server so their contents aren't enumerated here.
+      productCount: productIds.size,
+      folderCount: selectedFolders.size,
+    };
+  }, [selectedProducts, selectedFolders, subfolders, allProducts]);
+
+  const selectionCount = selectedProducts.size + selectedFolders.size;
+
   // ---- Mutations ----
 
   const createMutation = useMutation({
@@ -1959,23 +2066,30 @@ export default function ProductsPage() {
     onError: () => toast.error('Не удалось переместить товары'),
   });
 
-  // Bulk move-to-trash for selected products. Backend remove() now soft-deletes,
-  // so this fans out to one DELETE /products/:id call per selected id and the
-  // items land in the trash, restorable from the Trash button.
-  const bulkTrashMutation = useMutation({
-    mutationFn: async (productIds: string[]) => {
-      await Promise.all(productIds.map((id) => productsApi.remove(id)));
-    },
-    onSuccess: (_, productIds) => {
-      toast.success(
-        `${productIds.length} ${productIds.length === 1 ? 'товар перемещён' : 'товаров перемещено'} в корзину`,
-      );
+  // Bulk SOFT-delete (→ Корзина) via the dedicated backend endpoint. Handles
+  // three inputs: product ids, folder category ids (cascade), and «удалить весь
+  // товар» (deleteAll scoped to the active warehouse). Everything is reversible
+  // from the trash. Invalidates the same keys single-delete uses.
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (data: { productIds?: string[]; categoryIds?: string[]; deleteAll?: boolean; warehouseId?: string }) =>
+      productsApi.bulkDelete(data),
+    onSuccess: (res) => {
+      const p = res.data?.deletedProducts ?? 0;
+      const f = res.data?.deletedCategories ?? 0;
+      const parts: string[] = [];
+      if (p > 0) parts.push(`${p} ${p === 1 ? 'товар' : 'товаров'}`);
+      if (f > 0) parts.push(`${f} ${f === 1 ? 'папка' : 'папок'}`);
+      toast.success(parts.length > 0 ? `В корзину: ${parts.join(', ')}` : 'Перемещено в корзину');
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       queryClient.invalidateQueries({ queryKey: ['products-trash'] });
-      setSelectedProducts(new Set());
-      setSelectMode(false);
+      closeBulkDelete();
+      exitSelectMode();
     },
-    onError: () => toast.error('Не удалось переместить в корзину'),
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      toast.error(typeof msg === 'string' ? msg : 'Не удалось удалить');
+    },
   });
 
   // ---- Handlers ----
@@ -2189,6 +2303,53 @@ export default function ProductsPage() {
     });
   }
 
+  function toggleSelectFolder(fullPath: string) {
+    setSelectedFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(fullPath)) next.delete(fullPath);
+      else next.add(fullPath);
+      return next;
+    });
+  }
+
+  // Select every folder + product visible in the current view, or clear if all
+  // are already selected (toggle behaviour for the select-all control).
+  function toggleSelectAll() {
+    const allSelected =
+      currentProducts.length + subfolders.length > 0 &&
+      currentProducts.every((p) => selectedProducts.has(p.id)) &&
+      subfolders.every((f) => selectedFolders.has(f.fullPath));
+    if (allSelected) {
+      setSelectedProducts(new Set());
+      setSelectedFolders(new Set());
+    } else {
+      setSelectedProducts(new Set(currentProducts.map((p) => p.id)));
+      setSelectedFolders(new Set(subfolders.map((f) => f.fullPath)));
+    }
+  }
+
+  const isAllSelected =
+    currentProducts.length + subfolders.length > 0 &&
+    currentProducts.every((p) => selectedProducts.has(p.id)) &&
+    subfolders.every((f) => selectedFolders.has(f.fullPath));
+
+  // Fire the bulk-delete once the user has typed the confirm word. Guards the
+  // word here too (button is already disabled) as belt-and-suspenders.
+  function confirmBulkDelete() {
+    if (bulkConfirmText.trim().toLowerCase() !== 'согласен') return;
+    if (bulkDeleteMode === 'all') {
+      bulkDeleteMutation.mutate({ deleteAll: true, warehouseId: activeWarehouseId || undefined });
+    } else if (bulkDeleteMode === 'selection') {
+      const { productIds, categoryIds } = bulkDeleteSelection;
+      if (productIds.length === 0 && categoryIds.length === 0) return;
+      bulkDeleteMutation.mutate({
+        productIds: productIds.length ? productIds : undefined,
+        categoryIds: categoryIds.length ? categoryIds : undefined,
+        warehouseId: activeWarehouseId || undefined,
+      });
+    }
+  }
+
   const isMutating = createMutation.isPending || updateMutation.isPending;
 
   // ---- Navigation state ----
@@ -2387,8 +2548,7 @@ export default function ProductsPage() {
                 onClick={() => {
                   setActiveWarehouseId(w.id);
                   setActivePath([]);
-                  setSelectMode(false);
-                  setSelectedProducts(new Set());
+                  exitSelectMode();
                 }}
                 className={`flex items-center gap-1.5 px-3 py-2 rounded-full text-sm font-semibold whitespace-nowrap transition-colors flex-shrink-0 ${
                   active
@@ -2440,6 +2600,55 @@ export default function ProductsPage() {
         />
       </div>
 
+      {/* Selection toolbar — multi-select + «удалить весь товар».
+          Delete is a separately-gated, off-by-default capability (warehouse_delete),
+          so the whole bar only shows for users who hold it. Hidden while searching:
+          selection operates on the folder/root tree, not flat search results. */}
+      {canDeleteWarehouse && !showingSearch && (allProducts.length > 0 || subfolders.length > 0) && (
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
+            <button
+              type="button"
+              onClick={() => (selectMode ? exitSelectMode() : setSelectMode(true))}
+              className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors flex-shrink-0 ${
+                selectMode ? 'bg-primary-100 text-primary-700' : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              <ListChecks className="h-3.5 w-3.5" />
+              {selectMode ? 'Отмена' : 'Выбрать'}
+            </button>
+            {selectMode && (currentProducts.length > 0 || subfolders.length > 0) && (
+              <button
+                type="button"
+                onClick={toggleSelectAll}
+                className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors flex-shrink-0"
+              >
+                {isAllSelected ? <CheckSquare className="h-3.5 w-3.5" /> : <Square className="h-3.5 w-3.5" />}
+                {isAllSelected ? 'Снять всё' : 'Выбрать всё'}
+              </button>
+            )}
+            {selectMode && selectionCount > 0 && (
+              <span className="text-xs text-gray-400 truncate">Выбрано: {selectionCount}</span>
+            )}
+          </div>
+          {!selectMode && (
+            <button
+              type="button"
+              onClick={() => {
+                setBulkConfirmText('');
+                setBulkDeleteMode('all');
+              }}
+              className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
+              title="Удалить весь товар с этого склада (в корзину)"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Удалить весь товар</span>
+              <span className="sm:hidden">Очистить</span>
+            </button>
+          )}
+        </div>
+      )}
+
       {isLoading ? (
         <div className="flex items-center justify-center py-20">
           <Loader2 className="h-8 w-8 animate-spin text-primary-600" />
@@ -2456,15 +2665,13 @@ export default function ProductsPage() {
                   onClick={() => {
                     setActivePath([]);
                     activePathRef.current = [];
-                    setSelectMode(false);
-                    setSelectedProducts(new Set());
+                    exitSelectMode();
                   }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       setActivePath([]);
                       activePathRef.current = [];
-                      setSelectMode(false);
-                      setSelectedProducts(new Set());
+                      exitSelectMode();
                     }
                   }}
                   className="text-primary-600 hover:text-primary-700 font-medium flex-shrink-0 cursor-pointer flex items-center gap-0.5"
@@ -2482,16 +2689,14 @@ export default function ProductsPage() {
                         const newPath = activePath.slice(0, idx + 1);
                         setActivePath(newPath);
                         activePathRef.current = newPath;
-                        setSelectMode(false);
-                        setSelectedProducts(new Set());
+                        exitSelectMode();
                       }}
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           const newPath = activePath.slice(0, idx + 1);
                           setActivePath(newPath);
                           activePathRef.current = newPath;
-                          setSelectMode(false);
-                          setSelectedProducts(new Set());
+                          exitSelectMode();
                         }
                       }}
                       className={`truncate cursor-pointer ${
@@ -2505,20 +2710,6 @@ export default function ProductsPage() {
                   </span>
                 ))}
               </div>
-              {currentProducts.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectMode((v) => !v);
-                    setSelectedProducts(new Set());
-                  }}
-                  className={`text-xs font-medium px-3 py-1.5 rounded-lg transition-colors flex-shrink-0 ${
-                    selectMode ? 'bg-primary-100 text-primary-700' : 'text-gray-500 hover:bg-gray-100'
-                  }`}
-                >
-                  {selectMode ? 'Отмена' : 'Выбрать'}
-                </button>
-              )}
             </div>
           )}
 
@@ -2557,6 +2748,9 @@ export default function ProductsPage() {
                     onDelete={() =>
                       setDeleteFolderTarget({ id: folder.catId, name: folder.name, path: folder.fullPath })
                     }
+                    selectMode={selectMode}
+                    selected={selectedFolders.has(folder.fullPath)}
+                    onToggleSelect={() => toggleSelectFolder(folder.fullPath)}
                   />
                 ))}
               </Reorder.Group>
@@ -2617,37 +2811,42 @@ export default function ProductsPage() {
         </>
       )}
 
-      {/* Bottom action bar when products are selected */}
-      {selectMode && selectedProducts.size > 0 && (
+      {/* Floating action bar — visible whenever anything (products or folders)
+          is selected. «Переместить» applies to products only; «Удалить» opens
+          the type-to-confirm modal and covers both products and folders. */}
+      {selectMode && selectionCount > 0 && (
         <div className="sticky bottom-20 md:bottom-0 z-10 -mx-4 bg-white/95 backdrop-blur border-t border-gray-100 px-4 py-3 rounded-xl shadow-lg">
           <div className="flex items-center justify-between gap-2">
-            <span className="text-sm text-gray-600 flex-shrink-0">Выбрано: {selectedProducts.size}</span>
+            <span className="text-sm text-gray-600 flex-shrink-0">
+              Выбрано: {selectionCount}
+              {selectedFolders.size > 0 && (
+                <span className="text-gray-400">
+                  {' '}
+                  ({selectedProducts.size} тов., {selectedFolders.size} пап.)
+                </span>
+              )}
+            </span>
             <div className="flex items-center gap-2 flex-shrink-0">
-              <button
-                type="button"
-                onClick={() => setShowMoveModal(true)}
-                className="flex items-center gap-1.5 rounded-xl bg-primary-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary-700"
-              >
-                <Move className="h-4 w-4" />
-                Переместить
-              </button>
+              {selectedProducts.size > 0 && selectedFolders.size === 0 && (
+                <button
+                  type="button"
+                  onClick={() => setShowMoveModal(true)}
+                  className="flex items-center gap-1.5 rounded-xl bg-primary-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-primary-700"
+                >
+                  <Move className="h-4 w-4" />
+                  Переместить
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
-                  const ids = Array.from(selectedProducts);
-                  if (ids.length === 0) return;
-                  if (
-                    confirm(
-                      `Переместить ${ids.length} ${ids.length === 1 ? 'товар' : 'товаров'} в корзину? Можно будет восстановить.`,
-                    )
-                  ) {
-                    bulkTrashMutation.mutate(ids);
-                  }
+                  setBulkConfirmText('');
+                  setBulkDeleteMode('selection');
                 }}
-                disabled={bulkTrashMutation.isPending}
-                className="flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                className="flex items-center gap-1.5 rounded-xl bg-red-600 px-3 py-2.5 text-sm font-semibold text-white hover:bg-red-700"
               >
-                <Trash2 className="h-4 w-4" />В корзину
+                <Trash2 className="h-4 w-4" />
+                Удалить ({selectionCount})
               </button>
             </div>
           </div>
@@ -3180,6 +3379,91 @@ export default function ProductsPage() {
         >
           <img src={photoPreview} alt="" className="max-w-full max-h-[85vh] rounded-2xl shadow-2xl object-contain" />
         </div>
+      )}
+
+      {/* Destructive bulk-delete confirm — type «согласен» to enable the button.
+          Everything is moved to Корзина and is restorable. */}
+      {bulkDeleteMode && (
+        <Modal isOpen onClose={closeBulkDelete} title="Удаление в корзину" size="sm">
+          <div className="space-y-4">
+            {(() => {
+              const isAll = bulkDeleteMode === 'all';
+              const whName = warehouses?.find((w) => w.id === activeWarehouseId)?.name;
+              const productCount = isAll ? allProducts.length : bulkDeleteSelection.productCount;
+              const folderCount = isAll ? 0 : bulkDeleteSelection.folderCount;
+              const canConfirm = bulkConfirmText.trim().toLowerCase() === 'согласен' && !bulkDeleteMutation.isPending;
+              return (
+                <>
+                  <div className="rounded-xl border border-red-100 bg-red-50/60 p-3.5">
+                    <div className="flex items-start gap-2.5">
+                      <AlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <p className="text-sm font-semibold text-red-800">
+                          {isAll
+                            ? `Удалить весь товар${whName ? ` со склада «${whName}»` : ''}?`
+                            : 'Удалить выбранное?'}
+                        </p>
+                        <p className="text-xs text-red-700 mt-1">
+                          В корзину переедет{' '}
+                          <span className="font-semibold">
+                            {productCount} {productCount === 1 ? 'товар' : 'товаров'}
+                          </span>
+                          {folderCount > 0 && (
+                            <>
+                              {' '}
+                              и{' '}
+                              <span className="font-semibold">
+                                {folderCount} {folderCount === 1 ? 'папка' : 'папок'}
+                              </span>
+                            </>
+                          )}
+                          .
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <p className="text-xs text-gray-500">
+                    Всё удаляется в <span className="font-medium text-gray-700">Корзину</span> — можно восстановить. Для
+                    подтверждения введите слово <span className="font-semibold text-gray-900">согласен</span>.
+                  </p>
+
+                  <input
+                    type="text"
+                    value={bulkConfirmText}
+                    onChange={(e) => setBulkConfirmText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && canConfirm) confirmBulkDelete();
+                    }}
+                    placeholder="согласен"
+                    autoFocus
+                    autoComplete="off"
+                    className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-red-500 focus:outline-none focus:ring-2 focus:ring-red-500/20"
+                  />
+
+                  <div className="flex items-center justify-end gap-3 pt-1">
+                    <button
+                      type="button"
+                      onClick={closeBulkDelete}
+                      disabled={bulkDeleteMutation.isPending}
+                      className="rounded-xl border border-gray-300 bg-white px-4 py-2.5 text-sm font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      Отмена
+                    </button>
+                    <button
+                      type="button"
+                      onClick={confirmBulkDelete}
+                      disabled={!canConfirm}
+                      className="flex items-center gap-2 rounded-xl bg-red-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50 disabled:hover:bg-red-600"
+                    >
+                      {bulkDeleteMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}В корзину
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </Modal>
       )}
 
       {/* Trash bin — soft-deleted products with restore / hard-delete / empty */}

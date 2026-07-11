@@ -181,11 +181,14 @@ import type {
   UpdateClientRequest,
   CreateCarRequest,
   UpdateCarRequest,
+  TransferCarOwnerRequest,
   CreateProductRequest,
   UpdateProductRequest,
   StockUpdateRequest,
   BulkAdjustPriceRequest,
   BulkAdjustPriceResponse,
+  BulkDeleteRequest,
+  BulkDeleteResponse,
   CreateServiceRequest,
   UpdateServiceRequest,
   CreateCheckRequest,
@@ -477,6 +480,14 @@ export function createCarsApi(api: HttpClient) {
     getById: (id: string) => api.get<Car>(`/cars/${id}`),
     create: (data: CreateCarRequest) => api.post<Car>('/cars', data),
     update: (id: string, data: UpdateCarRequest) => api.patch<Car>(`/cars/${id}`, data),
+    /**
+     * Reassign a car to a new owner («сменить владельца»). moveHistory (default
+     * true) also carries the car's checks — and the debt / installment / loyalty
+     * rows derived from them — to the new client. Returns the updated car and how
+     * many checks moved. Gated by 'clients_edit'; owner-class bypasses.
+     */
+    transferOwner: (id: string, data: TransferCarOwnerRequest) =>
+      api.post<{ car: Car; movedChecks: number }>(`/cars/${id}/transfer-owner`, data),
     remove: (id: string) => api.delete(`/cars/${id}`),
     /** Recent checks for one car. limit capped at 200 server-side. */
     checks: (carId: string, params?: { limit?: number }) => api.get<Check[]>(`/cars/${carId}/checks`, { params }),
@@ -520,6 +531,12 @@ export function createProductsApi(api: HttpClient) {
      */
     bulkAdjustPrice: (data: BulkAdjustPriceRequest) =>
       api.post<BulkAdjustPriceResponse>('/products/bulk-adjust-price', data),
+    /**
+     * Bulk SOFT-delete (move to Корзина) — products by id, folders (cascade), or
+     * «удалить весь товар» (deleteAll, scoped to warehouseId). Never hard-deletes.
+     * Gated by 'warehouse_delete'; owner-class bypasses.
+     */
+    bulkDelete: (data: BulkDeleteRequest) => api.post<BulkDeleteResponse>('/products/bulk-delete', data),
     remove: (id: string) => api.delete(`/products/${id}`),
     // ── Trash bin ─────────────────────────────────────────────────────
     // Soft-deleted products live in the trash. They stay searchable here

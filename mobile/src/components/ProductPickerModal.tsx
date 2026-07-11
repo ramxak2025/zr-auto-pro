@@ -15,10 +15,12 @@ import {
   Alert,
   AccessibilityInfo,
 } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CachedImage from './CachedImage';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
+import KeyboardDoneToolbar from './KeyboardDoneToolbar';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -595,310 +597,325 @@ export default function ProductPickerModal({
   const hasActiveFilter = !!productSearch || !!activeCategory;
 
   return (
+    // Клавиатура (Round 11 D). RN <Modal> — отдельное нативное окно, корневой
+    // KeyboardProvider из App.tsx не дотягивается. Поле поиска сверху остаётся
+    // видимым, но список/корзина уходят под клавиатуру → нужен единый способ
+    // свернуть её: вложенный KeyboardProvider + «Готово». (Кнопка «Готово» в
+    // нижнем баре — это commit/закрытие, а не dismiss клавиатуры.)
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
-      <View style={styles.overlay}>
-        {/* Premium frosted blur backdrop (#6/#7) — replaces the old flat
+      <KeyboardProvider>
+        <View style={styles.overlay}>
+          {/* Premium frosted blur backdrop (#6/#7) — replaces the old flat
             rgba(0,0,0,0.4) dim. Static full-screen layer; tapping the
             visible area above the card closes the picker. The card slides
             up via `cardTranslateY` (not RNModal's "slide", which would
             drag the blur up too); swipe-back stays on `panResponder`. */}
-        <ModalBlurBackdrop onPress={handleClose} />
-        <Animated.View
-          style={[
-            styles.container,
-            { backgroundColor: palette.bg.elevated },
-            { transform: [{ translateX: panX }, { translateY: cardTranslateY }] },
-          ]}
-          {...panResponder.panHandlers}
-        >
-          {/* Handle bar */}
-          <View style={styles.handle}>
-            <View style={[styles.handleBar, { backgroundColor: palette.border.strong }]} />
-          </View>
+          <ModalBlurBackdrop onPress={handleClose} />
+          <Animated.View
+            style={[
+              styles.container,
+              { backgroundColor: palette.bg.elevated },
+              { transform: [{ translateX: panX }, { translateY: cardTranslateY }] },
+            ]}
+            {...panResponder.panHandlers}
+          >
+            {/* Handle bar */}
+            <View style={styles.handle}>
+              <View style={[styles.handleBar, { backgroundColor: palette.border.strong }]} />
+            </View>
 
-          {/* Header — close button on the left, title centered, warehouse
+            {/* Header — close button on the left, title centered, warehouse
               switcher pill on the right. The pill is presentational; tapping
               it toggles the inline dropdown so this component stays dumb. */}
-          <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
-            <TouchableOpacity onPress={handleClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
-              <Ionicons name="close" size={22} color={palette.text.secondary} />
-            </TouchableOpacity>
-            <Text style={[styles.headerTitle, { color: palette.text.primary }]}>{title}</Text>
-            {warehouseSwitcher ? (
-              <TouchableOpacity
-                onPress={() => setShowWarehouseDropdown((v) => !v)}
-                style={[
-                  styles.headerWarehouseChip,
-                  { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary },
-                ]}
-                activeOpacity={0.7}
-                accessibilityLabel="Выбрать склад"
-              >
-                <Text style={[styles.headerWarehouseChipText, { color: palette.accent.primaryText }]} numberOfLines={1}>
-                  {warehouseSwitcher.label}
-                </Text>
-                <Ionicons
-                  name={showWarehouseDropdown ? 'chevron-up' : 'chevron-down'}
-                  size={14}
-                  color={palette.accent.primaryText}
-                />
+            <View style={[styles.header, { borderBottomColor: palette.border.subtle }]}>
+              <TouchableOpacity onPress={handleClose} style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="close" size={22} color={palette.text.secondary} />
               </TouchableOpacity>
-            ) : (
-              <View style={{ width: 36 }} />
-            )}
-          </View>
+              <Text style={[styles.headerTitle, { color: palette.text.primary }]}>{title}</Text>
+              {warehouseSwitcher ? (
+                <TouchableOpacity
+                  onPress={() => setShowWarehouseDropdown((v) => !v)}
+                  style={[
+                    styles.headerWarehouseChip,
+                    { backgroundColor: palette.accent.primarySoft, borderColor: palette.accent.primary },
+                  ]}
+                  activeOpacity={0.7}
+                  accessibilityLabel="Выбрать склад"
+                >
+                  <Text
+                    style={[styles.headerWarehouseChipText, { color: palette.accent.primaryText }]}
+                    numberOfLines={1}
+                  >
+                    {warehouseSwitcher.label}
+                  </Text>
+                  <Ionicons
+                    name={showWarehouseDropdown ? 'chevron-up' : 'chevron-down'}
+                    size={14}
+                    color={palette.accent.primaryText}
+                  />
+                </TouchableOpacity>
+              ) : (
+                <View style={{ width: 36 }} />
+              )}
+            </View>
 
-          {/* Inline warehouse-switcher dropdown. Absolute-positioned
+            {/* Inline warehouse-switcher dropdown. Absolute-positioned
               overlay covering only the body region so the user can
               still tap the chip again to dismiss. Lives INSIDE the
               picker's RNModal — no nested modal, no iOS freeze. */}
-          {warehouseSwitcher && showWarehouseDropdown ? (
-            <View
-              style={[
-                styles.warehouseDropdown,
-                { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
-                buildShadow(palette, 'elevated'),
-              ]}
-            >
-              {warehouseSwitcher.options.map((w) => {
-                const iconName =
-                  w.kind === 'defect' ? 'warning-outline' : w.kind === 'used' ? 'cube-outline' : 'home-outline';
-                const sub =
-                  w.kind === 'defect' ? 'Брак' : w.kind === 'used' ? 'Б/У — подержанные детали' : 'Основной склад';
-                const active = warehouseSwitcher.value === w.id;
-                return (
-                  <TouchableOpacity
-                    key={w.id}
-                    style={[styles.warehouseDropdownRow, { borderBottomColor: palette.border.subtle }]}
-                    onPress={() => {
-                      warehouseSwitcher.onChange(w.id);
-                      setShowWarehouseDropdown(false);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons name={iconName as never} size={18} color={palette.accent.primary} />
-                    <View style={{ flex: 1 }}>
-                      <Text style={[styles.warehouseDropdownName, { color: palette.text.primary }]}>{w.name}</Text>
-                      <Text style={[styles.warehouseDropdownSub, { color: palette.text.secondary }]}>{sub}</Text>
-                    </View>
-                    {active ? (
-                      <Ionicons name="checkmark" size={20} color={palette.accent.primary} />
-                    ) : (
-                      <View style={{ width: 20 }} />
-                    )}
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          ) : null}
-
-          {/* Search */}
-          <View style={[styles.searchWrap, { backgroundColor: palette.bg.muted }]}>
-            <Ionicons name="search-outline" size={16} color={palette.text.tertiary} />
-            <TextInput
-              value={localSearch}
-              onChangeText={handleSearchChange}
-              style={[styles.searchInput, { color: palette.text.primary }]}
-              placeholder={'Поиск товара...'}
-              placeholderTextColor={palette.text.tertiary}
-              autoCorrect={false}
-              autoCapitalize="none"
-            />
-            {localSearch ? (
-              <TouchableOpacity
-                onPress={() => {
-                  setLocalSearch('');
-                  setProductSearch('');
-                }}
+            {warehouseSwitcher && showWarehouseDropdown ? (
+              <View
+                style={[
+                  styles.warehouseDropdown,
+                  { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle },
+                  buildShadow(palette, 'elevated'),
+                ]}
               >
-                <Ionicons name="close-circle-outline" size={18} color={palette.text.tertiary} />
-              </TouchableOpacity>
-            ) : (
-              <TouchableOpacity onPress={openScanner} hitSlop={8} accessibilityLabel="Сканировать штрих-код">
-                <Ionicons name="barcode-outline" size={20} color={colors.primary[500]} />
-              </TouchableOpacity>
-            )}
-          </View>
-
-          {/* Full-screen barcode scanner modal */}
-          <RNModal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}>
-            <View style={styles.scannerContainer}>
-              {showScanner && cameraPermission?.granted ? (
-                <CameraView
-                  style={StyleSheet.absoluteFillObject}
-                  facing="back"
-                  barcodeScannerSettings={{
-                    barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'qr'],
-                  }}
-                  onBarcodeScanned={handleBarCodeScanned}
-                />
-              ) : null}
-              <View style={styles.scannerOverlay} pointerEvents="box-none">
-                <View style={styles.scannerCornerBox} />
-                <Text style={styles.scannerHint}>Наведите камеру на штрих-код товара</Text>
+                {warehouseSwitcher.options.map((w) => {
+                  const iconName =
+                    w.kind === 'defect' ? 'warning-outline' : w.kind === 'used' ? 'cube-outline' : 'home-outline';
+                  const sub =
+                    w.kind === 'defect' ? 'Брак' : w.kind === 'used' ? 'Б/У — подержанные детали' : 'Основной склад';
+                  const active = warehouseSwitcher.value === w.id;
+                  return (
+                    <TouchableOpacity
+                      key={w.id}
+                      style={[styles.warehouseDropdownRow, { borderBottomColor: palette.border.subtle }]}
+                      onPress={() => {
+                        warehouseSwitcher.onChange(w.id);
+                        setShowWarehouseDropdown(false);
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons name={iconName as never} size={18} color={palette.accent.primary} />
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.warehouseDropdownName, { color: palette.text.primary }]}>{w.name}</Text>
+                        <Text style={[styles.warehouseDropdownSub, { color: palette.text.secondary }]}>{sub}</Text>
+                      </View>
+                      {active ? (
+                        <Ionicons name="checkmark" size={20} color={palette.accent.primary} />
+                      ) : (
+                        <View style={{ width: 20 }} />
+                      )}
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
-              <TouchableOpacity style={styles.scannerCancelBtn} onPress={() => setShowScanner(false)}>
-                <Ionicons name="close" size={22} color={colors.white} />
-                <Text style={styles.scannerCancelText}>Отмена</Text>
-              </TouchableOpacity>
-            </View>
-          </RNModal>
+            ) : null}
 
-          {/* Folder filter chips — horizontal, single-select, «Все» resets.
+            {/* Search */}
+            <View style={[styles.searchWrap, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="search-outline" size={16} color={palette.text.tertiary} />
+              <TextInput
+                value={localSearch}
+                onChangeText={handleSearchChange}
+                style={[styles.searchInput, { color: palette.text.primary }]}
+                placeholder={'Поиск товара...'}
+                placeholderTextColor={palette.text.tertiary}
+                autoCorrect={false}
+                autoCapitalize="none"
+              />
+              {localSearch ? (
+                <TouchableOpacity
+                  onPress={() => {
+                    setLocalSearch('');
+                    setProductSearch('');
+                  }}
+                >
+                  <Ionicons name="close-circle-outline" size={18} color={palette.text.tertiary} />
+                </TouchableOpacity>
+              ) : (
+                <TouchableOpacity onPress={openScanner} hitSlop={8} accessibilityLabel="Сканировать штрих-код">
+                  <Ionicons name="barcode-outline" size={20} color={colors.primary[500]} />
+                </TouchableOpacity>
+              )}
+            </View>
+
+            {/* Full-screen barcode scanner modal */}
+            <RNModal visible={showScanner} animationType="slide" onRequestClose={() => setShowScanner(false)}>
+              <View style={styles.scannerContainer}>
+                {showScanner && cameraPermission?.granted ? (
+                  <CameraView
+                    style={StyleSheet.absoluteFillObject}
+                    facing="back"
+                    barcodeScannerSettings={{
+                      barcodeTypes: ['ean13', 'ean8', 'upc_a', 'upc_e', 'code128', 'code39', 'qr'],
+                    }}
+                    onBarcodeScanned={handleBarCodeScanned}
+                  />
+                ) : null}
+                <View style={styles.scannerOverlay} pointerEvents="box-none">
+                  <View style={styles.scannerCornerBox} />
+                  <Text style={styles.scannerHint}>Наведите камеру на штрих-код товара</Text>
+                </View>
+                <TouchableOpacity style={styles.scannerCancelBtn} onPress={() => setShowScanner(false)}>
+                  <Ionicons name="close" size={22} color={colors.white} />
+                  <Text style={styles.scannerCancelText}>Отмена</Text>
+                </TouchableOpacity>
+              </View>
+            </RNModal>
+
+            {/* Folder filter chips — horizontal, single-select, «Все» resets.
               Replaces the old folder grid + drill-in/out: tapping a chip
               filters the one flat list, no entering/leaving folders. Pinned
               under the search so it's always reachable while scrolling. */}
-          {categoryChips.length > 0 ? (
-            <ScrollView
-              horizontal
-              showsHorizontalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-              style={styles.chipStripWrap}
-              contentContainerStyle={styles.chipStrip}
-            >
-              <ChipButton
-                label="Все"
-                active={activeCategory === null}
-                onPress={() => selectCategory(null)}
-                palette={palette}
-              />
-              {categoryChips.map((c) => (
+            {categoryChips.length > 0 ? (
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                style={styles.chipStripWrap}
+                contentContainerStyle={styles.chipStrip}
+              >
                 <ChipButton
-                  key={c}
-                  label={c}
-                  active={activeCategory === c}
-                  onPress={() => selectCategory(activeCategory === c ? null : c)}
+                  label="Все"
+                  active={activeCategory === null}
+                  onPress={() => selectCategory(null)}
                   palette={palette}
                 />
-              ))}
-            </ScrollView>
-          ) : null}
+                {categoryChips.map((c) => (
+                  <ChipButton
+                    key={c}
+                    label={c}
+                    active={activeCategory === c}
+                    onPress={() => selectCategory(activeCategory === c ? null : c)}
+                    palette={palette}
+                  />
+                ))}
+              </ScrollView>
+            ) : null}
 
-          {/* Body — skeleton on cold start, error+retry when the fetch died
+            {/* Body — skeleton on cold start, error+retry when the fetch died
               with no cache to fall back on, FlashList otherwise. Wrapped in a
               flex:1 region so the running-cart bar always pins to the bottom. */}
-          <View style={styles.body}>
-            {showInitialSkeleton ? (
-              <View style={styles.skeletonWrap}>
-                <ListSkeleton count={8} />
-              </View>
-            ) : showErrorState ? (
-              <View style={styles.stateWrap}>
-                <QueryErrorState
-                  title={'Не удалось загрузить товары'}
-                  description={'Проверьте соединение и попробуйте ещё раз'}
-                  onRetry={() => refetch()}
+            <View style={styles.body}>
+              {showInitialSkeleton ? (
+                <View style={styles.skeletonWrap}>
+                  <ListSkeleton count={8} />
+                </View>
+              ) : showErrorState ? (
+                <View style={styles.stateWrap}>
+                  <QueryErrorState
+                    title={'Не удалось загрузить товары'}
+                    description={'Проверьте соединение и попробуйте ещё раз'}
+                    onRetry={() => refetch()}
+                  />
+                </View>
+              ) : (
+                <FlashList
+                  data={visibleProducts}
+                  renderItem={renderItem}
+                  keyExtractor={keyExtractor}
+                  keyboardShouldPersistTaps="handled"
+                  contentContainerStyle={styles.listContent}
+                  removeClippedSubviews
+                  refreshControl={
+                    <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
+                  }
+                  ListEmptyComponent={
+                    queryResolvedEmpty ? (
+                      <View style={styles.empty}>
+                        <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
+                        <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Нет товаров'}</Text>
+                      </View>
+                    ) : hasActiveFilter ? (
+                      <View style={styles.empty}>
+                        <Ionicons name="search-outline" size={40} color={palette.text.tertiary} />
+                        <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Ничего не найдено'}</Text>
+                      </View>
+                    ) : null
+                  }
                 />
-              </View>
-            ) : (
-              <FlashList
-                data={visibleProducts}
-                renderItem={renderItem}
-                keyExtractor={keyExtractor}
-                keyboardShouldPersistTaps="handled"
-                contentContainerStyle={styles.listContent}
-                removeClippedSubviews
-                refreshControl={
-                  <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
-                }
-                ListEmptyComponent={
-                  queryResolvedEmpty ? (
-                    <View style={styles.empty}>
-                      <Ionicons name="cube-outline" size={40} color={palette.text.tertiary} />
-                      <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Нет товаров'}</Text>
-                    </View>
-                  ) : hasActiveFilter ? (
-                    <View style={styles.empty}>
-                      <Ionicons name="search-outline" size={40} color={palette.text.tertiary} />
-                      <Text style={[styles.emptyText, { color: palette.text.tertiary }]}>{'Ничего не найдено'}</Text>
-                    </View>
-                  ) : null
-                }
-              />
-            )}
-          </View>
+              )}
+            </View>
 
-          {/* Running cart review — expandable list of what's in the check so
+            {/* Running cart review — expandable list of what's in the check so
               far. Increment-only «+» (the picker's public contract exposes an
               add callback + a qty reader, no decrement). Bounded height so it
               never eats the whole list. */}
-          {cartExpanded && cart.items.length > 0 ? (
-            <View
-              style={[styles.cartPanel, { backgroundColor: palette.bg.card, borderTopColor: palette.border.subtle }]}
-            >
-              <ScrollView style={styles.cartScroll} keyboardShouldPersistTaps="handled">
-                {cart.items.map(({ product, qty }) => (
-                  <View key={product.id} style={[styles.cartRow, { borderBottomColor: palette.border.subtle }]}>
-                    <Text style={[styles.cartRowName, { color: palette.text.primary }]} numberOfLines={1}>
-                      {product.name}
-                    </Text>
-                    <Text style={[styles.cartRowMeta, { color: palette.text.tertiary }]}>
-                      {qty} × {formatMoney(product.sellPrice)}
-                    </Text>
-                    <Text style={[styles.cartRowSum, { color: palette.text.primary }]}>
-                      {formatMoney(product.sellPrice * qty)}
-                    </Text>
-                    <TouchableOpacity
-                      onPress={() => handleCartAdd(product)}
-                      style={[styles.cartRowPlus, { backgroundColor: palette.accent.primarySoft }]}
-                      hitSlop={6}
-                      accessibilityLabel={`Добавить ещё: ${product.name}`}
-                    >
-                      <Ionicons name="add" size={18} color={palette.accent.primaryText} />
-                    </TouchableOpacity>
-                  </View>
-                ))}
-              </ScrollView>
-            </View>
-          ) : null}
+            {cartExpanded && cart.items.length > 0 ? (
+              <View
+                style={[styles.cartPanel, { backgroundColor: palette.bg.card, borderTopColor: palette.border.subtle }]}
+              >
+                <ScrollView style={styles.cartScroll} keyboardShouldPersistTaps="handled">
+                  {cart.items.map(({ product, qty }) => (
+                    <View key={product.id} style={[styles.cartRow, { borderBottomColor: palette.border.subtle }]}>
+                      <Text style={[styles.cartRowName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {product.name}
+                      </Text>
+                      <Text style={[styles.cartRowMeta, { color: palette.text.tertiary }]}>
+                        {qty} × {formatMoney(product.sellPrice)}
+                      </Text>
+                      <Text style={[styles.cartRowSum, { color: palette.text.primary }]}>
+                        {formatMoney(product.sellPrice * qty)}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => handleCartAdd(product)}
+                        style={[styles.cartRowPlus, { backgroundColor: palette.accent.primarySoft }]}
+                        hitSlop={6}
+                        accessibilityLabel={`Добавить ещё: ${product.name}`}
+                      >
+                        <Ionicons name="add" size={18} color={palette.accent.primaryText} />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </ScrollView>
+              </View>
+            ) : null}
 
-          {/* Running-cart bar — pinned to the bottom above the home indicator.
+            {/* Running-cart bar — pinned to the bottom above the home indicator.
               Left = tappable summary (count + total, toggles the review panel);
               right = «Готово» (commit action = close, adds are already applied
               incrementally to the parent's check). */}
-          <View
-            style={[
-              styles.cartBar,
-              {
-                backgroundColor: palette.bg.elevated,
-                borderTopColor: palette.border.subtle,
-                paddingBottom: Math.max(insets.bottom, spacing[2]),
-              },
-            ]}
-          >
-            {cart.items.length > 0 ? (
-              <Pressable
-                style={styles.cartSummary}
-                onPress={() => setCartExpanded((v) => !v)}
-                accessibilityLabel="Показать корзину"
-              >
-                <View style={[styles.cartIconWrap, { backgroundColor: palette.accent.primarySoft }]}>
-                  <Ionicons name="cart" size={18} color={palette.accent.primaryText} />
-                  <View style={styles.cartCountBadge}>
-                    <Text style={styles.cartCountBadgeText}>{cart.totalQty}</Text>
+            <View
+              style={[
+                styles.cartBar,
+                {
+                  backgroundColor: palette.bg.elevated,
+                  borderTopColor: palette.border.subtle,
+                  paddingBottom: Math.max(insets.bottom, spacing[2]),
+                },
+              ]}
+            >
+              {cart.items.length > 0 ? (
+                <Pressable
+                  style={styles.cartSummary}
+                  onPress={() => setCartExpanded((v) => !v)}
+                  accessibilityLabel="Показать корзину"
+                >
+                  <View style={[styles.cartIconWrap, { backgroundColor: palette.accent.primarySoft }]}>
+                    <Ionicons name="cart" size={18} color={palette.accent.primaryText} />
+                    <View style={styles.cartCountBadge}>
+                      <Text style={styles.cartCountBadgeText}>{cart.totalQty}</Text>
+                    </View>
                   </View>
-                </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={[styles.cartTotalLabel, { color: palette.text.tertiary }]}>В чеке</Text>
-                  <Text style={[styles.cartTotalValue, { color: palette.text.primary }]} numberOfLines={1}>
-                    {formatMoney(cart.totalSum)}
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.cartTotalLabel, { color: palette.text.tertiary }]}>В чеке</Text>
+                    <Text style={[styles.cartTotalValue, { color: palette.text.primary }]} numberOfLines={1}>
+                      {formatMoney(cart.totalSum)}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={cartExpanded ? 'chevron-down' : 'chevron-up'}
+                    size={18}
+                    color={palette.text.tertiary}
+                  />
+                </Pressable>
+              ) : (
+                <View style={styles.cartSummary}>
+                  <Text style={[styles.cartEmptyHint, { color: palette.text.tertiary }]}>
+                    Нажмите на товар, чтобы добавить
                   </Text>
                 </View>
-                <Ionicons name={cartExpanded ? 'chevron-down' : 'chevron-up'} size={18} color={palette.text.tertiary} />
-              </Pressable>
-            ) : (
-              <View style={styles.cartSummary}>
-                <Text style={[styles.cartEmptyHint, { color: palette.text.tertiary }]}>
-                  Нажмите на товар, чтобы добавить
-                </Text>
-              </View>
-            )}
-            <TouchableOpacity style={styles.doneBtn} onPress={handleDone} activeOpacity={0.85}>
-              <Text style={styles.doneBtnText}>Готово</Text>
-            </TouchableOpacity>
-          </View>
-        </Animated.View>
-      </View>
+              )}
+              <TouchableOpacity style={styles.doneBtn} onPress={handleDone} activeOpacity={0.85}>
+                <Text style={styles.doneBtnText}>Готово</Text>
+              </TouchableOpacity>
+            </View>
+          </Animated.View>
+        </View>
+        <KeyboardDoneToolbar />
+      </KeyboardProvider>
     </RNModal>
   );
 }

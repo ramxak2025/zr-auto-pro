@@ -274,6 +274,101 @@ export class CarsService {
   }
 
   /**
+   * Transfer a car to a NEW owner («сменить владельца»), optionally carrying the
+   * car's full check history — and the debt / installment / loyalty ledger rows
+   * derived FROM those checks — over to the new client. Everything runs in ONE
+   * transaction so a partial transfer is impossible.
+   *
+   * Ledger handling (investigated 2026-07): client_debts, client_bonuses (loyalty)
+   * and installment_plans each store their OWN client_id AND a nullable check_id
+   * back to the originating check. They are NOT auto-carried by moving the check's
+   * client_id, so — for a consistent «полный перенос» — when moveHistory is on we
+   * also reassign every such row whose check_id belongs to THIS car's checks to the
+   * new client. installment_payments follow their plan (plan_id FK) → no direct
+   * touch needed. Rows with a NULL check_id (manual, standalone entries) are left
+   * alone: they were never tied to a check and thus not to this car.
+   */
+  async transferOwner(carId: string, tenantID: string, newClientId: string, moveHistory: boolean) {
+    // 1) Target client must exist in the tenant.
+    await this.assertClientInTenant(newClientId, tenantID);
+
+    // 2) Load the car (tenant-scoped) → current owner + plate.
+    const { rows: carRows } = await this.pool.query(
+      'SELECT id, client_id, plate_number, no_plate FROM cars WHERE id=$1 AND tenant_id=$2 LIMIT 1',
+      [carId, tenantID],
+    );
+    if (carRows.length === 0) throw new NotFoundException({ message: 'Машина не найдена' });
+    const current = carRows[0];
+
+    // Idempotent no-op: already owned by the target client.
+    if (current.client_id === newClientId) {
+      return { car: await this.getById(carId, tenantID), movedChecks: 0 };
+    }
+
+    // 3) Dedup guard: the target must not already own a car with this plate.
+    // Reuses the exact same normalization + per-client lookup as create/update.
+    // No-plate cars normalize to empty and are skipped (empty plate ≠ identity).
+    if (!current.no_plate) {
+      const norm = normalizePlate(current.plate_number ?? '');
+      if (!norm.isEmpty && norm.key) {
+        const existing = await this.findExistingPlateForClient(tenantID, newClientId, norm.key);
+        if (existing) {
+          throw new BadRequestException({ message: 'У этого клиента уже есть авто с таким номером' });
+        }
+      }
+    }
+
+    let movedChecks = 0;
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 4) Reassign the car itself.
+      await client.query('UPDATE cars SET client_id=$1 WHERE id=$2 AND tenant_id=$3', [newClientId, carId, tenantID]);
+
+      if (moveHistory !== false) {
+        // 5) Move ALL of the car's checks (incl. trashed history — NO deleted_at
+        // filter) to the new client.
+        const chkRes = await client.query('UPDATE checks SET client_id=$1 WHERE car_id=$2 AND tenant_id=$3', [
+          newClientId,
+          carId,
+          tenantID,
+        ]);
+        movedChecks = chkRes.rowCount ?? 0;
+
+        // 6) Carry the derived ledgers (debts / loyalty / installments) whose
+        // check_id belongs to this car's checks. Keeps «полный перенос» consistent
+        // so the new owner's debt / bonus / рассрочка balances are correct.
+        const carChecksSubquery = 'SELECT id FROM checks WHERE car_id=$2 AND tenant_id=$3';
+        await client.query(
+          `UPDATE client_debts SET client_id=$1
+             WHERE tenant_id=$3 AND check_id IN (${carChecksSubquery})`,
+          [newClientId, carId, tenantID],
+        );
+        await client.query(
+          `UPDATE client_bonuses SET client_id=$1
+             WHERE tenant_id=$3 AND check_id IN (${carChecksSubquery})`,
+          [newClientId, carId, tenantID],
+        );
+        await client.query(
+          `UPDATE installment_plans SET client_id=$1
+             WHERE tenant_id=$3 AND check_id IN (${carChecksSubquery})`,
+          [newClientId, carId, tenantID],
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    return { car: await this.getById(carId, tenantID), movedChecks };
+  }
+
+  /**
    * Recent checks for a specific car, newest-first. Belongs-to-tenant is
    * enforced via the WHERE clause; foreign cars yield an empty list rather
    * than 404 to keep the FE simple (an empty list is a valid history).
