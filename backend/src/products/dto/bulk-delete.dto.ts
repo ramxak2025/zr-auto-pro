@@ -22,9 +22,10 @@ export class BulkDeleteDto {
   @IsUUID('all', { each: true, message: 'Некорректный товар' })
   productIds?: string[];
 
-  /** warehouse_categories ids to trash — cascades to contents + subfolders. */
+  /** warehouse_categories ids to trash — cascades to contents + subfolders (≤2000). */
   @IsOptional()
   @IsArray()
+  @ArrayMaxSize(2000, { message: 'Слишком много папок за раз' })
   @IsUUID('all', { each: true, message: 'Некорректная папка' })
   categoryIds?: string[];
 

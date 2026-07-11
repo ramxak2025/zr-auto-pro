@@ -216,15 +216,24 @@ export class WarehouseAnalyticsService {
       salesParams.push(warehouseId);
       salesFilter = `AND p.warehouse_id = $${salesParams.length}`;
     }
+    // round-11 #10 / FIX #3: the check filters (not-returned / not-deferred /
+    // not-deleted / in-window) live in the SECOND LEFT JOIN's ON clause, so a
+    // non-matching check only NULLs ch.* while the cpl row is retained. We must
+    // therefore GATE every summed cpl column on `ch.id IS NOT NULL` (true exactly
+    // when the join matched) — otherwise returned/deferred/deleted/out-of-window
+    // lines still aggregate into revenue/cost/qty (the previous silent bug). The
+    // LEFT JOIN stays a LEFT JOIN so EVERY product is still listed (zero-sales
+    // products are needed for stock / ABC / over-/under-stock). MAX(ch.date)
+    // ignores the NULLed non-matches on its own.
     const { rows: salesRows } = await this.pool.query(
       `SELECT
          p.id,
          p.name,
          p.stock,
          p.cost_price,
-         COALESCE(SUM(cpl.quantity), 0) as sold_qty,
-         COALESCE(SUM(cpl.total_sell), 0) as revenue,
-         COALESCE(SUM(cpl.total_cost), 0) as cost,
+         COALESCE(SUM(CASE WHEN ch.id IS NOT NULL THEN cpl.quantity ELSE 0 END), 0) as sold_qty,
+         COALESCE(SUM(CASE WHEN ch.id IS NOT NULL THEN cpl.total_sell ELSE 0 END), 0) as revenue,
+         COALESCE(SUM(CASE WHEN ch.id IS NOT NULL THEN cpl.total_cost ELSE 0 END), 0) as cost,
          MAX(ch.date) as last_sold_at
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id

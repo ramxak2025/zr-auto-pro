@@ -7,6 +7,18 @@ export class WarehouseService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
   /**
+   * Escape LIKE metacharacters (%, _, and the escape char \) so a user-created
+   * folder path is matched LITERALLY in a subtree `LIKE path || '/%'` pattern.
+   * Without this a folder named e.g. «Скидка 50%» or «A_B» would over-match
+   * unrelated siblings. Paired with an explicit `ESCAPE '\'` clause in every
+   * query that builds the subtree pattern (fix #6). Backslash is escaped in the
+   * same single pass, so ordering is safe.
+   */
+  private static escapeLike(s: string): string {
+    return s.replace(/[\\%_]/g, (c) => '\\' + c);
+  }
+
+  /**
    * Resolve which warehouse a category read / write should target.
    *
    *   - explicit warehouseId from caller → verify it lives in tenant;
@@ -149,12 +161,20 @@ export class WarehouseService {
   async removeCategory(id: string, tenantID: string, moveProductsTo?: string, deleteContents?: boolean) {
     // Find the path of the (live) category being deleted. An already-trashed
     // folder is a no-op — keeps the endpoint idempotent.
+    // Resolve the folder's warehouse_id too (fix #2): a single folder id maps to
+    // exactly one (path, warehouse_id), and every product move / soft-delete below
+    // must stay scoped to THAT warehouse so a same-named folder in Б/У / брак is
+    // never touched.
     const { rows: catRows } = await this.pool.query(
-      'SELECT path FROM warehouse_categories WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
+      'SELECT path, warehouse_id FROM warehouse_categories WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
       [id, tenantID],
     );
     if (catRows.length === 0) return { message: 'Не найдено' };
     const deletedPath = catRows[0].path;
+    const deletedWarehouseId = (catRows[0].warehouse_id as string | null) ?? null;
+    // Subtree LIKE pattern, metacharacters escaped (fix #6). The folder itself is
+    // matched by exact equality (category=$2); only descendants use LIKE.
+    const subtreeLike = WarehouseService.escapeLike(deletedPath) + '/%';
 
     const client = await this.pool.connect();
     try {
@@ -166,7 +186,7 @@ export class WarehouseService {
         // cascade SQL lives in exactly one place). Return early — the shared
         // helper already soft-deletes the folder rows, so the trailing
         // folder-soft-delete below must not run twice.
-        await this.softDeleteFolderCascade(client, tenantID, deletedPath);
+        await this.softDeleteFolderCascade(client, tenantID, deletedPath, deletedWarehouseId);
         await client.query('COMMIT');
         return { message: 'Папка и товары удалены' };
       } else if (moveProductsTo !== undefined) {
@@ -174,22 +194,26 @@ export class WarehouseService {
         const target = moveProductsTo || null;
         await client.query(
           `UPDATE products SET category=$3
-           WHERE tenant_id=$1 AND deleted_at IS NULL AND (category=$2 OR category LIKE $2 || '/%')`,
-          [tenantID, deletedPath, target],
+           WHERE tenant_id=$1 AND deleted_at IS NULL
+             AND warehouse_id IS NOT DISTINCT FROM $5
+             AND (category=$2 OR category LIKE $4 ESCAPE '\\')`,
+          [tenantID, deletedPath, target, subtreeLike, deletedWarehouseId],
         );
       } else {
         // Default: clear category (move to root)
         await client.query(
           `UPDATE products SET category=NULL
-           WHERE tenant_id=$1 AND deleted_at IS NULL AND (category=$2 OR category LIKE $2 || '/%')`,
-          [tenantID, deletedPath],
+           WHERE tenant_id=$1 AND deleted_at IS NULL
+             AND warehouse_id IS NOT DISTINCT FROM $4
+             AND (category=$2 OR category LIKE $3 ESCAPE '\\')`,
+          [tenantID, deletedPath, subtreeLike, deletedWarehouseId],
         );
       }
 
       // Soft-delete the folder and all subfolders (reversible — never a hard
       // DELETE). Products were moved (not deleted) in the branches above, so
       // only the folder rows go to trash here.
-      await this.softDeleteFolderRows(client, tenantID, deletedPath);
+      await this.softDeleteFolderRows(client, tenantID, deletedPath, deletedWarehouseId);
 
       await client.query('COMMIT');
     } catch (err) {
@@ -207,12 +231,25 @@ export class WarehouseService {
    * never a hard DELETE). Only touches LIVE rows so a re-run stays a no-op. Runs
    * on the caller-provided transaction client. Single source of the folder
    * soft-delete SQL.
+   *
+   * Scoped by `warehouseId` (fix #2): after migration 032 the same path (e.g.
+   * «Тормоза») can live in main + Б/У + брак independently, so a delete must only
+   * touch rows in the SAME warehouse as the resolved folder. `IS NOT DISTINCT
+   * FROM` matches a real warehouse id exactly AND groups the legacy NULL bucket
+   * (folders that pre-date the per-warehouse split) with NULL-warehouse products.
    */
-  private async softDeleteFolderRows(client: PoolClient, tenantID: string, path: string): Promise<void> {
+  private async softDeleteFolderRows(
+    client: PoolClient,
+    tenantID: string,
+    path: string,
+    warehouseId: string | null,
+  ): Promise<void> {
     await client.query(
       `UPDATE warehouse_categories SET deleted_at = NOW()
-       WHERE tenant_id=$1 AND deleted_at IS NULL AND (path=$2 OR path LIKE $2 || '/%')`,
-      [tenantID, path],
+       WHERE tenant_id=$1 AND deleted_at IS NULL
+         AND warehouse_id IS NOT DISTINCT FROM $4
+         AND (path=$2 OR path LIKE $3 ESCAPE '\\')`,
+      [tenantID, path, WarehouseService.escapeLike(path) + '/%', warehouseId],
     );
   }
 
@@ -222,16 +259,25 @@ export class WarehouseService {
    * Runs on the caller-provided transaction client. This is the single source of
    * the "delete folder with contents" SQL — reused by removeCategory(deleteContents)
    * and by softDeleteCategories (bulk-delete). Returns the number of products moved.
+   *
+   * Scoped by `warehouseId` (fix #2) so deleting a folder chosen in ONE warehouse
+   * can't cascade into same-named folders/products in the others.
    */
-  private async softDeleteFolderCascade(client: PoolClient, tenantID: string, path: string): Promise<number> {
+  private async softDeleteFolderCascade(
+    client: PoolClient,
+    tenantID: string,
+    path: string,
+    warehouseId: string | null,
+  ): Promise<number> {
     const res = await client.query(
       `UPDATE products SET deleted_at = NOW()
        WHERE tenant_id=$1
          AND deleted_at IS NULL
-         AND (category=$2 OR category LIKE $2 || '/%')`,
-      [tenantID, path],
+         AND warehouse_id IS NOT DISTINCT FROM $4
+         AND (category=$2 OR category LIKE $3 ESCAPE '\\')`,
+      [tenantID, path, WarehouseService.escapeLike(path) + '/%', warehouseId],
     );
-    await this.softDeleteFolderRows(client, tenantID, path);
+    await this.softDeleteFolderRows(client, tenantID, path, warehouseId);
     return res.rowCount ?? 0;
   }
 
@@ -255,14 +301,22 @@ export class WarehouseService {
     client: PoolClient,
   ): Promise<{ deletedProducts: number; deletedCategories: number }> {
     if (!ids || ids.length === 0) return { deletedProducts: 0, deletedCategories: 0 };
+    // Keep each folder's warehouse_id (fix #2) so the cascade below stays scoped
+    // to the warehouse the folder actually lives in — never the same-named folder
+    // in a sibling warehouse (Б/У / брак).
     const { rows } = await client.query(
-      `SELECT path FROM warehouse_categories
+      `SELECT path, warehouse_id FROM warehouse_categories
         WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::uuid[])`,
       [tenantID, ids],
     );
     let deletedProducts = 0;
     for (const row of rows) {
-      deletedProducts += await this.softDeleteFolderCascade(client, tenantID, row.path as string);
+      deletedProducts += await this.softDeleteFolderCascade(
+        client,
+        tenantID,
+        row.path as string,
+        (row.warehouse_id as string | null) ?? null,
+      );
     }
     return { deletedProducts, deletedCategories: rows.length };
   }
@@ -297,6 +351,10 @@ export class WarehouseService {
     );
     if (catRows.length === 0) throw new BadRequestException({ message: 'Категория не найдена' });
     const oldPath = catRows[0].path;
+    // Subtree LIKE pattern with metacharacters escaped (fix #6). $2 (oldPath) stays
+    // UNescaped — the `substring(... from length($2)+1)` re-prefix math depends on
+    // its true length; only the LIKE match uses the escaped pattern ($4).
+    const subtreeLike = WarehouseService.escapeLike(oldPath) + '/%';
 
     const client = await this.pool.connect();
     try {
@@ -312,8 +370,8 @@ export class WarehouseService {
       // Rename all subcategories
       await client.query(
         `UPDATE warehouse_categories SET path = $3 || substring(path from length($2) + 1)
-         WHERE tenant_id=$1 AND path LIKE $2 || '/%'`,
-        [tenantID, oldPath, newPath],
+         WHERE tenant_id=$1 AND path LIKE $4 ESCAPE '\\'`,
+        [tenantID, oldPath, newPath, subtreeLike],
       );
 
       // Update products category references
@@ -324,8 +382,8 @@ export class WarehouseService {
       ]);
       await client.query(
         `UPDATE products SET category = $3 || substring(category from length($2) + 1)
-         WHERE tenant_id=$1 AND category LIKE $2 || '/%'`,
-        [tenantID, oldPath, newPath],
+         WHERE tenant_id=$1 AND category LIKE $4 ESCAPE '\\'`,
+        [tenantID, oldPath, newPath, subtreeLike],
       );
 
       await client.query('COMMIT');

@@ -275,18 +275,28 @@ export class CarsService {
 
   /**
    * Transfer a car to a NEW owner («сменить владельца»), optionally carrying the
-   * car's full check history — and the debt / installment / loyalty ledger rows
-   * derived FROM those checks — over to the new client. Everything runs in ONE
-   * transaction so a partial transfer is impossible.
+   * car's full check history — and the рассрочка (installment_plans) derived FROM
+   * those checks — over to the new client. Everything runs in ONE transaction so a
+   * partial transfer is impossible.
    *
-   * Ledger handling (investigated 2026-07): client_debts, client_bonuses (loyalty)
-   * and installment_plans each store their OWN client_id AND a nullable check_id
-   * back to the originating check. They are NOT auto-carried by moving the check's
-   * client_id, so — for a consistent «полный перенос» — when moveHistory is on we
-   * also reassign every such row whose check_id belongs to THIS car's checks to the
-   * new client. installment_payments follow their plan (plan_id FK) → no direct
-   * touch needed. Rows with a NULL check_id (manual, standalone entries) are left
-   * alone: they were never tied to a check and thus not to this car.
+   * Scope (fix #4): only the CURRENT owner's checks on this car are moved. Checks
+   * that belonged to a PRIOR owner (left behind by an earlier moveHistory=false
+   * transfer, or a reused plate) keep their owner. We capture that check-id set
+   * BEFORE mutating so the derived-ledger move below is order-independent.
+   *
+   * Ledger handling (investigated 2026-07, revised): ONLY installment_plans are
+   * carried. An installment plan is a DISCRETE per-check obligation (paid /
+   * remaining live on the plan row; installment_payments follow via plan_id FK) —
+   * moving it with its sale keeps «полный перенос» consistent and cannot corrupt a
+   * cross-client balance. client_bonuses (loyalty) and client_debts are
+   * DELIBERATELY NOT moved: both are FUNGIBLE per-client running balances (loyalty
+   * = Σaccrual − Σredemption; debts = Σcharge − Σpayment) whose negative side
+   * (redemption / payment) carries NO check_id and so cannot be split by car.
+   * Moving only the check-linked positive rows would decouple the balance, drive
+   * the OLD client negative (breaking loyalty's non-negative invariant) and hand
+   * the NEW client unearned, immediately-spendable value (real money as discounts).
+   * Loyalty & debts are PERSONAL to the client, not attached to the car — same
+   * precedent as checks.service.ts editClosedCheck, which leaves them untouched.
    */
   async transferOwner(carId: string, tenantID: string, newClientId: string, moveHistory: boolean) {
     // 1) Target client must exist in the tenant.
@@ -327,34 +337,39 @@ export class CarsService {
       await client.query('UPDATE cars SET client_id=$1 WHERE id=$2 AND tenant_id=$3', [newClientId, carId, tenantID]);
 
       if (moveHistory !== false) {
-        // 5) Move ALL of the car's checks (incl. trashed history — NO deleted_at
-        // filter) to the new client.
-        const chkRes = await client.query('UPDATE checks SET client_id=$1 WHERE car_id=$2 AND tenant_id=$3', [
-          newClientId,
-          carId,
-          tenantID,
-        ]);
-        movedChecks = chkRes.rowCount ?? 0;
+        // 5) Capture the CURRENT owner's checks on this car BEFORE any mutation.
+        // Scoping to `client_id = current owner` (fix #4) leaves a PRIOR owner's
+        // checks — from an earlier moveHistory=false transfer or a reused plate —
+        // untouched. Capturing the ids up front makes the ledger move below
+        // order-independent (moving the checks first would otherwise empty a
+        // car_id+client_id subquery). Trashed history is included (no deleted_at
+        // filter) so «полный перенос» carries the full history.
+        const { rows: chkRows } = await client.query(
+          'SELECT id FROM checks WHERE car_id=$1 AND tenant_id=$2 AND client_id=$3',
+          [carId, tenantID, current.client_id],
+        );
+        const checkIds = chkRows.map((r: any) => r.id as string);
+        movedChecks = checkIds.length;
 
-        // 6) Carry the derived ledgers (debts / loyalty / installments) whose
-        // check_id belongs to this car's checks. Keeps «полный перенос» consistent
-        // so the new owner's debt / bonus / рассрочка balances are correct.
-        const carChecksSubquery = 'SELECT id FROM checks WHERE car_id=$2 AND tenant_id=$3';
-        await client.query(
-          `UPDATE client_debts SET client_id=$1
-             WHERE tenant_id=$3 AND check_id IN (${carChecksSubquery})`,
-          [newClientId, carId, tenantID],
-        );
-        await client.query(
-          `UPDATE client_bonuses SET client_id=$1
-             WHERE tenant_id=$3 AND check_id IN (${carChecksSubquery})`,
-          [newClientId, carId, tenantID],
-        );
-        await client.query(
-          `UPDATE installment_plans SET client_id=$1
-             WHERE tenant_id=$3 AND check_id IN (${carChecksSubquery})`,
-          [newClientId, carId, tenantID],
-        );
+        if (checkIds.length > 0) {
+          // Move exactly those checks to the new client.
+          await client.query('UPDATE checks SET client_id=$1 WHERE tenant_id=$2 AND id = ANY($3::uuid[])', [
+            newClientId,
+            tenantID,
+            checkIds,
+          ]);
+
+          // 6) Carry рассрочка for exactly those checks. An installment plan is a
+          // DISCRETE per-check obligation (see method doc) — safe to move with its
+          // sale; installment_payments follow via plan_id FK → no direct touch.
+          // client_bonuses / client_debts are INTENTIONALLY NOT moved (see doc):
+          // fungible per-client balances that can't be split by car without
+          // corrupting the old owner's / new owner's balance.
+          await client.query(
+            'UPDATE installment_plans SET client_id=$1 WHERE tenant_id=$2 AND check_id = ANY($3::uuid[])',
+            [newClientId, tenantID, checkIds],
+          );
+        }
       }
 
       await client.query('COMMIT');
