@@ -70,10 +70,6 @@ export interface WarehouseSummary {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function clampPositive(n: number): number {
-  return n > 0 && Number.isFinite(n) ? n : 0;
-}
-
 function periodDays(period: Period): number {
   switch (period) {
     case 'week':
@@ -232,7 +228,7 @@ export class WarehouseAnalyticsService {
          MAX(ch.date) as last_sold_at
        FROM products p
        LEFT JOIN check_product_lines cpl ON cpl.product_id = p.id
-       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
+       LEFT JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2
        WHERE p.tenant_id = $1 AND p.deleted_at IS NULL ${salesFilter}
        GROUP BY p.id, p.name, p.stock, p.cost_price`,
       salesParams,
@@ -498,7 +494,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.total_sell), 0) as revenue,
          COALESCE(SUM(cpl.total_cost), 0) as cost
        FROM check_product_lines cpl
-       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
+       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2
        JOIN products p ON p.id = cpl.product_id
        GROUP BY p.category
        ORDER BY revenue DESC`,
@@ -529,7 +525,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.total_sell), 0) as revenue,
          COALESCE(SUM(cpl.total_sell - cpl.total_cost), 0) as profit
        FROM check_product_lines cpl
-       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
+       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2
        JOIN products p ON p.id = cpl.product_id
        GROUP BY p.id, p.name
        ORDER BY sold_qty DESC
@@ -561,7 +557,7 @@ export class WarehouseAnalyticsService {
          COALESCE(SUM(cpl.total_sell), 0) as revenue,
          COALESCE(SUM(cpl.total_sell - cpl.total_cost), 0) as profit
        FROM check_product_lines cpl
-       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL AND ch.date >= $2
+       JOIN checks ch ON ch.id = cpl.check_id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.is_returned = false AND ch.deleted_at IS NULL AND ch.date >= $2
        JOIN products p ON p.id = cpl.product_id
        GROUP BY p.id, p.name
        ORDER BY profit DESC
@@ -574,7 +570,11 @@ export class WarehouseAnalyticsService {
       name: r.name,
       soldQty: parseFloat(r.sold_qty) || 0,
       revenue: parseFloat(r.revenue) || 0,
-      profit: clampPositive(parseFloat(r.profit) || 0),
+      // round-11 #10 / FIX 4: return the REAL profit (may be negative) so
+      // getTopMargin is consistent with getTopMoving / getCategoryMargin, which
+      // never clamp. ORDER BY profit DESC still surfaces the top earners first;
+      // a loss-making product is now visible instead of silently shown as 0.
+      profit: parseFloat(r.profit) || 0,
     }));
   }
 }

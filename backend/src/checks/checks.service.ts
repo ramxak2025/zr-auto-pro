@@ -479,6 +479,42 @@ export class ChecksService {
     return map;
   }
 
+  /**
+   * PRODUCT COST LOCK (round-11 #10 — financial-integrity fix). Mirror of
+   * loadWarehouseSellPrices for `cost_price`. The ROOT CAUSE of inflated
+   * per-check / per-product net profit: ProductsService.mapProduct ZEROES
+   * `costPrice` for any actor without `warehouse_manage` (masters). A
+   * master-created check therefore shipped `costPrice: 0` to the write path,
+   * so `total_cost` was stored as 0 → per-line profit = full sell price →
+   * profit inflated everywhere. The SELL price was already re-locked
+   * server-side; the COST was not. This helper re-derives the authoritative
+   * cost from the warehouse so it is INDEPENDENT of the caller's permission.
+   *
+   * Returns a map productId → cost_price for EVERY referenced warehouse
+   * product, INCLUDING those whose cost is 0. Unlike sell (where 0 means "no
+   * warehouse price, keep the client value") a genuine 0-cost product is a
+   * legitimate value we must honour, so callers use `map[id] ?? clientCost`
+   * (nullish) — a present key of 0 wins, an absent key (ad-hoc line / product
+   * not found) falls back to the client-sent cost.
+   */
+  private async loadWarehouseCostPrices(
+    client: PoolClient,
+    tenantID: string,
+    productIds: string[],
+  ): Promise<Record<string, number>> {
+    const map: Record<string, number> = {};
+    if (productIds.length === 0) return map;
+    const { rows } = await client.query(`SELECT id, cost_price FROM products WHERE id = ANY($1) AND tenant_id = $2`, [
+      productIds,
+      tenantID,
+    ]);
+    for (const r of rows) {
+      const cost = parseFloat(r.cost_price);
+      map[r.id] = Number.isFinite(cost) && cost > 0 ? cost : 0;
+    }
+    return map;
+  }
+
   private mapCheck(row: any) {
     return {
       id: row.id,
@@ -1482,18 +1518,27 @@ export class ChecksService {
 
       // Product price lock: warehouse sell_price is authoritative (see helper).
       const warehouseSellMap = await this.loadWarehouseSellPrices(client, tenantID, referencedProductIds);
+      // Product cost lock (round-11 #10): warehouse cost_price is authoritative
+      // too, so a master (no warehouse_manage → client cost is 0) can no longer
+      // store a zero cost and inflate profit.
+      const warehouseCostMap = await this.loadWarehouseCostPrices(client, tenantID, referencedProductIds);
 
       for (const prod of products) {
         // Lock the SELL price to the current warehouse value when the product is
         // a warehouse item with a positive price; otherwise keep the client price
-        // (ad-hoc line / product with no warehouse price). The cost price is left
-        // exactly as today — only the sell price is locked.
+        // (ad-hoc line / product with no warehouse price).
         const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
         const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
+        // Lock the COST to the warehouse value for warehouse products (nullish:
+        // a present cost of 0 is a genuine value and wins). Ad-hoc lines with no
+        // productId keep the client-sent cost.
+        const effectiveCostPrice = prod.productId
+          ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
+          : prod.costPrice || 0;
         // Money precision (item 6): per-line sell/cost are real 2-decimal
         // amounts, so Σ(lines) matches the stored totals cent-for-cent.
         const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
-        const totalCost = round2((prod.costPrice || 0) * (prod.quantity || 1));
+        const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
         const productProfit = totalSell - totalCost;
         productTotal += totalSell;
         productCostTotal += totalCost;
@@ -1506,7 +1551,13 @@ export class ChecksService {
           productSalaryTotal += round2((productProfit * pct) / 100);
         }
 
-        productLines.push({ ...prod, sellPrice: effectiveSellPrice, totalSell, totalCost });
+        productLines.push({
+          ...prod,
+          sellPrice: effectiveSellPrice,
+          costPrice: effectiveCostPrice,
+          totalSell,
+          totalCost,
+        });
       }
 
       // Normalise the accumulated sums once before deriving totals (item 6):
@@ -2397,14 +2448,19 @@ export class ChecksService {
 
       // Product price lock (same rule as create): warehouse sell_price wins.
       const warehouseSellMap = await this.loadWarehouseSellPrices(client, tenantID, referencedProductIds);
+      // Product cost lock (round-11 #10): warehouse cost_price wins too.
+      const warehouseCostMap = await this.loadWarehouseCostPrices(client, tenantID, referencedProductIds);
 
       for (const prod of products) {
         const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
         const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
+        const effectiveCostPrice = prod.productId
+          ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
+          : prod.costPrice || 0;
         // Money precision (item 6): per-line sell/cost are real 2-decimal
         // amounts, so Σ(lines) matches the stored totals cent-for-cent.
         const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
-        const totalCost = round2((prod.costPrice || 0) * (prod.quantity || 1));
+        const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
         const productProfit = totalSell - totalCost;
         productTotal += totalSell;
         productCostTotal += totalCost;
@@ -2416,7 +2472,13 @@ export class ChecksService {
           productSalaryTotal += round2((productProfit * pct) / 100);
         }
 
-        productLines.push({ ...prod, sellPrice: effectiveSellPrice, totalSell, totalCost });
+        productLines.push({
+          ...prod,
+          sellPrice: effectiveSellPrice,
+          costPrice: effectiveCostPrice,
+          totalSell,
+          totalCost,
+        });
       }
 
       // Normalise the accumulated sums once before deriving totals (item 6) —
@@ -2731,19 +2793,30 @@ export class ChecksService {
     }
 
     const warehouseSellMap = await this.loadWarehouseSellPrices(client, tenantID, referencedProductIds);
+    // Product cost lock (round-11 #10): warehouse cost_price wins too.
+    const warehouseCostMap = await this.loadWarehouseCostPrices(client, tenantID, referencedProductIds);
 
     for (const prod of products) {
       const lockedSell = prod.productId ? warehouseSellMap[prod.productId] : undefined;
       const effectiveSellPrice = lockedSell !== undefined ? lockedSell : prod.sellPrice || 0;
+      const effectiveCostPrice = prod.productId
+        ? (warehouseCostMap[prod.productId] ?? (prod.costPrice || 0))
+        : prod.costPrice || 0;
       // Money precision (item 6) — same round2 discipline as create/fullUpdate.
       const totalSell = round2(effectiveSellPrice * (prod.quantity || 1));
-      const totalCost = round2((prod.costPrice || 0) * (prod.quantity || 1));
+      const totalCost = round2(effectiveCostPrice * (prod.quantity || 1));
       const productProfit = totalSell - totalCost;
       productTotal += totalSell;
       productCostTotal += totalCost;
       const pct = productCommissionMap[prod.productId] ?? globalProductPct;
       if (pct > 0 && productProfit > 0) productSalaryTotal += round2((productProfit * pct) / 100);
-      productLines.push({ ...prod, sellPrice: effectiveSellPrice, totalSell, totalCost });
+      productLines.push({
+        ...prod,
+        sellPrice: effectiveSellPrice,
+        costPrice: effectiveCostPrice,
+        totalSell,
+        totalCost,
+      });
     }
 
     // Normalise the accumulated sums once before deriving totals (item 6) —
