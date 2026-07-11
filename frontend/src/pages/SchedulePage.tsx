@@ -41,7 +41,7 @@ import { ScheduleEntry, TodayEmployeeStatus, User } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
-import LoadingSpinner from '../components/LoadingSpinner';
+import InlineLoader from '../components/InlineLoader';
 import EmptyState from '../components/EmptyState';
 
 type TabType = 'schedule' | 'today' | 'mystats' | 'attendance' | 'settings';
@@ -49,8 +49,16 @@ type TabType = 'schedule' | 'today' | 'mystats' | 'attendance' | 'settings';
 // Correct Russian day abbreviations (date-fns 'EE' locale gives wrong 2-char prefix for Сб)
 const DAY_ABBR = ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'];
 
-function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
-  entries: ScheduleEntry[]; users: User[]; dateFrom: string; dateTo: string;
+function AttendanceRatingTab({
+  entries,
+  users,
+  dateFrom,
+  dateTo,
+}: {
+  entries: ScheduleEntry[];
+  users: User[];
+  dateFrom: string;
+  dateTo: string;
 }) {
   const [selectedMonth, setSelectedMonth] = useState(() => {
     const now = new Date();
@@ -68,7 +76,10 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
 
   const { data: monthEntries } = useQuery<ScheduleEntry[]>({
     queryKey: ['schedule', monthStart, monthEnd],
-    queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd }); return res.data as ScheduleEntry[]; },
+    queryFn: async () => {
+      const res = await scheduleApi.getAll({ dateFrom: monthStart, dateTo: monthEnd });
+      return res.data as ScheduleEntry[];
+    },
   });
 
   const allEntries = monthEntries ?? entries;
@@ -81,11 +92,13 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
 
   // Rank users by attendance score
   const ranked = useMemo(() => {
-    return users.map(u => {
-      const s = stats[u.id] || emptyBreakdown();
-      const score = attendanceScore(s);
-      return { ...u, stats: s, score };
-    }).sort((a, b) => b.score - a.score || b.stats.full - a.stats.full);
+    return users
+      .map((u) => {
+        const s = stats[u.id] || emptyBreakdown();
+        const score = attendanceScore(s);
+        return { ...u, stats: s, score };
+      })
+      .sort((a, b) => b.score - a.score || b.stats.full - a.stats.full);
   }, [users, stats]);
 
   const shiftMonth = (dir: number) => {
@@ -103,9 +116,17 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
     <div className="space-y-4">
       {/* Month picker */}
       <div className="flex items-center justify-center gap-3">
-        <button onClick={() => shiftMonth(-1)} className="p-2 rounded-lg hover:bg-gray-100"><ChevronLeft className="h-5 w-5 text-gray-500" /></button>
+        <button
+          aria-label="Предыдущий месяц"
+          onClick={() => shiftMonth(-1)}
+          className="p-2 rounded-lg hover:bg-gray-100"
+        >
+          <ChevronLeft className="h-5 w-5 text-gray-500" />
+        </button>
         <span className="text-sm font-bold text-gray-900 capitalize min-w-[150px] text-center">{monthLabel}</span>
-        <button onClick={() => shiftMonth(1)} className="p-2 rounded-lg hover:bg-gray-100"><ChevronRight className="h-5 w-5 text-gray-500" /></button>
+        <button aria-label="Следующий месяц" onClick={() => shiftMonth(1)} className="p-2 rounded-lg hover:bg-gray-100">
+          <ChevronRight className="h-5 w-5 text-gray-500" />
+        </button>
       </div>
 
       {/* Ranking */}
@@ -122,7 +143,10 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
             return `${parseInt(day)}.${m}`;
           };
           return (
-            <div key={u.id} className={`bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden ${idx < 3 ? 'ring-1 ring-amber-200' : ''}`}>
+            <div
+              key={u.id}
+              className={`bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden ${idx < 3 ? 'ring-1 ring-amber-200' : ''}`}
+            >
               <button
                 type="button"
                 onClick={() => setExpandedUserId(isExpanded ? null : u.id)}
@@ -130,9 +154,17 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
               >
                 <div className="flex items-center gap-3">
                   {/* Rank */}
-                  <div className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
-                    idx === 0 ? 'bg-amber-100 text-amber-700' : idx === 1 ? 'bg-gray-200 text-gray-700' : idx === 2 ? 'bg-orange-100 text-orange-700' : 'bg-gray-50 text-gray-400'
-                  }`}>
+                  <div
+                    className={`flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                      idx === 0
+                        ? 'bg-amber-100 text-amber-700'
+                        : idx === 1
+                          ? 'bg-gray-200 text-gray-700'
+                          : idx === 2
+                            ? 'bg-orange-100 text-orange-700'
+                            : 'bg-gray-50 text-gray-400'
+                    }`}
+                  >
                     {medal || idx + 1}
                   </div>
 
@@ -140,11 +172,29 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-gray-900 truncate">{u.fullName}</p>
                     <div className="flex items-center gap-2 mt-1 flex-wrap">
-                      <span className="text-[10px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full font-medium">✅ {s.full}</span>
-                      {s.lateMinor > 0 && <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-full font-medium">⏰ {s.lateMinor}</span>}
-                      {s.lateMajor > 0 && <span className="text-[10px] bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">⚠️ {s.lateMajor}</span>}
-                      {s.absent > 0 && <span className="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full font-medium">❌ {s.absent}</span>}
-                      {s.sick > 0 && <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded-full font-medium">🏥 {s.sick}</span>}
+                      <span className="text-[10px] bg-green-50 text-green-700 px-1.5 py-0.5 rounded-full font-medium">
+                        ✅ {s.full}
+                      </span>
+                      {s.lateMinor > 0 && (
+                        <span className="text-[10px] bg-yellow-50 text-yellow-700 px-1.5 py-0.5 rounded-full font-medium">
+                          ⏰ {s.lateMinor}
+                        </span>
+                      )}
+                      {s.lateMajor > 0 && (
+                        <span className="text-[10px] bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded-full font-medium">
+                          ⚠️ {s.lateMajor}
+                        </span>
+                      )}
+                      {s.absent > 0 && (
+                        <span className="text-[10px] bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full font-medium">
+                          ❌ {s.absent}
+                        </span>
+                      )}
+                      {s.sick > 0 && (
+                        <span className="text-[10px] bg-rose-50 text-rose-700 px-1.5 py-0.5 rounded-full font-medium">
+                          🏥 {s.sick}
+                        </span>
+                      )}
                     </div>
                   </div>
 
@@ -153,16 +203,28 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
                     <p className={`text-lg font-bold ${scoreColor}`}>{u.score}%</p>
                     <p className="text-[9px] text-gray-400">посещ.</p>
                   </div>
-                  {isExpanded ? <ChevronUp className="h-4 w-4 text-gray-400 flex-shrink-0" /> : <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0" />}
+                  {isExpanded ? (
+                    <ChevronUp className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4 text-gray-400 flex-shrink-0" />
+                  )}
                 </div>
 
                 {/* Progress bar */}
                 {s.total > 0 && (
                   <div className="mt-3 h-2 bg-gray-100 rounded-full overflow-hidden flex">
-                    {s.full > 0 && <div className="bg-green-500 h-full" style={{ width: `${(s.full / s.total) * 100}%` }} />}
-                    {s.lateMinor > 0 && <div className="bg-yellow-400 h-full" style={{ width: `${(s.lateMinor / s.total) * 100}%` }} />}
-                    {s.lateMajor > 0 && <div className="bg-orange-500 h-full" style={{ width: `${(s.lateMajor / s.total) * 100}%` }} />}
-                    {s.absent > 0 && <div className="bg-red-500 h-full" style={{ width: `${(s.absent / s.total) * 100}%` }} />}
+                    {s.full > 0 && (
+                      <div className="bg-green-500 h-full" style={{ width: `${(s.full / s.total) * 100}%` }} />
+                    )}
+                    {s.lateMinor > 0 && (
+                      <div className="bg-yellow-400 h-full" style={{ width: `${(s.lateMinor / s.total) * 100}%` }} />
+                    )}
+                    {s.lateMajor > 0 && (
+                      <div className="bg-orange-500 h-full" style={{ width: `${(s.lateMajor / s.total) * 100}%` }} />
+                    )}
+                    {s.absent > 0 && (
+                      <div className="bg-red-500 h-full" style={{ width: `${(s.absent / s.total) * 100}%` }} />
+                    )}
                   </div>
                 )}
               </button>
@@ -222,10 +284,7 @@ function AttendanceRatingTab({ entries, users, dateFrom, dateTo }: {
 export default function SchedulePage() {
   const queryClient = useQueryClient();
   const { user: authUser } = useAuth();
-  const canEdit =
-    authUser?.role === 'director' ||
-    authUser?.role === 'superadmin' ||
-    authUser?.role === 'admin';
+  const canEdit = authUser?.role === 'director' || authUser?.role === 'superadmin' || authUser?.role === 'admin';
 
   const [tab, setTab] = useState<TabType>('schedule');
 
@@ -252,10 +311,14 @@ export default function SchedulePage() {
 
   // Local pending changes — applied in batch via "Apply" button
   // Key format: `${userId}-${date}`
-  const [pendingChanges, setPendingChanges] = useState<Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>>({});
+  const [pendingChanges, setPendingChanges] = useState<
+    Record<string, { userId: string; date: string; payload: any; existingEntryId?: string }>
+  >({});
 
   // Master reorder dialog
-  const [reorderDialog, setReorderDialog] = useState<{ userId: string; name: string; currentIndex: number } | null>(null);
+  const [reorderDialog, setReorderDialog] = useState<{ userId: string; name: string; currentIndex: number } | null>(
+    null,
+  );
 
   const [entryForm, setEntryForm] = useState({
     userId: '',
@@ -271,30 +334,41 @@ export default function SchedulePage() {
   const [settingsTab, setSettingsTab] = useState<'service' | 'masters'>('service');
 
   // Queries — queryFn returns plain data (NOT AxiosResponse) so setQueryData works
-  const { data: scheduleData, isLoading: scheduleLoading, refetch: refetchSchedule } = useQuery({
+  const {
+    data: scheduleData,
+    isLoading: scheduleLoading,
+    refetch: refetchSchedule,
+  } = useQuery({
     queryKey: ['schedule', dateFrom, dateTo],
-    queryFn: async () => { const res = await scheduleApi.getAll({ dateFrom, dateTo }); return res.data as ScheduleEntry[]; },
+    queryFn: async () => {
+      const res = await scheduleApi.getAll({ dateFrom, dateTo });
+      return res.data as ScheduleEntry[];
+    },
   });
 
   const { data: todayData, isLoading: todayLoading } = useQuery({
     queryKey: ['schedule-today'],
-    queryFn: async () => { const res = await scheduleApi.getToday(); return res.data as TodayEmployeeStatus[]; },
+    queryFn: async () => {
+      const res = await scheduleApi.getToday();
+      return res.data as TodayEmployeeStatus[];
+    },
     enabled: tab === 'today',
   });
 
   const { data: myStatsData } = useQuery({
     queryKey: ['my-schedule-stats'],
     queryFn: () => scheduleApi.getMyStats(),
-    select: (res) => res.data as {
-      totalScheduled: number;
-      totalWorked: number;
-      totalLate: number;
-      totalLateMinor: number;
-      totalLateMajor: number;
-      totalOnTime: number;
-      totalDaysOff: number;
-      avgLateMinutes: number;
-    },
+    select: (res) =>
+      res.data as {
+        totalScheduled: number;
+        totalWorked: number;
+        totalLate: number;
+        totalLateMinor: number;
+        totalLateMajor: number;
+        totalOnTime: number;
+        totalDaysOff: number;
+        avgLateMinutes: number;
+      },
     enabled: tab === 'mystats',
   });
 
@@ -331,13 +405,16 @@ export default function SchedulePage() {
       map[uid][d] = entry;
     });
     // Overlay pending changes
-    Object.values(pendingChanges).forEach(c => {
+    Object.values(pendingChanges).forEach((c) => {
       if (!c?.userId || !c?.date) return;
       const uid = c.userId;
       const d = String(c.date).slice(0, 10);
       if (!map[uid]) map[uid] = {};
       const existing = map[uid][d];
-      map[uid][d] = { ...(existing || { id: `pending-${uid}-${d}`, tenantId: '', userId: uid, date: c.date, isManualOverride: true }), ...c.payload } as ScheduleEntry;
+      map[uid][d] = {
+        ...(existing || { id: `pending-${uid}-${d}`, tenantId: '', userId: uid, date: c.date, isManualOverride: true }),
+        ...c.payload,
+      } as ScheduleEntry;
     });
     return map;
   }, [entries, pendingChanges]);
@@ -351,22 +428,26 @@ export default function SchedulePage() {
       queryClient.setQueryData<any>(['users'], (old: any) => {
         if (!old?.data) return old;
         const byId = new Map(old.data.map((u: any) => [u.id, u]));
-        const reordered = orderedIds.map((id, i) => {
-          const u = byId.get(id);
-          return u ? { ...u, sortOrder: i } : null;
-        }).filter(Boolean);
+        const reordered = orderedIds
+          .map((id, i) => {
+            const u = byId.get(id);
+            return u ? { ...u, sortOrder: i } : null;
+          })
+          .filter(Boolean);
         // Add any users not in orderedIds (new users)
         const remaining = old.data.filter((u: any) => !orderedIds.includes(u.id));
         return { ...old, data: [...reordered, ...remaining] };
       });
       return prev;
     },
-    onError: (_e, _v, ctx) => { if (ctx) queryClient.setQueryData(['users'], ctx); },
+    onError: (_e, _v, ctx) => {
+      if (ctx) queryClient.setQueryData(['users'], ctx);
+    },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
 
   const moveMaster = (userId: string, direction: 'up' | 'down') => {
-    const current = scheduleUsers.map(u => u.id);
+    const current = scheduleUsers.map((u) => u.id);
     const idx = current.indexOf(userId);
     if (idx < 0) return;
     const newIdx = direction === 'up' ? Math.max(0, idx - 1) : Math.min(current.length - 1, idx + 1);
@@ -377,10 +458,10 @@ export default function SchedulePage() {
   };
 
   const moveMasterToPosition = (userId: string, newPos: number) => {
-    const current = scheduleUsers.map(u => u.id);
+    const current = scheduleUsers.map((u) => u.id);
     const idx = current.indexOf(userId);
     if (idx < 0 || idx === newPos) return;
-    const reordered = current.filter(id => id !== userId);
+    const reordered = current.filter((id) => id !== userId);
     reordered.splice(newPos, 0, userId);
     updateOrderMutation.mutate(reordered);
     setReorderDialog(null);
@@ -390,8 +471,8 @@ export default function SchedulePage() {
   const scheduleUsers = useMemo(() => {
     // Include masters AND admins — both work on shifts and appear in schedule.
     // Exclude only director/superadmin (management, not shift workers).
-    const activeUsers = users.filter(u => u.isActive && (u.role === 'master' || u.role === 'admin'));
-    const activeIds = new Set(activeUsers.map(u => u.id));
+    const activeUsers = users.filter((u) => u.isActive && (u.role === 'master' || u.role === 'admin'));
+    const activeIds = new Set(activeUsers.map((u) => u.id));
 
     entries.forEach((e) => {
       if (e.user && !activeIds.has(e.userId)) {
@@ -421,9 +502,25 @@ export default function SchedulePage() {
     queryClient.setQueryData<ScheduleEntry[]>(scheduleQueryKey, (old) => {
       if (!old) return old;
       if (isNew) {
-        return [...old, { id: `t-${Date.now()}`, tenantId: '', userId, date, shiftStart: '09:00', shiftEnd: '18:00', isDayOff: false, lateMinutes: 0, isManualOverride: false, ...changes } as ScheduleEntry];
+        return [
+          ...old,
+          {
+            id: `t-${Date.now()}`,
+            tenantId: '',
+            userId,
+            date,
+            shiftStart: '09:00',
+            shiftEnd: '18:00',
+            isDayOff: false,
+            lateMinutes: 0,
+            isManualOverride: false,
+            ...changes,
+          } as ScheduleEntry,
+        ];
       }
-      return old.map(e => (e.userId === userId && String(e.date || '').slice(0, 10) === date) ? { ...e, ...changes } : e);
+      return old.map((e) =>
+        e.userId === userId && String(e.date || '').slice(0, 10) === date ? { ...e, ...changes } : e,
+      );
     });
   };
 
@@ -431,19 +528,31 @@ export default function SchedulePage() {
     mutationFn: (data: any) => scheduleApi.create(data),
     onSuccess: () => {
       // Delayed refetch — let server process first, patched cache is already showing
-      setTimeout(() => { refetchSchedule(); queryClient.invalidateQueries({ queryKey: ['schedule-today'] }); }, 1500);
+      setTimeout(() => {
+        refetchSchedule();
+        queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      }, 1500);
       closeModal();
     },
-    onError: () => { refetchSchedule(); toast.error('Ошибка'); },
+    onError: () => {
+      refetchSchedule();
+      toast.error('Ошибка');
+    },
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: any }) => scheduleApi.update(id, data),
     onSuccess: () => {
-      setTimeout(() => { refetchSchedule(); queryClient.invalidateQueries({ queryKey: ['schedule-today'] }); }, 1500);
+      setTimeout(() => {
+        refetchSchedule();
+        queryClient.invalidateQueries({ queryKey: ['schedule-today'] });
+      }, 1500);
       closeModal();
     },
-    onError: () => { refetchSchedule(); toast.error('Ошибка'); },
+    onError: () => {
+      refetchSchedule();
+      toast.error('Ошибка');
+    },
   });
 
   const deleteMutation = useMutation({
@@ -566,7 +675,14 @@ export default function SchedulePage() {
 
     const isDayOff = status === 'dayoff' || status === 'sick';
     const note = status === 'sick' ? 'Больничный' : status === 'absent' ? 'Прогул' : '';
-    const lateStatus = status === 'late_minor' ? 'late_minor' : status === 'late_major' ? 'late_major' : status === 'shift' ? 'on_time' : undefined;
+    const lateStatus =
+      status === 'late_minor'
+        ? 'late_minor'
+        : status === 'late_major'
+          ? 'late_major'
+          : status === 'shift'
+            ? 'on_time'
+            : undefined;
     const lateMinutes = status === 'late_minor' ? 15 : status === 'late_major' ? 60 : 0;
 
     // When admin marks "arrived on time" or "late", pin actualArrival to the
@@ -580,16 +696,19 @@ export default function SchedulePage() {
       return dt.toISOString();
     };
     const actualArrival =
-      status === 'shift'       ? arrivalForDate(0) :
-      status === 'late_minor'  ? arrivalForDate(15) :
-      status === 'late_major'  ? arrivalForDate(60) :
-      undefined;
+      status === 'shift'
+        ? arrivalForDate(0)
+        : status === 'late_minor'
+          ? arrivalForDate(15)
+          : status === 'late_major'
+            ? arrivalForDate(60)
+            : undefined;
 
     const payload: any = {
       userId,
       date,
       shiftStart: isDayOff ? null : shiftStartStr,
-      shiftEnd: isDayOff ? null : (entry?.shiftEnd || '18:00'),
+      shiftEnd: isDayOff ? null : entry?.shiftEnd || '18:00',
       isDayOff,
       note: note || '',
       lateStatus: lateStatus || null,
@@ -605,7 +724,7 @@ export default function SchedulePage() {
     // Save to pending changes — NOT sent to server until "Apply" clicked
     const key = `${userId}-${date}`;
     flushSync(() => {
-      setPendingChanges(prev => ({
+      setPendingChanges((prev) => ({
         ...prev,
         [key]: { userId, date, payload, existingEntryId: entry?.id },
       }));
@@ -693,16 +812,40 @@ export default function SchedulePage() {
   // Today tab helpers
   const getStatusBadge = (status: TodayEmployeeStatus) => {
     if (status.isDayOff)
-      return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-900 text-white">Выходной</span>;
+      return (
+        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-900 text-white">
+          Выходной
+        </span>
+      );
     if (!status.hasSchedule)
-      return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500">Нет расписания</span>;
+      return (
+        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-gray-100 text-gray-500">
+          Нет расписания
+        </span>
+      );
     if (status.lateStatus === 'late_major')
-      return <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700">Опоздание &gt;1ч</span>;
+      return (
+        <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700">
+          Опоздание &gt;1ч
+        </span>
+      );
     if (status.lateStatus === 'late_minor')
-      return <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700">Опоздание &lt;1ч</span>;
+      return (
+        <span className="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-yellow-100 text-yellow-700">
+          Опоздание &lt;1ч
+        </span>
+      );
     if (status.isWorking)
-      return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700">На смене</span>;
-    return <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700">Прогул</span>;
+      return (
+        <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700">
+          На смене
+        </span>
+      );
+    return (
+      <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700">
+        Прогул
+      </span>
+    );
   };
 
   const getStatusIcon = (status: TodayEmployeeStatus) => {
@@ -739,10 +882,16 @@ export default function SchedulePage() {
             </span>
           </div>
           <div className="flex gap-2">
-            <button onClick={discardPendingChanges} className="text-xs font-medium text-gray-500 hover:text-gray-700 px-2 py-1">
+            <button
+              onClick={discardPendingChanges}
+              className="text-xs font-medium text-gray-500 hover:text-gray-700 px-2 py-1"
+            >
               Отмена
             </button>
-            <button onClick={applyPendingChanges} className="text-xs font-bold bg-amber-600 text-white px-3 py-1.5 rounded-lg hover:bg-amber-700">
+            <button
+              onClick={applyPendingChanges}
+              className="text-xs font-bold bg-amber-600 text-white px-3 py-1.5 rounded-lg hover:bg-amber-700"
+            >
               Применить
             </button>
           </div>
@@ -751,13 +900,15 @@ export default function SchedulePage() {
 
       {/* Tabs — icon-first on mobile, icon+label on desktop */}
       <div className="mb-5 bg-gray-100 rounded-2xl p-1 flex items-center gap-0.5">
-        {([
-          { key: 'schedule', label: 'График', icon: CalendarDays },
-          { key: 'today', label: 'Сегодня', icon: Clock },
-          { key: 'mystats', label: 'Смены', icon: Users },
-          { key: 'attendance', label: 'Рейтинг', icon: BarChart3 },
-          ...(canEdit ? [{ key: 'settings' as const, label: 'Настр.', icon: Settings }] : []),
-        ] as const).map(t => {
+        {(
+          [
+            { key: 'schedule', label: 'График', icon: CalendarDays },
+            { key: 'today', label: 'Сегодня', icon: Clock },
+            { key: 'mystats', label: 'Смены', icon: Users },
+            { key: 'attendance', label: 'Рейтинг', icon: BarChart3 },
+            ...(canEdit ? [{ key: 'settings' as const, label: 'Настр.', icon: Settings }] : []),
+          ] as const
+        ).map((t) => {
           const Icon = t.icon;
           const active = tab === (t.key as TabType);
           return (
@@ -783,6 +934,7 @@ export default function SchedulePage() {
             <div className="bg-gradient-to-r from-blue-600 to-indigo-600 px-4 py-3">
               <div className="flex items-center justify-between">
                 <button
+                  aria-label="Предыдущий месяц"
                   onClick={goToPrevMonth}
                   className="p-2 rounded-xl bg-white/20 hover:bg-white/30 text-white transition-all duration-200 active:scale-95"
                 >
@@ -802,6 +954,7 @@ export default function SchedulePage() {
                   )}
                 </div>
                 <button
+                  aria-label="Следующий месяц"
                   onClick={goToNextMonth}
                   className="p-2 rounded-xl bg-white/20 hover:bg-white/30 text-white transition-all duration-200 active:scale-95"
                 >
@@ -814,33 +967,47 @@ export default function SchedulePage() {
             <div className="px-4 py-2.5 border-b border-gray-100 bg-gray-50/50">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-gray-500">
                 <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-green-50 border border-green-200 flex items-center justify-center text-[10px]">✓</span>
+                  <span className="w-5 h-5 rounded bg-green-50 border border-green-200 flex items-center justify-center text-[10px]">
+                    ✓
+                  </span>
                   Смена
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-gray-800 border border-gray-700 flex items-center justify-center text-[10px]">🌙</span>
+                  <span className="w-5 h-5 rounded bg-gray-800 border border-gray-700 flex items-center justify-center text-[10px]">
+                    🌙
+                  </span>
                   Вых
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-rose-50 border border-rose-200 flex items-center justify-center text-[10px]">🏥</span>
+                  <span className="w-5 h-5 rounded bg-rose-50 border border-rose-200 flex items-center justify-center text-[10px]">
+                    🏥
+                  </span>
                   Б/Л
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-yellow-50 border border-yellow-300 flex items-center justify-center text-[10px]">⏰</span>
+                  <span className="w-5 h-5 rounded bg-yellow-50 border border-yellow-300 flex items-center justify-center text-[10px]">
+                    ⏰
+                  </span>
                   &lt;1ч
                 </span>
                 <span className="flex items-center gap-1">
-                  <span className="w-5 h-5 rounded bg-orange-50 border border-orange-300 flex items-center justify-center text-[10px]">⚠️</span>
+                  <span className="w-5 h-5 rounded bg-orange-50 border border-orange-300 flex items-center justify-center text-[10px]">
+                    ⚠️
+                  </span>
                   &gt;1ч
                 </span>
               </div>
             </div>
 
             {scheduleLoading ? (
-              <div className="py-16"><LoadingSpinner /></div>
+              <InlineLoader />
             ) : scheduleUsers.length === 0 ? (
               <div className="py-16">
-                <EmptyState icon={Users} title="Нет сотрудников" description="Добавьте сотрудников для составления расписания" />
+                <EmptyState
+                  icon={Users}
+                  title="Нет сотрудников"
+                  description="Добавьте сотрудников для составления расписания"
+                />
               </div>
             ) : (
               /* Grid Table — horizontal scroll on mobile */
@@ -858,14 +1025,18 @@ export default function SchedulePage() {
                         key={u.id}
                         role="button"
                         tabIndex={0}
-                        onClick={() => canEdit && setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })}
-                        onKeyDown={(e) => e.key === 'Enter' && canEdit && setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })}
+                        onClick={() =>
+                          canEdit && setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })
+                        }
+                        onKeyDown={(e) =>
+                          e.key === 'Enter' &&
+                          canEdit &&
+                          setReorderDialog({ userId: u.id, name: u.fullName, currentIndex: idx })
+                        }
                         className="h-12 min-h-[48px] max-h-[48px] border-b border-gray-50 px-3 flex items-center gap-2 text-left hover:bg-gray-50 active:bg-gray-100 transition-colors cursor-pointer"
                       >
                         <span className="text-[10px] font-bold text-gray-300 w-5 flex-shrink-0">{idx + 1}</span>
-                        <span className="text-xs font-medium text-gray-800 truncate flex-1">
-                          {u.fullName}
-                        </span>
+                        <span className="text-xs font-medium text-gray-800 truncate flex-1">{u.fullName}</span>
                       </div>
                     ))}
                   </div>
@@ -886,12 +1057,16 @@ export default function SchedulePage() {
                                 isTodayDate ? 'bg-blue-100' : isWeekend ? 'bg-red-50/50' : ''
                               }`}
                             >
-                              <span className={`text-[9px] font-medium ${isWeekend ? 'text-red-400' : 'text-gray-400'}`}>
+                              <span
+                                className={`text-[9px] font-medium ${isWeekend ? 'text-red-400' : 'text-gray-400'}`}
+                              >
                                 {DAY_ABBR[getDay(day)]}
                               </span>
-                              <span className={`text-xs font-bold ${
-                                isTodayDate ? 'text-blue-600' : isWeekend ? 'text-red-500' : 'text-gray-700'
-                              }`}>
+                              <span
+                                className={`text-xs font-bold ${
+                                  isTodayDate ? 'text-blue-600' : isWeekend ? 'text-red-500' : 'text-gray-700'
+                                }`}
+                              >
                                 {format(day, 'd')}
                               </span>
                             </div>
@@ -910,17 +1085,39 @@ export default function SchedulePage() {
                             const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
                             const isTodayDate = isToday(day);
 
+                            const openCell = () => {
+                              if (canEdit) setQuickPopup({ userId: u.id, date: dateStr, entry });
+                            };
                             return (
                               <div
                                 key={dateStr}
-                                onClick={() => { if (canEdit) setQuickPopup({ userId: u.id, date: dateStr, entry }); }}
+                                {...(canEdit
+                                  ? {
+                                      role: 'button' as const,
+                                      tabIndex: 0,
+                                      'aria-label': `${u.fullName}, ${format(day, 'd MMMM', { locale: ru })}`,
+                                      onKeyDown: (e: React.KeyboardEvent) => {
+                                        if (e.key === 'Enter' || e.key === ' ') {
+                                          e.preventDefault();
+                                          openCell();
+                                        }
+                                      },
+                                    }
+                                  : {})}
+                                onClick={openCell}
                                 className={`w-11 flex-shrink-0 h-12 flex items-center justify-center border-r border-gray-50 last:border-r-0 transition-colors ${
                                   canEdit ? 'cursor-pointer hover:bg-blue-50/50' : ''
                                 } ${isTodayDate ? 'bg-blue-50/40' : isWeekend ? 'bg-red-50/20' : ''}`}
                               >
                                 {cellData ? (
-                                  <div className={`w-8 h-8 rounded-lg ${cellData.bgColor} border ${cellData.borderColor} flex items-center justify-center`}>
-                                    <span className={`${/^[\d:]+$/.test(cellData.label) ? 'text-[10px] font-bold' : 'text-[15px] leading-none'} ${cellData.textColor}`}>{cellData.label}</span>
+                                  <div
+                                    className={`w-8 h-8 rounded-lg ${cellData.bgColor} border ${cellData.borderColor} flex items-center justify-center`}
+                                  >
+                                    <span
+                                      className={`${/^[\d:]+$/.test(cellData.label) ? 'text-[10px] font-bold' : 'text-[15px] leading-none'} ${cellData.textColor}`}
+                                    >
+                                      {cellData.label}
+                                    </span>
                                   </div>
                                 ) : !isWeekend ? (
                                   <div className="w-8 h-8 rounded-lg bg-green-50/50 border border-green-100 flex items-center justify-center">
@@ -945,7 +1142,7 @@ export default function SchedulePage() {
       {tab === 'today' && (
         <div>
           {todayLoading ? (
-            <LoadingSpinner />
+            <InlineLoader />
           ) : todayStatuses.length === 0 ? (
             <EmptyState
               icon={CalendarDays}
@@ -962,9 +1159,7 @@ export default function SchedulePage() {
                   <div className="flex-shrink-0">{getStatusIcon(status)}</div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium text-gray-900">
-                        {status.fullName}
-                      </span>
+                      <span className="font-medium text-gray-900">{status.fullName}</span>
                       {getStatusBadge(status)}
                     </div>
                     {!status.isDayOff && status.hasSchedule && (
@@ -976,9 +1171,7 @@ export default function SchedulePage() {
                           <span className="ml-3 text-red-600">Опоздание: {status.lateMinutes} мин.</span>
                         )}
                         {status.actualArrival && (
-                          <span className="ml-3 text-gray-400">
-                            Пришёл: {status.actualArrival.slice(0, 5)}
-                          </span>
+                          <span className="ml-3 text-gray-400">Пришёл: {status.actualArrival.slice(0, 5)}</span>
                         )}
                       </div>
                     )}
@@ -1036,7 +1229,7 @@ export default function SchedulePage() {
               </div>
             </div>
           ) : (
-            <LoadingSpinner />
+            <InlineLoader />
           )}
         </div>
       )}
@@ -1045,7 +1238,10 @@ export default function SchedulePage() {
       {reorderDialog && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setReorderDialog(null)}>
           <div className="absolute inset-0 bg-black/30" />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xs max-h-[70vh] flex flex-col" onClick={e => e.stopPropagation()}>
+          <div
+            className="relative bg-white rounded-2xl shadow-2xl w-full max-w-xs max-h-[70vh] flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-4 pt-4 pb-2 border-b border-gray-100">
               <p className="text-sm font-bold text-gray-900 text-center">Позиция мастера</p>
               <p className="text-xs text-gray-400 text-center truncate">{reorderDialog.name}</p>
@@ -1056,7 +1252,9 @@ export default function SchedulePage() {
                   key={idx}
                   onClick={() => moveMasterToPosition(reorderDialog.userId, idx)}
                   className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm text-left transition-colors ${
-                    idx === reorderDialog.currentIndex ? 'bg-primary-50 text-primary-700 font-semibold' : 'text-gray-700 hover:bg-gray-50'
+                    idx === reorderDialog.currentIndex
+                      ? 'bg-primary-50 text-primary-700 font-semibold'
+                      : 'text-gray-700 hover:bg-gray-50'
                   }`}
                 >
                   <span className="w-6 text-[11px] font-bold text-gray-400">{idx + 1}</span>
@@ -1066,7 +1264,10 @@ export default function SchedulePage() {
                 </button>
               ))}
             </div>
-            <button onClick={() => setReorderDialog(null)} className="w-full text-center py-3 text-xs font-medium text-gray-500 border-t border-gray-100">
+            <button
+              onClick={() => setReorderDialog(null)}
+              className="w-full text-center py-3 text-xs font-medium text-gray-500 border-t border-gray-100"
+            >
               Отмена
             </button>
           </div>
@@ -1077,10 +1278,13 @@ export default function SchedulePage() {
       {quickPopup && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4" onClick={() => setQuickPopup(null)}>
           <div className="absolute inset-0 bg-black/30" />
-          <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[280px]" onClick={e => e.stopPropagation()}>
+          <div
+            className="relative bg-white rounded-2xl shadow-2xl w-full max-w-[280px]"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="px-4 pt-4 pb-2">
               <p className="text-sm font-bold text-gray-900 text-center">
-                {users.find(u => u.id === quickPopup.userId)?.fullName}
+                {users.find((u) => u.id === quickPopup.userId)?.fullName}
               </p>
               <p className="text-xs text-gray-400 text-center">{quickPopup.date.split('-').reverse().join('.')}</p>
             </div>
@@ -1092,16 +1296,25 @@ export default function SchedulePage() {
                 { status: 'late_minor' as const, emoji: '⏰', label: '<1ч', bg: 'bg-yellow-50 active:bg-yellow-100' },
                 { status: 'late_major' as const, emoji: '⚠️', label: '>1ч', bg: 'bg-orange-50 active:bg-orange-100' },
                 { status: 'absent' as const, emoji: '❌', label: 'Прогул', bg: 'bg-red-50 active:bg-red-100' },
-              ].map(item => (
-                <button key={item.status} onClick={() => quickSetStatus(item.status)}
-                  className={`flex flex-col items-center gap-1 py-3 rounded-xl ${item.bg} transition-colors`}>
+              ].map((item) => (
+                <button
+                  key={item.status}
+                  onClick={() => quickSetStatus(item.status)}
+                  className={`flex flex-col items-center gap-1 py-3 rounded-xl ${item.bg} transition-colors`}
+                >
                   <span className="text-xl">{item.emoji}</span>
                   <span className="text-[10px] font-semibold text-gray-700">{item.label}</span>
                 </button>
               ))}
             </div>
             {quickPopup.entry && (
-              <button onClick={() => quickSetStatus('delete')} className="w-full text-center py-3 text-xs font-medium text-red-500 border-t border-gray-100 rounded-b-2xl active:bg-red-50">
+              <button
+                onClick={() => {
+                  if (quickPopup.entry) setDeleteId(quickPopup.entry.id);
+                  setQuickPopup(null);
+                }}
+                className="w-full text-center py-3 text-xs font-medium text-red-600 border-t border-gray-100 rounded-b-2xl active:bg-red-50"
+              >
                 Удалить запись
               </button>
             )}
@@ -1110,7 +1323,9 @@ export default function SchedulePage() {
       )}
 
       {/* Attendance Rating Tab */}
-      {tab === 'attendance' && <AttendanceRatingTab entries={entries} users={scheduleUsers} dateFrom={dateFrom} dateTo={dateTo} />}
+      {tab === 'attendance' && (
+        <AttendanceRatingTab entries={entries} users={scheduleUsers} dateFrom={dateFrom} dateTo={dateTo} />
+      )}
 
       {/* Settings Tab — Modern Minimalist */}
       {tab === 'settings' && (
@@ -1140,9 +1355,7 @@ export default function SchedulePage() {
           </div>
 
           {/* Master Days Off tab */}
-          {settingsTab === 'masters' && (
-            <MasterDaysOffCard users={users} />
-          )}
+          {settingsTab === 'masters' && <MasterDaysOffCard users={users} />}
 
           {/* Service Work Modes tab */}
           {settingsTab === 'service' && (
@@ -1162,16 +1375,16 @@ export default function SchedulePage() {
                           </div>
                           <div>
                             <p className="text-sm font-medium text-gray-900">{wm.name}</p>
-                            <p className="text-xs text-gray-400">{wm.shiftStart} — {wm.shiftEnd}</p>
+                            <p className="text-xs text-gray-400">
+                              {wm.shiftStart} — {wm.shiftEnd}
+                            </p>
                           </div>
                         </div>
                       </div>
                     ))}
                   </div>
                 ) : (
-                  <div className="px-5 py-8 text-center text-sm text-gray-400">
-                    Нет режимов работы
-                  </div>
+                  <div className="px-5 py-8 text-center text-sm text-gray-400">Нет режимов работы</div>
                 )}
                 <div className="px-5 py-4 bg-gray-50/50 border-t border-gray-100">
                   <WorkModeForm onSubmit={(data: any) => createWorkModeMutation.mutate(data)} />
@@ -1179,9 +1392,7 @@ export default function SchedulePage() {
               </div>
 
               {/* Apply work mode */}
-              {workModes.length > 0 && (
-                <ApplyWorkModeCard workModes={workModes} users={users} />
-              )}
+              {workModes.length > 0 && <ApplyWorkModeCard workModes={workModes} users={users} />}
             </div>
           )}
         </div>
@@ -1197,30 +1408,54 @@ export default function SchedulePage() {
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
             <label className="label">Сотрудник</label>
-            <select className="input" value={entryForm.userId} onChange={(e) => setEntryForm({ ...entryForm, userId: e.target.value })} required>
+            <select
+              className="input"
+              value={entryForm.userId}
+              onChange={(e) => setEntryForm({ ...entryForm, userId: e.target.value })}
+              required
+            >
               <option value="">Выберите сотрудника</option>
-              {users.filter((u) => u.isActive).map((u) => (
-                <option key={u.id} value={u.id}>{u.fullName}</option>
-              ))}
+              {users
+                .filter((u) => u.isActive)
+                .map((u) => (
+                  <option key={u.id} value={u.id}>
+                    {u.fullName}
+                  </option>
+                ))}
             </select>
           </div>
           <div>
             <label className="label">Дата</label>
-            <input type="date" className="input" value={entryForm.date} onChange={(e) => setEntryForm({ ...entryForm, date: e.target.value })} required />
+            <input
+              type="date"
+              className="input"
+              value={entryForm.date}
+              onChange={(e) => setEntryForm({ ...entryForm, date: e.target.value })}
+              required
+            />
           </div>
           <div>
             <label className="label">Тип</label>
             <div className="grid grid-cols-3 gap-2">
-              <button type="button" onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: false })}
-                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${!entryForm.isDayOff && !entryForm.isSickDay ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
+              <button
+                type="button"
+                onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: false })}
+                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${!entryForm.isDayOff && !entryForm.isSickDay ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
+              >
                 Смена
               </button>
-              <button type="button" onClick={() => setEntryForm({ ...entryForm, isDayOff: true, isSickDay: false })}
-                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${entryForm.isDayOff && !entryForm.isSickDay ? 'border-gray-500 bg-gray-100 text-gray-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
+              <button
+                type="button"
+                onClick={() => setEntryForm({ ...entryForm, isDayOff: true, isSickDay: false })}
+                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${entryForm.isDayOff && !entryForm.isSickDay ? 'border-gray-500 bg-gray-100 text-gray-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
+              >
                 Выходной
               </button>
-              <button type="button" onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: true })}
-                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${entryForm.isSickDay ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}>
+              <button
+                type="button"
+                onClick={() => setEntryForm({ ...entryForm, isDayOff: false, isSickDay: true })}
+                className={`py-2.5 px-3 text-sm font-medium rounded-xl border-2 transition-colors ${entryForm.isSickDay ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-200 bg-white text-gray-600 hover:bg-gray-50'}`}
+              >
                 Больничный
               </button>
             </div>
@@ -1229,26 +1464,53 @@ export default function SchedulePage() {
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="label">Начало</label>
-                <input type="time" className="input" value={entryForm.shiftStart} onChange={(e) => setEntryForm({ ...entryForm, shiftStart: e.target.value })} />
+                <input
+                  type="time"
+                  className="input"
+                  value={entryForm.shiftStart}
+                  onChange={(e) => setEntryForm({ ...entryForm, shiftStart: e.target.value })}
+                />
               </div>
               <div>
                 <label className="label">Конец</label>
-                <input type="time" className="input" value={entryForm.shiftEnd} onChange={(e) => setEntryForm({ ...entryForm, shiftEnd: e.target.value })} />
+                <input
+                  type="time"
+                  className="input"
+                  value={entryForm.shiftEnd}
+                  onChange={(e) => setEntryForm({ ...entryForm, shiftEnd: e.target.value })}
+                />
               </div>
             </div>
           )}
           <div className="flex items-center justify-between pt-4 border-t border-gray-200">
             <div>
               {editingEntry && (
-                <button type="button" onClick={() => { setDeleteId(editingEntry.id); closeModal(); }} className="btn-danger btn-sm">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDeleteId(editingEntry.id);
+                    closeModal();
+                  }}
+                  className="btn-danger btn-sm"
+                >
                   <Trash2 className="w-3.5 h-3.5" /> Удалить
                 </button>
               )}
             </div>
             <div className="flex items-center gap-3">
-              <button type="button" onClick={closeModal} className="btn-secondary">Отмена</button>
+              <button type="button" onClick={closeModal} className="btn-secondary">
+                Отмена
+              </button>
               <button type="submit" disabled={isSaving} className="btn-primary">
-                {isSaving ? <><Loader2 className="w-4 h-4 animate-spin" /> Сохранение...</> : editingEntry ? 'Сохранить' : 'Создать'}
+                {isSaving ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" /> Сохранение...
+                  </>
+                ) : editingEntry ? (
+                  'Сохранить'
+                ) : (
+                  'Создать'
+                )}
               </button>
             </div>
           </div>
@@ -1295,8 +1557,18 @@ function WorkModeForm({ onSubmit }: { onSubmit: (data: any) => void }) {
         required
       />
       <div className="flex gap-2">
-        <input type="time" className="input w-[100px] text-sm" value={shiftStart} onChange={(e) => setShiftStart(e.target.value)} />
-        <input type="time" className="input w-[100px] text-sm" value={shiftEnd} onChange={(e) => setShiftEnd(e.target.value)} />
+        <input
+          type="time"
+          className="input w-[100px] text-sm"
+          value={shiftStart}
+          onChange={(e) => setShiftStart(e.target.value)}
+        />
+        <input
+          type="time"
+          className="input w-[100px] text-sm"
+          value={shiftEnd}
+          onChange={(e) => setShiftEnd(e.target.value)}
+        />
       </div>
       <button type="submit" className="btn-primary px-4 whitespace-nowrap text-sm">
         <Plus className="w-4 h-4" /> Добавить
@@ -1310,7 +1582,7 @@ const ORDERED_DAYS = [1, 2, 3, 4, 5, 6, 0]; // Пн-Вс
 
 function MasterDaysOffCard({ users }: { users: User[] }) {
   const queryClient = useQueryClient();
-  const activeUsers = users.filter(u => u.isActive && u.role === 'master');
+  const activeUsers = users.filter((u) => u.isActive && u.role === 'master');
 
   const updateMutation = useMutation({
     mutationFn: ({ userId, daysOff }: { userId: string; daysOff: number[] }) =>
@@ -1325,7 +1597,7 @@ function MasterDaysOffCard({ users }: { users: User[] }) {
 
   const toggleDay = (user: User, day: number) => {
     const current = user.daysOff || [];
-    const next = current.includes(day) ? current.filter(d => d !== day) : [...current, day];
+    const next = current.includes(day) ? current.filter((d) => d !== day) : [...current, day];
     updateMutation.mutate({ userId: user.id, daysOff: next });
   };
 
@@ -1341,7 +1613,11 @@ function MasterDaysOffCard({ users }: { users: User[] }) {
       </div>
       <div className="divide-y divide-gray-50">
         {activeUsers.map((u) => {
-          const initials = u.fullName.split(' ').map(w => w[0]).join('').slice(0, 2);
+          const initials = u.fullName
+            .split(' ')
+            .map((w) => w[0])
+            .join('')
+            .slice(0, 2);
           const offDays = u.daysOff || [];
           return (
             <div key={u.id} className="px-5 py-4">
@@ -1353,10 +1629,14 @@ function MasterDaysOffCard({ users }: { users: User[] }) {
                   <p className="text-sm font-medium text-gray-900 truncate">{u.fullName}</p>
                   {offDays.length > 0 && (
                     <p className="text-[11px] text-gray-400">
-                      Выходные: {offDays.sort((a, b) => {
-                        const order = [1,2,3,4,5,6,0];
-                        return order.indexOf(a) - order.indexOf(b);
-                      }).map(d => DAY_NAMES_FULL[d]).join(', ')}
+                      Выходные:{' '}
+                      {offDays
+                        .sort((a, b) => {
+                          const order = [1, 2, 3, 4, 5, 6, 0];
+                          return order.indexOf(a) - order.indexOf(b);
+                        })
+                        .map((d) => DAY_NAMES_FULL[d])
+                        .join(', ')}
                     </p>
                   )}
                 </div>
@@ -1408,8 +1688,14 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User
   });
 
   const handleApply = () => {
-    if (!selectedMode) { toast.error('Выберите режим работы'); return; }
-    if (!applyFrom || !applyTo) { toast.error('Укажите период'); return; }
+    if (!selectedMode) {
+      toast.error('Выберите режим работы');
+      return;
+    }
+    if (!applyFrom || !applyTo) {
+      toast.error('Укажите период');
+      return;
+    }
     applyMutation.mutate({
       workModeId: selectedMode,
       userId: selectedUser || undefined,
@@ -1418,7 +1704,7 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User
     });
   };
 
-  const activeUsers = users.filter(u => u.isActive && u.role === 'master');
+  const activeUsers = users.filter((u) => u.isActive && u.role === 'master');
 
   return (
     <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -1429,25 +1715,39 @@ function ApplyWorkModeCard({ workModes, users }: { workModes: any[]; users: User
         <select className="input text-sm" value={selectedMode} onChange={(e) => setSelectedMode(e.target.value)}>
           <option value="">Режим работы</option>
           {workModes.map((wm: any) => (
-            <option key={wm.id} value={wm.id}>{wm.name} ({wm.shiftStart}–{wm.shiftEnd})</option>
+            <option key={wm.id} value={wm.id}>
+              {wm.name} ({wm.shiftStart}–{wm.shiftEnd})
+            </option>
           ))}
         </select>
 
         <select className="input text-sm" value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)}>
           <option value="">Все мастера</option>
           {activeUsers.map((u) => (
-            <option key={u.id} value={u.id}>{u.fullName}</option>
+            <option key={u.id} value={u.id}>
+              {u.fullName}
+            </option>
           ))}
         </select>
 
         <div className="space-y-2">
           <div className="flex items-center gap-2">
             <label className="text-xs font-medium text-gray-500 w-10 flex-shrink-0">С</label>
-            <input type="date" className="input text-xs py-2 px-2.5 flex-1 min-w-0" value={applyFrom} onChange={(e) => setApplyFrom(e.target.value)} />
+            <input
+              type="date"
+              className="input text-xs py-2 px-2.5 flex-1 min-w-0"
+              value={applyFrom}
+              onChange={(e) => setApplyFrom(e.target.value)}
+            />
           </div>
           <div className="flex items-center gap-2">
             <label className="text-xs font-medium text-gray-500 w-10 flex-shrink-0">По</label>
-            <input type="date" className="input text-xs py-2 px-2.5 flex-1 min-w-0" value={applyTo} onChange={(e) => setApplyTo(e.target.value)} />
+            <input
+              type="date"
+              className="input text-xs py-2 px-2.5 flex-1 min-w-0"
+              value={applyTo}
+              onChange={(e) => setApplyTo(e.target.value)}
+            />
           </div>
         </div>
 

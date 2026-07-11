@@ -26,6 +26,8 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import QueryState from '../components/QueryState';
+import IconButton from '../components/IconButton';
 import PhoneInput from '../components/PhoneInput';
 import RolesManagement from '../components/RolesManagement';
 import { roleLabels } from '../../../shared/utils/formatters';
@@ -117,7 +119,7 @@ export default function UsersPage() {
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
   const [dismissedOpen, setDismissedOpen] = useState(false);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['users'],
     queryFn: () => usersApi.getAll(),
     select: (res) => res.data as User[],
@@ -279,14 +281,20 @@ export default function UsersPage() {
       </div>
 
       {/* Table */}
-      {users.length === 0 ? (
-        <EmptyState
-          icon={Users}
-          title="Нет сотрудников"
-          description="Добавьте первого сотрудника"
-          action={{ label: 'Добавить', onClick: openCreate }}
-        />
-      ) : (
+      <QueryState
+        isLoading={false}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        isEmpty={users.length === 0}
+        empty={{
+          icon: Users,
+          title: 'Нет сотрудников',
+          description: 'Добавьте первого сотрудника',
+          action: { label: 'Добавить', onClick: openCreate },
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <>
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
@@ -300,19 +308,21 @@ export default function UsersPage() {
                     </span>
                   </div>
                   <div className="flex items-center gap-1 flex-shrink-0">
-                    <button
+                    <IconButton
+                      label="Редактировать сотрудника"
+                      icon={Pencil}
+                      variant="ghost"
+                      size="sm"
                       onClick={() => openEdit(user)}
-                      className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
-                    >
-                      <Pencil className="w-3.5 h-3.5" />
-                    </button>
+                    />
                     {user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director' && (
-                      <button
+                      <IconButton
+                        label="Уволить сотрудника"
+                        icon={Trash2}
+                        variant="danger"
+                        size="sm"
                         onClick={() => setDeleteId(user.id)}
-                        className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      />
                     )}
                   </div>
                 </div>
@@ -324,7 +334,7 @@ export default function UsersPage() {
                   {user.isActive ? (
                     <span className="text-green-600 text-xs font-medium">Активен</span>
                   ) : (
-                    <span className="text-red-500 text-xs font-medium">Неактивен</span>
+                    <span className="text-red-600 text-xs font-medium">Неактивен</span>
                   )}
                 </div>
               </div>
@@ -364,21 +374,21 @@ export default function UsersPage() {
                     </td>
                     <td>
                       <div className="flex items-center gap-2">
-                        <button
+                        <IconButton
+                          label="Редактировать сотрудника"
+                          icon={Pencil}
+                          variant="ghost"
+                          size="sm"
                           onClick={() => openEdit(user)}
-                          className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
-                          title="Редактировать"
-                        >
-                          <Pencil className="w-4 h-4" />
-                        </button>
+                        />
                         {user.id !== currentUser?.id && user.role !== 'superadmin' && user.role !== 'director' && (
-                          <button
+                          <IconButton
+                            label="Уволить сотрудника"
+                            icon={Trash2}
+                            variant="danger"
+                            size="sm"
                             onClick={() => setDeleteId(user.id)}
-                            className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                            title="Уволить"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          />
                         )}
                       </div>
                     </td>
@@ -388,7 +398,7 @@ export default function UsersPage() {
             </table>
           </div>
         </>
-      )}
+      </QueryState>
 
       {/* Create / Edit Modal */}
       <Modal

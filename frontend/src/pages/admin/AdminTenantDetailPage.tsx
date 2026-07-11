@@ -36,7 +36,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import { Tenant, User, UserRole, UserPermissions, TenantCabinet, SubscriptionStatus, Plan } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import LoadingSpinner from '../../components/LoadingSpinner';
+import QueryState from '../../components/QueryState';
+import Switch from '../../components/Switch';
 import EmptyState from '../../components/EmptyState';
 import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
 import { roleLabels } from '../../../../shared/utils/formatters';
@@ -161,7 +162,13 @@ export default function AdminTenantDetailPage() {
   const [deleteUserId, setDeleteUserId] = useState<string | null>(null);
 
   // Queries
-  const { data: tenant, isLoading } = useQuery({
+  const {
+    data: tenant,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['tenant', id],
     queryFn: () => tenantsApi.getById(id!),
     select: (res) => res.data as Tenant,
@@ -464,7 +471,22 @@ export default function AdminTenantDetailPage() {
 
   const isUserSaving = createUserMutation.isPending || updateUserMutation.isPending;
 
-  if (isLoading) return <LoadingSpinner />;
+  // Loading → inline loader; a transient fetch FAILURE → error+retry (not a
+  // permanent "не найден"). Only a resolved-but-empty response is a real 404.
+  if (isLoading || isError) {
+    return (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        errorTitle="Не удалось загрузить автосервис"
+        minHeight="min-h-[60vh]"
+      >
+        {null}
+      </QueryState>
+    );
+  }
 
   if (!tenant) {
     return (
@@ -867,15 +889,11 @@ export default function AdminTenantDetailPage() {
             />
           </div>
           <div className="flex items-center gap-3">
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={tenantForm.isActive}
-                onChange={(e) => setTenantForm({ ...tenantForm, isActive: e.target.checked })}
-              />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
-            </label>
+            <Switch
+              checked={tenantForm.isActive}
+              onChange={(v) => setTenantForm({ ...tenantForm, isActive: v })}
+              label="Автосервис активен"
+            />
             <span className="text-sm font-medium text-gray-700">{tenantForm.isActive ? 'Активна' : 'Неактивна'}</span>
           </div>
           <div>
@@ -1006,15 +1024,11 @@ export default function AdminTenantDetailPage() {
             />
           </div>
           <div className="flex items-center gap-3">
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={userForm.isActive}
-                onChange={(e) => setUserForm({ ...userForm, isActive: e.target.checked })}
-              />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
-            </label>
+            <Switch
+              checked={userForm.isActive}
+              onChange={(v) => setUserForm({ ...userForm, isActive: v })}
+              label="Сотрудник активен"
+            />
             <span className="text-sm font-medium text-gray-700">{userForm.isActive ? 'Активен' : 'Неактивен'}</span>
           </div>
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">

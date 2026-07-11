@@ -3,16 +3,23 @@ import { Link, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { motion } from 'framer-motion';
 import {
-  ChevronLeft, Phone, Shield, Calendar, Clock, AtSign, Award,
-  TrendingUp, Wallet, Receipt, AlertTriangle,
+  ChevronLeft,
+  Phone,
+  Shield,
+  Calendar,
+  Clock,
+  AtSign,
+  Award,
+  TrendingUp,
+  Wallet,
+  Receipt,
+  AlertTriangle,
 } from 'lucide-react';
 import { usersApi, scheduleApi, salaryApi, checksApi } from '../api/services';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
-import type {
-  User, TodayEmployeeStatus, MasterSalary, EmployeeRanking,
-} from '../types';
-import { roleLabels } from '../../../shared/utils/formatters';
+import type { User, TodayEmployeeStatus, MasterSalary, EmployeeRanking } from '../types';
+import { roleLabels, formatMoney } from '../../../shared/utils/formatters';
 
 const roleBadgeColors: Record<string, string> = {
   superadmin: 'bg-red-50 text-red-700 ring-red-100',
@@ -20,9 +27,6 @@ const roleBadgeColors: Record<string, string> = {
   admin: 'bg-blue-50 text-blue-700 ring-blue-100',
   master: 'bg-green-50 text-green-700 ring-green-100',
 };
-
-const formatMoney = (v: number): string =>
-  Math.round(v).toString().replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 
 const formatTime = (iso?: string | null): string => {
   if (!iso) return '—';
@@ -34,9 +38,12 @@ function statusBadge(s?: TodayEmployeeStatus): { text: string; tone: string } {
   const note = (s.note || '').toLowerCase();
   if (note.includes('больнич')) return { text: 'Больничный', tone: 'bg-rose-50 text-rose-700 ring-rose-200' };
   if (s.isDayOff) return { text: 'Выходной', tone: 'bg-gray-100 text-gray-600 ring-gray-200' };
-  if (s.lateStatus === 'late_major') return { text: `Опозд. >1 ч (${s.lateMinutes} мин)`, tone: 'bg-orange-50 text-orange-700 ring-orange-200' };
-  if (s.lateStatus === 'late_minor') return { text: `Опозд. ${s.lateMinutes} мин`, tone: 'bg-yellow-50 text-yellow-800 ring-yellow-200' };
-  if (s.isWorking || s.actualArrival || s.lateStatus === 'on_time') return { text: 'На смене', tone: 'bg-green-50 text-green-700 ring-green-200' };
+  if (s.lateStatus === 'late_major')
+    return { text: `Опозд. >1 ч (${s.lateMinutes} мин)`, tone: 'bg-orange-50 text-orange-700 ring-orange-200' };
+  if (s.lateStatus === 'late_minor')
+    return { text: `Опозд. ${s.lateMinutes} мин`, tone: 'bg-yellow-50 text-yellow-800 ring-yellow-200' };
+  if (s.isWorking || s.actualArrival || s.lateStatus === 'on_time')
+    return { text: 'На смене', tone: 'bg-green-50 text-green-700 ring-green-200' };
   if (note.includes('прогул')) return { text: 'Прогул', tone: 'bg-red-50 text-red-700 ring-red-200' };
   if (s.hasSchedule) return { text: 'Не пришёл', tone: 'bg-red-50 text-red-700 ring-red-200' };
   return { text: '—', tone: 'bg-gray-100 text-gray-600 ring-gray-200' };
@@ -48,7 +55,10 @@ export default function EmployeeDetailPage() {
   // Profile
   const { data: user, isLoading: userLoading } = useQuery<User>({
     queryKey: ['user', id],
-    queryFn: async () => { const res = await usersApi.getById(id); return res.data; },
+    queryFn: async () => {
+      const res = await usersApi.getById(id);
+      return res.data;
+    },
     enabled: !!id,
     staleTime: 60_000,
   });
@@ -56,7 +66,10 @@ export default function EmployeeDetailPage() {
   // Today schedule status
   const { data: todayList } = useQuery<TodayEmployeeStatus[]>({
     queryKey: ['schedule-today'],
-    queryFn: async () => { const res = await scheduleApi.getToday(); return res.data; },
+    queryFn: async () => {
+      const res = await scheduleApi.getToday();
+      return res.data;
+    },
     staleTime: 30_000,
     refetchInterval: 60_000,
   });
@@ -65,7 +78,10 @@ export default function EmployeeDetailPage() {
   // Salary aggregate (period totals)
   const { data: salaryRows } = useQuery<MasterSalary[]>({
     queryKey: ['salary-all'],
-    queryFn: async () => { const res = await salaryApi.getAll(); return res.data; },
+    queryFn: async () => {
+      const res = await salaryApi.getAll();
+      return res.data;
+    },
     enabled: !!user && user.role === 'master',
     staleTime: 60_000,
   });
@@ -74,7 +90,10 @@ export default function EmployeeDetailPage() {
   // Ranking
   const { data: ranking } = useQuery<EmployeeRanking>({
     queryKey: ['employee-ranking'],
-    queryFn: async () => { const res = await checksApi.getRanking(); return res.data; },
+    queryFn: async () => {
+      const res = await checksApi.getRanking();
+      return res.data;
+    },
     staleTime: 60_000,
   });
 
@@ -95,15 +114,21 @@ export default function EmployeeDetailPage() {
   }, [ranking, user, id]);
 
   if (userLoading) return <LoadingSpinner />;
-  if (!user) return (
-    <EmptyState
-      icon={AlertTriangle}
-      title="Сотрудник не найден"
-      description="Возможно учётка была удалена или у вас нет к ней доступа."
-    />
-  );
+  if (!user)
+    return (
+      <EmptyState
+        icon={AlertTriangle}
+        title="Сотрудник не найден"
+        description="Возможно учётка была удалена или у вас нет к ней доступа."
+      />
+    );
 
-  const initials = user.fullName.split(' ').map(w => w[0]).join('').slice(0, 2).toUpperCase();
+  const initials = user.fullName
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
   const roleClass = roleBadgeColors[user.role] || roleBadgeColors.master;
   const sb = statusBadge(today);
 
@@ -119,8 +144,7 @@ export default function EmployeeDetailPage() {
         to="/employees"
         className="inline-flex items-center gap-1.5 text-sm font-medium text-gray-500 hover:text-gray-900 transition-colors"
       >
-        <ChevronLeft className="h-4 w-4" />
-        К списку сотрудников
+        <ChevronLeft className="h-4 w-4" />К списку сотрудников
       </Link>
 
       {/* Hero */}
@@ -152,19 +176,21 @@ export default function EmployeeDetailPage() {
         <div className="grid grid-cols-3 gap-2">
           <Tile
             label="Смена"
-            value={today?.shiftStart && today?.shiftEnd
-              ? `${formatTime(today.shiftStart)} – ${formatTime(today.shiftEnd)}`
-              : today?.isDayOff ? 'Выходной' : '—'}
+            value={
+              today?.shiftStart && today?.shiftEnd
+                ? `${formatTime(today.shiftStart)} – ${formatTime(today.shiftEnd)}`
+                : today?.isDayOff
+                  ? 'Выходной'
+                  : '—'
+            }
           />
-          <Tile
-            label="Пришёл"
-            value={today?.actualArrival ? formatTime(today.actualArrival) : '—'}
-          />
+          <Tile label="Пришёл" value={today?.actualArrival ? formatTime(today.actualArrival) : '—'} />
           <Tile
             label="Опоздание"
             value={today && today.lateMinutes > 0 ? `${today.lateMinutes} мин` : '—'}
-            tone={today?.lateStatus === 'late_major' ? 'orange'
-              : today?.lateStatus === 'late_minor' ? 'yellow' : undefined}
+            tone={
+              today?.lateStatus === 'late_major' ? 'orange' : today?.lateStatus === 'late_minor' ? 'yellow' : undefined
+            }
           />
         </div>
         {today?.note && (
@@ -215,7 +241,8 @@ export default function EmployeeDetailPage() {
           </div>
           {rank.monthPlace && (
             <p className="mt-3 text-xs text-gray-500">
-              Выручка за месяц: <span className="font-semibold text-gray-900 tabular-nums">{formatMoney(rank.monthRevenue)}</span>
+              Выручка за месяц:{' '}
+              <span className="font-semibold text-gray-900 tabular-nums">{formatMoney(rank.monthRevenue)}</span>
               <span className="mx-1.5 text-gray-300">·</span>
               Чеков: <span className="font-semibold text-gray-900 tabular-nums">{rank.monthChecks}</span>
             </p>
@@ -240,10 +267,7 @@ export default function EmployeeDetailPage() {
               </div>
               <span className="text-gray-300 text-lg">›</span>
             </Link>
-            <Link
-              to="/salary"
-              className="card-interactive flex items-center gap-3 px-4 py-3 no-underline"
-            >
+            <Link to="/salary" className="card-interactive flex items-center gap-3 px-4 py-3 no-underline">
               <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-50 text-green-700">
                 <Wallet className="h-4 w-4" />
               </div>
@@ -280,7 +304,7 @@ export default function EmployeeDetailPage() {
             <Row
               icon={<Calendar className="h-4 w-4 text-gray-400" />}
               label="Выходные"
-              value={user.daysOff.map((d) => ['Вс','Пн','Вт','Ср','Чт','Пт','Сб'][d] || '?').join(', ')}
+              value={user.daysOff.map((d) => ['Вс', 'Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб'][d] || '?').join(', ')}
             />
           )}
         </div>
@@ -294,7 +318,7 @@ export default function EmployeeDetailPage() {
 function Section({ icon, title, children }: { icon: React.ReactNode; title: string; children: React.ReactNode }) {
   return (
     <section className="rounded-2xl bg-white border border-gray-100 shadow-sm p-4">
-      <h2 className="flex items-center gap-2 text-[11px] font-bold text-gray-400 uppercase tracking-wider mb-3">
+      <h2 className="flex items-center gap-2 text-[11px] font-bold text-gray-500 uppercase tracking-wider mb-3">
         {icon}
         <span>{title}</span>
       </h2>
@@ -304,7 +328,11 @@ function Section({ icon, title, children }: { icon: React.ReactNode; title: stri
 }
 
 function Tile({
-  label, value, highlight, tone, hint,
+  label,
+  value,
+  highlight,
+  tone,
+  hint,
 }: {
   label: string;
   value: string;
@@ -321,7 +349,7 @@ function Tile({
         : 'bg-gray-50/60 border-gray-100 text-gray-900';
   return (
     <div className={`rounded-xl border ${base} px-3 py-2`}>
-      <p className="text-[10px] text-gray-400 uppercase tracking-wider mb-0.5">{label}</p>
+      <p className="text-[10px] text-gray-500 uppercase tracking-wider mb-0.5">{label}</p>
       <p className="text-sm font-semibold tabular-nums">
         {value}
         {hint && <span className="ml-1.5">{hint}</span>}

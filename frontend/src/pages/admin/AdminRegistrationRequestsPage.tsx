@@ -21,8 +21,7 @@ import { ru } from 'date-fns/locale';
 import { adminApi } from '../../api/services';
 import { RegistrationRequest } from '../../types';
 import Modal from '../../components/Modal';
-import LoadingSpinner from '../../components/LoadingSpinner';
-import EmptyState from '../../components/EmptyState';
+import QueryState from '../../components/QueryState';
 import { formatPhone } from '../../../../shared/validation/phone';
 
 type StatusFilter = 'pending' | 'approved' | 'rejected' | 'all';
@@ -53,7 +52,13 @@ export default function AdminRegistrationRequestsPage() {
   const [rejectTarget, setRejectTarget] = useState<RegistrationRequest | null>(null);
   const [rejectReason, setRejectReason] = useState('');
 
-  const { data: requests, isLoading } = useQuery({
+  const {
+    data: requests,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['registration-requests', filter],
     queryFn: () => adminApi.listRegistrationRequests(filter === 'all' ? undefined : filter),
     select: (res) => res.data as RegistrationRequest[],
@@ -144,17 +149,21 @@ export default function AdminRegistrationRequestsPage() {
         ))}
       </div>
 
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : list.length === 0 ? (
-        <EmptyState
-          icon={Inbox}
-          title="Заявок нет"
-          description={
-            filter === 'pending' ? 'Новые заявки на регистрацию появятся здесь' : 'В этой категории пока пусто'
-          }
-        />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        errorTitle="Не удалось загрузить заявки"
+        isEmpty={list.length === 0}
+        empty={{
+          icon: Inbox,
+          title: 'Заявок нет',
+          description:
+            filter === 'pending' ? 'Новые заявки на регистрацию появятся здесь' : 'В этой категории пока пусто',
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <div className="space-y-3">
           {list.map((req) => {
             const meta = statusMeta[req.status];
@@ -234,7 +243,7 @@ export default function AdminRegistrationRequestsPage() {
             );
           })}
         </div>
-      )}
+      </QueryState>
 
       {/* Approve Modal — set the free trial window */}
       <Modal isOpen={!!approveTarget} onClose={() => setApproveTarget(null)} title="Одобрить заявку" size="sm">

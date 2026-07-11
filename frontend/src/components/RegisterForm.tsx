@@ -113,7 +113,9 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
 
       {/* Company — обязательное, бизнес-поле */}
       <div>
-        <label className="label">Название организации (автосервиса)</label>
+        <label className="label">
+          Название организации (автосервиса) <span className="text-red-600">*</span>
+        </label>
         <input
           type="text"
           required
@@ -125,14 +127,17 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
           }}
           placeholder="ООО «Автосервис на Ленина» / ИП Иванов"
         />
-        {errors.company && <p className="mt-1 text-xs text-red-500">{errors.company}</p>}
+        {errors.company && <p className="mt-1 text-xs text-red-600">{errors.company}</p>}
       </div>
 
       {/* Owner */}
       <div>
-        <label className="label">Имя владельца / руководителя</label>
+        <label className="label">
+          Имя владельца / руководителя <span className="text-red-600">*</span>
+        </label>
         <input
           type="text"
+          required
           className={`input ${errors.owner ? 'input-error' : ''}`}
           value={ownerName}
           onChange={(e) => {
@@ -141,12 +146,14 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
           }}
           placeholder="Иванов Иван Иванович"
         />
-        {errors.owner && <p className="mt-1 text-xs text-red-500">{errors.owner}</p>}
+        {errors.owner && <p className="mt-1 text-xs text-red-600">{errors.owner}</p>}
       </div>
 
       {/* Phone */}
       <div>
-        <label className="label">Телефон (логин для входа)</label>
+        <label className="label">
+          Телефон (логин для входа) <span className="text-red-600">*</span>
+        </label>
         <input
           type="tel"
           inputMode="numeric"
@@ -160,12 +167,14 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
           }}
           placeholder="+7 (___) ___-__-__"
         />
-        {errors.phone && <p className="mt-1 text-xs text-red-500">{errors.phone}</p>}
+        {errors.phone && <p className="mt-1 text-xs text-red-600">{errors.phone}</p>}
       </div>
 
       {/* Password */}
       <div>
-        <label className="label">Пароль</label>
+        <label className="label">
+          Пароль <span className="text-red-600">*</span>
+        </label>
         <div className="relative">
           <input
             type={showPassword ? 'text' : 'password'}
@@ -187,7 +196,7 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
             {showPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
           </button>
         </div>
-        {errors.password && <p className="mt-1 text-xs text-red-500">{errors.password}</p>}
+        {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password}</p>}
       </div>
 
       {/* Comment (optional) */}

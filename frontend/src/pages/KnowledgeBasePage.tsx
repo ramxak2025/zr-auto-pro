@@ -133,7 +133,12 @@ export default function KnowledgeBasePage() {
 
   // Fetch the whole article set for the active section type once; the folder
   // view filters it client-side by `categoryId`. Slim payloads → cheap.
-  const { data: articles = [], isLoading: articlesLoading } = useQuery({
+  const {
+    data: articles = [],
+    isLoading: articlesLoading,
+    isError: articlesError,
+    refetch: refetchArticles,
+  } = useQuery({
     queryKey: sectionType ? KEY.articlesByType(sectionType) : ['knowledge', 'articles', 'none'],
     queryFn: async () => (await knowledgeApi.listArticles({ type: sectionType! })).data,
     enabled: sectionType !== null,
@@ -353,6 +358,13 @@ export default function KnowledgeBasePage() {
                 <div className="flex justify-center py-16">
                   <Loader2 className="h-6 w-6 animate-spin text-primary-500" />
                 </div>
+              ) : articlesError ? (
+                <EmptyState
+                  icon={AlertCircle}
+                  title="Не удалось загрузить"
+                  description="Проверьте соединение и попробуйте снова."
+                  action={{ label: 'Повторить', onClick: () => refetchArticles() }}
+                />
               ) : subfolders.length === 0 && folderArticles.length === 0 ? (
                 <EmptyState
                   icon={section === 'regulations' ? ShieldCheck : BookOpen}
@@ -698,7 +710,12 @@ function ArticleReader({
   const [acksOpen, setAcksOpen] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const { data: article, isLoading } = useQuery({
+  const {
+    data: article,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: KEY.article(articleId),
     queryFn: async () => (await knowledgeApi.getArticle(articleId)).data,
   });
@@ -752,6 +769,26 @@ function ArticleReader({
     onError: () => toast.error('Не удалось удалить'),
   });
 
+  if (isError && !article) {
+    return (
+      <div className="space-y-6">
+        <button onClick={onBack} className="btn-ghost btn-sm -ml-2">
+          <ArrowLeft className="h-4 w-4" /> Назад
+        </button>
+        <div className="flex flex-col items-center justify-center py-16 text-center" role="alert">
+          <span className="mb-4 rounded-full bg-red-50 p-3">
+            <AlertCircle className="h-8 w-8 text-red-500" aria-hidden="true" />
+          </span>
+          <h3 className="mb-1 text-lg font-medium text-gray-900">Не удалось загрузить статью</h3>
+          <p className="mb-4 max-w-sm text-sm text-gray-500">Проверьте соединение и попробуйте снова.</p>
+          <button onClick={() => refetch()} className="btn-secondary press-soft">
+            Повторить
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   if (isLoading || !article) {
     return (
       <div className="space-y-6">
@@ -789,7 +826,12 @@ function ArticleReader({
               <Pencil className="h-4 w-4" />
               <span className="hidden sm:inline">Изменить</span>
             </button>
-            <button onClick={() => setConfirmDelete(true)} className="btn-ghost btn-sm text-red-600">
+            <button
+              onClick={() => setConfirmDelete(true)}
+              className="btn-ghost btn-sm text-red-600"
+              aria-label="Удалить статью"
+              title="Удалить статью"
+            >
               <Trash2 className="h-4 w-4" />
             </button>
           </div>

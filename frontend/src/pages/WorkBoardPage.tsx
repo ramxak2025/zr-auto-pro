@@ -6,6 +6,7 @@ import toast from 'react-hot-toast';
 import { checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
+import PageHeader from '../components/PageHeader';
 import { WorkStatusPicker, columnBadgeStyle, columnDotStyle } from '../components/WorkStatusPicker';
 import WorkBoardColumnsModal from '../components/WorkBoardColumnsModal';
 import type { Check, ChecksBoard, WorkBoardColumn } from '../types';
@@ -119,29 +120,36 @@ export default function WorkBoardPage() {
   return (
     <div className="space-y-5 pb-6">
       {/* Header */}
-      <div className="page-header">
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary-50">
-            <LayoutGrid className="h-5 w-5 text-primary-600" />
-          </div>
-          <div className="min-w-0">
-            <h1 className="page-title">Доска работ</h1>
-            <p className="text-sm text-gray-400 mt-0.5">Активные заказ-наряды по стадиям. Не влияет на оплату.</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
-          {canConfigure && (
-            <button onClick={() => setSettingsOpen(true)} className="btn-ghost btn-sm" title="Настроить колонки">
-              <Settings2 className="h-4 w-4" />
-              <span className="hidden sm:inline">Настроить колонки</span>
+      <PageHeader
+        title="Доска работ"
+        icon={LayoutGrid}
+        subtitle="Активные заказ-наряды по стадиям. Не влияет на оплату."
+        actions={
+          <>
+            {canConfigure && (
+              <button
+                onClick={() => setSettingsOpen(true)}
+                className="btn-ghost btn-sm"
+                title="Настроить колонки"
+                aria-label="Настроить колонки"
+              >
+                <Settings2 className="h-4 w-4" />
+                <span className="hidden sm:inline">Настроить колонки</span>
+              </button>
+            )}
+            <button
+              onClick={() => refetch()}
+              disabled={isFetching}
+              className="btn-ghost btn-sm"
+              title="Обновить"
+              aria-label="Обновить"
+            >
+              <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Обновить</span>
             </button>
-          )}
-          <button onClick={() => refetch()} disabled={isFetching} className="btn-ghost btn-sm" title="Обновить">
-            <RefreshCw className={`h-4 w-4 ${isFetching ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">Обновить</span>
-          </button>
-        </div>
-      </div>
+          </>
+        }
+      />
 
       {isError ? (
         <div className="card card-body text-center">
@@ -195,7 +203,7 @@ export default function WorkBoardPage() {
                   <div className="space-y-3">
                     {items.length === 0 ? (
                       <div className="rounded-xl border border-dashed border-gray-200 py-8 text-center">
-                        <p className="text-xs text-gray-400">Пусто</p>
+                        <p className="text-xs text-gray-500">Пусто</p>
                       </div>
                     ) : (
                       items.map((check) => (

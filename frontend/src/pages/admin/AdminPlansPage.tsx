@@ -7,8 +7,8 @@ import { plansApi, adminApi } from '../../api/services';
 import { Plan, PlatformSettings } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import LoadingSpinner from '../../components/LoadingSpinner';
-import EmptyState from '../../components/EmptyState';
+import QueryState from '../../components/QueryState';
+import Switch from '../../components/Switch';
 // Feature toggles bucketed by `group` (core / section / integration) so the editor
 // and plan cards render the 23 keys under section headings. FEATURE_GROUPS wraps
 // the shared single-source-of-truth registry (web + mobile), so it never drifts.
@@ -45,7 +45,7 @@ export default function AdminPlansPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [freeMinutes, setFreeMinutes] = useState('');
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['plans'],
     queryFn: () => plansApi.getAll(),
     select: (res) => res.data as Plan[],
@@ -192,8 +192,6 @@ export default function AdminPlansPage() {
     settingsMutation.mutate(Math.round(freeMinutesNum));
   };
 
-  if (isLoading) return <LoadingSpinner />;
-
   return (
     <div>
       <div className="page-header">
@@ -249,14 +247,21 @@ export default function AdminPlansPage() {
         </div>
       </div>
 
-      {plans.length === 0 ? (
-        <EmptyState
-          icon={CreditCard}
-          title="Нет тарифов"
-          description="Создайте первый тариф"
-          action={{ label: 'Создать', onClick: openCreate }}
-        />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        errorTitle="Не удалось загрузить тарифы"
+        isEmpty={plans.length === 0}
+        empty={{
+          icon: CreditCard,
+          title: 'Нет тарифов',
+          description: 'Создайте первый тариф',
+          action: { label: 'Создать', onClick: openCreate },
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {plans.map((plan) => {
             const features: string[] = Array.isArray(plan.features) ? plan.features : [];
@@ -268,12 +273,16 @@ export default function AdminPlansPage() {
                     <button
                       onClick={() => openEdit(plan)}
                       className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
+                      aria-label="Редактировать тариф"
+                      title="Редактировать"
                     >
                       <Pencil className="w-4 h-4" />
                     </button>
                     <button
                       onClick={() => setDeleteId(plan.id)}
                       className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
+                      aria-label="Удалить тариф"
+                      title="Удалить"
                     >
                       <Trash2 className="w-4 h-4" />
                     </button>
@@ -281,7 +290,9 @@ export default function AdminPlansPage() {
                 </div>
 
                 <div>
-                  <span className="text-2xl font-bold text-gray-900">{plan.monthlyPrice.toLocaleString('ru-RU')}</span>
+                  <span className="text-2xl font-bold text-gray-900 tabular-nums">
+                    {plan.monthlyPrice.toLocaleString('ru-RU')}
+                  </span>
                   <span className="text-gray-500 ml-1">₽/мес</span>
                 </div>
 
@@ -306,7 +317,7 @@ export default function AdminPlansPage() {
                               ) : (
                                 <X className="w-4 h-4 text-gray-300 flex-shrink-0" />
                               )}
-                              <span className={included ? 'text-gray-700' : 'text-gray-400'}>{feat.label}</span>
+                              <span className={included ? 'text-gray-700' : 'text-gray-500'}>{feat.label}</span>
                             </li>
                           );
                         })}
@@ -326,7 +337,7 @@ export default function AdminPlansPage() {
             );
           })}
         </div>
-      )}
+      </QueryState>
 
       {/* Create / Edit Modal */}
       <Modal
@@ -437,15 +448,7 @@ export default function AdminPlansPage() {
           </div>
 
           <div className="flex items-center gap-3">
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={form.isActive}
-                onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-              />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
-            </label>
+            <Switch checked={form.isActive} onChange={(v) => setForm({ ...form, isActive: v })} label="Тариф активен" />
             <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активен' : 'Неактивен'}</span>
           </div>
 

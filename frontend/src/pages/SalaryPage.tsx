@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { Fragment, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DollarSign,
@@ -20,8 +20,8 @@ import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { formatMoney } from '../../../shared/utils/formatters';
 import DatePeriodPicker from '../components/DatePeriodPicker';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
+import QueryState from '../components/QueryState';
+import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import { UserRole, MasterSalary, SalarySummary, SalaryPayment } from '../types';
 
@@ -82,7 +82,7 @@ function PaymentHistorySection({ userId }: { userId: string }) {
   }
 
   if (!payments || payments.length === 0) {
-    return <p className="py-3 text-xs text-gray-400 text-center">Нет выплат</p>;
+    return <p className="py-3 text-xs text-gray-500 text-center">Нет выплат</p>;
   }
 
   return (
@@ -118,95 +118,105 @@ function PaymentHistorySection({ userId }: { userId: string }) {
 // ─── Master (employee) view of own salary ───────────────────────────────────
 
 function MasterSalaryView() {
-  const { data: summary, isLoading } = useQuery({
+  const {
+    data: summary,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['salary-my'],
     queryFn: () => salaryApi.getMy(),
     select: (res) => res.data as SalarySummary,
   });
 
-  if (isLoading) return <LoadingSpinner />;
-
-  if (!summary) {
-    return (
-      <EmptyState
-        icon={DollarSign}
-        title="Нет данных о зарплате"
-        description="Данные появятся после закрытия первого чека"
-      />
-    );
-  }
-
   return (
     <div className="space-y-6">
-      {/* Header */}
-      <div>
-        <h1 className="text-2xl font-bold text-gray-900">Моя зарплата</h1>
-        <p className="text-gray-500 mt-1">
-          {summary.masterName} &middot; Ставка: {summary.salaryPercent}%
-        </p>
-      </div>
+      <PageHeader
+        title="Моя зарплата"
+        icon={DollarSign}
+        subtitle={summary ? `${summary.masterName} · Ставка: ${summary.salaryPercent}%` : undefined}
+      />
 
-      {/* Summary cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="stat-card">
-          <div className="stat-label">Сегодня</div>
-          <div className="stat-value text-green-600">{formatMoney(summary.today)}</div>
-          {summary.todayChecks !== undefined && (
-            <p className="text-xs text-gray-400 mt-1">{summary.todayChecks} чек(ов)</p>
-          )}
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Неделя</div>
-          <div className="stat-value text-blue-600">{formatMoney(summary.week)}</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Месяц</div>
-          <div className="stat-value text-purple-600">{formatMoney(summary.month)}</div>
-          {summary.monthChecks !== undefined && (
-            <p className="text-xs text-gray-400 mt-1">{summary.monthChecks} чек(ов)</p>
-          )}
-        </div>
-        <div className="stat-card">
-          <div className="stat-label">Всего</div>
-          <div className="stat-value text-gray-900">{formatMoney(summary.total)}</div>
-        </div>
-      </div>
-
-      {/* Today breakdown by payment method */}
-      <div className="card">
-        <div className="card-body">
-          <h2 className="text-lg font-semibold text-gray-900 mb-4">Сегодня по способу оплаты</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="flex items-center gap-3 p-3 bg-green-50 rounded-lg">
-              <div className="p-2 bg-green-100 rounded-lg">
-                <Banknote className="w-5 h-5 text-green-600" />
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        isEmpty={!summary}
+        empty={{
+          icon: DollarSign,
+          title: 'Нет данных о зарплате',
+          description: 'Данные появятся после закрытия первого чека',
+        }}
+        minHeight="min-h-[40vh]"
+      >
+        {summary && (
+          <div className="space-y-6">
+            {/* Summary cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="stat-card">
+                <div className="stat-label">Сегодня</div>
+                <div className="stat-value text-green-600">{formatMoney(summary.today)}</div>
+                {summary.todayChecks !== undefined && (
+                  <p className="text-xs text-gray-400 mt-1">{summary.todayChecks} чек(ов)</p>
+                )}
               </div>
-              <div>
-                <p className="text-sm text-green-700">Наличные</p>
-                <p className="text-lg font-semibold text-green-800">{formatMoney(summary.todayCash || 0)}</p>
+              <div className="stat-card">
+                <div className="stat-label">Неделя</div>
+                <div className="stat-value text-blue-600">{formatMoney(summary.week)}</div>
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Месяц</div>
+                <div className="stat-value text-purple-600">{formatMoney(summary.month)}</div>
+                {summary.monthChecks !== undefined && (
+                  <p className="text-xs text-gray-400 mt-1">{summary.monthChecks} чек(ов)</p>
+                )}
+              </div>
+              <div className="stat-card">
+                <div className="stat-label">Всего</div>
+                <div className="stat-value text-gray-900">{formatMoney(summary.total)}</div>
               </div>
             </div>
-            <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
-              <div className="p-2 bg-blue-100 rounded-lg">
-                <CreditCard className="w-5 h-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm text-blue-700">Карта</p>
-                <p className="text-lg font-semibold text-blue-800">{formatMoney(summary.todayCard || 0)}</p>
-              </div>
-            </div>
-            <div className="flex items-center gap-3 p-3 bg-orange-50 rounded-lg">
-              <div className="p-2 bg-orange-100 rounded-lg">
-                <Shield className="w-5 h-5 text-orange-600" />
-              </div>
-              <div>
-                <p className="text-sm text-orange-700">Гарантия</p>
-                <p className="text-lg font-semibold text-orange-800">{formatMoney(summary.todayWarranty || 0)}</p>
+
+            {/* Today breakdown by payment method */}
+            <div className="card">
+              <div className="card-body">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">Сегодня по способу оплаты</h2>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="flex items-center gap-3 p-3 bg-green-50 rounded-lg">
+                    <div className="p-2 bg-green-100 rounded-lg">
+                      <Banknote className="w-5 h-5 text-green-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-green-700">Наличные</p>
+                      <p className="text-lg font-semibold text-green-800">{formatMoney(summary.todayCash || 0)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 p-3 bg-blue-50 rounded-lg">
+                    <div className="p-2 bg-blue-100 rounded-lg">
+                      <CreditCard className="w-5 h-5 text-blue-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-blue-700">Карта</p>
+                      <p className="text-lg font-semibold text-blue-800">{formatMoney(summary.todayCard || 0)}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3 p-3 bg-orange-50 rounded-lg">
+                    <div className="p-2 bg-orange-100 rounded-lg">
+                      <Shield className="w-5 h-5 text-orange-600" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-orange-700">Гарантия</p>
+                      <p className="text-lg font-semibold text-orange-800">{formatMoney(summary.todayWarranty || 0)}</p>
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </div>
+        )}
+      </QueryState>
     </div>
   );
 }
@@ -229,7 +239,13 @@ function AdminSalaryView() {
   // Expanded payment history rows
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
-  const { data: salaries, isLoading } = useQuery({
+  const {
+    data: salaries,
+    isLoading,
+    isError,
+    refetch,
+    isFetching,
+  } = useQuery({
     queryKey: ['salary-all', dateFrom, dateTo],
     queryFn: () => salaryApi.getAll({ dateFrom, dateTo }),
     select: (res) => {
@@ -318,7 +334,7 @@ function AdminSalaryView() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <h1 className="text-2xl font-bold text-gray-900">Зарплаты мастеров</h1>
+      <PageHeader title="Зарплаты мастеров" icon={DollarSign} />
 
       {/* Date filter */}
       <DatePeriodPicker
@@ -330,11 +346,15 @@ function AdminSalaryView() {
         }}
       />
 
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : masters.length === 0 ? (
-        <EmptyState icon={Users} title="Нет данных" description="За выбранный период нет данных по зарплатам" />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        isEmpty={masters.length === 0}
+        empty={{ icon: Users, title: 'Нет данных', description: 'За выбранный период нет данных по зарплатам' }}
+        minHeight="min-h-[40vh]"
+      >
         <>
           {/* Summary KPIs — fill desktop width */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -376,15 +396,15 @@ function AdminSalaryView() {
                     </div>
                     <div className="flex items-center justify-between mb-3">
                       <div>
-                        <p className="text-[10px] text-gray-400 uppercase">Выручка</p>
+                        <p className="text-[10px] text-gray-500 uppercase">Выручка</p>
                         <p className="text-sm font-medium text-gray-900">{formatMoney(master.totalRevenue)}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-[10px] text-gray-400 uppercase">Заработок</p>
+                        <p className="text-[10px] text-gray-500 uppercase">Заработок</p>
                         <p className="text-sm font-bold text-green-600">{formatMoney(master.totalEarnings)}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-[10px] text-gray-400 uppercase">Чеков</p>
+                        <p className="text-[10px] text-gray-500 uppercase">Чеков</p>
                         <p className="text-sm font-medium text-gray-600">{master.checkCount}</p>
                       </div>
                     </div>
@@ -392,11 +412,11 @@ function AdminSalaryView() {
                     {/* Paid / Remaining row */}
                     <div className="flex items-center justify-between mb-3 bg-gray-50 rounded-lg px-3 py-2">
                       <div>
-                        <p className="text-[10px] text-gray-400 uppercase">Выплачено</p>
+                        <p className="text-[10px] text-gray-500 uppercase">Выплачено</p>
                         <p className="text-sm font-medium text-blue-600">{formatMoney(master.paidAmount || 0)}</p>
                       </div>
                       <div className="text-right">
-                        <p className="text-[10px] text-gray-400 uppercase">Остаток</p>
+                        <p className="text-[10px] text-gray-500 uppercase">Остаток</p>
                         <p className="text-sm font-bold text-red-600">
                           {formatMoney(master.remainingAmount ?? master.totalEarnings)}
                         </p>
@@ -425,7 +445,7 @@ function AdminSalaryView() {
                   {/* Expandable payment history */}
                   {isExpanded && (
                     <div className="border-t border-gray-100 bg-gray-50 px-4 py-2">
-                      <p className="text-[10px] text-gray-400 uppercase font-bold mb-1">История выплат</p>
+                      <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">История выплат</p>
                       <PaymentHistorySection userId={master.masterId} />
                     </div>
                   )}
@@ -464,17 +484,19 @@ function AdminSalaryView() {
                 {masters.map((master) => {
                   const isExpanded = expandedRows.has(master.masterId);
                   return (
-                    <>
-                      <tr key={master.masterId}>
+                    <Fragment key={master.masterId}>
+                      <tr>
                         <td className="font-medium text-gray-900">{master.masterName}</td>
-                        <td className="text-right text-gray-600">{master.salaryPercent}%</td>
-                        <td className="text-right text-gray-900">{formatMoney(master.totalRevenue)}</td>
-                        <td className="text-right font-medium text-green-600">{formatMoney(master.totalEarnings)}</td>
-                        <td className="text-right text-blue-600">{formatMoney(master.paidAmount || 0)}</td>
-                        <td className="text-right font-medium text-red-600">
+                        <td className="text-right text-gray-600 tabular-nums">{master.salaryPercent}%</td>
+                        <td className="text-right text-gray-900 tabular-nums">{formatMoney(master.totalRevenue)}</td>
+                        <td className="text-right font-medium text-green-600 tabular-nums">
+                          {formatMoney(master.totalEarnings)}
+                        </td>
+                        <td className="text-right text-blue-600 tabular-nums">{formatMoney(master.paidAmount || 0)}</td>
+                        <td className="text-right font-medium text-red-600 tabular-nums">
                           {formatMoney(master.remainingAmount ?? master.totalEarnings)}
                         </td>
-                        <td className="text-right text-gray-600">{master.checkCount}</td>
+                        <td className="text-right text-gray-600 tabular-nums">{master.checkCount}</td>
                         <td className="text-right">
                           <div className="flex items-center justify-end gap-1">
                             <button onClick={() => openPayModal(master)} className="btn-primary text-xs py-1.5 px-3">
@@ -492,7 +514,7 @@ function AdminSalaryView() {
                         </td>
                       </tr>
                       {isExpanded && (
-                        <tr key={`${master.masterId}-history`}>
+                        <tr>
                           <td colSpan={8} className="bg-gray-50 px-6 py-3">
                             <p className="text-xs text-gray-500 font-semibold mb-2">
                               История выплат: {master.masterName}
@@ -501,7 +523,7 @@ function AdminSalaryView() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -509,18 +531,18 @@ function AdminSalaryView() {
                 <tr className="border-t-2 border-gray-300">
                   <td className="font-semibold text-gray-900">Итого</td>
                   <td></td>
-                  <td className="text-right font-semibold text-gray-900">{formatMoney(totalRevenue)}</td>
-                  <td className="text-right font-semibold text-green-600">{formatMoney(totalEarnings)}</td>
-                  <td className="text-right font-semibold text-blue-600">{formatMoney(totalPaid)}</td>
-                  <td className="text-right font-semibold text-red-600">{formatMoney(totalRemaining)}</td>
-                  <td className="text-right font-semibold text-gray-600">{totalChecks}</td>
+                  <td className="text-right font-semibold text-gray-900 tabular-nums">{formatMoney(totalRevenue)}</td>
+                  <td className="text-right font-semibold text-green-600 tabular-nums">{formatMoney(totalEarnings)}</td>
+                  <td className="text-right font-semibold text-blue-600 tabular-nums">{formatMoney(totalPaid)}</td>
+                  <td className="text-right font-semibold text-red-600 tabular-nums">{formatMoney(totalRemaining)}</td>
+                  <td className="text-right font-semibold text-gray-600 tabular-nums">{totalChecks}</td>
                   <td></td>
                 </tr>
               </tfoot>
             </table>
           </div>
         </>
-      )}
+      </QueryState>
 
       {/* ── Payment modal ──────────────────────────────────────────────── */}
       <Modal

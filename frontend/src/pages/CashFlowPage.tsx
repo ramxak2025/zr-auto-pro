@@ -7,8 +7,8 @@ import { ru } from 'date-fns/locale';
 import { reportsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import DatePeriodPicker from '../components/DatePeriodPicker';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
 import type { User } from '../../../shared/types';
 import { formatMoney } from '../../../shared/utils/formatters';
 
@@ -73,7 +73,13 @@ export default function CashFlowPage() {
     enabled: canFilterByMaster,
   });
 
-  const { data: cashFlow, isLoading } = useQuery({
+  const {
+    data: cashFlow,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['cashflow', dateFrom, dateTo, masterId],
     queryFn: () => reportsApi.getCashFlow({ dateFrom, dateTo, ...(masterId ? { masterId } : {}) }),
     select: (res) => res.data as CashFlowData,
@@ -104,12 +110,7 @@ export default function CashFlowPage() {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center gap-3">
-        <div className="p-2 bg-primary-50 rounded-xl">
-          <Wallet className="w-6 h-6 text-primary-600" />
-        </div>
-        <h1 className="text-2xl font-bold text-gray-900">Движение денег</h1>
-      </div>
+      <PageHeader title="Движение денег" icon={Wallet} />
 
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
@@ -127,6 +128,7 @@ export default function CashFlowPage() {
             <select
               value={masterId}
               onChange={(e) => setMasterId(e.target.value)}
+              aria-label="Фильтр по мастеру"
               className="input py-2 pr-8 min-w-[180px]"
             >
               <option value="">Все мастера</option>
@@ -147,14 +149,14 @@ export default function CashFlowPage() {
             <Banknote className="w-4 h-4 text-green-500" />
             <div className="stat-label">Наличные</div>
           </div>
-          <div className="stat-value text-green-600">{formatMoney(totals.cash)}</div>
+          <div className="stat-value tabular-nums text-green-600">{formatMoney(totals.cash)}</div>
         </div>
         <div className="stat-card">
           <div className="flex items-center gap-2 mb-1">
             <CreditCard className="w-4 h-4 text-blue-500" />
             <div className="stat-label">Карта</div>
           </div>
-          <div className="stat-value text-blue-600">{formatMoney(totals.card)}</div>
+          <div className="stat-value tabular-nums text-blue-600">{formatMoney(totals.card)}</div>
         </div>
         {hasInstallmentDebt && (
           <div className="stat-card">
@@ -162,7 +164,7 @@ export default function CashFlowPage() {
               <CalendarClock className="w-4 h-4 text-violet-500" />
               <div className="stat-label">Рассрочка (долг)</div>
             </div>
-            <div className="stat-value text-violet-600">{formatMoney(totals.installmentDebt ?? 0)}</div>
+            <div className="stat-value tabular-nums text-violet-600">{formatMoney(totals.installmentDebt ?? 0)}</div>
           </div>
         )}
         <div className="stat-card">
@@ -170,8 +172,8 @@ export default function CashFlowPage() {
             <Wallet className="w-4 h-4 text-gray-700" />
             <div className="stat-label">Итого</div>
           </div>
-          <div className="stat-value text-gray-900">{formatMoney(totals.total)}</div>
-          <p className="text-[11px] text-gray-400 mt-0.5">Оборот (без гарантии)</p>
+          <div className="stat-value tabular-nums text-gray-900">{formatMoney(totals.total)}</div>
+          <p className="text-[11px] text-gray-500 mt-0.5">Оборот (без гарантии)</p>
         </div>
         {hasWarrantyLoss && (
           <div className="stat-card">
@@ -179,8 +181,8 @@ export default function CashFlowPage() {
               <ShieldAlert className="w-4 h-4 text-red-500" />
               <div className="stat-label">Гарантия (убыток)</div>
             </div>
-            <div className="stat-value text-red-600">-{formatMoney(totals.warrantyLoss ?? 0)}</div>
-            <p className="text-[11px] text-gray-400 mt-0.5">Не входит в оборот — запчасти + оплата мастеру</p>
+            <div className="stat-value tabular-nums text-red-600">-{formatMoney(totals.warrantyLoss ?? 0)}</div>
+            <p className="text-[11px] text-gray-500 mt-0.5">Не входит в оборот — запчасти + оплата мастеру</p>
           </div>
         )}
         {hasInstallmentPaid && (
@@ -189,21 +191,29 @@ export default function CashFlowPage() {
               <Coins className="w-4 h-4 text-teal-500" />
               <div className="stat-label">Погашения рассрочки</div>
             </div>
-            <div className="stat-value text-teal-600">+{formatMoney(totals.installmentPaid ?? 0)}</div>
-            <p className="text-[11px] text-gray-400 mt-0.5">Не входит в оборот — оплата прошлых продаж</p>
+            <div className="stat-value tabular-nums text-teal-600">+{formatMoney(totals.installmentPaid ?? 0)}</div>
+            <p className="text-[11px] text-gray-500 mt-0.5">Не входит в оборот — оплата прошлых продаж</p>
             {installmentPaidParts.length > 0 && (
-              <p className="text-[11px] text-gray-400 mt-0.5">в т.ч. {installmentPaidParts.join(' · ')}</p>
+              <p className="text-[11px] text-gray-500 mt-0.5">в т.ч. {installmentPaidParts.join(' · ')}</p>
             )}
           </div>
         )}
       </div>
 
       {/* Table */}
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : days.length === 0 ? (
-        <EmptyState icon={Wallet} title="Нет данных" description="За выбранный период нет движения денежных средств" />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        isEmpty={days.length === 0}
+        empty={{
+          icon: Wallet,
+          title: 'Нет данных',
+          description: 'За выбранный период нет движения денежных средств',
+        }}
+        minHeight="min-h-[30vh]"
+      >
         <>
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
@@ -274,21 +284,25 @@ export default function CashFlowPage() {
                     <td className="capitalize text-gray-500 whitespace-nowrap">
                       {format(new Date(day.date), 'EEEE', { locale: ru })}
                     </td>
-                    <td className="text-right text-green-600">{day.cash > 0 ? formatMoney(day.cash) : '\u2014'}</td>
-                    <td className="text-right text-blue-600">{day.card > 0 ? formatMoney(day.card) : '\u2014'}</td>
+                    <td className="text-right tabular-nums text-green-600">
+                      {day.cash > 0 ? formatMoney(day.cash) : '\u2014'}
+                    </td>
+                    <td className="text-right tabular-nums text-blue-600">
+                      {day.card > 0 ? formatMoney(day.card) : '\u2014'}
+                    </td>
                     {hasInstallmentDebt && (
-                      <td className="text-right text-violet-600">
+                      <td className="text-right tabular-nums text-violet-600">
                         {(day.installmentDebt ?? 0) > 0 ? formatMoney(day.installmentDebt ?? 0) : '\u2014'}
                       </td>
                     )}
-                    <td className="text-right font-semibold text-gray-900">{formatMoney(day.total)}</td>
+                    <td className="text-right tabular-nums font-semibold text-gray-900">{formatMoney(day.total)}</td>
                     {hasWarrantyLoss && (
-                      <td className="text-right text-red-600">
+                      <td className="text-right tabular-nums text-red-600">
                         {(day.warrantyLoss ?? 0) > 0 ? `-${formatMoney(day.warrantyLoss ?? 0)}` : '\u2014'}
                       </td>
                     )}
                     {hasInstallmentPaid && (
-                      <td className="text-right text-teal-600">
+                      <td className="text-right tabular-nums text-teal-600">
                         {(day.installmentPaid ?? 0) > 0 ? `+${formatMoney(day.installmentPaid ?? 0)}` : '\u2014'}
                       </td>
                     )}
@@ -317,26 +331,32 @@ export default function CashFlowPage() {
               <tfoot>
                 <tr className="border-t-2 border-gray-300 bg-gray-50 [&>td]:sticky [&>td]:bottom-0 [&>td]:z-10 [&>td]:bg-gray-50">
                   <td className="font-bold text-gray-900">Итого</td>
-                  <td className="text-gray-400">{days.length} дн.</td>
-                  <td className="text-right font-bold text-green-600">{formatMoney(totals.cash)}</td>
-                  <td className="text-right font-bold text-blue-600">{formatMoney(totals.card)}</td>
+                  <td className="text-gray-500">{days.length} дн.</td>
+                  <td className="text-right tabular-nums font-bold text-green-600">{formatMoney(totals.cash)}</td>
+                  <td className="text-right tabular-nums font-bold text-blue-600">{formatMoney(totals.card)}</td>
                   {hasInstallmentDebt && (
-                    <td className="text-right font-bold text-violet-600">{formatMoney(totals.installmentDebt ?? 0)}</td>
+                    <td className="text-right tabular-nums font-bold text-violet-600">
+                      {formatMoney(totals.installmentDebt ?? 0)}
+                    </td>
                   )}
-                  <td className="text-right font-bold text-gray-900">{formatMoney(totals.total)}</td>
+                  <td className="text-right tabular-nums font-bold text-gray-900">{formatMoney(totals.total)}</td>
                   {hasWarrantyLoss && (
-                    <td className="text-right font-bold text-red-600">-{formatMoney(totals.warrantyLoss ?? 0)}</td>
+                    <td className="text-right tabular-nums font-bold text-red-600">
+                      -{formatMoney(totals.warrantyLoss ?? 0)}
+                    </td>
                   )}
                   {hasInstallmentPaid && (
-                    <td className="text-right font-bold text-teal-600">+{formatMoney(totals.installmentPaid ?? 0)}</td>
+                    <td className="text-right tabular-nums font-bold text-teal-600">
+                      +{formatMoney(totals.installmentPaid ?? 0)}
+                    </td>
                   )}
-                  <td className="text-right font-bold text-gray-900">100%</td>
+                  <td className="text-right tabular-nums font-bold text-gray-900">100%</td>
                 </tr>
               </tfoot>
             </table>
           </div>
         </>
-      )}
+      </QueryState>
     </div>
   );
 }

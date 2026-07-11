@@ -24,8 +24,8 @@ import { tenantsApi, plansApi } from '../../api/services';
 import { Tenant, Plan } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
-import LoadingSpinner from '../../components/LoadingSpinner';
-import EmptyState from '../../components/EmptyState';
+import QueryState from '../../components/QueryState';
+import Switch from '../../components/Switch';
 import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
 
 interface TenantFormData {
@@ -84,7 +84,7 @@ export default function AdminTenantsPage() {
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['tenants'],
     queryFn: () => tenantsApi.getAll(),
     select: (res) => res.data as Tenant[],
@@ -221,8 +221,6 @@ export default function AdminTenantsPage() {
     setExpandedId((prev) => (prev === id ? null : id));
   };
 
-  if (isLoading) return <LoadingSpinner />;
-
   return (
     <div>
       {/* Header */}
@@ -235,14 +233,21 @@ export default function AdminTenantsPage() {
       </div>
 
       {/* Accordion Cards */}
-      {tenants.length === 0 ? (
-        <EmptyState
-          icon={Building2}
-          title="Нет автосервисов"
-          description="Создайте первую автосервис"
-          action={{ label: 'Создать', onClick: openCreate }}
-        />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        errorTitle="Не удалось загрузить автосервисы"
+        isEmpty={tenants.length === 0}
+        empty={{
+          icon: Building2,
+          title: 'Нет автосервисов',
+          description: 'Создайте первый автосервис',
+          action: { label: 'Создать', onClick: openCreate },
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <div className="space-y-3">
           {tenants.map((tenant) => {
             const isExpanded = expandedId === tenant.id;
@@ -374,7 +379,7 @@ export default function AdminTenantsPage() {
             );
           })}
         </div>
-      )}
+      </QueryState>
 
       {/* Create / Edit Modal */}
       <Modal
@@ -531,7 +536,7 @@ export default function AdminTenantsPage() {
                 })}
               </div>
             ) : (
-              <p className="text-sm text-gray-400">
+              <p className="text-sm text-gray-500">
                 Нет доступных тарифов. Создайте тариф в разделе &laquo;Тарифы&raquo;.
               </p>
             )}
@@ -539,15 +544,7 @@ export default function AdminTenantsPage() {
 
           {/* Active Toggle */}
           <div className="flex items-center gap-3">
-            <label className="relative inline-flex items-center cursor-pointer">
-              <input
-                type="checkbox"
-                className="sr-only peer"
-                checked={form.isActive}
-                onChange={(e) => setForm({ ...form, isActive: e.target.checked })}
-              />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600" />
-            </label>
+            <Switch checked={form.isActive} onChange={(v) => setForm({ ...form, isActive: v })} label="Активна" />
             <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активна' : 'Неактивна'}</span>
           </div>
 

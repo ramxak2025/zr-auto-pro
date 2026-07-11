@@ -19,6 +19,7 @@ import { importsApi } from '../api/services';
 import { formatPhone } from '../../../shared/validation/phone';
 import { useAuth } from '../contexts/AuthContext';
 import LoadingSpinner from '../components/LoadingSpinner';
+import ConfirmDialog from '../components/ConfirmDialog';
 import type {
   ImportRowInput,
   ImportPreviewResponse,
@@ -228,6 +229,7 @@ export default function ImportClientsCarsPage() {
   const [previewing, setPreviewing] = useState(false);
   const [preview, setPreview] = useState<ImportPreviewResponseV2 | null>(null);
   const [confirming, setConfirming] = useState(false);
+  const [confirmImportOpen, setConfirmImportOpen] = useState(false);
   const [result, setResult] = useState<ImportConfirmResponseV2 | null>(null);
 
   // Duplicate decisions: global default + per-group overrides (key = phoneKey).
@@ -374,9 +376,6 @@ export default function ImportClientsCarsPage() {
 
   async function runConfirm() {
     if (!preview) return;
-    if (!window.confirm('Импортировать данные в систему? Это действие сохранит клиентов и авто в вашей базе.')) {
-      return;
-    }
     setConfirming(true);
     try {
       const rows = buildPayload();
@@ -954,7 +953,7 @@ export default function ImportClientsCarsPage() {
                 <ArrowLeft className="w-4 h-4" />
                 Изменить колонки
               </button>
-              <button onClick={runConfirm} disabled={confirming} className="btn-primary">
+              <button onClick={() => setConfirmImportOpen(true)} disabled={confirming} className="btn-primary">
                 {confirming ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
                 {confirming ? 'Импортируем…' : 'Подтвердить импорт'}
               </button>
@@ -1033,6 +1032,17 @@ export default function ImportClientsCarsPage() {
           </div>
         </div>
       )}
+
+      {/* Confirm import — irreversible DB write, routed through the styled dialog */}
+      <ConfirmDialog
+        isOpen={confirmImportOpen}
+        onClose={() => setConfirmImportOpen(false)}
+        onConfirm={runConfirm}
+        title="Импортировать данные?"
+        message="Клиенты и их автомобили будут сохранены в вашей базе согласно выбранным решениям по дублям. Продолжить?"
+        confirmText="Импортировать"
+        variant="primary"
+      />
     </div>
   );
 }

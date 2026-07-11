@@ -28,8 +28,9 @@ import toast from 'react-hot-toast';
 import { usersApi, scheduleApi, salaryApi } from '../api/services';
 import EmptyState from '../components/EmptyState';
 import LoadingSpinner from '../components/LoadingSpinner';
+import PageHeader from '../components/PageHeader';
 import type { User, ScheduleEntry, MasterSalary } from '../types';
-import { roleLabels } from '../../../shared/utils/formatters';
+import { roleLabels, formatMoney } from '../../../shared/utils/formatters';
 import {
   PERIOD_OPTIONS,
   PERIOD_LABEL_CASUAL,
@@ -45,11 +46,6 @@ const roleBadgeColors: Record<string, string> = {
   admin: 'bg-blue-50 text-blue-700',
   master: 'bg-green-50 text-green-700',
 };
-
-const formatMoney = (v: number): string =>
-  Math.round(v)
-    .toString()
-    .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽';
 
 const NO_GROUP = '__NO_GROUP__';
 
@@ -235,19 +231,12 @@ function Header({
   totalActive: number;
 }) {
   return (
-    <header className="sticky top-0 z-10 -mx-4 md:-mx-6 px-4 md:px-6 pt-2 pb-3 bg-gray-50/80 backdrop-blur">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
-            <Users className="h-5 w-5" />
-          </div>
-          <div>
-            <h1 className="text-2xl font-bold text-gray-900 tracking-tight">Сотрудники</h1>
-            <p className="text-sm text-gray-500">{totalActive} активных</p>
-          </div>
-        </div>
-
-        {/* Period switcher — segmented control */}
+    <PageHeader
+      title="Сотрудники"
+      icon={Users}
+      subtitle={`${totalActive} активных`}
+      actions={
+        /* Period switcher — segmented control */
         <div className="flex flex-wrap items-center gap-1 rounded-xl bg-white border border-gray-200 p-1 shadow-sm">
           {PERIOD_OPTIONS.map((p) => {
             const active = p.key === period;
@@ -265,8 +254,8 @@ function Header({
             );
           })}
         </div>
-      </div>
-    </header>
+      }
+    />
   );
 }
 
@@ -336,7 +325,7 @@ function GroupSection({
             <Pencil className="h-3 w-3 text-gray-300 group-hover:text-blue-600 transition-colors" />
           </button>
         )}
-        <span className="text-xs text-gray-400 ml-1">{members.length}</span>
+        <span className="text-xs text-gray-500 ml-1">{members.length}</span>
       </div>
 
       {/* Cards */}
@@ -536,14 +525,14 @@ function Stat({
 }) {
   return (
     <div className="bg-white px-3 py-2.5">
-      <div className="flex items-center gap-1 text-[10px] text-gray-400 uppercase tracking-wider">
+      <div className="flex items-center gap-1 text-[10px] text-gray-500 uppercase tracking-wider">
         {icon}
         <span>{label}</span>
       </div>
       <p className={`text-base font-bold tabular-nums mt-0.5 ${tone === 'warn' ? 'text-orange-600' : 'text-gray-900'}`}>
         {value}
       </p>
-      {hint && <p className="text-[10px] text-gray-400 mt-0">{hint}</p>}
+      {hint && <p className="text-[10px] text-gray-500 mt-0">{hint}</p>}
     </div>
   );
 }

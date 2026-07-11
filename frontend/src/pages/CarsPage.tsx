@@ -4,10 +4,15 @@ import { useQuery } from '@tanstack/react-query';
 import { Car, Calendar, User } from 'lucide-react';
 import { carsApi } from '../api/services';
 import SearchInput from '../components/SearchInput';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
+import QueryState from '../components/QueryState';
 import Pagination from '../components/Pagination';
+import { useClickableRow } from '../hooks/useClickableRow';
 import { Car as CarType, PaginatedResponse } from '../types';
+
+// `useClickableRow` holds no React state — it just returns the a11y prop bag —
+// so aliasing lets us call it per-row inside `.map` without tripping
+// react-hooks/rules-of-hooks (which forbids hook calls inside callbacks).
+const clickableRowProps = useClickableRow;
 
 export default function CarsPage() {
   const navigate = useNavigate();
@@ -16,7 +21,7 @@ export default function CarsPage() {
   const [page, setPage] = useState(1);
   const limit = 20;
 
-  const { data, isLoading } = useQuery<PaginatedResponse<CarType>>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<PaginatedResponse<CarType>>({
     queryKey: ['cars', { search, page, limit }],
     queryFn: async () => {
       const res = await carsApi.getAll({ search, page, limit });
@@ -43,7 +48,7 @@ export default function CarsPage() {
       </div>
 
       {/* Search */}
-      <div className="mb-4">
+      <div className="mb-4 max-w-md">
         <SearchInput
           value={search}
           onChange={(val) => {
@@ -55,26 +60,30 @@ export default function CarsPage() {
       </div>
 
       {/* Content */}
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : cars.length === 0 ? (
-        <EmptyState
-          icon={Car}
-          title="Нет автомобилей"
-          description={
-            search
-              ? 'По вашему запросу ничего не найдено'
-              : 'Автомобили будут добавлены через карточку клиента'
-          }
-        />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        isEmpty={cars.length === 0}
+        empty={{
+          icon: Car,
+          title: 'Нет автомобилей',
+          description: search
+            ? 'По вашему запросу ничего не найдено'
+            : 'Автомобили будут добавлены через карточку клиента',
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <>
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
             {cars.map((car) => (
               <div
                 key={car.id}
-                onClick={() => car.clientId && navigate(`/clients/${car.clientId}`)}
+                {...clickableRowProps(() => car.clientId && navigate(`/clients/${car.clientId}`), {
+                  label: `${car.plateNumber} ${car.makeModel}`,
+                })}
                 className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
               >
                 <div className="flex items-center justify-between mb-1">
@@ -85,9 +94,7 @@ export default function CarsPage() {
                   <span className="text-xs text-gray-400">{formatDate(car.createdAt)}</span>
                 </div>
                 <p className="text-sm text-gray-700 ml-6">{car.makeModel}</p>
-                {car.client && (
-                  <p className="text-xs text-gray-500 ml-6 mt-0.5">{car.client.fullName}</p>
-                )}
+                {car.client && <p className="text-xs text-gray-500 ml-6 mt-0.5">{car.client.fullName}</p>}
               </div>
             ))}
           </div>
@@ -107,19 +114,15 @@ export default function CarsPage() {
                 {cars.map((car) => (
                   <tr
                     key={car.id}
-                    onClick={() => {
-                      if (car.clientId) {
-                        navigate(`/clients/${car.clientId}`);
-                      }
-                    }}
+                    {...clickableRowProps(() => car.clientId && navigate(`/clients/${car.clientId}`), {
+                      label: `${car.plateNumber} ${car.makeModel}`,
+                    })}
                     className="cursor-pointer hover:bg-gray-50"
                   >
                     <td>
                       <div className="flex items-center gap-2">
                         <Car className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        <span className="font-semibold text-gray-900">
-                          {car.plateNumber}
-                        </span>
+                        <span className="font-semibold text-gray-900">{car.plateNumber}</span>
                       </div>
                     </td>
                     <td>
@@ -128,9 +131,7 @@ export default function CarsPage() {
                     <td>
                       <div className="flex items-center gap-2">
                         <User className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        <span className="text-gray-600">
-                          {car.client?.fullName || '—'}
-                        </span>
+                        <span className="text-gray-600">{car.client?.fullName || '—'}</span>
                       </div>
                     </td>
                     <td>
@@ -145,14 +146,9 @@ export default function CarsPage() {
             </table>
           </div>
 
-          <Pagination
-            page={page}
-            total={total}
-            limit={limit}
-            onChange={setPage}
-          />
+          <Pagination page={page} total={total} limit={limit} onChange={setPage} />
         </>
-      )}
+      </QueryState>
     </div>
   );
 }

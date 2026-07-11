@@ -172,6 +172,8 @@ function AudioPlayer({ recordingId, phone, onClose }: { recordingId: string; pho
           type="button"
           onClick={togglePlay}
           disabled={loading || !!error}
+          aria-label={playing ? 'Пауза' : 'Воспроизвести'}
+          title={playing ? 'Пауза' : 'Воспроизвести'}
           className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-500 text-white shadow-sm hover:bg-primary-600 active:scale-95 transition-all flex-shrink-0 disabled:opacity-50"
         >
           {loading ? (
@@ -185,11 +187,17 @@ function AudioPlayer({ recordingId, phone, onClose }: { recordingId: string; pho
 
         <div className="flex-1 min-w-0">
           {error ? (
-            <p className="text-xs text-red-500">{error}</p>
+            <p className="text-xs text-red-600">{error}</p>
           ) : (
             <>
               <div
                 ref={progressRef}
+                role="slider"
+                aria-label="Перемотка записи"
+                aria-valuemin={0}
+                aria-valuemax={Math.round(duration) || 0}
+                aria-valuenow={Math.round(currentTime)}
+                tabIndex={0}
                 className="relative h-1.5 bg-primary-200 rounded-full cursor-pointer"
                 onClick={seek}
                 onTouchStart={seek}
@@ -211,6 +219,8 @@ function AudioPlayer({ recordingId, phone, onClose }: { recordingId: string; pho
         <button
           type="button"
           onClick={onClose}
+          aria-label="Закрыть плеер"
+          title="Закрыть плеер"
           className="p-1 rounded-lg hover:bg-primary-100 text-primary-400 flex-shrink-0"
         >
           <X className="h-4 w-4" />
@@ -286,7 +296,7 @@ function CallRow({
               {call.client.cars?.[0] && ` \u2022 ${call.client.cars[0].makeModel || call.client.cars[0].plateNumber}`}
             </Link>
           ) : (
-            <p className="text-xs text-gray-400 mt-0.5">Неизвестный номер</p>
+            <p className="text-xs text-gray-500 mt-0.5">Неизвестный номер</p>
           )}
         </div>
 
@@ -294,7 +304,7 @@ function CallRow({
         <div className="flex items-center gap-2 flex-shrink-0">
           <div className="text-right">
             <p className="text-xs text-gray-500">{callTime}</p>
-            {call.duration > 0 && <p className="text-[10px] text-gray-400">{formatDuration(call.duration)}</p>}
+            {call.duration > 0 && <p className="text-[10px] text-gray-500">{formatDuration(call.duration)}</p>}
             {isMissed && call.calledBack && <p className="text-[10px] font-medium text-green-600">Перезвонили</p>}
             {isMissed && !call.calledBack && <p className="text-[10px] font-medium text-red-500">Пропущен</p>}
           </div>
@@ -303,6 +313,8 @@ function CallRow({
             <button
               type="button"
               onClick={() => onPlayRecording(isPlaying ? null : call.recordingUrl)}
+              aria-label={isPlaying ? 'Пауза' : 'Прослушать запись'}
+              title={isPlaying ? 'Пауза' : 'Прослушать запись'}
               className={`flex h-8 w-8 items-center justify-center rounded-full transition-colors flex-shrink-0 ${
                 isPlaying
                   ? 'bg-primary-500 text-white'
@@ -356,7 +368,7 @@ export default function CallsPage() {
     return format(selectedDate, 'd MMM, EEEEEE', { locale: ru });
   }, [dateStr, selectedDate]);
 
-  const { data, isLoading, isError } = useQuery({
+  const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['calls', dateStr],
     queryFn: async () => {
       const res = await callsApi.getCalls({ date: dateStr });
@@ -412,10 +424,15 @@ export default function CallsPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-bold text-gray-900">Звонки</h1>
-          <p className="text-xs text-gray-400">История и записи</p>
+          <p className="text-xs text-gray-500">История и записи</p>
         </div>
         <div className="flex items-center gap-1">
-          <button type="button" onClick={goToPrevDay} className="p-2 rounded-lg hover:bg-gray-100 text-gray-400">
+          <button
+            type="button"
+            onClick={goToPrevDay}
+            aria-label="Предыдущий день"
+            className="p-2 rounded-lg hover:bg-gray-100 text-gray-400"
+          >
             <ChevronLeft className="w-5 h-5" />
           </button>
           <span className="text-sm font-medium text-gray-700 min-w-[80px] text-center">{dateLabel}</span>
@@ -423,6 +440,7 @@ export default function CallsPage() {
             type="button"
             onClick={goToNextDay}
             disabled={isToday}
+            aria-label="Следующий день"
             className="p-2 rounded-lg hover:bg-gray-100 text-gray-400 disabled:opacity-20"
           >
             <ChevronRight className="w-5 h-5" />
@@ -507,10 +525,18 @@ export default function CallsPage() {
             ))}
           </div>
         ) : isError ? (
-          <div className="flex flex-col items-center py-10">
+          <div className="flex flex-col items-center py-10" role="alert">
             <AlertCircle className="h-8 w-8 text-red-300 mb-2" />
-            <p className="text-sm text-red-500">Не удалось загрузить звонки</p>
-            <p className="text-xs text-gray-400 mt-1">Проверьте настройки МоиЗвонки</p>
+            <p className="text-sm text-red-600">Не удалось загрузить звонки</p>
+            <p className="text-xs text-gray-500 mt-1">Проверьте настройки телефонии (Mango Office)</p>
+            <button
+              type="button"
+              onClick={() => refetch()}
+              disabled={isFetching}
+              className="btn-secondary btn-sm press-soft mt-4"
+            >
+              Повторить
+            </button>
           </div>
         ) : filteredCalls.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12">

@@ -294,8 +294,10 @@ export default function MorePage() {
 
   return (
     <div className="space-y-6">
+      <h1 className="page-title">Ещё</h1>
+
       {/* User card */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+      <div className="card p-5">
         <div className="flex items-center gap-4">
           <div className="relative">
             {user?.avatar ? (
@@ -309,6 +311,8 @@ export default function MorePage() {
               type="button"
               onClick={() => fileInputRef.current?.click()}
               disabled={uploading}
+              aria-label="Загрузить фото профиля"
+              title="Загрузить фото профиля"
               className="absolute -bottom-1 -right-1 flex h-7 w-7 items-center justify-center rounded-full bg-white border-2 border-gray-200 text-gray-500 hover:bg-gray-50 transition-colors shadow-sm"
             >
               {uploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Camera className="h-3.5 w-3.5" />}
@@ -333,7 +337,7 @@ export default function MorePage() {
       </div>
 
       {/* Menu items */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-100 overflow-hidden">
+      <div className="card divide-y divide-gray-100 overflow-hidden">
         {menuItems.map((item) => {
           // ROLE-ONLY hide-by-permission: скрываем пункт без gating-права.
           // Owner-class (superadmin/director/admin) видит всё.
@@ -373,7 +377,7 @@ export default function MorePage() {
       {/* Logout */}
       <button
         onClick={logout}
-        className="w-full flex items-center justify-center gap-2 bg-white rounded-2xl border border-gray-100 shadow-sm px-5 py-4
+        className="card w-full flex items-center justify-center gap-2 px-5 py-4
           text-red-600 font-medium text-sm hover:bg-red-50 active:bg-red-100 transition-colors"
       >
         <LogOut className="h-5 w-5" />
@@ -384,7 +388,7 @@ export default function MorePage() {
       <DeleteAccountSection />
 
       {/* Legal links */}
-      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-1 text-xs text-gray-400">
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 pt-1 text-xs text-gray-500">
         <a
           href={PRIVACY_URL}
           target="_blank"

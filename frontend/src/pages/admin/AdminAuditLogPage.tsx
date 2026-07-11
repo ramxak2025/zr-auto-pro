@@ -5,8 +5,7 @@ import { ru } from 'date-fns/locale';
 
 import { adminApi } from '../../api/services';
 import type { AuditLogEntry } from '../../types';
-import LoadingSpinner from '../../components/LoadingSpinner';
-import EmptyState from '../../components/EmptyState';
+import QueryState from '../../components/QueryState';
 
 // Human-readable labels for known audit actions; unknown actions show the raw key.
 const ACTION_LABELS: Record<string, string> = {
@@ -34,13 +33,17 @@ function actionBadgeClass(action: string): string {
 }
 
 export default function AdminAuditLogPage() {
-  const { data: entries, isLoading } = useQuery({
+  const {
+    data: entries,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['admin-audit-log'],
     queryFn: () => adminApi.listAuditLog(),
     select: (res) => res.data as AuditLogEntry[],
   });
-
-  if (isLoading) return <LoadingSpinner />;
 
   const rows = entries ?? [];
 
@@ -50,13 +53,20 @@ export default function AdminAuditLogPage() {
         <h1 className="page-title">Журнал действий</h1>
       </div>
 
-      {rows.length === 0 ? (
-        <EmptyState
-          icon={ScrollText}
-          title="Журнал пуст"
-          description="Действия администраторов платформы появятся здесь"
-        />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        errorTitle="Не удалось загрузить журнал"
+        isEmpty={rows.length === 0}
+        empty={{
+          icon: ScrollText,
+          title: 'Журнал пуст',
+          description: 'Действия администраторов платформы появятся здесь',
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <div className="table-container">
           <table className="table">
             <thead>
@@ -111,7 +121,7 @@ export default function AdminAuditLogPage() {
             </tbody>
           </table>
         </div>
-      )}
+      </QueryState>
     </div>
   );
 }

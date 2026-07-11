@@ -18,6 +18,8 @@ import {
 import toast from 'react-hot-toast';
 import { paymentsApi, fiscalApi, telephonyApi, walletApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import Switch from '../components/Switch';
+import QueryState from '../components/QueryState';
 import { UserRole } from '../types';
 import type {
   PaymentIntegrationSettings,
@@ -34,7 +36,7 @@ const inputCls =
   'w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:border-primary-300 focus:ring-1 focus:ring-primary-200 outline-none transition-all disabled:bg-gray-50 disabled:text-gray-400';
 const textareaCls = `${inputCls} font-mono text-xs leading-relaxed min-h-[88px] resize-y`;
 const labelCls = 'text-xs font-medium text-gray-600 mb-1 block';
-const hintCls = 'text-[11px] text-gray-400 mt-1';
+const hintCls = 'text-[11px] text-gray-500 mt-1';
 
 function StoredBadge({ ok, label }: { ok: boolean; label: string }) {
   return (
@@ -49,27 +51,20 @@ function StoredBadge({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
+// Accessible toggle wrapper — `label` gives the switch an accessible name
+// (the old sr-only checkbox announced as an unnamed "checkbox").
 function Toggle({
   checked,
   onChange,
   disabled,
+  label,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
   disabled?: boolean;
+  label: string;
 }) {
-  return (
-    <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
-      <input
-        type="checkbox"
-        className="sr-only peer"
-        checked={checked}
-        onChange={(e) => onChange(e.target.checked)}
-        disabled={disabled}
-      />
-      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600 peer-disabled:opacity-60" />
-    </label>
-  );
+  return <Switch checked={checked} onChange={onChange} disabled={disabled} label={label} />;
 }
 
 const HINT = 'Ключи — в ЛК провайдера; до ввода функция неактивна.';
@@ -86,7 +81,13 @@ const PAYMENT_PROVIDERS: { value: PaymentProviderName; label: string }[] = [
 function AcquiringCard() {
   const queryClient = useQueryClient();
 
-  const { data: settings, isLoading } = useQuery<PaymentIntegrationSettings>({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery<PaymentIntegrationSettings>({
     queryKey: ['payments', 'settings'],
     queryFn: async () => (await paymentsApi.getSettings()).data,
   });
@@ -147,16 +148,17 @@ function AcquiringCard() {
       : 'Секретный ключ магазина';
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+    <div className="card p-5 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <CreditCard className="h-4 w-4 text-gray-400" />
+          <CreditCard className="h-4 w-4 text-gray-500" />
           <h2 className="text-sm font-semibold text-gray-900">Эквайринг (карта / СБП)</h2>
         </div>
         <Toggle
+          label="Эквайринг"
           checked={form.enabled}
           onChange={(v) => update({ enabled: v })}
-          disabled={isLoading || mutation.isPending}
+          disabled={isLoading || isError || mutation.isPending}
         />
       </div>
 
@@ -165,11 +167,15 @@ function AcquiringCard() {
         <span>{HINT}</span>
       </p>
 
-      {isLoading ? (
-        <div className="flex justify-center py-4">
-          <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
-        </div>
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        minHeight="py-6"
+        errorTitle="Не удалось загрузить настройки"
+        errorDescription="Форма скрыта, чтобы не перезаписать сохранённые ключи. Повторите загрузку."
+      >
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -218,18 +224,18 @@ function AcquiringCard() {
             </p>
           </div>
         </div>
-      )}
 
-      {dirty && (
-        <button
-          onClick={handleSave}
-          disabled={mutation.isPending}
-          className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-        >
-          {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          Сохранить эквайринг
-        </button>
-      )}
+        {dirty && (
+          <button
+            onClick={handleSave}
+            disabled={mutation.isPending}
+            className="mt-4 w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+          >
+            {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Сохранить эквайринг
+          </button>
+        )}
+      </QueryState>
     </div>
   );
 }
@@ -259,7 +265,13 @@ const VAT_OPTIONS: { value: FiscalVat; label: string }[] = [
 function FiscalCard() {
   const queryClient = useQueryClient();
 
-  const { data: settings, isLoading } = useQuery<FiscalSettings>({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery<FiscalSettings>({
     queryKey: ['fiscal', 'settings'],
     queryFn: async () => (await fiscalApi.getSettings()).data,
   });
@@ -363,16 +375,17 @@ function FiscalCard() {
       : 'Пароль АТОЛ';
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+    <div className="card p-5 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Receipt className="h-4 w-4 text-gray-400" />
+          <Receipt className="h-4 w-4 text-gray-500" />
           <h2 className="text-sm font-semibold text-gray-900">Онлайн-касса 54-ФЗ (АТОЛ)</h2>
         </div>
         <Toggle
+          label="Онлайн-касса 54-ФЗ"
           checked={form.enabled}
           onChange={(v) => update({ enabled: v })}
-          disabled={isLoading || mutation.isPending}
+          disabled={isLoading || isError || mutation.isPending}
         />
       </div>
 
@@ -381,11 +394,15 @@ function FiscalCard() {
         <span>{HINT}</span>
       </p>
 
-      {isLoading ? (
-        <div className="flex justify-center py-4">
-          <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
-        </div>
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        minHeight="py-6"
+        errorTitle="Не удалось загрузить настройки"
+        errorDescription="Форма скрыта, чтобы не перезаписать сохранённые данные. Повторите загрузку."
+      >
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -491,18 +508,18 @@ function FiscalCard() {
             <p className={hintCls}>На этот адрес ОФД отправит электронный чек, если у клиента нет почты.</p>
           </div>
         </div>
-      )}
 
-      {dirty && (
-        <button
-          onClick={handleSave}
-          disabled={mutation.isPending}
-          className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-        >
-          {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          Сохранить онлайн-кассу
-        </button>
-      )}
+        {dirty && (
+          <button
+            onClick={handleSave}
+            disabled={mutation.isPending}
+            className="mt-4 w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+          >
+            {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Сохранить онлайн-кассу
+          </button>
+        )}
+      </QueryState>
     </div>
   );
 }
@@ -534,7 +551,13 @@ function TelephonyCard() {
   const { user } = useAuth();
   const tenantId = user?.tenantId ?? '';
 
-  const { data: settings, isLoading } = useQuery<TelephonySettings>({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery<TelephonySettings>({
     queryKey: ['telephony', 'settings'],
     queryFn: async () => (await telephonyApi.getSettings()).data,
   });
@@ -609,16 +632,17 @@ function TelephonyCard() {
   };
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+    <div className="card p-5 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <PhoneCall className="h-4 w-4 text-gray-400" />
+          <PhoneCall className="h-4 w-4 text-gray-500" />
           <h2 className="text-sm font-semibold text-gray-900">Телефония (Mango Office)</h2>
         </div>
         <Toggle
+          label="Телефония"
           checked={form.enabled}
           onChange={(v) => update({ enabled: v })}
-          disabled={isLoading || mutation.isPending}
+          disabled={isLoading || isError || mutation.isPending}
         />
       </div>
 
@@ -627,11 +651,15 @@ function TelephonyCard() {
         <span>{MANGO_HINT}</span>
       </p>
 
-      {isLoading ? (
-        <div className="flex justify-center py-4">
-          <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
-        </div>
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        minHeight="py-6"
+        errorTitle="Не удалось загрузить настройки"
+        errorDescription="Форма скрыта, чтобы не перезаписать сохранённые ключи. Повторите загрузку."
+      >
         <div className="space-y-3">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
@@ -698,18 +726,18 @@ function TelephonyCard() {
             </p>
           </div>
         </div>
-      )}
 
-      {dirty && (
-        <button
-          onClick={handleSave}
-          disabled={mutation.isPending}
-          className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-        >
-          {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          Сохранить телефонию
-        </button>
-      )}
+        {dirty && (
+          <button
+            onClick={handleSave}
+            disabled={mutation.isPending}
+            className="mt-4 w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+          >
+            {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Сохранить телефонию
+          </button>
+        )}
+      </QueryState>
     </div>
   );
 }
@@ -723,7 +751,13 @@ const WALLET_HINT = 'Сертификат Apple Pass Type ID — из Apple Deve
 function WalletCard() {
   const queryClient = useQueryClient();
 
-  const { data: settings, isLoading } = useQuery<WalletSettings>({
+  const {
+    data: settings,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery<WalletSettings>({
     queryKey: ['wallet', 'settings'],
     queryFn: async () => (await walletApi.getSettings()).data,
   });
@@ -847,16 +881,17 @@ function WalletCard() {
     : '-----BEGIN CERTIFICATE-----';
 
   return (
-    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+    <div className="card p-5 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
-          <Wallet className="h-4 w-4 text-gray-400" />
+          <Wallet className="h-4 w-4 text-gray-500" />
           <h2 className="text-sm font-semibold text-gray-900">Apple Wallet (карта лояльности)</h2>
         </div>
         <Toggle
+          label="Apple Wallet"
           checked={form.enabled}
           onChange={(v) => update({ enabled: v })}
-          disabled={isLoading || mutation.isPending}
+          disabled={isLoading || isError || mutation.isPending}
         />
       </div>
 
@@ -865,11 +900,15 @@ function WalletCard() {
         <span>{WALLET_HINT}</span>
       </p>
 
-      {isLoading ? (
-        <div className="flex justify-center py-4">
-          <Loader2 className="h-5 w-5 animate-spin text-gray-300" />
-        </div>
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        minHeight="py-6"
+        errorTitle="Не удалось загрузить настройки"
+        errorDescription="Форма скрыта, чтобы не перезаписать сохранённые сертификаты. Повторите загрузку."
+      >
         <div className="space-y-3">
           <div className="flex flex-wrap gap-1.5">
             <StoredBadge ok={!!settings?.hasCert} label="Сертификат" />
@@ -1012,18 +1051,18 @@ function WalletCard() {
             </p>
           </div>
         </div>
-      )}
 
-      {dirty && (
-        <button
-          onClick={handleSave}
-          disabled={mutation.isPending}
-          className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
-        >
-          {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
-          Сохранить Apple Wallet
-        </button>
-      )}
+        {dirty && (
+          <button
+            onClick={handleSave}
+            disabled={mutation.isPending}
+            className="mt-4 w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-3 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+          >
+            {mutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />}
+            Сохранить Apple Wallet
+          </button>
+        )}
+      </QueryState>
     </div>
   );
 }
@@ -1043,12 +1082,12 @@ export default function IntegrationsPage() {
 
   return (
     <div className="space-y-5 max-w-2xl mx-auto pb-8">
-      <div className="flex items-center gap-3">
-        <button onClick={() => navigate(-1)} className="btn-ghost btn-sm">
+      <div className="flex items-center gap-3 mb-6">
+        <button onClick={() => navigate(-1)} className="btn-ghost btn-sm" aria-label="Назад">
           <ArrowLeft className="w-4 h-4" />
         </button>
         <div>
-          <h1 className="text-xl font-bold text-gray-900">Интеграции</h1>
+          <h1 className="page-title">Интеграции</h1>
           <p className="text-sm text-gray-500">Онлайн-оплаты, фискализация чеков, телефония и Apple Wallet</p>
         </div>
       </div>

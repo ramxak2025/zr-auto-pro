@@ -46,6 +46,7 @@ import { UserRole as UserRoleEnum } from '../types';
 import { useNavigate } from 'react-router-dom';
 import CallsWidget from '../components/CallsWidget';
 import InstallmentsWidget from '../components/InstallmentsWidget';
+import PageHeader from '../components/PageHeader';
 
 // ---------------------------------------------------------------------------
 // Skeleton loader for cards
@@ -132,11 +133,19 @@ function QuickActions() {
 // Error banner
 // ---------------------------------------------------------------------------
 
-function ErrorBanner({ message }: { message: string }) {
+function ErrorBanner({ message, onRetry }: { message: string; onRetry?: () => void }) {
   return (
     <div className="flex items-center gap-3 bg-red-50 border border-red-200 rounded-xl p-4 text-red-700">
       <AlertCircle className="h-5 w-5 flex-shrink-0" />
-      <p className="text-sm">{message}</p>
+      <p className="text-sm flex-1">{message}</p>
+      {onRetry && (
+        <button
+          onClick={() => onRetry()}
+          className="text-sm font-medium text-red-700 underline underline-offset-2 hover:text-red-900 flex-shrink-0"
+        >
+          Повторить
+        </button>
+      )}
     </div>
   );
 }
@@ -220,7 +229,7 @@ function StaffStatusCircles() {
     if (items.length === 0) return null;
     return (
       <div>
-        <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+        <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
           <span>{icon}</span> {title} <span className="text-gray-300">({items.length})</span>
         </p>
         {/* Fixed-width, left-packed avatars (flex-wrap) instead of a 1fr grid —
@@ -252,7 +261,7 @@ function StaffStatusCircles() {
               <span className="text-[10px] text-gray-500 w-full truncate text-center group-hover:text-gray-900 transition-colors">
                 {s.fullName.split(' ')[0]}
               </span>
-              <span className="text-[9px] text-gray-400 w-full truncate text-center">{getStatusLabel(s)}</span>
+              <span className="text-[9px] text-gray-500 w-full truncate text-center">{getStatusLabel(s)}</span>
             </button>
           ))}
         </div>
@@ -264,7 +273,7 @@ function StaffStatusCircles() {
     <div className="rounded-2xl border border-gray-100 bg-white shadow-sm p-4 space-y-4">
       <div className="flex items-center justify-between">
         <h3 className="text-sm font-bold text-gray-900">Сотрудники сегодня</h3>
-        <div className="flex items-center gap-2 text-[11px] text-gray-400 flex-wrap">
+        <div className="flex items-center gap-2 text-[11px] text-gray-500 flex-wrap">
           {onShiftAll.length > 0 && (
             <span className="flex items-center gap-1">
               <span className="w-2 h-2 rounded-full bg-green-500" /> {onShiftAll.length}
@@ -344,12 +353,12 @@ function ShiftControl() {
           <div
             className={`flex h-10 w-10 items-center justify-center rounded-xl ${currentShift ? 'bg-green-100' : 'bg-gray-100'}`}
           >
-            <Clock className={`h-5 w-5 ${currentShift ? 'text-green-600' : 'text-gray-400'}`} />
+            <Clock className={`h-5 w-5 ${currentShift ? 'text-green-600' : 'text-gray-500'}`} />
           </div>
           <div>
             <p className="text-sm font-semibold text-gray-900">{currentShift ? 'Смена открыта' : 'Смена закрыта'}</p>
             {currentShift && (
-              <p className="text-xs text-gray-400">
+              <p className="text-xs text-gray-500">
                 с {new Date(currentShift.openedAt).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })}
               </p>
             )}
@@ -538,6 +547,7 @@ function RevenueChart() {
           <button
             type="button"
             onClick={() => setOffset((o) => o - 1)}
+            aria-label="Предыдущий период"
             className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors"
           >
             <ChevronLeft className="w-4 h-4" />
@@ -547,6 +557,7 @@ function RevenueChart() {
             type="button"
             onClick={() => setOffset((o) => (o < 0 ? o + 1 : 0))}
             disabled={offset >= 0}
+            aria-label="Следующий период"
             className="p-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-400 hover:text-white transition-colors disabled:opacity-20"
           >
             <ChevronRight className="w-4 h-4" />
@@ -561,7 +572,7 @@ function RevenueChart() {
             <Loader2 className="h-6 w-6 animate-spin text-slate-500" />
           </div>
         ) : !data?.points?.length ? (
-          <div className="text-center py-16 text-sm text-slate-500">Нет данных</div>
+          <div className="text-center py-16 text-sm text-slate-400">Нет данных</div>
         ) : (
           <div>
             {/* SVG Chart */}
@@ -631,9 +642,7 @@ function RevenueChart() {
                     return (
                       <span
                         key={idx}
-                        className={`absolute -translate-x-1/2 tabular-nums ${
-                          period === 'month' ? 'text-[8.5px]' : 'text-[10px]'
-                        } text-slate-500`}
+                        className={`absolute -translate-x-1/2 tabular-nums text-[10px] text-slate-400`}
                         style={{ left: `${xPct}%` }}
                       >
                         {label}
@@ -651,15 +660,15 @@ function RevenueChart() {
       {data && (
         <div className="grid grid-cols-3 gap-px bg-white/5 mt-2">
           <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
-            <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">Оборот</p>
+            <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Оборот</p>
             <p className="text-base font-bold text-white mt-0.5">{formatMoney(data.totalRevenue)}</p>
           </div>
           <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
-            <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">Прибыль</p>
+            <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Прибыль</p>
             <p className="text-base font-bold text-cyan-400 mt-0.5">{formatMoney(data.totalProfit)}</p>
           </div>
           <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
-            <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider">Чеков</p>
+            <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Чеков</p>
             <p className="text-base font-bold text-white mt-0.5">{data.totalChecks || '—'}</p>
           </div>
         </div>
@@ -672,7 +681,7 @@ function RevenueChart() {
             {data.points.map(
               (point: { date: string; revenue: number; profit: number; checkCount: number }, idx: number) => (
                 <div key={idx} className="flex-shrink-0 text-center px-3 py-2 rounded-xl bg-white/5 min-w-[64px]">
-                  <p className="text-[9px] text-slate-500 font-medium">
+                  <p className="text-[9px] text-slate-400 font-medium">
                     {formatLabel(point.date, idx, data.points.length)}
                   </p>
                   <p className="text-[11px] font-bold text-blue-300">{formatMoney(point.revenue)}</p>
@@ -733,7 +742,7 @@ function AdminDashboard() {
 
 function MasterDashboard() {
   const { user } = useAuth();
-  const { data, isLoading, isError } = useQuery<SalarySummary>({
+  const { data, isLoading, isError, refetch } = useQuery<SalarySummary>({
     queryKey: ['salary', 'my-summary'],
     queryFn: async () => {
       const res = await salaryApi.getMy();
@@ -754,7 +763,7 @@ function MasterDashboard() {
   }
 
   if (isError || !data) {
-    return <ErrorBanner message="Не удалось загрузить данные по зарплате" />;
+    return <ErrorBanner message="Не удалось загрузить данные по зарплате" onRetry={refetch} />;
   }
 
   const initials =
@@ -790,20 +799,20 @@ function MasterDashboard() {
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-blue-50">
               <ClipboardList className="h-4 w-4 text-blue-600" />
             </div>
-            <span className="text-xs text-gray-400 font-medium">Заказов сегодня</span>
+            <span className="text-xs text-gray-500 font-medium">Заказов сегодня</span>
           </div>
           <p className="text-2xl font-bold text-gray-900">{data.todayChecks || '—'}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5">За месяц: {data.monthChecks ?? 0}</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">За месяц: {data.monthChecks ?? 0}</p>
         </div>
         <div className="rounded-xl bg-white border border-gray-100 shadow-sm p-4">
           <div className="flex items-center gap-2.5 mb-2">
             <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-green-50">
               <TrendingUp className="h-4 w-4 text-green-600" />
             </div>
-            <span className="text-xs text-gray-400 font-medium">Сегодня</span>
+            <span className="text-xs text-gray-500 font-medium">Сегодня</span>
           </div>
           <p className="text-2xl font-bold text-gray-900">{data.today ? formatMoney(data.today) : '—'}</p>
-          <p className="text-[11px] text-gray-400 mt-0.5">За месяц: {formatMoney(data.month)}</p>
+          <p className="text-[11px] text-gray-500 mt-0.5">За месяц: {formatMoney(data.month)}</p>
         </div>
       </div>
 
@@ -814,17 +823,17 @@ function MasterDashboard() {
           <div className="rounded-xl bg-white p-3 text-center shadow-sm">
             <Banknote className="h-4 w-4 text-green-500 mx-auto mb-1.5" />
             <p className="text-sm font-bold text-gray-900">{formatMoney(data.todayCash ?? 0)}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">Наличные</p>
+            <p className="text-[10px] text-gray-500 mt-0.5">Наличные</p>
           </div>
           <div className="rounded-xl bg-white p-3 text-center shadow-sm">
             <CreditCard className="h-4 w-4 text-blue-500 mx-auto mb-1.5" />
             <p className="text-sm font-bold text-gray-900">{formatMoney(data.todayCard ?? 0)}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">Карта</p>
+            <p className="text-[10px] text-gray-500 mt-0.5">Карта</p>
           </div>
           <div className="rounded-xl bg-white p-3 text-center shadow-sm">
             <ShieldAlert className="h-4 w-4 text-amber-500 mx-auto mb-1.5" />
             <p className="text-sm font-bold text-gray-900">{formatMoney(data.todayWarranty ?? 0)}</p>
-            <p className="text-[10px] text-gray-400 mt-0.5">Гарантия · не в кассу</p>
+            <p className="text-[10px] text-gray-500 mt-0.5">Гарантия · не в кассу</p>
           </div>
         </div>
       </div>
@@ -885,11 +894,11 @@ function MasterDashboard() {
                       )}
                       <div className="flex-1 min-w-0">
                         <p className="text-sm font-medium text-gray-900 truncate">{promo.productName}</p>
-                        <p className="text-[11px] text-gray-400">Цена: {formatMoney(promo.sellPrice)}</p>
+                        <p className="text-[11px] text-gray-500">Цена: {formatMoney(promo.sellPrice)}</p>
                       </div>
                       <div className="text-right flex-shrink-0">
                         <p className="text-sm font-bold text-green-600">+{formatMoney(promo.estimatedBonus)}</p>
-                        <p className="text-[10px] text-gray-400">{promo.percent}% с прибыли</p>
+                        <p className="text-[10px] text-gray-500">{promo.percent}% с прибыли</p>
                       </div>
                     </div>
                   ))}
@@ -973,7 +982,7 @@ function MasterRankWidget({ userId }: { userId?: string }) {
           <span className="text-2xl">{medal || `#${myRank}`}</span>
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Мой рейтинг</p>
+          <p className="text-[10px] font-bold uppercase tracking-wider text-gray-500">Мой рейтинг</p>
           <p className="text-base font-bold text-gray-900 capitalize mt-0.5">{monthName}</p>
           <p className="text-xs text-gray-500 mt-0.5">
             <span className={`font-bold ${scoreColor}`}>{me.score}%</span> посещаемость · {me.full}/{me.total} смен
@@ -1001,14 +1010,7 @@ export default function DashboardPage() {
   return (
     <div className="space-y-5">
       {/* Header — only for admin/owner */}
-      {!isMaster && (
-        <div>
-          <h1 className="text-xl font-bold text-gray-900">
-            {greeting}, {displayName}!
-          </h1>
-          <p className="text-xs text-gray-400 mt-0.5">Обзор показателей автосервиса</p>
-        </div>
-      )}
+      {!isMaster && <PageHeader title={`${greeting}, ${displayName}!`} subtitle="Обзор показателей автосервиса" />}
 
       {/* Shift control — hidden for owner/director */}
       {!isOwner && <ShiftControl />}

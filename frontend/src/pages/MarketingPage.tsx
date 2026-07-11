@@ -1,7 +1,8 @@
 import { useState } from 'react';
-import { BarChart3, Gift, Plug, Send, Settings, Star, type LucideIcon } from 'lucide-react';
+import { BarChart3, Gift, Megaphone, Plug, Send, Settings, Star, type LucideIcon } from 'lucide-react';
 
 import { useAuth } from '../contexts/AuthContext';
+import PageHeader from '../components/PageHeader';
 import { UserRole } from '../types';
 import MarketingReportsView from '../components/marketing/MarketingReportsView';
 import ReputationView from '../components/marketing/ReputationView';
@@ -45,10 +46,7 @@ export default function MarketingPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-gray-900">Маркетинг</h1>
-        <p className="text-sm text-gray-500">Отзывы, интеграции, рассылки и лояльность</p>
-      </div>
+      <PageHeader title="Маркетинг" icon={Megaphone} subtitle="Отзывы, интеграции, рассылки и лояльность" />
 
       {/* Tab strip — scrollable, so all six fit on mobile */}
       <div className="no-scrollbar -mx-1 flex gap-1.5 overflow-x-auto px-1 pb-1">

@@ -5,7 +5,9 @@ import toast from 'react-hot-toast';
 
 import { notificationsApi } from '../api/services';
 import type { NotificationCategory, NotificationPreferences } from '../types';
-import LoadingSpinner from '../components/LoadingSpinner';
+import PageHeader from '../components/PageHeader';
+import QueryState from '../components/QueryState';
+import Switch from '../components/Switch';
 
 interface CategoryDef {
   key: NotificationCategory;
@@ -63,7 +65,13 @@ const CATEGORIES: CategoryDef[] = [
 export default function NotificationSettingsPage() {
   const queryClient = useQueryClient();
 
-  const { data: prefs, isLoading } = useQuery({
+  const {
+    data: prefs,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['notification-preferences'],
     queryFn: () => notificationsApi.getPreferences(),
     select: (res) => res.data as NotificationPreferences,
@@ -97,13 +105,9 @@ export default function NotificationSettingsPage() {
     updateMutation.mutate(next);
   };
 
-  if (isLoading) return <LoadingSpinner />;
-
   return (
     <div>
-      <div className="page-header">
-        <h1 className="page-title">Уведомления</h1>
-      </div>
+      <PageHeader title="Уведомления" icon={Bell} />
 
       <div className="max-w-2xl space-y-5">
         <div className="flex items-start gap-3 text-sm text-gray-500">
@@ -114,44 +118,53 @@ export default function NotificationSettingsPage() {
           </p>
         </div>
 
-        {/* Category toggles */}
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm divide-y divide-gray-100 overflow-hidden">
-          {CATEGORIES.map((cat) => {
-            const Icon = cat.icon;
-            const enabled = !muted.includes(cat.key);
-            return (
-              <div key={cat.key} className="flex items-center gap-4 px-5 py-4">
-                <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${cat.color}`}>
-                  <Icon className={`h-5 w-5 ${cat.iconColor}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm font-semibold text-gray-900">{cat.label}</p>
-                  <p className="text-xs text-gray-500">{cat.description}</p>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer flex-shrink-0">
-                  <input
-                    type="checkbox"
-                    className="sr-only peer"
+        {/* Load ladder: a failed fetch must NOT fall through to a form where
+            every switch reads ON (muted defaults to []) and toggling saves
+            against an unknown baseline. */}
+        <QueryState
+          isLoading={isLoading}
+          isError={isError}
+          onRetry={refetch}
+          isFetching={isFetching}
+          minHeight="min-h-[40vh]"
+          errorTitle="Не удалось загрузить настройки"
+          errorDescription="Переключатели скрыты, чтобы не сохранить их в неверном состоянии. Повторите загрузку."
+        >
+          {/* Category toggles */}
+          <div className="card divide-y divide-gray-100 overflow-hidden">
+            {CATEGORIES.map((cat) => {
+              const Icon = cat.icon;
+              const enabled = !muted.includes(cat.key);
+              return (
+                <div key={cat.key} className="flex items-center gap-4 px-5 py-4">
+                  <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${cat.color}`}>
+                    <Icon className={`h-5 w-5 ${cat.iconColor}`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold text-gray-900">{cat.label}</p>
+                    <p className="text-xs text-gray-500">{cat.description}</p>
+                  </div>
+                  <Switch
+                    label={cat.label}
                     checked={enabled}
                     onChange={() => toggle(cat.key)}
                     disabled={updateMutation.isPending}
                   />
-                  <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-2 peer-focus:ring-primary-500/20 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-primary-600 peer-disabled:opacity-60" />
-                </label>
-              </div>
-            );
-          })}
-        </div>
+                </div>
+              );
+            })}
+          </div>
 
-        {/* Footer note — broadcasts are always-on */}
-        <div className="flex items-start gap-2.5 rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
-          {updateMutation.isPending ? (
-            <Loader2 className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5 animate-spin" />
-          ) : (
-            <Info className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
-          )}
-          <p className="text-xs text-gray-500 leading-relaxed">Важные объявления от поддержки приходят всегда.</p>
-        </div>
+          {/* Footer note — broadcasts are always-on */}
+          <div className="mt-5 flex items-start gap-2.5 rounded-xl bg-gray-50 border border-gray-100 px-4 py-3">
+            {updateMutation.isPending ? (
+              <Loader2 className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5 animate-spin" />
+            ) : (
+              <Info className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
+            )}
+            <p className="text-xs text-gray-500 leading-relaxed">Важные объявления от поддержки приходят всегда.</p>
+          </div>
+        </QueryState>
       </div>
     </div>
   );

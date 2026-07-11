@@ -97,15 +97,17 @@ function CarChecksPanel({ carId }: { carId: string }) {
   };
 
   const paymentBadge = (method: string) => {
+    // Normalized to the -blue/-green/-yellow/-gray family used by the Recent
+    // Checks section below, so payment badges don't drift into two token sets.
     switch (method) {
       case 'cash':
-        return 'badge-success';
+        return 'badge-green';
       case 'card':
-        return 'badge-info';
+        return 'badge-blue';
       case 'warranty':
-        return 'badge-warning';
+        return 'badge-yellow';
       default:
-        return 'badge-default';
+        return 'badge-gray';
     }
   };
 

@@ -67,7 +67,7 @@ export default function LoginPage() {
           </div>
 
           {/* Subtitle */}
-          <p className="text-center text-sm text-gray-400 mb-10 tracking-wide">Система управления сервисом</p>
+          <p className="text-center text-sm text-gray-500 mb-10 tracking-wide">Система управления сервисом</p>
 
           {/* Form */}
           <form onSubmit={handleSubmit} className="space-y-5">
@@ -93,7 +93,7 @@ export default function LoginPage() {
                   }`}
                 />
               </div>
-              {phoneError && <p className="mt-1.5 text-xs text-red-500">{phoneError}</p>}
+              {phoneError && <p className="mt-1.5 text-xs text-red-600">{phoneError}</p>}
             </div>
 
             {/* Password */}
@@ -126,12 +126,13 @@ export default function LoginPage() {
                 <button
                   type="button"
                   onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
                   className="absolute inset-y-0 right-0 pr-4 flex items-center text-gray-400 hover:text-gray-600 transition-colors"
                 >
                   {showPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
                 </button>
               </div>
-              {passwordError && <p className="mt-1.5 text-xs text-red-500">{passwordError}</p>}
+              {passwordError && <p className="mt-1.5 text-xs text-red-600">{passwordError}</p>}
             </div>
 
             {/* Submit */}
@@ -153,7 +154,7 @@ export default function LoginPage() {
 
           {/* B2B request-access entry point — secondary, unobtrusive */}
           <div className="mt-6 text-center">
-            <span className="text-sm text-gray-400">Подключить автосервис? </span>
+            <span className="text-sm text-gray-500">Подключить автосервис? </span>
             <button
               type="button"
               onClick={() => setRegisterOpen(true)}
@@ -169,7 +170,7 @@ export default function LoginPage() {
 
       {/* Copyright footer */}
       <div className="pb-8 pt-4 space-y-2">
-        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-gray-400">
+        <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-xs text-gray-500">
           <a
             href="https://autexa.pw/privacy"
             target="_blank"
@@ -188,7 +189,7 @@ export default function LoginPage() {
             Условия использования
           </a>
         </div>
-        <p className="text-center text-xs text-gray-300">Autexa v2.1 &copy; 2026</p>
+        <p className="text-center text-xs text-gray-400">Autexa v2.1 &copy; 2026</p>
       </div>
     </div>
   );

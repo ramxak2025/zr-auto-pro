@@ -16,7 +16,7 @@ import {
 
 import { tenantsApi } from '../../api/services';
 import { PlatformStats } from '../../types';
-import LoadingSpinner from '../../components/LoadingSpinner';
+import QueryState from '../../components/QueryState';
 import MrrTrendChart from '../../components/MrrTrendChart';
 import SubscriptionRevenuePanel from '../../components/SubscriptionRevenuePanel';
 
@@ -25,13 +25,17 @@ function formatRub(value: number | undefined): string {
 }
 
 export default function AdminDashboardPage() {
-  const { data: stats, isLoading } = useQuery({
+  const {
+    data: stats,
+    isLoading,
+    isError,
+    isFetching,
+    refetch,
+  } = useQuery({
     queryKey: ['admin-stats'],
     queryFn: () => tenantsApi.getStats(),
     select: (res) => res.data as PlatformStats,
   });
-
-  if (isLoading) return <LoadingSpinner />;
 
   return (
     <div>
@@ -54,91 +58,100 @@ export default function AdminDashboardPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-        <div className="stat-card">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-blue-50 rounded-xl">
-              <Building2 className="w-5 h-5 text-blue-600" />
-            </div>
-            <div>
-              <p className="stat-label">Всего клиентов</p>
-              <p className="stat-value tabular-nums">{stats?.totalTenants ?? 0}</p>
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        errorTitle="Не удалось загрузить статистику"
+        minHeight="min-h-[200px]"
+      >
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
+          <div className="stat-card">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-blue-50 rounded-xl">
+                <Building2 className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <p className="stat-label">Всего клиентов</p>
+                <p className="stat-value tabular-nums">{stats?.totalTenants ?? 0}</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="stat-card">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-green-50 rounded-xl">
-              <Activity className="w-5 h-5 text-green-600" />
-            </div>
-            <div>
-              <p className="stat-label">Активных</p>
-              <p className="stat-value tabular-nums">{stats?.activeTenants ?? 0}</p>
+          <div className="stat-card">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-green-50 rounded-xl">
+                <Activity className="w-5 h-5 text-green-600" />
+              </div>
+              <div>
+                <p className="stat-label">Активных</p>
+                <p className="stat-value tabular-nums">{stats?.activeTenants ?? 0}</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="stat-card">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-red-50 rounded-xl">
-              <CalendarClock className="w-5 h-5 text-red-600" />
-            </div>
-            <div>
-              <p className="stat-label">Истёкших</p>
-              <p className="stat-value tabular-nums">{stats?.expiredTenants ?? 0}</p>
+          <div className="stat-card">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-red-50 rounded-xl">
+                <CalendarClock className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <p className="stat-label">Истёкших</p>
+                <p className="stat-value tabular-nums">{stats?.expiredTenants ?? 0}</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="stat-card">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-emerald-50 rounded-xl">
-              <BadgeRussianRuble className="w-5 h-5 text-emerald-600" />
-            </div>
-            <div>
-              <p className="stat-label">MRR (мес. выручка)</p>
-              <p className="stat-value tabular-nums">{formatRub(stats?.mrr)}</p>
+          <div className="stat-card">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-emerald-50 rounded-xl">
+                <BadgeRussianRuble className="w-5 h-5 text-emerald-600" />
+              </div>
+              <div>
+                <p className="stat-label">MRR (мес. выручка)</p>
+                <p className="stat-value tabular-nums">{formatRub(stats?.mrr)}</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="stat-card">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-teal-50 rounded-xl">
-              <TrendingUp className="w-5 h-5 text-teal-600" />
-            </div>
-            <div>
-              <p className="stat-label">ARPU (на клиента)</p>
-              <p className="stat-value tabular-nums">{formatRub(stats?.arpu)}</p>
+          <div className="stat-card">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-teal-50 rounded-xl">
+                <TrendingUp className="w-5 h-5 text-teal-600" />
+              </div>
+              <div>
+                <p className="stat-label">ARPU (на клиента)</p>
+                <p className="stat-value tabular-nums">{formatRub(stats?.arpu)}</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="stat-card">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-indigo-50 rounded-xl">
-              <UserPlus className="w-5 h-5 text-indigo-600" />
-            </div>
-            <div>
-              <p className="stat-label">Новых в этом месяце</p>
-              <p className="stat-value tabular-nums">{stats?.newTenantsThisMonth ?? 0}</p>
+          <div className="stat-card">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-indigo-50 rounded-xl">
+                <UserPlus className="w-5 h-5 text-indigo-600" />
+              </div>
+              <div>
+                <p className="stat-label">Новых в этом месяце</p>
+                <p className="stat-value tabular-nums">{stats?.newTenantsThisMonth ?? 0}</p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="stat-card">
-          <div className="flex items-center gap-3">
-            <div className="p-2.5 bg-purple-50 rounded-xl">
-              <Users className="w-5 h-5 text-purple-600" />
-            </div>
-            <div>
-              <p className="stat-label">Всего пользователей</p>
-              <p className="stat-value tabular-nums">{stats?.totalUsers ?? 0}</p>
+          <div className="stat-card">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-purple-50 rounded-xl">
+                <Users className="w-5 h-5 text-purple-600" />
+              </div>
+              <div>
+                <p className="stat-label">Всего пользователей</p>
+                <p className="stat-value tabular-nums">{stats?.totalUsers ?? 0}</p>
+              </div>
             </div>
           </div>
         </div>
-      </div>
+      </QueryState>
 
       {/* MRR trend — owner cabinet widget */}
       <div className="mb-8">

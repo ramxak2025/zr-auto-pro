@@ -6,19 +6,40 @@ import { ru } from 'date-fns/locale';
 import { subscriptionApi } from '../api/services';
 import { SubscriptionInfo } from '../types';
 import LoadingSpinner from '../components/LoadingSpinner';
+import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
 // Feature rows bucketed by `group` (core / section / integration) so each plan
 // card lists the 23 keys under section headings. Wraps the shared registry.
 import { FEATURE_GROUPS } from '../utils/featureGroups';
 import { getWhatsAppChatUrl } from '../config/contacts';
 
 export default function TariffPage() {
-  const { data: sub, isLoading } = useQuery({
+  const {
+    data: sub,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: ['subscription'],
     queryFn: () => subscriptionApi.get(),
     select: (res) => res.data as SubscriptionInfo,
   });
 
   if (isLoading) return <LoadingSpinner />;
+
+  if (isError) {
+    return (
+      <div>
+        <PageHeader title="Подписка" icon={CreditCard} />
+        <EmptyState
+          icon={CreditCard}
+          title="Не удалось загрузить подписку"
+          description="Проверьте соединение и попробуйте снова."
+          action={{ label: 'Повторить', onClick: () => refetch() }}
+        />
+      </div>
+    );
+  }
 
   const subscriptionEnd = sub?.subscriptionEnd ? parseISO(sub.subscriptionEnd) : null;
   const isExpired = subscriptionEnd ? isPast(subscriptionEnd) : false;
@@ -27,9 +48,7 @@ export default function TariffPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1 className="page-title">Подписка</h1>
-      </div>
+      <PageHeader title="Подписка" icon={CreditCard} />
 
       <div className="max-w-3xl space-y-6">
         {/* Current subscription info */}
@@ -69,7 +88,7 @@ export default function TariffPage() {
                 <CreditCard className="w-5 h-5 text-gray-400 mt-0.5 flex-shrink-0" />
                 <div>
                   <p className="text-sm font-medium text-gray-700">Стоимость тарифа</p>
-                  <p className="text-lg font-semibold text-gray-900 mt-0.5">
+                  <p className="text-lg font-semibold text-gray-900 mt-0.5 tabular-nums">
                     {sub?.monthlyPrice ? `${sub.monthlyPrice.toLocaleString('ru-RU')} ₽/мес` : 'Не указано'}
                   </p>
                 </div>
@@ -137,7 +156,7 @@ export default function TariffPage() {
                       </div>
 
                       <div>
-                        <span className="text-3xl font-bold text-gray-900">
+                        <span className="text-3xl font-bold text-gray-900 tabular-nums">
                           {plan.monthlyPrice.toLocaleString('ru-RU')}
                         </span>
                         <span className="text-gray-500 ml-1">₽/мес</span>
@@ -151,7 +170,7 @@ export default function TariffPage() {
                       <div className="space-y-3">
                         {FEATURE_GROUPS.map((grp) => (
                           <div key={grp.group}>
-                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1.5">
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-500 mb-1.5">
                               {grp.label}
                             </p>
                             <ul className="space-y-1.5">

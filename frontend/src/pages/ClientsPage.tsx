@@ -9,12 +9,17 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import SearchInput from '../components/SearchInput';
-import LoadingSpinner from '../components/LoadingSpinner';
-import EmptyState from '../components/EmptyState';
+import QueryState from '../components/QueryState';
+import IconButton from '../components/IconButton';
 import Pagination from '../components/Pagination';
 import PhoneInput from '../components/PhoneInput';
+import { useClickableRow } from '../hooks/useClickableRow';
 import { Client, PaginatedResponse } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
+
+// `useClickableRow` returns a static prop bag (no React state) — aliasing lets
+// us call it per-row inside `.map` without tripping react-hooks/rules-of-hooks.
+const clickableRowProps = useClickableRow;
 
 const clientInitials = (name: string) =>
   name
@@ -64,7 +69,7 @@ export default function ClientsPage() {
   const [submitting, setSubmitting] = useState(false);
 
   // Query
-  const { data, isLoading } = useQuery<PaginatedResponse<Client>>({
+  const { data, isLoading, isError, refetch, isFetching } = useQuery<PaginatedResponse<Client>>({
     queryKey: ['clients', { search, page, limit }],
     queryFn: async () => {
       const res = await clientsApi.getAll({ search, page, limit });
@@ -284,53 +289,58 @@ export default function ClientsPage() {
             <p className="text-base sm:text-lg font-bold text-blue-700 mt-0.5">{total}</p>
           </div>
           <div className="rounded-xl bg-emerald-50 p-3">
-            <p className="text-[10px] font-semibold text-emerald-500 uppercase tracking-wider">С автомобилями</p>
+            <p className="text-[10px] font-semibold text-emerald-500 uppercase tracking-wider">С авто · на стр.</p>
             <p className="text-base sm:text-lg font-bold text-emerald-700 mt-0.5">{withCars}</p>
           </div>
           <div className="rounded-xl bg-gray-50 p-3">
-            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Автопарк</p>
+            <p className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider">Автопарк · на стр.</p>
             <p className="text-base sm:text-lg font-bold text-gray-700 mt-0.5">{totalCars}</p>
           </div>
         </div>
       )}
 
       {/* Content */}
-      {isLoading ? (
-        <LoadingSpinner />
-      ) : clients.length === 0 ? (
-        <EmptyState
-          icon={Users}
-          title="Нет клиентов"
-          description={search ? 'По вашему запросу ничего не найдено' : 'Добавьте первого клиента'}
-          action={!search ? { label: 'Добавить клиента', onClick: openCreateModal } : undefined}
-        />
-      ) : (
+      <QueryState
+        isLoading={isLoading}
+        isError={isError}
+        onRetry={refetch}
+        isFetching={isFetching}
+        isEmpty={clients.length === 0}
+        empty={{
+          icon: Users,
+          title: 'Нет клиентов',
+          description: search ? 'По вашему запросу ничего не найдено' : 'Добавьте первого клиента',
+          action: !search ? { label: 'Добавить клиента', onClick: openCreateModal } : undefined,
+        }}
+        minHeight="min-h-[40vh]"
+      >
         <>
           {/* Mobile cards */}
           <div className="md:hidden space-y-3">
             {clients.map((client) => (
               <div
                 key={client.id}
-                onClick={() => navigate(`/clients/${client.id}`)}
+                {...clickableRowProps(() => navigate(`/clients/${client.id}`), { label: client.fullName })}
                 className="bg-white rounded-xl border border-gray-100 shadow-sm p-4 active:bg-gray-50 transition-colors cursor-pointer"
               >
                 <div className="flex items-center justify-between mb-2">
                   <span className="font-semibold text-gray-900 text-sm">{client.fullName}</span>
                   <div className="flex items-center gap-1">
                     {canEditClient && (
-                      <button
+                      <IconButton
+                        label="Редактировать"
+                        icon={Edit2}
+                        size="sm"
                         onClick={(e) => openEditModal(client, e)}
-                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                      </button>
+                      />
                     )}
-                    <button
+                    <IconButton
+                      label="Удалить"
+                      icon={Trash2}
+                      variant="danger"
+                      size="sm"
                       onClick={(e) => handleDelete(client.id, e)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    />
                   </div>
                 </div>
                 <div className="flex items-center gap-4 text-sm text-gray-500">
@@ -363,7 +373,7 @@ export default function ClientsPage() {
                   return (
                     <tr
                       key={client.id}
-                      onClick={() => navigate(`/clients/${client.id}`)}
+                      {...clickableRowProps(() => navigate(`/clients/${client.id}`), { label: client.fullName })}
                       className="cursor-pointer hover:bg-gray-50"
                     >
                       <td>
@@ -448,7 +458,7 @@ export default function ClientsPage() {
 
           <Pagination page={page} total={total} limit={limit} onChange={setPage} />
         </>
-      )}
+      </QueryState>
 
       {/* Create/Edit Modal */}
       <Modal isOpen={modalOpen} onClose={closeModal} title={editingClient ? 'Редактировать клиента' : 'Новый клиент'}>
