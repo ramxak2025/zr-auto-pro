@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, FormEvent } from 'react';
+import { useState, FormEvent } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -16,7 +16,6 @@ import {
   ChevronDown,
   ChevronUp,
   ChevronRight,
-  Search,
   UserCheck,
   Loader2,
   Clock,
@@ -36,6 +35,7 @@ import DuplicateWarningDialog from '../components/DuplicateWarningDialog';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
+import ClientSearchAutocomplete from '../components/ClientSearchAutocomplete';
 import { useAuth } from '../contexts/AuthContext';
 import {
   Client,
@@ -154,128 +154,6 @@ function CarChecksPanel({ carId }: { carId: string }) {
           </div>
         </div>
       ))}
-    </div>
-  );
-}
-
-// ---- Client Search Autocomplete for owner change ----
-function ClientSearchAutocomplete({
-  selectedClient,
-  onSelect,
-  excludeClientId,
-}: {
-  selectedClient: Client | null;
-  onSelect: (client: Client | null) => void;
-  excludeClientId?: string;
-}) {
-  const [search, setSearch] = useState('');
-  const [isOpen, setIsOpen] = useState(false);
-  const wrapperRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  const { data: clientsData, isLoading } = useQuery<{ data: Client[] }>({
-    queryKey: ['clients', { search, limit: 10 }],
-    queryFn: async () => {
-      const res = await clientsApi.getAll({ search, limit: 10 });
-      return res.data;
-    },
-    enabled: search.length >= 1,
-  });
-
-  const clients: Client[] = (clientsData?.data || []).filter((c) => c.id !== excludeClientId);
-
-  // Close dropdown on click outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (wrapperRef.current && !wrapperRef.current.contains(event.target as Node)) {
-        setIsOpen(false);
-      }
-    }
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
-  }, []);
-
-  const handleSelect = (client: Client) => {
-    onSelect(client);
-    setSearch('');
-    setIsOpen(false);
-  };
-
-  const handleClear = () => {
-    onSelect(null);
-    setSearch('');
-  };
-
-  if (selectedClient) {
-    return (
-      <div className="flex items-center gap-3 p-3 bg-primary-50 rounded-xl border border-primary-200">
-        <div className="p-1.5 bg-white rounded-lg">
-          <UserCheck className="w-4 h-4 text-primary-600" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-gray-900">{selectedClient.fullName}</p>
-          <p className="text-xs text-gray-500">{formatPhone(selectedClient.phone)}</p>
-        </div>
-        <button
-          type="button"
-          onClick={handleClear}
-          className="text-xs text-red-500 hover:text-red-700 font-medium px-2 py-1 rounded-lg hover:bg-red-50 transition-colors"
-        >
-          Сбросить
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div ref={wrapperRef} className="relative">
-      <div className="relative">
-        <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-        <input
-          ref={inputRef}
-          type="text"
-          value={search}
-          onChange={(e) => {
-            setSearch(e.target.value);
-            setIsOpen(true);
-          }}
-          onFocus={() => {
-            if (search.length >= 1) setIsOpen(true);
-          }}
-          className="input pl-9"
-          placeholder="Поиск клиента по имени или телефону..."
-        />
-      </div>
-
-      {isOpen && search.length >= 1 && (
-        <div className="absolute z-50 w-full mt-1 bg-white rounded-xl shadow-lg border border-gray-200 max-h-60 overflow-y-auto">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-4">
-              <Loader2 className="w-4 h-4 text-gray-400 animate-spin" />
-              <span className="ml-2 text-sm text-gray-500">Поиск...</span>
-            </div>
-          ) : clients.length === 0 ? (
-            <div className="py-4 text-center text-sm text-gray-400">Клиенты не найдены</div>
-          ) : (
-            clients.map((client) => (
-              <button
-                key={client.id}
-                type="button"
-                onClick={() => handleSelect(client)}
-                className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition-colors first:rounded-t-xl last:rounded-b-xl"
-              >
-                <div className="p-1.5 bg-gray-100 rounded-lg">
-                  <User className="w-4 h-4 text-gray-500" />
-                </div>
-                <div className="min-w-0">
-                  <p className="text-sm font-medium text-gray-900 truncate">{client.fullName}</p>
-                  <p className="text-xs text-gray-500">{formatPhone(client.phone)}</p>
-                </div>
-              </button>
-            ))
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -744,6 +622,12 @@ export default function ClientDetailPage() {
   // Expanded car (to show checks)
   const [expandedCarId, setExpandedCarId] = useState<string | null>(null);
 
+  // Dedicated «Сменить владельца» flow (feature #9). Convenient per-car action,
+  // separate from the buried owner-change field inside the car edit modal
+  // (which stays working too). Both paths call carsApi.update(car.id, {clientId}).
+  const [reassignCar, setReassignCar] = useState<CarType | null>(null);
+  const [reassignTarget, setReassignTarget] = useState<Client | null>(null);
+
   // Fetch client
   const {
     data: client,
@@ -829,6 +713,26 @@ export default function ClientDetailPage() {
     },
   });
 
+  // Dedicated «Сменить владельца» mutation (feature #9). Reassigns the car to
+  // the picked client. Backend guards against a duplicate plate under the
+  // TARGET client and answers 400 «У этого клиента уже есть авто с таким
+  // номером» — we surface that message directly.
+  const reassignCarMutation = useMutation({
+    mutationFn: ({ carId, clientId }: { carId: string; clientId: string }) => carsApi.update(carId, { clientId }),
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['clients', id] });
+      queryClient.invalidateQueries({ queryKey: ['clients', vars.clientId] });
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
+      toast.success('Владелец автомобиля изменён');
+      closeReassignModal();
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg || 'Не удалось сменить владельца');
+    },
+  });
+
   // Client edit handlers
   const openClientEditModal = () => {
     if (!client) return;
@@ -870,6 +774,22 @@ export default function ClientDetailPage() {
     setCarModalOpen(false);
     setEditingCar(null);
     setNewOwner(null);
+  };
+
+  // Reassign («Сменить владельца») handlers
+  const openReassignModal = (car: CarType) => {
+    setReassignCar(car);
+    setReassignTarget(null);
+  };
+
+  const closeReassignModal = () => {
+    setReassignCar(null);
+    setReassignTarget(null);
+  };
+
+  const confirmReassign = () => {
+    if (!reassignCar || !reassignTarget) return;
+    reassignCarMutation.mutate({ carId: reassignCar.id, clientId: reassignTarget.id });
   };
 
   const handleCarSubmit = async (e: FormEvent) => {
@@ -1086,6 +1006,18 @@ export default function ClientDetailPage() {
                     </div>
                   </button>
                   <div className="flex items-center gap-1 flex-shrink-0">
+                    {canEditClient && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          openReassignModal(car);
+                        }}
+                        className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-white transition-colors"
+                        title="Сменить владельца"
+                      >
+                        <UserCheck className="w-4 h-4" />
+                      </button>
+                    )}
                     <button
                       onClick={(e) => {
                         e.stopPropagation();
@@ -1363,6 +1295,62 @@ export default function ClientDetailPage() {
         }
         openExistingLabel={duplicateCar?.clientId === id ? 'Закрыть' : 'Открыть владельца'}
       />
+
+      {/* Dedicated «Сменить владельца» modal (feature #9) */}
+      <Modal isOpen={!!reassignCar} onClose={closeReassignModal} title="Сменить владельца">
+        <div className="space-y-4">
+          {reassignCar && (
+            <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+              <div className="p-2 bg-white rounded-xl border border-gray-200">
+                <Car className="w-5 h-5 text-gray-600" />
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-gray-900">{reassignCar.plateNumber}</p>
+                <p className="text-sm text-gray-500">{reassignCar.makeModel}</p>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <p className="text-xs text-gray-500 mb-2">
+              Текущий владелец: <span className="font-medium text-gray-700">{client.fullName}</span>
+            </p>
+            <label className="label">Новый владелец</label>
+            <ClientSearchAutocomplete
+              selectedClient={reassignTarget}
+              onSelect={setReassignTarget}
+              excludeClientId={id}
+            />
+          </div>
+
+          {reassignTarget && (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+              <p className="text-xs text-amber-800 flex items-start gap-1.5">
+                <UserCheck className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                <span>
+                  Автомобиль и вся история обслуживания перейдут к клиенту{' '}
+                  <span className="font-semibold">{reassignTarget.fullName}</span>. Прошлые чеки остаются за прежним
+                  владельцем.
+                </span>
+              </p>
+            </div>
+          )}
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={closeReassignModal} className="btn-secondary">
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={confirmReassign}
+              disabled={!reassignTarget || reassignCarMutation.isPending}
+              className="btn-primary disabled:opacity-50"
+            >
+              {reassignCarMutation.isPending ? 'Переносим…' : 'Сменить владельца'}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

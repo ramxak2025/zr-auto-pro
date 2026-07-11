@@ -18,6 +18,7 @@ import {
   Calculator,
   Minus,
   UserIcon,
+  UserCheck,
   CalendarDays,
   Gauge,
   Pencil,
@@ -30,7 +31,16 @@ import {
 import { format } from 'date-fns';
 import { ru as ruLocale } from 'date-fns/locale';
 import toast from 'react-hot-toast';
-import { checksApi, clientsApi, usersApi, servicesApi, productsApi, warrantyApi, warehousesApi } from '../api/services';
+import {
+  checksApi,
+  clientsApi,
+  carsApi,
+  usersApi,
+  servicesApi,
+  productsApi,
+  warrantyApi,
+  warehousesApi,
+} from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import type {
   Client,
@@ -49,6 +59,8 @@ import { UserRole } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { DEFAULT_UNIT, MIN_QTY, formatQty, parseQtyInput, roundQty, unitLabel } from '../utils/units';
 import LastVisitBadge from '../components/LastVisitBadge';
+import Modal from '../components/Modal';
+import ClientSearchAutocomplete from '../components/ClientSearchAutocomplete';
 import { TemplatePickerModal, SaveTemplateModal } from '../components/CheckTemplatesModals';
 
 const formatCurrency = (value: number): string => {
@@ -464,6 +476,10 @@ export default function CheckCreatePage() {
   const queryClient = useQueryClient();
   const { user, isRole, hasPermission } = useAuth();
   const canEditDate = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // «Сменить владельца» (feature #9) — gated by clients_edit; owner-class
+  // (superadmin/director/admin) bypasses. hasPermission already returns true for
+  // superadmin/director; ADMIN is added explicitly to match ClientDetailPage.
+  const canReassignOwner = isRole(UserRole.ADMIN) || hasPermission('clients_edit');
   const canSellInstallment = hasPermission('sell_installment');
   // Рассрочка — только на НОВОМ чеке (parity с mobile: canOfferInstallment).
   // План создаётся сервером в create(); правка чека план создать не умеет,
@@ -519,6 +535,11 @@ export default function CheckCreatePage() {
   // Warehouse filter for product picker (defaults to main warehouse)
   const [pickerWarehouseId, setPickerWarehouseId] = useState<string>('');
   const [warrantyExpanded, setWarrantyExpanded] = useState(false);
+
+  // «Сменить владельца» modal (feature #9) — reassign the selected car to
+  // another client without leaving the Касса screen.
+  const [reassignOpen, setReassignOpen] = useState(false);
+  const [reassignTarget, setReassignTarget] = useState<Client | null>(null);
 
   // Prevent accidental page leave
   useEffect(() => {
@@ -743,6 +764,49 @@ export default function CheckCreatePage() {
       }
     },
   });
+
+  // «Сменить владельца» (feature #9): reassign the currently-selected car to
+  // another client, then re-point this (unsaved) check's client to the new
+  // owner in local state. Car id is stable across reassign, so selectedCarId is
+  // preserved. We refetch the target client to get its full record (including
+  // the freshly-attached car) for the selected-client display. Backend guards a
+  // duplicate plate under the target client and answers 400 — surfaced as-is.
+  const reassignMutation = useMutation({
+    mutationFn: async (target: Client) => {
+      await carsApi.update(selectedCarId, { clientId: target.id });
+      // Fresh target record — has the newly-attached car in its cars[].
+      const res = await clientsApi.getById(target.id);
+      return res.data as Client;
+    },
+    onSuccess: (freshOwner) => {
+      setSelectedClient(freshOwner);
+      // selectedCarId stays the same — the car now lives under freshOwner.
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
+      queryClient.invalidateQueries({ queryKey: ['active-warranties'] });
+      toast.success('Владелец автомобиля изменён');
+      closeReassignModal();
+    },
+    onError: (err: unknown) => {
+      const msg = (err as { response?: { data?: { message?: string } } })?.response?.data?.message;
+      toast.error(msg || 'Не удалось сменить владельца');
+    },
+  });
+
+  const openReassignModal = () => {
+    setReassignTarget(null);
+    setReassignOpen(true);
+  };
+
+  const closeReassignModal = () => {
+    setReassignOpen(false);
+    setReassignTarget(null);
+  };
+
+  const confirmReassign = () => {
+    if (!reassignTarget) return;
+    reassignMutation.mutate(reassignTarget);
+  };
 
   // Computed totals
   const serviceTotal = useMemo(() => {
@@ -1225,6 +1289,18 @@ export default function CheckCreatePage() {
                       ))}
                     </select>
                   </div>
+                )}
+                {/* \u00ab\u0421\u043c\u0435\u043d\u0438\u0442\u044c \u0432\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u0430\u00bb \u2014 reassign the selected car to another
+                    client without leaving \u041a\u0430\u0441\u0441\u0430 (feature #9). */}
+                {canReassignOwner && selectedCarId && (
+                  <button
+                    type="button"
+                    onClick={openReassignModal}
+                    className="mt-2 inline-flex items-center gap-1.5 text-xs font-semibold text-primary-600 hover:text-primary-700 transition-colors"
+                  >
+                    <UserCheck className="w-3.5 h-3.5" />
+                    \u0421\u043c\u0435\u043d\u0438\u0442\u044c \u0432\u043b\u0430\u0434\u0435\u043b\u044c\u0446\u0430
+                  </button>
                 )}
                 <LastVisitBadge clientId={selectedClient.id} carId={selectedCarId || undefined} />
               </div>
@@ -1840,6 +1916,59 @@ export default function CheckCreatePage() {
         services={templateServices}
         products={templateProducts}
       />
+
+      {/* «Сменить владельца» modal (feature #9) — reassign the selected car */}
+      <Modal isOpen={reassignOpen} onClose={closeReassignModal} title="Сменить владельца">
+        <div className="space-y-4">
+          {(() => {
+            const car = selectedClient?.cars?.find((c) => c.id === selectedCarId);
+            return car ? (
+              <div className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl border border-gray-100">
+                <span className="font-mono font-bold text-sm bg-white border border-gray-200 px-2 py-1 rounded">
+                  {car.plateNumber}
+                </span>
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900 truncate">{car.makeModel}</p>
+                  {selectedClient && <p className="text-xs text-gray-500">Владелец: {selectedClient.fullName}</p>}
+                </div>
+              </div>
+            ) : null;
+          })()}
+
+          <div>
+            <label className="label">Новый владелец</label>
+            <ClientSearchAutocomplete
+              selectedClient={reassignTarget}
+              onSelect={setReassignTarget}
+              excludeClientId={selectedClient?.id}
+            />
+          </div>
+
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
+            <p className="text-xs text-amber-800 flex items-start gap-1.5">
+              <UserCheck className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+              <span>
+                Автомобиль и вся история обслуживания перейдут к новому владельцу. Прошлые чеки остаются за прежним
+                владельцем. Текущий (несохранённый) чек будет переоформлен на нового владельца.
+              </span>
+            </p>
+          </div>
+
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={closeReassignModal} className="btn-secondary">
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={confirmReassign}
+              disabled={!reassignTarget || reassignMutation.isPending}
+              className="btn-primary disabled:opacity-50"
+            >
+              {reassignMutation.isPending ? 'Переносим…' : 'Сменить владельца'}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

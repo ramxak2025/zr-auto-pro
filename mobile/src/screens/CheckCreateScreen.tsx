@@ -50,6 +50,7 @@ import PlateModeSwitcher, { type PlateMode } from '../components/PlateModeSwitch
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
 import ClientCarPickerSheet from '../components/ClientCarPickerSheet';
+import ConfirmDialog from '../components/ConfirmDialog';
 import PaymentMethodModal, { paymentMethodLabel, paymentMethodVisual } from '../components/PaymentMethodModal';
 import SbpPaymentModal from '../components/SbpPaymentModal';
 import InstallmentSaleFields from '../components/installments/InstallmentSaleFields';
@@ -116,6 +117,14 @@ function formatMoney(v: number) {
       .toString()
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ₽'
   );
+}
+
+/** «Марка/Модель · Госномер» для сообщения подтверждения переноса (#9). */
+function reassignCarLabel(car: Car): string {
+  const makeModel = (car.makeModel || '').trim();
+  const plate = (car.plateNumber || '').trim().toUpperCase();
+  if (makeModel && plate) return `${makeModel} · ${plate}`;
+  return makeModel || plate || 'без номера';
 }
 
 /**
@@ -547,6 +556,13 @@ export default function CheckCreateScreen() {
   const [showWarehouseSheet, setShowWarehouseSheet] = useState(false);
   // M2: быстрый «Создать клиента» из состояния «Клиент не найден».
   const [showQuickCreate, setShowQuickCreate] = useState(false);
+  // Feature #9 — «Сменить владельца» из карточки выбранного клиента: переносим
+  // авто другому клиенту (carsApi.update {clientId}) и перенацеливаем ТЕКУЩИЙ
+  // (несохранённый) чек на нового владельца. `reassignMode` роутит уже
+  // смонтированный QuickClientCreateSheet в этот поток вместо «добавить в чек».
+  // `reassignConfirm` — выбранный новый владелец, ждёт подтверждения.
+  const [reassignMode, setReassignMode] = useState(false);
+  const [reassignConfirm, setReassignConfirm] = useState<{ clientId: string; clientName: string } | null>(null);
   // Центральная модалка выбора способа оплаты (заменила инлайновый ряд кнопок).
   const [showPaymentPicker, setShowPaymentPicker] = useState(false);
   // ДОБАВОЧНО: модалка приёма оплаты по СБП / QR (эквайринг). Полностью
@@ -1145,6 +1161,69 @@ export default function CheckCreateScreen() {
     haptic('select');
     setCarPickerClient(clientData);
   }, [clientData]);
+
+  // Feature #9 — «Сменить владельца»: открываем тот же QuickClientCreateSheet,
+  // но в режиме reassign — его onCreated/onSelectExisting уходят в поток
+  // переноса авто, а не «добавить клиента в чек».
+  const openReassignOwner = React.useCallback(() => {
+    if (!selectedCar) return;
+    haptic('tap');
+    setReassignMode(true);
+    setShowQuickCreate(true);
+  }, [selectedCar]);
+
+  // Пользователь выбрал/создал нового владельца в sheet (режим reassign).
+  // Закрываем sheet и показываем подтверждение перед записью.
+  const onReassignPicked = React.useCallback(
+    (newClientId: string, newClientName: string) => {
+      setShowQuickCreate(false);
+      setReassignMode(false);
+      if (newClientId === clientId) {
+        Alert.alert('Владелец не изменился', 'Это авто уже принадлежит выбранному клиенту.');
+        return;
+      }
+      setReassignConfirm({ clientId: newClientId, clientName: newClientName });
+    },
+    [clientId],
+  );
+
+  // Подтверждено — переносим авто новому владельцу и ПЕРЕНАЦЕЛИВАЕМ текущий
+  // (несохранённый) чек на него. Чек ещё не в БД, так что конфликта нет:
+  // достаточно поменять car.client_id и переставить clientId в стейте — при
+  // сохранении чек уйдёт уже с новым владельцем. selectedClient/selectedCar
+  // перечитаются из ['client-detail', newClientId] после инвалидации.
+  const handleReassignOwner = React.useCallback(
+    async (car: Car, newClientId: string) => {
+      try {
+        await carsApi.update(car.id, { clientId: newClientId });
+        haptic('success');
+        // Инвалидируем detail-ключ ЭТОГО экрана (['client-detail', ...] — то,
+        // что читает selectedClient/clientCars) для старого и нового владельца,
+        // плюс списки авто и историю по авто.
+        queryClient.invalidateQueries({ queryKey: ['client-detail', clientId] });
+        queryClient.invalidateQueries({ queryKey: ['client-detail', newClientId] });
+        queryClient.invalidateQueries({ queryKey: ['cars'] });
+        queryClient.invalidateQueries({ queryKey: ['car-checks'] });
+        // Перенацеливаем несохранённый чек на нового владельца. carId оставляем
+        // тем же — это та же машина, просто с новым владельцем.
+        animateClientToggle();
+        setClientId(newClientId);
+        setCarId(car.id);
+      } catch (err: any) {
+        haptic('error');
+        const data = err?.response?.data;
+        const friendly =
+          (data && typeof data.message === 'string' && data.message) ||
+          (data && Array.isArray(data.message) && typeof data.message[0] === 'string' && data.message[0]) ||
+          (data && typeof data.error === 'string' && data.error) ||
+          'Не удалось сменить владельца';
+        Alert.alert('Ошибка', String(friendly));
+      } finally {
+        setReassignConfirm(null);
+      }
+    },
+    [clientId, queryClient],
+  );
 
   // Редактируем отложенный (черновик) чек: пользователь пришёл сюда по
   // «Продолжить» из деталки. Берём флаг из ЗАГРУЖЕННОГО серверного чека, а не
@@ -2399,23 +2478,48 @@ export default function CheckCreateScreen() {
                   {/* Round 8 #1 — машина выбрана: показываем ТОЛЬКО её, без
                         постоянного ряда «пилюль». Смена — осознанный тап по
                         «Сменить» → ClientCarPickerSheet со всеми авто клиента.
-                        Чип виден только когда выбор явный (carId) и машин ≥2. */}
-                  {!!carId && clientCars && clientCars.length > 1 && (
-                    <TouchableOpacity
-                      onPress={openCarSwitch}
-                      style={[
-                        styles.changeCarChip,
-                        { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
-                      ]}
-                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                      activeOpacity={0.7}
-                      accessibilityRole="button"
-                      accessibilityLabel="Сменить автомобиль"
-                    >
-                      <Ionicons name="swap-horizontal" size={13} color={palette.text.secondary} />
-                      <Text style={[styles.changeCarChipText, { color: palette.text.secondary }]}>Сменить</Text>
-                    </TouchableOpacity>
-                  )}
+                        Чип «Сменить» виден когда выбор явный (carId) и машин ≥2.
+                        Feature #9 — рядом чип «Сменить владельца» (перенос авто
+                        другому клиенту), виден при выбранном авто и праве
+                        clients_edit (owner-class — implicit). */}
+                  {(!!carId && clientCars && clientCars.length > 1) || hasPermission('clients_edit') ? (
+                    <View style={styles.selectedCarChipsRow}>
+                      {!!carId && clientCars && clientCars.length > 1 && (
+                        <TouchableOpacity
+                          onPress={openCarSwitch}
+                          style={[
+                            styles.changeCarChip,
+                            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                          ]}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel="Сменить автомобиль"
+                        >
+                          <Ionicons name="swap-horizontal" size={13} color={palette.text.secondary} />
+                          <Text style={[styles.changeCarChipText, { color: palette.text.secondary }]}>Сменить</Text>
+                        </TouchableOpacity>
+                      )}
+                      {hasPermission('clients_edit') && (
+                        <TouchableOpacity
+                          onPress={openReassignOwner}
+                          style={[
+                            styles.changeCarChip,
+                            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                          ]}
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel="Сменить владельца авто"
+                        >
+                          <Ionicons name="person-outline" size={13} color={palette.text.secondary} />
+                          <Text style={[styles.changeCarChipText, { color: palette.text.secondary }]}>
+                            Сменить владельца
+                          </Text>
+                        </TouchableOpacity>
+                      )}
+                    </View>
+                  ) : null}
                 </View>
               )}
 
@@ -3907,11 +4011,22 @@ export default function CheckCreateScreen() {
           без повторного поиска. */}
       <QuickClientCreateSheet
         visible={showQuickCreate}
-        onClose={() => setShowQuickCreate(false)}
-        initialPlate={isPhoneMode ? '' : plateSearch}
+        onClose={() => {
+          setShowQuickCreate(false);
+          setReassignMode(false);
+        }}
+        // В режиме reassign поля не предзаполняем номером/телефоном из поиска —
+        // выбираем/создаём НОВОГО владельца с чистой формы.
+        initialPlate={reassignMode ? '' : isPhoneMode ? '' : plateSearch}
         initialPlateMode={plateMode}
-        initialPhone={isPhoneMode ? phoneSearch : ''}
+        initialPhone={reassignMode ? '' : isPhoneMode ? phoneSearch : ''}
         onCreated={(client, car) => {
+          // Feature #9 — режим «Сменить владельца»: не подставляем клиента в
+          // чек, а уходим в поток переноса выбранного авто новому владельцу.
+          if (reassignMode) {
+            onReassignPicked(client.id, client.fullName);
+            return;
+          }
           setShowQuickCreate(false);
           // Засеваем кеш карточки клиента, чтобы selected-card появилась
           // мгновенно (selectedClient читает ['client-detail', clientId]).
@@ -3926,6 +4041,11 @@ export default function CheckCreateScreen() {
           setPhoneSearch('');
         }}
         onSelectExisting={(existingClientId, existingCarId) => {
+          if (reassignMode) {
+            const cached = queryClient.getQueryData<Client>(['client-detail', existingClientId]);
+            onReassignPicked(existingClientId, cached?.fullName || 'выбранному клиенту');
+            return;
+          }
           setShowQuickCreate(false);
           animateClientToggle();
           setClientId(existingClientId);
@@ -3933,6 +4053,26 @@ export default function CheckCreateScreen() {
           setPlateSearch('');
           setPhoneSearch('');
         }}
+      />
+
+      {/* Feature #9 — подтверждение «Сменить владельца». Чек не сохранён, так
+          что конфликта в БД нет; при подтверждении переносим авто и
+          перенацеливаем текущий чек на нового владельца. */}
+      <ConfirmDialog
+        visible={!!reassignConfirm}
+        onClose={() => setReassignConfirm(null)}
+        onConfirm={() => {
+          if (reassignConfirm && selectedCar) void handleReassignOwner(selectedCar, reassignConfirm.clientId);
+        }}
+        title="Сменить владельца?"
+        message={
+          reassignConfirm && selectedCar
+            ? `Автомобиль ${reassignCarLabel(selectedCar)} будет перенесён клиенту «${reassignConfirm.clientName}». ` +
+              'История прошлых чеков останется у текущего владельца.'
+            : ''
+        }
+        confirmText="Перенести"
+        variant="primary"
       />
 
       {/* Round 7 #8: у телефонного совпадения ≥2 авто — выбор машины. Пара
@@ -4332,6 +4472,14 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   changeCarChipText: { fontSize: 12, fontWeight: '600' as const, letterSpacing: -0.1 },
+  // Feature #9 — ряд чипов под выбранным авто: «Сменить» + «Сменить владельца».
+  // Wrap, чтобы на узких экранах длинный чип переносился, а не обрезался.
+  selectedCarChipsRow: {
+    flexDirection: 'row' as const,
+    flexWrap: 'wrap' as const,
+    justifyContent: 'center' as const,
+    gap: spacing[2],
+  },
   sectionSubLabel: {
     fontSize: 11,
     fontWeight: '700',

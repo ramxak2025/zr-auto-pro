@@ -195,6 +195,37 @@ export class CarsService {
       await this.assertClientInTenant(dto.clientId, tenantID);
     }
 
+    // Reassigning a car to a different owner (feature #9): guard against
+    // creating a duplicate plate under the TARGET client. Only runs when a
+    // real owner change is requested (`dto.clientId` present AND different from
+    // the car's current client_id). Reuses the exact same normalization +
+    // per-client lookup as create()'s idempotent-attach path. No-plate cars
+    // («без номера») normalize to empty and are skipped — an empty plate is not
+    // a stable identity.
+    if (dto.clientId !== undefined && dto.clientId !== null) {
+      const { rows: currentRows } = await this.pool.query(
+        'SELECT client_id, plate_number FROM cars WHERE id=$1 AND tenant_id=$2 LIMIT 1',
+        [id, tenantID],
+      );
+      if (currentRows.length > 0 && currentRows[0].client_id !== dto.clientId) {
+        // Plate to check is the one the car will have after this update:
+        // a provided plateNumber wins (unless toggling «без номера»), else the
+        // car's current stored plate.
+        const effectivePlate = dto.noPlate
+          ? ''
+          : dto.plateNumber !== undefined
+            ? dto.plateNumber
+            : (currentRows[0].plate_number ?? '');
+        const norm = normalizePlate(effectivePlate);
+        if (!norm.isEmpty && norm.key) {
+          const existing = await this.findExistingPlateForClient(tenantID, dto.clientId, norm.key);
+          if (existing) {
+            throw new BadRequestException({ message: 'У этого клиента уже есть авто с таким номером' });
+          }
+        }
+      }
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;

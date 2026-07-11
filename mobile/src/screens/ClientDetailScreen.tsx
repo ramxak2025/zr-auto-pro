@@ -26,6 +26,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SourcePickerSheet from '../components/SourcePickerSheet';
+import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
 import CarPlateField from '../components/CarPlateField';
 import type { PlateMode } from '../components/RussianPlateInput';
 import ClientCallsSection from '../components/ClientCallsSection';
@@ -239,6 +240,19 @@ export default function ClientDetailScreen() {
   const [editingCar, setEditingCar] = useState<Car | null>(null);
   const carFormRef = useRef<CarFormValues | null>(null);
   const [deleteCarId, setDeleteCarId] = useState<string | null>(null);
+  // Feature #9 — «Сменить владельца»: перенос авто другому клиенту через
+  // carsApi.update(car.id, { clientId }). Два шага UX: (1) выбор/создание
+  // нового владельца через QuickClientCreateSheet, (2) подтверждение переноса.
+  // `reassignCar` — авто, которое переносим (открытый sheet). `reassignTarget`
+  // — выбранный/созданный новый владелец, ждёт подтверждения в ConfirmDialog.
+  // История прошлых чеков остаётся у ТЕКУЩЕГО владельца (у чеков свой client_id).
+  const [reassignCar, setReassignCar] = useState<Car | null>(null);
+  const [reassignTarget, setReassignTarget] = useState<{
+    car: Car;
+    clientId: string;
+    clientName: string;
+  } | null>(null);
+  const [reassignBusy, setReassignBusy] = useState(false);
   // Notes editor (owner-only) — draft state lives inside <NotesEditorModal/>.
   const [notesModalOpen, setNotesModalOpen] = useState(false);
   // «Изменить данные клиента» (имя / телефон / комментарий) — R7-9. Раньше
@@ -728,6 +742,63 @@ export default function ClientDetailScreen() {
     }
   };
 
+  // ── Feature #9 — «Сменить владельца» ──────────────────────────────
+  // Step 1: open the owner-picker sheet for this car (reuses the SAME
+  // QuickClientCreateSheet that does search-existing AND create-new).
+  const openReassignOwner = (car: Car) => {
+    haptic('tap');
+    setReassignCar(car);
+  };
+
+  // Step 2: the sheet handed us the NEW owner (existing or freshly created).
+  // Stash the pair and surface a ConfirmDialog before writing — the move is a
+  // deliberate action, not a silent side-effect of picking a client.
+  const onReassignPicked = (newClientId: string, newClientName: string) => {
+    const car = reassignCar;
+    setReassignCar(null);
+    if (!car) return;
+    // Уже у этого владельца — переносить нечего.
+    if (newClientId === id) {
+      Alert.alert('Владелец не изменился', 'Это авто уже принадлежит текущему клиенту.');
+      return;
+    }
+    setReassignTarget({ car, clientId: newClientId, clientName: newClientName });
+  };
+
+  // Step 3: confirmed — write clientId onto the car. History is safe: past
+  // checks keep their own client_id (backend never rewrites them). Invalidate
+  // the same keys as updateCarMutation PLUS the NEW owner's detail card so its
+  // garage shows the moved car immediately.
+  const handleReassignOwner = async (car: Car, newClientId: string) => {
+    setReassignBusy(true);
+    try {
+      await carsApi.update(car.id, { clientId: newClientId });
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['client', id] });
+      queryClient.invalidateQueries({ queryKey: ['client', newClientId] });
+      queryClient.invalidateQueries({ queryKey: ['cars'] });
+      queryClient.invalidateQueries({ queryKey: ['car-checks'] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks', id] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks-full', id] });
+      queryClient.invalidateQueries({ queryKey: ['client-checks-by-car', id] });
+    } catch (err: any) {
+      // Бэкенд может отказать (например, у нового клиента уже есть авто с таким
+      // номером — уникальный индекс). Показываем реальную причину, а не глухую
+      // «Ошибку», чтобы владелец понял, что делать.
+      haptic('error');
+      const data = err?.response?.data;
+      const friendly =
+        (data && typeof data.message === 'string' && data.message) ||
+        (data && Array.isArray(data.message) && typeof data.message[0] === 'string' && data.message[0]) ||
+        (data && typeof data.error === 'string' && data.error) ||
+        'Не удалось сменить владельца';
+      Alert.alert('Ошибка', String(friendly));
+    } finally {
+      setReassignBusy(false);
+      setReassignTarget(null);
+    }
+  };
+
   const onRefresh = async () => {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: ['client', id] });
@@ -1200,6 +1271,7 @@ export default function ClientDetailScreen() {
                   onPressIn={() => prefetchCarDetail(car.id)}
                   onEdit={() => openEditCar(car)}
                   onDelete={() => setDeleteCarId(car.id)}
+                  onReassign={() => openReassignOwner(car)}
                 />
               </View>
             );
@@ -1547,8 +1619,52 @@ export default function ClientDetailScreen() {
         otherOwnerName={duplicateCar?.client?.fullName ?? null}
         busy={carSubmitting}
       />
+
+      {/* Feature #9 — «Сменить владельца»: выбор/создание нового владельца
+          (тот же sheet, что и в Кассе — умеет и найти существующего, и завести
+          нового). Подтверждение — в ConfirmDialog ниже. */}
+      <QuickClientCreateSheet
+        visible={!!reassignCar}
+        onClose={() => setReassignCar(null)}
+        initialPlate=""
+        initialPlateMode="ru"
+        onCreated={(created) => onReassignPicked(created.id, created.fullName)}
+        onSelectExisting={(existingClientId) => {
+          // Sheet может отдать имя не всегда; тянем его из кеша списков, а иначе
+          // подставляем нейтральную подпись — важен сам факт переноса.
+          const cached = queryClient.getQueryData<Client>(['client', existingClientId]);
+          onReassignPicked(existingClientId, cached?.fullName || 'выбранному клиенту');
+        }}
+      />
+
+      <ConfirmDialog
+        visible={!!reassignTarget}
+        onClose={() => setReassignTarget(null)}
+        onConfirm={() => {
+          // Гвард от повторного тапа во время in-flight записи; ConfirmDialog
+          // сам закрывается на confirm, так что вторая попытка маловероятна.
+          if (reassignTarget && !reassignBusy) void handleReassignOwner(reassignTarget.car, reassignTarget.clientId);
+        }}
+        title="Сменить владельца?"
+        message={
+          reassignTarget
+            ? `Автомобиль ${carLabel(reassignTarget.car)} будет перенесён клиенту «${reassignTarget.clientName}». ` +
+              'История прошлых чеков останется у текущего владельца.'
+            : ''
+        }
+        confirmText="Перенести"
+        variant="primary"
+      />
     </View>
   );
+}
+
+/** «Марка/Модель · Госномер» для сообщения подтверждения переноса (#9). */
+function carLabel(car: Car): string {
+  const makeModel = (car.makeModel || '').trim();
+  const plate = (car.plateNumber || '').trim().toUpperCase();
+  if (makeModel && plate) return `${makeModel} · ${plate}`;
+  return makeModel || plate || 'без номера';
 }
 
 // ── Sub-components ────────────────────────────────────────────────────
@@ -1633,6 +1749,9 @@ interface CarCardProps {
   onPressIn: () => void;
   onEdit: () => void;
   onDelete: () => void;
+  /** Feature #9 — сменить владельца (перенести авто другому клиенту). Гейт —
+   *  тот же `canEdit` (canEditMeta): owner-class OR clients_edit. */
+  onReassign: () => void;
 }
 function CarCard({
   car,
@@ -1645,6 +1764,7 @@ function CarCard({
   onPressIn,
   onEdit,
   onDelete,
+  onReassign,
 }: CarCardProps) {
   const carColor = getCarColor(car.id);
   const plate = (car.plateNumber || '').toUpperCase();
@@ -1682,6 +1802,15 @@ function CarCard({
         <View style={styles.carTopRight}>
           {canEdit ? (
             <View style={styles.carActions}>
+              <TouchableOpacity
+                onPress={onReassign}
+                style={styles.iconBtn}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel="Сменить владельца авто"
+              >
+                <Ionicons name="swap-horizontal" size={16} color={palette.text.tertiary} />
+              </TouchableOpacity>
               <TouchableOpacity onPress={onEdit} style={styles.iconBtn} hitSlop={8}>
                 <Ionicons name="create-outline" size={16} color={palette.text.tertiary} />
               </TouchableOpacity>
