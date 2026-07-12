@@ -1,17 +1,16 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, MessageCircle, Minus, Wrench } from 'lucide-react';
-import { formatRub, pricing, yearlyMonthly, type PlanCellValue, type PricingPlan } from '../content';
+import { pricing, type PlanCellValue, type PricingPlan } from '../content';
 import { getWhatsAppUrl, WHATSAPP_IMPLEMENTATION_MESSAGE } from '../config';
 
 /**
- * Общие «тяжёлые» куски тарифов: карточка плана (с переключателем месяц/год),
- * карта «Внедрение под ключ», полное сравнение (desktop-таблица + mobile —
- * горизонтально листаемая таблица со «липкой» первой колонкой). Используются
- * страницей /tarify; главная показывает компактный тизер (Pricing.tsx).
+ * Общие «тяжёлые» куски тарифов: карточка плана (только возможности, без цен —
+ * стоимость подбирается индивидуально при подключении), карта «Внедрение под
+ * ключ», полное сравнение (desktop-таблица + mobile — горизонтально листаемая
+ * таблица со «липкой» первой колонкой). Используются страницей /tarify; главная
+ * показывает компактный тизер (Pricing.tsx).
  */
-
-export type Billing = 'monthly' | 'yearly';
 
 const CTA_BASE =
   'inline-flex min-h-[48px] w-full items-center justify-center gap-2 rounded-2xl px-5 text-sm font-semibold transition motion-safe:active:scale-[0.98]';
@@ -52,8 +51,7 @@ function CompareCell({ value }: { value: PlanCellValue }) {
 }
 
 /** Карточка тарифа; «Легенда» — primary-бордер, бейдж и подъём на desktop. */
-export function PlanCard({ plan, billing }: { plan: PricingPlan; billing: Billing }) {
-  const monthly = billing === 'yearly' ? yearlyMonthly(plan.priceMonthly) : plan.priceMonthly;
+export function PlanCard({ plan }: { plan: PricingPlan }) {
   return (
     <div
       className={`relative flex h-full flex-col rounded-3xl bg-white p-6 sm:p-7 ${
@@ -69,19 +67,8 @@ export function PlanCard({ plan, billing }: { plan: PricingPlan; billing: Billin
       )}
       <h3 className="text-lg font-bold text-slate-900">{plan.name}</h3>
       <p className="mt-1 text-sm text-slate-500">{plan.description}</p>
-      <p className="mt-5 flex items-baseline gap-1.5">
-        <span className="text-4xl font-extrabold tracking-tight text-slate-900">{formatRub(monthly)} ₽</span>
-        <span className="text-sm font-medium text-slate-400">/мес</span>
-      </p>
-      {billing === 'yearly' ? (
-        <p className="mt-1 text-sm text-slate-500">
-          {formatRub(monthly * 12)} ₽ в год ·{' '}
-          <span className="text-slate-400 line-through">{formatRub(plan.priceMonthly)} ₽/мес</span>
-        </p>
-      ) : (
-        <p className="mt-1 text-sm text-slate-500">При оплате за год — дешевле на 20%</p>
-      )}
-      <p className="mt-4 text-sm font-medium text-slate-600">{plan.employees}</p>
+      <p className="mt-5 text-sm font-semibold text-slate-900">{plan.employees}</p>
+      <p className="mt-1 text-sm text-slate-500">Стоимость — индивидуально под размер команды</p>
       <p className="mt-6 text-xs font-semibold uppercase tracking-wider text-slate-500">Что входит</p>
       <ul className="mt-3 space-y-2.5">
         {plan.includes.map((item) => (
@@ -127,11 +114,8 @@ export function ImplementationCard() {
           </ul>
         </div>
         <div className="shrink-0 text-center lg:w-60 lg:text-right">
-          <p className="flex items-baseline justify-center gap-1.5 lg:justify-end">
-            <span className="text-3xl font-extrabold tracking-tight text-slate-900">{impl.price}</span>
-            <span className="text-sm font-medium text-slate-400">{impl.priceNote}</span>
-          </p>
-          <p className="mt-1 text-sm text-slate-500">{impl.duration}</p>
+          <p className="text-sm text-slate-500">{impl.duration}</p>
+          <p className="mt-1 text-sm text-slate-500">Стоимость — индивидуально, по объёму работ</p>
           {implUrl && (
             <a
               href={implUrl}
@@ -180,9 +164,7 @@ export function ComparisonTable() {
                 <span className={`block text-sm font-bold ${p.highlighted ? 'text-primary-700' : 'text-slate-900'}`}>
                   {p.name}
                 </span>
-                <span className="mt-0.5 block text-xs font-medium text-slate-400">
-                  {formatRub(p.priceMonthly)} ₽/мес
-                </span>
+                <span className="mt-0.5 block text-xs font-medium text-slate-400">{p.employees}</span>
               </th>
             ))}
           </tr>
@@ -278,9 +260,7 @@ export function ComparisonTableMobile() {
                     >
                       {p.name}
                     </span>
-                    <span className="mt-0.5 block text-[11px] font-medium text-slate-400">
-                      {formatRub(p.priceMonthly)} ₽
-                    </span>
+                    <span className="mt-0.5 block text-[11px] font-medium text-slate-400">{p.employees}</span>
                   </th>
                 ))}
               </tr>

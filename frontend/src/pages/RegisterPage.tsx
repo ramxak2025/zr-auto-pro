@@ -98,27 +98,12 @@ export default function RegisterPage() {
               </Link>
             }
             successActions={
-              <div className="w-full space-y-3">
-                <Link to="/login" className="btn-primary w-full">
-                  Перейти ко входу
-                </Link>
-                <Link
-                  to="/"
-                  className="inline-flex min-h-[44px] w-full items-center justify-center text-sm font-medium text-slate-500 transition-colors hover:text-slate-900"
-                >
-                  Вернуться на главную
-                </Link>
-              </div>
+              <Link to="/" className="btn-primary w-full">
+                Вернуться на главную
+              </Link>
             }
           />
         </div>
-
-        <p className="mt-6 text-center text-sm text-slate-500">
-          Уже есть аккаунт?{' '}
-          <Link to="/login" className="font-semibold text-primary-600 transition-colors hover:text-primary-700">
-            Войти
-          </Link>
-        </p>
       </main>
     </div>
   );

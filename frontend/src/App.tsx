@@ -243,9 +243,11 @@ export default function App() {
             }
           />
 
-          {/* Public: self-service registration (landing primary CTAs point here).
-              Must stay reachable when logged OUT — outside the auth-gated blocks.
-              A logged-in visitor is bounced to their home, exactly like /login. */}
+          {/* Public: B2B lead form «Заявка на подключение» (landing primary CTAs
+              point here). NOT self-serve signup — no password, no account minted;
+              a manager issues access after review. Must stay reachable when logged
+              OUT — outside the auth-gated blocks. A logged-in visitor is bounced to
+              their home, exactly like /login. */}
           <Route
             path="/register"
             element={

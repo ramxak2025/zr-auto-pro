@@ -1,72 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect } from 'react';
 import { Link, useNavigationType } from 'react-router-dom';
 import { Building2, ChevronDown, ChevronRight } from 'lucide-react';
-import { motion, useReducedMotion } from 'framer-motion';
 import Reveal from './sections/Reveal';
 import CtaSection from './sections/CtaSection';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
-import {
-  type Billing,
-  ComparisonTable,
-  ComparisonTableMobile,
-  ImplementationCard,
-  PlanCard,
-} from './sections/pricingShared';
+import { ComparisonTable, ComparisonTableMobile, ImplementationCard, PlanCard } from './sections/pricingShared';
 import { b2bNotice, pricing, pricingFaq, tarifyHero } from './content';
-
-/** Сегмент-контрол «Помесячно | На год −20%» с перетекающим ползунком. */
-function BillingToggle({ value, onChange }: { value: Billing; onChange: (b: Billing) => void }) {
-  const reduce = useReducedMotion();
-  const options: { key: Billing; label: string; badge?: string }[] = [
-    { key: 'monthly', label: 'Помесячно' },
-    { key: 'yearly', label: 'На год', badge: '−20%' },
-  ];
-  return (
-    <div className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white p-1 shadow-sm">
-      {options.map((o) => {
-        const active = value === o.key;
-        return (
-          <button
-            key={o.key}
-            type="button"
-            onClick={() => onChange(o.key)}
-            aria-pressed={active}
-            className="relative inline-flex min-h-[40px] items-center gap-1.5 rounded-full px-4 text-sm font-semibold"
-          >
-            {active && (
-              <motion.span
-                layoutId="billing-pill"
-                transition={reduce ? { duration: 0 } : { type: 'spring', stiffness: 400, damping: 34 }}
-                className="absolute inset-0 rounded-full bg-primary-600"
-              />
-            )}
-            <span className={`relative z-10 ${active ? 'text-white' : 'text-slate-600'}`}>{o.label}</span>
-            {o.badge && (
-              <span
-                className={`relative z-10 rounded-full px-1.5 py-0.5 text-[11px] font-bold ${
-                  active ? 'bg-white/20 text-white' : 'bg-emerald-50 text-emerald-600'
-                }`}
-              >
-                {o.badge}
-              </span>
-            )}
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 /**
  * Отдельная страница тарифов /tarify. Публичная — доступна и гостям,
  * и залогиненным (по образцу /f/:slug, без редиректа).
  *
- * Структура: мини-Header (лого + Войти) → крошки «Autexa → Тарифы» →
+ * Тарифы описаны ВОЗМОЖНОСТЯМИ, без цен: стоимость подбирается индивидуально
+ * под размер команды при подключении. Единственный CTA карточек — «Оставить
+ * заявку». Структура: мини-Header (лого + Войти) → крошки «Autexa → Тарифы» →
  * hero-строка → карточки планов (мобиле — вертикальная стопка, «Легенда»
  * первой с бейджем; desktop — 3 колонки) → «Внедрение под ключ» →
  * полное сравнение (desktop-таблица / mobile-details из pricingShared) →
- * mini-FAQ о ценах → CTA WhatsApp/Telegram → Footer + GlassTabBar.
+ * mini-FAQ → CTA WhatsApp/Telegram → Footer + GlassTabBar.
  */
 
 /** Мини-шапка страницы: только лого (→ главная) и «Войти». */
@@ -116,8 +68,6 @@ function Breadcrumbs() {
 
 export default function TarifyPage() {
   const navigationType = useNavigationType();
-  // По умолчанию «На год» — якорим выгодную цену (честно помечено −20%).
-  const [billing, setBilling] = useState<Billing>('yearly');
 
   // Заголовок вкладки с восстановлением при уходе
   useEffect(() => {
@@ -191,19 +141,12 @@ export default function TarifyPage() {
           </div>
         </Reveal>
 
-        {/* Переключатель периода оплаты */}
-        <Reveal delay={0.08}>
-          <div className="mt-8 flex justify-center">
-            <BillingToggle value={billing} onChange={setBilling} />
-          </div>
-        </Reveal>
-
         {/* Карточки планов: мобиле — стопка («Легенда» первой), desktop — 3 колонки */}
         <Reveal delay={0.1}>
-          <div className="mt-6 flex flex-col gap-4 pt-3 md:grid md:grid-cols-3">
+          <div className="mt-8 flex flex-col gap-4 pt-3 md:grid md:grid-cols-3">
             {pricing.plans.map((plan) => (
               <div key={plan.key} className={plan.highlighted ? 'order-first md:order-none' : ''}>
-                <PlanCard plan={plan} billing={billing} />
+                <PlanCard plan={plan} />
               </div>
             ))}
           </div>
@@ -230,11 +173,11 @@ export default function TarifyPage() {
           <ComparisonTableMobile />
         </Reveal>
 
-        {/* Mini-FAQ о ценах */}
+        {/* Mini-FAQ */}
         <section className="pt-14 sm:pt-20">
           <Reveal>
             <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
-              Вопросы о цене
+              Частые вопросы
             </h2>
           </Reveal>
           <div className="mt-6 space-y-3">

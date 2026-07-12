@@ -26,8 +26,12 @@ export const LANDING_CONTACTS: LandingContacts = {
 /** Текст первого сообщения в WhatsApp для CTA «Оставить заявку». */
 export const WHATSAPP_ACCESS_MESSAGE = 'Здравствуйте! Хочу оставить заявку на подключение своего автосервиса к Autexa';
 
-/** Текст первого сообщения в WhatsApp для «Скачать через поддержку». */
-export const WHATSAPP_INSTALL_MESSAGE = 'Здравствуйте! Хочу установить приложение Autexa';
+/**
+ * Текст первого сообщения в WhatsApp для упоминаний «WhatsApp» в ответах FAQ
+ * (linkify). Нейтральный контакт с поддержкой — БЕЗ формулировок про установку
+ * приложения в обход App Store / Google Play.
+ */
+export const WHATSAPP_INSTALL_MESSAGE = 'Здравствуйте! Хочу задать вопрос по Autexa для автосервиса';
 
 /** Текст первого сообщения в WhatsApp для CTA «Подключить» на карточке тарифа. */
 export function getPlanConnectMessage(planName: string): string {

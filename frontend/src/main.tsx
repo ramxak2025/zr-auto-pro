@@ -5,7 +5,6 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './contexts/AuthContext';
 import App from './App';
-import InstallPrompt from './components/InstallPrompt';
 import ErrorBoundary from './components/ErrorBoundary';
 import { setupPersistence } from './utils/persistentCache';
 import './index.css';
@@ -45,8 +44,7 @@ window.addEventListener('load', () => {
 setInterval(() => {
   if (
     document.body.style.overflow === 'hidden' &&
-    !document.querySelector('.fixed.inset-0.z-50') && // Modal overlay
-    !document.querySelector('[class*="z-[9998]"]')    // InstallPrompt backdrop
+    !document.querySelector('.fixed.inset-0.z-50') // Modal overlay
   ) {
     document.body.style.overflow = '';
   }
@@ -91,11 +89,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <App />
-            <InstallPrompt />
             <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
           </AuthProvider>
         </QueryClientProvider>
       </BrowserRouter>
     </ErrorBoundary>
-  </React.StrictMode>
+  </React.StrictMode>,
 );

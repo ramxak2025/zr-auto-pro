@@ -1,5 +1,5 @@
 import { ReactNode, useState } from 'react';
-import { Loader2, Eye, EyeOff, CheckCircle2 } from 'lucide-react';
+import { Loader2, CheckCircle2 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { registrationApi } from '../api/services';
 import { formatPhone, isValidPhone } from '../../../shared/validation/phone';
@@ -8,7 +8,6 @@ interface FieldErrors {
   company?: string;
   owner?: string;
   phone?: string;
-  password?: string;
 }
 
 interface RegisterFormProps {
@@ -20,8 +19,7 @@ interface RegisterFormProps {
   footerSecondary?: ReactNode;
   /**
    * Actions block shown under the confirmation message after a successful
-   * submit — the modal passes «Вернуться ко входу», the page passes links to
-   * /login and /.
+   * submit — the modal passes «Вернуться ко входу», the page passes a link to /.
    */
   successActions: ReactNode;
   /**
@@ -32,27 +30,49 @@ interface RegisterFormProps {
 }
 
 /**
- * B2B «Заявка на подключение автосервиса» (migration 123) shared by BOTH the
- * login modal (`RegisterModal`) and the standalone `/register` page
- * (`RegisterPage`). This is NOT self-serve consumer checkout: Autexa is sold
- * only to organisations (юрлица/ИП). A prospective autoservice submits an
- * UNAUTHENTICATED request via the moderated `registrationApi.submit` pipeline;
- * on success the form flips to a confirmation state (no auto-login, no instant
- * access — the organisation is connected only after a manager/superadmin
- * approves). Business errors (уже зарегистрирован / заявка уже отправлена)
- * surface via toast from `err.response.data.message`.
+ * «Заявка на подключение» — a credential-free B2B SALES LEAD form shared by BOTH
+ * the login screen entry (`RegisterModal`) and the standalone `/register` page
+ * (`RegisterPage`). This is NOT self-serve consumer signup and NOT account
+ * creation: Autexa is sold only to organisations (юрлица/ИП). A prospective
+ * autoservice leaves org name + contact name + phone (+ optional comment); on
+ * approval a manager contacts them and issues access — there is no public
+ * password field and no instant login.
+ *
+ * The moderated backend endpoint (`registrationApi.submit`, POST
+ * /registration-requests) is UNCHANGED and still requires a `password` string in
+ * its contract (`shared/api/types.ts` / backend DTO, min 8 chars). Since we no
+ * longer collect a password from the visitor — and must not ship a predictable
+ * placeholder — we satisfy that required field with a high-entropy random secret
+ * the user never sees or sets (`generateRequestSecret`). It is stored server-side
+ * as a bcrypt hash like before; the manager resets/issues the real credentials
+ * when they approve and contact the organisation. Business errors (уже
+ * зарегистрирован / заявка уже отправлена) surface via toast.
  *
  * Only the surrounding chrome and the two action slots (`footerSecondary`,
  * `successActions`) differ between the modal and the page — the fields,
  * validation and submit live here once.
  */
+
+/**
+ * A throwaway high-entropy secret (NOT a user-facing password) generated purely
+ * to satisfy the moderated endpoint's required `password` field without exposing
+ * an account-creation UI. Never displayed; never reused; the manager issues the
+ * real credentials on approval.
+ */
+function generateRequestSecret(): string {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  const bytes = new Uint8Array(28);
+  crypto.getRandomValues(bytes);
+  let out = '';
+  for (let i = 0; i < bytes.length; i++) out += alphabet[bytes[i] % alphabet.length];
+  return out;
+}
+
 export default function RegisterForm({ footerSecondary, successActions, onSubmittedChange }: RegisterFormProps) {
   const [companyName, setCompanyName] = useState('');
   const [ownerName, setOwnerName] = useState('');
   const [phone, setPhone] = useState('');
-  const [password, setPassword] = useState('');
   const [comment, setComment] = useState('');
-  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
@@ -63,17 +83,19 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
     if (!companyName.trim()) next.company = 'Укажите название организации';
     if (!ownerName.trim()) next.owner = 'Укажите имя владельца или руководителя';
     if (!isValidPhone(phone)) next.phone = 'Введите корректный телефон';
-    if (password.length < 8) next.password = 'Минимум 8 символов';
     setErrors(next);
     if (Object.keys(next).length > 0) return;
 
     setSubmitting(true);
     try {
+      // `password` is a throwaway secret to satisfy the moderated endpoint's
+      // contract — the visitor never sets or sees a password. Access is issued
+      // by a manager after approval.
       await registrationApi.submit({
         companyName: companyName.trim(),
         ownerName: ownerName.trim(),
         phone: phone.trim(),
-        password,
+        password: generateRequestSecret(),
         comment: comment.trim() || undefined,
       });
       setSubmitted(true);
@@ -97,7 +119,7 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
         </div>
         <h3 className="mb-2 text-base font-semibold text-gray-900">Заявка отправлена</h3>
         <p className="mb-6 max-w-xs text-sm text-gray-500">
-          Менеджер свяжется с вами, подключит вашу организацию, и вы войдёте под своим телефоном и паролем.
+          Менеджер свяжется с вами, подключит вашу организацию и передаст доступы для входа.
         </p>
         {successActions}
       </div>
@@ -107,8 +129,8 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
       <p className="text-sm text-gray-500">
-        Autexa предоставляется автосервисам — юридическим лицам и ИП. Оставьте заявку: менеджер свяжется и подключит
-        вашу организацию. Мгновенного самостоятельного доступа нет.
+        Autexa предоставляется автосервисам — юридическим лицам и ИП. Оставьте заявку: менеджер свяжется, подключит вашу
+        организацию и передаст доступы. Это не самостоятельная регистрация — доступ выдаёт менеджер.
       </p>
 
       {/* Company — обязательное, бизнес-поле */}
@@ -149,10 +171,10 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
         {errors.owner && <p className="mt-1 text-xs text-red-600">{errors.owner}</p>}
       </div>
 
-      {/* Phone */}
+      {/* Phone — контакт для связи менеджера */}
       <div>
         <label className="label">
-          Телефон (логин для входа) <span className="text-red-600">*</span>
+          Телефон для связи <span className="text-red-600">*</span>
         </label>
         <input
           type="tel"
@@ -168,35 +190,6 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
           placeholder="+7 (___) ___-__-__"
         />
         {errors.phone && <p className="mt-1 text-xs text-red-600">{errors.phone}</p>}
-      </div>
-
-      {/* Password */}
-      <div>
-        <label className="label">
-          Пароль <span className="text-red-600">*</span>
-        </label>
-        <div className="relative">
-          <input
-            type={showPassword ? 'text' : 'password'}
-            autoComplete="new-password"
-            className={`input pr-11 ${errors.password ? 'input-error' : ''}`}
-            value={password}
-            onChange={(e) => {
-              setPassword(e.target.value);
-              setErrors((p) => ({ ...p, password: undefined }));
-            }}
-            placeholder="Минимум 8 символов"
-          />
-          <button
-            type="button"
-            onClick={() => setShowPassword((v) => !v)}
-            className="absolute inset-y-0 right-0 flex items-center pr-3 text-gray-400 transition-colors hover:text-gray-600"
-            aria-label={showPassword ? 'Скрыть пароль' : 'Показать пароль'}
-          >
-            {showPassword ? <EyeOff className="h-[18px] w-[18px]" /> : <Eye className="h-[18px] w-[18px]" />}
-          </button>
-        </div>
-        {errors.password && <p className="mt-1 text-xs text-red-600">{errors.password}</p>}
       </div>
 
       {/* Comment (optional) */}
