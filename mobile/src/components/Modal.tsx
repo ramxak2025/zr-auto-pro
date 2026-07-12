@@ -5,7 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
-import KeyboardDoneToolbar from './KeyboardDoneToolbar';
 
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 
@@ -79,10 +78,6 @@ export default function Modal({ visible, onClose, title, children }: ModalProps)
             </KeyboardAwareScrollView>
           </View>
         </KeyboardAvoidingView>
-        {/* Единая «Готово» над клавиатурой (Round 11 D). RN <Modal> — отдельное
-            нативное окно, корневой тулбар из App.tsx туда не дотягивается,
-            поэтому монтируем свой экземпляр внутри ЭТОГО KeyboardProvider. */}
-        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </RNModal>
   );

@@ -20,7 +20,6 @@ import { FlashList } from '@shopify/flash-list';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import CachedImage from './CachedImage';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
-import KeyboardDoneToolbar from './KeyboardDoneToolbar';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
@@ -597,11 +596,13 @@ export default function ProductPickerModal({
   const hasActiveFilter = !!productSearch || !!activeCategory;
 
   return (
-    // Клавиатура (Round 11 D). RN <Modal> — отдельное нативное окно, корневой
-    // KeyboardProvider из App.tsx не дотягивается. Поле поиска сверху остаётся
-    // видимым, но список/корзина уходят под клавиатуру → нужен единый способ
-    // свернуть её: вложенный KeyboardProvider + «Готово». (Кнопка «Готово» в
-    // нижнем баре — это commit/закрытие, а не dismiss клавиатуры.)
+    // Клавиатура (Round 11 D, переделано). RN <Modal> — отдельное нативное
+    // окно, корневой KeyboardProvider из App.tsx не дотягивается → вложенный
+    // KeyboardProvider. Поле поиска живёт сверху и не прячется; список товаров
+    // (FlashList) и корзина скроллятся под клавиатурой. Свернуть её — тап по
+    // пустому месту списка (keyboardShouldPersistTaps="handled" стоит на
+    // FlashList и внутренних ScrollView). Кнопка «Готово» в нижнем баре — это
+    // commit/закрытие, а не dismiss клавиатуры.
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={handleClose}>
       <KeyboardProvider>
         <View style={styles.overlay}>
@@ -914,7 +915,6 @@ export default function ProductPickerModal({
             </View>
           </Animated.View>
         </View>
-        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </RNModal>
   );

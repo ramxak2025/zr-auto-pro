@@ -25,7 +25,6 @@ import { useColors } from '../../contexts/ThemeContext';
 import { knowledgeApi } from '../../api/services';
 import { haptic } from '../../platform/haptics';
 import { KeyboardAwareView } from '../KeyboardAware';
-import KeyboardDoneToolbar from '../KeyboardDoneToolbar';
 import { flattenWithDepth } from './folderTree';
 import type { KnowledgeCategory } from '../../../../shared/types';
 
@@ -154,12 +153,14 @@ export default function FolderManagerModal({
   };
 
   return (
-    // Клавиатура (Round 11 D). RN <Modal> — отдельное нативное окно, корневой
-    // KeyboardProvider из App.tsx туда не дотягивается → вложенный провайдер.
-    // Шит прижат к низу и имеет autoFocus-поле «Название» → без подъёма поле
-    // и кнопка «Создать» уходили под клавиатуру. KeyboardAwareView поднимает
-    // весь шит над клавиатурой (iOS+Android одинаково), а KeyboardDoneToolbar
-    // даёт «Готово».
+    // Клавиатура (Round 11 D, переделано). RN <Modal> — отдельное нативное
+    // окно, корневой KeyboardProvider из App.tsx туда не дотягивается →
+    // вложенный провайдер. Шит прижат к низу и имеет autoFocus-поле
+    // «Название» → без подъёма поле и кнопка «Создать» уходили под клавиатуру.
+    // KeyboardAwareView поднимает весь шит над клавиатурой (iOS+Android
+    // одинаково). Свернуть клавиатуру — тап по фону/пустому месту
+    // (keyboardShouldPersistTaps="handled" на списке папок). Отдельная кнопка
+    // «Готово» не нужна.
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardProvider>
         <Pressable style={styles.backdrop} onPress={onClose}>
@@ -265,7 +266,6 @@ export default function FolderManagerModal({
             </Pressable>
           </KeyboardAwareView>
         </Pressable>
-        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </Modal>
   );

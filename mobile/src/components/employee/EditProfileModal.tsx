@@ -23,21 +23,19 @@ import {
   Alert,
   Modal as RNModal,
   Pressable,
-  ScrollView,
   StyleSheet,
   TextInput,
   View,
   Platform,
   ActivityIndicator,
 } from 'react-native';
-import { KeyboardAvoidingView, KeyboardProvider } from 'react-native-keyboard-controller';
+import { KeyboardAvoidingView, KeyboardAwareScrollView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import { Image as ExpoImage } from 'expo-image';
 import { employeesApi } from '../../api/services';
 import ModalBlurBackdrop from '../ModalBlurBackdrop';
-import KeyboardDoneToolbar from '../KeyboardDoneToolbar';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../../theme';
@@ -170,13 +168,15 @@ export function EditProfileModal({ visible, onClose, profile }: EditProfileModal
   };
 
   return (
-    // Клавиатура (Round 11 D). Раньше RN-core KeyboardAvoidingView (behavior
-    // 'padding' только на iOS, на Android undefined = no-op) → number-pad поля
-    // (WhatsApp, план выручки/чеков) уходили под клавиатуру на Android без
-    // способа свернуть (у number-pad нет return). Теперь keyboard-controller:
-    // 'padding' работает ОДИНАКОВО iOS+Android, а вложенный KeyboardProvider +
-    // KeyboardDoneToolbar дают «Готово». RN <Modal> — отдельное нативное окно,
-    // поэтому провайдер обязателен именно здесь.
+    // Клавиатура (Round 11 D, переделано). RN <Modal> — отдельное нативное
+    // окно → вложенный KeyboardProvider обязателен. KeyboardAvoidingView
+    // 'padding' (keyboard-controller, одинаково iOS+Android) поднимает
+    // центрированную карточку целиком, чтобы её низ (кнопки «Отменить /
+    // Сохранить») вышел из-под клавиатуры; тело — KeyboardAwareScrollView,
+    // который авто-скроллит активный TextInput (WhatsApp, план выручки/чеков),
+    // удерживая его ВИДИМЫМ над клавиатурой (WhatsApp/Telegram). Свернуть
+    // клавиатуру — тап по пустому месту (keyboardShouldPersistTaps="handled")
+    // или потянуть вниз (keyboardDismissMode="interactive").
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
       <KeyboardProvider>
         {/* Blurred backdrop — tap the blurred area to close. */}
@@ -199,10 +199,12 @@ export function EditProfileModal({ visible, onClose, profile }: EditProfileModal
               </Pressable>
             </View>
 
-            <ScrollView
+            <KeyboardAwareScrollView
               style={styles.body}
               contentContainerStyle={styles.bodyContent}
+              bottomOffset={spacing[6]}
               keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="interactive"
               showsVerticalScrollIndicator={false}
             >
               <Field label="Фото">
@@ -305,7 +307,7 @@ export function EditProfileModal({ visible, onClose, profile }: EditProfileModal
                   />
                 </Field>
               </View>
-            </ScrollView>
+            </KeyboardAwareScrollView>
 
             <View style={[styles.footer, { borderTopColor: palette.border.subtle }]}>
               <Pressable
@@ -328,7 +330,6 @@ export function EditProfileModal({ visible, onClose, profile }: EditProfileModal
             </View>
           </View>
         </KeyboardAvoidingView>
-        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </RNModal>
   );

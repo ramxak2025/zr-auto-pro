@@ -29,7 +29,6 @@ import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery } from '@tanstack/react-query';
 import SearchInput from './SearchInput';
-import KeyboardDoneToolbar from './KeyboardDoneToolbar';
 import { productsApi, warehouseCategoriesApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import { haptic } from '../platform/haptics';
@@ -234,10 +233,11 @@ export default function FolderPickerModal({
   const listData = search ? searchResults : childFolders;
 
   return (
-    // Клавиатура (Round 11 D). RN <Modal> — отдельное нативное окно, поэтому
-    // вложенный KeyboardProvider + «Готово»: поле поиска живёт сверху и не
-    // прячется, но без тулбара клавиатуру нечем свернуть на multiline/крупных
-    // клавиатурах. Тулбар даёт единый способ сворачивания.
+    // Клавиатура (Round 11 D, переделано). RN <Modal> — отдельное нативное
+    // окно → вложенный KeyboardProvider. Поле поиска живёт сверху и не
+    // прячется; список папок (FlashList) скроллится под клавиатурой. Свернуть
+    // её — тап по пустому месту (keyboardShouldPersistTaps="handled" стоит на
+    // FlashList). Отдельная кнопка «Готово» не нужна.
     <RNModal visible={visible} animationType="slide" presentationStyle="pageSheet" onRequestClose={onClose}>
       <KeyboardProvider>
         <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]} edges={['top', 'bottom']}>
@@ -338,7 +338,6 @@ export default function FolderPickerModal({
             </View>
           ) : null}
         </SafeAreaView>
-        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </RNModal>
   );

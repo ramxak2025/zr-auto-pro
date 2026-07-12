@@ -14,13 +14,8 @@
  */
 import React from 'react';
 import { Modal as RNModal, StyleSheet, View } from 'react-native';
-import { KeyboardAvoidingView, KeyboardProvider } from 'react-native-keyboard-controller';
-import {
-  Gesture,
-  GestureDetector,
-  GestureHandlerRootView,
-  ScrollView as GHScrollView,
-} from 'react-native-gesture-handler';
+import { KeyboardAwareScrollView, KeyboardProvider } from 'react-native-keyboard-controller';
+import { Gesture, GestureDetector, GestureHandlerRootView } from 'react-native-gesture-handler';
 import Animated, {
   Extrapolation,
   interpolate,
@@ -37,7 +32,6 @@ import { SPRING_TIGHT, TIMING_STANDARD, preferSpring } from '../platform/motion'
 import { Text } from '../platform/Typography';
 import { useColors } from '../contexts/ThemeContext';
 import ModalBlurBackdrop from './ModalBlurBackdrop';
-import KeyboardDoneToolbar from './KeyboardDoneToolbar';
 
 export interface BottomSheetProps {
   visible: boolean;
@@ -153,36 +147,32 @@ export function BottomSheet({ visible, onClose, title, heightRatio = 0.7, childr
                 )}
               </View>
             </GestureDetector>
-            {/* Keyboard-aware + scrollable body (Round 11 #1). autoFocus'd inputs
-              (Warehouse forms) pop the keyboard; keyboard-controller's
-              KeyboardAvoidingView lifts the body над клавиатурой ОДИНАКОВО на
-              iOS И Android (RN-core `behavior` был no-op на Android), а
-              `keyboardVerticalOffset` компенсирует нижний safe-area отступ
-              самого листа, чтобы поле не оказалось под клавиатурой. Пан-жест
-              drag-to-dismiss живёт на ШАПКЕ (GestureDetector выше), поэтому он
-              сосуществует с клавиатурным инсетом — тело скроллит, шапка
-              закрывает. GH ScrollView держит submit-кнопку достижимой. */}
-            <KeyboardAvoidingView
-              behavior="padding"
-              keyboardVerticalOffset={Math.max(insets.bottom, 12)}
+            {/* Keyboard-aware + scrollable body (Round 11 #1, переделано).
+              КОРЕНЬ бага: раньше тут был `KeyboardAvoidingView behavior="padding"`
+              вокруг ОБЫЧНОГО ScrollView — padding сжимал вьюпорт, но НЕ
+              подкручивал к фокусу, поэтому нижние поля формы (напр. «Марка» в
+              анкете нового клиента) оставались ПОД клавиатурой. Теперь —
+              `KeyboardAwareScrollView` из keyboard-controller: он знает
+              АБСОЛЮТНЫЙ кадр клавиатуры и авто-скроллит активный TextInput так,
+              чтобы он всегда был ВИДЕН над клавиатурой (WhatsApp/Telegram),
+              одинаково на iOS и Android. `bottomOffset` держит поле над
+              клавиатурой с запасом (safe-area листа + 16). Пан drag-to-dismiss
+              живёт на ШАПКЕ (GestureDetector выше) — со скроллом тела не спорит.
+              `keyboardShouldPersistTaps="handled"` = тап по пустому месту формы
+              сворачивает клавиатуру (кнопки при этом продолжают работать), тап
+              по кнопке не «съедается». */}
+            <KeyboardAwareScrollView
               style={styles.bodyFlex}
+              contentContainerStyle={styles.bodyContent}
+              bottomOffset={Math.max(insets.bottom, 12) + 16}
+              keyboardShouldPersistTaps="handled"
+              keyboardDismissMode="interactive"
+              showsVerticalScrollIndicator={false}
             >
-              <GHScrollView
-                style={styles.bodyFlex}
-                contentContainerStyle={styles.bodyContent}
-                keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="interactive"
-                showsVerticalScrollIndicator={false}
-              >
-                {children}
-              </GHScrollView>
-            </KeyboardAvoidingView>
+              {children}
+            </KeyboardAwareScrollView>
           </Animated.View>
         </GestureHandlerRootView>
-        {/* Единая «Готово» над клавиатурой (Round 11 D). Свой экземпляр внутри
-            вложенного KeyboardProvider — RN <Modal> держит отдельное нативное
-            окно, куда корневой тулбар из App.tsx не дотягивается. */}
-        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </RNModal>
   );

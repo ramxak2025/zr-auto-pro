@@ -49,7 +49,7 @@ import {
   RefreshControl,
   useWindowDimensions,
 } from 'react-native';
-import { KeyboardAvoidingView, KeyboardProvider } from 'react-native-keyboard-controller';
+import { KeyboardAvoidingView, KeyboardAwareScrollView, KeyboardProvider } from 'react-native-keyboard-controller';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -59,7 +59,6 @@ import * as ImagePicker from 'expo-image-picker';
 import CachedImage from '../components/CachedImage';
 import IosScreenHeader from '../components/IosScreenHeader';
 import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
-import KeyboardDoneToolbar from '../components/KeyboardDoneToolbar';
 import { equipmentApi, uploadsApi } from '../api/services';
 import { UserRole } from '../../../shared/types';
 import { useAuth } from '../contexts/AuthContext';
@@ -142,11 +141,15 @@ function CenteredDialog({
 }: CenteredDialogProps) {
   const palette = useColors();
   return (
-    // Клавиатура (Round 11 D). RN <Modal> — отдельное нативное окно, нужен
-    // вложенный KeyboardProvider. RN-core KeyboardAvoidingView был 'padding'
-    // только на iOS (Android undefined = no-op) → number-pad поля (стоимость,
-    // срок службы) без «Готово» и без подъёма прятались под клавиатурой.
-    // keyboard-controller: 'padding' одинаково iOS+Android + KeyboardDoneToolbar.
+    // Клавиатура (Round 11 D, переделано). RN <Modal> — отдельное нативное
+    // окно, нужен вложенный KeyboardProvider. KeyboardAvoidingView 'padding'
+    // (keyboard-controller, одинаково iOS+Android) поднимает центрированную
+    // карточку целиком, чтобы её низ (кнопка «Выдать») вышел из-под клавиатуры;
+    // тело — KeyboardAwareScrollView, который авто-скроллит активный TextInput
+    // (стоимость, срок службы), удерживая его ВИДИМЫМ над клавиатурой
+    // (WhatsApp/Telegram). Свернуть клавиатуру — тап по пустому месту
+    // (keyboardShouldPersistTaps="handled") или потянуть вниз
+    // (keyboardDismissMode="interactive"). Отдельная кнопка «Готово» не нужна.
     <RNModal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <KeyboardProvider>
         {/* Frosted blur backdrop (replaces the old rgba(0,0,0,0.45) dark scrim).
@@ -176,14 +179,16 @@ function CenteredDialog({
                 </TouchableOpacity>
               </View>
 
-              <ScrollView
+              <KeyboardAwareScrollView
                 style={dialogStyles.bodyScroll}
                 contentContainerStyle={dialogStyles.bodyContent}
-                showsVerticalScrollIndicator={false}
+                bottomOffset={spacing[6]}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="interactive"
+                showsVerticalScrollIndicator={false}
               >
                 {children}
-              </ScrollView>
+              </KeyboardAwareScrollView>
 
               {primaryText && (
                 <View style={[dialogStyles.footer, { borderTopColor: palette.border.subtle }]}>
@@ -214,7 +219,6 @@ function CenteredDialog({
             </TouchableOpacity>
           </View>
         </KeyboardAvoidingView>
-        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </RNModal>
   );

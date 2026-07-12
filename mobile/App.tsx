@@ -20,7 +20,6 @@ import OfflineBanner from './src/components/OfflineBanner';
 import { colors } from './src/theme';
 import { haptic } from './src/platform/haptics';
 import UpdateGate from './src/components/UpdateGate';
-import KeyboardDoneToolbar from './src/components/KeyboardDoneToolbar';
 import { hydrateCache, hydratePriorityCache, attachPersistence } from './src/utils/persistentCache';
 import { attachForegroundRevalidation } from './src/utils/foregroundRevalidation';
 import { attachOtaUpdates } from './src/utils/otaUpdates';
@@ -547,13 +546,6 @@ function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: Theme
             вне QueryClientProvider сознательно: обычный fetch + локальный
             state, никаких зависимостей от auth/query. */}
         <UpdateGate />
-        {/* Единая «Готово» над клавиатурой для ВСЕХ обычных экранов/скроллов
-            (Round 11 D). Смонтирована один раз в корневом KeyboardProvider —
-            любой сфокусированный TextInput получает кнопку сворачивания без
-            пер-экранной работы. Пока клавиатура скрыта — ничего не рендерит.
-            Экраны с СОБСТВЕННЫМ RN <Modal> (отдельное нативное окно) монтируют
-            свой экземпляр внутри своего вложенного KeyboardProvider. */}
-        <KeyboardDoneToolbar />
       </KeyboardProvider>
     </SafeAreaProvider>
   );
