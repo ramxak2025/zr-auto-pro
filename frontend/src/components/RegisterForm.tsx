@@ -76,6 +76,11 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [errors, setErrors] = useState<FieldErrors>({});
+  // 152-ФЗ: обязательное согласие на обработку персональных данных. Без него
+  // заявку отправить нельзя (кнопка задизейблена). Маркетинговое согласие —
+  // отдельное, добровольное, отправку не блокирует.
+  const [consent, setConsent] = useState(false);
+  const [marketingConsent, setMarketingConsent] = useState(false);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -85,18 +90,26 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
     if (!isValidPhone(phone)) next.phone = 'Введите корректный телефон';
     setErrors(next);
     if (Object.keys(next).length > 0) return;
+    // 152-ФЗ: без согласия на обработку ПДн заявку не отправляем. Кнопка и так
+    // задизейблена — это защита от отправки по Enter.
+    if (!consent) return;
 
     setSubmitting(true);
     try {
       // `password` is a throwaway secret to satisfy the moderated endpoint's
       // contract — the visitor never sets or sees a password. Access is issued
       // by a manager after approval.
+      //
+      // Маркетинговое согласие передаём менеджеру через штатное поле комментария —
+      // API-контракт (shared) при этом не трогаем.
+      const marketingNote = marketingConsent ? 'Согласие на информационные сообщения: да' : '';
+      const fullComment = [comment.trim(), marketingNote].filter(Boolean).join('\n') || undefined;
       await registrationApi.submit({
         companyName: companyName.trim(),
         ownerName: ownerName.trim(),
         phone: phone.trim(),
         password: generateRequestSecret(),
-        comment: comment.trim() || undefined,
+        comment: fullComment,
       });
       setSubmitted(true);
       onSubmittedChange?.(true);
@@ -204,10 +217,46 @@ export default function RegisterForm({ footerSecondary, successActions, onSubmit
         />
       </div>
 
+      {/* Consent (152-ФЗ) — обязательное согласие на обработку ПДн + добровольное на рассылку */}
+      <div className="space-y-2.5 pt-1">
+        <label className="flex cursor-pointer items-start gap-2.5">
+          <input
+            type="checkbox"
+            required
+            checked={consent}
+            onChange={(e) => setConsent(e.target.checked)}
+            className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <span className="text-xs leading-relaxed text-gray-500">
+            Я согласен на обработку персональных данных в соответствии с{' '}
+            <a
+              href="/privacy"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="font-medium text-primary-600 underline decoration-primary-300 underline-offset-2 hover:text-primary-700"
+            >
+              политикой конфиденциальности
+            </a>
+            <span className="text-red-600"> *</span>
+          </span>
+        </label>
+        <label className="flex cursor-pointer items-start gap-2.5">
+          <input
+            type="checkbox"
+            checked={marketingConsent}
+            onChange={(e) => setMarketingConsent(e.target.checked)}
+            className="mt-0.5 h-4 w-4 flex-shrink-0 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+          <span className="text-xs leading-relaxed text-gray-500">
+            Согласен получать информационные сообщения (необязательно)
+          </span>
+        </label>
+      </div>
+
       {/* Actions */}
       <div className="flex items-center justify-end gap-3 border-t border-gray-200 pt-4">
         {footerSecondary}
-        <button type="submit" disabled={submitting} className="btn-primary">
+        <button type="submit" disabled={submitting || !consent} className="btn-primary">
           {submitting ? (
             <>
               <Loader2 className="h-4 w-4 animate-spin" />

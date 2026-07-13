@@ -3168,20 +3168,13 @@ export default function CheckCreateScreen() {
                 <View style={styles.lineInputs}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>Цена</Text>
-                    <TextInput
-                      value={String(line.sellPrice)}
-                      onChangeText={(v) => updateProductLine(idx, 'sellPrice', parseMoneyInput(v))}
-                      style={[
-                        styles.lineInput,
-                        {
-                          backgroundColor: palette.bg.muted,
-                          borderColor: palette.border.subtle,
-                          color: palette.text.primary,
-                        },
-                      ]}
-                      keyboardType="numeric"
-                      selectTextOnFocus
-                    />
+                    {/* Цена товара берётся со склада и фиксируется сервером —
+                        показываем её как read-only значение, а не как поле ввода,
+                        чтобы UI не обещал редактирование, которого нет. Редактируется
+                        только количество (услуги при этом сохраняют ручную цену). */}
+                    <Text style={[styles.lineReadonlyPrice, { color: palette.text.primary }]}>
+                      {formatMoney(line.sellPrice)}
+                    </Text>
                   </View>
                   <View style={{ width: 60 }}>
                     <Text style={[styles.lineInputLabel, { color: palette.text.secondary }]}>
@@ -4706,6 +4699,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[2],
     paddingVertical: spacing[1.5],
     fontSize: fontSize.sm,
+    color: colors.gray[900],
+  },
+  // Read-only цена товара: та же вертикальная метрика, что и lineInput
+  // (paddingVertical + fontSize), но без рамки/фона — это значение, не поле ввода.
+  lineReadonlyPrice: {
+    paddingVertical: spacing[1.5],
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
     color: colors.gray[900],
   },
   lineTotal: {

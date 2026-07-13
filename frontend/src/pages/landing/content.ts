@@ -111,7 +111,7 @@ export type PlanCellValue = boolean | string;
 export interface PricingPlan {
   key: string;
   name: string;
-  /** Подпись про размер команды: 'от 2 сотрудников' / 'до 10 сотрудников'. */
+  /** Подпись про размер команды: 'до 2 сотрудников' / 'до 10 сотрудников'. */
   employees: string;
   /** Одна строка сути тарифа. */
   description: string;
@@ -1576,8 +1576,8 @@ export const pricing: PricingContent = {
     {
       key: 'lichnyi',
       name: 'Старт',
-      employees: 'от 2 сотрудников',
-      description: 'Для небольших автосервисов, команда от 2 человек',
+      employees: 'до 2 сотрудников',
+      description: 'Для небольших автосервисов, до 2 сотрудников',
       includes: [
         'Касса, заказ-наряды и журнал',
         'Склад, поставщики и закупки',
@@ -1633,7 +1633,7 @@ export const pricing: PricingContent = {
   commonLabel: 'Во всех тарифах',
   // Различия — сверху: человек сначала видит, ЗА ЧТО доплачивает.
   differences: [
-    { feature: 'Сотрудников', values: ['от 2', 'до 10', 'до 20'] },
+    { feature: 'Сотрудников', values: ['до 2', 'до 10', 'до 20'] },
     { feature: 'Расписание смен', values: [false, true, true] },
     { feature: 'Голосовой ввод', values: [false, false, '1000 мин/мес'] },
     { feature: 'Фото к заказ-наряду', values: [false, false, true] },
