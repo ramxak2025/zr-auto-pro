@@ -114,7 +114,11 @@ function Section({
         </span>
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-gray-900 leading-tight">{title}</h3>
-          {subtitle && <p className="text-xs text-gray-400 truncate">{subtitle}</p>}
+          {subtitle && (
+            <p className="text-xs text-gray-400 truncate" title={subtitle}>
+              {subtitle}
+            </p>
+          )}
         </div>
         {right && <div className="ml-auto flex-shrink-0">{right}</div>}
       </header>
@@ -551,17 +555,17 @@ function ReportBody({ data }: { data: MarketingReport }) {
         icon={UserPlus}
         iconClass="bg-emerald-50 text-emerald-600"
         title="Привлечение"
-        subtitle="Новые и вернувшиеся клиенты за период"
+        subtitle="Считаем по дате заведения клиента в базу"
       >
         <div className="grid grid-cols-2 gap-2.5">
           <StatBox
-            label="Новые клиенты"
+            label="Новые (добавлены в базу за период)"
             value={formatInt(acq.newClients)}
             sub={formatMoney(acq.newRevenue)}
             valueClass="text-emerald-600"
           />
           <StatBox
-            label="Вернувшиеся"
+            label="Существующие (уже были в базе)"
             value={formatInt(acq.returningClients)}
             sub={formatMoney(acq.returningRevenue)}
             valueClass="text-blue-600"
@@ -581,7 +585,7 @@ function ReportBody({ data }: { data: MarketingReport }) {
               </span>
               <span className="flex items-center gap-1.5">
                 <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
-                Вернувшиеся {formatMoney(acq.returningRevenue)}
+                Существующие {formatMoney(acq.returningRevenue)}
               </span>
             </div>
           </div>

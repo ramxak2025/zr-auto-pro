@@ -17,6 +17,7 @@ import {
   createSuppliersApi,
   createSalaryApi,
   createMotivationApi,
+  createPlanningApi,
   createReportsApi,
   createShiftsApi,
   createScheduleApi,
@@ -105,6 +106,14 @@ export const salaryApi = createSalaryApi(api);
 // непривилегированного к ЕГО собственным начислениям. Consumed by MotivationScreen
 // (раздел «Ещё» → Финансы) + surfaced в SalaryScreen (MasterSalary.motivationAmount).
 export const motivationApi = createMotivationApi(api);
+// «Планирование / Постоянные расходы» v3.0.1 ФИЧА 1 (backend planning/, миграция
+// 132). Владельческий конфиг, который питает НАЧИСЛЕННУЮ чистую прибыль на
+// дашборде (reportsApi.dashboardV2 → DashboardV2.netProfitAccrual): постоянные
+// месячные расходы (аренда/коммуналка/реклама…) + мотивация не-сдельных
+// сотрудников (оклад / % с оборота / % с прибыли). Каждый маршрут owner-class +
+// financial_reports закрыт на сервере. Consumed by PlanningScreen («Постоянные
+// расходы» в разделе «Ещё → Финансы», owner-only).
+export const planningApi = createPlanningApi(api);
 export const reportsApi = createReportsApi(api);
 export const shiftsApi = createShiftsApi(api);
 export const scheduleApi = createScheduleApi(api);

@@ -3061,6 +3061,376 @@ function MonthForecastCard() {
  * HYBRID-perf plan: dashboard-v2 cash position is critical and forces
  * refetch-on-mount; this badge surfaces that revalidation state.
  */
+// ── v3.0.1 ФИЧА 1 — Реальная чистая прибыль (по начислению) ──────────────────
+// Owner/director. Источник — netProfitAccrual, который приезжает на уже горячем
+// ['dashboard-v2','today'] (тот же запрос, что Hero / Deferred / Freshness —
+// нового сетевого запроса НЕТ). MTD netProfit крупно + прогноз на месяц,
+// раскрываемый разбор вычитаемого, warning про непокрытую планом постоянку и
+// CTA «настроить План», если конфиг пуст. Старый бэкенд поле не шлёт → карточка
+// молча скрывается, дашборд не ломается.
+function NetProfitAccrualCard() {
+  const palette = useColors();
+  const navigation = useNavigation<any>();
+  const [expanded, setExpanded] = useState(false);
+  const { data, isLoading } = useQuery({
+    queryKey: ['dashboard-v2', 'today'],
+    queryFn: async () => (await reportsApi.dashboardV2({ period: 'today' })).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const accrual = data?.netProfitAccrual;
+
+  if (!data) {
+    if (isLoading) {
+      return (
+        <AnimatedCard
+          index={1}
+          style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <Skeleton width={'50%'} height={14} radius={6} />
+          <Skeleton width={'70%'} height={34} radius={8} style={{ marginTop: spacing[3] }} />
+          <Skeleton width={'100%'} height={40} radius={10} style={{ marginTop: spacing[3] }} />
+        </AnimatedCard>
+      );
+    }
+    return null;
+  }
+  if (!accrual) return null;
+
+  const { mtd, projection, config } = accrual;
+  const netMtd = mtd.netProfit;
+  const netProj = projection.netProfit;
+  const positive = netMtd >= 0;
+  const accent = positive ? colors.green[600] : colors.red[600];
+  const accentBg =
+    palette.mode === 'dark'
+      ? softTint(positive ? colors.green[600] : colors.red[600], 'dark')
+      : positive
+        ? colors.green[50]
+        : colors.red[50];
+
+  // Ничего не запланировано — прибыль по начислению = чекам минус разовые,
+  // без «размазанной» постоянки/окладов. Ведём владельца в План.
+  const configEmpty =
+    config.plannedFixedMonthly === 0 &&
+    config.staffFixedMonthly === 0 &&
+    config.pctTurnoverTotal === 0 &&
+    config.pctProfitTotal === 0;
+
+  // Разбор вычитаемого. amount всегда ≥ 0; kind решает знак/цвет.
+  const breakdown: { label: string; amount: number; kind: 'base' | 'minus' }[] = [
+    { label: 'Прибыль по чекам', amount: mtd.checkProfit, kind: 'base' },
+    { label: 'Постоянные расходы', amount: mtd.plannedFixedAmortized, kind: 'minus' },
+    { label: 'Оклады сотрудников', amount: mtd.staffFixedAmortized, kind: 'minus' },
+    { label: '% с оборота', amount: mtd.staffPctTurnover, kind: 'minus' },
+    { label: '% с прибыли', amount: mtd.staffPctProfit, kind: 'minus' },
+    { label: 'Разовые расходы', amount: mtd.oneOffExpenses, kind: 'minus' },
+  ];
+  if (mtd.recurringExcess > 0) {
+    breakdown.push({ label: 'Постоянка сверх Плана', amount: mtd.recurringExcess, kind: 'minus' });
+  }
+
+  return (
+    <AnimatedCard
+      index={1}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: accentBg }]}>
+          <Ionicons name="trending-up-outline" size={16} color={accent} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ЧИСТАЯ ПРИБЫЛЬ</Text>
+        <View style={[styles.napBasisPill, { backgroundColor: palette.bg.muted }]}>
+          <Text style={[styles.napBasisText, { color: palette.text.tertiary }]}>по начислению</Text>
+        </View>
+      </View>
+
+      <Text style={[styles.napValue, { color: accent }]} numberOfLines={1} adjustsFontSizeToFit>
+        {formatMoney(netMtd)}
+      </Text>
+      <Text style={[styles.napCaption, { color: palette.text.tertiary }]}>с начала месяца</Text>
+
+      <View style={[styles.napProjRow, { backgroundColor: palette.bg.muted }]}>
+        <Ionicons name="calendar-outline" size={14} color={palette.text.secondary} />
+        <Text style={[styles.napProjLabel, { color: palette.text.secondary }]}>Прогноз на месяц</Text>
+        <Text style={[styles.napProjValue, { color: netProj >= 0 ? palette.text.primary : colors.red[600] }]}>
+          {formatMoney(netProj)}
+        </Text>
+      </View>
+
+      {configEmpty ? (
+        <TouchableOpacity
+          style={[
+            styles.napCta,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50] },
+          ]}
+          onPress={() => {
+            haptic('tap');
+            navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Planning', initial: false } });
+          }}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="options-outline" size={18} color={colors.primary[600]} />
+          <Text style={[styles.napCtaText, { color: colors.primary[700] }]}>
+            Настройте постоянные расходы и оклады, чтобы видеть реальную прибыль
+          </Text>
+          <Ionicons name="chevron-forward" size={16} color={colors.primary[600]} />
+        </TouchableOpacity>
+      ) : (
+        <>
+          {config.recurringUncovered > 0 && (
+            <TouchableOpacity
+              style={[
+                styles.napWarn,
+                { backgroundColor: palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50] },
+              ]}
+              onPress={() => {
+                haptic('tap');
+                navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'Planning', initial: false } });
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="alert-circle-outline" size={16} color={colors.amber[600]} />
+              <Text style={[styles.napWarnText, { color: colors.amber[700] }]}>
+                Отмечено постоянным, но не в Плане: {formatMoney(config.recurringUncovered)} — задайте в Постоянных
+                расходах
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={styles.napToggle}
+            onPress={() => {
+              haptic('tap');
+              setExpanded((e) => !e);
+            }}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.napToggleText, { color: colors.primary[600] }]}>
+              {expanded ? 'Скрыть разбор' : 'Что вычитается'}
+            </Text>
+            <Ionicons name={expanded ? 'chevron-up' : 'chevron-down'} size={15} color={colors.primary[600]} />
+          </TouchableOpacity>
+
+          {expanded && (
+            <View style={[styles.napBreakdown, { borderTopColor: palette.border.subtle }]}>
+              {breakdown.map((row) => (
+                <View key={row.label} style={styles.napRow}>
+                  <Text style={[styles.napRowLabel, { color: palette.text.secondary }]}>{row.label}</Text>
+                  <Text
+                    style={[
+                      styles.napRowValue,
+                      {
+                        color:
+                          row.kind === 'base'
+                            ? palette.text.primary
+                            : row.amount > 0
+                              ? colors.red[600]
+                              : palette.text.tertiary,
+                      },
+                    ]}
+                  >
+                    {row.kind === 'minus' && row.amount > 0 ? '− ' : ''}
+                    {formatMoney(row.amount)}
+                  </Text>
+                </View>
+              ))}
+              <View style={[styles.napRow, styles.napRowTotal, { borderTopColor: palette.border.subtle }]}>
+                <Text style={[styles.napRowTotalLabel, { color: palette.text.primary }]}>Чистая прибыль</Text>
+                <Text style={[styles.napRowTotalValue, { color: accent }]}>{formatMoney(netMtd)}</Text>
+              </View>
+            </View>
+          )}
+        </>
+      )}
+    </AnimatedCard>
+  );
+}
+
+// ── v3.0.1 ФИЧА 3 — Отложенные чеки (напоминание) ────────────────────────────
+// Owner видит все чеки тенанта, сотрудник — только свои (скоуп на бэке). Пусто →
+// карточки нет вовсе. Тап по строке открывает чек (CheckDetail, как в
+// MasterRecentChecks). «Ещё N» ведёт в Журнал с фильтром отложенных.
+function DeferredRemindersCard() {
+  const palette = useColors();
+  const navigation = useNavigation<any>();
+  const { data, isLoading } = useQuery({
+    queryKey: ['checks', 'deferred-reminders'],
+    queryFn: async () => (await checksApi.deferredReminders()).data,
+    staleTime: 60_000,
+    placeholderData: (prev) => prev,
+  });
+
+  const items = Array.isArray(data) ? data : [];
+  if (!data) {
+    if (isLoading) {
+      return (
+        <AnimatedCard
+          index={5}
+          style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        >
+          <Skeleton width={'55%'} height={16} radius={6} />
+          <Skeleton width={'100%'} height={40} radius={8} style={{ marginTop: spacing[3] }} />
+        </AnimatedCard>
+      );
+    }
+    return null;
+  }
+  if (items.length === 0) return null;
+
+  const MAX = 6;
+  const visible = items.slice(0, MAX);
+  const more = items.length - visible.length;
+  const accentBg = palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50];
+
+  const openCheck = (id: string) => {
+    haptic('tap');
+    navigation.navigate('Main', {
+      screen: 'Checks',
+      params: { screen: 'CheckDetail', initial: false, params: { id } },
+    });
+  };
+
+  const fmtDate = (iso: string): string => {
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+  };
+
+  return (
+    <AnimatedCard
+      index={5}
+      style={[styles.ownerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.ownerCardHeader}>
+        <View style={[styles.ownerCardIcon, { backgroundColor: accentBg }]}>
+          <Ionicons name="time-outline" size={16} color={colors.amber[600]} />
+        </View>
+        <Text style={[styles.ownerCardLabel, { color: palette.text.secondary }]}>ОТЛОЖЕННЫЕ ЧЕКИ</Text>
+        <View style={[styles.drCountPill, { backgroundColor: accentBg }]}>
+          <Text style={[styles.drCountText, { color: colors.amber[700] }]}>{items.length}</Text>
+        </View>
+      </View>
+
+      <View>
+        {visible.map((r, idx) => {
+          const date = fmtDate(r.date);
+          const subParts = [date, r.clientName || 'Без клиента', r.masterName || ''].filter(Boolean);
+          return (
+            <TouchableOpacity
+              key={r.id}
+              style={[
+                styles.drRow,
+                idx < visible.length - 1 && {
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                  borderBottomColor: palette.border.subtle,
+                },
+              ]}
+              onPress={() => openCheck(r.id)}
+              activeOpacity={0.6}
+            >
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <View style={styles.drTitleRow}>
+                  <Text style={[styles.drNumber, { color: palette.text.primary }]}>№{r.number}</Text>
+                  {r.plate ? (
+                    <View style={[styles.drPlate, { backgroundColor: palette.bg.muted }]}>
+                      <Text style={[styles.drPlateText, { color: palette.text.secondary }]} numberOfLines={1}>
+                        {r.plate}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+                <Text style={[styles.drSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  {subParts.join(' · ')}
+                </Text>
+              </View>
+              <Text style={[styles.drTotal, { color: palette.text.primary }]}>{formatMoney(r.total)}</Text>
+              <Ionicons
+                name="chevron-forward"
+                size={16}
+                color={palette.text.tertiary}
+                style={{ marginLeft: spacing[1.5] }}
+              />
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+
+      {more > 0 && (
+        <TouchableOpacity
+          style={[styles.drMore, { borderTopColor: palette.border.subtle }]}
+          onPress={() => {
+            haptic('tap');
+            navigation.navigate('Main', {
+              screen: 'Checks',
+              params: { screen: 'ChecksHome', params: { deferred: true } },
+            });
+          }}
+          activeOpacity={0.7}
+        >
+          <Text style={[styles.drMoreText, { color: colors.primary[600] }]}>Ещё {more} — смотреть все</Text>
+          <Ionicons name="chevron-forward" size={15} color={colors.primary[600]} />
+        </TouchableOpacity>
+      )}
+    </AnimatedCard>
+  );
+}
+
+// ── v3.0.1 ФИЧА 4 — Master: «ЗП за месяц / в среднем за смену / смен» ─────────
+// Presentation-only. Данные приходят пропом из уже загруженного SalarySummary
+// (['salary','my-summary']) — нового запроса нет. perDay=null / workedShiftsMonth
+// отсутствует (старый бэкенд) → соответствующая строка не рисуется.
+function MasterSalaryMonthCard({ summary }: { summary: SalarySummary }) {
+  const palette = useColors();
+  const perDay = summary.perDay;
+  const hasPerDay = perDay != null;
+  const hasShifts = summary.workedShiftsMonth != null;
+  const shifts = summary.workedShiftsMonth ?? 0;
+
+  return (
+    <AnimatedCard
+      index={2}
+      style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+    >
+      <View style={styles.salaryMonthHeader}>
+        <View
+          style={[
+            styles.salaryMonthIcon,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+          ]}
+        >
+          <Ionicons name="wallet-outline" size={16} color={colors.green[600]} />
+        </View>
+        <Text style={[styles.cashTitle, { color: palette.text.secondary }]}>ЗП ЗА МЕСЯЦ</Text>
+      </View>
+
+      <Text style={[styles.salaryMonthValue, { color: palette.text.primary }]} numberOfLines={1} adjustsFontSizeToFit>
+        {formatMoney(summary.month)}
+      </Text>
+
+      {(hasPerDay || hasShifts) && (
+        <View style={[styles.salaryMonthMetrics, { borderTopColor: palette.border.subtle }]}>
+          {hasPerDay && (
+            <View style={styles.salaryMonthMetric}>
+              <Text style={[styles.salaryMetricValue, { color: palette.text.primary }]}>
+                {formatMoney(perDay as number)}
+              </Text>
+              <Text style={[styles.salaryMetricLabel, { color: palette.text.tertiary }]}>в среднем за смену</Text>
+            </View>
+          )}
+          {hasShifts && (
+            <View style={styles.salaryMonthMetric}>
+              <Text style={[styles.salaryMetricValue, { color: palette.text.primary }]}>{shifts}</Text>
+              <Text style={[styles.salaryMetricLabel, { color: palette.text.tertiary }]}>смен отработано</Text>
+            </View>
+          )}
+        </View>
+      )}
+    </AnimatedCard>
+  );
+}
+
 function OwnerFreshnessBadge() {
   const { isFetching, isLoading, dataUpdatedAt } = useQuery({
     queryKey: ['dashboard-v2', 'today'],
@@ -3143,8 +3513,10 @@ function AdminDashboard({ name }: { name: string }) {
       </View>
       <OwnerHero name={name} />
       <KpiStrip />
+      <NetProfitAccrualCard />
       <OwnerAnalyticsChart />
       <TodaySnapshotRow />
+      <DeferredRemindersCard />
       {visibleWidgets.map((w) => (
         <w.Component key={w.id} />
       ))}
@@ -3717,6 +4089,9 @@ function MasterDashboard() {
         </AnimatedCard>
       </View>
 
+      <MasterSalaryMonthCard summary={data} />
+      <DeferredRemindersCard />
+
       <AnimatedCard
         index={3}
         style={[styles.cashSection, { backgroundColor: palette.bg.elevated, borderColor: palette.border.subtle }]}
@@ -3917,7 +4292,10 @@ export default function DashboardScreen() {
     // with no filter — that refetched EVERY key in the app.)
     const ownerKeys: (string | (string | number)[])[][] = [
       ['dashboard-chart'],
+      // ['dashboard-v2'] also refreshes NetProfitAccrualCard (piggybacks on it).
       ['dashboard-v2'],
+      // Отложенные чеки (напоминание) — DeferredRemindersCard.
+      ['checks', 'deferred-reminders'],
       ['schedule-today'],
       ['calls-summary'],
       ['installments', 'widget'],
@@ -3933,11 +4311,14 @@ export default function DashboardScreen() {
     ];
     const masterKeys: (string | (string | number)[])[][] = [
       ['shifts'],
+      // ['salary'] also refreshes MasterSalaryMonthCard (same summary query).
       ['salary'],
       // MasterRecentChecks reads ['checks', 'recent-master']; restrict
       // the invalidation to that exact suffix so we don't accidentally
       // refetch the entire Journal infinite-scroll cache.
       ['checks', 'recent-master'],
+      // Отложенные чеки (свои) — DeferredRemindersCard.
+      ['checks', 'deferred-reminders'],
       // MasterRatingCard reads the marketing dashboard (open to all roles).
       ['marketing-dashboard'],
       // MyAttendanceRankWidget reads ['schedule', monthStart, monthEnd]
@@ -4546,6 +4927,160 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     textTransform: 'uppercase',
   },
+
+  // ── ФИЧА 1 — Реальная чистая прибыль (по начислению) ──────────────────────
+  napBasisPill: {
+    marginLeft: 'auto',
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.md,
+  },
+  napBasisText: { fontSize: 10.5, fontWeight: '600', letterSpacing: 0.2 },
+  napValue: {
+    fontSize: 32,
+    fontWeight: '800',
+    letterSpacing: -0.6,
+    marginTop: spacing[1],
+    fontVariant: ['tabular-nums'],
+  },
+  napCaption: { fontSize: 12.5, marginTop: 2 },
+  napProjRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginTop: spacing[3],
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.lg,
+  },
+  napProjLabel: { fontSize: 13, fontWeight: '600' },
+  napProjValue: {
+    fontSize: 15,
+    fontWeight: '700',
+    letterSpacing: -0.2,
+    marginLeft: 'auto',
+    fontVariant: ['tabular-nums'],
+  },
+  napCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    marginTop: spacing[3],
+    padding: spacing[3],
+    borderRadius: borderRadius.lg,
+  },
+  napCtaText: { flex: 1, fontSize: 13, fontWeight: '600', lineHeight: 18 },
+  napWarn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginTop: spacing[3],
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[3],
+    borderRadius: borderRadius.lg,
+  },
+  napWarnText: { flex: 1, fontSize: 12, fontWeight: '600', lineHeight: 17 },
+  napToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1],
+    marginTop: spacing[3],
+    paddingVertical: spacing[1.5],
+  },
+  napToggleText: { fontSize: 13, fontWeight: '600' },
+  napBreakdown: {
+    marginTop: spacing[1],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    paddingTop: spacing[1],
+  },
+  napRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing[1.5],
+    gap: spacing[3],
+  },
+  napRowLabel: { fontSize: 13.5, flexShrink: 1 },
+  napRowValue: { fontSize: 13.5, fontWeight: '600', fontVariant: ['tabular-nums'] },
+  napRowTotal: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing[1],
+    paddingTop: spacing[2.5],
+  },
+  napRowTotalLabel: { fontSize: 14, fontWeight: '700' },
+  napRowTotalValue: {
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+    fontVariant: ['tabular-nums'],
+  },
+
+  // ── ФИЧА 3 — Отложенные чеки (напоминание) ────────────────────────────────
+  drCountPill: {
+    marginLeft: 'auto',
+    minWidth: 22,
+    height: 22,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[1.5],
+  },
+  drCountText: { fontSize: 12, fontWeight: '800', fontVariant: ['tabular-nums'] },
+  drRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing[2.5],
+    gap: spacing[2],
+  },
+  drTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  drNumber: { fontSize: 14.5, fontWeight: '700', letterSpacing: -0.2 },
+  drPlate: {
+    paddingHorizontal: spacing[1.5],
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+    maxWidth: 130,
+  },
+  drPlateText: { fontSize: 11, fontWeight: '600', letterSpacing: 0.3 },
+  drSub: { fontSize: 12, marginTop: 2 },
+  drTotal: { fontSize: 14, fontWeight: '700', letterSpacing: -0.2, fontVariant: ['tabular-nums'] },
+  drMore: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1],
+    marginTop: spacing[1],
+    paddingTop: spacing[3],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  drMoreText: { fontSize: 13, fontWeight: '600' },
+
+  // ── ФИЧА 4 — Master: ЗП за месяц ──────────────────────────────────────────
+  salaryMonthHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  salaryMonthIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  salaryMonthValue: {
+    fontSize: 28,
+    fontWeight: '800',
+    letterSpacing: -0.5,
+    marginTop: spacing[2],
+    fontVariant: ['tabular-nums'],
+  },
+  salaryMonthMetrics: {
+    flexDirection: 'row',
+    gap: spacing[4],
+    marginTop: spacing[3],
+    paddingTop: spacing[3],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  salaryMonthMetric: { flex: 1 },
+  salaryMetricValue: { fontSize: 17, fontWeight: '700', letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
+  salaryMetricLabel: { fontSize: 11.5, marginTop: 2 },
 
   // ── Рассрочка widget ──────────────────────────────────────────────────────
   installmentHeaderRight: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginLeft: 'auto' },

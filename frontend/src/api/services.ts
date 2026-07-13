@@ -19,6 +19,7 @@ import {
   createShiftsApi,
   createScheduleApi,
   createExpensesApi,
+  createPlanningApi,
   createWarehouseCategoriesApi,
   createMarketingApi,
   createPublicReviewApi,
@@ -106,6 +107,9 @@ export const reportsApi = createReportsApi(api);
 export const shiftsApi = createShiftsApi(api);
 export const scheduleApi = createScheduleApi(api);
 export const expensesApi = createExpensesApi(api);
+// v3.0.1 ФИЧА 1 — «Планирование»: постоянные расходы + мотивация сотрудников.
+// Питает чистую прибыль по начислению (reportsApi.dashboardV2 → netProfitAccrual).
+export const planningApi = createPlanningApi(api);
 export const warehouseCategoriesApi = createWarehouseCategoriesApi(api);
 export const marketingApi = createMarketingApi(api);
 export const publicReviewApi = createPublicReviewApi(api);

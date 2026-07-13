@@ -263,6 +263,23 @@ const menuSections: MenuSection[] = [
         iconColor: colors.rose[600],
       },
       {
+        // «Постоянные расходы и мотивация» (v3.0.1 ФИЧА 1) — владельческий
+        // конфиг: постоянные месячные расходы + мотивация не-сдельных
+        // сотрудников. Питает НАЧИСЛЕННУЮ чистую прибыль на дашборде. Owner-only
+        // (director/superadmin), API owner-class + financial_reports на сервере.
+        // Переиспользуем item-key 'expenses' — той же финансовой видимостью
+        // владелец управляет и «Расходами» (новый ключ сломал бы ITEM_KEYS
+        // drift-guard, как у «Рассрочки» с 'cashflow').
+        label: 'Постоянные расходы',
+        description: 'Аренда, оклады и мотивация — для прибыли',
+        screen: 'Planning',
+        itemKey: 'expenses',
+        roles: ['director', 'superadmin'],
+        icon: 'repeat-outline',
+        iconBg: colors.indigo[50],
+        iconColor: colors.indigo[600],
+      },
+      {
         label: 'Финансовые отчёты',
         description: 'Прибыль, маржа, средний чек',
         screen: 'Reports',

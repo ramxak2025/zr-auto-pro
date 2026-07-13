@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Wallet, Tag, Loader2, X, ShieldAlert } from 'lucide-react';
+import { Plus, Trash2, Wallet, Tag, Loader2, X, ShieldAlert, Info, Repeat } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
@@ -11,6 +11,7 @@ import PageHeader from '../components/PageHeader';
 import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import Switch from '../components/Switch';
 
 const formatCurrency = (value: number) =>
   Math.round(value)
@@ -31,6 +32,7 @@ export default function ExpensesPage() {
   const [catModalOpen, setCatModalOpen] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [newCatName, setNewCatName] = useState('');
+  const [newCatRecurring, setNewCatRecurring] = useState(false);
 
   const [form, setForm] = useState({
     categoryId: '',
@@ -84,14 +86,28 @@ export default function ExpensesPage() {
   });
 
   const createCatMutation = useMutation({
-    mutationFn: (data: { name: string }) => expensesApi.createCategory(data),
+    mutationFn: (data: { name: string; isRecurring?: boolean }) => expensesApi.createCategory(data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['expense-categories'] });
       toast.success('Категория создана');
       setNewCatName('');
+      setNewCatRecurring(false);
       setCatModalOpen(false);
     },
     onError: () => toast.error('Ошибка при создании категории'),
+  });
+
+  // Toggle the «постоянный расход» flag (v3.0.1 ФИЧА 1). Recurring categories
+  // are accrual-neutral: their payments hit the cash register but are counted
+  // in profit via the Planning config, not deducted again as one-offs.
+  const updateCatMutation = useMutation({
+    mutationFn: ({ id, isRecurring }: { id: string; isRecurring: boolean }) =>
+      expensesApi.updateCategory(id, { isRecurring }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['expense-categories'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+    },
+    onError: () => toast.error('Не удалось изменить категорию'),
   });
 
   const deleteCatMutation = useMutation({
@@ -381,31 +397,69 @@ export default function ExpensesPage() {
       {/* Categories management modal */}
       <Modal isOpen={catModalOpen} onClose={() => setCatModalOpen(false)} title="Категории расходов" size="md">
         <div className="space-y-4">
-          <div className="flex gap-2">
-            <input
-              type="text"
-              className="input flex-1"
-              value={newCatName}
-              onChange={(e) => setNewCatName(e.target.value)}
-              placeholder="Новая категория (Аренда, Маркетинг...)"
-            />
-            <button
-              onClick={() => {
-                if (newCatName.trim()) createCatMutation.mutate({ name: newCatName.trim() });
-              }}
-              disabled={!newCatName.trim() || createCatMutation.isPending}
-              className="btn-primary px-3"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+          {/* Create */}
+          <div className="rounded-xl border border-gray-200 p-3 space-y-3">
+            <div className="flex gap-2">
+              <input
+                type="text"
+                className="input flex-1"
+                value={newCatName}
+                onChange={(e) => setNewCatName(e.target.value)}
+                placeholder="Новая категория (Аренда, Маркетинг...)"
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' && newCatName.trim())
+                    createCatMutation.mutate({ name: newCatName.trim(), isRecurring: newCatRecurring });
+                }}
+              />
+              <button
+                onClick={() => {
+                  if (newCatName.trim())
+                    createCatMutation.mutate({ name: newCatName.trim(), isRecurring: newCatRecurring });
+                }}
+                disabled={!newCatName.trim() || createCatMutation.isPending}
+                aria-label="Создать категорию"
+                className="btn-primary px-3"
+              >
+                {createCatMutation.isPending ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Plus className="w-4 h-4" />
+                )}
+              </button>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="flex items-center gap-1.5 text-sm font-medium text-gray-700">
+                <Repeat className="h-4 w-4 text-gray-400" /> Постоянный расход
+              </span>
+              <Switch checked={newCatRecurring} onChange={setNewCatRecurring} label="Постоянный расход" />
+            </div>
+            <p className="flex items-start gap-1.5 text-xs text-gray-500 leading-snug">
+              <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              Оплаты идут в кассу, а в прибыли учитываются через План — равномерно по дням месяца.
+            </p>
           </div>
+
+          {/* List */}
           <div className="divide-y divide-gray-100">
             {categories.length === 0 ? (
               <p className="py-6 text-center text-sm text-gray-400">Нет категорий</p>
             ) : (
               categories.map((c: any) => (
-                <div key={c.id} className="flex items-center justify-between py-2.5">
-                  <span className="text-sm font-medium text-gray-800">{c.name}</span>
+                <div key={c.id} className="flex items-center gap-3 py-2.5">
+                  <span className="min-w-0 flex-1 truncate text-sm font-medium text-gray-800">{c.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`hidden sm:inline text-xs ${c.isRecurring ? 'text-primary-600 font-medium' : 'text-gray-400'}`}
+                    >
+                      Постоянный
+                    </span>
+                    <Switch
+                      checked={!!c.isRecurring}
+                      onChange={(v) => updateCatMutation.mutate({ id: c.id, isRecurring: v })}
+                      disabled={updateCatMutation.isPending}
+                      label={`Отметить категорию «${c.name}» постоянным расходом`}
+                    />
+                  </div>
                   <button
                     type="button"
                     aria-label={`Удалить категорию ${c.name}`}

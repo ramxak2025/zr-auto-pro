@@ -40,6 +40,7 @@ import InstallmentsScreen from '../screens/InstallmentsScreen';
 import InstallmentDetailScreen from '../screens/InstallmentDetailScreen';
 import InstallmentReminderSettingsScreen from '../screens/InstallmentReminderSettingsScreen';
 import ExpensesScreen from '../screens/ExpensesScreen';
+import PlanningScreen from '../screens/PlanningScreen';
 import UsersScreen from '../screens/UsersScreen';
 import RolesScreen from '../screens/RolesScreen';
 import RoleEditorScreen from '../screens/RoleEditorScreen';
@@ -453,6 +454,15 @@ function MoreStackNavigator() {
           (акции)». */}
       <MoreStack.Screen name="Motivation" component={MotivationScreen} />
       <MoreStack.Screen name="Expenses" component={ExpensesScreen} />
+      {/* «Постоянные расходы и мотивация» (v3.0.1 ФИЧА 1, планирование). Owner-
+          only конфиг, который питает НАЧИСЛЕННУЮ чистую прибыль на дашборде:
+          постоянные месячные расходы + мотивация не-сдельных сотрудников.
+          UNGATED by plan-feature — экран самогейтится до director/superadmin
+          (все /planning маршруты owner-class + financial_reports закрыты на
+          сервере), строка в «Ещё» roles-filtered. Живёт в MoreStack → floating
+          tab bar остаётся виден. Дашборд открывает его через
+          navigate('Main', { screen: 'MoreTab', params: { screen: 'Planning' } }). */}
+      <MoreStack.Screen name="Planning" component={PlanningScreen} />
       <MoreStack.Screen name="Reports" component={GatedReports} />
       {/* «Маркетинг» hub → four direction sub-screens. All live in MoreStack so
           the floating tab bar stays visible and back-nav steps in-section

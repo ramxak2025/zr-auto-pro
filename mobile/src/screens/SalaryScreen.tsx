@@ -84,6 +84,15 @@ function statusColors(s: RowStatus, palette: SemanticPalette): { bg: string; tex
   }
 }
 
+/** Русское склонение слова «смена» для счётчика отработанных смен. */
+function shiftsWord(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'смена';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'смены';
+  return 'смен';
+}
+
 // ── Employee row (compact) ─────────────────────────────────────────────────
 
 interface EmployeeRowProps {
@@ -107,6 +116,12 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen }:
   const premiums = master.premiumsAmount || 0;
   const motivation = master.motivationAmount || 0;
   const checks = master.checkCount || 0;
+  // v3.0.1 ФИЧА 4 — «в среднем за смену»: perDay = totalEarnings ÷ workedShifts
+  // (сервер округляет; null при 0 смен, тогда строку не показываем). Смены
+  // считаются по настройкам расписания тенанта.
+  const workedShifts = master.workedShifts || 0;
+  const perDay = master.perDay;
+  const hasPerDay = perDay != null && workedShifts > 0;
 
   return (
     <TouchableOpacity
@@ -153,6 +168,21 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen }:
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginTop: 2 }} />
         </View>
       </View>
+
+      {hasPerDay ? (
+        <View style={styles.rowPerDayLine}>
+          <View style={[styles.rowPerDayPill, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="calendar-outline" size={11} color={palette.text.tertiary} />
+            <Text style={[styles.rowPerDayShifts, { color: palette.text.secondary }]}>
+              {workedShifts} {shiftsWord(workedShifts)}
+            </Text>
+          </View>
+          <Text style={[styles.rowPerDayValue, { color: palette.text.primary }]} numberOfLines={1}>
+            ≈ {formatMoney(perDay as number)}
+          </Text>
+          <Text style={[styles.rowPerDayCaption, { color: palette.text.tertiary }]}>в среднем за смену</Text>
+        </View>
+      ) : null}
 
       {checks + services + products + premiums + motivation > 0 ? (
         <View style={styles.rowChipsLine}>
@@ -526,4 +556,32 @@ const styles = StyleSheet.create({
   rowAmount: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.4 },
   rowChipsLine: { paddingLeft: 36 + spacing[3] },
   rowChipsText: { fontSize: 11, fontWeight: fontWeight.medium },
+
+  // «В среднем за смену» line — aligned under the name (skip avatar + gap).
+  rowPerDayLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingLeft: 36 + spacing[3],
+  },
+  rowPerDayPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 8,
+  },
+  rowPerDayShifts: {
+    fontSize: 10,
+    fontWeight: fontWeight.semibold,
+    fontVariant: ['tabular-nums'],
+  },
+  rowPerDayValue: {
+    fontSize: 12,
+    fontWeight: fontWeight.bold,
+    letterSpacing: -0.2,
+    fontVariant: ['tabular-nums'],
+  },
+  rowPerDayCaption: { fontSize: 11, fontWeight: fontWeight.medium },
 });

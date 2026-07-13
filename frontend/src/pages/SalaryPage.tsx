@@ -42,6 +42,15 @@ function formatMonthYear(my: string): string {
   return format(d, 'LLLL yyyy', { locale: ru });
 }
 
+/** Russian plural for «смена»: 1 смена · 2 смены · 5 смен. */
+function pluralShifts(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'смена';
+  if (m10 >= 2 && m10 <= 4 && !(m100 >= 12 && m100 <= 14)) return 'смены';
+  return 'смен';
+}
+
 // ─── Payment dialog form state ──────────────────────────────────────────────
 
 interface PaymentFormState {
@@ -171,6 +180,13 @@ function MasterSalaryView() {
                 <div className="stat-value text-purple-600">{formatMoney(summary.month)}</div>
                 {summary.monthChecks !== undefined && (
                   <p className="text-xs text-gray-400 mt-1">{summary.monthChecks} чек(ов)</p>
+                )}
+                {summary.perDay != null && (
+                  <p className="text-xs text-gray-400 mt-0.5 tabular-nums">
+                    ≈ {formatMoney(summary.perDay)} / смена
+                    {summary.workedShiftsMonth != null &&
+                      ` · ${summary.workedShiftsMonth} ${pluralShifts(summary.workedShiftsMonth)}`}
+                  </p>
                 )}
               </div>
               <div className="stat-card">
@@ -423,6 +439,22 @@ function AdminSalaryView() {
                       </div>
                     </div>
 
+                    {/* Average per worked shift/day */}
+                    {(master.workedShifts != null || master.perDay != null) && (
+                      <p className="mb-3 text-xs text-gray-500 tabular-nums">
+                        В среднем за смену:{' '}
+                        <span className="font-semibold text-gray-700">
+                          {master.perDay != null ? formatMoney(master.perDay) : '—'}
+                        </span>
+                        {master.workedShifts != null && (
+                          <span className="text-gray-400">
+                            {' · '}
+                            {master.workedShifts} {pluralShifts(master.workedShifts)}
+                          </span>
+                        )}
+                      </p>
+                    )}
+
                     {/* Actions */}
                     <div className="flex items-center gap-2">
                       <button
@@ -474,6 +506,7 @@ function AdminSalaryView() {
                   <th className="text-right">% ставка</th>
                   <th className="text-right">Выручка</th>
                   <th className="text-right">Заработок</th>
+                  <th className="text-right">За смену</th>
                   <th className="text-right">Выплачено</th>
                   <th className="text-right">Остаток</th>
                   <th className="text-right">Чеков</th>
@@ -491,6 +524,20 @@ function AdminSalaryView() {
                         <td className="text-right text-gray-900 tabular-nums">{formatMoney(master.totalRevenue)}</td>
                         <td className="text-right font-medium text-green-600 tabular-nums">
                           {formatMoney(master.totalEarnings)}
+                        </td>
+                        <td className="text-right tabular-nums">
+                          {master.perDay != null ? (
+                            <>
+                              <span className="font-medium text-gray-900">{formatMoney(master.perDay)}</span>
+                              {master.workedShifts != null && (
+                                <span className="block text-[11px] text-gray-400">
+                                  {master.workedShifts} {pluralShifts(master.workedShifts)}
+                                </span>
+                              )}
+                            </>
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
                         </td>
                         <td className="text-right text-blue-600 tabular-nums">{formatMoney(master.paidAmount || 0)}</td>
                         <td className="text-right font-medium text-red-600 tabular-nums">
@@ -515,7 +562,7 @@ function AdminSalaryView() {
                       </tr>
                       {isExpanded && (
                         <tr>
-                          <td colSpan={8} className="bg-gray-50 px-6 py-3">
+                          <td colSpan={9} className="bg-gray-50 px-6 py-3">
                             <p className="text-xs text-gray-500 font-semibold mb-2">
                               История выплат: {master.masterName}
                             </p>
@@ -533,6 +580,7 @@ function AdminSalaryView() {
                   <td></td>
                   <td className="text-right font-semibold text-gray-900 tabular-nums">{formatMoney(totalRevenue)}</td>
                   <td className="text-right font-semibold text-green-600 tabular-nums">{formatMoney(totalEarnings)}</td>
+                  <td></td>
                   <td className="text-right font-semibold text-blue-600 tabular-nums">{formatMoney(totalPaid)}</td>
                   <td className="text-right font-semibold text-red-600 tabular-nums">{formatMoney(totalRemaining)}</td>
                   <td className="text-right font-semibold text-gray-600 tabular-nums">{totalChecks}</td>

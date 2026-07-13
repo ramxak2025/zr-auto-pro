@@ -83,6 +83,7 @@ const MorePage = lazyWithRetry(() => import('./pages/MorePage'));
 const TariffPage = lazyWithRetry(() => import('./pages/TariffPage'));
 const RetailChecksPage = lazyWithRetry(() => import('./pages/RetailChecksPage'));
 const ExpensesPage = lazyWithRetry(() => import('./pages/ExpensesPage'));
+const PlanningPage = lazyWithRetry(() => import('./pages/PlanningPage'));
 const MarketingPage = lazyWithRetry(() => import('./pages/MarketingPage'));
 const CompanySettingsPage = lazyWithRetry(() => import('./pages/CompanySettingsPage'));
 const IntegrationsPage = lazyWithRetry(() => import('./pages/IntegrationsPage'));
@@ -301,6 +302,7 @@ export default function App() {
                     {/* Legacy «Дебиторка» path → «Рассрочка» (keeps old bookmarks alive) */}
                     <Route path="/debtors" element={<Navigate to="/installments" replace />} />
                     <Route path="/expenses" element={<ExpensesPage />} />
+                    <Route path="/planning" element={<PlanningPage />} />
                     <Route path="/users" element={gated('users_manage', <UsersPage />)} />
                     <Route path="/employees" element={<EmployeesPage />} />
                     <Route path="/employees/:id" element={<EmployeeDetailPage />} />

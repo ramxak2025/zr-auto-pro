@@ -27,6 +27,7 @@ import {
   Coins,
   ShoppingCart,
   Plug,
+  SlidersHorizontal,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
@@ -149,6 +150,15 @@ const menuItems: MenuItem[] = [
     description: 'Аренда, маркетинг и др.',
     path: '/expenses',
     icon: Wallet,
+    roles: ['director', 'superadmin'],
+    color: 'bg-rose-50',
+    iconColor: 'text-rose-600',
+  },
+  {
+    label: 'Постоянные расходы и мотивация',
+    description: 'Планирование для реальной чистой прибыли',
+    path: '/planning',
+    icon: SlidersHorizontal,
     roles: ['director', 'superadmin'],
     color: 'bg-rose-50',
     iconColor: 'text-rose-600',

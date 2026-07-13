@@ -763,6 +763,7 @@ export default function MarketingReportsScreen() {
                   <Text style={[styles.splitValue, { color: palette.text.primary }]}>
                     {formatInt(report.acquisition.newClients)}
                   </Text>
+                  <Text style={[styles.splitSub, { color: palette.text.tertiary }]}>добавлены в базу за период</Text>
                   <Text style={[styles.splitSub, { color: palette.text.tertiary }]}>
                     {formatMoney(report.acquisition.newRevenue)}
                   </Text>
@@ -771,15 +772,28 @@ export default function MarketingReportsScreen() {
                 <View style={styles.splitCol}>
                   <View style={styles.legendDotRow}>
                     <View style={[styles.legendDot, { backgroundColor: colors.teal[600] }]} />
-                    <Text style={[styles.legendLabel, { color: palette.text.secondary }]}>Повторные</Text>
+                    <Text style={[styles.legendLabel, { color: palette.text.secondary }]}>Существующие</Text>
                   </View>
                   <Text style={[styles.splitValue, { color: palette.text.primary }]}>
                     {formatInt(report.acquisition.returningClients)}
                   </Text>
+                  <Text style={[styles.splitSub, { color: palette.text.tertiary }]}>уже были в базе</Text>
                   <Text style={[styles.splitSub, { color: palette.text.tertiary }]}>
                     {formatMoney(report.acquisition.returningRevenue)}
                   </Text>
                 </View>
+              </View>
+
+              {/* Как считается (v3.0.1 ФИЧА 5) — «новый» это дата ЗАВЕДЕНИЯ
+                  клиента в базу (clients.created_at ∈ период), а не дата первого
+                  чека. Однозначная подпись, чтобы владелец не путал с «первым
+                  визитом». */}
+              <View style={[styles.basisNote, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="information-circle-outline" size={14} color={palette.text.tertiary} />
+                <Text style={[styles.basisNoteText, { color: palette.text.secondary }]}>
+                  Клиент считается «новым», если его карточка заведена в базу за выбранный период. «Существующие» — те,
+                  кто был в базе раньше и вернулся.
+                </Text>
               </View>
 
               {/* По источникам */}
@@ -1386,6 +1400,18 @@ const styles = StyleSheet.create({
   legendLabel: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
   splitValue: { fontSize: fontSize['2xl'], lineHeight: 30, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
   splitSub: { fontSize: fontSize.xs, fontVariant: ['tabular-nums'] },
+
+  // «Как считается» footnote под сплитом привлечения.
+  basisNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+    marginTop: spacing[3.5],
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+  },
+  basisNoteText: { flex: 1, fontSize: 11, lineHeight: 15 },
 
   // Sub block (source / funnel / cohort)
   subBlock: { marginTop: spacing[4], paddingTop: spacing[4], borderTopWidth: StyleSheet.hairlineWidth },

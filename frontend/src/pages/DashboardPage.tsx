@@ -18,8 +18,13 @@ import {
   Loader2,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Gift,
   Package,
+  Coins,
+  Wallet,
+  AlertTriangle,
+  ArrowRight,
 } from 'lucide-react';
 import {
   format,
@@ -40,8 +45,8 @@ import toast from 'react-hot-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../../../shared/utils/attendance';
-import { checksApi, salaryApi, shiftsApi, scheduleApi, usersApi } from '../api/services';
-import type { SalarySummary, UserRole, TodayEmployeeStatus, Shift } from '../types';
+import { checksApi, salaryApi, shiftsApi, scheduleApi, usersApi, reportsApi } from '../api/services';
+import type { SalarySummary, UserRole, TodayEmployeeStatus, Shift, DeferredCheckReminder } from '../types';
 import { UserRole as UserRoleEnum } from '../types';
 import { useNavigate } from 'react-router-dom';
 import CallsWidget from '../components/CallsWidget';
@@ -721,6 +726,7 @@ function AdminDashboard() {
   return (
     <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
       <div className="space-y-5 xl:col-span-2">
+        <NetProfitCard />
         <RevenueChart />
         <StaffStatusCircles />
       </div>
@@ -995,6 +1001,215 @@ function MasterRankWidget({ userId }: { userId?: string }) {
 }
 
 // ---------------------------------------------------------------------------
+// Real net profit (accrual) — owner/director. Fixed costs + salaries are
+// amortised across calendar days, so the number stops jumping on payday.
+// Source: reportsApi.dashboardV2().netProfitAccrual. Hidden on old backends.
+// ---------------------------------------------------------------------------
+
+function BreakdownRow({ label, value, sign }: { label: string; value: number; sign: 'plus' | 'minus' }) {
+  return (
+    <div className="flex items-center justify-between py-1.5 text-sm">
+      <span className="text-gray-600">{label}</span>
+      <span className={`font-medium tabular-nums ${sign === 'plus' ? 'text-gray-900' : 'text-rose-600'}`}>
+        {sign === 'minus' ? '−' : ''}
+        {formatMoney(value)}
+      </span>
+    </div>
+  );
+}
+
+function NetProfitCard() {
+  const [expanded, setExpanded] = useState(false);
+  const { data, isLoading } = useQuery({
+    queryKey: ['dashboard-v2'],
+    queryFn: async () => (await reportsApi.dashboardV2()).data,
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+
+  const acc = data?.netProfitAccrual;
+  if (isLoading && !data) return <StatCardSkeleton />;
+  if (!acc) return null; // legacy backend — no accrual payload
+
+  const { mtd, projection, config, daysElapsed, daysInMonth } = acc;
+  const configEmpty =
+    config.plannedFixedMonthly === 0 &&
+    config.staffFixedMonthly === 0 &&
+    config.pctTurnoverTotal === 0 &&
+    config.pctProfitTotal === 0;
+  const positive = mtd.netProfit >= 0;
+
+  const rows: { label: string; value: number; sign: 'plus' | 'minus' }[] = [
+    { label: 'Прибыль по чекам', value: mtd.checkProfit, sign: 'plus' },
+    { label: 'Постоянные расходы', value: mtd.plannedFixedAmortized, sign: 'minus' },
+    { label: 'Оклады', value: mtd.staffFixedAmortized, sign: 'minus' },
+    { label: '% с оборота', value: mtd.staffPctTurnover, sign: 'minus' },
+    { label: '% с прибыли', value: mtd.staffPctProfit, sign: 'minus' },
+    { label: 'Разовые расходы', value: mtd.oneOffExpenses, sign: 'minus' },
+  ];
+  if (mtd.recurringExcess > 0) rows.push({ label: 'Постоянка вне Плана', value: mtd.recurringExcess, sign: 'minus' });
+  const visibleRows = rows.filter((r, i) => i === 0 || r.value !== 0);
+
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+      <div className="p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <span
+              className={`flex h-10 w-10 items-center justify-center rounded-xl ${positive ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}
+            >
+              <Coins className="h-5 w-5" />
+            </span>
+            <div>
+              <p className="text-sm font-semibold text-gray-900">Чистая прибыль</p>
+              <p className="text-xs text-gray-500">по начислению · с начала месяца</p>
+            </div>
+          </div>
+          <span className="rounded-full bg-gray-100 px-2.5 py-1 text-[11px] font-medium text-gray-500 tabular-nums whitespace-nowrap">
+            {daysElapsed} / {daysInMonth} дн.
+          </span>
+        </div>
+
+        <div className="mt-4 flex items-end justify-between gap-4">
+          <div className="min-w-0">
+            <p
+              className={`text-3xl font-bold tabular-nums leading-none ${positive ? 'text-gray-900' : 'text-rose-600'}`}
+            >
+              {formatMoney(mtd.netProfit)}
+            </p>
+            <p className="mt-1.5 text-xs text-gray-500">Заработано к сегодняшнему дню</p>
+          </div>
+          <div className="flex-shrink-0 text-right">
+            <p className="text-[11px] font-medium uppercase tracking-wider text-gray-400">Прогноз на месяц</p>
+            <p className="mt-0.5 text-lg font-bold text-gray-700 tabular-nums">{formatMoney(projection.netProfit)}</p>
+          </div>
+        </div>
+
+        {config.recurringUncovered > 0 && (
+          <Link
+            to="/planning"
+            className="mt-4 flex items-center gap-2.5 rounded-xl border border-amber-200 bg-amber-50 px-3.5 py-2.5 text-amber-800 transition-colors hover:bg-amber-100"
+          >
+            <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+            <span className="flex-1 text-xs leading-snug">
+              Отмечено постоянным, но не в Плане:{' '}
+              <span className="font-semibold tabular-nums">{formatMoney(config.recurringUncovered)}</span>
+            </span>
+            <ArrowRight className="h-4 w-4 flex-shrink-0" />
+          </Link>
+        )}
+
+        {configEmpty && (
+          <Link
+            to="/planning"
+            className="mt-4 flex items-center gap-2.5 rounded-xl border border-primary-200 bg-primary-50 px-3.5 py-2.5 text-primary-800 transition-colors hover:bg-primary-100"
+          >
+            <Wallet className="h-4 w-4 flex-shrink-0" />
+            <span className="flex-1 text-xs leading-snug">
+              Настройте постоянные расходы и оклады — прибыль станет точной
+            </span>
+            <ArrowRight className="h-4 w-4 flex-shrink-0" />
+          </Link>
+        )}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        aria-expanded={expanded}
+        className="flex w-full items-center justify-between border-t border-gray-100 px-5 py-3 text-xs font-medium text-gray-500 transition-colors hover:bg-gray-50"
+      >
+        <span>Как это считается</span>
+        <ChevronDown className={`h-4 w-4 transition-transform duration-200 ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+
+      {expanded && (
+        <div className="border-t border-gray-100 bg-gray-50/50 px-5 py-3">
+          <div className="divide-y divide-gray-100">
+            {visibleRows.map((r) => (
+              <BreakdownRow key={r.label} label={r.label} value={r.value} sign={r.sign} />
+            ))}
+          </div>
+          <div className="mt-2 flex items-center justify-between border-t border-gray-200 pt-2.5">
+            <span className="text-sm font-semibold text-gray-900">Чистая прибыль</span>
+            <span className={`text-base font-bold tabular-nums ${positive ? 'text-emerald-600' : 'text-rose-600'}`}>
+              {formatMoney(mtd.netProfit)}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Deferred checks reminder — owner sees all tenant deferred checks, employee
+// sees only their own (backend-scoped). Hidden when empty.
+// ---------------------------------------------------------------------------
+
+function DeferredChecksCard() {
+  const navigate = useNavigate();
+  const { data, isLoading } = useQuery<DeferredCheckReminder[]>({
+    queryKey: ['deferred-reminders'],
+    queryFn: async () => (await checksApi.deferredReminders()).data,
+    staleTime: 30_000,
+  });
+
+  const items = data ?? [];
+  if (isLoading || items.length === 0) return null;
+
+  return (
+    <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-hidden">
+      <div className="flex items-center gap-3 px-5 py-4 border-b border-gray-100">
+        <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50 text-amber-600">
+          <Clock className="h-5 w-5" />
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-gray-900">Отложенные чеки</p>
+          <p className="text-xs text-gray-500">Ждут завершения или оплаты</p>
+        </div>
+        <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-bold text-amber-700 tabular-nums">
+          {items.length}
+        </span>
+      </div>
+
+      <ul className={`divide-y divide-gray-100 ${items.length > 5 ? 'max-h-80 overflow-y-auto' : ''}`}>
+        {items.map((c) => (
+          <li key={c.id}>
+            <button
+              type="button"
+              onClick={() => navigate(`/checks/${c.id}`)}
+              className="flex w-full items-center gap-3 px-5 py-3 text-left transition-colors hover:bg-gray-50 active:bg-gray-100"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-semibold text-gray-900">№{c.number}</span>
+                  {c.plate && (
+                    <span className="rounded bg-gray-100 px-1.5 py-0.5 text-[11px] font-medium text-gray-600">
+                      {c.plate}
+                    </span>
+                  )}
+                </div>
+                <p className="mt-0.5 truncate text-xs text-gray-500">
+                  {c.clientName || 'Без клиента'}
+                  {' · '}
+                  {format(new Date(c.date), 'd MMM', { locale: ru })}
+                  {c.masterName ? ` · ${c.masterName}` : ''}
+                </p>
+              </div>
+              <span className="whitespace-nowrap text-sm font-semibold text-gray-900 tabular-nums">
+                {formatMoney(c.total)}
+              </span>
+              <ChevronRight className="h-4 w-4 flex-shrink-0 text-gray-300" />
+            </button>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Main page
 // ---------------------------------------------------------------------------
 
@@ -1017,6 +1232,9 @@ export default function DashboardPage() {
 
       {/* Stats */}
       {isMaster ? <MasterDashboard /> : <AdminDashboard />}
+
+      {/* Deferred checks reminder — owner: all; employee: own (backend-scoped). Hidden when empty. */}
+      <DeferredChecksCard />
 
       {/* Quick actions */}
       <QuickActions />

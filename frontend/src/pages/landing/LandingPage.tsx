@@ -5,6 +5,7 @@ import Hero from './sections/Hero';
 import TrustStrip from './sections/TrustStrip';
 import Roles from './sections/Roles';
 import Features from './sections/Features';
+import NetProfit from './sections/NetProfit';
 import Reliability from './sections/Reliability';
 import Platforms from './sections/Platforms';
 import Pricing from './sections/Pricing';
@@ -74,6 +75,7 @@ export default function LandingPage() {
       <TrustStrip />
       <Roles />
       <Features />
+      <NetProfit />
       <Reliability />
       <Platforms />
       <Pricing />

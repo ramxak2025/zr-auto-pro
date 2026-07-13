@@ -770,26 +770,27 @@ export default function ExpensesScreen() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['expense-categories'] }),
   });
 
-  // Owner toggles «Требует одобрения» per category. Optimistic so the Switch
-  // flips instantly; rolled back on error. Director / admin / superadmin only
-  // (enforced both by UI gating and the backend role guard).
+  // Owner toggles «Требует одобрения» / «Постоянный расход» per category.
+  // Optimistic so the Switch flips instantly; rolled back on error. Director /
+  // admin / superadmin only (enforced both by UI gating and the backend role
+  // guard). `isRecurring` (v3.0.1 ФИЧА 1, миграция 132) помечает категорию как
+  // «плановую»: оплаты по ней идут в кассу как обычно, но в НАЧИСЛЕННОЙ прибыли
+  // учитываются через План (амортизация по дням), а не разовым списанием.
+  type ExpenseCategoryRow = { id: string; name: string; approvalRequired?: boolean; isRecurring?: boolean };
   const updateCatMutation = useMutation({
-    mutationFn: ({ id, approvalRequired }: { id: string; approvalRequired: boolean }) =>
-      expensesApi.updateCategory(id, { approvalRequired }),
-    onMutate: async ({ id, approvalRequired }) => {
+    mutationFn: ({ id, ...patch }: { id: string; approvalRequired?: boolean; isRecurring?: boolean }) =>
+      expensesApi.updateCategory(id, patch),
+    onMutate: async ({ id, ...patch }) => {
       await queryClient.cancelQueries({ queryKey: ['expense-categories'] });
-      const prev = queryClient.getQueryData<Array<{ id: string; name: string; approvalRequired?: boolean }>>([
-        'expense-categories',
-      ]);
-      queryClient.setQueryData<Array<{ id: string; name: string; approvalRequired?: boolean }>>(
-        ['expense-categories'],
-        (old) => (old ? old.map((c) => (c.id === id ? { ...c, approvalRequired } : c)) : old),
+      const prev = queryClient.getQueryData<ExpenseCategoryRow[]>(['expense-categories']);
+      queryClient.setQueryData<ExpenseCategoryRow[]>(['expense-categories'], (old) =>
+        old ? old.map((c) => (c.id === id ? { ...c, ...patch } : c)) : old,
       );
       return { prev };
     },
     onError: (_e, _v, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(['expense-categories'], ctx.prev);
-      Alert.alert('Ошибка', 'Не удалось изменить настройку одобрения');
+      Alert.alert('Ошибка', 'Не удалось изменить настройку категории');
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['expense-categories'] }),
   });
@@ -1696,6 +1697,19 @@ export default function ExpensesScreen() {
             он не учитывается. Ваши собственные расходы одобряются сразу.
           </Text>
         </View>
+        {/* «Постоянный расход» explainer (v3.0.1 ФИЧА 1) */}
+        <View
+          style={[
+            styles.approvalInfo,
+            { backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50] },
+          ]}
+        >
+          <Ionicons name="calendar-outline" size={15} color={colors.primary[600]} />
+          <Text style={[styles.approvalInfoText, { color: colors.primary[700] }]}>
+            «Постоянный расход»: оплаты по этой категории идут в кассу как обычно, а в прибыли учитываются через План —
+            амортизация по дням, а не разовым списанием.
+          </Text>
+        </View>
 
         {categories.length === 0 ? (
           <View style={styles.catEmptyState}>
@@ -1739,6 +1753,29 @@ export default function ExpensesScreen() {
                     updateCatMutation.mutate({ id: c.id, approvalRequired: v });
                   }}
                   trackColor={{ false: palette.bg.card, true: colors.green[500] }}
+                  thumbColor={colors.white}
+                  ios_backgroundColor={palette.bg.card}
+                />
+              </View>
+              {/* «Постоянный расход» (v3.0.1 ФИЧА 1) — категория плановой
+                  амортизации. Оплаты идут в кассу как обычно, а в прибыли
+                  учитываются через План (по дням), а не разовым списанием. */}
+              <View style={[styles.catApprovalRow, { borderTopColor: palette.border.subtle }]}>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.catApprovalLabel, { color: palette.text.primary }]}>Постоянный расход</Text>
+                  <Text style={[styles.catApprovalHint, { color: palette.text.tertiary }]} numberOfLines={2}>
+                    {c.isRecurring
+                      ? 'В прибыли учитывается через План — по дням'
+                      : 'В прибыли списывается разово, в день оплаты'}
+                  </Text>
+                </View>
+                <Switch
+                  value={!!c.isRecurring}
+                  onValueChange={(v) => {
+                    haptic('select');
+                    updateCatMutation.mutate({ id: c.id, isRecurring: v });
+                  }}
+                  trackColor={{ false: palette.bg.card, true: colors.primary[500] }}
                   thumbColor={colors.white}
                   ios_backgroundColor={palette.bg.card}
                 />
