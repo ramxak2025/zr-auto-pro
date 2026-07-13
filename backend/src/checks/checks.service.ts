@@ -3750,6 +3750,50 @@ export class ChecksService {
     };
   }
 
+  /**
+   * v3.0.1 ФИЧА 3 — «Отложенные чеки» на главной (карточка-напоминание).
+   *
+   * Возвращает отложенные (is_deferred=true, не удалённые) чеки для дашборда,
+   * новейшие сверху. ОХВАТ по роли (решение владельца):
+   *   • владелец/директор (owner-class ИЛИ право checks_view_all) → ВСЕ
+   *     отложенные чеки тенанта;
+   *   • сотрудник (мастер/кассир/…) → ТОЛЬКО СВОИ (авторские: master_id = self).
+   * checks_view_all — тот же ключ охвата, что и в getAll: owner-class всегда true,
+   * легаси-мастер по умолчанию false → видит только свои. Пустой список → клиент
+   * карточку не показывает. Tenant-scoped, параметризовано. LIMIT 100 — это
+   * напоминание, не пагинированный список.
+   */
+  async getDeferredReminders(tenantID: string, actor: ChecksActor) {
+    const canAll = userHasPermission(actor, 'checks_view_all');
+    const params: any[] = [tenantID];
+    let ownFilter = '';
+    if (!canAll) {
+      params.push(actor.userID);
+      ownFilter = ` AND ch.master_id = $${params.length}`;
+    }
+    const { rows } = await this.pool.query(
+      `SELECT ch.id, ch.number, ch.date, ch.total_revenue,
+              cl.full_name AS client_name, ca.plate_number, m.full_name AS master_name
+         FROM checks ch
+         LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+         LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
+         LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
+        WHERE ch.tenant_id = $1 AND ch.is_deferred = true AND ch.deleted_at IS NULL${ownFilter}
+        ORDER BY ch.date DESC, ch.created_at DESC
+        LIMIT 100`,
+      params,
+    );
+    return rows.map((r) => ({
+      id: r.id as string,
+      number: r.number as number,
+      date: r.date,
+      clientName: (r.client_name as string) ?? null,
+      plate: (r.plate_number as string) ?? null,
+      total: parseFloat(r.total_revenue) || 0,
+      masterName: (r.master_name as string) ?? null,
+    }));
+  }
+
   async getDashboardChart(tenantID: string, period: string, offset: number = 0) {
     // Clamp the caller-supplied offset to a sane window (item 11): ±1200
     // periods ≈ 100 years even at monthly granularity. An unbounded offset

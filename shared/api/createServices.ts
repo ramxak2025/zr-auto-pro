@@ -86,6 +86,11 @@ import type {
   EmployeeFullProfile,
   DashboardV2,
   ClientsNewVsReturning,
+  FixedCost,
+  FixedCostCategory,
+  EmployeeCompensation,
+  EmployeeCompensationType,
+  DeferredCheckReminder,
   OwnerAlert,
   BestDayOfWeek,
   RecentReview,
@@ -589,6 +594,12 @@ export function createChecksApi(api: HttpClient) {
     getAll: (params?: ChecksParams & { isDeferred?: boolean }) =>
       api.get<PaginatedResponse<Check>>('/checks', { params }),
     getDashboard: () => api.get<DashboardStats>('/checks/dashboard'),
+    /**
+     * v3.0.1 ФИЧА 3 — отложенные чеки для карточки-напоминания на главной.
+     * Владелец/директор → ВСЕ отложенные чеки тенанта; сотрудник → только СВОИ
+     * (авторские). Newest-first. Пустой список → карточку не показываем.
+     */
+    deferredReminders: () => api.get<DeferredCheckReminder[]>('/checks/deferred-reminders'),
     getDashboardChart: (period: string, offset?: number) =>
       api.get<{
         points: Array<{ date: string; revenue: number; profit: number; checkCount: number }>;
@@ -935,6 +946,39 @@ export function createReportsApi(api: HttpClient) {
   };
 }
 
+// ───────────────────────────────────────────────────────────────────────
+//  v3.0.1 ФИЧА 1 — «Планирование / Постоянные расходы» (owner-only).
+//  Config that drives the ACCRUAL net profit on the owner dashboard
+//  (reportsApi.dashboardV2 → DashboardV2.netProfitAccrual). Two configs:
+//    • fixed costs — planned recurring MONTHLY amounts (rent/utilities/marketing/…)
+//    • employee compensation — оклад / % с оборота / % с прибыли per employee.
+//  Every endpoint is owner-class + financial_reports gated server-side.
+// ───────────────────────────────────────────────────────────────────────
+
+export function createPlanningApi(api: HttpClient) {
+  return {
+    fixedCosts: {
+      list: () => api.get<FixedCost[]>('/planning/fixed-costs'),
+      create: (data: { name: string; category?: FixedCostCategory; monthlyAmount: number; active?: boolean }) =>
+        api.post<FixedCost>('/planning/fixed-costs', data),
+      update: (
+        id: string,
+        data: { name?: string; category?: FixedCostCategory; monthlyAmount?: number; active?: boolean },
+      ) => api.patch<FixedCost>(`/planning/fixed-costs/${id}`, data),
+      remove: (id: string) => api.delete(`/planning/fixed-costs/${id}`),
+    },
+    compensation: {
+      list: () => api.get<EmployeeCompensation[]>('/planning/compensation'),
+      /** Upsert by (tenant, employee) — one config per employee (v1). */
+      upsert: (data: { userId: string; type: EmployeeCompensationType; amount: number; active?: boolean }) =>
+        api.post<EmployeeCompensation>('/planning/compensation', data),
+      update: (id: string, data: { type?: EmployeeCompensationType; amount?: number; active?: boolean }) =>
+        api.patch<EmployeeCompensation>(`/planning/compensation/${id}`, data),
+      remove: (id: string) => api.delete(`/planning/compensation/${id}`),
+    },
+  };
+}
+
 export function createWarehousesApi(api: HttpClient) {
   return {
     list: () => api.get<Warehouse[]>('/warehouses'),
@@ -1045,11 +1089,16 @@ export function createScheduleApi(api: HttpClient) {
 export function createExpensesApi(api: HttpClient) {
   return {
     getCategories: () =>
-      api.get<Array<{ id: string; name: string; approvalRequired?: boolean }>>('/expenses/categories'),
-    createCategory: (data: { name: string; approvalRequired?: boolean }) =>
+      api.get<Array<{ id: string; name: string; approvalRequired?: boolean; isRecurring?: boolean }>>(
+        '/expenses/categories',
+      ),
+    // `isRecurring` (132, v3.0.1 ФИЧА 1) — помечает категорию как «оплата плановой
+    // постоянки» (аренда/коммуналка/маркетинг/зарплата): её расходы accrual-нейтральны
+    // (не режут прибыль по начислению, идут только в «Движение денег»).
+    createCategory: (data: { name: string; approvalRequired?: boolean; isRecurring?: boolean }) =>
       api.post<ExpenseCategory>('/expenses/categories', data),
-    /** Toggle `approvalRequired` (or rename) a category. Director / admin / superadmin only (#11). */
-    updateCategory: (id: string, data: { name?: string; approvalRequired?: boolean }) =>
+    /** Toggle `approvalRequired` / `isRecurring` (or rename) a category. Director / admin / superadmin only. */
+    updateCategory: (id: string, data: { name?: string; approvalRequired?: boolean; isRecurring?: boolean }) =>
       api.patch<ExpenseCategory>(`/expenses/categories/${id}`, data),
     removeCategory: (id: string) => api.delete(`/expenses/categories/${id}`),
     // The server now exposes `createdBy`, `creatorName`, `source` and

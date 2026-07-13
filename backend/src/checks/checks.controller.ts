@@ -25,6 +25,17 @@ export class ChecksController {
     return this.checksService.getDashboard(user.tenantID);
   }
 
+  /**
+   * v3.0.1 ФИЧА 3 — отложенные чеки для карточки-напоминания на главной.
+   * Открыт любому аутентифицированному пользователю; охват свои/все решает сервис
+   * по роли (owner/director → все; сотрудник → только свои). Объявлен ДО `:id`,
+   * чтобы литеральный путь не был перехвачен param-роутом.
+   */
+  @Get('deferred-reminders')
+  getDeferredReminders(@CurrentUser() user: JwtPayload) {
+    return this.checksService.getDeferredReminders(user.tenantID, user);
+  }
+
   @Get('dashboard/chart')
   getDashboardChart(@CurrentUser() user: JwtPayload, @Query('period') period: string, @Query('offset') offset: string) {
     return this.checksService.getDashboardChart(user.tenantID, period, parseInt(offset) || 0);

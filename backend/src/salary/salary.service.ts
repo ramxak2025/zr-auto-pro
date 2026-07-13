@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { PushService } from '../push/push.service';
 import { ExpensesService } from '../expenses/expenses.service';
+import { ScheduleService } from '../schedule/schedule.service';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 
 interface PremiumDto {
@@ -22,7 +23,36 @@ export class SalaryService {
     @Inject(PG_POOL) private pool: Pool,
     private push: PushService,
     private expenses: ExpensesService,
+    private schedule: ScheduleService,
   ) {}
+
+  /**
+   * v3.0.1 ФИЧА 4 — сколько ОТРАБОТАННЫХ смен у каждого сотрудника в диапазоне
+   * [dateFrom, dateTo] (YYYY-MM-DD, включительно). «Смена» определяется НАСТРОЙКАМИ
+   * расписания тенанта (schedule_settings.shift_statuses → ScheduleService.
+   * buildShiftFilter): владелец сам решает, что считать сменой (дефолт: worked +
+   * short). Возвращает Map<userId, count>. Если тенант не считает ничего сменой
+   * (buildShiftFilter → null) — пустая карта (у всех 0 смен → perDay = null).
+   *
+   * buildShiftFilter возвращает SQL-предикат БЕЗ плейсхолдеров (статусы —
+   * литералы из белого списка ALLOWED_SHIFT_STATUSES), поэтому его безопасно
+   * инлайнить; параметры запроса — только tenant + диапазон дат.
+   */
+  private async workedShiftsByUser(tenantID: string, dateFrom: string, dateTo: string): Promise<Map<string, number>> {
+    const filter = await this.schedule.buildShiftFilter(tenantID);
+    if (!filter) return new Map();
+    const { rows } = await this.pool.query(
+      `SELECT user_id, COUNT(*)::int AS worked
+         FROM schedule_entries
+        WHERE tenant_id = $1 AND date >= $2::date AND date <= $3::date
+          AND ${filter.sql}
+        GROUP BY user_id`,
+      [tenantID, dateFrom, dateTo],
+    );
+    const map = new Map<string, number>();
+    for (const r of rows) map.set(r.user_id as string, parseInt(r.worked, 10) || 0);
+    return map;
+  }
 
   private static readonly MONTH_NAMES = [
     'Январь',
@@ -192,6 +222,11 @@ export class SalaryService {
       motivationByUser[m.employee_id] = parseFloat(m.amount) || 0;
     }
 
+    // v3.0.1 ФИЧА 4 — отработанные смены за тот же период (по настройкам
+    // расписания). perDay = totalEarnings / workedShifts; смен 0 → perDay = null
+    // (не делим). Один запрос на всех сотрудников.
+    const shiftsByUser = await this.workedShiftsByUser(tenantID, dateFrom, dateTo);
+
     return rows.map((r) => {
       const masterId = r.master_id;
       const masterPayments = paymentsByUser[masterId] || [];
@@ -208,6 +243,9 @@ export class SalaryService {
       // what the shop owes (totalEarnings → remainingAmount). 0 when no promos.
       const motivationAmount = motivationByUser[masterId] || 0;
       const totalEarnings = baseEarnings + premiumsAmount + motivationAmount;
+      // «ЗП за день» = заработано за период ÷ отработанных смен. null при 0 смен.
+      const workedShifts = shiftsByUser.get(masterId) || 0;
+      const perDay = workedShifts > 0 ? Math.round(totalEarnings / workedShifts) : null;
 
       return {
         masterId,
@@ -225,6 +263,9 @@ export class SalaryService {
         paidAmount,
         // Penalties reduce what the shop still owes the employee.
         remainingAmount: totalEarnings - paidAmount - penaltiesAmount,
+        // v3.0.1 ФИЧА 4 — «ЗП за день» (по отработанным сменам за период).
+        workedShifts,
+        perDay,
         payments: masterPayments,
         premiums: masterPremiums,
         penalties: masterPenalties,
@@ -741,11 +782,27 @@ export class SalaryService {
     );
     const mot = motRows[0] || { today: 0, month: 0, total: 0 };
 
+    // v3.0.1 ФИЧА 4 — «ЗП за день / за месяц» на ГЛАВНОЙ у самого сотрудника
+    // (master-view). Отработанные смены с начала месяца по сегодня (по настройкам
+    // расписания тенанта). perDay = ЗП за месяц (month) ÷ отработанных смен; смен
+    // 0 → null (показываем только «за месяц»). Даты — локальные YYYY-MM-DD,
+    // согласованно с monthStart выше.
+    const y = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const dd = String(now.getDate()).padStart(2, '0');
+    const shiftsMap = await this.workedShiftsByUser(tenantID, `${y}-${mm}-01`, `${y}-${mm}-${dd}`);
+    const workedShiftsMonth = shiftsMap.get(userID) || 0;
+    const monthEarned = monthService + monthProduct;
+    const perDay = workedShiftsMonth > 0 ? Math.round(monthEarned / workedShiftsMonth) : null;
+
     return {
       today: todayService + todayProduct,
       week: weekService + weekProduct,
       month: monthService + monthProduct,
       total: totalService + totalProduct,
+      // v3.0.1 ФИЧА 4 — своя «ЗП за день» + отработанные смены месяца (master-view).
+      workedShiftsMonth,
+      perDay,
       todayService,
       todayProduct,
       masterName: user.full_name,

@@ -26,7 +26,7 @@ export class ExpensesController {
   updateCategory(
     @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
-    @Body() dto: { name?: string; approvalRequired?: boolean },
+    @Body() dto: { name?: string; approvalRequired?: boolean; isRecurring?: boolean },
   ) {
     return this.expensesService.updateCategory(id, user.tenantID, dto);
   }

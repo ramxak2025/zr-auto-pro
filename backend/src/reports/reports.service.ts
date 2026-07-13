@@ -508,11 +508,25 @@ export class ReportsService {
     // category (per-check `profit` already nets the salary accrual, so adding
     // the payout expense would double-count labour in netProfit) and count
     // only APPROVED expenses (NULL = legacy approved).
+    // `exp_month_oneoff` (v3.0.1 ФИЧА 1) — ТОЛЬКО РАЗОВЫЕ расходы месяца:
+    // approved, не «Зарплата», И категория НЕ помечена is_recurring (132). Это
+    // единственный расходный терм, который режет ACCRUAL-прибыль. Плановая
+    // постоянка (recurring-категории) в accrual НЕ вычитается по факту — она
+    // начисляется из fixed_costs/employee_compensation ниже, а её оплаты идут
+    // только в «Движение денег» (развязка двойного списания). exp_month/exp_today
+    // (кассовые) остаются как были — их использует СТАРАЯ netProfitMonth (по факту).
+    // `exp_month_recurring` (FIX 2) — companion to exp_month_oneoff: approved,
+    // non-«Зарплата», recurring-flagged (132) expenses this month. Guarantees
+    // exp_month = exp_month_oneoff + exp_month_recurring, so no paid expense can
+    // silently vanish from the accrual when a category is flagged recurring but
+    // never budgeted in fixed_costs (see reconciliation below).
     const { rows: expenseRows } = await this.pool.query(
       `SELECT
          COALESCE(SUM(CASE WHEN e.date >= $2 THEN e.amount END), 0) AS exp_today,
          COALESCE(SUM(CASE WHEN e.date >= $3 THEN e.amount END), 0) AS exp_month,
-         COALESCE(SUM(CASE WHEN e.date >= $4 AND e.date < $3 THEN e.amount END), 0) AS exp_prev_month
+         COALESCE(SUM(CASE WHEN e.date >= $4 AND e.date < $3 THEN e.amount END), 0) AS exp_prev_month,
+         COALESCE(SUM(CASE WHEN e.date >= $3 AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS exp_month_oneoff,
+         COALESCE(SUM(CASE WHEN e.date >= $3 AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS exp_month_recurring
        FROM expenses e
        LEFT JOIN expense_categories ec ON ec.id = e.category_id
        WHERE e.tenant_id=$1
@@ -523,6 +537,8 @@ export class ReportsService {
     const expToday = parseFloat(expenseRows[0]?.exp_today) || 0;
     const expMonth = parseFloat(expenseRows[0]?.exp_month) || 0;
     const expPrevMonth = parseFloat(expenseRows[0]?.exp_prev_month) || 0;
+    const oneOffExpMonth = parseFloat(expenseRows[0]?.exp_month_oneoff) || 0;
+    const recurringActualMonth = parseFloat(expenseRows[0]?.exp_month_recurring) || 0;
 
     const profitToday = parseFloat(base.profit_today) || 0;
     const profitMonth = parseFloat(base.profit_month) || 0;
@@ -671,6 +687,173 @@ export class ReportsService {
     const dayOfMonth = Math.max(today.getDate(), 1);
     const monthForecast = (revenueMonth / dayOfMonth) * daysInMonth;
 
+    // ── v3.0.1 ФИЧА 1 — ЧИСТАЯ ПРИБЫЛЬ ПО НАЧИСЛЕНИЮ (accrual) ────────────────
+    // Гладкая, прогнозируемая прибыль: аренда/коммуналка/маркетинг/оклады НЕ
+    // прыгают в день оплаты, а размазываются по ВСЕМ календарным дням месяца.
+    //
+    // ФОРМУЛА (MTD = с начала месяца по сегодня):
+    //   checkProfit           = profitMonth  (выручка − запчасти − %мастеру за
+    //                           работу; уже в per-check profit; гарантия = убыток)
+    //   plannedFixedAmortized = Σ fixed_costs.monthly_amount / daysInMonth × dayOfMonth
+    //   staffFixedAmortized   = Σ оклады (employee_compensation type=fixed_monthly)
+    //                           / daysInMonth × dayOfMonth
+    //   staffPctTurnover      = revenueMonth × Σ%(pct_turnover)/100   (натурально MTD)
+    //   staffPctProfit        = max(checkProfit,0) × Σ%(pct_profit)/100
+    //                           (база — прибыль по чекам ДО вычета постоянки/мотиваций,
+    //                            иначе рекурсия; в убыток доля = 0)
+    //   oneOffExpenses        = разовые approved-расходы месяца (НЕ recurring, НЕ
+    //                           «Зарплата»); СУНК-стоимость — считаются ОДИН раз,
+    //                           в прогнозе НЕ run-rate'ятся (FIX 1)
+    //   recurringExcess       = страховка «ничего не теряется» (FIX 2, см. ниже)
+    //   netProfitAccrued_MTD  = checkProfit − plannedFixedAmortized − staffFixedAmortized
+    //                           − staffPctTurnover − staffPctProfit − oneOffExpenses
+    //                           − recurringExcess
+    //
+    // РАЗВЯЗКА ДВОЙНОГО СПИСАНИЯ: плановая постоянка вычитается ТОЛЬКО из конфига
+    // (fixed_costs + employee_compensation). Её ФАКТИЧЕСКИЕ оплаты пишутся в
+    // expenses под recurring-категориями (132) / «Зарплата» и в accrual-прибыль
+    // повторно НЕ попадают (oneOffExpMonth их исключает; per-check %мастеру и так
+    // не в expenses). Итог: каждая копейка постоянки списывается РОВНО один раз.
+    //
+    // FIX 2 — «ничего не теряется» + инвариант нулевого конфига:
+    //   • НЕТ планового конфига (всё 0) → recurring-категории трактуем как разовые:
+    //     фактический расход месяца берём НЕФИЛЬТРОВАННЫМ (expMonth), поэтому
+    //     mtd.netProfit === netProfitMonth ТОЧНО (иначе помеченная recurring-, но
+    //     не заведённая в план категория «испаряла» реальный расход из прибыли).
+    //   • ЕСТЬ плановый конфиг → плановая постоянка амортизируется как обычно, но
+    //     ДОПОЛНИТЕЛЬНО вычитаем непокрытый планом избыток фактической постоянки:
+    //     recurringExcessMTD = max(recurringActualMonth×amortFactor − plannedCoverageMTD, 0)
+    //     где plannedCoverageMTD = (plannedFixed+staffFixed)×amortFactor
+    //       + revenueMTD×%оборот/100 + max(checkProfit,0)×%прибыль/100.
+    //     Так реальная аренда 80k, помеченная recurring, но не заведённая в план,
+    //     не исчезает — она уходит в recurringExcess (и в config.recurringUncovered
+    //     как сигнал владельцу «отмечено постоянным, но не заведено в План»).
+    //
+    // ПРОГНОЗ на весь месяц = run-rate выручки/прибыли (÷ dayOfMonth × daysInMonth)
+    // − ПОЛНАЯ плановая постоянка (не амортизированная) − %-сотрудники от run-rate
+    // − разовые расходы ОДИН раз (сунк, без run-rate) − run-rate непокрытой постоянки.
+    const [{ rows: fcRows }, { rows: compRows }] = await Promise.all([
+      this.pool.query(
+        `SELECT COALESCE(SUM(monthly_amount), 0) AS planned_fixed
+           FROM fixed_costs WHERE tenant_id = $1 AND active = true`,
+        [tenantID],
+      ),
+      this.pool.query(
+        `SELECT type, COALESCE(SUM(amount), 0) AS total
+           FROM employee_compensation WHERE tenant_id = $1 AND active = true
+          GROUP BY type`,
+        [tenantID],
+      ),
+    ]);
+    const plannedFixedMonthly = parseFloat(fcRows[0]?.planned_fixed) || 0;
+    let staffFixedMonthly = 0;
+    let pctTurnoverTotal = 0;
+    let pctProfitTotal = 0;
+    for (const c of compRows) {
+      const total = parseFloat(c.total) || 0;
+      if (c.type === 'fixed_monthly') staffFixedMonthly += total;
+      else if (c.type === 'pct_turnover') pctTurnoverTotal += total;
+      else if (c.type === 'pct_profit') pctProfitTotal += total;
+    }
+    // Есть ли у тенанта ХОТЬ КАКОЙ-ТО плановый конфиг? От этого зависит трактовка
+    // recurring-категорий (см. FIX 2 выше).
+    const hasPlannedConfig =
+      plannedFixedMonthly > 0 || staffFixedMonthly > 0 || pctTurnoverTotal > 0 || pctProfitTotal > 0;
+
+    const checkProfitMTD = profitMonth;
+    const revenueMTD = revenueMonth;
+    const amortFactor = dayOfMonth / daysInMonth; // доля месяца, прошедшая к сегодня
+    const runRateFactor = daysInMonth / dayOfMonth; // экстраполяция MTD → полный месяц
+
+    // Month-to-date accrual. `% с прибыли` база — max(checkProfit, 0): в убыточный
+    // месяц доля с прибыли = 0, а не отрицательная (не отбираем у сотрудника, не
+    // «раздуваем» прибыль двойным минусом). `% с оборота` база (выручка) всегда ≥ 0.
+    const mtdPlannedFixed = plannedFixedMonthly * amortFactor;
+    const mtdStaffFixed = staffFixedMonthly * amortFactor;
+    const mtdStaffPctTurnover = revenueMTD * (pctTurnoverTotal / 100);
+    const mtdStaffPctProfit = Math.max(checkProfitMTD, 0) * (pctProfitTotal / 100);
+
+    // FIX 2 — фактический расход + непокрытый избыток постоянки. Без конфига:
+    // расход = expMonth (recurring как разовые) → инвариант mtd===netProfitMonth.
+    // С конфигом: расход = oneOffExpMonth, плюс recurringExcess подхватывает всё,
+    // что помечено постоянным, но планом не покрыто (ничего не теряется).
+    const mtdOneOff = hasPlannedConfig ? oneOffExpMonth : expMonth;
+    let mtdRecurringExcess = 0;
+    if (hasPlannedConfig) {
+      const plannedCoverageMTD = mtdPlannedFixed + mtdStaffFixed + mtdStaffPctTurnover + mtdStaffPctProfit;
+      mtdRecurringExcess = Math.max(recurringActualMonth * amortFactor - plannedCoverageMTD, 0);
+    }
+    const mtdNetProfit =
+      checkProfitMTD -
+      mtdPlannedFixed -
+      mtdStaffFixed -
+      mtdStaffPctTurnover -
+      mtdStaffPctProfit -
+      mtdOneOff -
+      mtdRecurringExcess;
+
+    // Full-month projection (run-rate revenue/profit + FULL planned costs). Разовые
+    // расходы — СУНК: считаем ОДИН раз (projOneOff === mtdOneOff, БЕЗ run-rate,
+    // FIX 1). Непокрытая постоянка — ongoing, поэтому run-rate'ится.
+    const projRevenue = revenueMTD * runRateFactor;
+    const projCheckProfit = checkProfitMTD * runRateFactor;
+    const projOneOff = mtdOneOff; // FIX 1 — sunk cost, count once (matches mtd)
+    const projStaffPctTurnover = projRevenue * (pctTurnoverTotal / 100);
+    const projStaffPctProfit = Math.max(projCheckProfit, 0) * (pctProfitTotal / 100);
+    let projRecurringExcess = 0;
+    if (hasPlannedConfig) {
+      const plannedCoverageProj = plannedFixedMonthly + staffFixedMonthly + projStaffPctTurnover + projStaffPctProfit;
+      projRecurringExcess = Math.max(recurringActualMonth * runRateFactor - plannedCoverageProj, 0);
+    }
+    const projNetProfit =
+      projCheckProfit -
+      plannedFixedMonthly -
+      staffFixedMonthly -
+      projStaffPctTurnover -
+      projStaffPctProfit -
+      projOneOff -
+      projRecurringExcess;
+
+    const r0 = (n: number) => Math.round(n);
+    const netProfitAccrual = {
+      daysInMonth,
+      daysElapsed: dayOfMonth,
+      mtd: {
+        checkProfit: r0(checkProfitMTD),
+        plannedFixedAmortized: r0(mtdPlannedFixed),
+        staffFixedAmortized: r0(mtdStaffFixed),
+        staffPctTurnover: r0(mtdStaffPctTurnover),
+        staffPctProfit: r0(mtdStaffPctProfit),
+        oneOffExpenses: r0(mtdOneOff),
+        // Непокрытый планом избыток фактической постоянки (FIX 2). 0 при отсутствии
+        // конфига (recurring трактуется как разовое в oneOffExpenses).
+        recurringExcess: r0(mtdRecurringExcess),
+        netProfit: r0(mtdNetProfit),
+      },
+      projection: {
+        revenue: r0(projRevenue),
+        checkProfit: r0(projCheckProfit),
+        plannedFixed: r0(plannedFixedMonthly),
+        staffFixed: r0(staffFixedMonthly),
+        staffPctTurnover: r0(projStaffPctTurnover),
+        staffPctProfit: r0(projStaffPctProfit),
+        // Разовые — сунк, один раз (совпадает с mtd.oneOffExpenses, FIX 1).
+        oneOffExpenses: r0(projOneOff),
+        recurringExcess: r0(projRecurringExcess),
+        netProfit: r0(projNetProfit),
+      },
+      config: {
+        plannedFixedMonthly: r0(plannedFixedMonthly),
+        staffFixedMonthly: r0(staffFixedMonthly),
+        pctTurnoverTotal,
+        pctProfitTotal,
+        // FIX 2d — сколько фактической постоянки (MTD) помечено «постоянной», но НЕ
+        // покрыто планом: сигнал UI «отмечено постоянным, но не заведено в План: X ₽»,
+        // чтобы владелец добавил строку в fixed_costs, а не терял расход молча.
+        recurringUncovered: r0(mtdRecurringExcess),
+      },
+    };
+
     return {
       revenueToday,
       revenueMonth,
@@ -684,14 +867,31 @@ export class ReportsService {
       deferredSum,
       personalRecord,
       monthForecast: Math.round(monthForecast),
+      // v3.0.1 ФИЧА 1 — гладкая чистая прибыль по начислению (факт MTD + прогноз).
+      // Additive: старые клиенты игнорируют поле; новые показывают
+      // netProfitAccrual.mtd.netProfit («с начала месяца») и
+      // netProfitAccrual.projection.netProfit («прогноз на месяц»). Кассовый
+      // netProfitMonth (по факту) остаётся для обратной совместимости.
+      netProfitAccrual,
       period,
     };
   }
 
   /**
-   * "New vs returning" client split for the requested window. New = client's
-   * first check falls inside the window; returning = client had a check
-   * before the window started.
+   * "New vs returning" client split for the requested window.
+   *
+   * v3.0.1 ФИЧА 5 — определение владельца (было: по дате ПЕРВОГО ЧЕКА; стало: по
+   * дате ЗАВЕДЕНИЯ КЛИЕНТА В БАЗУ):
+   *   • НОВЫЙ (new)       = клиент, чья запись СОЗДАНА в периоде
+   *     (clients.created_at ∈ [from,to]). Считаются ВСЕ такие клиенты тенанта,
+   *     независимо от того, был ли у них чек. Метка UI: «новые (добавлены в базу
+   *     за период)».
+   *   • СУЩЕСТВУЮЩИЙ (returning) = клиент, который был в базе ДО периода
+   *     (created_at < from) И проявил активность (имел чек) в периоде. Метка UI:
+   *     «существующие».
+   *   newRevenue      = выручка чеков в периоде у клиентов, заведённых в периоде.
+   *   returningRevenue= выручка чеков в периоде у клиентов, заведённых раньше.
+   * `basis` явно фиксирует базу расчёта, чтобы UI не гадал. Tenant-scoped.
    */
   async clientsNewVsReturning(tenantID: string, params: { from: string; to: string }) {
     const from = this.safeDate(params?.from, '');
@@ -702,32 +902,34 @@ export class ReportsService {
         returningCount: 0,
         newRevenue: 0,
         returningRevenue: 0,
+        basis: 'client_created_at' as const,
         period: { from: params?.from ?? '', to: params?.to ?? '' },
       };
     }
     params = { from, to };
     const { rows } = await this.pool.query(
-      `WITH first_visits AS (
-         SELECT client_id, MIN(date) AS first_date
-           FROM checks
-          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
-            AND deleted_at IS NULL
-          GROUP BY client_id
-       ),
-       window_checks AS (
-         SELECT ch.client_id, ch.total_revenue, fv.first_date
+      `WITH window_checks AS (
+         -- Чеки периода + дата ЗАВЕДЕНИЯ клиента (created_at) для когорты.
+         SELECT ch.client_id, ch.total_revenue, cl.created_at AS client_created_at
            FROM checks ch
-           LEFT JOIN first_visits fv ON fv.client_id = ch.client_id
+           JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = $1
           WHERE ch.tenant_id=$1 AND ch.is_deferred=false
             AND ch.deleted_at IS NULL
             AND ch.client_id IS NOT NULL
             AND ch.date::date BETWEEN $2::date AND $3::date
        )
        SELECT
-         COUNT(DISTINCT CASE WHEN first_date::date BETWEEN $2::date AND $3::date THEN client_id END) AS new_count,
-         COUNT(DISTINCT CASE WHEN first_date::date < $2::date THEN client_id END) AS returning_count,
-         COALESCE(SUM(CASE WHEN first_date::date BETWEEN $2::date AND $3::date THEN total_revenue END), 0) AS new_revenue,
-         COALESCE(SUM(CASE WHEN first_date::date < $2::date THEN total_revenue END), 0) AS returning_revenue
+         -- НОВЫЕ = все записи клиентов, созданные в периоде (даже без чека).
+         (SELECT COUNT(*) FROM clients
+            WHERE tenant_id=$1 AND created_at::date BETWEEN $2::date AND $3::date) AS new_count,
+         -- СУЩЕСТВУЮЩИЕ = активные в периоде, заведённые ДО периода. FIX 3 —
+         -- клиенты с НЕИЗВЕСТНОЙ датой заведения (created_at IS NULL) идут в
+         -- «существующие», НЕ в «новые»: иначе они выпадали из обоих сегментов и
+         -- их выручка периода терялась. new_count/new_revenue не трогаем (NULL в
+         -- BETWEEN и так не попадает).
+         COUNT(DISTINCT CASE WHEN client_created_at IS NULL OR client_created_at::date < $2::date THEN client_id END) AS returning_count,
+         COALESCE(SUM(CASE WHEN client_created_at::date BETWEEN $2::date AND $3::date THEN total_revenue END), 0) AS new_revenue,
+         COALESCE(SUM(CASE WHEN client_created_at IS NULL OR client_created_at::date < $2::date THEN total_revenue END), 0) AS returning_revenue
        FROM window_checks`,
       [tenantID, params.from, params.to],
     );
@@ -737,6 +939,8 @@ export class ReportsService {
       returningCount: parseInt(r?.returning_count) || 0,
       newRevenue: parseFloat(r?.new_revenue) || 0,
       returningRevenue: parseFloat(r?.returning_revenue) || 0,
+      // Явная база расчёта для прозрачности UI: «новый» = добавлен в базу за период.
+      basis: 'client_created_at' as const,
       period: { from: params.from, to: params.to },
     };
   }
@@ -1074,26 +1278,23 @@ export class ReportsService {
 
   /**
    * Acquisition: reuse clientsNewVsReturning for the new/returning split, then
-   * ADD a by-source breakdown of the NEW clients (those whose FIRST check falls
-   * inside the window), grouped by clients.source. null/empty source →
-   * «Без источника». Per-source revenue = Σ of those clients' checks inside the
-   * window, so Σ bySource.revenue ≈ newRevenue.
+   * ADD a by-source breakdown of the NEW clients, grouped by clients.source.
+   *
+   * v3.0.1 ФИЧА 5 — «новый» теперь = запись клиента СОЗДАНА в периоде
+   * (clients.created_at ∈ [from,to]), а НЕ «первый чек в периоде» (согласовано с
+   * владельцем). bySource и firstVisitCohort ниже используют то же определение,
+   * чтобы весь раздел «Отчёты → привлечение» был консистентен. null/empty source
+   * → «Без источника». Per-source revenue = Σ чеков этих клиентов в периоде.
    */
   private async marketingAcquisition(tenantID: string, from: string, to: string) {
     const base = await this.clientsNewVsReturning(tenantID, { from, to });
 
     const { rows } = await this.pool.query(
-      `WITH first_visits AS (
-         SELECT client_id, MIN(date) AS first_date
-           FROM checks
-          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
-            AND deleted_at IS NULL
-          GROUP BY client_id
-       ),
-       new_clients AS (
-         SELECT client_id
-           FROM first_visits
-          WHERE first_date::date BETWEEN $2::date AND $3::date
+      `WITH new_clients AS (
+         -- НОВЫЕ = записи клиентов, заведённые в периоде (определение владельца).
+         SELECT id AS client_id
+           FROM clients
+          WHERE tenant_id = $1 AND created_at::date BETWEEN $2::date AND $3::date
        )
        SELECT
          COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника') AS source,
@@ -1112,25 +1313,19 @@ export class ReportsService {
       [tenantID, from, to],
     );
 
-    // First-visit cohort: NEW clients (first ever check inside the window),
-    // bucketed by the ISO WEEK of that first visit, with the revenue of their
-    // in-window checks. Lets the client draw "how many first-timers arrived each
-    // week and what they spent". date_trunc('week') → Monday-start ISO weeks.
+    // Cohort of NEW clients bucketed by the ISO WEEK they were ADDED TO THE BASE
+    // (clients.created_at — v3.0.1 ФИЧА 5, was «first ever check»), with the
+    // revenue of their in-window checks. Lets the client draw "how many new
+    // clients were added each week and what they spent". date_trunc('week') →
+    // Monday-start ISO weeks.
     const { rows: cohortRows } = await this.pool.query(
-      `WITH first_visits AS (
-         SELECT client_id, MIN(date) AS first_date
-           FROM checks
-          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
-            AND deleted_at IS NULL
-          GROUP BY client_id
-       ),
-       new_clients AS (
-         SELECT client_id, first_date
-           FROM first_visits
-          WHERE first_date::date BETWEEN $2::date AND $3::date
+      `WITH new_clients AS (
+         SELECT id AS client_id, created_at AS created_date
+           FROM clients
+          WHERE tenant_id = $1 AND created_at::date BETWEEN $2::date AND $3::date
        )
        SELECT
-         to_char(date_trunc('week', nc.first_date), 'YYYY-MM-DD') AS period_start,
+         to_char(date_trunc('week', nc.created_date), 'YYYY-MM-DD') AS period_start,
          COUNT(DISTINCT nc.client_id) AS new_clients,
          COALESCE(SUM(ch.total_revenue) FILTER (WHERE ch.payment_method IS DISTINCT FROM 'warranty'), 0) AS revenue
        FROM new_clients nc
@@ -1140,8 +1335,8 @@ export class ReportsService {
         AND ch.is_deferred = false
         AND ch.deleted_at IS NULL
         AND ch.date::date BETWEEN $2::date AND $3::date
-       GROUP BY date_trunc('week', nc.first_date)
-       ORDER BY date_trunc('week', nc.first_date)`,
+       GROUP BY date_trunc('week', nc.created_date)
+       ORDER BY date_trunc('week', nc.created_date)`,
       [tenantID, from, to],
     );
 
@@ -1475,24 +1670,20 @@ export class ReportsService {
                   ('1 ' || $4)::interval
                 ) AS b
        ),
-       first_visits AS (
-         SELECT client_id, MIN(date) AS first_date
-           FROM checks
-          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL AND deleted_at IS NULL
-          GROUP BY client_id
-       ),
        lifetime_visits AS (
          SELECT client_id, COUNT(*) AS visit_count
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL AND deleted_at IS NULL
           GROUP BY client_id
        ),
-       -- New clients per bucket: first-ever visit lands in the bucket.
+       -- New clients per bucket: client ADDED TO BASE (clients.created_at) in the
+       -- bucket — v3.0.1 ФИЧА 5 (was «first-ever visit»), so trends.newClients
+       -- matches the corrected new-vs-returning definition.
        new_by_bucket AS (
-         SELECT date_trunc($4, first_date) AS b, COUNT(*) AS new_clients
-           FROM first_visits
-          WHERE first_date::date BETWEEN $2::date AND $3::date
-          GROUP BY date_trunc($4, first_date)
+         SELECT date_trunc($4, created_at) AS b, COUNT(*) AS new_clients
+           FROM clients
+          WHERE tenant_id=$1 AND created_at::date BETWEEN $2::date AND $3::date
+          GROUP BY date_trunc($4, created_at)
        ),
        -- Revenue per bucket (non-warranty in-window checks).
        rev_by_bucket AS (

@@ -37,9 +37,12 @@ export class ExpensesService {
   }
 
   async createCategory(tenantID: string, dto: any) {
+    // `is_recurring` (132) — v3.0.1 ФИЧА 1: помечает категорию как «оплата плановой
+    // постоянки» (аренда/коммуналка/маркетинг). Такие расходы НЕ режут accrual-
+    // прибыль (она начислена из конфига), а идут только в «Движение денег».
     const { rows } = await this.pool.query(
-      'INSERT INTO expense_categories (name, tenant_id, approval_required) VALUES ($1, $2, $3) RETURNING *',
-      [dto.name, tenantID, !!dto.approvalRequired],
+      'INSERT INTO expense_categories (name, tenant_id, approval_required, is_recurring) VALUES ($1, $2, $3, $4) RETURNING *',
+      [dto.name, tenantID, !!dto.approvalRequired, !!dto.isRecurring],
     );
     return this.mapCategory(rows[0]);
   }
@@ -48,7 +51,11 @@ export class ExpensesService {
    * Toggle (or rename) a category. Currently used to flip `approval_required`
    * from the owner's expense-settings screen (#11). Returns the updated row.
    */
-  async updateCategory(id: string, tenantID: string, dto: { name?: string; approvalRequired?: boolean }) {
+  async updateCategory(
+    id: string,
+    tenantID: string,
+    dto: { name?: string; approvalRequired?: boolean; isRecurring?: boolean },
+  ) {
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -59,6 +66,11 @@ export class ExpensesService {
     if (dto.approvalRequired !== undefined) {
       sets.push(`approval_required=$${idx++}`);
       vals.push(!!dto.approvalRequired);
+    }
+    // v3.0.1 ФИЧА 1 — переключатель «повторяющаяся» (планово-постоянная) категория.
+    if (dto.isRecurring !== undefined) {
+      sets.push(`is_recurring=$${idx++}`);
+      vals.push(!!dto.isRecurring);
     }
     if (sets.length === 0) {
       const { rows } = await this.pool.query('SELECT * FROM expense_categories WHERE id=$1 AND tenant_id=$2', [
@@ -89,6 +101,8 @@ export class ExpensesService {
       tenantId: r.tenant_id,
       // 057_expense_category_approval — may be NULL on legacy rows.
       approvalRequired: !!r.approval_required,
+      // 132 (v3.0.1 ФИЧА 1) — recurring/planned category → accrual-neutral, cash-only.
+      isRecurring: !!r.is_recurring,
       createdAt: r.created_at,
     };
   }

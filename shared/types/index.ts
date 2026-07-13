@@ -2072,6 +2072,16 @@ export interface MasterSalary {
   paidAmount: number;
   /** totalEarnings − paidAmount − penaltiesAmount. */
   remainingAmount: number;
+  /**
+   * v3.0.1 ФИЧА 4 — отработанные смены за период (по настройкам расписания
+   * тенанта: schedule_settings.shift_statuses). Optional — старый бэкенд не шлёт.
+   */
+  workedShifts?: number;
+  /**
+   * «ЗП за день» = totalEarnings ÷ workedShifts (округлено). null при 0 смен
+   * (не делим). Optional — старый бэкенд не шлёт.
+   */
+  perDay?: number | null;
   payments?: SalaryPayment[];
   /** Premium rows awarded inside the period. */
   premiums?: SalaryPremium[];
@@ -2111,6 +2121,17 @@ export interface SalarySummary {
   motivationMonth?: number;
   /** «Мотивация» — promo-product bonus accrued all-time (095). */
   motivationTotal?: number;
+  /**
+   * v3.0.1 ФИЧА 4 — отработанные смены сотрудника с начала месяца по сегодня (по
+   * настройкам расписания). Для master-view на ГЛАВНОЙ. Optional — старый бэкенд
+   * не шлёт.
+   */
+  workedShiftsMonth?: number;
+  /**
+   * «ЗП за день» = month ÷ workedShiftsMonth (округлено). null при 0 смен — тогда
+   * показываем только «ЗП за месяц» (month). Optional — старый бэкенд не шлёт.
+   */
+  perDay?: number | null;
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -2239,6 +2260,14 @@ export interface ExpenseCategory {
   tenantId: string;
   /** 057 — when true, non-privileged users' expenses in this category go to 'pending'. */
   approvalRequired?: boolean;
+  /**
+   * 132 (v3.0.1 ФИЧА 1) — when true this category = «оплата плановой постоянки»
+   * (аренда/коммуналка/маркетинг/зарплата). Its expenses are accrual-neutral: they
+   * do NOT reduce the accrual net profit (already accrued from the planning config)
+   * and show up only in cash-flow. Legacy/one-off categories (false) reduce profit
+   * as real costs, unchanged.
+   */
+  isRecurring?: boolean;
   createdAt: string;
 }
 
@@ -2668,6 +2697,81 @@ export interface EmployeeFullProfile {
 //  Owner dashboard v2 + supporting analytics
 // ───────────────────────────────────────────────────────────────────────
 
+/**
+ * v3.0.1 ФИЧА 1 — «Реальная чистая прибыль (по начислению)».
+ *
+ * Гладкая, прогнозируемая прибыль: постоянные расходы (аренда/коммуналка/маркетинг)
+ * и оклады НЕ прыгают в день оплаты, а размазываются по всем календарным дням
+ * месяца. Приходит в DashboardV2.netProfitAccrual (owner dashboard, reports v2).
+ *
+ * ФОРМУЛА (MTD = с начала месяца по сегодня):
+ *   netProfit = checkProfit                 (выручка − запчасти − %мастеру за работу)
+ *             − plannedFixedAmortized       (Σ постоянка / дней_в_месяце × прошедших)
+ *             − staffFixedAmortized         (Σ оклады / дней_в_месяце × прошедших)
+ *             − staffPctTurnover            (выручка периода × Σ% с оборота / 100)
+ *             − staffPctProfit              (checkProfit × Σ% с прибыли / 100)
+ *             − oneOffExpenses              (разовые approved-расходы; НЕ постоянка/ЗП)
+ * ПРОГНОЗ на месяц: run-rate выручки/прибыли (÷ прошедших × дней_в_месяце) минус
+ * ПОЛНАЯ (не амортизированная) постоянка и %-сотрудники от run-rate.
+ *
+ * РАЗВЯЗКА ДВОЙНОГО СЧЁТА: постоянка вычитается только из конфига (planned/staff),
+ * а её ФАКТИЧЕСКИЕ оплаты (recurring-категории расходов + «Зарплата») в прибыль
+ * повторно НЕ попадают — только в «Движение денег» (кассовый netProfitMonth).
+ */
+export interface NetProfitAccrual {
+  daysInMonth: number;
+  /** Прошедших календарных дней месяца (1..daysInMonth). */
+  daysElapsed: number;
+  /** Факт «с начала месяца по сегодня» (начислено к сегодняшнему дню). */
+  mtd: {
+    checkProfit: number;
+    plannedFixedAmortized: number;
+    staffFixedAmortized: number;
+    staffPctTurnover: number;
+    staffPctProfit: number;
+    /** Разовые (не постоянные, не «Зарплата») расходы месяца — сунк, один раз. */
+    oneOffExpenses: number;
+    /**
+     * Непокрытый планом избыток ФАКТИЧЕСКОЙ постоянки: расходы, помеченные
+     * «постоянными» (is_recurring), но не заведённые в План (fixed_costs). Вычтен
+     * из netProfit, чтобы ничего не терялось. 0 без планового конфига.
+     */
+    recurringExcess: number;
+    /** Итоговая чистая прибыль по начислению на сегодня. */
+    netProfit: number;
+  };
+  /** Прогноз на ВЕСЬ месяц (run-rate + полная плановая постоянка). */
+  projection: {
+    revenue: number;
+    checkProfit: number;
+    plannedFixed: number;
+    staffFixed: number;
+    staffPctTurnover: number;
+    staffPctProfit: number;
+    /** Разовые расходы — сунк-стоимость, считаются один раз (= mtd.oneOffExpenses). */
+    oneOffExpenses: number;
+    /** Run-rate непокрытого планом избытка постоянки. */
+    recurringExcess: number;
+    netProfit: number;
+  };
+  /** Снимок конфига (для прозрачности UI). */
+  config: {
+    plannedFixedMonthly: number;
+    staffFixedMonthly: number;
+    /** Σ % с оборота по всем сотрудникам. */
+    pctTurnoverTotal: number;
+    /** Σ % с прибыли по всем сотрудникам. */
+    pctProfitTotal: number;
+    /**
+     * Сколько фактической постоянки (MTD) помечено «постоянной», но НЕ заведено в
+     * План (fixed_costs). > 0 → UI показывает предупреждение «отмечено постоянным,
+     * но не заведено в План: X ₽». 0 когда всё покрыто планом или планового
+     * конфига нет.
+     */
+    recurringUncovered: number;
+  };
+}
+
 export interface DashboardV2 {
   revenueToday: number;
   revenueMonth: number;
@@ -2710,15 +2814,95 @@ export interface DashboardV2 {
   /** Returns recorded today (count + total refund amount). */
   returnsToday: number;
   returnsAmount: number;
+  /**
+   * v3.0.1 ФИЧА 1 — чистая прибыль ПО НАЧИСЛЕНИЮ (факт MTD + прогноз на месяц).
+   * Additive/optional: старый бэкенд поле не шлёт → клиент показывает прежний
+   * кассовый netProfitMonth. Новые клиенты рендерят netProfitAccrual.mtd.netProfit
+   * («с начала месяца») и .projection.netProfit («прогноз на месяц»).
+   */
+  netProfitAccrual?: NetProfitAccrual;
   period: 'today' | 'week' | 'month' | 'year';
 }
 
 export interface ClientsNewVsReturning {
+  /** Новые = клиенты, чья запись создана в периоде (clients.created_at ∈ [from,to]). */
   newCount: number;
+  /** Существующие = активные в периоде клиенты, заведённые в базу ДО периода. */
   returningCount: number;
+  /** Выручка чеков периода у клиентов, заведённых в периоде. */
   newRevenue: number;
+  /** Выручка чеков периода у клиентов, заведённых раньше. */
   returningRevenue: number;
+  /**
+   * v3.0.1 ФИЧА 5 — явная база расчёта «новый vs существующий». 'client_created_at'
+   * = «новый» это дата ЗАВЕДЕНИЯ клиента в базу (не дата первого чека). Позволяет
+   * UI подписать «новые (добавлены в базу за период)» однозначно. Optional —
+   * старый бэкенд поле не шлёт.
+   */
+  basis?: 'client_created_at';
   period: { from: string; to: string };
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  v3.0.1 ФИЧА 1 — «Планирование / Постоянные расходы» (owner-only config).
+//  Feeds the ACCRUAL net profit (DashboardV2.netProfitAccrual). CRUD via
+//  createPlanningApi → /planning/*. Owner-class + financial_reports gated.
+// ───────────────────────────────────────────────────────────────────────
+
+export type FixedCostCategory = 'rent' | 'utilities' | 'marketing' | 'other';
+
+/** One planned recurring MONTHLY fixed cost (amortised over calendar days). */
+export interface FixedCost {
+  id: string;
+  tenantId: string;
+  /** Display name: «Аренда», «Коммуналка», «Реклама Авито», … */
+  name: string;
+  category: FixedCostCategory;
+  /** Amount PER MONTH (RUB). */
+  monthlyAmount: number;
+  /** Paused rows never accrue into the net profit. */
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Compensation type for a non-piece-rate employee (cleaner / admin / cashier /
+ * manager). Per-check master commission is separate (already in check profit).
+ *   • fixed_monthly — оклад (RUB/month), amortised over calendar days.
+ *   • pct_turnover  — % of period revenue (`amount` = percent 0..100).
+ *   • pct_profit    — % of check profit  (`amount` = percent 0..100).
+ */
+export type EmployeeCompensationType = 'fixed_monthly' | 'pct_turnover' | 'pct_profit';
+
+/** One employee's compensation config (one per employee, v1). */
+export interface EmployeeCompensation {
+  id: string;
+  tenantId: string;
+  userId: string;
+  userName?: string;
+  userRole?: string;
+  type: EmployeeCompensationType;
+  /** RUB/month for fixed_monthly; percent 0..100 for pct_*. */
+  amount: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * v3.0.1 ФИЧА 3 — one deferred (is_deferred) check for the dashboard reminder
+ * card. Newest first. Owner/director see ALL tenant deferred checks; an employee
+ * sees only their OWN (authored). GET /checks/deferred-reminders.
+ */
+export interface DeferredCheckReminder {
+  id: string;
+  number: number;
+  date: string;
+  clientName: string | null;
+  plate: string | null;
+  total: number;
+  masterName: string | null;
 }
 
 export interface OwnerAlert {
@@ -2768,14 +2952,15 @@ export interface MarketingAcquisitionSource {
 }
 
 /**
- * One weekly cohort of first-time clients (their first-ever visit fell inside
- * this ISO week within the window). `periodStart` = Monday of that week (ISO
- * YYYY-MM-DD). Only weeks with ≥1 new client are present.
+ * One weekly cohort of NEW clients — v3.0.1 ФИЧА 5: those ADDED TO THE BASE
+ * (clients.created_at) inside this ISO week within the window (was «first-ever
+ * visit»). `periodStart` = Monday of that week (ISO YYYY-MM-DD). Only weeks with
+ * ≥1 new client are present.
  */
 export interface MarketingFirstVisitCohort {
   periodStart: string;
   newClients: number;
-  /** Revenue those first-timers generated on their in-window checks. */
+  /** Revenue those new clients generated on their in-window checks. */
   revenue: number;
 }
 
@@ -2813,7 +2998,7 @@ export interface MarketingRevenueByMaster {
  */
 export interface MarketingTrendPoint {
   periodStart: string;
-  /** Clients whose first-ever visit fell in this bucket. */
+  /** Clients ADDED TO BASE (clients.created_at) in this bucket — v3.0.1 ФИЧА 5. */
   newClients: number;
   /** Non-warranty check revenue in this bucket. */
   revenue: number;
@@ -2843,10 +3028,11 @@ export interface MarketingTrendPoint {
 export interface MarketingReport {
   period: { from: string; to: string };
   /**
-   * New vs returning acquisition. new = client's FIRST check falls inside the
-   * window; returning = client's first check predates the window. Plus a
-   * by-source breakdown of the NEW clients (clients.source) and a weekly
-   * first-visit cohort.
+   * New vs returning acquisition — v3.0.1 ФИЧА 5 (владельческое определение):
+   * new = client's base record was CREATED in the window (clients.created_at);
+   * returning = client active in the window whose created_at predates it. Plus a
+   * by-source breakdown of the NEW clients (clients.source) and a weekly cohort
+   * bucketed by created_at.
    */
   acquisition: {
     newClients: number;
