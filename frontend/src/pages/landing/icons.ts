@@ -11,6 +11,7 @@ import {
   Percent,
   Receipt,
   ShieldCheck,
+  TrendingUp,
   Truck,
   UserCog,
   Users,
@@ -34,6 +35,7 @@ export const SECTION_ICONS: Record<string, LucideIcon> = {
   Percent,
   CalendarClock,
   Wallet,
+  TrendingUp,
   BarChart3,
   Truck,
   UserCog,
@@ -65,6 +67,9 @@ export const SECTION_TINTS: Record<string, SectionTint> = {
   // amber-700: amber-600 на amber-100 давал 2.86:1 — ниже порога 3:1 для графики (WCAG)
   sklad: { chip: 'bg-amber-100', icon: 'text-amber-700' },
   dengi: { chip: 'bg-emerald-100', icon: 'text-emerald-600' },
+  // pribyl соседствует с dengi (emerald) в bento и в группе «Деньги» —
+  // берём indigo, чтобы флагман прибыли не сливался с движением денег.
+  pribyl: { chip: 'bg-indigo-100', icon: 'text-indigo-600' },
   otchety: { chip: 'bg-sky-100', icon: 'text-sky-600' },
   rassrochka: { chip: 'bg-orange-100', icon: 'text-orange-600' },
   klienty: { chip: 'bg-teal-100', icon: 'text-teal-600' },
@@ -88,13 +93,13 @@ export interface SectionGroup {
 }
 
 /**
- * Единственный источник группировки 16 разделов по направлениям бизнеса.
+ * Единственный источник группировки 17 разделов по направлениям бизнеса.
  * Используется в шторке «Разделы» (SectionsSheet), сетке «Все возможности»
  * (Features, mobile) и сетке категорий на /voprosy — правится в одном месте.
  */
 export const SECTION_GROUPS: SectionGroup[] = [
   { title: 'Работа сервиса', slugs: ['kassa', 'zhurnal', 'sklad', 'postavshchiki'] },
-  { title: 'Деньги', slugs: ['dengi', 'zarplata', 'rassrochka', 'otchety'] },
+  { title: 'Деньги', slugs: ['pribyl', 'dengi', 'zarplata', 'rassrochka', 'otchety'] },
   { title: 'Клиенты', slugs: ['klienty', 'zapisi', 'marketing'] },
   { title: 'Команда', slugs: ['sotrudniki', 'raspisanie', 'golos'] },
   { title: 'Система', slugs: ['nadezhnost', 'prochee'] },

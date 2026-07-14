@@ -170,18 +170,20 @@ const LAYOUT: { slug: string; className: string }[] = [
   { slug: 'golos', className: 'md:col-span-2 lg:col-span-3 lg:row-span-2' },
   { slug: 'zhurnal', className: 'lg:col-span-3' },
   { slug: 'sklad', className: 'lg:col-span-3' },
+  // Денежный ряд: движение денег + чистая прибыль (флагман) — два широких блока
   { slug: 'dengi', className: 'md:col-span-2 lg:col-span-6' },
+  { slug: 'pribyl', className: 'md:col-span-2 lg:col-span-6' },
   { slug: 'otchety', className: 'lg:col-span-3' },
   { slug: 'rassrochka', className: 'lg:col-span-3' },
   { slug: 'klienty', className: 'lg:col-span-3' },
   { slug: 'zapisi', className: 'lg:col-span-3' },
   { slug: 'raspisanie', className: 'lg:col-span-3' },
   { slug: 'zarplata', className: 'lg:col-span-3' },
-  { slug: 'postavshchiki', className: 'lg:col-span-4' },
-  { slug: 'sotrudniki', className: 'lg:col-span-4' },
+  { slug: 'postavshchiki', className: 'lg:col-span-3' },
+  { slug: 'sotrudniki', className: 'lg:col-span-3' },
   { slug: 'marketing', className: 'lg:col-span-4' },
-  { slug: 'nadezhnost', className: 'lg:col-span-6' },
-  { slug: 'prochee', className: 'md:col-span-2 lg:col-span-6' },
+  { slug: 'nadezhnost', className: 'lg:col-span-4' },
+  { slug: 'prochee', className: 'md:col-span-2 lg:col-span-4' },
 ];
 
 /** CSS-мокапы для «больших» ячеек. */
@@ -217,7 +219,7 @@ export default function Features() {
           </p>
         </Reveal>
 
-        {/* < md: вместо 16 стековых карточек — фото-карусель «Главное» (6 rich-карточек)
+        {/* < md: вместо 17 стековых карточек — фото-карусель «Главное» (6 rich-карточек)
             + компактная сетка чипов «Все возможности». Скролл страницы короче в разы,
             фото продают вместо простыней текста. md+ — прежний bento без изменений. */}
         <div className="md:hidden">

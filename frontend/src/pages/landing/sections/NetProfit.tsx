@@ -1,4 +1,5 @@
-import { Check, Minus } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { ArrowRight, Check, Minus } from 'lucide-react';
 import Reveal from './Reveal';
 import CtaButton from './CtaButton';
 import { netProfit } from '../content';
@@ -55,6 +56,16 @@ export default function NetProfit() {
           </ul>
 
           <CtaButton className="mt-9" />
+
+          {/* Мостик к разделу-карточке /f/pribyl: showcase остаётся флагманом,
+              а «Подробнее» ведёт в углублённую статью — без ощущения дубля. */}
+          <Link
+            to="/f/pribyl"
+            className="mt-4 inline-flex min-h-[44px] items-center gap-1.5 text-sm font-semibold text-primary-600 transition-colors hover:text-primary-700"
+          >
+            Подробнее о расчёте прибыли
+            <ArrowRight className="h-4 w-4" />
+          </Link>
         </Reveal>
 
         {/* ── Правая колонка: мокап виджета «Чистая прибыль» ── */}
