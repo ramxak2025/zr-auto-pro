@@ -80,7 +80,7 @@
       "policy": "appVersion"
     },
     "extra": {
-      "apiUrl": "https://autexa-cloud.ru/api",
+      "apiUrl": "https://autexa.pw/api",
       "apiFallbackUrls": ["https://d5dpq4hcfoor5l4q1a97.wnq2w1o5.apigw.yandexcloud.net/api"],
       "sentryDsn": "https://d248fd476c55b8b4854145c66cd9c115@o4511507149291520.ingest.us.sentry.io/4511507152502784",
       "eas": {

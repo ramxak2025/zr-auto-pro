@@ -12,6 +12,7 @@ import {
   Animated,
   AccessibilityInfo,
 } from 'react-native';
+import Constants from 'expo-constants';
 import CachedImage from '../components/CachedImage';
 import { Button } from '../components/Button';
 import RegistrationRequestSheet from './RegistrationRequestSheet';
@@ -205,8 +206,8 @@ export default function LoginScreen() {
             )}
           </View>
 
-          {/* Footer */}
-          <Text style={styles.footer}>Autexa v2.1 © 2026</Text>
+          {/* Footer — версия из app.json (не хардкодить, чтобы не устаревала). */}
+          <Text style={styles.footer}>Autexa v{Constants.expoConfig?.version ?? ''} © 2026</Text>
         </ScrollView>
       </KeyboardAvoidingView>
 
