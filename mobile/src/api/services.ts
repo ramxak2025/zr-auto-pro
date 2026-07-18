@@ -55,13 +55,11 @@ import {
   createVoiceApi,
 } from '../../../shared/api/createServices';
 
-// Login uses happy-eyeballs across the failover ring (FIX B): fired at ALL ring
-// hosts concurrently, first success wins — a slow/blocked primary no longer
-// stalls sign-in ~15s before the reserve is tried. Login is the ONLY mutation
-// safe to duplicate (password check + token issue, no side effects). Every OTHER
-// auth method (register/me/logout/updateAvatar/deleteAccount) is passed through
-// unchanged. On single-host builds `loginAcrossHosts` degrades to one ordinary
-// request, so this wrapper is byte-for-byte the previous behaviour there.
+// Login uses the health-selected host first and traverses the ring only after a
+// route/proxy-class failure. The three aliases terminate at one backend, so a
+// parallel POST fan-out would multiply password checks and global rate-limit
+// charges. Credential/validation/429 responses stop immediately. Every other
+// auth method (register/me/logout/updateAvatar/deleteAccount) is unchanged.
 const authApiBase = createAuthApi(api);
 export const authApi: typeof authApiBase = {
   ...authApiBase,

@@ -7,7 +7,8 @@
  * этом случае не показывался вовсе, и отказы выглядели как «приложение
  * сломалось». Новый различает две ситуации дуальной пробой:
  *
- *   1. GET {активная база}/health (короткий таймаут) — сервер доступен?
+ *   1. Общий host-selector гоняет /health по ВСЕМ хостам
+ *      failover-кольца и принимает первый здоровый — API доступен?
  *   2. Нейтральная достижимость (ya.ru / captive.apple.com / gstatic
  *      generate_204, 6 с) — интернет вообще есть?
  *
@@ -39,18 +40,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { onlineManager } from '@tanstack/react-query';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
-import { getActiveApiBaseUrl, onNetworkClassFailure, onRequestSucceeded } from '../api/axios';
+import { onNetworkClassFailure, onRequestSucceeded, reselectApiHost } from '../api/axios';
 import { isHtmlApiPayload } from '../api/apiHosts';
 import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
 
 type BannerStatus = 'hidden' | 'no-internet' | 'server-unreachable';
 
-/**
- * Health-проба API — «дохлый» сервер может не слать RST, поэтому таймаут.
- * 8 с (было 4): через VPN handshake+RTT легко съедают 4–6 с, и честно живой
- * сервер записывался в недоступные — баннер врал «сервер недоступен».
- */
-const API_PROBE_TIMEOUT_MS = 8_000;
 /** Нейтральная проба достижимости интернета. 6 с — тот же VPN-запас. */
 const NEUTRAL_PROBE_TIMEOUT_MS = 6_000;
 /** Мин. пауза между событийными пробами — волна ретраев не должна спамить. */
@@ -97,29 +92,57 @@ const NEUTRAL_PROBES: ReadonlyArray<{ url: string; validate: ProbeValidate }> = 
 ];
 
 /** GET с таймаутом; никогда не бросает — только true/false. */
-async function probeUrl(url: string, timeoutMs: number, validate: ProbeValidate = (res) => res.ok): Promise<boolean> {
+function probeUrl(
+  url: string,
+  timeoutMs: number,
+  validate: ProbeValidate = (res) => res.ok,
+  parentSignal?: AbortSignal,
+): Promise<boolean> {
   const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), timeoutMs);
-  try {
-    const res = await fetch(url, { method: 'GET', signal: abort.signal });
-    return await validate(res);
-  } catch {
-    return false;
-  } finally {
-    clearTimeout(timer);
-  }
+  return new Promise<boolean>((resolve) => {
+    let settled = false;
+    const finish = (result: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      parentSignal?.removeEventListener('abort', forwardAbort);
+      resolve(result);
+    };
+    function forwardAbort() {
+      abort.abort();
+      finish(false);
+    }
+
+    // Resolve the wrapper itself on the deadline. Some native fetch adapters
+    // only treat AbortController as a hint and may otherwise hang forever.
+    const timer = setTimeout(forwardAbort, timeoutMs);
+    if (parentSignal?.aborted) {
+      forwardAbort();
+      return;
+    }
+    parentSignal?.addEventListener('abort', forwardAbort, { once: true });
+    void (async () => {
+      try {
+        const res = await fetch(url, { method: 'GET', signal: abort.signal });
+        finish(await validate(res));
+      } catch {
+        finish(false);
+      }
+    })();
+  });
 }
 
 /** true — первая же проба прошла свой критерий; false — все нет. Не бросает. */
 function anyReachable(
   probes: ReadonlyArray<{ url: string; validate: ProbeValidate }>,
   timeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<boolean> {
   return new Promise((resolve) => {
     let remaining = probes.length;
     let settled = false;
     for (const probe of probes) {
-      void probeUrl(probe.url, timeoutMs, probe.validate).then((ok) => {
+      void probeUrl(probe.url, timeoutMs, probe.validate, signal).then((ok) => {
         if (settled) return;
         if (ok) {
           settled = true;
@@ -149,38 +172,71 @@ export default function OfflineBanner() {
   const probingRef = useRef(false);
   const lastProbeAt = useRef(0);
   const probeSeq = useRef(0);
+  const probeAbortRef = useRef<AbortController | null>(null);
   const mountedRef = useRef(true);
+
+  /** Keep the ref in sync immediately, even before React commits a render. */
+  const setBannerStatus = useCallback((next: BannerStatus) => {
+    statusRef.current = next;
+    if (mountedRef.current) setStatus(next);
+  }, []);
+
+  /**
+   * Invalidate the current result and abort neutral fetches. The host selector
+   * has its own generation/queued-pass protection; a subsequent run can call
+   * it immediately and will request a fresh pass for the new route.
+   */
+  const cancelCurrentProbe = useCallback(() => {
+    if (!probingRef.current && probeAbortRef.current === null) return;
+    probeSeq.current += 1;
+    probeAbortRef.current?.abort();
+    probeAbortRef.current = null;
+    probingRef.current = false;
+    if (mountedRef.current) setChecking(false);
+  }, []);
 
   /**
    * Дуальная проба. `manual` обходит дебаунс (кнопка «Проверить» и
    * 20-секундная автоперепроверка должны срабатывать всегда).
    */
-  const runProbe = useCallback(async (manual: boolean) => {
+  const runProbe = useCallback(async (manual: boolean, restartForNewRoute = false) => {
     const now = Date.now();
-    if (probingRef.current) return;
+    if (probingRef.current && !restartForNewRoute) return;
     if (!manual && now - lastProbeAt.current < PROBE_DEBOUNCE_MS) return;
+    // Offline→online (or another explicit route transition) must not be lost
+    // behind a stale probe. Invalidate/cancel it and launch the new run now;
+    // otherwise reconnect could remain untested until the 20s interval.
+    if (probingRef.current) cancelCurrentProbe();
     probingRef.current = true;
     lastProbeAt.current = now;
     const seq = ++probeSeq.current;
+    const abort = new AbortController();
+    probeAbortRef.current = abort;
     if (manual) setChecking(true);
     try {
-      // 1) Сервер доступен? Пробуем АКТИВНУЮ базу (с учётом failover-резерва).
-      // notHtmlOk — HTML-200 (captive-portal / чужой апстрим) не «оздоравливает».
-      const apiOk = await probeUrl(`${getActiveApiBaseUrl()}/health`, API_PROBE_TIMEOUT_MS, notHtmlOk);
-      if (!mountedRef.current || seq !== probeSeq.current) return;
-      if (apiOk) {
-        setStatus('hidden');
+      // 1) API доступен? Перевыбираем по ВСЕМУ кольцу, а не
+      // проверяем только старую active/static base. Селектор сам владеет
+      // таймаутом, точным `{status:"ok"}`, debounce/dedupe и принимает
+      // первый здоровый хост для всех следующих axios-запросов.
+      const selectedHost = await reselectApiHost(restartForNewRoute).catch(() => null);
+      if (!mountedRef.current || abort.signal.aborted || seq !== probeSeq.current) return;
+      if (selectedHost) {
+        setBannerStatus('hidden');
         return;
       }
       // 2) Сервер нет — а интернет вообще есть?
-      const internetOk = await anyReachable(NEUTRAL_PROBES, NEUTRAL_PROBE_TIMEOUT_MS);
-      if (!mountedRef.current || seq !== probeSeq.current) return;
-      setStatus(internetOk ? 'server-unreachable' : 'no-internet');
+      const internetOk = await anyReachable(NEUTRAL_PROBES, NEUTRAL_PROBE_TIMEOUT_MS, abort.signal);
+      if (!mountedRef.current || abort.signal.aborted || seq !== probeSeq.current) return;
+      setBannerStatus(internetOk ? 'server-unreachable' : 'no-internet');
     } finally {
-      probingRef.current = false;
-      if (mountedRef.current) setChecking(false);
+      // An invalidated older run must never clear the state of its replacement.
+      if (seq === probeSeq.current) {
+        probingRef.current = false;
+        if (probeAbortRef.current === abort) probeAbortRef.current = null;
+        if (mountedRef.current) setChecking(false);
+      }
     }
-  }, []);
+  }, [cancelCurrentProbe, setBannerStatus]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -191,10 +247,12 @@ export default function OfflineBanner() {
     // сервер может быть всё ещё отфильтрован).
     const unsubOnline = onlineManager.subscribe((isOnline) => {
       if (!isOnline) {
-        probeSeq.current += 1; // гонка: проба в полёте не должна перезаписать
-        setStatus('no-internet');
+        cancelCurrentProbe(); // stale route/result must not survive reconnect
+        setBannerStatus('no-internet');
       } else if (statusRef.current !== 'hidden') {
-        void runProbe(true);
+        // Force a fresh run even if the old route's selector/fetch is still
+        // unwinding; the selector queues a new generation-safe pass.
+        void runProbe(true, true);
       }
     });
 
@@ -207,19 +265,18 @@ export default function OfflineBanner() {
     // Любой успешный ответ axios — сервер доказуемо доступен: прячем баннер
     // мгновенно и обесцениваем пробу в полёте.
     const unsubSuccess = onRequestSucceeded(() => {
-      if (statusRef.current !== 'hidden') {
-        probeSeq.current += 1;
-        setStatus('hidden');
-      }
+      cancelCurrentProbe();
+      if (statusRef.current !== 'hidden') setBannerStatus('hidden');
     });
 
     return () => {
       mountedRef.current = false;
+      cancelCurrentProbe();
       unsubOnline();
       unsubFailure();
       unsubSuccess();
     };
-  }, [runProbe]);
+  }, [cancelCurrentProbe, runProbe, setBannerStatus]);
 
   // Автоперепроверка каждые 20 с, пока баннер виден. Живёт только вместе с
   // баннером — скрытый баннер не тратит ни таймера, ни сети.

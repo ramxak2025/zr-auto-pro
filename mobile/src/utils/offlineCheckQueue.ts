@@ -298,7 +298,21 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
   let loaded = false;
   let loadPromise: Promise<void> | null = null;
   let flushPromise: Promise<FlushResult> | null = null;
+  let flushGeneration = -1;
   let lastNetworkKickAt = 0;
+  // A clear is an authenticated-session boundary. Async work captured before
+  // it may finish at native level, but must never publish or send in the new
+  // session.
+  let sessionGeneration = 0;
+
+  // Preserve disk ordering: a slow pre-clear write must always be followed by
+  // the empty clear snapshot, never complete after it and resurrect on boot.
+  let storageWriteTail: Promise<void> = Promise.resolve();
+  // A failed session-boundary clear leaves the old durable queue on disk.
+  // Until a later clear succeeds, never persist or send new-session entries:
+  // durable auth intentionally stays on the old session too, so reboot state
+  // remains consistent instead of pairing token A with queue B.
+  let storageBoundaryReady = true;
 
   let send: SendQueuedCheck | null = null;
   let onSent: ((entry: QueuedCheck, result: unknown) => void) | undefined;
@@ -316,29 +330,39 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     });
   }
 
-  async function persist(): Promise<void> {
-    await deps.storage.setItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY, serializeQueue(entries));
+  function persistSnapshot(snapshot: readonly QueuedCheck[]): Promise<void> {
+    const serialized = serializeQueue(snapshot);
+    const write = storageWriteTail
+      .catch(() => {})
+      .then(() => deps.storage.setItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY, serialized));
+    storageWriteTail = write.catch(() => {});
+    return write;
   }
 
   /** Заменить снапшот (иммутабельно — для useSyncExternalStore), сохранить, оповестить. */
-  async function commit(next: readonly QueuedCheck[]): Promise<void> {
+  async function commit(next: readonly QueuedCheck[], ownerGeneration = sessionGeneration): Promise<boolean> {
+    if (ownerGeneration !== sessionGeneration) return false;
     entries = next;
     notify();
     try {
-      await persist();
+      await persistSnapshot(next);
     } catch {
       // Диск отказал ПОСЛЕ обновления памяти: очередь этой сессии живёт, при
       // рестарте вернётся последняя удачная запись. Благодаря идемпотентному
       // clientRequestId возможный повтор отправки безопасен (дубля не будет).
     }
+    return ownerGeneration === sessionGeneration;
   }
 
   function ensureLoaded(): Promise<void> {
     if (loaded) return Promise.resolve();
     if (!loadPromise) {
-      loadPromise = deps.storage
+      const ownerGeneration = sessionGeneration;
+      const pendingLoad = deps.storage
         .getItem(OFFLINE_CHECK_QUEUE_STORAGE_KEY)
         .then((raw) => {
+          // A getItem started for a previous tenant may resolve after clear.
+          if (ownerGeneration !== sessionGeneration) return;
           // enqueue мог отработать, пока читался диск, — не затираем свежие
           // записи гидратацией (дозаписываем восстановленные В НАЧАЛО: они старше).
           const restored = parseStoredQueue(raw);
@@ -351,15 +375,23 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
           loaded = true;
         })
         .catch(() => {
+          if (ownerGeneration !== sessionGeneration) return;
           // Не смогли прочитать диск — работаем с пустой очередью в памяти.
           loaded = true;
+        })
+        .finally(() => {
+          if (loadPromise === pendingLoad) loadPromise = null;
         });
+      loadPromise = pendingLoad;
     }
     return loadPromise;
   }
 
   async function enqueue(payload: QueuedCheckPayload, meta?: QueuedCheckMeta): Promise<QueuedCheck> {
+    const ownerGeneration = sessionGeneration;
     await ensureLoaded();
+    if (ownerGeneration !== sessionGeneration) throw new Error('Сессия сменилась до сохранения чека');
+    if (!storageBoundaryReady) throw new Error('Хранилище офлайн-очереди не готово после смены сессии');
     const existing = entries.find((e) => e.clientRequestId === payload.clientRequestId);
     if (existing) return existing;
     const entry: QueuedCheck = {
@@ -378,37 +410,49 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     entries = next;
     notify();
     try {
-      await persist();
+      await persistSnapshot(next);
     } catch (err) {
-      entries = prev;
-      notify();
+      if (ownerGeneration === sessionGeneration) {
+        entries = prev;
+        notify();
+      }
       throw err;
     }
+    if (ownerGeneration !== sessionGeneration) throw new Error('Сессия сменилась до сохранения чека');
     return entry;
   }
 
   async function remove(clientRequestId: string): Promise<void> {
+    const ownerGeneration = sessionGeneration;
     await ensureLoaded();
+    if (ownerGeneration !== sessionGeneration || !storageBoundaryReady) return;
     if (!entries.some((e) => e.clientRequestId === clientRequestId)) return;
-    await commit(entries.filter((e) => e.clientRequestId !== clientRequestId));
+    await commit(entries.filter((e) => e.clientRequestId !== clientRequestId), ownerGeneration);
   }
 
   async function retry(clientRequestId: string): Promise<void> {
+    const ownerGeneration = sessionGeneration;
     await ensureLoaded();
+    if (ownerGeneration !== sessionGeneration || !storageBoundaryReady) return;
     const target = entries.find((e) => e.clientRequestId === clientRequestId);
     if (!target || target.status !== 'failed') return;
-    await commit(
+    const committed = await commit(
       entries.map((e) =>
         e.clientRequestId === clientRequestId ? { ...e, status: 'pending' as const, failedMessage: undefined } : e,
       ),
+      ownerGeneration,
     );
+    if (!committed || ownerGeneration !== sessionGeneration) return;
     await flush();
   }
 
-  async function doFlush(): Promise<FlushResult> {
+  async function doFlush(ownerGeneration: number): Promise<FlushResult> {
     await ensureLoaded();
     let sent = 0;
     let rejected = 0;
+    if (ownerGeneration !== sessionGeneration || !storageBoundaryReady) {
+      return { sent, rejected, remaining: entries.length };
+    }
     if (!send) {
       // Wiring ещё не подключён (attachOfflineCheckQueue не вызван) —
       // отправлять нечем; данные никуда не деваются.
@@ -418,17 +462,27 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     // Последовательно, по одному, в порядке добавления. 'failed' пропускаются
     // (ждут ручного «Повторить») и не блокируют последующие pending-чеки.
     for (;;) {
+      if (ownerGeneration !== sessionGeneration) break;
       const entry = entries.find((e) => e.status === 'pending');
       if (!entry) break;
 
       // attempts++ фиксируем ДО запроса, чтобы счётчик пережил смерть
       // процесса посреди отправки.
       const attempted: QueuedCheck = { ...entry, attempts: entry.attempts + 1 };
-      await commit(entries.map((e) => (e.clientRequestId === entry.clientRequestId ? attempted : e)));
+      const committed = await commit(
+        entries.map((e) => (e.clientRequestId === entry.clientRequestId ? attempted : e)),
+        ownerGeneration,
+      );
+      if (!committed || ownerGeneration !== sessionGeneration) break;
 
       try {
         const result = await send(attempted.payload);
-        await commit(entries.filter((e) => e.clientRequestId !== attempted.clientRequestId));
+        if (ownerGeneration !== sessionGeneration) break;
+        const removed = await commit(
+          entries.filter((e) => e.clientRequestId !== attempted.clientRequestId),
+          ownerGeneration,
+        );
+        if (!removed || ownerGeneration !== sessionGeneration) break;
         sent += 1;
         try {
           onSent?.(attempted, result);
@@ -436,16 +490,19 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
           // Колбэк (инвалидация/уведомление) не должен останавливать очередь.
         }
       } catch (error) {
+        if (ownerGeneration !== sessionGeneration) break;
         if (isPermanentServerRejection(error)) {
           const message = extractServerMessage(error);
           rejected += 1;
-          await commit(
+          const markedFailed = await commit(
             entries.map((e) =>
               e.clientRequestId === attempted.clientRequestId
                 ? { ...e, status: 'failed' as const, failedMessage: message }
                 : e,
             ),
+            ownerGeneration,
           );
+          if (!markedFailed || ownerGeneration !== sessionGeneration) break;
           try {
             onRejected?.(attempted, message);
           } catch {
@@ -464,11 +521,17 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
   }
 
   function flush(): Promise<FlushResult> {
-    if (flushPromise) return flushPromise;
-    flushPromise = doFlush().finally(() => {
-      flushPromise = null;
+    const ownerGeneration = sessionGeneration;
+    if (flushPromise && flushGeneration === ownerGeneration) return flushPromise;
+    const pendingFlush = doFlush(ownerGeneration).finally(() => {
+      if (flushPromise === pendingFlush) {
+        flushPromise = null;
+        flushGeneration = -1;
+      }
     });
-    return flushPromise;
+    flushPromise = pendingFlush;
+    flushGeneration = ownerGeneration;
+    return pendingFlush;
   }
 
   function kickFromNetworkSuccess(): void {
@@ -495,9 +558,18 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     // отложенный чек мастера A дослался бы под токеном мастера B (чужой
     // тенант!). Вызывается из logout; зеркалит решение web (purgeOfflineQueues).
     clearAll: async () => {
+      sessionGeneration += 1;
+      const ownerGeneration = sessionGeneration;
+      storageBoundaryReady = false;
       entries = [];
-      await persist();
+      loaded = true;
+      loadPromise = null;
+      flushPromise = null;
+      flushGeneration = -1;
+      lastNetworkKickAt = 0;
       notify();
+      await persistSnapshot([]);
+      if (ownerGeneration === sessionGeneration) storageBoundaryReady = true;
     },
     enqueue,
     remove,

@@ -5,7 +5,14 @@
  *   2) уже раскатанные битые конфиги самолечатся (главный кейс);
  *   3) HTML-ответ на /api-запрос детектится как чужой апстрим.
  */
-import { apiPathOf, buildApiHosts, isHtmlApiPayload, normalizeReserveApiBase } from '../apiHosts';
+import {
+  apiPathOf,
+  buildApiHosts,
+  isHtmlApiPayload,
+  nextUntriedApiHost,
+  normalizeReserveApiBase,
+  orderApiHosts,
+} from '../apiHosts';
 
 const PRIMARY = 'https://autexa-cloud.ru/api';
 
@@ -51,6 +58,21 @@ describe('buildApiHosts', () => {
     expect(buildApiHosts(PRIMARY, [])).toEqual([PRIMARY]);
     expect(buildApiHosts(PRIMARY, undefined)).toEqual([PRIMARY]);
     expect(buildApiHosts(PRIMARY, 'oops')).toEqual([PRIMARY]);
+  });
+});
+
+describe('обход кольца', () => {
+  const hosts = ['h1', 'h2', 'h3'];
+
+  it('начинает порядок с предпочитаемого хоста без потери остальных', () => {
+    expect(orderApiHosts(hosts, 'h2')).toEqual(['h2', 'h3', 'h1']);
+    expect(orderApiHosts(hosts, 'unknown')).toEqual(hosts);
+  });
+
+  it('последовательно находит второй и третий ещё не испробованные хосты', () => {
+    expect(nextUntriedApiHost(hosts, 'h1', ['h1'])).toBe('h2');
+    expect(nextUntriedApiHost(hosts, 'h2', ['h1', 'h2'])).toBe('h3');
+    expect(nextUntriedApiHost(hosts, 'h3', ['h1', 'h2', 'h3'])).toBeNull();
   });
 });
 

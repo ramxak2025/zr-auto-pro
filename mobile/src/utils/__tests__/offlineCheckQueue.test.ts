@@ -42,6 +42,14 @@ function createMemoryStorage(initial?: Record<string, string>) {
   return { storage, map };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
 function payloadOf(id: string, extra?: Record<string, unknown>): QueuedCheckPayload {
   return { clientRequestId: id, masterId: 'm1', services: [], products: [], ...extra };
 }
@@ -411,6 +419,121 @@ describe('ядро очереди', () => {
     core.kickFromNetworkSuccess();
     await Promise.resolve();
     expect(calls).toBe(0);
+  });
+
+  it('clearAll инвалидирует зависшую гидратацию и не воскрешает старый tenant', async () => {
+    const oldEntry: QueuedCheck = {
+      clientRequestId: ID_A,
+      payload: payloadOf(ID_A),
+      createdAt: 1,
+      attempts: 0,
+      status: 'pending',
+    };
+    const staleRead = deferred<string | null>();
+    const map = new Map<string, string>([
+      [OFFLINE_CHECK_QUEUE_STORAGE_KEY, serializeQueue([oldEntry])],
+    ]);
+    const storage: QueueStorage = {
+      getItem: async () => staleRead.promise,
+      setItem: async (key, value) => {
+        map.set(key, value);
+      },
+    };
+    const core = createOfflineCheckQueueCore({ storage });
+
+    const loading = core.ensureLoaded();
+    await core.clearAll();
+    staleRead.resolve(serializeQueue([oldEntry]));
+    await loading;
+
+    expect(core.getSnapshot()).toEqual([]);
+    expect(parseStoredQueue(map.get(OFFLINE_CHECK_QUEUE_STORAGE_KEY) ?? null)).toEqual([]);
+  });
+
+  it('clearAll во время pre-send persist не отправляет payload A под новой сессией', async () => {
+    const { storage, map } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage });
+    await core.enqueue(payloadOf(ID_A));
+
+    const writeStarted = deferred<void>();
+    const releaseWrite = deferred<void>();
+    const originalSetItem = storage.setItem;
+    let blockNextWrite = true;
+    storage.setItem = async (key, value) => {
+      if (blockNextWrite) {
+        blockNextWrite = false;
+        writeStarted.resolve();
+        await releaseWrite.promise;
+      }
+      await originalSetItem(key, value);
+    };
+    const sender = jest.fn(async () => ({ number: 1 }));
+    core.setSender(sender);
+
+    const flushing = core.flush();
+    await writeStarted.promise;
+    const clearing = core.clearAll();
+    expect(core.getSnapshot()).toEqual([]);
+    releaseWrite.resolve();
+    await Promise.all([flushing, clearing]);
+
+    expect(sender).not.toHaveBeenCalled();
+    expect(core.getSnapshot()).toEqual([]);
+    expect(parseStoredQueue(map.get(OFFLINE_CHECK_QUEUE_STORAGE_KEY) ?? null)).toEqual([]);
+  });
+
+  it('clearAll игнорирует результат уже отправленного запроса и не вызывает callback', async () => {
+    const { storage, map } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage });
+    await core.enqueue(payloadOf(ID_A));
+
+    const sendStarted = deferred<void>();
+    const sendResult = deferred<unknown>();
+    const onSent = jest.fn();
+    core.setSender(
+      async () => {
+        sendStarted.resolve();
+        return sendResult.promise;
+      },
+      { onSent },
+    );
+
+    const flushing = core.flush();
+    await sendStarted.promise;
+    await core.clearAll();
+    sendResult.resolve({ number: 1 });
+    await flushing;
+
+    expect(onSent).not.toHaveBeenCalled();
+    expect(core.getSnapshot()).toEqual([]);
+    expect(parseStoredQueue(map.get(OFFLINE_CHECK_QUEUE_STORAGE_KEY) ?? null)).toEqual([]);
+  });
+
+  it('после failed tenant clear не пишет и не отправляет queue B до успешной границы', async () => {
+    const { storage, map } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage });
+    await core.enqueue(payloadOf(ID_A));
+    const originalSetItem = storage.setItem;
+    let failClear = true;
+    storage.setItem = async (key, value) => {
+      if (failClear) throw new Error('native clear failed');
+      await originalSetItem(key, value);
+    };
+    const sender = jest.fn(async () => ({ number: 1 }));
+    core.setSender(sender);
+
+    await expect(core.clearAll()).rejects.toThrow('native clear failed');
+    await expect(core.enqueue(payloadOf(ID_B))).rejects.toThrow(/не готово после смены сессии/);
+    await core.flush();
+    expect(sender).not.toHaveBeenCalled();
+    expect(parseStoredQueue(map.get(OFFLINE_CHECK_QUEUE_STORAGE_KEY) ?? null).map((e) => e.clientRequestId)).toEqual([
+      ID_A,
+    ]);
+
+    failClear = false;
+    await core.clearAll();
+    await core.enqueue(payloadOf(ID_B));
+    expect(core.getSnapshot().map((e) => e.clientRequestId)).toEqual([ID_B]);
   });
 
   it('конкурентные flush сливаются в один раунд', async () => {

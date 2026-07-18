@@ -23,14 +23,19 @@ import UpdateGate from './src/components/UpdateGate';
 import { hydrateCache, hydratePriorityCache, attachPersistence } from './src/utils/persistentCache';
 import { attachForegroundRevalidation } from './src/utils/foregroundRevalidation';
 import { attachOtaUpdates } from './src/utils/otaUpdates';
-import { attachBackendRecovery } from './src/utils/backendRecovery';
+import { attachBackendRecovery, createApiRouteRecoveryController } from './src/utils/backendRecovery';
 import {
   attachOfflineCheckQueue,
   kickOfflineCheckQueueOnNetworkSuccess,
   type QueuedCheck,
 } from './src/utils/offlineCheckQueue';
 import { shouldRetryTransient, transientRetryDelay } from './src/utils/queryRetry';
-import { API_URL, onRequestSucceeded, raceInitialActiveHost } from './src/api/axios';
+import {
+  ensureApiHostReady,
+  onNetworkClassFailure,
+  onRequestSucceeded,
+  reselectApiHost,
+} from './src/api/axios';
 import { checksApi } from './src/api/services';
 
 // NetInfo's DEFAULT reachability probe hits clients3.google.com in the
@@ -70,14 +75,13 @@ onlineManager.setEventListener((setOnline) =>
   }),
 );
 
-// Happy-eyeballs launch host race (FIX B). Fire GET /health at ALL failover-ring
-// hosts concurrently and adopt the FIRST that answers as the active base, so the
-// app connects as fast as the FASTEST reachable host instead of stalling ~15s on
-// primary before failover. INERT on single-host builds (guarded inside), fires
-// nothing on Android beyond the same /health GET, and never forces offline. Runs
-// once, as early as possible — before the first real request wave (AuthContext
-// /me revalidation) mounts.
-raceInitialActiveHost();
+// Start routing initialization as soon as the JS bundle evaluates. Unlike the
+// old fire-and-forget launch race, request/session restore can await this shared
+// promise, and App delays the eager offline-check sender until it settles:
+// persisted-host restore and the whole-ring happy-eyeballs selection therefore
+// finish before authenticated request waves can choose a stale/dead base. The
+// login UI itself is not gated, so a logged-out/offline cold start stays fast.
+const apiRoutingInitialization = ensureApiHostReady().catch(() => {});
 
 // Configure how notifications are handled when the app is in the foreground.
 // Must be set before any notification arrives — top-level call outside component.
@@ -289,6 +293,7 @@ function handleNotificationResponse(response: Notifications.NotificationResponse
 }
 
 export default function App() {
+  const [apiRoutingReady, setApiRoutingReady] = useState(false);
   const [cacheReady, setCacheReady] = useState(false);
   const [priorityHydrated, setPriorityHydrated] = useState(false);
   const [authResolved, setAuthResolved] = useState(false);
@@ -298,6 +303,19 @@ export default function App() {
   const recoveryCleanup = useRef<(() => void) | null>(null);
   const offlineQueueCleanup = useRef<(() => void) | null>(null);
   const netSuccessCleanup = useRef<(() => void) | null>(null);
+
+  // Track completion for recovery listeners and UpdateGate. AuthProvider stays
+  // mounted so a logged-out/offline user sees the login form immediately; the
+  // shared axios request/login paths await ensureApiHostReady before traffic.
+  useEffect(() => {
+    let mounted = true;
+    void apiRoutingInitialization.then(() => {
+      if (mounted) setApiRoutingReady(true);
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -312,27 +330,32 @@ export default function App() {
     // freshest cash position immediately, instead of yesterday's snapshot
     // plus a manual pull-to-refresh.
     foregroundCleanup.current = attachForegroundRevalidation(queryClient);
-    // Backend-recovery self-heal: a 502 keeps the socket up, so NetInfo /
-    // onlineManager / refetchOnReconnect never fire. This polls /health while
-    // any mounted query is errored and refetches them the moment the backend
-    // returns — no manual «Повторить» needed. See utils/backendRecovery.ts.
-    recoveryCleanup.current = attachBackendRecovery(queryClient, API_URL);
-    // Офлайн-очередь чеков (Round 9): гидратация + досылка хвоста прошлой
-    // сессии + триггеры (foreground / 60s-таймер пока непуста). Отправка —
-    // живой checksApi.create: payload несёт clientRequestId, поэтому досылка
-    // «полудоставленного» чека вернёт уже созданный, а не задвоит его.
-    offlineQueueCleanup.current = attachOfflineCheckQueue({
-      send: (payload) => checksApi.create(payload as never).then((res) => res.data),
-      onSent: (entry, result) => {
-        invalidateAfterQueuedCheckSent();
-        notifyQueuedCheckSent(entry, result);
-      },
-      onRejected: alertQueuedCheckRejected,
-      appState: AppState,
+    // Delay eager background traffic until the routing barrier. Auth/login
+    // remain responsive because axios itself awaits the same barrier only when
+    // a real request is sent; attachOfflineCheckQueue, however, performs an
+    // eager flush after hydration and should not even start before selection.
+    void apiRoutingInitialization.then(() => {
+      if (cancelled) return;
+      // Backend-recovery self-heal: query failures re-probe the WHOLE ring and
+      // refetch the errored active queries after adopting a healthy host.
+      recoveryCleanup.current = attachBackendRecovery(queryClient);
+      // Офлайн-очередь чеков (Round 9): гидратация + досылка хвоста прошлой
+      // сессии + триггеры (foreground / 60s-таймер пока непуста). Отправка —
+      // живой checksApi.create: payload несёт clientRequestId, поэтому досылка
+      // «полудоставленного» чека вернёт уже созданный, а не задвоит его.
+      offlineQueueCleanup.current = attachOfflineCheckQueue({
+        send: (payload) => checksApi.create(payload as never).then((res) => res.data),
+        onSent: (entry, result) => {
+          invalidateAfterQueuedCheckSent();
+          notifyQueuedCheckSent(entry, result);
+        },
+        onRejected: alertQueuedCheckRejected,
+        appState: AppState,
+      });
+      // Третий flush-триггер: ЛЮБОЙ успешный ответ axios — сеть доказуемо
+      // вернулась (дебаунс внутри очереди, пустая очередь — мгновенный no-op).
+      netSuccessCleanup.current = onRequestSucceeded(kickOfflineCheckQueueOnNetworkSuccess);
     });
-    // Третий flush-триггер: ЛЮБОЙ успешный ответ axios — сеть доказуемо
-    // вернулась (дебаунс внутри очереди, пустая очередь — мгновенный no-op).
-    netSuccessCleanup.current = onRequestSucceeded(kickOfflineCheckQueueOnNetworkSuccess);
     // Audit #8.7 — cold-start hydrate race. Step 1: synchronously hydrate
     // ONLY the priority first-screen keys (Dashboard / Журнал / Склад),
     // bounded to ~80ms. The splash stays up until this resolves so a fast
@@ -366,6 +389,33 @@ export default function App() {
       netSuccessCleanup.current = null;
     };
   }, []);
+
+  // Re-evaluate the complete API ring whenever the device's usable route may
+  // have changed. NetInfo emits plenty of noisy telemetry, so compare only a
+  // stable route signature (connection/type/SSID/IP/carrier) and ignore mere
+  // reachability or signal-strength updates. Foreground is an independent
+  // trigger because a VPN can be toggled while the app is suspended without a
+  // reliable NetInfo event. A final axios network failure is the last-resort
+  // trigger for DNS/carrier filtering that leaves NetInfo looking unchanged.
+  // The selector itself owns debounce, in-flight dedupe and stale-result
+  // protection, so nearly simultaneous triggers safely collapse into one race.
+  useEffect(() => {
+    if (!apiRoutingReady) return;
+
+    const routeRecovery = createApiRouteRecoveryController({
+      initialAppState: AppState.currentState,
+      reselect: reselectApiHost,
+    });
+    const unsubscribeNetInfo = NetInfo.addEventListener(routeRecovery.onNetworkState);
+    const appStateSubscription = AppState.addEventListener('change', routeRecovery.onAppState);
+    const unsubscribeNetworkFailure = onNetworkClassFailure(routeRecovery.onNetworkFailure);
+
+    return () => {
+      unsubscribeNetInfo();
+      appStateSubscription.remove();
+      unsubscribeNetworkFailure();
+    };
+  }, [apiRoutingReady]);
 
   // EAS Updates (OTA): тихая догрузка свежего JS-бандла при возврате в
   // foreground — применяется на следующем холодном старте, никаких reload
@@ -449,6 +499,7 @@ export default function App() {
     <ErrorBoundary>
       <ThemeProvider>
         <ThemedRoot
+          apiRoutingReady={apiRoutingReady}
           cacheReady={cacheReady}
           fontsReady={fontsReady}
           showSplash={showSplash}
@@ -460,6 +511,7 @@ export default function App() {
 }
 
 interface ThemedRootProps {
+  apiRoutingReady: boolean;
   cacheReady: boolean;
   fontsReady: boolean;
   showSplash: boolean;
@@ -472,7 +524,7 @@ interface ThemedRootProps {
  * style all flip with the dark-mode toggle. Living one level inside
  * <ThemeProvider> is the cleanest way to subscribe.
  */
-function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: ThemedRootProps) {
+function ThemedRoot({ apiRoutingReady, cacheReady, fontsReady, showSplash, onAuthResolve }: ThemedRootProps) {
   const { mode, palette } = useThemeMode();
   return (
     <SafeAreaProvider style={{ backgroundColor: palette.bg.canvas }}>
@@ -545,7 +597,7 @@ function ThemedRoot({ cacheReady, fontsReady, showSplash, onAuthResolve }: Theme
             минимум выше текущей сборки (см. components/UpdateGate.tsx). Живёт
             вне QueryClientProvider сознательно: обычный fetch + локальный
             state, никаких зависимостей от auth/query. */}
-        <UpdateGate />
+        {apiRoutingReady && <UpdateGate />}
       </KeyboardProvider>
     </SafeAreaProvider>
   );

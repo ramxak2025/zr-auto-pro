@@ -1,13 +1,21 @@
 // Hermetic unit: mock the only runtime import so the controller is tested in
 // isolation under the node jest env (no react-query / react-native runtime).
 jest.mock('@tanstack/react-query', () => ({ onlineManager: { isOnline: () => true } }));
+jest.mock('../../api/axios', () => ({ reselectApiHost: jest.fn() }));
+
+import { reselectApiHost } from '../../api/axios';
 
 import {
+  createApiRouteRecoveryController,
   createRecoveryController,
+  getNetworkRouteSignature,
   isRecoverableErrored,
+  probeApiRing,
   PROBE_BACKOFF_MS,
   type RecoveryDeps,
 } from '../backendRecovery';
+
+const mockReselectApiHost = reselectApiHost as jest.MockedFunction<typeof reselectApiHost>;
 
 interface HarnessState {
   errored: boolean;
@@ -15,6 +23,7 @@ interface HarnessState {
   time: number;
   healthy: boolean;
   refetchCount: number;
+  refetchHook?: () => void;
   probeHook?: () => void;
 }
 
@@ -36,6 +45,7 @@ function makeHarness(init: Partial<HarnessState> = {}) {
     now: () => state.time,
     refetchErrored: () => {
       state.refetchCount += 1;
+      state.refetchHook?.();
     },
     probeHealth: async () => {
       state.probeHook?.();
@@ -92,6 +102,143 @@ describe('isRecoverableErrored', () => {
   it('does NOT recover a non-error query', () => {
     expect(isRecoverableErrored('success', true, undefined)).toBe(false);
     expect(isRecoverableErrored('pending', true, undefined)).toBe(false);
+  });
+});
+
+describe('getNetworkRouteSignature', () => {
+  const wifi = {
+    isConnected: true,
+    type: 'wifi',
+    isInternetReachable: true,
+    details: {
+      isConnectionExpensive: false,
+      ssid: 'ZR-AUTO',
+      bssid: 'aa:bb:cc:dd:ee:ff',
+      ipAddress: '192.168.1.20',
+      subnet: '255.255.255.0',
+      strength: 80,
+      linkSpeed: 433,
+    },
+  };
+
+  it('ignores noisy reachability/radio telemetry when the route is unchanged', () => {
+    const noisyUpdate = {
+      ...wifi,
+      isInternetReachable: false,
+      details: { ...wifi.details, strength: 25, linkSpeed: 72 },
+    };
+    expect(getNetworkRouteSignature(noisyUpdate)).toBe(getNetworkRouteSignature(wifi));
+  });
+
+  it.each([
+    ['connectivity', { ...wifi, isConnected: false, details: null }],
+    ['network type', { ...wifi, type: 'vpn' }],
+    ['Wi-Fi identity', { ...wifi, details: { ...wifi.details, ssid: 'Mobile hotspot' } }],
+    ['local route', { ...wifi, details: { ...wifi.details, ipAddress: '10.0.0.7' } }],
+    [
+      'carrier route',
+      {
+        ...wifi,
+        type: 'cellular',
+        details: { isConnectionExpensive: true, carrier: 'Megafon', cellularGeneration: '5g' },
+      },
+    ],
+  ])('changes for a meaningful %s change', (_label, next) => {
+    expect(getNetworkRouteSignature(next)).not.toBe(getNetworkRouteSignature(wifi));
+  });
+});
+
+describe('createApiRouteRecoveryController', () => {
+  const wifi = {
+    isConnected: true,
+    type: 'wifi',
+    details: {
+      isConnectionExpensive: false,
+      ssid: 'ZR-AUTO',
+      bssid: 'aa:bb:cc:dd:ee:ff',
+      ipAddress: '192.168.1.20',
+      subnet: '255.255.255.0',
+      strength: 80,
+    },
+  };
+
+  it('reselects only for meaningful NetInfo route changes and reconnect', () => {
+    const reselect = jest.fn<Promise<string | null>, [forceFreshRoute?: boolean]>()
+      .mockResolvedValue('https://autexa.pw/api');
+    const controller = createApiRouteRecoveryController({ initialAppState: 'active', reselect });
+
+    controller.onNetworkState(wifi); // initial listener snapshot = baseline
+    controller.onNetworkState({ ...wifi, details: { ...wifi.details, strength: 20 } });
+    expect(reselect).not.toHaveBeenCalled();
+
+    controller.onNetworkState({ ...wifi, details: { ...wifi.details, ssid: 'Mobile hotspot' } });
+    expect(reselect).toHaveBeenCalledTimes(1);
+    expect(reselect).toHaveBeenLastCalledWith(true);
+
+    controller.onNetworkState({ isConnected: false, type: 'none', details: null });
+    expect(reselect).toHaveBeenCalledTimes(1); // no pointless probe offline
+    controller.onNetworkState({
+      isConnected: true,
+      type: 'cellular',
+      details: { isConnectionExpensive: true, carrier: 'Megafon', cellularGeneration: '5g' },
+    });
+    expect(reselect).toHaveBeenCalledTimes(2);
+    expect(reselect).toHaveBeenLastCalledWith(true);
+  });
+
+  it('reselects on a real foreground transition and every final network failure', () => {
+    const reselect = jest.fn<Promise<string | null>, [forceFreshRoute?: boolean]>()
+      .mockResolvedValue('https://autexa.pw/api');
+    const controller = createApiRouteRecoveryController({ initialAppState: 'active', reselect });
+
+    controller.onAppState('active');
+    controller.onAppState('background');
+    expect(reselect).not.toHaveBeenCalled();
+    controller.onAppState('active');
+    expect(reselect).toHaveBeenCalledTimes(1);
+    expect(reselect).toHaveBeenLastCalledWith(true);
+
+    controller.onNetworkFailure();
+    controller.onNetworkFailure();
+    expect(reselect).toHaveBeenCalledTimes(3);
+    expect(reselect).toHaveBeenLastCalledWith(false);
+  });
+
+  it('contains synchronous and asynchronous selector failures', async () => {
+    const asyncFailure = createApiRouteRecoveryController({
+      initialAppState: 'active',
+      reselect: () => Promise.reject(new Error('async failure')),
+    });
+    expect(() => asyncFailure.onNetworkFailure()).not.toThrow();
+    await Promise.resolve();
+
+    const syncFailure = createApiRouteRecoveryController({
+      initialAppState: 'active',
+      reselect: (() => {
+        throw new Error('sync failure');
+      }) as (forceFreshRoute?: boolean) => Promise<string | null>,
+    });
+    expect(() => syncFailure.onNetworkFailure()).not.toThrow();
+  });
+});
+
+describe('probeApiRing', () => {
+  beforeEach(() => mockReselectApiHost.mockReset());
+
+  it('is healthy only after the whole-ring selector adopts a reachable host', async () => {
+    mockReselectApiHost.mockResolvedValueOnce('https://autexa-cloud.ru/api');
+    await expect(probeApiRing()).resolves.toBe(true);
+    expect(mockReselectApiHost).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports unhealthy when every ring host fails', async () => {
+    mockReselectApiHost.mockResolvedValueOnce(null);
+    await expect(probeApiRing()).resolves.toBe(false);
+  });
+
+  it('contains an unexpected selector error', async () => {
+    mockReselectApiHost.mockRejectedValueOnce(new Error('probe crashed'));
+    await expect(probeApiRing()).resolves.toBe(false);
   });
 });
 
@@ -161,21 +308,49 @@ describe('createRecoveryController', () => {
     expect(h.scheduled).toHaveLength(1);
   });
 
-  it('applies a cooldown after a recovery refetch, then re-arms', async () => {
+  it('queues a trigger received during cooldown and re-arms at its expiry', async () => {
     const h = makeHarness({ healthy: true });
     h.controller.trigger();
     await h.runPending();
     expect(h.state.refetchCount).toBe(1);
 
-    // Still erroring (refetch in flight); a re-trigger inside the cooldown is
-    // ignored so we don't hammer a backend we just confirmed healthy.
+    // Still erroring (refetch in flight); retain one wake-up instead of
+    // dropping the only event a fast failed refetch may emit.
     h.controller.trigger();
-    expect(h.scheduled).toHaveLength(0);
-
-    // Once the cooldown elapses, a fresh error event re-arms the loop.
-    h.state.time = 4_000;
     h.controller.trigger();
     expect(h.scheduled).toHaveLength(1);
+    expect(h.scheduled[0].ms).toBe(4_000);
+
+    // No fresh external event is needed: expiry starts the normal 2s backoff.
+    h.state.time = 4_000;
+    expect(await h.runPending()).toBe(4_000);
+    expect(h.scheduled).toHaveLength(1);
+    expect(h.scheduled[0].ms).toBe(PROBE_BACKOFF_MS[0]);
+  });
+
+  it('does not lose a synchronous fast-failure notification from refetch', async () => {
+    const h = makeHarness({ healthy: true });
+    h.state.refetchHook = () => h.controller.trigger();
+
+    h.controller.trigger();
+    await h.runPending();
+
+    expect(h.state.refetchCount).toBe(1);
+    expect(h.scheduled).toHaveLength(1);
+    expect(h.scheduled[0].ms).toBe(4_000);
+  });
+
+  it('drops the cooldown wake-up if the query heals before expiry', async () => {
+    const h = makeHarness({ healthy: true });
+    h.controller.trigger();
+    await h.runPending();
+    h.controller.trigger();
+    h.state.errored = false;
+    h.state.time = 4_000;
+
+    await h.runPending();
+    expect(h.scheduled).toHaveLength(0);
+    expect(h.state.refetchCount).toBe(1);
   });
 
   it('stop() cancels a pending probe', () => {

@@ -76,8 +76,21 @@ export class RateLimitGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<Request>();
     const ip = request.ip || request.socket.remoteAddress || 'unknown';
     const method = request.method;
-    const path = request.path || request.url || '';
+    // Express `request.path` is already the pathname (query string removed).
+    // Keep the `request.url` fallback for unit/non-Express contexts, but strip
+    // its query string before matching so both inputs have the same semantics.
+    const path = request.path || (request.url || '').split('?', 1)[0];
     const now = Date.now();
+
+    // Public liveness is the routing control plane for mobile failover. The
+    // Yandex reserve gateway multiplexes many devices behind one egress IP;
+    // charging this tiny, database-free GET/HEAD endpoint to the anonymous
+    // bucket can make a healthy reserve look dead to every client at once.
+    // Match only the actual route (with/without Nest's global `/api` prefix
+    // and Express' optional trailing slash). In particular, `/health/db`
+    // executes `SELECT 1` and must remain inside the ordinary read quota.
+    const isPublicLiveness = (method === 'GET' || method === 'HEAD') && /^(?:\/api)?\/health\/?$/.test(path);
+    if (isPublicLiveness) return true;
 
     // Identify the user behind a shared NAT by a fingerprint of their JWT.
     // We hash the FULL token (not a fixed slice — see the class doc: the first

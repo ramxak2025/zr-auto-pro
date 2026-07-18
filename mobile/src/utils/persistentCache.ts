@@ -23,6 +23,11 @@ import { InteractionManager } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
 import {
+  AUTH_SESSION_ENVELOPE_KEY,
+  LEGACY_TOKEN_KEY,
+  parseAuthSessionEnvelope,
+} from '../contexts/authSessionStorage';
+import {
   STORAGE_PREFIX,
   PERSISTED_KEYS,
   VARIANT_CAPS,
@@ -98,21 +103,98 @@ const PRIORITY_KEY_SET = new Set<string>(PRIORITY_KEYS);
 const PRIORITY_HYDRATE_BUDGET_MS = 80;
 
 /**
- * Tenant-isolation gate shared by both hydration passes. Returns the auth
- * token, or `null` if the previous session is over — in which case it also
- * flushes orphaned `rqcache:v1:*` entries so a half-completed logout (process
- * killed mid-clear) can't leak tenant A's data into tenant B's next login.
+ * Session boundary for cache mutations.
+ *
+ * AsyncStorage calls cross the native bridge and cannot be cancelled once
+ * started. A logout/login clear must therefore be ordered AFTER an in-flight
+ * write from the previous tenant, while delayed/debounced writes that have not
+ * started yet must be discarded. The generation provides the latter; the
+ * shared promise tail provides the former (and also keeps new-session writes
+ * behind the clear).
  */
-async function readTokenOrFlush(): Promise<string | null> {
-  const token = await AsyncStorage.getItem('token');
-  if (!token) {
-    const orphanKeys = (await AsyncStorage.getAllKeys()).filter((k) => k.startsWith(STORAGE_PREFIX));
+let persistenceGeneration = 0;
+let persistenceBoundaryReady = true;
+let storageMutationTail: Promise<void> = Promise.resolve();
+
+function enqueueStorageMutation(mutation: () => Promise<void>): Promise<void> {
+  const queued = storageMutationTail.then(mutation);
+  // A failed mutation must not poison the queue for later clears or writes.
+  // Callers still receive `queued`, so clear failures can gate auth commits.
+  storageMutationTail = queued.catch(() => {});
+  return queued;
+}
+
+function isCurrentGeneration(generation: number): boolean {
+  return generation === persistenceGeneration;
+}
+
+function isWritableGeneration(generation: number): boolean {
+  return isCurrentGeneration(generation) && persistenceBoundaryReady;
+}
+
+interface HydrationAuthSession {
+  token: string | null;
+  identity: string;
+}
+
+/**
+ * Resolve the authoritative cold-start auth owner. A valid v1 envelope wins
+ * over every legacy mirror, including a logged-out tombstone over a stale A
+ * token. Legacy is used only as the migration fallback for a missing/corrupt
+ * envelope.
+ */
+function resolveHydrationAuthSession(rawEnvelope: string | null, legacyToken: string | null): HydrationAuthSession {
+  const envelope = parseAuthSessionEnvelope(rawEnvelope);
+  if (envelope) {
+    return {
+      token: envelope.token,
+      identity: JSON.stringify(['v1', envelope.generation, envelope.token]),
+    };
+  }
+  return { token: legacyToken, identity: JSON.stringify(['legacy', legacyToken]) };
+}
+
+async function readHydrationAuthSession(): Promise<HydrationAuthSession> {
+  const [rawEnvelope, legacyToken] = await Promise.all([
+    AsyncStorage.getItem(AUTH_SESSION_ENVELOPE_KEY).catch(() => null),
+    AsyncStorage.getItem(LEGACY_TOKEN_KEY).catch(() => null),
+  ]);
+  return resolveHydrationAuthSession(rawEnvelope, legacyToken);
+}
+
+/** Re-check the authoritative durable session after a hydration await/yield. */
+async function isCurrentHydrationSession(generation: number, session: HydrationAuthSession): Promise<boolean> {
+  if (!isCurrentGeneration(generation)) return false;
+  const currentSession = await readHydrationAuthSession();
+  return isCurrentGeneration(generation) && currentSession.identity === session.identity;
+}
+
+/**
+ * Tenant-isolation gate shared by both hydration passes. Returns the durable
+ * auth identity, or `null` if the previous session is over — in which case it
+ * also flushes orphaned `rqcache:v1:*` entries so a half-completed logout
+ * (process killed mid-clear) can't leak A's data into B's next login.
+ */
+async function readTokenOrFlush(generation: number): Promise<HydrationAuthSession | null> {
+  const session = await readHydrationAuthSession();
+  if (!isCurrentGeneration(generation)) return null;
+
+  if (!session.token) {
+    const allKeys = await AsyncStorage.getAllKeys();
+    if (!isCurrentGeneration(generation)) return null;
+
+    const orphanKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
     if (orphanKeys.length > 0) {
-      await AsyncStorage.multiRemove(orphanKeys).catch(() => {});
+      // Serialize this GC with normal writes/clear too. If a session boundary
+      // wins before the queued removal starts, the stale cleanup is a no-op.
+      await enqueueStorageMutation(async () => {
+        if (!isWritableGeneration(generation)) return;
+        await AsyncStorage.multiRemove(orphanKeys);
+      }).catch(() => {});
     }
     return null;
   }
-  return token;
+  return session;
 }
 
 /**
@@ -128,18 +210,24 @@ async function readTokenOrFlush(): Promise<string | null> {
  * logs in on the same device.
  */
 export async function hydrateCache(qc: QueryClient): Promise<void> {
+  const hydrationGeneration = persistenceGeneration;
+
   try {
     // Tenant isolation gate. Read the auth token first; if it's missing,
     // the previous session is over and no persisted entries should be
     // resurrected into the QueryClient. We also flush any orphan entries
     // so the next login starts clean.
-    const token = await readTokenOrFlush();
-    if (!token) return;
+    const authSession = await readTokenOrFlush(hydrationGeneration);
+    if (!authSession?.token || !isCurrentGeneration(hydrationGeneration)) return;
 
     const allKeys = await AsyncStorage.getAllKeys();
+    if (!(await isCurrentHydrationSession(hydrationGeneration, authSession))) return;
+
     const ourKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
     if (ourKeys.length === 0) return;
     const pairs = await AsyncStorage.multiGet(ourKeys);
+    if (!(await isCurrentHydrationSession(hydrationGeneration, authSession))) return;
+
     const now = Date.now();
     // GC bookkeeping (RNPERF: no-eviction fix). Stale / corrupt /
     // de-whitelisted / search-volatile slots found while hydrating are
@@ -159,6 +247,9 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
     for (let i = 0; i < pairs.length; i += CHUNK) {
       const slice = pairs.slice(i, i + CHUNK);
       for (const [skey, raw] of slice) {
+        // No await occurs within a chunk, but checking every pair makes the
+        // apply boundary explicit and protects against synchronous re-entry.
+        if (!isCurrentGeneration(hydrationGeneration)) return;
         const result = applyStoredPair(qc, raw, now);
         if (result.status === 'ok') {
           alive.push({ storageKey: skey, first: result.first, storedAt: result.storedAt });
@@ -169,6 +260,7 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
       }
       if (i + CHUNK < pairs.length) {
         await new Promise<void>((resolve) => setTimeout(resolve, 0));
+        if (!(await isCurrentHydrationSession(hydrationGeneration, authSession))) return;
       }
     }
 
@@ -194,7 +286,10 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
     }
 
     if (deadKeys.length > 0) {
-      await AsyncStorage.multiRemove(deadKeys).catch(() => {});
+      await enqueueStorageMutation(async () => {
+        if (!isWritableGeneration(hydrationGeneration)) return;
+        await AsyncStorage.multiRemove(deadKeys);
+      }).catch(() => {});
     }
   } catch {
     // AsyncStorage unavailable — proceed without hydration
@@ -217,12 +312,16 @@ export async function hydrateCache(qc: QueryClient): Promise<void> {
  * device hydrates nothing and orphans are flushed.
  */
 export async function hydratePriorityCache(qc: QueryClient): Promise<void> {
+  const hydrationGeneration = persistenceGeneration;
+
   const work = (async () => {
     try {
-      const token = await readTokenOrFlush();
-      if (!token) return;
+      const authSession = await readTokenOrFlush(hydrationGeneration);
+      if (!authSession?.token || !isCurrentGeneration(hydrationGeneration)) return;
 
       const allKeys = await AsyncStorage.getAllKeys();
+      if (!(await isCurrentHydrationSession(hydrationGeneration, authSession))) return;
+
       // Keep only OUR slots whose first key is a priority key. The stored key
       // is `STORAGE_PREFIX + JSON.stringify(queryKey)`, so a priority entry
       // serialises as e.g. `rqcache:v1:["dashboard-v2",...]` — a cheap string
@@ -236,8 +335,11 @@ export async function hydratePriorityCache(qc: QueryClient): Promise<void> {
       });
       if (priorityStorageKeys.length === 0) return;
       const pairs = await AsyncStorage.multiGet(priorityStorageKeys);
+      if (!(await isCurrentHydrationSession(hydrationGeneration, authSession))) return;
+
       const now = Date.now();
       for (const [, raw] of pairs) {
+        if (!isCurrentGeneration(hydrationGeneration)) return;
         applyStoredPair(qc, raw, now);
       }
     } catch {
@@ -284,6 +386,7 @@ export function attachPersistence(qc: QueryClient): () => void {
     queryKey: QueryKey;
     data: unknown;
     storedAt: number;
+    generation: number;
     timer: ReturnType<typeof setTimeout>;
   }
   const pendingWrites = new Map<string, PendingWrite>();
@@ -297,6 +400,10 @@ export function attachPersistence(qc: QueryClient): () => void {
     // transition) finishes — a multi-page journal payload can take a few
     // ms to stringify, enough to drop frames mid-swipe.
     InteractionManager.runAfterInteractions(() => {
+      // `clearPersistentCache` invalidates this generation synchronously.
+      // Avoid even serialising a delayed old-tenant payload after that point.
+      if (pending.generation !== persistenceGeneration) return;
+
       let payload: string;
       try {
         const entry: StoredEntry = {
@@ -309,7 +416,17 @@ export function attachPersistence(qc: QueryClient): () => void {
         // Non-serialisable data (circular ref etc.) — skip the write.
         return;
       }
-      AsyncStorage.setItem(skey, payload).catch(() => {});
+
+      const write = enqueueStorageMutation(async () => {
+        // The generation may have changed while this write was waiting behind
+        // another AsyncStorage mutation. Such a queued-but-not-started write
+        // belongs to the old tenant and must become a no-op.
+        if (!isWritableGeneration(pending.generation)) return;
+        await AsyncStorage.setItem(skey, payload);
+      });
+      // Persistence is best-effort; keep failures isolated from the app and
+      // from the serialized queue's following mutations.
+      void write.catch(() => {});
     });
   };
 
@@ -339,6 +456,7 @@ export function attachPersistence(qc: QueryClient): () => void {
       queryKey: query.queryKey,
       data: query.state.data,
       storedAt: Date.now(),
+      generation: persistenceGeneration,
       timer: setTimeout(() => flush(skey), WRITE_DEBOUNCE_MS),
     });
   });
@@ -352,14 +470,23 @@ export function attachPersistence(qc: QueryClient): () => void {
 }
 
 /** Clear all persisted cache — call from logout. */
-export async function clearPersistentCache(): Promise<void> {
-  try {
+export function clearPersistentCache(): Promise<void> {
+  // This executes before the function returns, invalidating every old-session
+  // debounce / InteractionManager callback immediately. The queued clear then
+  // waits for any AsyncStorage.setItem that had already started.
+  persistenceGeneration += 1;
+  const clearGeneration = persistenceGeneration;
+  persistenceBoundaryReady = false;
+
+  return enqueueStorageMutation(async () => {
     const allKeys = await AsyncStorage.getAllKeys();
     const ourKeys = allKeys.filter((k) => k.startsWith(STORAGE_PREFIX));
     if (ourKeys.length > 0) await AsyncStorage.multiRemove(ourKeys);
-  } catch {
-    // best-effort
-  }
+
+    // Two clears may overlap. Only the newest successful boundary can admit
+    // current-generation cache writes again.
+    if (isCurrentGeneration(clearGeneration)) persistenceBoundaryReady = true;
+  });
 }
 
 // Re-export the whitelist so callers / docs that referenced `PERSISTED_KEYS`

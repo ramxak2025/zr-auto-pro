@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef, ReactNode } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Platform } from 'react-native';
 import * as Notifications from 'expo-notifications';
@@ -24,13 +24,28 @@ import {
   scheduleApi,
   pushApi,
 } from '../api/services';
-import { onAuthExpired, setAuthToken } from '../api/axios';
+import api, {
+  createCapturedAuthRequester,
+  onApiRouteReady,
+  onAuthExpired,
+  onRequestSucceeded,
+  reselectApiHost,
+  setAuthToken,
+} from '../api/axios';
 import { captureException } from '../sentry';
 import { clearWidgetData } from '../utils/widgetBridge';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { clearOfflineCheckQueue } from '../utils/offlineCheckQueue';
 import { toLocalISODate } from '../utils/dates';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
+import {
+  commitAuthenticatedSession,
+  createSessionEpochRuntime,
+  createSessionRecoveryBackoff,
+  runSessionRecoveryAttempt,
+  type SessionEpochRuntime,
+} from './authSessionRuntime';
+import { createAuthSessionStorage } from './authSessionStorage';
 import type { User, UserPermissions, UserRole, SectionVisibility } from '../../../shared/types';
 
 /** Logical top-level section bucket used by MoreScreen + visibility overrides (#071). */
@@ -49,6 +64,11 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   loading: boolean;
+  /** Stored bearer exists, but /me is still waiting for a usable API route. */
+  recoveringSession: boolean;
+  /** A non-blocking /me recovery attempt is currently in flight. */
+  sessionRecoveryPending: boolean;
+  retrySessionRecovery: () => void;
   login: (phone: string, password: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
@@ -94,41 +114,30 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
-// AsyncStorage slot for the persisted user object. Mirrored alongside the
-// 'token' slot so a cold start can render the shell from cache before /me
-// resolves (optimistic restore). MUST be wiped on logout / 401 (tenant safety
-// — user B must never see user A's cached identity). The axios 401 handler
-// already removes this key too; AuthContext keeps it in sync on its own paths.
-const STORAGE_USER_KEY = 'user';
+const authSessionStorage = createAuthSessionStorage<User>(AsyncStorage, {
+  isUser: (value): value is User =>
+    !!value && typeof value === 'object' && typeof (value as { id?: unknown }).id === 'string',
+});
 
-// AsyncStorage flag set while a superadmin is impersonating a tenant owner.
-// Persisted so the «Вы вошли как …» banner survives a cold restart for the
-// (short) life of the director token. Cleared on logout / end-impersonation /
-// 401 alongside the token + user slots.
-const STORAGE_IMPERSONATING_KEY = 'impersonating';
-
-/** Persist the authenticated user object for optimistic cold-start restore. */
-async function persistUser(u: User): Promise<void> {
-  try {
-    await AsyncStorage.setItem(STORAGE_USER_KEY, JSON.stringify(u));
-  } catch {
-    // best-effort — losing the cache only costs a network wait next cold start
-  }
-}
-
-/** Read + parse the cached user, or null if absent / corrupt. */
-async function readCachedUser(): Promise<User | null> {
-  try {
-    const raw = await AsyncStorage.getItem(STORAGE_USER_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === 'object' && typeof parsed.id === 'string') {
-      return parsed as User;
+/**
+ * Start both tenant-scoped durable clears in the same tick. allSettled keeps a
+ * rejection handler attached immediately, but we still reject after both have
+ * settled so a cross-tenant login never persists B after a failed A clear.
+ */
+async function clearPreviousTenantStorage(): Promise<void> {
+  const start = (operation: () => Promise<unknown>): Promise<unknown> => {
+    try {
+      return Promise.resolve(operation());
+    } catch (error) {
+      return Promise.reject(error);
     }
-    return null;
-  } catch {
-    return null;
-  }
+  };
+  const results = await Promise.allSettled([
+    start(clearOfflineCheckQueue),
+    start(clearPersistentCache),
+  ]);
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failed) throw failed.reason;
 }
 
 /** True when an axios error is a genuine 401 (session expired / revoked). */
@@ -136,29 +145,17 @@ function isAuthExpiry(err: unknown): boolean {
   return (err as { response?: { status?: number } })?.response?.status === 401;
 }
 
-/**
- * Fetch the current user with a bounded retry. Retries up to 2 times
- * (~400ms, ~800ms backoff) but ONLY on non-401 failures — a genuine 401 is
- * a real expiry and must surface immediately so the caller can log out.
- * Network / timeout / 5xx are transient and worth a couple of retries before
- * we decide to keep the optimistically-restored session.
- */
-async function fetchMeWithRetry(): Promise<User> {
-  const delays = [400, 800];
-  let lastErr: unknown;
-  for (let attempt = 0; attempt <= delays.length; attempt++) {
-    try {
-      const res = await authApi.me();
-      return res.data as User;
-    } catch (err) {
-      lastErr = err;
-      // Don't burn retries on a real expiry — propagate the 401 now.
-      if (isAuthExpiry(err) || attempt === delays.length) throw err;
-      await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
-    }
-  }
-  throw lastErr;
-}
+// One cold-start deadline for storage restore + the complete API-ring attempt.
+// The axios layer already traverses every healthy candidate, so retrying /me
+// here would multiply its worst case (3 manual attempts × 3 hosts). Fifteen
+// seconds covers the observed 5–6s cold TLS path plus `/me`, while a total
+// ring outage still cannot pin the native splash indefinitely.
+export const AUTH_BOOTSTRAP_BUDGET_MS = 15_000;
+const SESSION_RECOVERY_BACKOFF_MS: readonly number[] = [2_000, 5_000, 15_000, 30_000];
+// Three physical /me attempts at 8s fit inside this total recovery window,
+// with room for a manual fresh-route health pass (~9s) when needed.
+export const SESSION_RECOVERY_BUDGET_MS = 35_000;
+export const SESSION_RECOVERY_HOST_TIMEOUT_MS = 8_000;
 
 interface AuthProviderProps {
   children: ReactNode;
@@ -503,12 +500,49 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   const [token, setToken] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [isImpersonating, setIsImpersonating] = useState(false);
+  const [recoveringSession, setRecoveringSession] = useState(false);
+  const [sessionRecoveryPending, setSessionRecoveryPending] = useState(false);
+  const sessionRuntimeRef = useRef<SessionEpochRuntime | null>(null);
+  if (!sessionRuntimeRef.current) sessionRuntimeRef.current = createSessionEpochRuntime();
+  const sessionRuntime = sessionRuntimeRef.current;
+  const recoveryAttemptRef = useRef<Promise<void> | null>(null);
+  const recoveryWakeQueuedRef = useRef(false);
+  const recoveryForceQueuedRef = useRef(false);
+  const recoveryBackoffRef = useRef(createSessionRecoveryBackoff(SESSION_RECOVERY_BACKOFF_MS));
+  const recoveryCooldownTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Network requests run outside the serial commit queue. Starting a newer
+  // transition advances the epoch immediately and aborts tracked bootstrap /
+  // recovery reads; a late login response can then only resolve to a no-op.
+  const beginSessionTransition = useCallback(() => {
+    recoveryWakeQueuedRef.current = false;
+    recoveryForceQueuedRef.current = false;
+    recoveryBackoffRef.current.reset();
+    if (recoveryCooldownTimerRef.current) clearTimeout(recoveryCooldownTimerRef.current);
+    recoveryCooldownTimerRef.current = null;
+    setSessionRecoveryPending(false);
+    return sessionRuntime.begin();
+  }, [sessionRuntime]);
+
+  useEffect(
+    () => () => {
+      if (recoveryCooldownTimerRef.current) clearTimeout(recoveryCooldownTimerRef.current);
+      // Abort tracked bootstrap/recovery work and invalidate every late commit
+      // before this provider's setters disappear.
+      sessionRuntime.begin();
+    },
+    [sessionRuntime],
+  );
 
   // Load token + cached user on mount (optimistic restore + status-aware
   // background revalidation).
   useEffect(() => {
     let cancelled = false;
     let resolved = false;
+    let budgetExpired = false;
+    const bootstrapEpoch = sessionRuntime.capture();
+    const bootstrapAbort = new AbortController();
+    const untrackBootstrapAbort = sessionRuntime.trackAbort(bootstrapEpoch, bootstrapAbort);
     // `finish` flips the splash exactly once. With optimistic restore it
     // fires as soon as token+user are read from disk — the shell renders
     // from cache with NO network wait; /me revalidates in the background.
@@ -519,26 +553,39 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       onAuthResolve?.();
     };
 
+    // This timer starts before AsyncStorage, so the budget covers the WHOLE
+    // bootstrap rather than only the HTTP portion. On expiry we cancel the
+    // single /me request (including any remaining axios ring traversal) and
+    // release the splash. Cancellation is a transient outcome: it must never
+    // clear a stored token or an optimistically restored user.
+    const deadlineTimer = setTimeout(() => {
+      budgetExpired = true;
+      bootstrapAbort.abort();
+      finish();
+    }, AUTH_BOOTSTRAP_BUDGET_MS);
+
     (async () => {
-      // Read token AND the cached user together so we can restore the whole
-      // session optimistically before the first /me round-trip.
-      const [stored, cachedUser, impersonatingFlag] = await Promise.all([
-        AsyncStorage.getItem('token').catch(() => null),
-        readCachedUser(),
-        AsyncStorage.getItem(STORAGE_IMPERSONATING_KEY).catch(() => null),
-      ]);
-      if (cancelled) return;
+      // The versioned envelope is authoritative; legacy token/user/flag keys
+      // are read only as a migration fallback by authSessionStorage.
+      const storedSession = await authSessionStorage.read();
+      const stored = storedSession.token;
+      const cachedUser = storedSession.user;
+      // A native storage bridge can itself stall. Never let a value captured
+      // before the deadline overwrite a login/session established after the
+      // splash was released.
+      if (cancelled || budgetExpired || !sessionRuntime.isCurrent(bootstrapEpoch)) return;
       // Restore the impersonation banner state for the (short) life of the
       // director token. If the token has already expired, the /me below 401s
       // and the whole session — flag included — is wiped.
-      if (impersonatingFlag === '1') setIsImpersonating(true);
+      if (storedSession.impersonating) setIsImpersonating(true);
 
       if (!stored) {
         // No token → logged out. Drop any stray cached user (tenant safety)
         // and the impersonation flag (it must never outlive its token).
-        AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
-        AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
+        void authSessionStorage.write({ token: null, user: null, impersonating: false });
+        setRecoveringSession(false);
         setIsImpersonating(false);
+        clearTimeout(deadlineTimer);
         finish();
         return;
       }
@@ -554,37 +601,61 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       // start — the user sees their app instantly while /me revalidates.
       if (cachedUser) {
         setUser(cachedUser);
+        setRecoveringSession(false);
         finish();
+      } else {
+        // We know the bearer exists, but cannot safely enter the app until
+        // /me identifies its tenant/user. If the first attempt times out the
+        // navigator shows an explicit recovery surface, never a fake Login.
+        setRecoveringSession(true);
       }
 
-      // Background (or blocking, when no cached user) revalidation of /me
-      // with a bounded, 401-aware retry.
+      // Background (or blocking, when no cached user) revalidation. This is
+      // intentionally ONE request: axios owns traversal of the three-host
+      // ring, while the AbortSignal enforces the single cold-start deadline.
       try {
-        const fresh = await fetchMeWithRetry();
-        if (cancelled) return;
-        setUser(fresh);
-        persistUser(fresh).catch(() => {});
+        const res = await api.get<User>('/auth/me', { signal: bootstrapAbort.signal });
+        const fresh = res.data;
+        // The deadline and epoch are checked AFTER resolution as well: abort
+        // is cooperative, so a response already queued on the JS microtask
+        // queue may still win the transport race unless we reject it here.
+        if (cancelled || budgetExpired || !sessionRuntime.isCurrent(bootstrapEpoch)) return;
+        let applied = false;
+        await sessionRuntime.commit(bootstrapEpoch, async (isCurrent) => {
+          if (!isCurrent() || budgetExpired) return;
+          setUser(fresh);
+          setRecoveringSession(false);
+          applied = true;
+          await authSessionStorage.write({
+            token: stored,
+            user: fresh,
+            impersonating: storedSession.impersonating,
+          });
+        });
         // Token still valid — kick off prefetch for a warm session.
-        if (queryClient) prefetchAfterLogin(queryClient, fresh);
+        if (applied && !budgetExpired && sessionRuntime.isCurrent(bootstrapEpoch) && queryClient) {
+          prefetchAfterLogin(queryClient, fresh);
+        }
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || budgetExpired || !sessionRuntime.isCurrent(bootstrapEpoch)) return;
         if (isAuthExpiry(err)) {
           // Genuine expiry (401) — clear token + cached user and fall back to
           // Login. A valid token is only ever wiped on a REAL 401. This also
           // covers an expired impersonation (30-min director) token: the
           // banner flag is cleared and the superadmin lands on Login.
           setAuthToken(null);
-          AsyncStorage.removeItem('token').catch(() => {});
-          AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
-          AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
+          void authSessionStorage.write({ token: null, user: null, impersonating: false });
           setToken(null);
           setUser(null);
+          setRecoveringSession(false);
           setIsImpersonating(false);
         }
         // Non-401 (network / timeout / 5xx, or `!err.response`): DO NOTHING.
         // Keep the optimistically-restored cached session — a transient
         // failure must never log a user out. The token survives untouched.
       } finally {
+        clearTimeout(deadlineTimer);
+        untrackBootstrapAbort();
         // No-op if we already finished optimistically; otherwise (no cached
         // user) this is where the splash finally dismisses.
         finish();
@@ -593,43 +664,149 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
 
     return () => {
       cancelled = true;
+      clearTimeout(deadlineTimer);
+      bootstrapAbort.abort();
+      untrackBootstrapAbort();
     };
     // onAuthResolve is captured intentionally — we only fire it for the
     // initial mount cycle, not on prop changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryClient]);
 
+  const attemptSessionRecovery = useCallback((force = false) => {
+    if (loading || !recoveringSession || !token || user) return;
+    if (recoveryAttemptRef.current) {
+      recoveryWakeQueuedRef.current = true;
+      if (force) recoveryForceQueuedRef.current = true;
+      return;
+    }
+    const cooldownRemaining = recoveryBackoffRef.current.remainingMs();
+    if (!force && cooldownRemaining > 0) {
+      if (!recoveryCooldownTimerRef.current) {
+        recoveryCooldownTimerRef.current = setTimeout(() => {
+          recoveryCooldownTimerRef.current = null;
+          attemptSessionRecovery(false);
+        }, cooldownRemaining);
+      }
+      return;
+    }
+    if (recoveryCooldownTimerRef.current) clearTimeout(recoveryCooldownTimerRef.current);
+    recoveryCooldownTimerRef.current = null;
+
+    const recoveryEpoch = sessionRuntime.capture();
+    const recoveryAbort = new AbortController();
+    const untrackRecoveryAbort = sessionRuntime.trackAbort(recoveryEpoch, recoveryAbort);
+    let budgetExpired = false;
+    let recovered = false;
+    recoveryWakeQueuedRef.current = false;
+    recoveryForceQueuedRef.current = false;
+    setSessionRecoveryPending(true);
+
+    const work = (async () => {
+      const deadlineTimer = setTimeout(() => {
+        budgetExpired = true;
+        recoveryAbort.abort();
+      }, SESSION_RECOVERY_BUDGET_MS);
+      try {
+        const res = await runSessionRecoveryAttempt({
+          forceFreshRoute: force,
+          reselectRoute: reselectApiHost,
+          isCurrent: () => !budgetExpired && sessionRuntime.isCurrent(recoveryEpoch),
+          loadUser: () =>
+            api.get<User>('/auth/me', {
+              signal: recoveryAbort.signal,
+              timeout: SESSION_RECOVERY_HOST_TIMEOUT_MS,
+            }),
+        });
+        if (!res) return;
+        const fresh = res.data;
+        if (budgetExpired || !sessionRuntime.isCurrent(recoveryEpoch)) return;
+
+        let applied = false;
+        await sessionRuntime.commit(recoveryEpoch, async (isCurrent) => {
+          if (!isCurrent() || budgetExpired) return;
+          setUser(fresh);
+          setRecoveringSession(false);
+          applied = true;
+          recovered = true;
+          recoveryBackoffRef.current.reset();
+          await authSessionStorage.write({ token, user: fresh, impersonating: isImpersonating });
+        });
+        if (applied && !budgetExpired && sessionRuntime.isCurrent(recoveryEpoch) && queryClient) {
+          prefetchAfterLogin(queryClient, fresh);
+        }
+      } catch {
+        // 401 is handled by the axios auth-expiry event. Transport/timeout/5xx
+        // deliberately leave the bearer and recovery surface intact for the
+        // next route-success, foreground or explicit user retry.
+      } finally {
+        clearTimeout(deadlineTimer);
+        untrackRecoveryAbort();
+        // A second recovery cannot start while this ref is non-null; clear it
+        // unconditionally before consuming a queued positive network signal.
+        recoveryAttemptRef.current = null;
+        const stillCurrent = sessionRuntime.isCurrent(recoveryEpoch);
+        if (stillCurrent) setSessionRecoveryPending(false);
+        if (!recovered && stillCurrent) {
+          recoveryBackoffRef.current.recordFailure();
+        }
+        const retryQueued = recoveryWakeQueuedRef.current;
+        const retryForce = recoveryForceQueuedRef.current;
+        recoveryWakeQueuedRef.current = false;
+        recoveryForceQueuedRef.current = false;
+        if (retryQueued && !recovered && stillCurrent) {
+          queueMicrotask(() => attemptSessionRecovery(retryForce));
+        }
+      }
+    })();
+    recoveryAttemptRef.current = work;
+  }, [isImpersonating, loading, queryClient, recoveringSession, sessionRuntime, token, user]);
+
+  const retrySessionRecovery = useCallback(() => attemptSessionRecovery(true), [attemptSessionRecovery]);
+
+  // Wake the unresolved stored session only on positive evidence: an axios
+  // request succeeded, or App's existing NetInfo/AppState route controller
+  // completed a healthy reselection. No second selector/listener is created.
+  useEffect(() => {
+    if (loading || !recoveringSession || !token || user) return;
+    const retry = () => attemptSessionRecovery(false);
+    const unsubscribeRoute = onApiRouteReady(retry);
+    const unsubscribeRequest = onRequestSucceeded(retry);
+    return () => {
+      unsubscribeRoute();
+      unsubscribeRequest();
+    };
+  }, [attemptSessionRecovery, loading, recoveringSession, token, user]);
+
   // Listen for 401 events from axios interceptor
   useEffect(() => {
     return onAuthExpired(() => {
-      // Cancel every in-flight refetch BEFORE clearing the cache —
-      // otherwise a still-pending request lands after we've cleared
-      // state and resurrects a stale `queryClient` entry under a
-      // re-authenticated session (mixing tenants A and B briefly).
-      queryClient?.cancelQueries().catch(() => {});
-      // Clear the in-memory bearer (the axios 401 handler already called
-      // setAuthToken(null), but this listener also fires for the
-      // coalesced/secondary paths — idempotent and cheap).
+      const expiredEpoch = beginSessionTransition();
+      // Publish the logout boundary before any unbounded query cancellation.
+      // These calls start synchronously: even if the runtime queue is wedged,
+      // a killed process cannot reboot into the expired bearer plus live A
+      // queue/cache. A newer login is protected by each storage generation.
       setAuthToken(null);
       setToken(null);
       setUser(null);
+      setRecoveringSession(false);
+      setSessionRecoveryPending(false);
       setIsImpersonating(false);
-      // Wipe the cached user identity too — tenant safety. (The axios 401
-      // handler already removes it, but this listener also covers the
-      // coalesced/secondary paths; idempotent and cheap.)
-      AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
-      AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
-      // Clear persistent cache so the next login starts fresh
-      clearPersistentCache().catch(() => {});
-      // Ревью 05.07: офлайн-очередь чеков не должна пережить пользователя —
-      // иначе отложенный чек мастера A дослался бы под токеном B (чужой тенант).
-      clearOfflineCheckQueue().catch(() => {});
-      // Session died — the widget must not keep showing the dead session's
-      // numbers (same privacy contract as the cached-user wipe above).
-      clearWidgetData();
-      queryClient?.clear();
+      const tombstoneWrite = authSessionStorage.write({ token: null, user: null, impersonating: false });
+      const tenantDiskClear = clearPreviousTenantStorage().catch(() => {});
+
+      void sessionRuntime.commit(expiredEpoch, async (isCurrent) => {
+        if (!isCurrent()) return;
+        await tombstoneWrite;
+        if (!isCurrent()) return;
+        await queryClient?.cancelQueries().catch(() => {});
+        if (!isCurrent()) return;
+        queryClient?.clear();
+        clearWidgetData();
+        await tenantDiskClear;
+      });
     });
-  }, [queryClient]);
+  }, [beginSessionTransition, queryClient, sessionRuntime]);
 
   // Stabilise the auth API surface — every consumer of `useAuth()` reads
   // these callbacks, and a fresh function identity on every AuthProvider
@@ -639,96 +816,99 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
   // change (login, logout, 401, refreshUser).
   const login = useCallback(
     async (phone: string, password: string) => {
+      const loginEpoch = beginSessionTransition();
+      // Network stays outside the commit queue: a slow login A must not hold
+      // up a newer login B or logout. Only its result is serialised below.
       const res = await authApi.login({ phone, password });
       const { token: t, user: u } = res.data;
-      // Cross-tenant safety: even though `logout()` is the normal path
-      // off-board user A's data, a crash/kill mid-session can leave
-      // `rqcache:v1:*` entries belonging to A in AsyncStorage. When user
-      // B then logs in on the same device, we MUST start with an empty
-      // QueryClient + empty persistent cache before persisting B's data.
-      queryClient?.cancelQueries().catch(() => {});
-      queryClient?.clear();
-      await clearPersistentCache().catch(() => {});
-      await clearOfflineCheckQueue().catch(() => {});
-      await clearOfflineCheckQueue().catch(() => {});
-      // Same cross-tenant/-role isolation for the home-screen widget: the
-      // App Group payload may still hold user A's numbers (e.g. the owner's
-      // прибыль). Wipe it BEFORE B's session starts — B's own dashboard
-      // re-populates it with the correct role-shaped payload on first load.
-      clearWidgetData();
-      // Drop tenant A's bearer BEFORE priming B's token. setAuthToken(null)
-      // clears the in-memory bearer; setAuthToken(t) installs B's for every
-      // subsequent request without an AsyncStorage read on the prefetch
-      // fan-out. (The client-side ETag layer that used to leak A's body into B
-      // via a 304 was removed — see api/axios.ts.)
-      setAuthToken(null);
-      await AsyncStorage.setItem('token', t);
-      // Persist B's user AFTER clearPersistentCache() above (which only wipes
-      // 'rqcache:v1:*', not the 'user' slot) so the next cold start restores
-      // B — never a leftover A. Part of the same cross-tenant isolation as the
-      // token / QueryClient / ETag resets above.
-      await persistUser(u);
-      setAuthToken(t);
-      setToken(t);
-      setUser(u);
-      if (queryClient) prefetchAfterLogin(queryClient, u);
+      const applied = await commitAuthenticatedSession(sessionRuntime, loginEpoch, {
+        clearPreviousTenant: () => {
+          queryClient?.cancelQueries().catch(() => {});
+          queryClient?.clear();
+          clearWidgetData();
+          // clearAll empties its in-memory queue before returning the promise.
+          // Both durable tenant stores must be empty before token B is
+          // persisted; otherwise a process kill can restore B beside A data.
+          return clearPreviousTenantStorage();
+        },
+        applyInMemory: () => {
+          setAuthToken(t);
+          setToken(t);
+          setUser(u);
+          setRecoveringSession(false);
+          setSessionRecoveryPending(false);
+          setIsImpersonating(false);
+        },
+        persist: async () => {
+          await authSessionStorage.write({ token: t, user: u, impersonating: false });
+        },
+      });
+      if (applied && sessionRuntime.isCurrent(loginEpoch) && queryClient) prefetchAfterLogin(queryClient, u);
     },
-    [queryClient],
+    [beginSessionTransition, queryClient, sessionRuntime],
   );
 
   const refreshUser = useCallback(async () => {
+    const refreshEpoch = sessionRuntime.capture();
     try {
       const res = await authApi.me();
       const fresh = res.data as User;
-      setUser(fresh);
-      // Keep the cold-start cache in sync so the next optimistic restore
-      // reflects the latest profile (role / permissions / name changes).
-      persistUser(fresh).catch(() => {});
+      await sessionRuntime.commit(refreshEpoch, async (isCurrent) => {
+        if (!isCurrent()) return;
+        setUser(fresh);
+        await authSessionStorage.write({ token, user: fresh, impersonating: isImpersonating });
+      });
     } catch {
       // ignore — a transient failure keeps the current session intact
     }
-  }, []);
+  }, [isImpersonating, sessionRuntime, token]);
 
   const logout = useCallback(async () => {
-    // Unregister this device's push token BEFORE the bearer is dropped —
-    // fire-and-forget, same as the logout call itself. Without this the
-    // previous user keeps receiving their tenant's pushes after user B
-    // signs in on the same device.
-    if (registeredPushToken) {
-      pushApi.unregister(registeredPushToken).catch(() => {});
-      registeredPushToken = null;
+    const logoutEpoch = beginSessionTransition();
+    const previousPushToken = registeredPushToken;
+    registeredPushToken = null;
+
+    // Capture A's bearer + epoch before publishing the local tombstone. The
+    // server cleanup stays best-effort and never blocks local logout, but is
+    // ordered so JWT revocation cannot beat push-token removal. A late result
+    // is rejected at the axios session boundary and cannot affect session B.
+    if (token) {
+      const cleanupAsPreviousSession = createCapturedAuthRequester(token);
+      void (async () => {
+        if (previousPushToken) {
+          await cleanupAsPreviousSession({
+            method: 'delete',
+            url: '/push/token',
+            data: { token: previousPushToken },
+          }).catch(() => {});
+        }
+        await cleanupAsPreviousSession({ method: 'post', url: '/auth/logout' }).catch(() => {});
+      })();
     }
-    authApi.logout().catch(() => {});
-    // Cancel in-flight queries first so a stale request can't land
-    // after we've torn down state and revive an entry under the next
-    // user's session.
-    queryClient?.cancelQueries().catch(() => {});
-    // Drop the in-memory bearer so subsequent requests are unauthenticated.
+
     setAuthToken(null);
-    await AsyncStorage.removeItem('token');
-    // Wipe the cached user identity — tenant safety: user B logging in on the
-    // same device must never restore user A optimistically.
-    await AsyncStorage.removeItem(STORAGE_USER_KEY).catch(() => {});
-    await AsyncStorage.removeItem(STORAGE_IMPERSONATING_KEY).catch(() => {});
-    await clearPersistentCache().catch(() => {});
-    await clearOfflineCheckQueue().catch(() => {});
-    // Round 7 audit #4: the expo-image disk/memory cache (product photos,
-    // avatars — see CachedImage's `cachePolicy="memory-disk"`) survived
-    // logout, so user B on the same device could still be served user A's
-    // cached bitmaps. Fire-and-forget: losing the image cache only costs a
-    // re-download, and it must never block or fail the logout itself.
-    ExpoImage.clearDiskCache().catch(() => {});
-    ExpoImage.clearMemoryCache().catch(() => {});
-    // Wipe the home-screen widget payload — the owner's revenue/profit (or a
-    // master's earnings) must never stay visible on the springboard after
-    // logout, nor leak into the next user's widget until their dashboard
-    // writes fresh role-shaped data.
-    clearWidgetData();
-    queryClient?.clear();
     setToken(null);
     setUser(null);
+    setRecoveringSession(false);
+    setSessionRecoveryPending(false);
     setIsImpersonating(false);
-  }, [queryClient]);
+    const tombstoneWrite = authSessionStorage.write({ token: null, user: null, impersonating: false });
+    const tenantDiskClear = clearPreviousTenantStorage().catch(() => {});
+
+    await sessionRuntime.commit(logoutEpoch, async (isCurrent) => {
+      if (!isCurrent()) return;
+      await tombstoneWrite;
+      if (!isCurrent()) return;
+      await queryClient?.cancelQueries().catch(() => {});
+      if (!isCurrent()) return;
+      queryClient?.clear();
+      clearWidgetData();
+      await tenantDiskClear;
+      if (!isCurrent()) return;
+      ExpoImage.clearDiskCache().catch(() => {});
+      ExpoImage.clearMemoryCache().catch(() => {});
+    });
+  }, [beginSessionTransition, queryClient, sessionRuntime, token]);
 
   /**
    * beginImpersonation — install the short-lived (30-min) director token
@@ -745,31 +925,31 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
    */
   const beginImpersonation = useCallback(
     async (t: string, u: User) => {
-      queryClient?.cancelQueries().catch(() => {});
-      queryClient?.clear();
-      await clearPersistentCache().catch(() => {});
-      await clearOfflineCheckQueue().catch(() => {});
-      await clearOfflineCheckQueue().catch(() => {});
-      // Round 7 audit #4: same image-cache isolation as logout() — the
-      // superadmin's cached bitmaps must not bleed into the impersonated
-      // tenant's session (fire-and-forget, errors swallowed).
-      ExpoImage.clearDiskCache().catch(() => {});
-      ExpoImage.clearMemoryCache().catch(() => {});
-      // Same widget isolation as login(): the superadmin's (or previous
-      // session's) widget payload must not survive into the impersonated
-      // tenant's session.
-      clearWidgetData();
-      setAuthToken(null);
-      await AsyncStorage.setItem('token', t);
-      await persistUser(u);
-      await AsyncStorage.setItem(STORAGE_IMPERSONATING_KEY, '1').catch(() => {});
-      setAuthToken(t);
-      setToken(t);
-      setUser(u);
-      setIsImpersonating(true);
-      if (queryClient) prefetchAfterLogin(queryClient, u);
+      const impersonationEpoch = beginSessionTransition();
+      const applied = await commitAuthenticatedSession(sessionRuntime, impersonationEpoch, {
+        clearPreviousTenant: () => {
+          queryClient?.cancelQueries().catch(() => {});
+          queryClient?.clear();
+          ExpoImage.clearDiskCache().catch(() => {});
+          ExpoImage.clearMemoryCache().catch(() => {});
+          clearWidgetData();
+          return clearPreviousTenantStorage();
+        },
+        applyInMemory: () => {
+          setAuthToken(t);
+          setToken(t);
+          setUser(u);
+          setRecoveringSession(false);
+          setSessionRecoveryPending(false);
+          setIsImpersonating(true);
+        },
+        persist: async () => {
+          await authSessionStorage.write({ token: t, user: u, impersonating: true });
+        },
+      });
+      if (applied && sessionRuntime.isCurrent(impersonationEpoch) && queryClient) prefetchAfterLogin(queryClient, u);
     },
-    [queryClient],
+    [beginSessionTransition, queryClient, sessionRuntime],
   );
 
   /**
@@ -839,6 +1019,9 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       user,
       token,
       loading,
+      recoveringSession,
+      sessionRecoveryPending,
+      retrySessionRecovery,
       login,
       logout,
       refreshUser,
@@ -854,6 +1037,9 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       user,
       token,
       loading,
+      recoveringSession,
+      sessionRecoveryPending,
+      retrySessionRecovery,
       login,
       logout,
       refreshUser,

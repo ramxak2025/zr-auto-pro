@@ -64,6 +64,29 @@ export function buildApiHosts(primaryBase: string, rawFallbacks: unknown): strin
 }
 
 /**
+ * Stable ring order starting at `preferred`. Unknown preferences are ignored.
+ * Keeping this pure makes both request failover and health selection use the
+ * exact same host order.
+ */
+export function orderApiHosts(hosts: readonly string[], preferred: string | null | undefined): string[] {
+  if (!preferred) return [...hosts];
+  const start = hosts.indexOf(preferred);
+  if (start < 0) return [...hosts];
+  return [...hosts.slice(start), ...hosts.slice(0, start)];
+}
+
+/** Next host in the ring that this request has not already attempted. */
+export function nextUntriedApiHost(
+  hosts: readonly string[],
+  current: string,
+  attempted: readonly string[],
+): string | null {
+  const tried = new Set(attempted);
+  tried.add(current);
+  return orderApiHosts(hosts, current).slice(1).find((host) => !tried.has(host)) ?? null;
+}
+
+/**
  * HTML вместо JSON от «/api» — признак чужого апстрима (битая база,
  * captive-portal оператора, страница ошибки хостинга). Такой ответ ОБЯЗАН
  * считаться сетевым сбоем, а не данными.

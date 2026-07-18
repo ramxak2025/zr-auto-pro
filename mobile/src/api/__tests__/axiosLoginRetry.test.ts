@@ -1,16 +1,11 @@
 /**
- * Тесты одиночного прозрачного ретрая логина (сеть с потерей пакетов:
- * оператор рвёт соединение до того, как ответ сервера дошёл).
+ * Тесты границы failover в общем axios-интерсепторе.
  *
- * Контракт (см. login-retry блок в ../axios.ts):
- *   1) POST /auth/login при ERR_NETWORK / ECONNABORTED повторяется РОВНО один
- *      раз: в кольце >1 хоста — на следующий хост (тот же механизм смены
- *      хоста, что failover, + adoptActiveBase на успехе); один хост — на тот
- *      же хост;
- *   2) ответ сервера (401 / 400) НЕ ретраится — у ошибки есть .response;
- *   3) остальные мутации (POST /expenses) при ERR_NETWORK НЕ ретраятся —
- *      правило «мутации только при ERR_HTML_RESPONSE» не тронуто;
- *   4) GET-failover продолжает работать как раньше (регрессионный пин).
+ * Контракт:
+ *   1) прямой POST /auth/login и остальные мутации никогда не ретраятся;
+ *      безопасным последовательным входом владеет только loginAcrossHosts;
+ *   2) ответ сервера (401 / 400) также не ретраится;
+ *   3) GET/HEAD/OPTIONS обходят всё трёххостовое кольцо.
  *
  * Герметично: мокируем ЕДИНСТВЕННЫЕ runtime-зависимости axios.ts
  * (expo-constants, AsyncStorage), сетевой слой подменяем adapter'ом axios —
@@ -22,6 +17,8 @@ import type { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'a
 
 const PRIMARY = 'https://primary.test/api';
 const RESERVE = 'https://reserve.test/api';
+const THIRD = 'https://third.test/api';
+const realFetch = global.fetch;
 
 // Переменная читается фабрикой мока ЛЕНИВО (getter) — каждый reload модуля
 // axios.ts видит актуальное кольцо. Префикс `mock` обязателен для hoisted
@@ -59,7 +56,7 @@ function loadApiModule(fallbacks: string[]): AxiosModule {
   return require('../axios') as AxiosModule;
 }
 
-type Step = 'net' | 'abort' | 'html' | 'ok' | 400 | 401;
+type Step = 'net' | 'abort' | 'html' | 'html403' | 'ok' | 400 | 401 | 403 | 408 | 421 | 451 | 502 | 503 | 504;
 
 function okResponse(
   config: InternalAxiosRequestConfig,
@@ -98,6 +95,12 @@ function scriptAdapter(api: AxiosInstance, script: Step[]): InternalAxiosRequest
     const step = script[Math.min(calls.length - 1, script.length - 1)];
     if (step === 'ok') return okResponse(config, { token: 'jwt', user: { id: 1 } });
     if (step === 'html') return okResponse(config, '<!doctype html><html>портал оператора</html>', 'text/html');
+    if (step === 'html403') {
+      const error = httpError(config, 403) as Error & { response: AxiosResponse };
+      error.response.data = '<!doctype html><html>blocked by upstream</html>';
+      error.response.headers = { 'content-type': 'text/html' };
+      throw error;
+    }
     if (step === 'net') throw netError(config, 'ERR_NETWORK');
     if (step === 'abort') throw netError(config, 'ECONNABORTED');
     throw httpError(config, step);
@@ -105,54 +108,55 @@ function scriptAdapter(api: AxiosInstance, script: Step[]): InternalAxiosRequest
   return calls;
 }
 
-describe('одиночный прозрачный ретрай POST /auth/login', () => {
+describe('границы failover axios-интерсептора', () => {
   beforeEach(() => {
     // Успешный переезд на резерв запускает 10-минутную пробу возврата primary
     // (setInterval) — фейковые таймеры не дают ей повиснуть открытым хендлом.
     // Микротаски (await / промисы моков) не фейкаем.
     jest.useFakeTimers({ doNotFake: ['nextTick', 'queueMicrotask'] });
+    global.fetch = jest.fn(async () => ({
+      ok: true,
+      text: async () => '{"status":"ok"}',
+      headers: { get: () => 'application/json' },
+    })) as unknown as typeof fetch;
   });
   afterEach(() => {
     jest.useRealTimers();
+    global.fetch = realFetch;
   });
 
-  it('ERR_NETWORK, кольцо >1: ровно один повтор на СЛЕДУЮЩИЙ хост + адопция резерва (как failover)', async () => {
+  it('прямой POST /auth/login при ERR_NETWORK не получает скрытый второй запрос', async () => {
     const mod = loadApiModule([RESERVE]);
     const calls = scriptAdapter(mod.default, ['net', 'ok']);
 
-    const res = await mod.default.post('/auth/login', { phone: '+79990000000', password: 'x' });
+    await expect(mod.default.post('/auth/login', { phone: '+79990000000', password: 'x' })).rejects.toThrow(
+      /Нет соединения с сервером/,
+    );
 
-    expect(res.status).toBe(200);
-    expect(res.data).toEqual({ token: 'jwt', user: { id: 1 } });
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
     expect(calls[0].baseURL).toBe(PRIMARY);
-    expect(calls[1].baseURL).toBe(RESERVE);
-    expect(calls[1].url).toBe('/auth/login');
-    // Успех на резерве запоминается активной базой — тот же механизм, что failover.
-    expect(mod.getActiveApiBaseUrl()).toBe(RESERVE);
   });
 
-  it('ECONNABORTED, один хост в кольце: ровно один повтор на ТОТ ЖЕ хост', async () => {
+  it('прямой POST /auth/login при ECONNABORTED на одном хосте тоже не дублируется', async () => {
     const mod = loadApiModule([]);
     const calls = scriptAdapter(mod.default, ['abort', 'ok']);
 
-    const res = await mod.default.post('/auth/login', { phone: '+79990000000', password: 'x' });
+    await expect(mod.default.post('/auth/login', { phone: '+79990000000', password: 'x' })).rejects.toThrow(
+      /Нет соединения с сервером/,
+    );
 
-    expect(res.status).toBe(200);
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
     expect(calls[0].baseURL).toBe(PRIMARY);
-    expect(calls[1].baseURL).toBe(PRIMARY);
-    expect(mod.getActiveApiBaseUrl()).toBe(PRIMARY);
   });
 
-  it('оба захода упали сетью: РОВНО две попытки (не цикл), наружу — честная сетевая ошибка', async () => {
+  it('прямой login при route failure не обходит кольцо', async () => {
     const mod = loadApiModule([RESERVE]);
     const calls = scriptAdapter(mod.default, ['net', 'net']);
 
     await expect(mod.default.post('/auth/login', { phone: '+79990000000', password: 'x' })).rejects.toThrow(
       /Нет соединения с сервером/,
     );
-    expect(calls).toHaveLength(2);
+    expect(calls).toHaveLength(1);
   });
 
   it('401 НЕ ретраится — ответ сервера дошёл (неверный пароль ≠ обрыв сети)', async () => {
@@ -181,6 +185,15 @@ describe('одиночный прозрачный ретрай POST /auth/login'
     expect(calls).toHaveLength(1);
   });
 
+  it.each<Step>(['html', 502, 504])('мутация при %s не уходит на другой хост', async (failure) => {
+    const mod = loadApiModule([RESERVE, THIRD]);
+    const calls = scriptAdapter(mod.default, [failure, 'ok']);
+
+    await expect(mod.default.post('/expenses', { amount: 100 })).rejects.toBeTruthy();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].baseURL).toBe(PRIMARY);
+  });
+
   it('ERR_HTML_RESPONSE на логине при одном хосте НЕ ретраится этим механизмом (та же статика ответит снова)', async () => {
     const mod = loadApiModule([]);
     const calls = scriptAdapter(mod.default, ['html']);
@@ -191,16 +204,111 @@ describe('одиночный прозрачный ретрай POST /auth/login'
     expect(calls).toHaveLength(1);
   });
 
-  it('регрессия: GET-failover работает как раньше (сетевой отказ → следующий хост)', async () => {
-    const mod = loadApiModule([RESERVE]);
-    const calls = scriptAdapter(mod.default, ['net', 'ok']);
+  it('GET проходит все 3 хоста: transport → HTML → успех третьего', async () => {
+    const mod = loadApiModule([RESERVE, THIRD]);
+    const calls = scriptAdapter(mod.default, ['net', 'html', 'ok']);
 
     const res = await mod.default.get('/products');
 
     expect(res.status).toBe(200);
-    expect(calls).toHaveLength(2);
-    expect(calls[0].baseURL).toBe(PRIMARY);
-    expect(calls[1].baseURL).toBe(RESERVE);
+    expect(calls.map((call) => call.baseURL)).toEqual([PRIMARY, RESERVE, THIRD]);
+    expect(mod.getActiveApiBaseUrl()).toBe(THIRD);
+  });
+
+  it('GET проходит 502 и 504 двух маршрутов и принимает третий', async () => {
+    const mod = loadApiModule([RESERVE, THIRD]);
+    const calls = scriptAdapter(mod.default, [502, 504, 'ok']);
+
+    const res = await mod.default.get('/dashboard');
+
+    expect(res.status).toBe(200);
+    expect(calls.map((call) => call.baseURL)).toEqual([PRIMARY, RESERVE, THIRD]);
+    expect(mod.getActiveApiBaseUrl()).toBe(THIRD);
+  });
+
+  it.each<Step>([408, 421, 451])('GET обходит route-status %s и принимает живой резерв', async (failure) => {
+    const mod = loadApiModule([RESERVE]);
+    const calls = scriptAdapter(mod.default, [failure, 'ok']);
+
+    await expect(mod.default.get('/products')).resolves.toMatchObject({ status: 200 });
+    expect(calls.map((call) => call.baseURL)).toEqual([PRIMARY, RESERVE]);
+  });
+
+  it('финальные 451 всех трёх путей дают один recovery event', async () => {
+    const mod = loadApiModule([RESERVE, THIRD]);
+    const failed = jest.fn();
+    mod.onNetworkClassFailure(failed);
+    const calls = scriptAdapter(mod.default, [451, 451, 451]);
+
+    await expect(mod.default.get('/products')).rejects.toMatchObject({ response: { status: 451 } });
+    expect(calls).toHaveLength(3);
+    expect(failed).toHaveBeenCalledTimes(1);
+  });
+
+  it('GET с обычным JSON-403 авторитетен и не обходит permission-ответ', async () => {
+    const mod = loadApiModule([RESERVE]);
+    const calls = scriptAdapter(mod.default, [403, 'ok']);
+
+    await expect(mod.default.get('/admin')).rejects.toMatchObject({ response: { status: 403 } });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('GET failover видит HTML даже когда captive/WAF вернул HTTP 403', async () => {
+    const mod = loadApiModule([RESERVE]);
+    const calls = scriptAdapter(mod.default, ['html403', 'ok']);
+
+    const res = await mod.default.get('/products');
+
+    expect(res.status).toBe(200);
+    expect(calls.map((call) => call.baseURL)).toEqual([PRIMARY, RESERVE]);
+    expect(mod.getActiveApiBaseUrl()).toBe(RESERVE);
+  });
+
+  it('после полного отказа circuit breaker не умножает каждый query retry на три хоста', async () => {
+    const mod = loadApiModule([RESERVE, THIRD]);
+    const calls = scriptAdapter(mod.default, ['net', 'net', 'net', 'net', 'net', 'net', 'ok']);
+
+    await expect(mod.default.get('/products')).rejects.toThrow(/Нет соединения с сервером/);
+    expect(calls).toHaveLength(3); // first logical request proves the whole ring dead
+
+    await expect(mod.default.get('/products')).rejects.toThrow(/Нет соединения с сервером/);
+    expect(calls).toHaveLength(4); // retry wave touches active only while circuits are open
+
+    jest.advanceTimersByTime(8_000);
+    const recovered = await mod.default.get('/products');
+    expect(recovered.status).toBe(200);
+    expect(calls.map((call) => call.baseURL)).toEqual([
+      PRIMARY,
+      RESERVE,
+      THIRD,
+      PRIMARY,
+      PRIMARY,
+      RESERVE,
+      THIRD,
+    ]);
+    expect(mod.getActiveApiBaseUrl()).toBe(THIRD);
+  });
+
+  it('успешный network reselect очищает circuits старого маршрута', async () => {
+    const mod = loadApiModule([RESERVE, THIRD]);
+    const calls = scriptAdapter(mod.default, ['net', 'net', 'net', 'net', 'ok']);
+
+    await expect(mod.default.get('/products')).rejects.toThrow(/Нет соединения с сервером/);
+    expect(calls).toHaveLength(3);
+
+    const reselection = mod.reselectApiHost(true);
+    jest.advanceTimersByTime(150);
+    await reselection;
+
+    const recovered = await mod.default.get('/products');
+    expect(recovered.status).toBe(200);
+    expect(calls.map((call) => call.baseURL)).toEqual([
+      PRIMARY,
+      RESERVE,
+      THIRD,
+      PRIMARY,
+      RESERVE,
+    ]);
     expect(mod.getActiveApiBaseUrl()).toBe(RESERVE);
   });
 });

@@ -83,6 +83,7 @@ import BookingSettingsScreen from '../screens/BookingSettingsScreen';
 import TemplatesScreen from '../screens/TemplatesScreen';
 import TemplateEditorScreen from '../screens/TemplateEditorScreen';
 import LoadingSpinner from '../components/LoadingSpinner';
+import SessionRecoveryScreen from '../components/SessionRecoveryScreen';
 import { screenErrorBoundaryLayout } from '../components/ErrorBoundary';
 import FeatureGate from '../components/FeatureGate';
 import AdminShellNavigator from './AdminShellNavigator';
@@ -879,10 +880,20 @@ function MainShell() {
 }
 
 export default function AppNavigator() {
-  const { user, loading } = useAuth();
+  const { user, loading, recoveringSession, sessionRecoveryPending, retrySessionRecovery, logout } = useAuth();
 
   if (loading) {
     return <LoadingSpinner />;
+  }
+
+  if (!user && recoveringSession) {
+    return (
+      <SessionRecoveryScreen
+        pending={sessionRecoveryPending}
+        onRetry={retrySessionRecovery}
+        onLogout={logout}
+      />
+    );
   }
 
   return (
