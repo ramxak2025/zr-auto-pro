@@ -22,11 +22,7 @@
 import { InteractionManager } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import type { QueryClient, QueryKey } from '@tanstack/react-query';
-import {
-  AUTH_SESSION_ENVELOPE_KEY,
-  LEGACY_TOKEN_KEY,
-  parseAuthSessionEnvelope,
-} from '../contexts/authSessionStorage';
+import { AUTH_SESSION_ENVELOPE_KEY, LEGACY_TOKEN_KEY, parseAuthSessionEnvelope } from '../contexts/authSessionStorage';
 import {
   STORAGE_PREFIX,
   PERSISTED_KEYS,
@@ -135,6 +131,15 @@ function isWritableGeneration(generation: number): boolean {
 interface HydrationAuthSession {
   token: string | null;
   identity: string;
+  /** Which durable source decided the session (envelope wins over legacy). */
+  source: 'v1' | 'legacy';
+  /**
+   * true — durable-сессию не удалось ПРОЧИТАТЬ (reject нативного getItem).
+   * Это НЕ сигнал «разлогинен»: гидрацию пропускаем, но rqcache-слоты на
+   * диске не трогаем — иначе транзиентный сбой моста/storage стирал бы весь
+   * instant-boot кэш живого пользователя.
+   */
+  unreadable?: boolean;
 }
 
 /**
@@ -142,24 +147,48 @@ interface HydrationAuthSession {
  * over every legacy mirror, including a logged-out tombstone over a stale A
  * token. Legacy is used only as the migration fallback for a missing/corrupt
  * envelope.
+ *
+ * The identity deliberately EXCLUDES `envelope.generation`: authSessionStorage
+ * bumps it on every write, including the bootstrap `/auth/me` revalidation
+ * that re-commits the SAME token+user. Folding it in made a successful `/me`
+ * mid-hydration look like a session change and silently aborted the rest of
+ * background hydration (+ its GC pass) for the very same user. A user switch
+ * always changes the token, and every in-process transition (login / logout /
+ * 401 / impersonation) synchronously bumps `persistenceGeneration` via
+ * `clearPersistentCache` — so the token alone is the durable identity.
  */
 function resolveHydrationAuthSession(rawEnvelope: string | null, legacyToken: string | null): HydrationAuthSession {
   const envelope = parseAuthSessionEnvelope(rawEnvelope);
   if (envelope) {
     return {
       token: envelope.token,
-      identity: JSON.stringify(['v1', envelope.generation, envelope.token]),
+      identity: JSON.stringify(['v1', envelope.token]),
+      source: 'v1',
     };
   }
-  return { token: legacyToken, identity: JSON.stringify(['legacy', legacyToken]) };
+  return { token: legacyToken, identity: JSON.stringify(['legacy', legacyToken]), source: 'legacy' };
 }
 
 async function readHydrationAuthSession(): Promise<HydrationAuthSession> {
+  let readFailed = false;
+  const guardedGet = (key: string) =>
+    AsyncStorage.getItem(key).catch(() => {
+      readFailed = true;
+      return null;
+    });
   const [rawEnvelope, legacyToken] = await Promise.all([
-    AsyncStorage.getItem(AUTH_SESSION_ENVELOPE_KEY).catch(() => null),
-    AsyncStorage.getItem(LEGACY_TOKEN_KEY).catch(() => null),
+    guardedGet(AUTH_SESSION_ENVELOPE_KEY),
+    guardedGet(LEGACY_TOKEN_KEY),
   ]);
-  return resolveHydrationAuthSession(rawEnvelope, legacyToken);
+  const session = resolveHydrationAuthSession(rawEnvelope, legacyToken);
+  // Валидный конверт авторитетен — сбой чтения одного лишь legacy-зеркала не
+  // важен. Во всех остальных случаях reject любого из чтений означает
+  // «состояние сессии неизвестно», а НЕ «разлогинен»: вызывающие обязаны
+  // пропустить гидрацию и не трогать диск.
+  if (session.source !== 'v1' && readFailed) {
+    return { ...session, identity: JSON.stringify(['unreadable']), unreadable: true };
+  }
+  return session;
 }
 
 /** Re-check the authoritative durable session after a hydration await/yield. */
@@ -178,6 +207,11 @@ async function isCurrentHydrationSession(generation: number, session: HydrationA
 async function readTokenOrFlush(generation: number): Promise<HydrationAuthSession | null> {
   const session = await readHydrationAuthSession();
   if (!isCurrentGeneration(generation)) return null;
+
+  // Сбой ЧТЕНИЯ auth-ключей ≠ «разлогинен»: без достоверного знания о сессии
+  // гидрацию пропускаем, но НИЧЕГО не удаляем — стирать rqcache-слоты можно
+  // только по успешно прочитанному logged-out состоянию.
+  if (session.unreadable) return null;
 
   if (!session.token) {
     const allKeys = await AsyncStorage.getAllKeys();

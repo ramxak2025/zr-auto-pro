@@ -252,6 +252,72 @@ describe('persistent-cache tenant session boundary', () => {
     expect(queryClient.getQueryData(['products'])).toEqual([{ tenant: 'B' }]);
   });
 
+  it('same-token envelope rewrite (bootstrap /me re-commit) mid-hydration does NOT abort hydration', async () => {
+    const { hydrateCache } = loadPersistentCache();
+    const queryClient = new QueryClient();
+    const pairsA = deferred<readonly (readonly [string, string | null])[]>();
+
+    // authSessionStorage.write() bumps the envelope generation on EVERY
+    // commit, including the bootstrap /auth/me revalidation of the same
+    // token+user. That must not look like a session change to hydration.
+    let envelopeGeneration = 1;
+    mockAsyncStorage.getItem.mockImplementation(async (key) => {
+      if (key === AUTH_SESSION_ENVELOPE_KEY) return authEnvelope('token-A', envelopeGeneration);
+      if (key === LEGACY_TOKEN_KEY) return 'token-A';
+      return null;
+    });
+    mockAsyncStorage.getAllKeys.mockResolvedValue([PRODUCT_STORAGE_KEY]);
+    mockAsyncStorage.multiGet.mockReturnValueOnce(pairsA.promise);
+
+    const hydration = hydrateCache(queryClient);
+    await flushMicrotasks();
+
+    // /me succeeded while multiGet was still reading the disk.
+    envelopeGeneration = 2;
+    pairsA.resolve([productPair('A')]);
+    await hydration;
+
+    expect(queryClient.getQueryData(['products'])).toEqual([{ tenant: 'A' }]);
+  });
+
+  it('transient auth-key read failure skips hydration WITHOUT flushing the persisted cache', async () => {
+    const { hydrateCache } = loadPersistentCache();
+    const queryClient = new QueryClient();
+
+    // Native bridge hiccup: both auth reads reject while the cache keys are
+    // perfectly readable. This must not be treated as a logged-out state.
+    mockAsyncStorage.getItem.mockImplementation(async (key) => {
+      if (key === AUTH_SESSION_ENVELOPE_KEY || key === LEGACY_TOKEN_KEY) {
+        throw new Error('native bridge hiccup');
+      }
+      return null;
+    });
+    mockAsyncStorage.getAllKeys.mockResolvedValue([PRODUCT_STORAGE_KEY]);
+
+    await hydrateCache(queryClient);
+
+    expect(mockAsyncStorage.multiRemove).not.toHaveBeenCalled();
+    expect(mockAsyncStorage.multiGet).not.toHaveBeenCalled();
+    expect(queryClient.getQueryData(['products'])).toBeUndefined();
+  });
+
+  it('a failed legacy-mirror read does not block hydration when the envelope is valid', async () => {
+    const { hydrateCache } = loadPersistentCache();
+    const queryClient = new QueryClient();
+
+    mockAsyncStorage.getItem.mockImplementation(async (key) => {
+      if (key === AUTH_SESSION_ENVELOPE_KEY) return authEnvelope('token-A');
+      if (key === LEGACY_TOKEN_KEY) throw new Error('native bridge hiccup');
+      return null;
+    });
+    mockAsyncStorage.getAllKeys.mockResolvedValue([PRODUCT_STORAGE_KEY]);
+    mockAsyncStorage.multiGet.mockResolvedValue([productPair('A')]);
+
+    await hydrateCache(queryClient);
+
+    expect(queryClient.getQueryData(['products'])).toEqual([{ tenant: 'A' }]);
+  });
+
   it('rejects a failed clear and blocks writes until a later clear succeeds', async () => {
     const { attachPersistence, clearPersistentCache } = loadPersistentCache();
     const queryClient = new QueryClient();

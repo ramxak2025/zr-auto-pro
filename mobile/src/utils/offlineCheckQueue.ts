@@ -173,7 +173,14 @@ export function generateClientRequestId(): string {
  * как и раньше.
  */
 export function isNetworkClassCheckError(error: unknown): boolean {
-  const response = (error as { response?: { status?: number } } | null | undefined)?.response;
+  const candidate = error as { response?: { status?: number }; code?: string; __CANCEL__?: unknown } | null | undefined;
+  // Отмена запроса (axios CanceledError / staleAuthCancellation при смене
+  // auth-сессии) — ДЕТЕРМИНИРОВАННЫЙ отказ, не сетевой. Такой чек в очередь
+  // класть НЕЛЬЗЯ: очередь безусловно чистится при следующем логине
+  // (clearPreviousTenantStorage), и ложный «сохранён на телефоне» превратился
+  // бы в тихую потерю чека. Экран обязан показать честную ошибку.
+  if (candidate?.code === 'ERR_CANCELED' || candidate?.__CANCEL__) return false;
+  const response = candidate?.response;
   if (!response) return true;
   const status = response.status;
   return status === 502 || status === 503 || status === 504;
@@ -427,7 +434,10 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     await ensureLoaded();
     if (ownerGeneration !== sessionGeneration || !storageBoundaryReady) return;
     if (!entries.some((e) => e.clientRequestId === clientRequestId)) return;
-    await commit(entries.filter((e) => e.clientRequestId !== clientRequestId), ownerGeneration);
+    await commit(
+      entries.filter((e) => e.clientRequestId !== clientRequestId),
+      ownerGeneration,
+    );
   }
 
   async function retry(clientRequestId: string): Promise<void> {

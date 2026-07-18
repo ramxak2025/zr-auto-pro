@@ -119,6 +119,21 @@ describe('isNetworkClassCheckError (что уходит в очередь)', () 
       expect(isNetworkClassCheckError(axiosError(status))).toBe(false);
     }
   });
+
+  it('отмена (ERR_CANCELED / staleAuthCancellation) — детерминированная, в очередь НЕ уходит', () => {
+    // Форма staleAuthCancellation из api/axios.ts: isAxiosError + ERR_CANCELED
+    // + __CANCEL__, без .response. Ложное «сохранён на телефоне» здесь стало
+    // бы тихой потерей чека: очередь чистится при следующем логине.
+    const staleAuth = Object.assign(new Error('Request belongs to a stale auth session'), {
+      isAxiosError: true,
+      code: 'ERR_CANCELED',
+      __CANCEL__: true,
+    });
+    expect(isNetworkClassCheckError(staleAuth)).toBe(false);
+    // axios CanceledError несёт флаг через прототип — достаточно любого из двух.
+    expect(isNetworkClassCheckError({ code: 'ERR_CANCELED' })).toBe(false);
+    expect(isNetworkClassCheckError({ __CANCEL__: true })).toBe(false);
+  });
 });
 
 describe('isPermanentServerRejection (flush → bucket failed)', () => {
@@ -430,9 +445,7 @@ describe('ядро очереди', () => {
       status: 'pending',
     };
     const staleRead = deferred<string | null>();
-    const map = new Map<string, string>([
-      [OFFLINE_CHECK_QUEUE_STORAGE_KEY, serializeQueue([oldEntry])],
-    ]);
+    const map = new Map<string, string>([[OFFLINE_CHECK_QUEUE_STORAGE_KEY, serializeQueue([oldEntry])]]);
     const storage: QueueStorage = {
       getItem: async () => staleRead.promise,
       setItem: async (key, value) => {
