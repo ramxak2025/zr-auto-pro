@@ -35,8 +35,15 @@
  * Owner-reported fixes (2026-05):
  *   • "Нет значка раздела Интеграции, нет значка Мегафон ВАТС" — both
  *     used Ionicons names that resolved to `Circle` in our Lucide shim.
- *     Switched Мегафон to `cellular-outline` (now mapped → Signal).
+ *     Switched Мегафон to `cellular` (mapped → Signal).
  *     MoreScreen entry now uses `extension-puzzle-outline` (Puzzle).
+ *
+ * Owner-reported redesign (2026-07):
+ *   • "Иконки провайдеров — пустые/серые кружки" — every provider tile now
+ *     renders a SOLID brand-colour tile with a WHITE glyph (iOS «app-icon»
+ *     pattern) via `provider.brand` / `brandBg`+`brandFg`, so WhatsApp reads
+ *     green, Telegram blue, SMS.RU orange, Мегафон зелёный и т.д. — узнаваемо
+ *     в светлой и тёмной теме. Apple Wallet — адаптивный «графит».
  */
 import React, { useMemo, useState } from 'react';
 import {
@@ -81,8 +88,13 @@ interface ProviderDef {
   name: string;
   description: string;
   iconName: keyof typeof import('@expo/vector-icons/build/Ionicons').default.glyphMap;
-  /** Used for the icon tint pill. */
-  tone: { bg: string; fg: string };
+  /**
+   * Solid brand colour for the icon tile. Rendered as a filled rounded tile with
+   * a WHITE glyph on top (iOS «app-icon» pattern) — reads as a recognizable brand
+   * badge in both light and dark, instead of the pale-tint «серый кружок» owner
+   * reported. Use the provider's real brand colour where known.
+   */
+  brand: string;
   /** Field labels. */
   apiKeyLabel: string;
   /** Show senderPhone field. */
@@ -120,8 +132,8 @@ const PHONE_PROVIDERS: ProviderDef[] = [
     kind: 'phone',
     name: 'Мои Звонки',
     description: 'Виртуальная АТС, обработка звонков и SMS',
-    iconName: 'call-outline',
-    tone: { bg: colors.blue[50], fg: colors.blue[600] },
+    iconName: 'call',
+    brand: '#4F46E5', // индиго — телефония
     apiKeyLabel: 'Ключ API',
     moizvonkiFields: true,
     sendsClientSms: true,
@@ -132,8 +144,8 @@ const PHONE_PROVIDERS: ProviderDef[] = [
     kind: 'phone',
     name: 'Мегафон ВАТС',
     description: 'Звонки и SMS через Мегафон',
-    iconName: 'cellular-outline',
-    tone: { bg: colors.green[50], fg: colors.green[600] },
+    iconName: 'cellular',
+    brand: '#00B956', // фирменный зелёный Мегафона
     apiKeyLabel: 'Токен ВАТС',
     needsPhone: true,
     sendsClientSms: true,
@@ -151,7 +163,7 @@ const MESSENGER_PROVIDERS: ProviderDef[] = [
     name: 'WhatsApp Business',
     description: 'WhatsApp Cloud API — сообщения клиентам',
     iconName: 'logo-whatsapp',
-    tone: { bg: '#dcf8c6', fg: '#075E54' },
+    brand: '#25D366', // фирменный зелёный WhatsApp
     // Cloud API auth = a permanent Bearer access token (write-only → apiKey)
     // routed by a Phone number ID (non-secret → phoneNumberId).
     apiKeyLabel: 'Access token',
@@ -163,8 +175,8 @@ const MESSENGER_PROVIDERS: ProviderDef[] = [
     kind: 'whatsapp',
     name: 'Telegram',
     description: 'Уведомления через Telegram-бота',
-    iconName: 'paper-plane-outline',
-    tone: { bg: '#e1f3fb', fg: '#229ED9' },
+    iconName: 'paper-plane',
+    brand: '#229ED9', // фирменный синий Telegram
     // Bot token (write-only → apiKey) + target chat (non-secret → chatId).
     apiKeyLabel: 'Токен бота',
     needsChatId: true,
@@ -177,7 +189,7 @@ const MESSENGER_PROVIDERS: ProviderDef[] = [
     name: 'SMS.RU',
     description: 'Массовые SMS-рассылки клиентам',
     iconName: 'chatbox-ellipses-outline',
-    tone: { bg: colors.blue[50], fg: colors.blue[600] },
+    brand: '#F97316', // оранжевый — SMS-канал, отличается от синих мессенджеров
     apiKeyLabel: 'API ID',
     needsName: true,
     sendsClientSms: true,
@@ -244,17 +256,8 @@ function ProviderCard({ provider, integration, onPress, index }: ProviderCardPro
       style={[styles.providerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.providerCardRow}>
-        <View
-          style={[
-            styles.providerLogo,
-            { backgroundColor: palette.mode === 'dark' ? softTint(provider.tone.fg, 'dark') : provider.tone.bg },
-          ]}
-        >
-          <Ionicons
-            name={provider.iconName as any}
-            size={22}
-            color={palette.mode === 'dark' ? provider.tone.bg : provider.tone.fg}
-          />
+        <View style={[styles.providerLogo, { backgroundColor: provider.brand }]}>
+          <Ionicons name={provider.iconName as any} size={22} color={colors.white} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.providerName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -320,12 +323,14 @@ interface MoneyEntryCardProps {
   name: string;
   description: string;
   iconName: keyof typeof import('@expo/vector-icons/build/Ionicons').default.glyphMap;
-  tone: { bg: string; fg: string };
+  /** Solid brand tile colour + glyph colour (usually white on brand). */
+  brandBg: string;
+  brandFg: string;
   onPress: () => void;
   index: number;
 }
 
-function MoneyEntryCard({ name, description, iconName, tone, onPress, index }: MoneyEntryCardProps) {
+function MoneyEntryCard({ name, description, iconName, brandBg, brandFg, onPress, index }: MoneyEntryCardProps) {
   const palette = useColors();
   return (
     <AnimatedCard
@@ -334,13 +339,8 @@ function MoneyEntryCard({ name, description, iconName, tone, onPress, index }: M
       style={[styles.providerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.providerCardRow}>
-        <View
-          style={[
-            styles.providerLogo,
-            { backgroundColor: palette.mode === 'dark' ? softTint(tone.fg, 'dark') : tone.bg },
-          ]}
-        >
-          <Ionicons name={iconName as any} size={22} color={palette.mode === 'dark' ? tone.bg : tone.fg} />
+        <View style={[styles.providerLogo, { backgroundColor: brandBg }]}>
+          <Ionicons name={iconName as any} size={22} color={brandFg} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.providerName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -524,17 +524,8 @@ function ProviderModal({
   return (
     <Modal visible={!!provider} onClose={onClose} title={provider.name}>
       <View style={styles.modalHeaderBlock}>
-        <View
-          style={[
-            styles.modalLogo,
-            { backgroundColor: palette.mode === 'dark' ? softTint(provider.tone.fg, 'dark') : provider.tone.bg },
-          ]}
-        >
-          <Ionicons
-            name={provider.iconName as any}
-            size={26}
-            color={palette.mode === 'dark' ? provider.tone.bg : provider.tone.fg}
-          />
+        <View style={[styles.modalLogo, { backgroundColor: provider.brand }]}>
+          <Ionicons name={provider.iconName as any} size={26} color={colors.white} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>{provider.description}</Text>
@@ -951,8 +942,9 @@ export default function IntegrationsScreen() {
             index={0}
             name="Онлайн-касса 54-ФЗ"
             description="АТОЛ Онлайн — фискализация чеков"
-            iconName="receipt-outline"
-            tone={{ bg: colors.green[50], fg: colors.green[600] }}
+            iconName="receipt"
+            brandBg="#16A34A"
+            brandFg={colors.white}
             onPress={() => {
               haptic('tap');
               navigation.navigate('PaymentIntegrations');
@@ -969,8 +961,9 @@ export default function IntegrationsScreen() {
             index={0}
             name="Приём оплаты картой и СБП"
             description="Эквайринг — ЮKassa или Тинькофф"
-            iconName="card-outline"
-            tone={{ bg: colors.blue[50], fg: colors.blue[600] }}
+            iconName="card"
+            brandBg="#2563EB"
+            brandFg={colors.white}
             onPress={() => {
               haptic('tap');
               navigation.navigate('PaymentIntegrations');
@@ -980,8 +973,12 @@ export default function IntegrationsScreen() {
             index={1}
             name="Apple Wallet"
             description="Карта лояльности клиента (.pkpass)"
-            iconName="wallet-outline"
-            tone={{ bg: palette.bg.muted, fg: palette.text.primary }}
+            iconName="wallet"
+            // Apple Wallet — нейтральный «графит»: чёрная плитка + белый глиф в
+            // светлой теме, белая плитка + тёмный глиф в тёмной (Apple-эстетика,
+            // контраст сохраняется в обоих режимах).
+            brandBg={palette.text.primary}
+            brandFg={palette.bg.card}
             onPress={() => {
               haptic('tap');
               navigation.navigate('PaymentIntegrations');
@@ -1065,7 +1062,8 @@ export default function IntegrationsScreen() {
 //  (CallsScreen) once the owner enters real keys AND flips the toggle on.
 // ─────────────────────────────────────────────────────────────────────
 
-const MANGO_TONE = { bg: '#fdecec', fg: '#e11d48' };
+// Mango Office — фирменный «коралловый» тон. Плитка сплошного цвета + белый глиф.
+const MANGO_BRAND = '#E11D48';
 
 /** Read-only view of Mango's connection state for the compact catalogue card. */
 function useMangoStatus(): 'ok' | 'warn' | 'off' {
@@ -1095,13 +1093,8 @@ function MangoCard({ onPress, index }: { onPress: () => void; index: number }) {
       style={[styles.providerCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
     >
       <View style={styles.providerCardRow}>
-        <View
-          style={[
-            styles.providerLogo,
-            { backgroundColor: palette.mode === 'dark' ? softTint(MANGO_TONE.fg, 'dark') : MANGO_TONE.bg },
-          ]}
-        >
-          <Ionicons name="call-outline" size={22} color={palette.mode === 'dark' ? MANGO_TONE.bg : MANGO_TONE.fg} />
+        <View style={[styles.providerLogo, { backgroundColor: MANGO_BRAND }]}>
+          <Ionicons name="call" size={22} color={colors.white} />
         </View>
         <View style={{ flex: 1, minWidth: 0 }}>
           <Text style={[styles.providerName, { color: palette.text.primary }]} numberOfLines={1}>
@@ -1227,13 +1220,8 @@ function MangoModal({ visible, onClose }: { visible: boolean; onClose: () => voi
   return (
     <Modal visible={visible} onClose={onClose} title="Mango Office">
       <View style={styles.modalHeaderBlock}>
-        <View
-          style={[
-            styles.modalLogo,
-            { backgroundColor: palette.mode === 'dark' ? softTint(MANGO_TONE.fg, 'dark') : MANGO_TONE.bg },
-          ]}
-        >
-          <Ionicons name="call-outline" size={26} color={palette.mode === 'dark' ? MANGO_TONE.bg : MANGO_TONE.fg} />
+        <View style={[styles.modalLogo, { backgroundColor: MANGO_BRAND }]}>
+          <Ionicons name="call" size={26} color={colors.white} />
         </View>
         <View style={{ flex: 1 }}>
           <Text style={[styles.modalDesc, { color: palette.text.secondary }]}>

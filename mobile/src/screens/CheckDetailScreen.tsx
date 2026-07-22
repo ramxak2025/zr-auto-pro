@@ -2292,6 +2292,13 @@ export default function CheckDetailScreen() {
         productId={movementProduct?.id ?? null}
         productName={movementProduct?.name}
         productUnit={movementProduct?.unit}
+        onOpenCheck={(checkId) => {
+          // Закрываем модалку и пушим НОВЫЙ CheckDetail поверх текущего —
+          // именно push (мы уже в CheckDetail): navigate подменил бы params
+          // текущего экрана и сломал бы кнопку «назад».
+          setMovementProduct(null);
+          navigation.push('CheckDetail', { id: checkId });
+        }}
       />
     </SafeAreaView>
   );

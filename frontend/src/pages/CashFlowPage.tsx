@@ -1,20 +1,6 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import {
-  Wallet,
-  Banknote,
-  CreditCard,
-  ShieldAlert,
-  Users,
-  CalendarClock,
-  Coins,
-  PiggyBank,
-  Undo2,
-  AlertCircle,
-  Truck,
-  Receipt,
-  Landmark,
-} from 'lucide-react';
+import { Wallet, Banknote, CreditCard, ShieldAlert, Users, CalendarClock, Coins, PiggyBank, Undo2 } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
@@ -52,18 +38,6 @@ interface CashFlowDay {
   // Возвраты по дате ФАКТИЧЕСКОГО возврата — информационно: деньги уже вычтены
   // из дня продажи, в total НЕ входят и из cash/card дня возврата не вычитаются.
   refunds?: number;
-  // Не разнесённый по нал/карта/долг остаток «Итого» (битые легаси-ноги):
-  // тождество cash + card + installmentDebt + unallocated = total — точное.
-  unallocated?: number;
-  // ОТТОКИ (E-1). supplierPayments — Σ оплат поставщикам за день (вкл. авто-платежи
-  // «Оплатить сразу» и погашения Б/У-долга). expensesOut — Σ операционных расходов
-  // (approved, кроме «Зарплата»). netCash = «осталось в кассе» = received − refunds
-  // − supplierPayments − expensesOut. Считаются только на уровне тенанта (без
-  // фильтра по мастеру) → опциональны: при фильтре по мастеру и на старом бэкенде
-  // не приходят / равны 0.
-  supplierPayments?: number;
-  expensesOut?: number;
-  netCash?: number;
 }
 
 interface CashFlowData {
@@ -80,10 +54,6 @@ interface CashFlowData {
     installmentPaidCard?: number;
     received?: number;
     refunds?: number;
-    unallocated?: number;
-    supplierPayments?: number;
-    expensesOut?: number;
-    netCash?: number;
   };
 }
 
@@ -144,17 +114,9 @@ export default function CashFlowPage() {
   const hasWarrantyLoss = typeof totals.warrantyLoss === 'number' && totals.warrantyLoss > 0;
   // «Касса» (received) — показываем всегда, когда бэкенд прислал поле: это
   // главная цифра «сколько денег реально пришло». Возвраты — информационная
-  // строка (уже вычтены из дня продажи), «Не разнесено» — только при ≠0.
+  // строка (уже вычтены из дня продажи).
   const hasReceived = typeof totals.received === 'number';
   const hasRefunds = typeof totals.refunds === 'number' && totals.refunds > 0;
-  const hasUnallocated = typeof totals.unallocated === 'number' && totals.unallocated !== 0;
-
-  // ОТТОКИ (E-1): «Оплата поставщикам» и «Расходы» показываем, когда бэкенд прислал
-  // ненулевую сумму. «Осталось в кассе» (netCash, кассовый итог) — только когда есть
-  // хоть один отток: без оттоков это дубль «Кассы».
-  const hasSupplierPayments = typeof totals.supplierPayments === 'number' && totals.supplierPayments > 0;
-  const hasExpensesOut = typeof totals.expensesOut === 'number' && totals.expensesOut > 0;
-  const hasNetCash = (hasSupplierPayments || hasExpensesOut) && typeof totals.netCash === 'number';
 
   // Разбивка погашений по способу оплаты (119) — подпись «в т.ч. наличными /
   // картой» только когда бэкенд прислал поля и часть ненулевая.
@@ -244,40 +206,6 @@ export default function CashFlowPage() {
             <p className="text-[11px] text-gray-500 mt-0.5">Реально принято: нал + карта + погашения рассрочки</p>
           </div>
         )}
-        {hasSupplierPayments && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <Truck className="w-4 h-4 text-orange-500" />
-              <div className="stat-label">Оплата поставщикам</div>
-            </div>
-            <div className="stat-value tabular-nums text-orange-600">-{formatMoney(totals.supplierPayments ?? 0)}</div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Оплаты и погашения долга — отток из кассы</p>
-          </div>
-        )}
-        {hasExpensesOut && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <Receipt className="w-4 h-4 text-orange-500" />
-              <div className="stat-label">Расходы</div>
-            </div>
-            <div className="stat-value tabular-nums text-orange-600">-{formatMoney(totals.expensesOut ?? 0)}</div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Операционные расходы за период — отток из кассы</p>
-          </div>
-        )}
-        {hasNetCash && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <Landmark className="w-4 h-4 text-emerald-500" />
-              <div className="stat-label">Осталось в кассе</div>
-            </div>
-            <div
-              className={`stat-value tabular-nums ${(totals.netCash ?? 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}
-            >
-              {formatMoney(totals.netCash ?? 0)}
-            </div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Касса − возвраты − оплаты поставщикам − расходы</p>
-          </div>
-        )}
         {hasRefunds && (
           <div className="stat-card">
             <div className="flex items-center gap-2 mb-1">
@@ -286,16 +214,6 @@ export default function CashFlowPage() {
             </div>
             <div className="stat-value tabular-nums text-rose-600">{formatMoney(totals.refunds ?? 0)}</div>
             <p className="text-[11px] text-gray-500 mt-0.5">Уже вычтены из дня продажи — справочно</p>
-          </div>
-        )}
-        {hasUnallocated && (
-          <div className="stat-card">
-            <div className="flex items-center gap-2 mb-1">
-              <AlertCircle className="w-4 h-4 text-amber-500" />
-              <div className="stat-label">Не разнесено</div>
-            </div>
-            <div className="stat-value tabular-nums text-amber-600">{formatMoney(totals.unallocated ?? 0)}</div>
-            <p className="text-[11px] text-gray-500 mt-0.5">Остаток «Итого» без нал/карта/долга (старые чеки)</p>
           </div>
         )}
         {hasWarrantyLoss && (
@@ -390,34 +308,6 @@ export default function CashFlowPage() {
                     <span className="text-rose-600 tabular-nums">{formatMoney(day.refunds ?? 0)}</span>
                   </div>
                 )}
-                {(day.unallocated ?? 0) !== 0 && (
-                  <div className="mt-1 flex items-center justify-between text-xs">
-                    <span className="text-gray-500">Не разнесено</span>
-                    <span className="text-amber-600 tabular-nums">{formatMoney(day.unallocated ?? 0)}</span>
-                  </div>
-                )}
-                {(day.supplierPayments ?? 0) > 0 && (
-                  <div className="mt-1 flex items-center justify-between text-xs">
-                    <span className="text-gray-500">Оплата поставщикам</span>
-                    <span className="text-orange-600 tabular-nums">-{formatMoney(day.supplierPayments ?? 0)}</span>
-                  </div>
-                )}
-                {(day.expensesOut ?? 0) > 0 && (
-                  <div className="mt-1 flex items-center justify-between text-xs">
-                    <span className="text-gray-500">Расходы</span>
-                    <span className="text-orange-600 tabular-nums">-{formatMoney(day.expensesOut ?? 0)}</span>
-                  </div>
-                )}
-                {((day.supplierPayments ?? 0) > 0 || (day.expensesOut ?? 0) > 0) && typeof day.netCash === 'number' && (
-                  <div className="mt-1 flex items-center justify-between border-t border-gray-100 pt-2 text-xs">
-                    <span className="text-gray-500">Осталось в кассе</span>
-                    <span
-                      className={`font-semibold tabular-nums ${day.netCash >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}
-                    >
-                      {formatMoney(day.netCash)}
-                    </span>
-                  </div>
-                )}
               </div>
             ))}
           </div>
@@ -436,15 +326,11 @@ export default function CashFlowPage() {
                   {hasWarrantyLoss && <th className="text-right">Гарантия (убыток)</th>}
                   {hasInstallmentPaid && <th className="text-right">Погашено</th>}
                   {hasReceived && <th className="text-right">Касса за день</th>}
-                  {hasSupplierPayments && <th className="text-right">Оплата поставщикам</th>}
-                  {hasExpensesOut && <th className="text-right">Расходы</th>}
-                  {hasNetCash && <th className="text-right">Осталось в кассе</th>}
                   {hasRefunds && (
                     <th className="text-right" title="Уже вычтены из дня продажи — справочно">
                       Возвраты
                     </th>
                   )}
-                  {hasUnallocated && <th className="text-right">Не разнесено</th>}
                   <th className="w-[22%]">Доля периода</th>
                 </tr>
               </thead>
@@ -484,33 +370,9 @@ export default function CashFlowPage() {
                         {formatMoney(day.received ?? 0)}
                       </td>
                     )}
-                    {hasSupplierPayments && (
-                      <td className="text-right tabular-nums text-orange-600">
-                        {(day.supplierPayments ?? 0) > 0 ? `-${formatMoney(day.supplierPayments ?? 0)}` : '\u2014'}
-                      </td>
-                    )}
-                    {hasExpensesOut && (
-                      <td className="text-right tabular-nums text-orange-600">
-                        {(day.expensesOut ?? 0) > 0 ? `-${formatMoney(day.expensesOut ?? 0)}` : '\u2014'}
-                      </td>
-                    )}
-                    {hasNetCash && (
-                      <td
-                        className={`text-right tabular-nums font-semibold ${
-                          (day.netCash ?? 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'
-                        }`}
-                      >
-                        {typeof day.netCash === 'number' ? formatMoney(day.netCash) : '\u2014'}
-                      </td>
-                    )}
                     {hasRefunds && (
                       <td className="text-right tabular-nums text-rose-600">
                         {(day.refunds ?? 0) > 0 ? formatMoney(day.refunds ?? 0) : '\u2014'}
-                      </td>
-                    )}
-                    {hasUnallocated && (
-                      <td className="text-right tabular-nums text-amber-600">
-                        {(day.unallocated ?? 0) !== 0 ? formatMoney(day.unallocated ?? 0) : '\u2014'}
                       </td>
                     )}
                     <td>
@@ -562,33 +424,9 @@ export default function CashFlowPage() {
                       {formatMoney(totals.received ?? 0)}
                     </td>
                   )}
-                  {hasSupplierPayments && (
-                    <td className="text-right tabular-nums font-bold text-orange-600">
-                      -{formatMoney(totals.supplierPayments ?? 0)}
-                    </td>
-                  )}
-                  {hasExpensesOut && (
-                    <td className="text-right tabular-nums font-bold text-orange-600">
-                      -{formatMoney(totals.expensesOut ?? 0)}
-                    </td>
-                  )}
-                  {hasNetCash && (
-                    <td
-                      className={`text-right tabular-nums font-bold ${
-                        (totals.netCash ?? 0) >= 0 ? 'text-emerald-600' : 'text-rose-600'
-                      }`}
-                    >
-                      {formatMoney(totals.netCash ?? 0)}
-                    </td>
-                  )}
                   {hasRefunds && (
                     <td className="text-right tabular-nums font-bold text-rose-600">
                       {formatMoney(totals.refunds ?? 0)}
-                    </td>
-                  )}
-                  {hasUnallocated && (
-                    <td className="text-right tabular-nums font-bold text-amber-600">
-                      {formatMoney(totals.unallocated ?? 0)}
                     </td>
                   )}
                   <td className="text-right tabular-nums font-bold text-gray-900">100%</td>

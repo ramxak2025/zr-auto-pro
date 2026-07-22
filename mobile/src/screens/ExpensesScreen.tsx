@@ -57,7 +57,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { expensesApi, usersApi } from '../api/services';
+import { expensesApi, suppliersApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
@@ -662,6 +662,23 @@ export default function ExpensesScreen() {
       return res.data as ExpenseItem[];
     },
     enabled: tab === 'regular' || tab === 'oneoff',
+    placeholderData: (prev) => prev,
+  });
+
+  // «Закупка товара» (волна G) — оплаты поставщикам за выбранный период.
+  // Справочный ОТТОК на закупку: деньги из кассы уходят, но в ПРИБЫЛЬ это не
+  // идёт — стоимость товара уже сидит в себестоимости при продаже. Поэтому
+  // сумма показывается отдельной секцией и НЕ складывается с расходами выше
+  // (иначе прибыль задвоилась бы). Видимость = как у сервера
+  // (GET /suppliers/payments-report): financial_reports ИЛИ can_add_expenses.
+  const canViewPurchases = isOwnerRole || canCreate;
+  const { data: supplierPurchases } = useQuery({
+    queryKey: ['supplier-payments-report', dateRange.from, dateRange.to],
+    queryFn: async () => {
+      const res = await suppliersApi.getPaymentsReport({ dateFrom: dateRange.from, dateTo: dateRange.to });
+      return res.data;
+    },
+    enabled: canViewPurchases,
     placeholderData: (prev) => prev,
   });
 
@@ -1296,6 +1313,72 @@ export default function ExpensesScreen() {
               </View>
             );
           })}
+        </View>
+      )}
+
+      {/* «Закупка товара» — оплаты поставщикам за период (волна G).
+          Справочный отток: в кассу влияет, в прибыль НЕ идёт (стоимость уже
+          в себестоимости при продаже). Отдельная секция, визуально отделена
+          оранжевой пометкой — чтобы владелец не суммировал её с расходами
+          выше и не задваивал в P&L. Видимость = как у сервера. */}
+      {canViewPurchases && (supplierPurchases?.items?.length ?? 0) > 0 && (
+        <View style={[styles.purchaseCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+          <View style={styles.purchaseHeaderRow}>
+            <View style={styles.purchaseTitleRow}>
+              <Ionicons name="cube-outline" size={15} color={colors.orange[600]} />
+              <Text style={[iosSectionLabel, { marginBottom: 0, color: palette.text.tertiary }]}>Закупка товара</Text>
+            </View>
+            <Text style={[styles.purchaseTotal, { color: palette.text.primary }]}>
+              {formatMoney(supplierPurchases?.total ?? 0)}
+            </Text>
+          </View>
+          <View
+            style={[
+              styles.purchaseNote,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50] },
+            ]}
+          >
+            <Ionicons name="information-circle-outline" size={13} color={colors.orange[600]} />
+            <Text style={[styles.purchaseNoteText, { color: colors.orange[700] }]} numberOfLines={2}>
+              Не влияет на прибыль — стоимость уже учтена в себестоимости при продаже
+            </Text>
+          </View>
+          {(supplierPurchases?.items ?? []).map((p, i, arr) => (
+            <TouchableOpacity
+              key={p.id}
+              activeOpacity={0.7}
+              onPress={() => navigation.navigate('Suppliers')}
+              style={[
+                styles.purchaseRow,
+                i < arr.length - 1 && {
+                  borderBottomWidth: StyleSheet.hairlineWidth,
+                  borderBottomColor: palette.border.subtle,
+                },
+              ]}
+            >
+              <View
+                style={[
+                  styles.purchaseIcon,
+                  {
+                    backgroundColor: palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                  },
+                ]}
+              >
+                <Ionicons name="cube-outline" size={14} color={colors.orange[600]} />
+              </View>
+              <View style={styles.purchaseMiddle}>
+                <Text style={[styles.purchaseName, { color: palette.text.primary }]} numberOfLines={1}>
+                  {p.supplierName || 'Поставщик'}
+                </Text>
+                <Text style={[styles.purchaseMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  {formatDateShort(p.date)}
+                  {p.comment ? ` · ${p.comment}` : ''}
+                </Text>
+              </View>
+              <Text style={[styles.purchaseAmount, { color: palette.text.primary }]}>−{formatMoney(p.amount)}</Text>
+              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
+            </TouchableOpacity>
+          ))}
         </View>
       )}
 
@@ -2254,6 +2337,75 @@ const styles = StyleSheet.create({
     marginTop: 1,
   },
   topAmount: {
+    fontSize: fontSize.sm,
+    fontWeight: '800',
+  },
+
+  // «Закупка товара» — оплаты поставщикам за период (справочный отток).
+  purchaseCard: {
+    ...iosCard,
+    marginHorizontal: spacing[4],
+    marginBottom: spacing[3],
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[4],
+  },
+  purchaseHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: spacing[2.5],
+  },
+  purchaseTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    flexShrink: 1,
+  },
+  purchaseTotal: {
+    fontSize: fontSize.base,
+    fontWeight: '800',
+    letterSpacing: -0.3,
+  },
+  purchaseNote: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.md,
+    marginBottom: spacing[2],
+  },
+  purchaseNoteText: {
+    flex: 1,
+    fontSize: 11,
+    fontWeight: fontWeight.medium,
+    lineHeight: 15,
+  },
+  purchaseRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing[2.5],
+    gap: spacing[3],
+  },
+  purchaseIcon: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  purchaseMiddle: {
+    flex: 1,
+  },
+  purchaseName: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+  },
+  purchaseMeta: {
+    fontSize: 11,
+    marginTop: 1,
+  },
+  purchaseAmount: {
     fontSize: fontSize.sm,
     fontWeight: '800',
   },

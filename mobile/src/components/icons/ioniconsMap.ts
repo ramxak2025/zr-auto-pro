@@ -149,6 +149,13 @@ export const IONICON_TO_LUCIDE: Record<string, IconMapEntry> = {
   // ── productivity / docs ───────────────────────────────────────────────
   'clipboard-outline': { lucide: 'Clipboard' },
   'document-text-outline': { lucide: 'FileText' },
+  // KnowledgeBaseScreen плитки. «Статьи» (document-text) падала в пустой Circle —
+  // у Lucide НЕТ компонента `DocumentText`, и PascalCase-fallback шима его не
+  // находил. «Учебный центр» (school) раньше неявно резолвился в здание школы —
+  // даём осмысленную «выпускную шапочку» (курсы / аттестация) и явный маппинг.
+  'document-text': { lucide: 'FileText', solid: true },
+  school: { lucide: 'GraduationCap', solid: true },
+  'school-outline': { lucide: 'GraduationCap' },
   'folder-open-outline': { lucide: 'FolderOpen' },
   folder: { lucide: 'Folder', solid: true, fill: true },
   'layers-outline': { lucide: 'Layers' },

@@ -2111,7 +2111,12 @@ export type StockMovementType =
   | 'defect_return_to_supplier'
   // Inbound leg of a customer return to the main warehouse. Distinct from
   // 'income' (supplier purchase) so the journal renders «Возврат клиента».
-  | 'customer_return';
+  | 'customer_return'
+  // Продажа товара из чека (волна G). Синтетический тип — на сервере НЕ
+  // создаётся движением склада, только подмешивается в ленту «Движение товара»
+  // карточки товара при includeSales. Несёт checkId/checkNumber для перехода
+  // в чек; остаток (stockBefore/After) для него не осмыслен (0/0).
+  | 'sale';
 
 export interface StockMovement {
   id: string;
@@ -2138,6 +2143,10 @@ export interface StockMovement {
   linkedExpenseId?: string | null;
   /** True when this movement is the inbound leg of a "Покупка б/у товара" — rendered specially in the journal. */
   isUsedPurchase?: boolean;
+  /** Только для type='sale' (волна G): чек, из которого пришла продажа — для перехода в него. */
+  checkId?: string | null;
+  /** Только для type='sale' (волна G): номер чека продажи. */
+  checkNumber?: number | null;
   createdAt: string;
 }
 

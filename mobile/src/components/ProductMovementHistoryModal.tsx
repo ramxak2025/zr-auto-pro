@@ -70,6 +70,10 @@ const MOVEMENT_VISUALS: Record<StockMovementType, MovementVisual> = {
     label: 'Возврат клиента',
     sign: '+',
   },
+  // Продажа товара из чека (волна G): подмешивается в ленту при includeSales,
+  // строка нажимаема и ведёт в чек по checkId. Расход со склада → знак '−'.
+  // Индиго — чтобы отличать от синей инвентаризации и зелёного поступления.
+  sale: { icon: 'cart', color: colors.indigo[600], label: 'Продажа', sign: '−' },
 };
 
 // Fallback на случай, если бэк пришлёт неизвестный (будущий) тип — не падаем,
@@ -124,22 +128,37 @@ export interface ProductMovementHistoryModalProps {
   productUnit?: string;
   /** Опционально сузить журнал до конкретного склада. */
   warehouseId?: string;
+  /**
+   * Тап по строке-продаже (type='sale') → открыть чек, из которого пришла
+   * продажа. Не передан → строка-продажа остаётся нажимаемой визуально не
+   * отличается, но по тапу ничего не делает (переход недоступен из этого места).
+   */
+  onOpenCheck?: (checkId: string) => void;
 }
 
 function MovementRow({
   item,
   palette,
   unit,
+  onOpenCheck,
 }: {
   item: StockMovement;
   palette: ReturnType<typeof useColors>;
   unit?: string;
+  onOpenCheck?: (checkId: string) => void;
 }) {
   const v = visualFor(item.type);
   const operator = item.user?.fullName?.trim();
 
-  return (
-    <View style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+  // Продажа с привязкой к чеку → строка нажимаема и ведёт в чек. Остаток
+  // (stockAfter) для продажи не осмыслен (0/0), поэтому вместо «Остаток: N»
+  // показываем «Чек №N» + chevron.
+  const isSale = item.type === 'sale';
+  const checkId = item.checkId ?? null;
+  const canOpenCheck = isSale && !!checkId && !!onOpenCheck;
+
+  const body = (
+    <>
       <View style={[styles.iconWrap, { backgroundColor: palette.bg.muted }]}>
         <Ionicons name={v.icon} size={24} color={v.color} />
       </View>
@@ -159,10 +178,19 @@ function MovementRow({
           <Text variant="caption" color={palette.text.tertiary}>
             {formatMovementDateTime(item.createdAt)}
           </Text>
-          <Text variant="caption" color={palette.text.tertiary}>
-            {'Остаток: '}
-            {formatQtyUnit(item.stockAfter, unit)}
-          </Text>
+          {isSale ? (
+            <View style={styles.checkLink}>
+              <Text variant="caption" color={v.color}>
+                {item.checkNumber != null ? `Чек №${item.checkNumber}` : 'Открыть чек'}
+              </Text>
+              {canOpenCheck ? <Ionicons name="chevron-forward" size={14} color={v.color} /> : null}
+            </View>
+          ) : (
+            <Text variant="caption" color={palette.text.tertiary}>
+              {'Остаток: '}
+              {formatQtyUnit(item.stockAfter, unit)}
+            </Text>
+          )}
         </View>
 
         {operator ? (
@@ -183,7 +211,28 @@ function MovementRow({
           </View>
         ) : null}
       </View>
-    </View>
+    </>
+  );
+
+  if (canOpenCheck) {
+    return (
+      <Pressable
+        onPress={() => onOpenCheck?.(checkId)}
+        accessibilityRole="button"
+        accessibilityLabel={item.checkNumber != null ? `Открыть чек №${item.checkNumber}` : 'Открыть чек'}
+        style={({ pressed }) => [
+          styles.row,
+          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+          pressed && styles.rowPressed,
+        ]}
+      >
+        {body}
+      </Pressable>
+    );
+  }
+
+  return (
+    <View style={[styles.row, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>{body}</View>
   );
 }
 
@@ -194,6 +243,7 @@ export default function ProductMovementHistoryModal({
   productName,
   productUnit,
   warehouseId,
+  onOpenCheck,
 }: ProductMovementHistoryModalProps) {
   const palette = useColors();
 
@@ -206,6 +256,9 @@ export default function ProductMovementHistoryModal({
       const res = await stockMovementsApi.list({
         productId: productId ?? undefined,
         warehouseId,
+        // Волна G: подмешиваем продажи товара из чеков в ленту движения —
+        // строки type='sale' с checkId/checkNumber для перехода в чек.
+        includeSales: true,
       });
       return res.data;
     },
@@ -216,8 +269,10 @@ export default function ProductMovementHistoryModal({
   });
 
   const renderItem = useCallback(
-    ({ item }: { item: StockMovement }) => <MovementRow item={item} palette={palette} unit={productUnit} />,
-    [palette, productUnit],
+    ({ item }: { item: StockMovement }) => (
+      <MovementRow item={item} palette={palette} unit={productUnit} onOpenCheck={onOpenCheck} />
+    ),
+    [palette, productUnit, onOpenCheck],
   );
 
   const keyExtractor = useCallback((m: StockMovement) => m.id, []);
@@ -306,6 +361,14 @@ const styles = StyleSheet.create({
     marginBottom: spacing[2.5],
     borderRadius: borderRadius['2xl'],
     borderWidth: StyleSheet.hairlineWidth,
+  },
+  rowPressed: {
+    opacity: 0.6,
+  },
+  checkLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[0.5],
   },
   iconWrap: {
     width: 44,

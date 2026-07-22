@@ -18,7 +18,7 @@ import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
-import { checksApi, expensesApi, reportsApi, usersApi } from '../api/services';
+import { checksApi, reportsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import AnimatedCard from '../components/AnimatedCard';
@@ -443,32 +443,11 @@ export default function CashFlowScreen() {
     };
   }, [expandedChecks, expandedDay]);
 
-  // Lazy per-day expense list — same trigger as the checks above, so an
-  // expanded day shows BOTH income (checks: plate + sum) and outflow
-  // (expenses: purpose + sum). Owner-style screen, so we never filter by
-  // master here — расходы предприятия не привязаны к выбранному мастеру.
-  const { data: expandedExpenses, isLoading: isLoadingExpenses } = useQuery<any[]>({
-    queryKey: ['cashflow-day-expenses', expandedDay],
-    queryFn: async () => {
-      if (!expandedDay) return [];
-      // Only APPROVED expenses are real outflow — pending/rejected must not
-      // count toward the day total or show as spend.
-      const res = await expensesApi.getAll({
-        dateFrom: expandedDay,
-        dateTo: expandedDay,
-        approvalStatus: 'approved',
-      });
-      return Array.isArray(res.data) ? (res.data as any[]) : [];
-    },
-    enabled: canViewCashFlow && !!expandedDay,
-  });
-
   // ── Handlers ─────────────────────────────────────────────────────────
   const onRefresh = async () => {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: ['cashflow'] });
     await queryClient.invalidateQueries({ queryKey: ['cashflow-day-checks'] });
-    await queryClient.invalidateQueries({ queryKey: ['cashflow-day-expenses'] });
     setRefreshing(false);
   };
 
@@ -1021,144 +1000,6 @@ export default function CashFlowScreen() {
                     </View>
                   </>
                 )}
-                {/* «Не разнесено» — остаток «Итого», не разбитый на нал/карта/долг
-                    (битые ноги легаси cash_card-чеков, миграция 118 их сознательно
-                    не чинила). Тождество: нал + карта + долг + не разнесено =
-                    Итого точно. Видно только при ненулевом остатке. */}
-                {typeof totals.unallocated === 'number' && Math.round(totals.unallocated) !== 0 && (
-                  <>
-                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
-                    <View style={styles.channelRow}>
-                      <View
-                        style={[
-                          styles.channelIcon,
-                          {
-                            backgroundColor:
-                              palette.mode === 'dark' ? softTint(colors.yellow[700], 'dark') : colors.yellow[50],
-                          },
-                        ]}
-                      >
-                        <Ionicons name="help-circle-outline" size={16} color={colors.yellow[700]} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>Не разнесено</Text>
-                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
-                          Без разбивки нал/карта (старые чеки) — входит в итог
-                        </Text>
-                      </View>
-                      <Text style={[styles.channelAmount, { color: palette.text.primary }]}>
-                        {formatMoney(totals.unallocated)}
-                      </Text>
-                    </View>
-                  </>
-                )}
-                {/* ── Оттоки (E-4): расходование кассы за период ────────────
-                    Бэк отдаёт их аддитивно (старый бэк — поля нет, строку
-                    прячем). «Оплата поставщикам» = supplier_payments по дате
-                    (в т.ч. авто-платежи «Оплатить сразу» и погашения Б/У-долга);
-                    «Расходы» = операционные expenses (approved). */}
-                {typeof totals.supplierPayments === 'number' && totals.supplierPayments > 0 && (
-                  <>
-                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
-                    <View style={styles.channelRow}>
-                      <View
-                        style={[
-                          styles.channelIcon,
-                          {
-                            backgroundColor:
-                              palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
-                          },
-                        ]}
-                      >
-                        <Ionicons name="cube-outline" size={16} color={colors.orange[600]} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>Оплата поставщикам</Text>
-                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
-                          Платежи поставщикам и за Б/У — вычтены из кассы
-                        </Text>
-                      </View>
-                      <Text style={[styles.channelAmount, { color: colors.orange[600] }]}>
-                        −{formatMoney(totals.supplierPayments)}
-                      </Text>
-                    </View>
-                  </>
-                )}
-                {typeof totals.expensesOut === 'number' && totals.expensesOut > 0 && (
-                  <>
-                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
-                    <View style={styles.channelRow}>
-                      <View
-                        style={[
-                          styles.channelIcon,
-                          {
-                            backgroundColor:
-                              palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50],
-                          },
-                        ]}
-                      >
-                        <Ionicons name="arrow-down" size={16} color={colors.rose[600]} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>Расходы</Text>
-                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
-                          Операционные расходы за период — вычтены из кассы
-                        </Text>
-                      </View>
-                      <Text style={[styles.channelAmount, { color: colors.rose[600] }]}>
-                        −{formatMoney(totals.expensesOut)}
-                      </Text>
-                    </View>
-                  </>
-                )}
-                {/* «Осталось в кассе» (netCash) — итоговая строка: касса минус
-                    возвраты, оплаты поставщикам и расходы. Показываем только
-                    когда есть хоть один отток — иначе netCash == «Касса за
-                    период» и строка была бы дублем. */}
-                {typeof totals.netCash === 'number' && (totals.supplierPayments > 0 || totals.expensesOut > 0) && (
-                  <>
-                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
-                    <View style={styles.channelRow}>
-                      <View
-                        style={[
-                          styles.channelIcon,
-                          {
-                            backgroundColor:
-                              palette.mode === 'dark'
-                                ? softTint(totals.netCash >= 0 ? colors.green[600] : colors.rose[600], 'dark')
-                                : totals.netCash >= 0
-                                  ? colors.green[50]
-                                  : colors.rose[50],
-                          },
-                        ]}
-                      >
-                        <Ionicons
-                          name="cash-outline"
-                          size={16}
-                          color={totals.netCash >= 0 ? colors.green[600] : colors.rose[600]}
-                        />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text
-                          style={[styles.channelLabel, { color: palette.text.primary, fontWeight: fontWeight.bold }]}
-                        >
-                          Осталось в кассе
-                        </Text>
-                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
-                          Касса − возвраты − оплаты поставщикам − расходы
-                        </Text>
-                      </View>
-                      <Text
-                        style={[
-                          styles.channelAmount,
-                          { color: totals.netCash >= 0 ? colors.green[600] : colors.rose[600] },
-                        ]}
-                      >
-                        {formatMoney(totals.netCash)}
-                      </Text>
-                    </View>
-                  </>
-                )}
               </View>
             </AnimatedCard>
 
@@ -1282,57 +1123,11 @@ export default function CashFlowScreen() {
                           </Text>
                         </View>
                       )}
-                      {/* Не разнесено — легаси-остаток без разбивки нал/карта;
-                          входит в итог дня. Показываем только при ≠0. */}
-                      {typeof day.unallocated === 'number' && Math.round(day.unallocated) !== 0 && (
-                        <View style={styles.dayDetailItem}>
-                          <View style={[styles.dayDot, { backgroundColor: colors.yellow[500] }]} />
-                          <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
-                            Не разнесено: {formatMoney(day.unallocated)}
-                          </Text>
-                        </View>
-                      )}
-                      {/* Оттоки дня (E-4): оплаты поставщикам + расходы, и итог
-                          «Осталось в кассе». Поля опциональные — старый бэк их
-                          не шлёт, строки прячем. */}
-                      {typeof day.supplierPayments === 'number' && day.supplierPayments > 0 && (
-                        <View style={styles.dayDetailItem}>
-                          <View style={[styles.dayDot, { backgroundColor: colors.orange[600] }]} />
-                          <Text style={[styles.dayDetailText, { color: colors.orange[600] }]}>
-                            Поставщикам: −{formatMoney(day.supplierPayments)}
-                          </Text>
-                        </View>
-                      )}
-                      {typeof day.expensesOut === 'number' && day.expensesOut > 0 && (
-                        <View style={styles.dayDetailItem}>
-                          <View style={[styles.dayDot, { backgroundColor: colors.rose[500] }]} />
-                          <Text style={[styles.dayDetailText, { color: colors.rose[600] }]}>
-                            Расходы: −{formatMoney(day.expensesOut)}
-                          </Text>
-                        </View>
-                      )}
-                      {typeof day.netCash === 'number' && (day.supplierPayments > 0 || day.expensesOut > 0) && (
-                        <View style={styles.dayDetailItem}>
-                          <View
-                            style={[
-                              styles.dayDot,
-                              { backgroundColor: day.netCash >= 0 ? colors.green[600] : colors.rose[500] },
-                            ]}
-                          />
-                          <Text
-                            style={[
-                              styles.dayDetailText,
-                              { color: palette.text.secondary, fontWeight: fontWeight.semibold },
-                            ]}
-                          >
-                            Осталось в кассе: {formatMoney(day.netCash)}
-                          </Text>
-                        </View>
-                      )}
                     </View>
 
-                    {/* Expanded — income (checks) + outflow (expenses) for
-                        this day. Both lists lazy-load on expand. */}
+                    {/* Expanded — income (checks) for this day. Lazy-loads on
+                        expand. Расходы/оплаты поставщикам сюда не входят —
+                        «Движение денег» показывает только приход (волна G). */}
                     {isOpen && (
                       <View style={[styles.checksSection, { borderTopColor: palette.border.subtle }]}>
                         {/* ── Доходы: чеки (госномер + сумма) ──────────── */}
@@ -1372,23 +1167,6 @@ export default function CashFlowScreen() {
                             )}
                           </>
                         )}
-
-                        {/* ── Расходы: назначение + сумма ──────────────── */}
-                        {isLoadingExpenses && !expandedExpenses ? null : expandedExpenses &&
-                          expandedExpenses.length > 0 ? (
-                          <View style={[styles.expensesBlock, { borderTopColor: palette.border.subtle }]}>
-                            <View style={styles.detailSubLabelRow}>
-                              <View style={[styles.detailDot, { backgroundColor: colors.rose[500] }]} />
-                              <Text style={[styles.detailSubLabel, { color: palette.text.tertiary }]}>Расходы</Text>
-                              <Text style={[styles.expensesTotal, { color: colors.rose[600] }]}>
-                                −{formatMoney(expandedExpenses.reduce((s, e) => s + (e.amount || 0), 0))}
-                              </Text>
-                            </View>
-                            {expandedExpenses.map((e: any) => (
-                              <ExpenseRow key={e.id} expense={e} palette={palette} />
-                            ))}
-                          </View>
-                        ) : null}
                       </View>
                     )}
                   </AnimatedCard>
@@ -1596,40 +1374,6 @@ function CheckRow({
       <Text style={[styles.checkAmount, { color: palette.text.primary }]}>{formatMoney(check.totalRevenue || 0)}</Text>
       <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} style={{ marginLeft: 4 }} />
     </TouchableOpacity>
-  );
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// ExpenseRow — one-line outflow row inside an expanded day card.
-// Purpose (назначение = описание / категория) + amount. Non-tappable: this
-// screen is read-only «движение денег»; editing lives in the Expenses screen.
-// ─────────────────────────────────────────────────────────────────────────────
-function ExpenseRow({ expense, palette }: { expense: any; palette: ReturnType<typeof useColors> }) {
-  const purpose: string =
-    (expense?.description && String(expense.description).trim()) || expense?.categoryName || 'Расход';
-  const sub: string | undefined = expense?.description && expense?.categoryName ? expense.categoryName : undefined;
-  return (
-    <View style={styles.checkRow}>
-      <View
-        style={[
-          styles.checkIcon,
-          { backgroundColor: palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50] },
-        ]}
-      >
-        <Ionicons name="arrow-down" size={14} color={colors.rose[600]} />
-      </View>
-      <View style={{ flex: 1 }}>
-        <Text style={[styles.checkPrimary, { color: palette.text.primary }]} numberOfLines={1}>
-          {purpose}
-        </Text>
-        {!!sub && (
-          <Text style={[styles.checkSecondary, { color: palette.text.tertiary }]} numberOfLines={1}>
-            {sub}
-          </Text>
-        )}
-      </View>
-      <Text style={[styles.checkAmount, { color: colors.rose[600] }]}>−{formatMoney(expense?.amount || 0)}</Text>
-    </View>
   );
 }
 
@@ -1854,17 +1598,6 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.bold,
     letterSpacing: 0.3,
     textTransform: 'uppercase',
-  },
-  // Расходы block — sits beneath the checks, separated by a hairline.
-  expensesBlock: {
-    marginTop: spacing[2.5],
-    paddingTop: spacing[2.5],
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  expensesTotal: {
-    marginLeft: 'auto',
-    fontSize: 11,
-    fontWeight: fontWeight.bold,
   },
   checkRow: {
     flexDirection: 'row',

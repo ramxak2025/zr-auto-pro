@@ -1,8 +1,19 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Patch,
+  Delete,
+  Param,
+  Body,
+  Query,
+  UseGuards,
+  ForbiddenException,
+} from '@nestjs/common';
 import { SuppliersService } from './suppliers.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
-import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
+import { PermissionsGuard, RequirePermission, userHasPermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
 // ROLE-ONLY (консолидация 2026-07). Enforcement на сервере:
@@ -30,6 +41,20 @@ export class SuppliersController {
   @Get('payments')
   getPayments(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.suppliersService.getPayments(user.tenantID, query);
+  }
+
+  // Отчёт по оплатам поставщикам за период — для секции «Закупка товара (не
+  // влияет на прибыль)» в разделе «Расходы» (волна G). Гейт как у GET /expenses:
+  // OR-проверка can_add_expenses | financial_reports (вносящий видит контекст
+  // затрат, финансист — тоже; owner-class проходит через userHasPermission).
+  // Литеральный путь объявлен ДО @Get(':id'), иначе 'payments-report' попал бы
+  // в параметр :id.
+  @Get('payments-report')
+  getPaymentsReport(@CurrentUser() user: JwtPayload, @Query() query: any) {
+    if (!userHasPermission(user, 'can_add_expenses') && !userHasPermission(user, 'financial_reports')) {
+      throw new ForbiddenException({ message: 'Недостаточно прав для этого действия' });
+    }
+    return this.suppliersService.getPaymentsReport(user.tenantID, query);
   }
 
   @RequirePermission('suppliers_access')

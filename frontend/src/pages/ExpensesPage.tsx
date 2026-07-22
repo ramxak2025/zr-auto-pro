@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Trash2, Wallet, Tag, Loader2, X, ShieldAlert, Info, Repeat } from 'lucide-react';
+import { Plus, Trash2, Wallet, Tag, Loader2, X, ShieldAlert, Info, Repeat, Truck } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
-import { expensesApi } from '../api/services';
+import { expensesApi, suppliersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import PageHeader from '../components/PageHeader';
@@ -68,6 +68,22 @@ export default function ExpensesPage() {
       const res = await expensesApi.getAll({ dateFrom, dateTo });
       return res.data;
     },
+  });
+
+  // Волна G (решение владельца 2026-07): закупки/оплаты поставщикам показываем в
+  // «Расходах» отдельной СПРАВОЧНОЙ секцией «Закупка товара (не влияет на прибыль)».
+  // Это ОТТОК денег на закупку; в прибыль НЕ входит — стоимость товара уже учтена
+  // в себестоимости при продаже, задваивать нельзя. Эндпоинт гейтится на сервере
+  // как GET /expenses (can_add_expenses | financial_reports), поэтому запрос
+  // включаем только при наличии одного из этих прав.
+  const canViewPurchases = canAddExpense || canDeleteExpense;
+  const { data: purchaseReport } = useQuery({
+    queryKey: ['supplier-payments-report', dateFrom, dateTo],
+    queryFn: async () => {
+      const res = await suppliersApi.getPaymentsReport({ dateFrom, dateTo });
+      return res.data;
+    },
+    enabled: canViewPurchases,
   });
 
   const createMutation = useMutation({
@@ -341,6 +357,50 @@ export default function ExpensesPage() {
           </div>
         </div>
       </QueryState>
+
+      {/* Закупка товара — справочный отток, НЕ влияет на прибыль (волна G).
+          Показываем секцию только когда за период были оплаты поставщикам. */}
+      {purchaseReport && purchaseReport.total > 0 && (
+        <div className="card overflow-hidden">
+          <div className="flex items-start justify-between gap-3 border-b border-gray-100 bg-slate-50 px-4 py-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-slate-200 text-slate-600">
+                <Truck className="h-4 w-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-sm font-semibold text-gray-800">Закупка товара</p>
+                <p className="text-[11px] text-gray-500">Не влияет на прибыль</p>
+              </div>
+            </div>
+            <span className="whitespace-nowrap text-lg font-bold text-slate-700 tabular-nums">
+              {formatCurrency(purchaseReport.total)}
+            </span>
+          </div>
+          <p className="flex items-start gap-1.5 border-b border-gray-100 px-4 py-2.5 text-xs leading-snug text-gray-500">
+            <Info className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+            Оплаты поставщикам за период — отток денег на закупку. В прибыль не входит: стоимость товара уже учтена в
+            себестоимости при продаже.
+          </p>
+          {purchaseReport.items.length > 0 && (
+            <div className="divide-y divide-gray-100">
+              {purchaseReport.items.map((p) => (
+                <div key={p.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium text-gray-800">{p.supplierName || 'Поставщик'}</p>
+                    <p className="text-[11px] text-gray-500">
+                      {format(new Date(p.date), 'dd.MM.yyyy', { locale: ru })}
+                      {p.comment ? ` · ${p.comment}` : ''}
+                    </p>
+                  </div>
+                  <span className="whitespace-nowrap text-sm font-semibold text-slate-700 tabular-nums">
+                    {formatCurrency(p.amount)}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Add expense modal */}
       <Modal isOpen={modalOpen} onClose={() => setModalOpen(false)} title="Новый расход" size="md">

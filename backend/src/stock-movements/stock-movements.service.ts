@@ -17,7 +17,11 @@ export type StockMovementType =
   | 'expense'
   | 'defect_transfer'
   | 'used_transfer'
-  | 'defect_return_to_supplier';
+  | 'defect_return_to_supplier'
+  // 'sale' — синтетический тип (волна G): продажа товара из чека. НЕ создаётся
+  // через POST /stock-movements (в ALL_TYPES/DTO его нет), только подмешивается
+  // в list() при includeSales для ленты «Движение товара» карточки товара.
+  | 'sale';
 
 const ALL_TYPES: StockMovementType[] = [
   'inventory',
@@ -649,7 +653,14 @@ export class StockMovementsService {
   // ── listing ────────────────────────────────────────────────────────────
   async list(
     tenantID: string,
-    query: { warehouseId?: string; productId?: string; type?: string; dateFrom?: string; dateTo?: string },
+    query: {
+      warehouseId?: string;
+      productId?: string;
+      type?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      includeSales?: boolean | string;
+    },
   ) {
     let where = 'sm.tenant_id = $1';
     const params: any[] = [tenantID];
@@ -692,7 +703,7 @@ export class StockMovementsService {
       params,
     );
 
-    return rows.map((row) => ({
+    const stockRows = rows.map((row) => ({
       id: row.id,
       productId: row.product_id,
       product: { id: row.product_id, name: row.product_name },
@@ -716,7 +727,75 @@ export class StockMovementsService {
       // 034_used_purchase_movement_flag.sql adds this column. The journal
       // (mobile + web) keys off it to render "Покупка Б/У" specially.
       isUsedPurchase: !!row.is_used_purchase,
+      checkId: null as string | null,
+      checkNumber: null as number | null,
       createdAt: row.created_at,
     }));
+
+    // ── ПРОДАЖИ (волна G) — opt-in ──────────────────────────────────────────
+    // «Движение товара» показывает только складские операции (приёмка, списание,
+    // перенос). Владелец хочет видеть в той же ленте и ПРОДАЖИ этого товара с
+    // переходом в чек. Включается ТОЛЬКО при валидном productId (карточка одного
+    // товара) — на общей ленте всех товаров продажи не подмешиваем (это был бы
+    // весь журнал чеков). Строки продаж — тип 'sale', с checkId/checkNumber для
+    // навигации; на складские остатки они не влияют (stockBefore/After = null).
+    const includeSales = query.includeSales === true || query.includeSales === 'true';
+    if (!includeSales || !isUuid(query.productId)) {
+      return stockRows;
+    }
+
+    const { rows: saleRows } = await this.pool.query(
+      `SELECT cpl.id AS line_id, cpl.product_id, cpl.name AS product_name, cpl.quantity,
+              c.id AS check_id, c.number AS check_number,
+              COALESCE(c.date, c.created_at) AS created_at,
+              c.master_id, u.full_name AS master_name
+         FROM check_product_lines cpl
+         JOIN checks c ON c.id = cpl.check_id AND c.tenant_id = $1 AND c.deleted_at IS NULL
+         LEFT JOIN users u ON u.id = c.master_id
+        WHERE cpl.product_id = $2
+        ORDER BY COALESCE(c.date, c.created_at) DESC
+        LIMIT 200`,
+      [tenantID, query.productId.trim()],
+    );
+
+    const sales = saleRows.map((row) => ({
+      id: `sale:${row.line_id}`,
+      productId: row.product_id,
+      product: { id: row.product_id, name: row.product_name },
+      type: 'sale' as const,
+      quantity: parseFloat(row.quantity) || 0,
+      // Продажи не пишут stock_movements → историю остатка на момент продажи не
+      // восстановить. 0/0 — плейсхолдер; клиент строку 'sale' рендерит отдельно
+      // (по checkId), остаток для неё не показывает.
+      stockBefore: 0,
+      stockAfter: 0,
+      reason: null,
+      userId: row.master_id ?? null,
+      user: row.master_id ? { id: row.master_id, fullName: row.master_name } : null,
+      warehouseId: null,
+      warehouseName: null,
+      sourceWarehouseId: null,
+      sourceWarehouseName: null,
+      targetWarehouseId: null,
+      targetWarehouseName: null,
+      supplierId: null,
+      supplierName: null,
+      recordAsExpense: false,
+      linkedExpenseId: null,
+      isUsedPurchase: false,
+      checkId: row.check_id as string,
+      checkNumber: row.check_number ?? null,
+      createdAt: row.created_at,
+    }));
+
+    // Смёржить складские + продажи, отсортировать по времени (новые сверху),
+    // обрезать объединённый список до 200 (тот же лимит, что и по складу).
+    const merged = [...stockRows, ...sales];
+    merged.sort((a, b) => {
+      const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return tb - ta;
+    });
+    return merged.slice(0, 200);
   }
 }

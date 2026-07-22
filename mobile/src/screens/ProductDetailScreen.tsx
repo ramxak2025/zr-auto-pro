@@ -1030,6 +1030,12 @@ export default function ProductDetailScreen() {
         productId={historyOpen ? productId : null}
         productName={product.name}
         productUnit={product.unit}
+        onOpenCheck={(checkId) => {
+          // Закрываем модалку и уходим кросс-таб в Журнал → CheckDetail:
+          // CheckDetail недостижим из ProductsStack напрямую.
+          setHistoryOpen(false);
+          navigation.navigate('Checks', { screen: 'CheckDetail', params: { id: checkId } });
+        }}
       />
 
       {/* Fullscreen photo preview — mirrors the warehouse list preview UX. */}

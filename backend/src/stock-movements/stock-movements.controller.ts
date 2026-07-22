@@ -77,6 +77,9 @@ export class StockMovementsController {
       type: query.type,
       dateFrom: query.dateFrom,
       dateTo: query.dateTo,
+      // Подмешать продажи товара в ленту (только при валидном productId) —
+      // «Движение товара» в карточке одного товара показывает и продажи (волна G).
+      includeSales: query.includeSales,
     });
   }
 

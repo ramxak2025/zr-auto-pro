@@ -712,6 +712,24 @@ export function createSuppliersApi(api: HttpClient) {
     createDelivery: (data: CreateDeliveryRequest) => api.post<{ id: string }>('/suppliers/deliveries', data),
     getDeliveryById: (id: string) => api.get<Delivery>(`/suppliers/deliveries/${id}`),
     getPayments: (params?: { supplierId?: string }) => api.get<SupplierPayment[]>('/suppliers/payments', { params }),
+    /**
+     * Отчёт по оплатам поставщикам за период — источник секции «Закупка товара
+     * (не влияет на прибыль)» в разделе «Расходы» (волна G). Только ОТТОК на
+     * закупку; в прибыль/P&L НЕ входит (стоимость уже в себестоимости продажи).
+     * Период — московский полуинтервал, как в getCashFlow. Гейт на сервере:
+     * can_add_expenses | financial_reports (как GET /expenses).
+     */
+    getPaymentsReport: (params?: { dateFrom?: string; dateTo?: string }) =>
+      api.get<{
+        total: number;
+        items: Array<{
+          id: string;
+          supplierName: string | null;
+          amount: number;
+          date: string;
+          comment: string | null;
+        }>;
+      }>('/suppliers/payments-report', { params }),
     createPayment: (data: CreatePaymentRequest) => api.post<{ id: string }>('/suppliers/payments', data),
     /**
      * Return defective stock to the supplier. Server decrements defect
@@ -886,18 +904,12 @@ export function createReportsApi(api: HttpClient) {
         //   • received — «касса за день»: реально принятые деньги = cash + card
         //     + installmentPaid (владелец сверяет ящик с received − refunds);
         //   • refunds — возвраты клиентам по ДАТЕ ВОЗВРАТА, информационно (из
-        //     дня ПРОДАЖИ деньги уже вычтены реверсом, в total не входит);
-        //   • unallocated — остаток «Итого», не разнесённый по нал/карта/долг
-        //     (битые ноги легаси cash_card-чеков): cash + card + installmentDebt
-        //     + unallocated = total сходится арифметически.
-        // ОТТОКИ (E-1) — расходная сторона кассы за день (только при просмотре
-        // всего тенанта; при фильтре по мастеру не атрибутируются и равны 0):
-        //   • supplierPayments — оплаты поставщикам (supplier_payments по date,
-        //     вкл. авто-платежи «Оплатить сразу» и погашения Б/У-долга);
-        //   • expensesOut — операционные расходы (expenses, approved, кроме
-        //     «Зарплата» — та же логика, что otherExpenses в фин.отчёте);
-        //   • netCash — «осталось в кассе» = received − refunds −
-        //     supplierPayments − expensesOut.
+        //     дня ПРОДАЖИ деньги уже вычтены реверсом, в total не входит).
+        // Волна G (решение владельца 2026-07) — «Движение денег» возвращено к
+        // ПРОСТОМУ виду: нал/карта/погашения рассрочки/возвраты/Итого. Поля
+        // unallocated («Не разнесено»), supplierPayments/expensesOut (оттоки) и
+        // netCash («Осталось в кассе») УБРАНЫ — закупки у поставщиков теперь
+        // показываются в разделе «Расходы» отдельной секцией.
         // Все поля опциональны — старый бэкенд их не
         // шлёт, клиенты рендерят строки только когда поле пришло числом.
         days: Array<{
@@ -913,10 +925,6 @@ export function createReportsApi(api: HttpClient) {
           installmentPaidCard?: number;
           received?: number;
           refunds?: number;
-          unallocated?: number;
-          supplierPayments?: number;
-          expensesOut?: number;
-          netCash?: number;
         }>;
         totals: {
           cash: number;
@@ -930,10 +938,6 @@ export function createReportsApi(api: HttpClient) {
           installmentPaidCard?: number;
           received?: number;
           refunds?: number;
-          unallocated?: number;
-          supplierPayments?: number;
-          expensesOut?: number;
-          netCash?: number;
         };
       }>('/reports/cashflow', { params }),
     /**
@@ -1051,8 +1055,19 @@ export function createWarrantyApi(api: HttpClient) {
 
 export function createStockMovementsApi(api: HttpClient) {
   return {
-    list: (params?: { warehouseId?: string; productId?: string; type?: string; dateFrom?: string; dateTo?: string }) =>
-      api.get<StockMovement[]>('/stock-movements', { params }),
+    list: (params?: {
+      warehouseId?: string;
+      productId?: string;
+      type?: string;
+      dateFrom?: string;
+      dateTo?: string;
+      /**
+       * Подмешать продажи товара в ленту «Движение товара» (волна G). Работает
+       * ТОЛЬКО вместе с валидным productId (карточка одного товара) — на общей
+       * ленте игнорируется. Возвращает строки type='sale' с checkId/checkNumber.
+       */
+      includeSales?: boolean;
+    }) => api.get<StockMovement[]>('/stock-movements', { params }),
     create: (body: {
       type:
         | 'inventory'

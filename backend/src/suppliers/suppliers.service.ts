@@ -13,6 +13,13 @@ import { capLimit } from '../common/cap-limit';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
 
+// Бизнес-таймзона (Europe/Moscow, UTC+3 без летнего времени) — та же, что в
+// reports.service: период задаётся московским полуинтервалом [from 00:00 МСК,
+// to+1 00:00 МСК), чтобы «Закупка товара» в разделе «Расходы» совпадала по
+// дням с «Движением денег».
+const SUPPLIERS_BUSINESS_TZ = 'Europe/Moscow';
+const SUPPLIERS_ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 @Injectable()
 export class SuppliersService {
   private readonly logger = new Logger('SuppliersService');
@@ -586,6 +593,59 @@ export class SuppliersService {
       // Set when this payment was auto-created by «Оплатить сразу» at receiving (098).
       deliveryId: r.delivery_id ?? null,
     }));
+  }
+
+  /**
+   * Отчёт по оплатам поставщикам за период — источник секции «Закупка товара
+   * (не влияет на прибыль)» в разделе «Расходы» (решение владельца, волна G).
+   * Показывает ОТТОК денег на закупку, но НЕ трогает прибыль: стоимость товара
+   * уже учтена в себестоимости при продаже (getFinancial), поэтому эти суммы
+   * НЕ пишутся в expenses и НЕ участвуют в P&L — иначе двойной счёт.
+   *
+   * Период — московский полуинтервал [dateFrom 00:00 МСК, dateTo+1 00:00 МСК),
+   * как в reports.getCashFlow. Тенант-скоуп обязателен.
+   */
+  async getPaymentsReport(
+    tenantID: string,
+    query: any,
+  ): Promise<{
+    total: number;
+    items: Array<{ id: string; supplierName: string | null; amount: number; date: any; comment: string | null }>;
+  }> {
+    const safeDate = (value: unknown, fallback: string): string => {
+      if (typeof value !== 'string' || !SUPPLIERS_ISO_DATE_RE.test(value)) return fallback;
+      const ts = Date.parse(`${value}T00:00:00Z`);
+      if (Number.isNaN(ts)) return fallback;
+      if (new Date(ts).toISOString().slice(0, 10) !== value) return fallback;
+      return value;
+    };
+    const now = new Date();
+    const firstOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+    const todayISO = now.toISOString().split('T')[0];
+    const dateFrom = safeDate(query?.dateFrom, firstOfMonth);
+    const dateTo = safeDate(query?.dateTo, todayISO);
+
+    const { rows } = await this.pool.query(
+      `SELECT sp.id, sp.amount, sp.date, sp.comment, s.name AS supplier_name
+         FROM supplier_payments sp
+         LEFT JOIN suppliers s ON s.id = sp.supplier_id AND s.tenant_id = sp.tenant_id
+        WHERE sp.tenant_id = $1
+          AND sp.date >= $2::date::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}'
+          AND sp.date < ($3::date + 1)::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}'
+        ORDER BY sp.date DESC
+        LIMIT 500`,
+      [tenantID, dateFrom, dateTo],
+    );
+
+    const items = rows.map((r) => ({
+      id: r.id,
+      supplierName: r.supplier_name ?? null,
+      amount: parseFloat(r.amount) || 0,
+      date: r.date,
+      comment: r.comment ?? null,
+    }));
+    const total = items.reduce((acc, it) => acc + it.amount, 0);
+    return { total, items };
   }
 
   async createPayment(tenantID: string, dto: any) {

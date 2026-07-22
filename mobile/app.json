@@ -3,7 +3,7 @@
     "name": "Autexa",
     "slug": "autexa-mobile",
     "owner": "ramxak",
-    "version": "3.1.0",
+    "version": "3.1.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -38,7 +38,7 @@
         "backgroundColor": "#2563eb"
       },
       "package": "com.autexa.mobile",
-      "versionCode": 14,
+      "versionCode": 15,
       "softwareKeyboardLayoutMode": "resize",
       "edgeToEdgeEnabled": true,
       "permissions": [

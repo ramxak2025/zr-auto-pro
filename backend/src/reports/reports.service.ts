@@ -325,10 +325,6 @@ export class ReportsService {
           installmentPaidCard: 0,
           received: 0,
           refunds: 0,
-          unallocated: 0,
-          supplierPayments: 0,
-          expensesOut: 0,
-          netCash: 0,
         },
       };
     }
@@ -373,10 +369,11 @@ export class ReportsService {
     //     начисляется и по гарантии). Показывается как затрата в «Движении
     //     денег». Derived из checks, в таблицу расходов не пишется → двойного
     //     счёта нет.
-    //   • unallocated (НОВОЕ) — остаток «Итого», не разнесённый по нал/карта/
-    //     долг (битые ноги легаси cash_card-чеков, которые миграция 118
-    //     сознательно не чинила). С ним тождество сходится АРИФМЕТИЧЕСКИ:
-    //     cash + card + installmentDebt + unallocated = total. 0 на чистых данных.
+    // Волна G (решение владельца 2026-07): «Движение денег» возвращено к
+    // ПРОСТОМУ виду — нал/карта/погашения рассрочки/возвраты/Итого. Поля
+    // unallocated («Не разнесено»), supplierPayments/expensesOut (оттоки) и
+    // netCash («Осталось в кассе») УБРАНЫ из ответа: закупки у поставщиков
+    // теперь показываются в разделе «Расходы» отдельной секцией, а не тут.
     // День = МОСКОВСКИЙ календарный день (BUSINESS_TZ), границы — полуинтервал
     // [from 00:00 МСК, to+1 00:00 МСК): ночные чеки 00:00–03:00 МСК больше не
     // падают во «вчера», а чек, датированный dateTo+1 (веб пишет голую дату =
@@ -389,11 +386,7 @@ export class ReportsService {
               COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN total_revenue ELSE 0 END), 0) as warranty,
               COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN product_cost_total + service_salary_total + COALESCE(product_salary_total, 0) ELSE 0 END), 0) as warranty_loss,
               COALESCE(SUM(CASE WHEN payment_method = 'installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) ELSE 0 END), 0) as installment_debt,
-              COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0) as total,
-              COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0)
-                - COALESCE(SUM(cash_amount), 0)
-                - COALESCE(SUM(card_amount), 0)
-                - COALESCE(SUM(CASE WHEN payment_method = 'installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) ELSE 0 END), 0) as unallocated
+              COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0) as total
        FROM checks
        WHERE tenant_id = $1
          AND date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
@@ -478,22 +471,10 @@ export class ReportsService {
       installmentPaidCash: 0,
       installmentPaidCard: 0,
       total: parseFloat(r.total) || 0,
-      // Не разнесённый по нал/карта/долг остаток «Итого» (легаси cash_card):
-      // cash + card + installmentDebt + unallocated = total — точно.
-      unallocated: parseFloat(r.unallocated) || 0,
       refunds: 0,
       // «Касса за день» — реально принятые деньги (нал+карта+погашения
       // рассрочки), считается после вливания погашений ниже.
       received: 0,
-      // ОТТОКИ (E-1): оплаты поставщикам (supplier_payments — вкл. авто-платежи
-      // «Оплатить сразу» и погашения Б/У-долга) и операционные расходы
-      // (expenses, approved, кроме «Зарплата» — та же категорийная логика, что
-      // otherExpenses в getFinancial). Вливаются ниже. netCash = «осталось в
-      // кассе» = received − supplierPayments − expensesOut (refunds уже учтён в
-      // received на дне продажи, повторно не вычитается).
-      supplierPayments: 0,
-      expensesOut: 0,
-      netCash: 0,
     }));
 
     // Вливаем погашения и возвраты в дни: совпавший день дополняем, день без
@@ -510,56 +491,9 @@ export class ReportsService {
       installmentPaidCash: 0,
       installmentPaidCard: 0,
       total: 0,
-      unallocated: 0,
       refunds: 0,
       received: 0,
-      supplierPayments: 0,
-      expensesOut: 0,
-      netCash: 0,
     });
-
-    // ОТТОКИ (E-1) — считаются ТОЛЬКО на уровне всего тенанта (masterId === null):
-    // оплаты поставщикам и операционные расходы не атрибутируются конкретному
-    // мастеру, поэтому при фильтре по сотруднику (или у мастера с охватом 'own')
-    // оттоки не показываем — иначе чужие расходы искажали бы «его кассу».
-    // Границы — тот же московский полуинтервал [from 00:00, to+1 00:00), что и
-    // притоки; source-таблицы уже существуют, двойного счёта с прибылью нет
-    // (cashflow ≠ P&L, закупки в expenses не пишутся).
-    let supplierRows: any[] = [];
-    let expenseRows: any[] = [];
-    if (!masterId) {
-      const outParams = [tenantID, dateFrom, dateTo];
-      const supplierRes = await this.pool.query(
-        `SELECT to_char((date AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
-                COALESCE(SUM(amount), 0) as amount
-           FROM supplier_payments
-          WHERE tenant_id = $1
-            AND date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-            AND date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-          GROUP BY 1
-          ORDER BY 1`,
-        outParams,
-      );
-      supplierRows = supplierRes.rows;
-      // Категорийная логика идентична otherExpenses в getFinancial: approved
-      // (NULL = legacy approved), кроме категории «Зарплата» (salary payouts
-      // зеркалятся туда — в cashflow они уже учтены отдельно и не дублируются).
-      const expenseRes = await this.pool.query(
-        `SELECT to_char((e.date AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
-                COALESCE(SUM(e.amount), 0) as amount
-           FROM expenses e
-           LEFT JOIN expense_categories ec ON ec.id = e.category_id
-          WHERE e.tenant_id = $1
-            AND e.date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-            AND e.date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-            AND COALESCE(e.approval_status, 'approved') = 'approved'
-            AND COALESCE(ec.name, '') <> 'Зарплата'
-          GROUP BY 1
-          ORDER BY 1`,
-        outParams,
-      );
-      expenseRows = expenseRes.rows;
-    }
 
     const byKey = new Map(days.map((d) => [dayKey(d.date), d]));
     for (const r of paidRows) {
@@ -584,34 +518,8 @@ export class ReportsService {
       }
       existing.refunds += parseFloat(r.refunds) || 0;
     }
-    for (const r of supplierRows) {
-      const key = dayKey(r.day);
-      let existing = byKey.get(key);
-      if (!existing) {
-        existing = emptyDay(r.day);
-        byKey.set(key, existing);
-        days.push(existing);
-      }
-      existing.supplierPayments += parseFloat(r.amount) || 0;
-    }
-    for (const r of expenseRows) {
-      const key = dayKey(r.day);
-      let existing = byKey.get(key);
-      if (!existing) {
-        existing = emptyDay(r.day);
-        byKey.set(key, existing);
-        days.push(existing);
-      }
-      existing.expensesOut += parseFloat(r.amount) || 0;
-    }
     for (const d of days) {
       d.received = d.cash + d.card + d.installmentPaid;
-      // «Осталось в кассе» = приток − оплаты поставщикам − расходы. Возвраты
-      // (refunds) НЕ вычитаются повторно: политика владельца «возврат гасит
-      // продажу в её периоде» — returns.service реверсирует ноги нал/карта в дне
-      // ПРОДАЖИ, поэтому received уже уменьшен на возврат. refunds остаётся
-      // информационной строкой дня возврата (в netCash не участвует).
-      d.netCash = d.received - d.supplierPayments - d.expensesOut;
     }
     days.sort((a, b) => dayKey(a.date).localeCompare(dayKey(b.date)));
 
@@ -627,10 +535,6 @@ export class ReportsService {
       installmentPaidCard: 0,
       received: 0,
       refunds: 0,
-      unallocated: 0,
-      supplierPayments: 0,
-      expensesOut: 0,
-      netCash: 0,
     };
     for (const d of days) {
       totals.cash += d.cash;
@@ -644,10 +548,6 @@ export class ReportsService {
       totals.total += d.total;
       totals.received += d.received;
       totals.refunds += d.refunds;
-      totals.unallocated += d.unallocated;
-      totals.supplierPayments += d.supplierPayments;
-      totals.expensesOut += d.expensesOut;
-      totals.netCash += d.netCash;
     }
 
     return { days, totals };

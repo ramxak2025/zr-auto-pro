@@ -3579,6 +3579,12 @@ export default function ProductsScreen() {
         productId={historyProduct?.id ?? null}
         productName={historyProduct?.name}
         productUnit={historyProduct?.unit}
+        onOpenCheck={(checkId) => {
+          // Закрываем модалку и уходим кросс-таб в Журнал → CheckDetail:
+          // CheckDetail недостижим из ProductsStack напрямую.
+          setHistoryProduct(null);
+          navigation.navigate('Checks', { screen: 'CheckDetail', params: { id: checkId } });
+        }}
       />
 
       {/* «Перенести в папку» — folder picker scoped to the product's warehouse.
