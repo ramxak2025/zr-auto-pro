@@ -28,7 +28,6 @@ import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
 import type { InstallmentPlan } from '../../../shared/types';
 
 type Filter = 'open' | 'closed';
@@ -38,12 +37,14 @@ export default function InstallmentsScreen() {
   const queryClient = useQueryClient();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const [filter, setFilter] = useState<Filter>('open');
   const [refreshing, setRefreshing] = useState(false);
 
-  // Reminder settings + the write actions are owner-class (director/admin/superadmin).
-  const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+  // Настройки напоминаний + write-действия — ключ debts_manage (сервер:
+  // /installments reminder-settings, reminders/send, pay/payoff/PATCH → тот же
+  // ключ; admin живёт по матрице из /auth/me).
+  const isOwnerClass = hasPermission('debts_manage');
 
   const { data: plansRaw, isLoading } = useQuery<InstallmentPlan[]>({
     queryKey: ['installments', 'list', filter],

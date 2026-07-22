@@ -25,6 +25,7 @@ import {
   PlayCircle,
   Wallet,
   Gift,
+  StickyNote,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { format, parseISO, isPast, formatDistanceToNow, addDays, addYears } from 'date-fns';
@@ -33,7 +34,7 @@ import { ru } from 'date-fns/locale';
 import { tenantsApi, usersApi, plansApi } from '../../api/services';
 import type { ExtendSubscriptionRequest } from '../../api/services';
 import { useAuth } from '../../contexts/AuthContext';
-import { Tenant, User, UserRole, UserPermissions, TenantCabinet, SubscriptionStatus, Plan } from '../../types';
+import { Tenant, User, UserRole, TenantCabinet, SubscriptionStatus, Plan } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import QueryState from '../../components/QueryState';
@@ -66,25 +67,6 @@ const subStatusMeta: Record<SubscriptionStatus, { label: string; badge: string }
   active: { label: 'Активна', badge: 'badge-green' },
   expired: { label: 'Истекла', badge: 'badge-yellow' },
   suspended: { label: 'Приостановлена', badge: 'badge-red' },
-};
-
-const defaultPermissions: UserPermissions = {
-  checks_view: true,
-  checks_create: true,
-  checks_edit: false,
-  checks_delete: false,
-  checks_change_datetime: false,
-  profit_view: false,
-  clients_view: true,
-  clients_edit: false,
-  warehouse_access: false,
-  suppliers_access: false,
-  financial_reports: false,
-  export_data: false,
-  user_management: false,
-  schedule_view: false,
-  salary_view: false,
-  marketing_access: false,
 };
 
 // ----------- Tenant Edit Form -----------
@@ -440,6 +422,10 @@ export default function AdminTenantDetailPage() {
       return;
     }
 
+    // ROLE-ONLY (126): permissions в payload НЕ отправляем ни при создании, ни
+    // при редактировании — backend их игнорирует (users.service пишет пустую
+    // карту, права определяет назначенная роль). Раньше create слал мёртвый
+    // словарь defaultPermissions.
     const payload: any = {
       fullName: userForm.fullName,
       phone: userForm.phone,
@@ -450,12 +436,6 @@ export default function AdminTenantDetailPage() {
     };
 
     if (editingUser) {
-      // РЕДАКТИРОВАНИЕ: permissions в payload НЕ кладём. Раньше сюда всегда
-      // уходила захардкоженная { ...defaultPermissions } — каждый суперадмин-
-      // edit сотрудника молча затирал права, настроенные владельцем в
-      // приложении (users.service пишет permissions при любом присутствии
-      // ключа). Права правит владелец через свой редактор; отсюда — только
-      // профиль. При СОЗДАНИИ дефолты оставляем — у нового юзера прав ещё нет.
       if (userForm.password) payload.password = userForm.password;
       updateUserMutation.mutate({ userId: editingUser.id, data: payload });
     } else {
@@ -464,7 +444,6 @@ export default function AdminTenantDetailPage() {
         return;
       }
       payload.password = userForm.password;
-      payload.permissions = { ...defaultPermissions };
       createUserMutation.mutate(payload);
     }
   };
@@ -514,19 +493,44 @@ export default function AdminTenantDetailPage() {
 
   return (
     <div>
-      {/* Back + Header */}
-      <div className="mb-6">
-        <button
-          onClick={() => navigate('/admin/tenants')}
-          className="flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700 mb-3"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Назад к автосервисам
-        </button>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="page-title">{tenant.name}</h1>
+      {/* Back link */}
+      <button
+        onClick={() => navigate('/admin/tenants')}
+        className="mb-3 flex items-center gap-1.5 text-sm text-gray-500 hover:text-gray-700"
+      >
+        <ArrowLeft className="w-4 h-4" />
+        Назад к автосервисам
+      </button>
+
+      {/* Header card: имя + статус + действия одной панелью */}
+      <div className="card mb-4 p-5">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-primary-50">
+              <Building2 className="h-5 w-5 text-primary-600" />
+            </div>
+            <div className="min-w-0">
+              <h1 className="truncate text-xl font-bold text-gray-900 md:text-2xl">{tenant.name}</h1>
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                {tenant.isActive ? (
+                  <span className="badge-green">Активна</span>
+                ) : (
+                  <span className="badge-red">Отключена</span>
+                )}
+                {subStatus && (
+                  <span className={subStatusMeta[subStatus.status].badge}>{subStatusMeta[subStatus.status].label}</span>
+                )}
+                <SubscriptionPeriodBadge
+                  kind={subStatus?.currentPeriodKind ?? tenant.currentPeriodKind}
+                  until={subStatus?.subscriptionEnd ?? tenant.subscriptionEnd}
+                  size="sm"
+                />
+              </div>
+            </div>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
-            <button onClick={openExtendModal} className="btn-secondary btn-sm">
+            <button onClick={openExtendModal} className="btn-primary btn-sm">
               <CalendarPlus className="w-4 h-4" />
               Продлить
             </button>
@@ -537,6 +541,10 @@ export default function AdminTenantDetailPage() {
             <button onClick={() => setImpersonateConfirm(true)} className="btn-secondary btn-sm">
               <LogIn className="w-4 h-4" />
               Войти как владелец
+            </button>
+            <button onClick={openTenantEdit} className="btn-secondary btn-sm">
+              <Pencil className="w-4 h-4" />
+              Редактировать
             </button>
             {isSuspended ? (
               <button
@@ -555,206 +563,180 @@ export default function AdminTenantDetailPage() {
                 Приостановить
               </button>
             )}
-            <button onClick={openTenantEdit} className="btn-secondary btn-sm">
-              <Pencil className="w-4 h-4" />
-              Редактировать
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Tenant Info Card */}
-      <div className="card card-body mb-6">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div className="space-y-3">
-            {tenant.phone && (
-              <div className="flex items-center gap-2 text-sm">
-                <Phone className="w-4 h-4 text-gray-400" />
-                <span className="text-gray-700">{tenant.phone}</span>
-              </div>
-            )}
-            {tenant.email && (
-              <div className="flex items-center gap-2 text-sm">
-                <Mail className="w-4 h-4 text-gray-400" />
-                <span className="text-gray-700">{tenant.email}</span>
-              </div>
-            )}
-            {tenant.address && (
-              <div className="flex items-center gap-2 text-sm">
-                <MapPin className="w-4 h-4 text-gray-400" />
-                <span className="text-gray-700">{tenant.address}</span>
-              </div>
-            )}
-            <div className="flex items-center gap-2 text-sm">
-              <Users className="w-4 h-4 text-gray-400" />
-              <span className="text-gray-700">
-                Пользователей: {tenantUsers.length} / {tenant.maxUsers}
-              </span>
-            </div>
-          </div>
-
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm">
-              <span className="text-gray-500">Статус:</span>
-              {tenant.isActive ? (
-                <span className="badge-green">Активна</span>
-              ) : (
-                <span className="badge-red">Неактивна</span>
-              )}
-            </div>
-            <div className="flex items-center gap-2 text-sm">
-              <CalendarDays className="w-4 h-4 text-gray-400" />
-              <span className="text-gray-500">Подписка до:</span>
-              {subscriptionEnd ? (
-                <span className={isExpired ? 'text-red-600 font-medium' : 'text-gray-700'}>
-                  {format(subscriptionEnd, 'd MMMM yyyy', { locale: ru })}
-                  {isExpired && <span className="badge-red ml-1">Истекла</span>}
-                </span>
-              ) : (
-                <span className="text-gray-400">Не указано</span>
-              )}
-            </div>
-            {tenant.subscriptionNote && (
-              <div className="text-sm text-gray-500">Примечание: {tenant.subscriptionNote}</div>
-            )}
-            {tenant.slug && (
-              <div className="text-sm text-gray-500">
-                Slug: <span className="font-mono text-gray-700">{tenant.slug}</span>
-              </div>
-            )}
           </div>
         </div>
 
-        {tenant.description && (
-          <div className="mt-4 pt-4 border-t border-gray-100">
-            <p className="text-sm text-gray-600">{tenant.description}</p>
+        {subStatus?.status === 'suspended' && (
+          <div className="mt-4 flex items-start gap-3 rounded-lg bg-red-50 p-4">
+            <PauseCircle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="text-sm font-medium text-red-700">
+                Работа приостановлена
+                {subStatus.suspendedAt
+                  ? ` ${format(parseISO(subStatus.suspendedAt), 'd MMMM yyyy', { locale: ru })}`
+                  : ''}
+              </p>
+              {subStatus.suspendedReason && (
+                <p className="text-sm text-red-600 mt-0.5">Причина: {subStatus.suspendedReason}</p>
+              )}
+            </div>
           </div>
         )}
       </div>
 
-      {/* Subscription status (superadmin cabinet) */}
-      {subStatus && (
-        <div className="card card-body mb-6">
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-            <h2 className="text-lg font-semibold text-gray-900">Подписка</h2>
-            <div className="flex flex-wrap items-center gap-2">
-              <SubscriptionPeriodBadge kind={subStatus.currentPeriodKind} until={subStatus.subscriptionEnd} />
-              <span className={subStatusMeta[subStatus.status].badge}>{subStatusMeta[subStatus.status].label}</span>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <p className="text-xs text-gray-500 mb-0.5">Тариф</p>
-              <p className="text-sm font-semibold text-gray-900">{subStatus.planName || 'Не назначен'}</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-0.5">Стоимость</p>
-              <p className="text-sm font-semibold text-gray-900">{formatRub(subStatus.planPrice)}/мес</p>
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-0.5">Действует до</p>
-              {subStatus.subscriptionEnd ? (
-                <p
-                  className={`text-sm font-semibold tabular-nums ${
-                    subStatus.status === 'expired' ? 'text-red-600' : 'text-gray-900'
-                  }`}
-                >
-                  {format(parseISO(subStatus.subscriptionEnd), 'd MMMM yyyy', { locale: ru })}
-                </p>
-              ) : (
-                <p className="text-sm font-semibold text-gray-400">Не указано</p>
-              )}
-            </div>
-            <div>
-              <p className="text-xs text-gray-500 mb-0.5">Сотрудников</p>
-              <p className="text-sm font-semibold text-gray-900">
-                {subStatus.currentUsers} / {subStatus.maxUsers}
-              </p>
-            </div>
-          </div>
-
-          {subStatus.status === 'suspended' && (
-            <div className="mt-4 flex items-start gap-3 rounded-lg bg-red-50 p-4">
-              <PauseCircle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
+      <div className="mb-4 grid grid-cols-1 gap-4 xl:grid-cols-3">
+        {/* Подписка (superadmin cabinet) */}
+        <div className="card p-5 xl:col-span-2">
+          <h2 className="mb-4 text-base font-semibold text-gray-900">Подписка</h2>
+          {subStatus ? (
+            <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
               <div>
-                <p className="text-sm font-medium text-red-700">
-                  Работа приостановлена
-                  {subStatus.suspendedAt
-                    ? ` ${format(parseISO(subStatus.suspendedAt), 'd MMMM yyyy', { locale: ru })}`
-                    : ''}
-                </p>
-                {subStatus.suspendedReason && (
-                  <p className="text-sm text-red-600 mt-0.5">Причина: {subStatus.suspendedReason}</p>
+                <p className="text-xs text-gray-500 mb-0.5">Тариф</p>
+                <p className="text-sm font-semibold text-gray-900">{subStatus.planName || 'Не назначен'}</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-0.5">Стоимость</p>
+                <p className="text-sm font-semibold tabular-nums text-gray-900">{formatRub(subStatus.planPrice)}/мес</p>
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-0.5">Действует до</p>
+                {subStatus.subscriptionEnd ? (
+                  <p
+                    className={`text-sm font-semibold tabular-nums ${
+                      subStatus.status === 'expired' ? 'text-red-600' : 'text-gray-900'
+                    }`}
+                  >
+                    {format(parseISO(subStatus.subscriptionEnd), 'd MMMM yyyy', { locale: ru })}
+                  </p>
+                ) : (
+                  <p className="text-sm font-semibold text-gray-400">Не указано</p>
                 )}
+              </div>
+              <div>
+                <p className="text-xs text-gray-500 mb-0.5">Сотрудников</p>
+                <p className="text-sm font-semibold tabular-nums text-gray-900">
+                  {subStatus.currentUsers} / {subStatus.maxUsers}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-2 text-sm text-gray-400">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Загрузка данных подписки…
+            </div>
+          )}
+
+          {/* Показатели клиента */}
+          {metrics && (
+            <div className="mt-5 border-t border-gray-100 pt-4">
+              <h3 className="mb-3 text-sm font-semibold text-gray-900">Показатели клиента</h3>
+              <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                <div className="rounded-lg bg-gray-50 p-3">
+                  <div className="mb-1 flex items-center gap-1.5 text-gray-500">
+                    <ClipboardList className="h-3.5 w-3.5" />
+                    <span className="text-xs">Заказ-наряды</span>
+                  </div>
+                  <p className="text-lg font-bold tabular-nums text-gray-900">{metrics.checksTotal}</p>
+                  <p className="text-xs tabular-nums text-gray-500">за 30 дней: {metrics.checksLast30d}</p>
+                </div>
+                <div className="rounded-lg bg-gray-50 p-3">
+                  <div className="mb-1 flex items-center gap-1.5 text-gray-500">
+                    <Banknote className="h-3.5 w-3.5" />
+                    <span className="text-xs">Выручка</span>
+                  </div>
+                  <p className="text-lg font-bold tabular-nums text-gray-900">{formatRub(metrics.revenueTotal)}</p>
+                  <p className="text-xs tabular-nums text-gray-500">за 30 дней: {formatRub(metrics.revenueLast30d)}</p>
+                </div>
+                <div className="rounded-lg bg-gray-50 p-3">
+                  <div className="mb-1 flex items-center gap-1.5 text-gray-500">
+                    <Users className="h-3.5 w-3.5" />
+                    <span className="text-xs">Сотрудники</span>
+                  </div>
+                  <p className="text-lg font-bold tabular-nums text-gray-900">{metrics.usersCount}</p>
+                  <p className="text-xs tabular-nums text-gray-500">активных: {metrics.activeUsersCount}</p>
+                </div>
+                <div className="rounded-lg bg-gray-50 p-3">
+                  <div className="mb-1 flex items-center gap-1.5 text-gray-500">
+                    <Package className="h-3.5 w-3.5" />
+                    <span className="text-xs">Товары / активность</span>
+                  </div>
+                  <p className="text-lg font-bold tabular-nums text-gray-900">{metrics.productsCount}</p>
+                  <p className="flex items-center gap-1 text-xs text-gray-500">
+                    {metrics.lastActivityAt ? (
+                      <>
+                        <Clock className="h-3 w-3" />
+                        {formatDistanceToNow(parseISO(metrics.lastActivityAt), {
+                          addSuffix: true,
+                          locale: ru,
+                        })}
+                      </>
+                    ) : (
+                      <>
+                        <Activity className="h-3 w-3" />
+                        нет активности
+                      </>
+                    )}
+                  </p>
+                </div>
               </div>
             </div>
           )}
         </div>
-      )}
 
-      {/* Activity metrics (показатели клиента) */}
-      {metrics && (
-        <div className="mb-6">
-          <h2 className="text-lg font-semibold text-gray-900 mb-3">Показатели клиента</h2>
-          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-            <div className="card card-body">
-              <div className="flex items-center gap-2 text-gray-500 mb-1">
-                <ClipboardList className="w-4 h-4" />
-                <span className="text-xs">Заказ-наряды</span>
-              </div>
-              <p className="text-xl font-bold text-gray-900">{metrics.checksTotal}</p>
-              <p className="text-xs text-gray-500">за 30 дней: {metrics.checksLast30d}</p>
+        {/* Информация о тенанте */}
+        <div className="card p-5">
+          <h2 className="mb-4 text-base font-semibold text-gray-900">Информация</h2>
+          <div className="space-y-3 text-sm">
+            <div className="flex items-center gap-2">
+              <Phone className="w-4 h-4 flex-shrink-0 text-gray-400" />
+              <span className="text-gray-700">{tenant.phone || '—'}</span>
             </div>
-
-            <div className="card card-body">
-              <div className="flex items-center gap-2 text-gray-500 mb-1">
-                <Banknote className="w-4 h-4" />
-                <span className="text-xs">Выручка</span>
-              </div>
-              <p className="text-xl font-bold text-gray-900">{formatRub(metrics.revenueTotal)}</p>
-              <p className="text-xs text-gray-500">за 30 дней: {formatRub(metrics.revenueLast30d)}</p>
+            <div className="flex items-center gap-2">
+              <Mail className="w-4 h-4 flex-shrink-0 text-gray-400" />
+              <span className="truncate text-gray-700">{tenant.email || '—'}</span>
             </div>
-
-            <div className="card card-body">
-              <div className="flex items-center gap-2 text-gray-500 mb-1">
-                <Users className="w-4 h-4" />
-                <span className="text-xs">Сотрудники</span>
-              </div>
-              <p className="text-xl font-bold text-gray-900">{metrics.usersCount}</p>
-              <p className="text-xs text-gray-500">активных: {metrics.activeUsersCount}</p>
+            <div className="flex items-center gap-2">
+              <MapPin className="w-4 h-4 flex-shrink-0 text-gray-400" />
+              <span className="text-gray-700">{tenant.address || '—'}</span>
             </div>
-
-            <div className="card card-body">
-              <div className="flex items-center gap-2 text-gray-500 mb-1">
-                <Package className="w-4 h-4" />
-                <span className="text-xs">Товары / активность</span>
-              </div>
-              <p className="text-xl font-bold text-gray-900">{metrics.productsCount}</p>
-              <p className="text-xs text-gray-500 flex items-center gap-1">
-                {metrics.lastActivityAt ? (
-                  <>
-                    <Clock className="w-3 h-3" />
-                    {formatDistanceToNow(parseISO(metrics.lastActivityAt), {
-                      addSuffix: true,
-                      locale: ru,
-                    })}
-                  </>
-                ) : (
-                  <>
-                    <Activity className="w-3 h-3" />
-                    нет активности
-                  </>
-                )}
-              </p>
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 flex-shrink-0 text-gray-400" />
+              <span className="tabular-nums text-gray-700">
+                Пользователей: {tenantUsers.length} / {tenant.maxUsers}
+              </span>
             </div>
+            <div className="flex items-center gap-2">
+              <CalendarDays className="w-4 h-4 flex-shrink-0 text-gray-400" />
+              <span className="text-gray-500">Подписка до:</span>
+              {subscriptionEnd ? (
+                <span className={`tabular-nums ${isExpired ? 'font-medium text-red-600' : 'text-gray-700'}`}>
+                  {format(subscriptionEnd, 'd MMM yyyy', { locale: ru })}
+                </span>
+              ) : (
+                <span className="text-gray-400">не указано</span>
+              )}
+            </div>
+            {tenant.subscriptionNote && (
+              <div className="flex items-start gap-2">
+                <StickyNote className="mt-0.5 w-4 h-4 flex-shrink-0 text-gray-400" />
+                <span className="text-gray-600">{tenant.subscriptionNote}</span>
+              </div>
+            )}
+            {tenant.slug && (
+              <div className="text-gray-500">
+                Slug: <span className="font-mono text-gray-700">{tenant.slug}</span>
+              </div>
+            )}
+            {tenant.description && <p className="border-t border-gray-100 pt-3 text-gray-600">{tenant.description}</p>}
           </div>
         </div>
-      )}
+      </div>
 
       {/* Users Section */}
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-lg font-semibold text-gray-900">Пользователи</h2>
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-base font-semibold text-gray-900">
+          Пользователи <span className="tabular-nums text-gray-400">({tenantUsers.length})</span>
+        </h2>
         <button onClick={openCreateUser} className="btn-primary btn-sm">
           <Plus className="w-4 h-4" />
           Новый пользователь
@@ -778,20 +760,20 @@ export default function AdminTenantDetailPage() {
                 <th>Роль</th>
                 <th>% ставка</th>
                 <th>Статус</th>
-                <th>Действия</th>
+                <th className="text-right">Действия</th>
               </tr>
             </thead>
             <tbody>
               {tenantUsers.map((user) => (
                 <tr key={user.id}>
                   <td className="font-medium text-gray-900">{user.fullName}</td>
-                  <td>{user.phone}</td>
+                  <td className="tabular-nums">{user.phone}</td>
                   <td>
                     <span className={roleBadgeMap[user.role] || 'badge-gray'}>
                       {roleLabels[user.role] || user.role}
                     </span>
                   </td>
-                  <td>{user.salaryPercent}%</td>
+                  <td className="tabular-nums">{user.salaryPercent}%</td>
                   <td>
                     {user.isActive ? (
                       <span className="badge-green">Активен</span>
@@ -800,7 +782,7 @@ export default function AdminTenantDetailPage() {
                     )}
                   </td>
                   <td>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center justify-end gap-1">
                       <button
                         onClick={() => openEditUser(user)}
                         className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg hover:bg-gray-100 transition-colors"
@@ -842,14 +824,25 @@ export default function AdminTenantDetailPage() {
               required
             />
           </div>
-          <div>
-            <label className="label">Телефон</label>
-            <input
-              type="tel"
-              className="input"
-              value={tenantForm.phone}
-              onChange={(e) => setTenantForm({ ...tenantForm, phone: e.target.value })}
-            />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label">Телефон</label>
+              <input
+                type="tel"
+                className="input"
+                value={tenantForm.phone}
+                onChange={(e) => setTenantForm({ ...tenantForm, phone: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Email</label>
+              <input
+                type="email"
+                className="input"
+                value={tenantForm.email}
+                onChange={(e) => setTenantForm({ ...tenantForm, email: e.target.value })}
+              />
+            </div>
           </div>
           <div>
             <label className="label">Адрес</label>
@@ -858,15 +851,6 @@ export default function AdminTenantDetailPage() {
               className="input"
               value={tenantForm.address}
               onChange={(e) => setTenantForm({ ...tenantForm, address: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Email</label>
-            <input
-              type="email"
-              className="input"
-              value={tenantForm.email}
-              onChange={(e) => setTenantForm({ ...tenantForm, email: e.target.value })}
             />
           </div>
           <div>
@@ -887,6 +871,10 @@ export default function AdminTenantDetailPage() {
               onChange={(e) => setTenantForm({ ...tenantForm, maxUsers: Number(e.target.value) })}
               min={1}
             />
+            <p className="mt-1 text-xs text-gray-500">
+              Меняется автоматически при назначении тарифа. Ручное значение — осознанное исключение для этого
+              автосервиса.
+            </p>
           </div>
           <div className="flex items-center gap-3">
             <Switch
@@ -896,23 +884,25 @@ export default function AdminTenantDetailPage() {
             />
             <span className="text-sm font-medium text-gray-700">{tenantForm.isActive ? 'Активна' : 'Неактивна'}</span>
           </div>
-          <div>
-            <label className="label">Подписка до</label>
-            <input
-              type="date"
-              className="input"
-              value={tenantForm.subscriptionEnd}
-              onChange={(e) => setTenantForm({ ...tenantForm, subscriptionEnd: e.target.value })}
-            />
-          </div>
-          <div>
-            <label className="label">Примечание к подписке</label>
-            <input
-              type="text"
-              className="input"
-              value={tenantForm.subscriptionNote}
-              onChange={(e) => setTenantForm({ ...tenantForm, subscriptionNote: e.target.value })}
-            />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label">Подписка до</label>
+              <input
+                type="date"
+                className="input"
+                value={tenantForm.subscriptionEnd}
+                onChange={(e) => setTenantForm({ ...tenantForm, subscriptionEnd: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Примечание к подписке</label>
+              <input
+                type="text"
+                className="input"
+                value={tenantForm.subscriptionNote}
+                onChange={(e) => setTenantForm({ ...tenantForm, subscriptionNote: e.target.value })}
+              />
+            </div>
           </div>
           <div>
             <label className="label">Доп. минуты голоса (надбавка)</label>
@@ -1011,6 +1001,9 @@ export default function AdminTenantDetailPage() {
               <option value={UserRole.ADMIN}>Админ</option>
               <option value={UserRole.MASTER}>Мастер</option>
             </select>
+            <p className="mt-1 text-xs text-gray-500">
+              Права сотрудника определяются ролью. Тонкая настройка ролей — в приложении владельца автосервиса.
+            </p>
           </div>
           <div>
             <label className="label">% ставка от услуг</label>

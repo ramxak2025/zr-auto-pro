@@ -33,7 +33,6 @@ import { knowledgeApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
 import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
 import type { KnowledgeCourse, KnowledgeLesson } from '../../../shared/types';
 
 type ParamList = { KnowledgeCourseDetail: { id: string; title?: string } };
@@ -43,8 +42,10 @@ export default function KnowledgeCourseDetailScreen() {
   const route = useRoute<RouteProp<ParamList, 'KnowledgeCourseDetail'>>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
-  const isManager = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Мутации базы знаний — ключ knowledge_manage (сервер гейтит тем же ключом;
+  // «права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me).
+  const { hasPermission } = useAuth();
+  const isManager = hasPermission('knowledge_manage');
 
   const id = route.params?.id;
 

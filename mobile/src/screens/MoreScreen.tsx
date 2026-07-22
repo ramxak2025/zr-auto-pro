@@ -80,10 +80,11 @@ interface MenuSection {
 
 // ROLE-ONLY menu-hide (консолидация 2026-07): раздел без доступа СКРЫТ целиком
 // (не «показан с замком»). Бэкенд теперь возвращает 403 и costPrice:0 — UI обязан
-// это зеркалить: никаких мёртвых кнопок и «0 ₽ себестоимости». Owner-class
-// (superadmin/director/admin) видят всё — тот же байпас, что у сервера
-// (permissions.guard OWNER_CLASS_ROLES).
-const MENU_OWNER_CLASS_ROLES = new Set<string>(['superadmin', 'director', 'admin']);
+// это зеркалить: никаких мёртвых кнопок и «0 ₽ себестоимости».
+// «Права как в Битрикс24» (2026-07): admin СНЯТ из owner-class на сервере —
+// /auth/me отдаёт эффективные права из матрицы роли, поэтому здесь единый гейт
+// hasPermission(key); строковый байпас остаётся ТОЛЬКО у superadmin/director
+// (внутри самого hasPermission) и у пунктов вне матрицы («Подписка»).
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Menu structure — owner-requested 5-group taxonomy (#17), iOS Settings-style.
@@ -217,7 +218,7 @@ const menuSections: MenuSection[] = [
         description: 'Z-отчёт, инкассация, сверка кассы',
         screen: 'CashShift',
         itemKey: 'cashflow',
-        roles: ['director', 'admin', 'superadmin'],
+        permission: 'cash_shifts_manage',
         // Z-отчёт / сверка кассы → calculator (cash-register feel). Was
         // `file-tray-full-outline`, which had no Lucide twin and rendered a
         // meaningless Circle placeholder.
@@ -247,7 +248,7 @@ const menuSections: MenuSection[] = [
         description: 'Акционные товары и бонусы за продажи',
         screen: 'Motivation',
         itemKey: 'salary',
-        roles: ['director', 'superadmin'],
+        permission: 'motivation_manage',
         icon: 'gift-outline',
         iconBg: colors.emerald[50],
         iconColor: colors.green[600],
@@ -257,7 +258,7 @@ const menuSections: MenuSection[] = [
         description: 'Аренда, маркетинг и др.',
         screen: 'Expenses',
         itemKey: 'expenses',
-        roles: ['director', 'superadmin'],
+        permission: 'can_add_expenses',
         icon: 'trending-down-outline',
         iconBg: colors.rose[50],
         iconColor: colors.rose[600],
@@ -274,7 +275,7 @@ const menuSections: MenuSection[] = [
         description: 'Аренда, оклады и мотивация — для прибыли',
         screen: 'Planning',
         itemKey: 'expenses',
-        roles: ['director', 'superadmin'],
+        permission: 'financial_reports',
         icon: 'repeat-outline',
         iconBg: colors.indigo[50],
         iconColor: colors.indigo[600],
@@ -343,6 +344,7 @@ const menuSections: MenuSection[] = [
         description: 'Остатки, оборот, движение',
         screen: 'WarehouseAnalytics',
         itemKey: 'warehouse-analytics',
+        permission: 'warehouse_analytics_view',
         icon: 'analytics-outline',
         iconBg: colors.teal[50],
         iconColor: colors.teal[600],
@@ -405,7 +407,6 @@ const menuSections: MenuSection[] = [
         itemKey: 'users',
         permission: 'user_management',
         featureKey: 'users_manage',
-        roles: ['director', 'superadmin'],
         icon: 'shield-outline',
         iconBg: colors.indigo[50],
         iconColor: colors.indigo[600],
@@ -419,7 +420,10 @@ const menuSections: MenuSection[] = [
         description: 'Реквизиты и данные для чеков',
         screen: 'CompanySettings',
         itemKey: 'company-settings',
-        roles: ['director', 'superadmin'],
+        // GET/PATCH /my-company — сид «Администратора» company_manage=false
+        // (сегодня admin исключён и на сервере) → пункт остаётся d/sa, пока
+        // владелец не выдаст право явно.
+        permission: 'company_manage',
         icon: 'business-outline',
         iconBg: colors.slate[100],
         iconColor: colors.slate[600],
@@ -582,20 +586,15 @@ export default function MoreScreen() {
     return !(Array.isArray(sub.features) && sub.features.includes(featureKey));
   };
 
-  // Owner-class (superadmin/director/admin) — always see everything, matching
-  // the server's permissions.guard OWNER_CLASS_ROLES bypass. Their permission
-  // map from the role matrix may be sparse (guards short-circuit them by string
-  // role), so the client MUST bypass here too or an admin would lose menu rows.
-  const isOwnerClass = !!user?.role && MENU_OWNER_CLASS_ROLES.has(user.role);
-
   const filterItem = (item: MenuItem): boolean => {
     // App Store Guideline 3.1.1/3.1.3(c): на iOS приложение — чисто внутренний
     // инструмент организации, никакой «покупаемой» подписки/тарифа в интерфейсе.
     // Пункт «Подписка» (Subscription) скрыт на iOS целиком; на Android остаётся.
     if (Platform.OS === 'ios' && item.screen === 'Subscription') return false;
     // ROLE-ONLY menu-hide: раздел без права СКРЫТ целиком (не «с замком»).
-    // Owner-class минует гейт прав; остальные — hasPermission из матрицы роли.
-    if (item.permission && !isOwnerClass && !hasPermission(item.permission)) return false;
+    // Матрица роли АВТОРИТЕТНА: /auth/me отдаёт эффективные права, admin живёт
+    // по ним; superadmin/director байпасятся внутри самого hasPermission.
+    if (item.permission && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
     // 073 — granular per-item visibility override (additive to the group-level
     // isSectionVisible check the caller already applied). Owners keep their

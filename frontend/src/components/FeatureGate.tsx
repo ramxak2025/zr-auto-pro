@@ -45,13 +45,16 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  const { data: sub } = useQuery<SubscriptionInfo>({
+  const { data: sub, isError: subIsError } = useQuery<SubscriptionInfo>({
     queryKey: ['subscription'],
     queryFn: async () => {
       const res = await subscriptionApi.get();
       return res.data;
     },
     staleTime: 5 * 60 * 1000,
+    // Подписка гейтит целые разделы — одна сетевая осечка не должна отключать
+    // план-гейтинг (глобальный дефолт retry: 1 здесь слишком робкий).
+    retry: 3,
   });
 
   // Only superadmin bypasses feature gates
@@ -59,8 +62,15 @@ export default function FeatureGate({ featureKey, title, description, benefits, 
     return <>{children}</>;
   }
 
-  // Optimistic: show children while loading
-  if (!sub) return <>{children}</>;
+  // Optimistic: show children while loading. При ОКОНЧАТЕЛЬНОЙ ошибке (все
+  // ретраи исчерпаны) тоже fail-open — владелец не должен терять кассу из-за
+  // 5xx на /subscription — но обход гейтинга фиксируем, а не молчим.
+  if (!sub) {
+    if (subIsError) {
+      console.warn(`[FeatureGate] запрос /subscription не удался — «${featureKey}» показан без проверки тарифа`);
+    }
+    return <>{children}</>;
+  }
 
   // Authoritative check: the resolved feature keys of the current plan.
   if (Array.isArray(sub.features) && sub.features.includes(featureKey)) {

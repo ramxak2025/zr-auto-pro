@@ -107,7 +107,19 @@ export class ScheduleService {
         case 'worked':
           // worked = the user actually showed up (actual_arrival set) and
           // wasn't tagged as late_major (which is "long" bucket below).
-          clauses.push(`(actual_arrival IS NOT NULL AND COALESCE(late_status, '') <> 'late_major')`);
+          // Страж против «застрявшего» actual_arrival: день, переключённый в
+          // выходной/больничный/прогул, сменой НЕ считается, даже если старый
+          // клиент не прислал actualArrival: null при переключении статуса
+          // (частичный PATCH оставляет факт прихода в строке). Корень жалобы
+          // «в расписании 5 смен, в зарплате 10».
+          // Больничный/прогул матчим ТОЧНЫМ лейблом quick-action ('Больничный'
+          // /'Прогул'), а не подстрокой: свободный note реально отработанного
+          // дня («оформили больничный клиенту») не должен выкидывать смену.
+          clauses.push(
+            `(actual_arrival IS NOT NULL AND COALESCE(late_status, '') <> 'late_major'
+              AND is_day_off = false
+              AND COALESCE(note, '') NOT IN ('Больничный', 'Прогул'))`,
+          );
           break;
         case 'dayoff':
           clauses.push(`(is_day_off = true)`);
@@ -267,7 +279,16 @@ export class ScheduleService {
     const { rows } = await this.pool.query(
       `SELECT
          COUNT(*) as total_scheduled,
-         COUNT(CASE WHEN actual_arrival IS NOT NULL THEN 1 END) as total_worked,
+         -- «Рабочих дней» = ТО ЖЕ worked-определение, что у зарплаты
+         -- (buildShiftFilter 'worked'): факт прихода, НЕ late_major, не
+         -- выходной/больничный/прогул (точный лейбл quick-action, не подстрока)
+         -- и только прошедшие дни (бизнес-«сегодня» — Europe/Moscow).
+         COUNT(CASE WHEN actual_arrival IS NOT NULL
+                     AND COALESCE(late_status, '') <> 'late_major'
+                     AND is_day_off = false
+                     AND COALESCE(note, '') NOT IN ('Больничный', 'Прогул')
+                     AND date <= (now() AT TIME ZONE 'Europe/Moscow')::date
+                THEN 1 END) as total_worked,
          COUNT(CASE WHEN late_status IN ('late_minor','late_major') THEN 1 END) as total_late,
          COUNT(CASE WHEN late_status = 'late_minor' THEN 1 END) as total_late_minor,
          COUNT(CASE WHEN late_status = 'late_major' THEN 1 END) as total_late_major,

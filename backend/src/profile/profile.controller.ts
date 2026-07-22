@@ -1,22 +1,25 @@
 import { Body, Controller, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { ProfileService } from './profile.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
 
 /**
- * «Мой профиль» — self profile edit, self password change, and the owner-class
- * approval queue for employee profile-change requests.
+ * «Мой профиль» — self profile edit, self password change, and the approval
+ * queue for employee profile-change requests.
  *
- * JwtAuthGuard + RolesGuard apply to the whole controller (mirrors DebtsController).
- * Endpoints WITHOUT a @Roles decorator are open to any authenticated user (the
- * self actions); the review-queue endpoints are restricted to владелец
- * (director / superadmin). Role branching for "apply directly vs create a
- * request" lives in ProfileService, keyed off the caller's own role.
+ * Guards apply to the whole controller (mirrors DebtsController). Undecorated
+ * endpoints are open to any authenticated user (the self actions); the
+ * review-queue endpoints ride the 'employees_approve_profile' matrix cell
+ * (employees.approveProfile, миграция 136) — owner-only: сид «Администратора»
+ * false (сегодня @Roles(d,sa) БЕЗ admin — 1:1). Owner-class (director/
+ * superadmin) bypasses via PermissionsGuard. Role branching for "apply directly
+ * vs create a request" lives in ProfileService, keyed off the caller's own role.
  */
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('profile')
 export class ProfileController {
   constructor(private profile: ProfileService) {}
@@ -48,21 +51,21 @@ export class ProfileController {
     return this.profile.getMyChangeRequest(user.userID);
   }
 
-  // ─── Owner review queue (director / superadmin) ─────────────────────────
+  // ─── Review queue ('employees_approve_profile'; сид Админ=false) ────────
 
-  @Roles('director', 'superadmin')
+  @RequirePermission('employees_approve_profile')
   @Get('change-requests')
   listChangeRequests(@CurrentUser() user: JwtPayload) {
     return this.profile.listChangeRequests(user.tenantID);
   }
 
-  @Roles('director', 'superadmin')
+  @RequirePermission('employees_approve_profile')
   @Post('change-requests/:id/approve')
   approve(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.profile.approveChangeRequest(user, id);
   }
 
-  @Roles('director', 'superadmin')
+  @RequirePermission('employees_approve_profile')
   @Post('change-requests/:id/reject')
   reject(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     return this.profile.rejectChangeRequest(user, id);

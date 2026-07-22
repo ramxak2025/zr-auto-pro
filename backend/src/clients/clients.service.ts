@@ -369,6 +369,30 @@ export class ClientsService {
     if (check.length > 0 && check[0].is_retail) {
       throw new NotFoundException({ message: 'Нельзя удалить розничного покупателя' });
     }
+
+    // Hard delete каскадом уничтожает installment_plans / client_debts /
+    // client_bonuses (FK CASCADE, мигр. 081/083/093) — деньги, которые клиент
+    // должен, пропали бы из учёта без следа. Блокируем удаление, пока есть
+    // открытая рассрочка или непогашенный долг (409 с понятным текстом).
+    const { rows: obligations } = await this.pool.query(
+      `SELECT
+         (SELECT COUNT(*) FROM installment_plans
+           WHERE client_id=$1 AND tenant_id=$2 AND status='open') AS open_plans,
+         (SELECT COALESCE(SUM(CASE WHEN type='charge' THEN amount ELSE -amount END), 0)
+            FROM client_debts WHERE client_id=$1 AND tenant_id=$2) AS debt_balance`,
+      [id, tenantID],
+    );
+    const openPlans = parseInt(obligations[0].open_plans, 10) || 0;
+    const debtBalance = parseFloat(obligations[0].debt_balance) || 0;
+    if (openPlans > 0 || debtBalance > 0) {
+      throw new ConflictException({
+        message:
+          openPlans > 0
+            ? 'Нельзя удалить клиента: есть незакрытая рассрочка. Сначала закройте рассрочку.'
+            : 'Нельзя удалить клиента: есть непогашенный долг. Сначала погасите или спишите долг.',
+      });
+    }
+
     await this.pool.query('DELETE FROM clients WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
     return { message: 'Удалено' };
   }

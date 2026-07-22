@@ -10,7 +10,7 @@ import PageHeader from '../components/PageHeader';
 import { WorkStatusPicker, columnBadgeStyle, columnDotStyle } from '../components/WorkStatusPicker';
 import WorkBoardColumnsModal from '../components/WorkBoardColumnsModal';
 import type { Check, ChecksBoard, WorkBoardColumn } from '../types';
-import { UserRole } from '../types';
+
 import { formatMoney } from '../../../shared/utils/formatters';
 
 // Stable query key — invalidated by setWorkStatus mutations everywhere.
@@ -80,9 +80,11 @@ function CheckCard({
 
 export default function WorkBoardPage() {
   const queryClient = useQueryClient();
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const canEdit = hasPermission('checks_edit');
-  const canConfigure = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Настройка колонок доски — ключ checks_board_manage (backend CRUD
+  // /checks/board-columns; волна Битрикс24).
+  const canConfigure = hasPermission('checks_board_manage');
   const [settingsOpen, setSettingsOpen] = useState(false);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery<ChecksBoard>({

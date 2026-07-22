@@ -30,17 +30,25 @@ const clientInitials = (name: string) =>
     .slice(0, 2)
     .toUpperCase();
 
+/** SW-офлайн-очередь отвечает 202 {queued:true} — сервер запрос ещё НЕ видел. */
+const isQueuedOffline = (res: { status?: number; data?: unknown } | undefined): boolean =>
+  res?.status === 202 && (res?.data as { queued?: boolean } | undefined)?.queued === true;
+
 export default function ClientsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { user, hasPermission } = useAuth();
-  const isDirector = user?.role === 'director' || user?.role === 'superadmin';
+  const { hasPermission } = useAuth();
 
-  // ROLE/PERMISSION: inline "edit existing client" requires `clients_edit`.
-  // Owner-class roles bypass. Creating a new client (openCreateModal) and
-  // attaching a car stay ungated.
-  const isOwnerClass = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
-  const canEditClient = isOwnerClass || hasPermission('clients_edit');
+  // Волна «права как в Битрикс24»: только матрица (байпас superadmin/director —
+  // внутри hasPermission; admin — по правам роли из /auth/me).
+  //   clients_edit   — правка карточки клиента + импорт (backend imports/).
+  //   clients_delete — удаление клиента (backend DELETE /clients/:id).
+  //   export_data    — экспорт CSV (backend GET /clients/export-csv).
+  // Создание клиента (openCreateModal) остаётся без гейта — мастер в Кассе.
+  const canEditClient = hasPermission('clients_edit');
+  const canDeleteClient = hasPermission('clients_delete');
+  const canImport = hasPermission('clients_edit');
+  const canExport = hasPermission('export_data');
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
@@ -80,7 +88,14 @@ export default function ClientsPage() {
   // Mutations
   const createMutation = useMutation({
     mutationFn: (data: { fullName: string; phone: string; comment?: string }) => clientsApi.create(data),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (isQueuedOffline(res)) {
+        // SW-офлайн: сервер клиента ещё НЕ создал — честный тост без «Клиент
+        // создан» и без инвалидаций (сервер ничего нового не отдаст).
+        toast('Нет сети — клиент поставлен в очередь и сохранится автоматически', { icon: '📡', duration: 5000 });
+        closeModal();
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       toast.success('Клиент создан');
       closeModal();
@@ -93,7 +108,12 @@ export default function ClientsPage() {
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: { fullName: string; phone: string; comment?: string } }) =>
       clientsApi.update(id, data),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (isQueuedOffline(res)) {
+        toast('Нет сети — изменения поставлены в очередь и сохранятся автоматически', { icon: '📡', duration: 5000 });
+        closeModal();
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ['clients'] });
       toast.success('Клиент обновлён');
       closeModal();
@@ -206,41 +226,41 @@ export default function ClientsPage() {
       <div className="page-header">
         <h1 className="page-title">Клиенты</h1>
         <div className="flex items-center gap-2">
-          {isDirector && (
-            <>
-              <button
-                type="button"
-                onClick={() => navigate('/clients/import')}
-                className="btn-secondary hidden md:inline-flex"
-                title="Импорт клиентов и авто (только на компьютере)"
-              >
-                <Upload className="w-4 h-4" />
-                <span>Импорт</span>
-              </button>
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    const res = await clientsApi.exportCsv();
-                    const blob = new Blob([res.data as any], { type: 'text/csv;charset=utf-8' });
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = 'clients.csv';
-                    a.click();
-                    URL.revokeObjectURL(url);
-                    toast.success('CSV скачан');
-                  } catch {
-                    toast.error('Ошибка экспорта');
-                  }
-                }}
-                className="btn-secondary"
-                title="Экспорт CSV"
-              >
-                <Download className="w-4 h-4" />
-                <span className="hidden sm:inline">CSV</span>
-              </button>
-            </>
+          {canImport && (
+            <button
+              type="button"
+              onClick={() => navigate('/clients/import')}
+              className="btn-secondary hidden md:inline-flex"
+              title="Импорт клиентов и авто (только на компьютере)"
+            >
+              <Upload className="w-4 h-4" />
+              <span>Импорт</span>
+            </button>
+          )}
+          {canExport && (
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  const res = await clientsApi.exportCsv();
+                  const blob = new Blob([res.data as any], { type: 'text/csv;charset=utf-8' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'clients.csv';
+                  a.click();
+                  URL.revokeObjectURL(url);
+                  toast.success('CSV скачан');
+                } catch {
+                  toast.error('Ошибка экспорта');
+                }
+              }}
+              className="btn-secondary"
+              title="Экспорт CSV"
+            >
+              <Download className="w-4 h-4" />
+              <span className="hidden sm:inline">CSV</span>
+            </button>
           )}
           <button onClick={openCreateModal} className="btn-primary">
             <Plus className="w-4 h-4" />
@@ -334,13 +354,15 @@ export default function ClientsPage() {
                         onClick={(e) => openEditModal(client, e)}
                       />
                     )}
-                    <IconButton
-                      label="Удалить"
-                      icon={Trash2}
-                      variant="danger"
-                      size="sm"
-                      onClick={(e) => handleDelete(client.id, e)}
-                    />
+                    {canDeleteClient && (
+                      <IconButton
+                        label="Удалить"
+                        icon={Trash2}
+                        variant="danger"
+                        size="sm"
+                        onClick={(e) => handleDelete(client.id, e)}
+                      />
+                    )}
                   </div>
                 </div>
                 <div className="flex items-center gap-4 text-sm text-gray-500">
@@ -440,13 +462,15 @@ export default function ClientsPage() {
                               <Edit2 className="w-4 h-4" />
                             </button>
                           )}
-                          <button
-                            onClick={(e) => handleDelete(client.id, e)}
-                            className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
-                            title="Удалить"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
+                          {canDeleteClient && (
+                            <button
+                              onClick={(e) => handleDelete(client.id, e)}
+                              className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                              title="Удалить"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

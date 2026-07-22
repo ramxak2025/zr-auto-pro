@@ -30,6 +30,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
 import CachedImage from '../components/CachedImage';
+import { showToast } from '../components/Toast';
 import Markdown from '../components/knowledge/Markdown';
 import KnowledgeBlocks from '../components/KnowledgeBlocks';
 import VideoEmbed from '../components/knowledge/VideoEmbed';
@@ -42,7 +43,6 @@ import { getImageUrl } from '../api/axios';
 import { spacing, borderRadius, colors, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { formatDateShort } from '../../../shared/utils/formatters';
-import { UserRole } from '../../../shared/types';
 import type { KnowledgeArticle, KnowledgeAcksResponse, ArticleFeedbackResult } from '../../../shared/types';
 
 type ParamList = { KnowledgeArticle: { id: string; title?: string } };
@@ -93,8 +93,10 @@ export default function KnowledgeArticleScreen() {
   const tabBarHeight = useTabBarHeight();
   const insets = useSafeAreaInsets();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const isManager = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Мутации базы знаний — ключ knowledge_manage (сервер гейтит тем же ключом;
+  // «права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me).
+  const { hasPermission } = useAuth();
+  const isManager = hasPermission('knowledge_manage');
 
   const id = route.params?.id;
   const [acksOpen, setAcksOpen] = React.useState(false);
@@ -186,7 +188,12 @@ export default function KnowledgeArticleScreen() {
       haptic('select');
       setFeedback({ helpfulCount: res.helpfulCount, notHelpfulCount: res.notHelpfulCount, myFeedback: res.myFeedback });
     },
-    onError: () => haptic('error'),
+    onError: () => {
+      // Ставки низкие (👍/👎), но молчать нельзя (волна C): лёгкий тост
+      // вместо блокирующего Alert.
+      haptic('error');
+      showToast('Оценка не отправлена — нет связи с сервером');
+    },
   });
 
   // Regulation re-acknowledgment: the backend already returns acknowledged=false

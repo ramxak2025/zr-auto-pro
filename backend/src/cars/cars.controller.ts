@@ -6,16 +6,25 @@ import { PermissionsGuard, RequirePermission } from '../common/guards/permission
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { TransferOwnerDto } from './dto/transfer-owner.dto';
 
-// RolesGuard + PermissionsGuard added at controller level, but ONLY
-// transfer-owner is decorated with @RequirePermission. Both guards are a no-op
-// for undecorated routes (no @Roles / no @RequirePermission → allow), so
-// create / update / delete stay exactly as open as before — a master must still
-// be able to add cars from the Касса screen. Owner-class bypasses.
+// Gating mirrors the clients module (гараж клиента = clients-домен):
+//   • reads (GET /, lookup-by-plate, :id, :id/checks) → 'clients_view' (сид
+//     true у всех трёх системных ролей — lookup-by-plate в Кассе у мастера
+//     сохраняется 1:1);
+//   • CREATE stays open — a master must still be able to add a car from the
+//     Касса screen (guards are a no-op for undecorated routes);
+//   • PATCH /:id → 'clients_edit', same tier as PATCH /clients/:id and
+//     transfer-owner. An open PATCH let any master reassign the car's owner
+//     via `clientId` (обход гейта transfer-owner, история чеков рвалась);
+//   • DELETE /:id → 'clients_delete' (clients.delete, миграция 136), same as
+//     DELETE /clients/:id — hard delete без корзины, checks.car_id уходит в
+//     NULL (006_fix_fk_cascade).
+// Owner-class (director/superadmin) bypasses permission gates.
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('cars')
 export class CarsController {
   constructor(private carsService: CarsService) {}
 
+  @RequirePermission('clients_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.carsService.getAll(user.tenantID, query);
@@ -25,11 +34,13 @@ export class CarsController {
    * Look up an existing car by plate in the current tenant. Used by the UI
    * to warn before creating a duplicate. Plate is normalized server-side.
    */
+  @RequirePermission('clients_view')
   @Get('lookup-by-plate')
   lookupByPlate(@CurrentUser() user: JwtPayload, @Query('plate') plate: string) {
     return this.carsService.findByPlate(user.tenantID, plate || '');
   }
 
+  @RequirePermission('clients_view')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.carsService.getById(id, user.tenantID);
@@ -39,6 +50,7 @@ export class CarsController {
    * Per-car check history — used by the car detail panel and the cash
    * screen "история по машине" section. `limit` capped at 200 server-side.
    */
+  @RequirePermission('clients_view')
   @Get(':id/checks')
   getChecks(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Query('limit') limit?: string) {
     const numericLimit = parseInt(String(limit ?? '50'), 10);
@@ -50,11 +62,13 @@ export class CarsController {
     return this.carsService.create(user.tenantID, dto);
   }
 
+  @RequirePermission('clients_edit')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.carsService.update(id, user.tenantID, dto);
   }
 
+  @RequirePermission('clients_delete')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.carsService.remove(id, user.tenantID);

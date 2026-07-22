@@ -433,6 +433,10 @@ function getOffsetLabel(period: ChartPeriod, offset: number): string {
 function RevenueChart() {
   const [period, setPeriod] = useState<ChartPeriod>('week');
   const [offset, setOffset] = useState(0);
+  // Прибыль — только держателю profit_view (R7): сервер зануляет profit в
+  // dashboard-chart без права, поэтому линию/ячейку прячем, а не рисуем нули.
+  const { hasPermission } = useAuth();
+  const canSeeProfit = hasPermission('profit_view');
 
   const { data, isLoading } = useQuery({
     queryKey: ['dashboard-chart', period, offset],
@@ -619,15 +623,19 @@ function RevenueChart() {
                   strokeWidth="2.5"
                   strokeLinecap="round"
                 />
-                {/* Profit area + line */}
-                <path d={buildAreaPath(profitValues, chartHeight, chartWidth, maxProfit)} fill="url(#profGrad)" />
-                <path
-                  d={buildWavePath(profitValues, chartHeight, chartWidth, maxProfit)}
-                  fill="none"
-                  stroke="rgb(6,182,212)"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                />
+                {/* Profit area + line — только держателю profit_view */}
+                {canSeeProfit && (
+                  <>
+                    <path d={buildAreaPath(profitValues, chartHeight, chartWidth, maxProfit)} fill="url(#profGrad)" />
+                    <path
+                      d={buildWavePath(profitValues, chartHeight, chartWidth, maxProfit)}
+                      fill="none"
+                      stroke="rgb(6,182,212)"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  </>
+                )}
               </svg>
               {/* X-axis labels — absolutely positioned to line up exactly with the
                   SVG point x-coordinates (which are padding + i * step), so the
@@ -663,15 +671,17 @@ function RevenueChart() {
 
       {/* Bottom stats row */}
       {data && (
-        <div className="grid grid-cols-3 gap-px bg-white/5 mt-2">
+        <div className={`grid ${canSeeProfit ? 'grid-cols-3' : 'grid-cols-2'} gap-px bg-white/5 mt-2`}>
           <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
             <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Оборот</p>
             <p className="text-base font-bold text-white mt-0.5">{formatMoney(data.totalRevenue)}</p>
           </div>
-          <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
-            <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Прибыль</p>
-            <p className="text-base font-bold text-cyan-400 mt-0.5">{formatMoney(data.totalProfit)}</p>
-          </div>
+          {canSeeProfit && (
+            <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
+              <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Прибыль</p>
+              <p className="text-base font-bold text-cyan-400 mt-0.5">{formatMoney(data.totalProfit)}</p>
+            </div>
+          )}
           <div className="bg-slate-900/50 backdrop-blur px-4 py-3 text-center">
             <p className="text-[10px] font-medium text-slate-400 uppercase tracking-wider">Чеков</p>
             <p className="text-base font-bold text-white mt-0.5">{data.totalChecks || '—'}</p>
@@ -690,7 +700,7 @@ function RevenueChart() {
                     {formatLabel(point.date, idx, data.points.length)}
                   </p>
                   <p className="text-[11px] font-bold text-blue-300">{formatMoney(point.revenue)}</p>
-                  <p className="text-[9px] text-cyan-400">{formatMoney(point.profit)}</p>
+                  {canSeeProfit && <p className="text-[9px] text-cyan-400">{formatMoney(point.profit)}</p>}
                 </div>
               ),
             )}
@@ -706,13 +716,18 @@ function RevenueChart() {
 // ---------------------------------------------------------------------------
 
 function AdminDashboard() {
-  const { user } = useAuth();
-  const isOwner =
-    user?.role === (UserRoleEnum.DIRECTOR as UserRole) || user?.role === (UserRoleEnum.SUPERADMIN as UserRole);
+  const { hasPermission } = useAuth();
+  // Финансовый дашборд (net profit, графики, рассрочка) — по ключу
+  // financial_reports (backend /reports/dashboard-v2 гейтится им же; волна
+  // Битрикс24). Без права — только ростер сотрудников.
+  const canSeeFinance = hasPermission('financial_reports');
+  // Чистая прибыль — отдельный ключ profit_view: держатель financial_reports
+  // без profit_view видит аналитику (оборот/чеки), но не карту прибыли.
+  const canSeeProfit = hasPermission('profit_view');
 
-  // Admin (non-owner): only the staff roster — cap its width so a handful of
-  // people don't sprawl across an ultra-wide monitor.
-  if (!isOwner) {
+  // No financial_reports: only the staff roster — cap its width so a handful
+  // of people don't sprawl across an ultra-wide monitor.
+  if (!canSeeFinance) {
     return (
       <div className="max-w-3xl">
         <StaffStatusCircles />
@@ -726,7 +741,7 @@ function AdminDashboard() {
   return (
     <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 xl:items-start">
       <div className="space-y-5 xl:col-span-2">
-        <NetProfitCard />
+        {canSeeProfit && <NetProfitCard />}
         <RevenueChart />
         <StaffStatusCircles />
       </div>

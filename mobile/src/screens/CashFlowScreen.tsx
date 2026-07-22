@@ -29,7 +29,6 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
 
 // ── Android LayoutAnimation enable ──────────────────────────────────────
 // Required for collapsible day cards to animate height changes on Android.
@@ -84,6 +83,19 @@ function parseISO(s: string): Date {
   // Treat the YYYY-MM-DD string as local-date (no TZ shift).
   const [y, m, d] = s.split('-').map((v) => parseInt(v, 10));
   return new Date(y, (m || 1) - 1, d || 1);
+}
+
+// Бизнес-таймзона продукта — Europe/Moscow (UTC+3, без переходов на летнее
+// время с 2014). /reports/cashflow группирует дни по календарным суткам МСК,
+// поэтому drill-down дня обязан запрашивать ровно тот же полуинтервал
+// [D 00:00 МСК, D+1 00:00 МСК), сконвертированный в UTC-инстанты (cashflow C3).
+const MSK_UTC_OFFSET = '+03:00';
+function mskDayStartUtc(day: string): Date {
+  return new Date(`${day}T00:00:00${MSK_UTC_OFFSET}`);
+}
+function mskDayEndUtc(day: string): Date {
+  // Эксклюзивная верхняя граница суток МСК (полночь следующего дня).
+  return new Date(mskDayStartUtc(day).getTime() + 24 * 60 * 60 * 1000);
 }
 
 function addDays(d: Date, n: number): Date {
@@ -266,7 +278,7 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
 export default function CashFlowScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { isRole, hasPermission } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
   // «Движение денег» — теперь НЕ только owner-class. Волна 3 (миграция 121):
   // сервер гейтит `/reports/cashflow` через @RequirePermission('cashflow_view')
@@ -277,8 +289,10 @@ export default function CashFlowScreen() {
   //     явный `cashflow_view_all`. Поведение владельца не меняется.
   //   • canViewCashFlow    — доступ к экрану вообще: всё выше ЛИБО own-only
   //     `cashflow_view` (сервер вернёт только его операции).
-  const canViewAllCashFlow =
-    isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN) || hasPermission('cashflow_view_all');
+  // «Права как в Битрикс24» (2026-07): admin живёт по матрице из /auth/me
+  // (сид reports.cashflow='all' — поведение 1:1); superadmin/director
+  // байпасятся внутри самого hasPermission.
+  const canViewAllCashFlow = hasPermission('cashflow_view_all');
   const canViewCashFlow = canViewAllCashFlow || hasPermission('cashflow_view');
   // Own-only держатель `cashflow_view` фильтр по сотруднику НЕ видит: сервер
   // всё равно игнорирует переданный masterId и отдаёт только его операции,
@@ -378,7 +392,23 @@ export default function CashFlowScreen() {
     queryKey: ['cashflow-day-checks', expandedDay, effectiveEmployeeId],
     queryFn: async () => {
       if (!expandedDay) return { data: [] };
-      const params: any = { dateFrom: expandedDay, dateTo: expandedDay, limit: 200 };
+      // Окно дня — ровно одни московские сутки [D 00:00 МСК, D+1 00:00 МСК).
+      // Бэк (checks.getAll) кастует обе границы как
+      // `$::date::timestamp AT TIME ZONE 'Europe/Moscow'`, поэтому дату
+      // передаём ГОЛОЙ строкой 'YYYY-MM-DD' — ровно как соседний
+      // expenses-запрос ниже. Полный ISO-инстант в dateFrom ломал границу:
+      // text→date каст отбрасывает tz, и московская полночь '…T21:00:00Z'
+      // схлопывалась в предыдущий день → окно расползалось на ДВОЕ суток
+      // (список выглядел корректно лишь из-за клиентского среза ниже).
+      // isDeferred:false (C4): сумма дня считается только по ПРОВЕДЁННЫМ
+      // чекам (reports: is_deferred = false) — открытые драфты в списке
+      // выглядели как деньги, которых в итоге дня нет.
+      const params: any = {
+        dateFrom: expandedDay,
+        dateTo: expandedDay,
+        isDeferred: false,
+        limit: 200,
+      };
       if (effectiveEmployeeId) params.masterId = effectiveEmployeeId;
       const res = await checksApi.getAll(params);
       return res.data;
@@ -389,6 +419,29 @@ export default function CashFlowScreen() {
     // flashing the PREVIOUS day's checks + total. These keys aren't
     // persisted, so nothing is lost on day change.
   });
+
+  // Сплит included/warranty + оборонительный срез суток МСК (cashflow C4).
+  // После фикса NEW-2 бэк уже возвращает ровно одни московские сутки, поэтому
+  // date-фильтр ниже — belt-and-suspenders (страхует от старого закешированного
+  // широкого окна). Смысловая часть — сплит:
+  // `included` — проведённые НЕ-гарантийные чеки (ровно то, из чего сложен
+  // day.total); `warranty` — гарантийные, в day.total не входят — рендерятся
+  // отдельной секцией «не входит в итог», чтобы ручная сумма списка сходилась
+  // с карточкой дня.
+  const expandedDayRows = useMemo(() => {
+    const rows: any[] = Array.isArray(expandedChecks?.data) ? expandedChecks.data : [];
+    if (!expandedDay) return { included: [] as any[], warranty: [] as any[] };
+    const start = mskDayStartUtc(expandedDay).getTime();
+    const end = mskDayEndUtc(expandedDay).getTime();
+    const inDay = rows.filter((c) => {
+      const t = new Date(c?.date).getTime();
+      return Number.isFinite(t) && t >= start && t < end;
+    });
+    return {
+      included: inDay.filter((c) => c?.paymentMethod !== 'warranty'),
+      warranty: inDay.filter((c) => c?.paymentMethod === 'warranty'),
+    };
+  }, [expandedChecks, expandedDay]);
 
   // Lazy per-day expense list — same trigger as the checks above, so an
   // expanded day shows BOTH income (checks: plate + sum) and outflow
@@ -905,6 +958,207 @@ export default function CashFlowScreen() {
                     </View>
                   </>
                 )}
+                {/* «Касса за период» — реально полученные деньги: нал + карта +
+                    погашения рассрочки. «Итого» выше — начисленный оборот (в нём
+                    сидит долг рассрочки), received — то, что физически легло в
+                    кассу. Поле опциональное — старый бэк его не шлёт. */}
+                {typeof totals.received === 'number' && (
+                  <>
+                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
+                    <View style={styles.channelRow}>
+                      <View
+                        style={[
+                          styles.channelIcon,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
+                          },
+                        ]}
+                      >
+                        <Ionicons name="wallet-outline" size={16} color={colors.green[600]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>
+                          Касса за {PERIOD_LABELS[period].toLowerCase()}
+                        </Text>
+                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
+                          Наличные + карта + погашения рассрочки
+                        </Text>
+                      </View>
+                      <Text style={[styles.channelAmount, { color: colors.green[600] }]}>
+                        {formatMoney(totals.received)}
+                      </Text>
+                    </View>
+                  </>
+                )}
+                {/* Возвраты по ДАТЕ ВОЗВРАТА — информационно: деньги уже вычтены
+                    из дня ПРОДАЖИ (реверс ног в returns.service), поэтому в
+                    «Итого» не входят и второй раз из кассы не вычитаются. */}
+                {typeof totals.refunds === 'number' && totals.refunds > 0 && (
+                  <>
+                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
+                    <View style={styles.channelRow}>
+                      <View
+                        style={[
+                          styles.channelIcon,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50],
+                          },
+                        ]}
+                      >
+                        <Ionicons name="arrow-undo-outline" size={16} color={colors.rose[600]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>Возвраты</Text>
+                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
+                          Уже вычтены из дня продажи — в итог не входят
+                        </Text>
+                      </View>
+                      <Text style={[styles.channelAmount, { color: colors.rose[600] }]}>
+                        −{formatMoney(totals.refunds)}
+                      </Text>
+                    </View>
+                  </>
+                )}
+                {/* «Не разнесено» — остаток «Итого», не разбитый на нал/карта/долг
+                    (битые ноги легаси cash_card-чеков, миграция 118 их сознательно
+                    не чинила). Тождество: нал + карта + долг + не разнесено =
+                    Итого точно. Видно только при ненулевом остатке. */}
+                {typeof totals.unallocated === 'number' && Math.round(totals.unallocated) !== 0 && (
+                  <>
+                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
+                    <View style={styles.channelRow}>
+                      <View
+                        style={[
+                          styles.channelIcon,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark' ? softTint(colors.yellow[700], 'dark') : colors.yellow[50],
+                          },
+                        ]}
+                      >
+                        <Ionicons name="help-circle-outline" size={16} color={colors.yellow[700]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>Не разнесено</Text>
+                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
+                          Без разбивки нал/карта (старые чеки) — входит в итог
+                        </Text>
+                      </View>
+                      <Text style={[styles.channelAmount, { color: palette.text.primary }]}>
+                        {formatMoney(totals.unallocated)}
+                      </Text>
+                    </View>
+                  </>
+                )}
+                {/* ── Оттоки (E-4): расходование кассы за период ────────────
+                    Бэк отдаёт их аддитивно (старый бэк — поля нет, строку
+                    прячем). «Оплата поставщикам» = supplier_payments по дате
+                    (в т.ч. авто-платежи «Оплатить сразу» и погашения Б/У-долга);
+                    «Расходы» = операционные expenses (approved). */}
+                {typeof totals.supplierPayments === 'number' && totals.supplierPayments > 0 && (
+                  <>
+                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
+                    <View style={styles.channelRow}>
+                      <View
+                        style={[
+                          styles.channelIcon,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark' ? softTint(colors.orange[600], 'dark') : colors.orange[50],
+                          },
+                        ]}
+                      >
+                        <Ionicons name="cube-outline" size={16} color={colors.orange[600]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>Оплата поставщикам</Text>
+                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
+                          Платежи поставщикам и за Б/У — вычтены из кассы
+                        </Text>
+                      </View>
+                      <Text style={[styles.channelAmount, { color: colors.orange[600] }]}>
+                        −{formatMoney(totals.supplierPayments)}
+                      </Text>
+                    </View>
+                  </>
+                )}
+                {typeof totals.expensesOut === 'number' && totals.expensesOut > 0 && (
+                  <>
+                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
+                    <View style={styles.channelRow}>
+                      <View
+                        style={[
+                          styles.channelIcon,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark' ? softTint(colors.rose[600], 'dark') : colors.rose[50],
+                          },
+                        ]}
+                      >
+                        <Ionicons name="arrow-down" size={16} color={colors.rose[600]} />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={[styles.channelLabel, { color: palette.text.primary }]}>Расходы</Text>
+                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
+                          Операционные расходы за период — вычтены из кассы
+                        </Text>
+                      </View>
+                      <Text style={[styles.channelAmount, { color: colors.rose[600] }]}>
+                        −{formatMoney(totals.expensesOut)}
+                      </Text>
+                    </View>
+                  </>
+                )}
+                {/* «Осталось в кассе» (netCash) — итоговая строка: касса минус
+                    возвраты, оплаты поставщикам и расходы. Показываем только
+                    когда есть хоть один отток — иначе netCash == «Касса за
+                    период» и строка была бы дублем. */}
+                {typeof totals.netCash === 'number' && (totals.supplierPayments > 0 || totals.expensesOut > 0) && (
+                  <>
+                    <View style={[styles.totalsDivider, { backgroundColor: palette.border.subtle }]} />
+                    <View style={styles.channelRow}>
+                      <View
+                        style={[
+                          styles.channelIcon,
+                          {
+                            backgroundColor:
+                              palette.mode === 'dark'
+                                ? softTint(totals.netCash >= 0 ? colors.green[600] : colors.rose[600], 'dark')
+                                : totals.netCash >= 0
+                                  ? colors.green[50]
+                                  : colors.rose[50],
+                          },
+                        ]}
+                      >
+                        <Ionicons
+                          name="cash-outline"
+                          size={16}
+                          color={totals.netCash >= 0 ? colors.green[600] : colors.rose[600]}
+                        />
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text
+                          style={[styles.channelLabel, { color: palette.text.primary, fontWeight: fontWeight.bold }]}
+                        >
+                          Осталось в кассе
+                        </Text>
+                        <Text style={[styles.channelShare, { color: palette.text.tertiary }]}>
+                          Касса − возвраты − оплаты поставщикам − расходы
+                        </Text>
+                      </View>
+                      <Text
+                        style={[
+                          styles.channelAmount,
+                          { color: totals.netCash >= 0 ? colors.green[600] : colors.rose[600] },
+                        ]}
+                      >
+                        {formatMoney(totals.netCash)}
+                      </Text>
+                    </View>
+                  </>
+                )}
               </View>
             </AnimatedCard>
 
@@ -916,17 +1170,22 @@ export default function CashFlowScreen() {
               <EmptyState title="Нет операций" description="Нет операций за выбранный период" icon="receipt" />
             ) : (
               daysSorted.map((day: any, idx: number) => {
-                const isOpen = expandedDay === day.date;
-                const dateObj = parseISO(day.date);
+                // День приходит строкой 'YYYY-MM-DD' (бэк отдаёт to_char по
+                // МСК); slice(0,10) — страховка от закешированного старого
+                // формата (pg-Date сериализовался полным ISO — именно этот
+                // сырой ключ и порождал мусорное окно drill-down, C3).
+                const dayKey = String(day.date).slice(0, 10);
+                const isOpen = expandedDay === dayKey;
+                const dateObj = parseISO(dayKey);
                 return (
                   <AnimatedCard
-                    key={day.date}
+                    key={dayKey}
                     style={[styles.dayCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
                     index={idx + 1}
                   >
                     <TouchableOpacity
                       activeOpacity={0.7}
-                      onPress={() => toggleDay(day.date)}
+                      onPress={() => toggleDay(dayKey)}
                       style={styles.dayHeader}
                       accessibilityRole="button"
                       accessibilityLabel={`Раскрыть чеки за ${dateObj.toLocaleDateString('ru-RU')}`}
@@ -1002,6 +1261,74 @@ export default function CashFlowScreen() {
                           </Text>
                         </View>
                       )}
+                      {/* Касса за день — реально полученные деньги (нал + карта +
+                          погашения); отличается от итога дня, когда есть долг
+                          рассрочки. Поле опциональное — старый бэк его не шлёт. */}
+                      {typeof day.received === 'number' && day.received > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.primary[500] }]} />
+                          <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                            Касса за день: {formatMoney(day.received)}
+                          </Text>
+                        </View>
+                      )}
+                      {/* Возвраты по дате возврата — информационно: из итога дня
+                          продажи уже вычтены, второй раз не минусуются. */}
+                      {typeof day.refunds === 'number' && day.refunds > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.rose[500] }]} />
+                          <Text style={[styles.dayDetailText, { color: colors.rose[600] }]}>
+                            Возвраты: −{formatMoney(day.refunds)} · уже вычтены из дня продажи
+                          </Text>
+                        </View>
+                      )}
+                      {/* Не разнесено — легаси-остаток без разбивки нал/карта;
+                          входит в итог дня. Показываем только при ≠0. */}
+                      {typeof day.unallocated === 'number' && Math.round(day.unallocated) !== 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.yellow[500] }]} />
+                          <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                            Не разнесено: {formatMoney(day.unallocated)}
+                          </Text>
+                        </View>
+                      )}
+                      {/* Оттоки дня (E-4): оплаты поставщикам + расходы, и итог
+                          «Осталось в кассе». Поля опциональные — старый бэк их
+                          не шлёт, строки прячем. */}
+                      {typeof day.supplierPayments === 'number' && day.supplierPayments > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.orange[600] }]} />
+                          <Text style={[styles.dayDetailText, { color: colors.orange[600] }]}>
+                            Поставщикам: −{formatMoney(day.supplierPayments)}
+                          </Text>
+                        </View>
+                      )}
+                      {typeof day.expensesOut === 'number' && day.expensesOut > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.rose[500] }]} />
+                          <Text style={[styles.dayDetailText, { color: colors.rose[600] }]}>
+                            Расходы: −{formatMoney(day.expensesOut)}
+                          </Text>
+                        </View>
+                      )}
+                      {typeof day.netCash === 'number' && (day.supplierPayments > 0 || day.expensesOut > 0) && (
+                        <View style={styles.dayDetailItem}>
+                          <View
+                            style={[
+                              styles.dayDot,
+                              { backgroundColor: day.netCash >= 0 ? colors.green[600] : colors.rose[500] },
+                            ]}
+                          />
+                          <Text
+                            style={[
+                              styles.dayDetailText,
+                              { color: palette.text.secondary, fontWeight: fontWeight.semibold },
+                            ]}
+                          >
+                            Осталось в кассе: {formatMoney(day.netCash)}
+                          </Text>
+                        </View>
+                      )}
                     </View>
 
                     {/* Expanded — income (checks) + outflow (expenses) for
@@ -1017,14 +1344,33 @@ export default function CashFlowScreen() {
                           <View style={{ paddingVertical: spacing[3], alignItems: 'center' }}>
                             <ActivityIndicator color={colors.primary[500]} />
                           </View>
-                        ) : !expandedChecks?.data?.length ? (
+                        ) : expandedDayRows.included.length === 0 && expandedDayRows.warranty.length === 0 ? (
                           <Text style={[styles.checksEmpty, { color: palette.text.tertiary }]}>
                             Нет чеков за этот день
                           </Text>
                         ) : (
-                          (Array.isArray(expandedChecks.data) ? expandedChecks.data : []).map((c: any) => (
-                            <CheckRow key={c.id} check={c} palette={palette} onPress={() => openCheck(c.id)} />
-                          ))
+                          <>
+                            {expandedDayRows.included.map((c: any) => (
+                              <CheckRow key={c.id} check={c} palette={palette} onPress={() => openCheck(c.id)} />
+                            ))}
+                            {/* Гарантийные чеки дня — справочно: их totalRevenue
+                                НЕ входит в итог дня (day.total), поэтому они
+                                вынесены из основного списка, чтобы ручная
+                                сумма строк сходилась с карточкой (C4). */}
+                            {expandedDayRows.warranty.length > 0 && (
+                              <>
+                                <View style={[styles.detailSubLabelRow, { marginTop: spacing[2] }]}>
+                                  <View style={[styles.detailDot, { backgroundColor: colors.yellow[500] }]} />
+                                  <Text style={[styles.detailSubLabel, { color: palette.text.tertiary }]}>
+                                    Гарантия — не входит в итог
+                                  </Text>
+                                </View>
+                                {expandedDayRows.warranty.map((c: any) => (
+                                  <CheckRow key={c.id} check={c} palette={palette} onPress={() => openCheck(c.id)} />
+                                ))}
+                              </>
+                            )}
+                          </>
                         )}
 
                         {/* ── Расходы: назначение + сумма ──────────────── */}

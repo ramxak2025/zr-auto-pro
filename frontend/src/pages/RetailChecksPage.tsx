@@ -20,6 +20,7 @@ const paymentMethodBadge: Record<string, string> = {
   card: 'badge-blue',
   warranty: 'badge-yellow',
   cash_card: 'badge-gray',
+  installment: 'badge-blue',
 };
 
 export default function RetailChecksPage() {

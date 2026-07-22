@@ -14,7 +14,7 @@ import {
 import { LinearGradient } from 'expo-linear-gradient';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery, useInfiniteQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useInfiniteQuery, useMutation, useQueryClient, onlineManager } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { clientsApi, carsApi, checksApi } from '../api/services';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -22,7 +22,6 @@ import { normalizePlateQuery, looksLikePlateQuery, plateMatches } from '../utils
 import { normalizePlateForSearch } from '../utils/plateMask';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { UserRole } from '../../../shared/types';
 import SearchInput from '../components/SearchInput';
 import { ListSkeleton } from '../components/Skeleton';
 import EmptyState from '../components/EmptyState';
@@ -97,17 +96,18 @@ const RetailPinCard = React.memo(function RetailPinCard({ onPress }: { onPress: 
 export default function ClientsScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
-  // Свайп-действия строки клиента — «Изменить» (правка существующего профиля) и
-  // «Удалить». И то и другое — операции над СУЩЕСТВУЮЩИМ клиентом, поэтому гейт
-  // единый: `clients_edit`, а owner-class (superadmin/director/admin) минует его,
-  // как остальные per-screen гейты этого батча (зеркалит серверный
-  // PermissionsGuard). Без права строка — статичная карточка без свайпа (см.
-  // ClientListRow). Создание НОВОГО клиента (openCreateModal / FAB «+») и подбор
-  // клиента в чек НЕ гейтятся — мастерам это нужно в Кассе.
-  const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
-  const canDelete = isOwnerClass || hasPermission('clients_edit');
+  // Свайп-действия строки клиента — «Изменить» (PATCH → clients_edit) и
+  // «Удалить» (DELETE → clients_delete). «Права как в Битрикс24»: матрица
+  // авторитетна — admin живёт по эффективным правам из /auth/me,
+  // superadmin/director байпасятся внутри hasPermission. Свайп открывается при
+  // ЛЮБОМ из двух прав (ClientListRow принимает один флаг; сервер всё равно
+  // 403-ит действие без своего ключа). Без обоих прав строка — статичная
+  // карточка без свайпа (см. ClientListRow). Создание НОВОГО клиента
+  // (openCreateModal / FAB «+») и подбор клиента в чек НЕ гейтятся — мастерам
+  // это нужно в Кассе.
+  const canDelete = hasPermission('clients_edit') || hasPermission('clients_delete');
   const tabBarHeight = useTabBarHeight();
 
   // Mode — see ClientsMode. Default: plate (госномер) search.
@@ -790,15 +790,30 @@ export default function ClientsScreen() {
             getItemLayout={getPlateItemLayout}
             ListHeaderComponent={retailHeader}
             ListEmptyComponent={
-              normalizedPlate.length >= 2 && !plateQuery.isFetching && !carsPlateQuery.isFetching ? (
-                <EmptyState icon="car" title="Ничего не найдено" description={`Госномер «${plateSearch}» не найден`} />
-              ) : normalizedPlate.length < 2 ? (
+              normalizedPlate.length < 2 ? (
                 <EmptyState
                   icon="search"
                   title="Введите госномер"
                   description="Найдите авто и клиента по номеру — RU или INT"
                 />
-              ) : null
+              ) : plateQuery.isFetching || carsPlateQuery.isFetching ? null : plateQuery.isError ||
+                carsPlateQuery.isError ||
+                plateQuery.fetchStatus === 'paused' ||
+                carsPlateQuery.fetchStatus === 'paused' ||
+                !onlineManager.isOnline() ? (
+                // Поиск упал по сети / офлайн — это НЕ «номер не найден».
+                // Даём «Нет связи» + «Повторить» вместо ложного пустого.
+                <QueryErrorState
+                  title="Нет связи с сервером"
+                  description="Проверьте интернет и попробуйте ещё раз"
+                  onRetry={() => {
+                    void plateQuery.refetch();
+                    void carsPlateQuery.refetch();
+                  }}
+                />
+              ) : (
+                <EmptyState icon="car" title="Ничего не найдено" description={`Госномер «${plateSearch}» не найден`} />
+              )
             }
             contentContainerStyle={plateListContentStyle}
             keyboardShouldPersistTaps="handled"

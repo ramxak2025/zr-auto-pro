@@ -10,7 +10,7 @@ import QueryState from '../components/QueryState';
 import Pagination from '../components/Pagination';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
 import { useClickableRow } from '../hooks/useClickableRow';
-import { UserRole } from '../types';
+
 import type { PurchaseOrder, PurchaseOrderStatus, PaginatedResponse, Supplier } from '../types';
 import { formatMoney, formatDateShort } from '../../../shared/utils/formatters';
 
@@ -28,8 +28,10 @@ const STATUS_TABS: { value: '' | PurchaseOrderStatus; label: string }[] = [
 
 export default function PurchaseOrdersPage() {
   const navigate = useNavigate();
-  const { isRole } = useAuth();
-  const canWrite = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  // Заказы поставщикам: мутации — suppliers_manage (backend purchase-orders/;
+  // волна Битрикс24). Просмотр списка — suppliers_access (гейт меню).
+  const canWrite = hasPermission('suppliers_manage');
 
   const [status, setStatus] = useState<'' | PurchaseOrderStatus>('');
   const [supplierId, setSupplierId] = useState('');

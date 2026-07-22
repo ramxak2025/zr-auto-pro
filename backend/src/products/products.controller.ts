@@ -95,6 +95,10 @@ export class ProductsController {
   // Routes are registered before the catch-all `:id` route so that
   // /products/trash and /products/trash/empty don't get swallowed as ids.
 
+  // Просмотр корзины — часть цикла удаления: тот же грантуемый ключ
+  // 'warehouse_delete', что и soft-delete (manage ⇒ delete при flatten;
+  // owner-class обходит через PermissionsGuard).
+  @RequirePermission('warehouse_delete')
   @Get('trash')
   getTrash(@CurrentUser() user: JwtPayload) {
     return this.productsService.getTrash(user.tenantID, user);

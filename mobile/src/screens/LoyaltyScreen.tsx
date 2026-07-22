@@ -35,8 +35,10 @@ export default function LoyaltyScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const canEdit = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Настройки лояльности — ключ settings_manage (сервер: PATCH /loyalty/
+  // settings → тот же ключ; admin живёт по матрице из /auth/me).
+  const { hasPermission } = useAuth();
+  const canEdit = hasPermission('settings_manage');
 
   const [enabled, setEnabled] = useState(false);
   const [accrual, setAccrual] = useState('0');

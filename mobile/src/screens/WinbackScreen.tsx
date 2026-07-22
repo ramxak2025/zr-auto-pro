@@ -49,7 +49,6 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import AnimatedCard from '../components/AnimatedCard';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
 import type { WinbackClient } from '../../../shared/types';
 
 const DAY_PRESETS = [30, 60, 90, 180] as const;
@@ -160,9 +159,11 @@ export default function WinbackScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
+  const { hasPermission } = useAuth();
 
-  const canUse = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Возврат клиентов (winback) — ключ marketing_access (сервер: GET /marketing/
+  // winback + POST winback/send → тот же ключ; admin живёт по матрице).
+  const canUse = hasPermission('marketing_access');
 
   const [days, setDays] = useState<number>(DEFAULT_DAYS);
   const [message, setMessage] = useState<string>(DEFAULT_MESSAGE);

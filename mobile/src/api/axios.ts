@@ -1,7 +1,13 @@
 import axios, { AxiosError, type AxiosRequestConfig, type AxiosResponse, type InternalAxiosRequestConfig } from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
-import { buildApiHosts, isHtmlApiPayload, nextUntriedApiHost, orderApiHosts } from './apiHosts';
+import {
+  buildApiHosts,
+  isBodyLimitedGatewayHost,
+  isHtmlApiPayload,
+  nextUntriedApiHost,
+  orderApiHosts,
+} from './apiHosts';
 import { AUTH_SESSION_ENVELOPE_KEY, parseAuthSessionEnvelope } from '../contexts/authSessionStorage';
 
 // API URL: hardcoded production server, fallback to dev server
@@ -30,10 +36,24 @@ export const API_URL = API_BASE_URL;
 // "https://reserve.example.ru/api").
 //
 // Поведение: идемпотентный GET/HEAD/OPTIONS обходит ВСЁ кольцо при transport-
-// сбое, HTML-заглушке или 502/503/504. Мутации не ретраятся между хостами:
-// таймаут не доказывает, что сервер не успел выполнить запись. Успешный хост
-// запоминается в module state + AsyncStorage, а фоновая проба периодически
-// пытается вернуть primary.
+// сбое, HTML-заглушке или 502/503/504. Активный хост получает КОРОТКИЙ бюджет
+// хопа (IDEMPOTENT_HOP_TIMEOUT_MS), после его провала оставшиеся хосты
+// гоняются ПАРАЛЛЕЛЬНО (raceIdempotentAcrossHosts — happy-eyeballs реального
+// запроса, а не только /health): хост №2 кольца — тот же VDS-IP, что primary,
+// и при блокировке по IP последовательный обход платил бы полный таймаут за
+// мёртвый дубль. Мутации ретраятся на другой хост ТОЛЬКО в двух доказуемо
+// безопасных случаях (см. hasMutationIdempotencyKey / isDeliveryProvablyNotStarted):
+//   • тело несёт валидный clientRequestId — сервер дедуплицирует по
+//     (tenant, client_request_id) UNIQUE (миграция 111), повтор вернёт уже
+//     созданную запись, а не дубль;
+//   • сбой класса «запрос гарантированно не был доставлен» (DNS не
+//     разрезолвился / connection refused) — записи на сервере быть не может.
+// Таймаут ПОСЛЕ отправки мутацию НЕ ретраит (возможен дубль записи): хост
+// помечается сбойным и кольцо переизбирается для СЛЕДУЮЩИХ запросов, а сама
+// мутация отдаёт честную ошибку с ручным «Повторить». Успешный хост
+// запоминается в module state + AsyncStorage, а фоновая проба пытается
+// вернуть primary только после нескольких ПОДРЯД успешных /health
+// (гистерезис против маятника при операторском троттлинге).
 //
 // HAPPY-EYEBALLS: вместо ожидания ~DEFAULT_TIMEOUT_MS на primary до первого
 // failover'а — даём сохранённому/current хосту ограниченный head-start, затем
@@ -74,6 +94,19 @@ const ACTIVE_BASE_STORAGE_KEY = 'active_api_base_v1';
 // спамит: таймер живёт ТОЛЬКО пока activeBaseUrl !== primary (обычно никогда).
 const PRIMARY_RETURN_PROBE_INTERVAL_MS = 75_000;
 const PRIMARY_RETURN_PROBE_TIMEOUT_MS = 8_000;
+/**
+ * Гистерезис возврата: primary принимается назад только после N ПОДРЯД
+ * успешных проб. Один удачный КРОШЕЧНЫЙ /health при операторском троттлинге
+ * (мелкие пакеты проходят, большие/долгие ответы душатся — типичный DPI)
+ * раньше маятником возвращал сессию на полуживой primary каждые ~75 с, и
+ * каждая волна реальных запросов снова платила таймауты, а мутации падали.
+ * Две пробы с интервалом ~75 с ≈ окно стабильности ~2.5 мин. Серия
+ * сбрасывается и неудачной пробой, и сбоем primary на реальном трафике
+ * (markHostRouteFailure). Возврат по РЕАЛЬНОМУ успешному запросу
+ * (adoptRequestWinner) гистерезисом не гейтится — полный GET тяжелее пробы.
+ */
+const PRIMARY_RETURN_SUCCESS_STREAK = 2;
+let primaryReturnSuccessStreak = 0;
 /** Короткий таймаут одной пробы стартовой гонки хостов (happy-eyeballs). */
 const LAUNCH_HOST_RACE_TIMEOUT_MS = 8_000;
 /** Give the sticky/current host a small lead before waking reserve routes. */
@@ -88,12 +121,43 @@ const RESELECT_SESSION_BUDGET_MS = 9_000;
 const HOST_ROUTE_FAILURE_COOLDOWN_MS = 8_000;
 const hostRouteFailureUntil = new Map<string, number>();
 
+// ── Бюджеты хопов кольца (C3) ───────────────────────────────────────────────
+// DEFAULT_TIMEOUT_MS (15с) — де-факто connect-timeout: у RN-axios нет
+// отдельного first-byte таймаута, и blackhole-хост (операторский фильтр без
+// RST) съедал полные 15с НА КАЖДЫЙ хоп — полный обход кольца до ~45с.
+// Пока в кольце остаются непройденные хосты, хоп получает короткий бюджет;
+// финальный хоп (последний шанс) сохраняет полный DEFAULT_TIMEOUT_MS —
+// терпимость к медленному холодному TLS/VPN не теряется.
+/** Бюджет хопа идемпотентного GET/HEAD/OPTIONS, пока есть непройденные хосты. */
+const IDEMPOTENT_HOP_TIMEOUT_MS = 5_000;
+/** Бюджет параллельной гонки оставшихся хостов: worst-case обход кольца
+ * ≈ 5с (активный хоп) + 7с (гонка) ≈ 12с вместо 45с последовательных. */
+const IDEMPOTENT_RACE_TIMEOUT_MS = 7_000;
+/** Не-финальный хоп мутации с clientRequestId (финальный — DEFAULT_TIMEOUT_MS). */
+const KEYED_MUTATION_HOP_TIMEOUT_MS = 5_000;
+
+// ── Подозрительный маршрут после смены сети (C-4) ───────────────────────────
+// Wi-Fi↔VPN↔LTE-скачок делает базу, выбранную на ПРЕЖНЕМ пути, подозрительной:
+// обычная (без idempotency-ключа) мутация на ней не должна платить полные 15с
+// connect-timeout — «Сохранить» на протухшем маршруте быстрее отдаёт честную
+// ошибку и ручной «Повторить» уже уходит на живой хост. Укороченный бюджет
+// действует ТОЛЬКО пока в кольце есть живая альтернатива (иначе торопиться
+// некуда — медленный VPN важнее); первый же успех любого хоста снимает пометку.
+const SUSPECT_ROUTE_MUTATION_TIMEOUT_MS = 8_000;
+let suspectBaseUrl: string | null = null;
+
 function markHostRouteFailure(host: string): void {
-  if (API_HOSTS.includes(host)) hostRouteFailureUntil.set(host, Date.now() + HOST_ROUTE_FAILURE_COOLDOWN_MS);
+  if (!API_HOSTS.includes(host)) return;
+  hostRouteFailureUntil.set(host, Date.now() + HOST_ROUTE_FAILURE_COOLDOWN_MS);
+  // Реальный трафик поймал сбой primary — гистерезис возврата стартует заново.
+  if (host === API_BASE_URL) primaryReturnSuccessStreak = 0;
 }
 
 function markHostHealthy(host: unknown): void {
   if (typeof host === 'string') hostRouteFailureUntil.delete(host);
+  // C-4: успех (реальный ответ или принятый /health-победитель) — маршрут
+  // доказуемо жив, подозрение со смены сети снимается.
+  suspectBaseUrl = null;
 }
 
 function circuitOpenHosts(): string[] {
@@ -104,6 +168,23 @@ function circuitOpenHosts(): string[] {
     else open.push(host);
   }
   return open;
+}
+
+/**
+ * C-3: реальная смена Wi-Fi/LTE/VPN-маршрута обесценивает short-lived
+ * circuit'ы, выученные на ПРЕЖНЕМ пути — хост, умерший на VPN, может быть жив
+ * на Wi-Fi (и наоборот). Вызывается синхронно из reselectApiHost(true);
+ * экспортирован для сетевых контроллеров, наблюдающих смену маршрута сами.
+ */
+export function resetRouteCircuits(): void {
+  hostRouteFailureUntil.clear();
+}
+
+/** C-4: есть ли в кольце живая (не в circuit-cooldown) альтернатива базе. */
+function hasLiveAlternativeHost(base: string): boolean {
+  if (API_HOSTS.length <= 1) return false;
+  const open = new Set(circuitOpenHosts());
+  return API_HOSTS.some((host) => host !== base && !open.has(host));
 }
 
 /**
@@ -163,11 +244,16 @@ function probeHostHealth(base: string, timeoutMs: number, raceSignal?: AbortSign
   });
 }
 
-/** First host gets a short lead; reserves then race concurrently. */
+/**
+ * First host gets a short lead; reserves then race concurrently.
+ * `headStartMs <= 0` запускает ВСЕ пробы одновременно — так reselect после
+ * сбоя не дарит 1.5с форы хосту, который этот сбой и вызвал (M4).
+ */
 function findFirstHealthyHost(
   hosts: readonly string[],
   timeoutMs: number,
   externalSignal?: AbortSignal,
+  headStartMs: number = PREFERRED_HOST_HEAD_START_MS,
 ): Promise<string | null> {
   if (hosts.length === 0) return Promise.resolve(null);
   return new Promise((resolve) => {
@@ -221,7 +307,8 @@ function findFirstHealthyHost(
 
     launch(hosts[0], 0);
     if (hosts.length > 1) {
-      headStartTimer = setTimeout(launchReserves, PREFERRED_HOST_HEAD_START_MS);
+      if (headStartMs <= 0) launchReserves();
+      else headStartTimer = setTimeout(launchReserves, headStartMs);
     }
   });
 }
@@ -233,6 +320,9 @@ let apiHostReadyPromise: Promise<void> | null = null;
 let reselectInFlight: Promise<string | null> | null = null;
 let reselectProbeStarted = false;
 let reselectRequestedAgain = false;
+/** C-3: ближайший проход гонки идёт ПОЛНЫМ кольцом primary-first (реальная
+ * смена маршрута обесценила резерв-предпочтение). Потребляется проходом. */
+let reselectPrimaryFirst = false;
 let reselectPassAbort: AbortController | null = null;
 let activeBasePersistence: Promise<void> = Promise.resolve();
 type ApiRouteReadyListener = () => void;
@@ -280,9 +370,14 @@ function stopPrimaryReturnProbe(): void {
   }
 }
 
-/** Пока живём на резерве — раз в ~75 с пробуем /health primary и возвращаемся. */
+/**
+ * Пока живём на резерве — раз в ~75 с пробуем /health primary. Возврат только
+ * после PRIMARY_RETURN_SUCCESS_STREAK подряд успехов (гистерезис C1): один
+ * удачный крошечный /health полуживого primary больше не маятничит сессию.
+ */
 function ensurePrimaryReturnProbe(): void {
   if (primaryReturnTimer || activeBaseUrl === API_BASE_URL) return;
+  primaryReturnSuccessStreak = 0;
   primaryReturnTimer = setInterval(async () => {
     if (activeBaseUrl === API_BASE_URL) {
       stopPrimaryReturnProbe();
@@ -290,11 +385,18 @@ function ensurePrimaryReturnProbe(): void {
     }
     const generation = selectionGeneration;
     if (await probeHostHealth(API_BASE_URL, PRIMARY_RETURN_PROBE_TIMEOUT_MS)) {
-      // A network reselect/failover that happened while this probe was in
-      // flight is newer evidence and must win.
-      adoptActiveBase(API_BASE_URL, generation);
+      primaryReturnSuccessStreak += 1;
+      if (primaryReturnSuccessStreak >= PRIMARY_RETURN_SUCCESS_STREAK) {
+        primaryReturnSuccessStreak = 0;
+        // A network reselect/failover that happened while this probe was in
+        // flight is newer evidence and must win.
+        adoptActiveBase(API_BASE_URL, generation);
+      }
+    } else {
+      // Интермиттирующий троттлинг: любой провал обнуляет серию.
+      primaryReturnSuccessStreak = 0;
     }
-    // primary всё ещё недоступен — остаёмся на резерве до следующей пробы.
+    // primary нестабилен/недоступен — остаёмся на резерве до следующей пробы.
   }, PRIMARY_RETURN_PROBE_INTERVAL_MS);
 }
 
@@ -385,6 +487,23 @@ export function ensureApiHostReady(): Promise<void> {
  * an older probe from overwriting a newer request success.
  */
 export function reselectApiHost(forceFreshRoute = false): Promise<string | null> {
+  if (forceFreshRoute) {
+    // C-3: вызвавший НАБЛЮДАЛ реальную смену маршрута (NetInfo signature,
+    // foreground, offline→online, ручной retry). Знания прежнего пути
+    // устаревают немедленно и синхронно:
+    //   • short-lived circuit'ы выучены на старой сети — чистим;
+    //   • серия гистерезиса возврата на primary копилась на старой сети;
+    //   • текущая база под подозрением — обычные мутации на ней получают
+    //     укороченный бюджет (C-4), пока первый успех не докажет обратное;
+    //   • сама гонка пойдёт ПОЛНЫМ кольцом primary-first: живой primary
+    //     принимается сразу, а не через 2×75с гистерезиса.
+    // Фоновые/сбойные вызовы (forceFreshRoute=false) ничего этого не делают —
+    // гистерезис против маятника при операторском троттлинге сохраняется.
+    resetRouteCircuits();
+    primaryReturnSuccessStreak = 0;
+    if (API_HOSTS.length > 1) suspectBaseUrl = activeBaseUrl;
+    reselectPrimaryFirst = true;
+  }
   if (reselectInFlight) {
     // BackendRecovery, OfflineBanner and axios may all report the SAME outage;
     // they join the current selector. Only a caller that observed an actual
@@ -413,10 +532,19 @@ export function reselectApiHost(forceFreshRoute = false): Promise<string | null>
           const passAbort = new AbortController();
           reselectPassAbort = passAbort;
           const generation = selectionGeneration;
+          // C-3: после реальной смены маршрута гонка идёт ПОЛНЫМ кольцом
+          // primary-first — предпочтение резерва выучено на прежней сети, а
+          // живой primary должен приниматься сразу (circuit'ы уже сброшены,
+          // так что head-start ему положен). Иначе — M4: активный хост,
+          // только что провалившийся на реальном трафике (circuit-open),
+          // не заслуживает head-start — все пробы сразу.
+          const preferredHost = reselectPrimaryFirst ? API_BASE_URL : activeBaseUrl;
+          reselectPrimaryFirst = false;
           const winner = await findFirstHealthyHost(
-            orderApiHosts(API_HOSTS, activeBaseUrl),
+            orderApiHosts(API_HOSTS, preferredHost),
             LAUNCH_HOST_RACE_TIMEOUT_MS,
             passAbort.signal,
+            circuitOpenHosts().includes(preferredHost) ? 0 : PREFERRED_HOST_HEAD_START_MS,
           );
           if (generation === selectionGeneration) {
             if (winner) {
@@ -445,6 +573,9 @@ export function reselectApiHost(forceFreshRoute = false): Promise<string | null>
       reselectInFlight = null;
       reselectProbeStarted = false;
       reselectRequestedAgain = false;
+      // Форс, чей проход не состоялся (исчерпан 9с бюджет), не должен
+      // протаскивать primary-first в несвязанный будущий фоновый проход.
+      reselectPrimaryFirst = false;
       reselectPassAbort = null;
     }
   });
@@ -466,6 +597,11 @@ type FailoverAwareConfig = InternalAxiosRequestConfig & {
   _allowCapturedAuthDispatch?: boolean;
   /** loginAcrossHosts emits one network failure only after every route fails. */
   _suppressNetworkFailure?: boolean;
+  /** Дефолтный бюджет инстанса заменён коротким — хоповым (C3) или бюджетом
+   * «подозрительной» базы после смены сети (C-4); сбрасывается на ретрае. */
+  _hopBudgetApplied?: boolean;
+  /** M2: multipart-аплоад прибит к прямому хосту вместо шлюза с лимитом тела. */
+  _uploadPinnedToDirectHost?: boolean;
 };
 
 /**
@@ -476,6 +612,49 @@ type FailoverAwareConfig = InternalAxiosRequestConfig & {
 function isLoginRequest(cfg: InternalAxiosRequestConfig): boolean {
   if ((cfg.method || 'get').toLowerCase() !== 'post') return false;
   return /(^|\/)auth\/login\/?$/.test(cfg.url || '');
+}
+
+/** UUID v4-ключ серверной идемпотентности (checks.client_request_id, мигр. 111). */
+const CLIENT_REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const SERIALIZED_CLIENT_REQUEST_ID_RE =
+  /"clientRequestId"\s*:\s*"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}"/i;
+
+/**
+ * C2а: мутация с серверным идемпотентным ключом. Backend дедуплицирует по
+ * (tenant, client_request_id) UNIQUE — повтор на другом хосте вернёт УЖЕ
+ * созданную запись, а не дубль, поэтому межхостовый ретрай безопасен. Ключ
+ * обязан быть валидным UUID: пустую строку сервер трактует как «без ключа»
+ * (дедупа нет) — такие мутации ретраить нельзя. До dispatch `data` — объект,
+ * в error.config — уже сериализованная transformRequest'ом строка.
+ */
+function hasMutationIdempotencyKey(cfg: FailoverAwareConfig): boolean {
+  const method = (cfg.method || 'get').toLowerCase();
+  if (method !== 'post' && method !== 'patch' && method !== 'put') return false;
+  const data: unknown = cfg.data;
+  if (typeof data === 'string') return SERIALIZED_CLIENT_REQUEST_ID_RE.test(data);
+  if (data && typeof data === 'object' && !(typeof FormData !== 'undefined' && data instanceof FormData)) {
+    const key = (data as Record<string, unknown>).clientRequestId;
+    return typeof key === 'string' && CLIENT_REQUEST_ID_RE.test(key);
+  }
+  return false;
+}
+
+/**
+ * C2б: сбой, при котором запрос ГАРАНТИРОВАННО не был доставлен серверу —
+ * соединение даже не установилось (DNS не разрезолвился / connect отвергнут),
+ * значит записи на сервере быть не может и ретрай на другом хосте безопасен.
+ * Generic «Network Error» и таймауты сюда сознательно НЕ входят: они могли
+ * случиться уже ПОСЛЕ отправки записи (дефект слепого ретрая PR #10). Коды —
+ * node/adapter-уровня, паттерны сообщений — реальные строки нативных стеков
+ * iOS (NSURLError) и Android (OkHttp).
+ */
+const NEVER_DELIVERED_CODES = new Set(['ECONNREFUSED', 'ENOTFOUND', 'EAI_AGAIN', 'ERR_NAME_NOT_RESOLVED']);
+const NEVER_DELIVERED_MESSAGE_RE =
+  /(unable to resolve host|failed to connect to|connection refused|hostname could not be found|could not connect to the server)/i;
+function isDeliveryProvablyNotStarted(error: AxiosError): boolean {
+  if (error.response) return false;
+  if (error.code && NEVER_DELIVERED_CODES.has(error.code)) return true;
+  return NEVER_DELIVERED_MESSAGE_RE.test(error.message || '');
 }
 
 /** A response from an older Wi-Fi/LTE/VPN epoch must not change new routing. */
@@ -563,14 +742,17 @@ function readAuthTokenWithDeadline(): Promise<string | null> {
     void Promise.all([
       AsyncStorage.getItem(AUTH_SESSION_ENVELOPE_KEY).catch(() => null),
       AsyncStorage.getItem('token').catch(() => null),
-    ]).then(([rawEnvelope, legacyToken]) => {
-      const envelope = parseAuthSessionEnvelope(rawEnvelope);
-      if (envelope) {
-        finish(envelope.token);
-        return;
-      }
-      finish(legacyToken ?? null);
-    }, () => finish(null));
+    ]).then(
+      ([rawEnvelope, legacyToken]) => {
+        const envelope = parseAuthSessionEnvelope(rawEnvelope);
+        if (envelope) {
+          finish(envelope.token);
+          return;
+        }
+        finish(legacyToken ?? null);
+      },
+      () => finish(null),
+    );
   });
 }
 
@@ -718,7 +900,23 @@ api.interceptors.request.use(async (config) => {
   // traversal state on the config across axios retries.
   cfg._routeGeneration = selectionGeneration;
   if (API_HOSTS.length > 1) {
-    const selectedBase = cfg._failoverBaseUrl ?? activeBaseUrl;
+    let selectedBase = cfg._failoverBaseUrl ?? activeBaseUrl;
+    // M2: Яндекс-шлюз режет тело запроса ~3.5 МБ — multipart-аплоад (фото
+    // iPhone обычно больше) через него детерминированно падает. Пока сессия
+    // живёт на шлюзе, аплоад прибивается к первому прямому хосту кольца;
+    // провал даёт понятную ошибку (см. финальный wrap в error-интерсепторе).
+    if (
+      !cfg._failoverBaseUrl &&
+      isBodyLimitedGatewayHost(selectedBase) &&
+      typeof FormData !== 'undefined' &&
+      config.data instanceof FormData
+    ) {
+      const directHost = orderApiHosts(API_HOSTS, API_BASE_URL).find((host) => !isBodyLimitedGatewayHost(host));
+      if (directHost) {
+        selectedBase = directHost;
+        cfg._uploadPinnedToDirectHost = true;
+      }
+    }
     config.baseURL = selectedBase;
     if (!cfg._failoverTriedBases?.includes(selectedBase)) {
       cfg._failoverTriedBases = [...(cfg._failoverTriedBases ?? []), selectedBase];
@@ -737,6 +935,46 @@ api.interceptors.request.use(async (config) => {
   // (createServices' 120s/600s heavy endpoints) is left untouched.
   if (config.timeout === DEFAULT_TIMEOUT_MS && typeof FormData !== 'undefined' && config.data instanceof FormData) {
     config.timeout = UPLOAD_TIMEOUT_MS;
+  }
+
+  // C3: пока у кольца остаются непройденные хосты, blackhole-активный хост не
+  // должен съедать полный 15с бюджет как де-факто connect-timeout. Короткий
+  // хоп применяется только к запросам с дефолтным бюджетом инстанса:
+  // single-host кольцо инертно, явные per-request таймауты (120s/600s тяжёлых
+  // эндпоинтов) и аплоады не трогаются. Финальный хоп сохраняет полный бюджет.
+  if (config.timeout === DEFAULT_TIMEOUT_MS && API_HOSTS.length > 1) {
+    const untriedLeft = API_HOSTS.length - (cfg._failoverTriedBases?.length ?? 1);
+    if (untriedLeft > 0) {
+      const hopMethod = (cfg.method || 'get').toLowerCase();
+      if (hopMethod === 'get' || hopMethod === 'head' || hopMethod === 'options') {
+        config.timeout = IDEMPOTENT_HOP_TIMEOUT_MS;
+        cfg._hopBudgetApplied = true;
+      } else if (hasMutationIdempotencyKey(cfg)) {
+        config.timeout = KEYED_MUTATION_HOP_TIMEOUT_MS;
+        cfg._hopBudgetApplied = true;
+      }
+    }
+  }
+
+  // C-4: обычная (без idempotency-ключа) мутация на базе, помеченной
+  // подозрительной после смены сетевого маршрута, не платит полные 15с
+  // connect-timeout на протухшем пути — при живой альтернативе в кольце ей
+  // хватает 8с. GET и keyed-мутации уже покрыты хоповыми бюджетами выше;
+  // аплоады (UPLOAD_TIMEOUT_MS) и явные per-request таймауты не проходят
+  // страж DEFAULT_TIMEOUT_MS. _hopBudgetApplied: доказуемо-недоставленный
+  // ретрай на СЛЕДУЮЩИЙ хост вернёт полный бюджет — короток только
+  // подозрительный маршрут, а не вся мутация.
+  if (
+    config.timeout === DEFAULT_TIMEOUT_MS &&
+    suspectBaseUrl !== null &&
+    config.baseURL === suspectBaseUrl &&
+    hasLiveAlternativeHost(suspectBaseUrl)
+  ) {
+    const suspectMethod = (cfg.method || 'get').toLowerCase();
+    if (suspectMethod !== 'get' && suspectMethod !== 'head' && suspectMethod !== 'options') {
+      config.timeout = SUSPECT_ROUTE_MUTATION_TIMEOUT_MS;
+      cfg._hopBudgetApplied = true;
+    }
   }
 
   return config;
@@ -809,6 +1047,102 @@ function fireAuthExpired() {
   });
 }
 
+/** Route-класс ошибки (transport / HTML-подмена / proxy-статус) — не наш API. */
+function isRouteClassError(error: unknown): boolean {
+  const candidate = error as AxiosError | undefined;
+  if (axios.isCancel(candidate) || candidate?.code === 'ERR_CANCELED') return false;
+  if (!candidate?.response) return true;
+  const status = candidate.response.status;
+  return (
+    status === 502 ||
+    status === 503 ||
+    status === 504 ||
+    status === 408 ||
+    status === 421 ||
+    status === 451 ||
+    isHtmlApiPayload(candidate.response.data, candidate.response.headers?.['content-type'])
+  );
+}
+
+/**
+ * M1: параллельная гонка ОСТАВШИХСЯ хостов кольца для идемпотентного запроса
+ * (happy-eyeballs РЕАЛЬНОГО GET, а не только /health). Хост №2 кольца — тот
+ * же VDS-IP, что primary: при блокировке по IP жив только шлюз, и
+ * последовательный обход платил бы полный таймаут хопа за мёртвый дубль IP.
+ * Побеждает первый успешный ответ; проигравшие догорают по своему бюджету и
+ * молча игнорируются (GET идемпотентен — лишний дубль безопасен, мутации
+ * сюда НЕ попадают). Все кандидаты упали → reject ошибкой первого по порядку
+ * кольца кандидата.
+ */
+function raceIdempotentAcrossHosts(
+  cfg: FailoverAwareConfig,
+  failedBase: string,
+  tried: readonly string[],
+  candidates: readonly string[],
+): Promise<AxiosResponse> {
+  const allTried = [...new Set([...tried, failedBase, ...candidates])];
+  const raceTimeout =
+    cfg._hopBudgetApplied || cfg.timeout === DEFAULT_TIMEOUT_MS ? IDEMPOTENT_RACE_TIMEOUT_MS : cfg.timeout;
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let rejectedCount = 0;
+    const errors: unknown[] = [];
+    candidates.forEach((host, index) => {
+      const attempt: FailoverAwareConfig = {
+        ...cfg,
+        timeout: raceTimeout,
+        _failoverBaseUrl: host,
+        _failoverTriedBases: allTried,
+        _disableHostFailover: true,
+        _suppressNetworkFailure: true,
+        _hopBudgetApplied: false,
+      };
+      api.request(attempt).then(
+        (res) => {
+          if (settled) return;
+          settled = true;
+          const successfulBase =
+            typeof res.config.baseURL === 'string' && API_HOSTS.includes(res.config.baseURL)
+              ? res.config.baseURL
+              : host;
+          adoptRequestWinner(successfulBase, res.config as FailoverAwareConfig);
+          resolve(res);
+        },
+        (raceError: unknown) => {
+          errors[index] = raceError;
+          // Мёртвый кандидат коротко «закорачивается» и для следующих волн —
+          // но только доказательством ТЕКУЩЕГО поколения маршрута (зеркально
+          // adoptRequestWinner): попытка, ушедшая до смены сети и упавшая
+          // после resetRouteCircuits(), не должна заново открывать 8с circuit
+          // на свежей сети уликами старого пути. Поколение попытки штампует
+          // request-интерсептор при её dispatch.
+          const attemptCfg = (raceError as AxiosError | undefined)?.config as FailoverAwareConfig | undefined;
+          if (isRouteClassError(raceError) && attemptCfg?._routeGeneration === selectionGeneration) {
+            markHostRouteFailure(host);
+          }
+          rejectedCount += 1;
+          if (!settled && rejectedCount === candidates.length) {
+            settled = true;
+            reject(errors.find((e) => e !== undefined));
+          }
+        },
+      );
+    });
+  });
+}
+
+/**
+ * Полный отказ гонки кандидатов: attempts подавляли свои network-события
+ * (_suppressNetworkFailure), поэтому один финальный recovery-сигнал уходит
+ * здесь — на уровне логического запроса, как в последовательном обходе.
+ */
+function finalizeRingFailure(ringError: unknown, cfg: FailoverAwareConfig): Promise<never> {
+  if (isRouteClassError(ringError) && !cfg._suppressNetworkFailure) {
+    fireNetworkListeners(networkFailureListeners);
+  }
+  return Promise.reject(ringError);
+}
+
 // ── HTML-страж (инцидент 05.07) — ОТДЕЛЬНЫЙ интерсептор, зарегистрирован ДО
 // основной пары. КРИТИЧНО (находка ревью): reject из success-хендлера НЕ
 // попадает в error-хендлер ТОЙ ЖЕ пары (axios ловит только ошибки более
@@ -843,7 +1177,15 @@ api.interceptors.response.use(
   // bookkeeping — see the "ETag … REMOVED" note above for why). Единственное
   // дополнение — сигнал «сеть жива» для офлайн-очереди чеков и баннера.
   (res) => {
-    markHostHealthy(res.config?.baseURL);
+    // Снимать suspect/circuit можно только доказательством ТЕКУЩЕГО поколения
+    // маршрута: ответ, ушедший в полёт ДО смены сети, доказывает живость
+    // СТАРОГО пути и не должен снимать suspectBaseUrl/circuit'ы, выученные на
+    // свежей сети. Путь adoptActiveBase (markHostHealthy внутри) не трогаем —
+    // там поколение уже проверено вызывающим. Сигнал «сеть жива» (офлайн-
+    // очередь чеков, баннер) остаётся безусловным: успех ЛЮБОГО поколения —
+    // честное доказательство работающей сети.
+    const cfg = res.config as FailoverAwareConfig | undefined;
+    if (cfg?._routeGeneration === selectionGeneration) markHostHealthy(cfg.baseURL);
     fireNetworkListeners(requestSuccessListeners);
     return res;
   },
@@ -859,38 +1201,79 @@ api.interceptors.response.use(
     // Axios sends non-2xx responses straight to this error handler, so the
     // success-path HTML guard cannot see a captive/WAF page with 403/451.
     // Detect it here too; JSON 4xx remains an authoritative API response.
-    const htmlErrorResponse = isHtmlApiPayload(
-      error.response?.data,
-      error.response?.headers?.['content-type'],
-    );
+    const htmlErrorResponse = isHtmlApiPayload(error.response?.data, error.response?.headers?.['content-type']);
     const transportOrHtmlFailure = !error.response || error.code === 'ERR_HTML_RESPONSE' || htmlErrorResponse;
     const failoverClassFailure = transportOrHtmlFailure || gatewayFailure || routeStatusFailure;
     const method = (cfg?.method || 'get').toLowerCase();
     const idempotent = method === 'get' || method === 'head' || method === 'options';
 
-    // Idempotent requests traverse every host exactly once. Mutations never
-    // enter this path: a timeout/HTML/proxy status cannot prove that a write
-    // was not already applied by the backend.
-    if (cfg && API_HOSTS.length > 1 && idempotent && !cfg._disableHostFailover && failoverClassFailure) {
+    if (cfg && API_HOSTS.length > 1 && !cfg._disableHostFailover && failoverClassFailure) {
       const failedBase =
         typeof cfg.baseURL === 'string' && API_HOSTS.includes(cfg.baseURL) ? cfg.baseURL : activeBaseUrl;
-      markHostRouteFailure(failedBase);
+      // Circuit открывается только доказательством ТЕКУЩЕГО поколения маршрута
+      // (зеркально adoptRequestWinner): запрос, ушедший на ПРЕЖНЕЙ сети и
+      // упавший ПОСЛЕ resetRouteCircuits() смены сети, не должен заново
+      // короткозамыкать хост (и сбрасывать гистерезис primary) на свежей сети.
+      // Сам failover/ретрай ниже при этом идёт как обычно — повторная попытка
+      // получает свежие поколение и активную базу в request-интерсепторе.
+      if (cfg._routeGeneration === selectionGeneration) markHostRouteFailure(failedBase);
       const tried = cfg._failoverTriedBases ?? [failedBase];
-      // One logical request still gets a complete first traversal. Subsequent
-      // query/retry waves skip hosts that just proved dead, collapsing a
-      // backend-wide outage from up to 21 requests/query to roughly one per
-      // retry until the short circuit expires or a health reselect clears it.
-      const nextBase = nextUntriedApiHost(API_HOSTS, failedBase, [...tried, ...circuitOpenHosts()]);
-      if (nextBase) {
-        cfg._failoverBaseUrl = nextBase;
-        cfg._failoverTriedBases = [...new Set([...tried, failedBase])];
-        const retried = await api.request(cfg);
-        const successfulBase =
-          typeof retried.config.baseURL === 'string' && API_HOSTS.includes(retried.config.baseURL)
-            ? retried.config.baseURL
-            : nextBase;
-        adoptRequestWinner(successfulBase, retried.config as FailoverAwareConfig);
-        return retried;
+
+      if (idempotent) {
+        // C3/M1: оставшиеся хосты гоняются ПАРАЛЛЕЛЬНО. Кандидаты исключают
+        // хосты в circuit-cooldown: волна ретраев при полном отказе бэкенда
+        // схлопывается примерно до одного запроса, ЦЕНОЙ того, что хост,
+        // оживший внутри 8с окна, дождётся истечения circuit'а или
+        // health-reselect — сознательный компромисс (пин: тест circuit
+        // breaker'а), а НЕ гарантия «полного первого обхода».
+        const blocked = new Set([...tried, failedBase, ...circuitOpenHosts()]);
+        const candidates = orderApiHosts(API_HOSTS, failedBase)
+          .slice(1)
+          .filter((host) => !blocked.has(host));
+        if (candidates.length > 0) {
+          try {
+            return await raceIdempotentAcrossHosts(cfg, failedBase, tried, candidates);
+          } catch (ringError) {
+            return finalizeRingFailure(ringError, cfg);
+          }
+        }
+      } else if (hasMutationIdempotencyKey(cfg) || isDeliveryProvablyNotStarted(error)) {
+        // C2а/C2б: мутация ретраится ПОСЛЕДОВАТЕЛЬНО (никогда параллельно —
+        // запись нельзя размножать) и только когда повтор доказуемо безопасен:
+        // серверный идемпотентный ключ ИЛИ запрос гарантированно не был
+        // доставлен. Рекурсия через api.request сама продолжит обход, если и
+        // следующий хоп упадёт безопасным классом.
+        const nextBase = nextUntriedApiHost(API_HOSTS, failedBase, [
+          ...tried,
+          ...circuitOpenHosts(),
+          // Аплоад никогда не ретраится на шлюз с лимитом тела (M2).
+          ...(typeof FormData !== 'undefined' && cfg.data instanceof FormData
+            ? API_HOSTS.filter(isBodyLimitedGatewayHost)
+            : []),
+        ]);
+        if (nextBase) {
+          cfg._failoverBaseUrl = nextBase;
+          cfg._failoverTriedBases = [...new Set([...tried, failedBase])];
+          if (cfg._hopBudgetApplied) {
+            // Вернуть полный бюджет: интерсептор выдаст новый хоповый, если
+            // непройденные хосты ещё остаются; финальный хоп получит 15с.
+            cfg.timeout = DEFAULT_TIMEOUT_MS;
+            cfg._hopBudgetApplied = false;
+          }
+          const retried = await api.request(cfg);
+          const successfulBase =
+            typeof retried.config.baseURL === 'string' && API_HOSTS.includes(retried.config.baseURL)
+              ? retried.config.baseURL
+              : nextBase;
+          adoptRequestWinner(successfulBase, retried.config as FailoverAwareConfig);
+          return retried;
+        }
+      } else {
+        // C2в: мутация упала ПОСЛЕ возможной отправки (таймаут/обрыв) —
+        // ретраить нельзя (возможен дубль записи), но маршрут под подозрением:
+        // переизбираем хост для СЛЕДУЮЩИХ запросов, чтобы ручной «Повторить»
+        // ушёл уже на живой хост, а не в тот же blackhole.
+        void reselectApiHost().catch(() => {});
       }
     }
 
@@ -902,15 +1285,15 @@ api.interceptors.response.use(
       // `code` (observed on a few Android DNS/TLS failures). loginAcrossHosts
       // must still recognise this as a route failure and try the next alias;
       // a plain Error here used to stop the ring after H1.
-      const wrapped = Object.assign(
-        new Error(`Нет соединения с сервером\nURL: ${baseURL}\nПричина: ${reason}`),
-        {
-          isAxiosError: true,
-          code: error.code,
-          baseURL,
-          config: error.config,
-        },
-      );
+      const message = cfg?._uploadPinnedToDirectHost
+        ? `Фото не загрузилось: прямой канал к серверу сейчас недоступен, а резервный шлюз не пропускает большие файлы. Повторите, когда основной канал восстановится.\nURL: ${baseURL}\nПричина: ${reason}`
+        : `Нет соединения с сервером\nURL: ${baseURL}\nПричина: ${reason}`;
+      const wrapped = Object.assign(new Error(message), {
+        isAxiosError: true,
+        code: error.code,
+        baseURL,
+        config: error.config,
+      });
       return Promise.reject(wrapped);
     }
 
@@ -948,10 +1331,7 @@ export function raceInitialActiveHost(): void {
 
 /** Конфиг одной ограниченной попытки входа на конкретный хост. */
 type LoginAttemptConfig = AxiosRequestConfig &
-  Pick<
-    FailoverAwareConfig,
-    '_failoverBaseUrl' | '_disableHostFailover' | '_suppressNetworkFailure'
-  >;
+  Pick<FailoverAwareConfig, '_failoverBaseUrl' | '_disableHostFailover' | '_suppressNetworkFailure'>;
 
 /** Bound a stale route without making normal VPN logins artificially tight. */
 const LOGIN_HOST_TIMEOUT_MS = 8_000;
@@ -960,11 +1340,7 @@ const LOGIN_TOTAL_BUDGET_MS = 30_000;
 /** Leave room for JS/bridge hand-off so the final ring member can be sent. */
 const LOGIN_BUDGET_HANDOFF_RESERVE_MS = 300;
 
-function waitForLoginRouteBarrier(
-  barrier: Promise<void>,
-  deadline: number,
-  signal: AbortSignal,
-): Promise<boolean> {
+function waitForLoginRouteBarrier(barrier: Promise<void>, deadline: number, signal: AbortSignal): Promise<boolean> {
   const remainingMs = deadline - Date.now();
   if (remainingMs <= 0 || signal.aborted) return Promise.resolve(false);
   return new Promise((resolve) => {
@@ -979,7 +1355,10 @@ function waitForLoginRouteBarrier(
     const onAbort = () => finish(false);
     const timer = setTimeout(() => finish(false), remainingMs);
     signal.addEventListener?.('abort', onAbort);
-    void barrier.then(() => finish(true), () => finish(true));
+    void barrier.then(
+      () => finish(true),
+      () => finish(true),
+    );
   });
 }
 
@@ -1005,8 +1384,17 @@ function isLoginHostRouteFailure(error: unknown): boolean {
       candidate?.code === 'ETIMEDOUT'
     );
   }
-  return status === 403 || status === 404 || status === 405 || status === 408 || status === 421 || status === 451 ||
-    status === 502 || status === 503 || status === 504;
+  return (
+    status === 403 ||
+    status === 404 ||
+    status === 405 ||
+    status === 408 ||
+    status === 421 ||
+    status === 451 ||
+    status === 502 ||
+    status === 503 ||
+    status === 504
+  );
 }
 
 /**
@@ -1023,8 +1411,12 @@ function isLoginHostRouteFailure(error: unknown): boolean {
  * censorship 451 and 502-504 may try the next host. Each host is attempted at
  * most once, normal login sends exactly one request, and all route failures
  * emit one recovery event only after the ring is exhausted.
+ *
+ * Тот же последовательный обход обслуживает и другие ПУБЛИЧНЫЕ pre-auth POST'ы
+ * с серверным дедупом (postPublicAcrossHosts → регистрация: телефонный дедуп
+ * делает повтор детерминированным 409, а не дублем).
  */
-export async function loginAcrossHosts<T = unknown>(data: unknown): Promise<AxiosResponse<T>> {
+async function postAcrossHostsSequential<T>(url: string, data: unknown): Promise<AxiosResponse<T>> {
   let lastRouteError: unknown;
   let totalBudgetExpired = false;
   const loginDeadline = Date.now() + LOGIN_TOTAL_BUDGET_MS;
@@ -1039,11 +1431,7 @@ export async function loginAcrossHosts<T = unknown>(data: unknown): Promise<Axio
       // Re-read the ring after every bounded route barrier. If the user turns
       // VPN on while H1 is timing out and the selector adopts H3, the next
       // POST must follow fresh H3 rather than a stale order captured at tap.
-      const routeReady = await waitForLoginRouteBarrier(
-        ensureApiHostReady(),
-        loginDeadline,
-        totalAbort.signal,
-      );
+      const routeReady = await waitForLoginRouteBarrier(ensureApiHostReady(), loginDeadline, totalAbort.signal);
       const host = orderApiHosts(API_HOSTS, activeBaseUrl).find((candidate) => !attemptedHosts.has(candidate));
       if (!routeReady || !host) {
         totalBudgetExpired = true;
@@ -1070,13 +1458,10 @@ export async function loginAcrossHosts<T = unknown>(data: unknown): Promise<Axio
         // cold-start selection and never send H3. Share the remaining budget
         // fairly, while preserving the 8s ceiling when earlier routes fail
         // fast. Every ring member therefore receives a real attempt.
-        const fairShareMs = Math.max(
-          1,
-          Math.floor((remainingMs - LOGIN_BUDGET_HANDOFF_RESERVE_MS) / hostsLeft),
-        );
+        const fairShareMs = Math.max(1, Math.floor((remainingMs - LOGIN_BUDGET_HANDOFF_RESERVE_MS) / hostsLeft));
         const cfg: LoginAttemptConfig = {
           method: 'post',
-          url: '/auth/login',
+          url,
           data,
           signal: totalAbort.signal,
           timeout: Math.min(LOGIN_HOST_TIMEOUT_MS, fairShareMs),
@@ -1109,6 +1494,20 @@ export async function loginAcrossHosts<T = unknown>(data: unknown): Promise<Axio
 
   fireNetworkListeners(networkFailureListeners);
   throw lastRouteError ?? new Error('Нет доступных API-хостов');
+}
+
+export async function loginAcrossHosts<T = unknown>(data: unknown): Promise<AxiosResponse<T>> {
+  return postAcrossHostsSequential<T>('/auth/login', data);
+}
+
+/**
+ * M3: публичный pre-auth POST через то же безопасное последовательное кольцо,
+ * что и login (route-сбой → следующий хост; авторитетный ответ — стоп).
+ * ТОЛЬКО для эндпоинтов с серверным дедупом повтора (регистрация: дубль
+ * телефона детерминированно даёт 409, а не вторую запись).
+ */
+export function postPublicAcrossHosts<T = unknown>(url: string, data: unknown): Promise<AxiosResponse<T>> {
+  return postAcrossHostsSequential<T>(url, data);
 }
 
 export default api;

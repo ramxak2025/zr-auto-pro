@@ -8,7 +8,6 @@ import { purchaseOrdersApi, suppliersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import InlineLoader from '../components/InlineLoader';
 import Modal from '../components/Modal';
-import { UserRole } from '../types';
 import type { PurchaseOrder, PaginatedResponse, Supplier, Product, PurchaseOrderSuggestionGroup } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 
@@ -23,7 +22,7 @@ export default function PurchaseOrderEditPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const isEdit = !!id;
 
   const [supplierId, setSupplierId] = useState('');
@@ -33,12 +32,13 @@ export default function PurchaseOrderEditPage() {
   const [suggestOpen, setSuggestOpen] = useState(false);
   const [hydrated, setHydrated] = useState(false);
 
-  // Writes are owner-side only.
+  // Создание/правка заказа — suppliers_manage (волна Битрикс24; байпас
+  // superadmin/director — внутри hasPermission, admin — по матрице роли).
   useEffect(() => {
-    if (!isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN)) {
+    if (!hasPermission('suppliers_manage')) {
       navigate('/purchase-orders', { replace: true });
     }
-  }, [isRole, navigate]);
+  }, [hasPermission, navigate]);
 
   // Suppliers for the select.
   const { data: suppliers } = useQuery({

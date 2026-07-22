@@ -45,6 +45,9 @@ interface MenuItem {
   path: string;
   icon: typeof Users;
   permission?: keyof UserPermissions;
+  /** Пункт виден, если есть ХОТЯ БЫ ОДНО из прав (OR-гейт, зеркало backend). */
+  anyPermission?: (keyof UserPermissions)[];
+  /** Только для зон БЕЗ ключа матрицы (напр. биллинг «Тариф и подписка»). */
   roles?: string[];
   featureKey?: string;
   color: string;
@@ -65,6 +68,7 @@ const menuItems: MenuItem[] = [
     description: 'График работы и смены',
     path: '/schedule',
     icon: CalendarDays,
+    permission: 'schedule_view',
     featureKey: 'schedule_view',
     color: 'bg-indigo-50',
     iconColor: 'text-indigo-600',
@@ -149,8 +153,9 @@ const menuItems: MenuItem[] = [
     label: 'Расходы',
     description: 'Аренда, маркетинг и др.',
     path: '/expenses',
+    // Зеркало backend GET /expenses (OR-гейт): вносит расходы ЛИБО финансы.
+    anyPermission: ['can_add_expenses', 'financial_reports'],
     icon: Wallet,
-    roles: ['director', 'superadmin'],
     color: 'bg-rose-50',
     iconColor: 'text-rose-600',
   },
@@ -159,7 +164,7 @@ const menuItems: MenuItem[] = [
     description: 'Планирование для реальной чистой прибыли',
     path: '/planning',
     icon: SlidersHorizontal,
-    roles: ['director', 'superadmin'],
+    permission: 'financial_reports',
     color: 'bg-rose-50',
     iconColor: 'text-rose-600',
   },
@@ -231,7 +236,8 @@ const menuItems: MenuItem[] = [
     description: 'Реквизиты и данные для чеков',
     path: '/company-settings',
     icon: Building2,
-    roles: ['director', 'superadmin'],
+    // Owner-only ячейка settings.company: у системного «Администратора» false.
+    permission: 'company_manage',
     color: 'bg-slate-50',
     iconColor: 'text-slate-600',
   },
@@ -240,7 +246,7 @@ const menuItems: MenuItem[] = [
     description: 'Эквайринг, СБП и онлайн-касса 54-ФЗ',
     path: '/integrations',
     icon: Plug,
-    roles: ['director', 'admin', 'superadmin'],
+    permission: 'settings_manage',
     color: 'bg-slate-50',
     iconColor: 'text-slate-600',
   },
@@ -275,9 +281,6 @@ export default function MorePage() {
   // not a fragile match by plan name. See shared/constants/features.ts.
   const planFeatures: string[] = Array.isArray(sub?.features) ? sub!.features : [];
   const isBypass = user?.role === 'superadmin';
-  // Owner-class always sees every section (hide-by-permission applies to
-  // masters / restricted custom roles only).
-  const isOwnerClass = user?.role === 'superadmin' || user?.role === 'director' || user?.role === 'admin';
 
   const isFeatureLocked = (featureKey?: string) => {
     if (!featureKey || isBypass || !sub) return false;
@@ -350,8 +353,12 @@ export default function MorePage() {
       <div className="card divide-y divide-gray-100 overflow-hidden">
         {menuItems.map((item) => {
           // ROLE-ONLY hide-by-permission: скрываем пункт без gating-права.
-          // Owner-class (superadmin/director/admin) видит всё.
-          if (!isOwnerClass && item.permission && !hasPermission(item.permission)) {
+          // Байпас только superadmin/director — внутри hasPermission; admin
+          // живёт по эффективным правам матрицы из /auth/me (волна Битрикс24).
+          if (item.permission && !hasPermission(item.permission)) {
+            return null;
+          }
+          if (item.anyPermission && !item.anyPermission.some((p) => hasPermission(p))) {
             return null;
           }
           if (item.roles && user?.role && !item.roles.includes(user.role)) {

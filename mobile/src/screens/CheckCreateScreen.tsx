@@ -17,7 +17,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, onlineManager } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
@@ -646,7 +646,13 @@ export default function CheckCreateScreen() {
       ? ''
       : debouncedNormalized;
 
-  const { data: plateClients, isFetching: isFetchingPlate } = useQuery<Client[]>({
+  const {
+    data: plateClients,
+    isFetching: isFetchingPlate,
+    isError: isErrorPlate,
+    fetchStatus: fetchStatusPlate,
+    refetch: refetchPlate,
+  } = useQuery<Client[]>({
     queryKey: ['clients-plate', networkSearch, plateMode],
     queryFn: async () => {
       const res = await clientsApi.getAll({ search: networkSearch, limit: 20 });
@@ -667,7 +673,13 @@ export default function CheckCreateScreen() {
   // телефонной ветки, и отдаёт клиента вложенным в машину — поэтому прямой
   // поиск по машинам возвращает префиксные совпадения с первых двух символов.
   // Результаты вливаются в plateResults ниже (dedup по клиент+авто).
-  const { data: plateCars, isFetching: isFetchingCars } = useQuery<Car[]>({
+  const {
+    data: plateCars,
+    isFetching: isFetchingCars,
+    isError: isErrorCars,
+    fetchStatus: fetchStatusCars,
+    refetch: refetchCars,
+  } = useQuery<Car[]>({
     queryKey: ['cars-plate', networkSearch, plateMode],
     queryFn: async () => {
       const res = await carsApi.getAll({ search: networkSearch, limit: 20 });
@@ -677,6 +689,23 @@ export default function CheckCreateScreen() {
     enabled: !isPhoneMode && debouncedHasLetters && networkSearch.length >= 2,
     placeholderData: (prev) => prev,
   });
+
+  // ── Сетевой сбой поиска клиента (баг владельца) ───────────────────────
+  // Если поисковый запрос УПАЛ по сети (нет ответа / 5xx после failover)
+  // или ПРИОСТАНОВЛЕН офлайном (onlineManager / fetchStatus==='paused'),
+  // список результатов пуст НЕ потому, что клиента нет, а потому что до
+  // сервера не достучались. Показывать «Клиент не найден» + «Создать
+  // клиента» в этом случае — ложь и риск дубля (создание тоже упадёт).
+  // Вместо этого — «Нет связи» + «Повторить». Флаг потребляется ТОЛЬКО
+  // внутри гейта «поиск активен и результатов нет» ниже, поэтому здесь не
+  // проверяем длину запроса. cars-запрос в телефонном режиме выключен →
+  // его isError/paused не даёт ложных срабатываний.
+  const searchNetworkError =
+    isErrorPlate ||
+    isErrorCars ||
+    fetchStatusPlate === 'paused' ||
+    fetchStatusCars === 'paused' ||
+    !onlineManager.isOnline();
 
   const { data: clientData } = useQuery<Client>({
     queryKey: ['client-detail', clientId],
@@ -698,7 +727,12 @@ export default function CheckCreateScreen() {
 
   const masters = useMemo(() => (allUsers || []).filter((u) => u.isActive && !u.hiddenEverywhere), [allUsers]);
 
-  const { data: allServices } = useQuery<Service[]>({
+  const {
+    data: allServices,
+    isError: isErrorServices,
+    fetchStatus: fetchStatusServices,
+    refetch: refetchServices,
+  } = useQuery<Service[]>({
     queryKey: ['all-services'],
     queryFn: async () => {
       const res = await servicesApi.getAll({ limit: 500 });
@@ -706,6 +740,13 @@ export default function CheckCreateScreen() {
     },
     enabled: showServicePicker,
   });
+
+  // Тот же сетевой сбой, что и в поиске клиента: список услуг не загрузился
+  // из-за сети (упал / приостановлен офлайном) → показываем «Нет связи» +
+  // «Повторить», а не пустоту / ложное «Ничего не найдено».
+  const servicePickerNetworkError =
+    (isErrorServices || fetchStatusServices === 'paused' || !onlineManager.isOnline()) &&
+    (allServices?.length ?? 0) === 0;
 
   // Products cache for bundle expansion + the oversell guard — CRITICAL
   // screen. Stock numbers must NEVER be stale here: picking a product is
@@ -1058,19 +1099,33 @@ export default function CheckCreateScreen() {
   // previous fire-and-forget `.then()` left a silent EMPTY form (and an
   // unhandled rejection) when the load failed — the owner would edit a
   // blank чек and overwrite the real one on save.
-  const { data: editCheck, isError: editCheckError } = useQuery<Check>({
+  const {
+    data: editCheck,
+    isError: editCheckError,
+    isFetchedAfterMount: editCheckFresh,
+  } = useQuery<Check>({
     queryKey: ['check', editId],
     queryFn: async () => {
       const res = await checksApi.getById(editId!);
       return res.data;
     },
     enabled: !!editId,
+    // Гидрация формы обязана идти из ПОДТВЕРЖДЁННОЙ правды сервера, а не из
+    // первого попавшегося снапшота: ключ 'check' входит в PERSISTED_KEYS
+    // (диск, до 7 дней давности), и без 'always' свежий (<2 мин) кеш не
+    // рефетчится → isFetchedAfterMount никогда не стал бы true.
+    refetchOnMount: 'always',
   });
   // Hydrate the form ONCE per editId — a background refetch of the same
   // cache entry must never clobber the user's in-progress edits.
+  // `editCheckFresh` (isFetchedAfterMount) гейтит гидрацию до ответа,
+  // полученного ПОСЛЕ mount: cold-start мог восстановить ['check', id] из
+  // 7-дневного persisted-снапшота, и гидрация из него (с вечным
+  // hydratedEditIdRef-замком) затирала бы при сохранении более новое
+  // серверное состояние — тот же класс бага, что «edit переназначал мастера».
   const hydratedEditIdRef = useRef<string | null>(null);
   useEffect(() => {
-    if (!editId || !editCheck || hydratedEditIdRef.current === editId) return;
+    if (!editId || !editCheck || !editCheckFresh || editCheckError || hydratedEditIdRef.current === editId) return;
     hydratedEditIdRef.current = editId;
     const c = editCheck;
     setClientId(c.clientId || '');
@@ -1096,7 +1151,7 @@ export default function CheckCreateScreen() {
     setServiceLines(c.services || []);
     setProductLines(c.products || []);
     if (c.date) setCheckDate(new Date(c.date));
-  }, [editId, editCheck]);
+  }, [editId, editCheck, editCheckFresh, editCheckError]);
   useEffect(() => {
     if (!editCheckError) return;
     Alert.alert('Ошибка', 'Не удалось загрузить чек', [{ text: 'OK', onPress: () => navigation.goBack() }]);
@@ -1613,6 +1668,21 @@ export default function CheckCreateScreen() {
         // open anyway (staleTime 0 + refetchOnMount 'always').
         ['all-products-check'],
         ['warehouse-analytics'],
+        // Деньги чека каскадно меняют зарплату, мотивацию, фин-отчёт, рейтинг
+        // сотрудников и историю клиента — backend считает их ИЗ checks
+        // (salary.service / reports.service). Без этих ключей Зарплата /
+        // Отчёты / карточка клиента показывали старые суммы до ручного
+        // pull-to-refresh (mobile-audit C1). refetchType 'none' достаточно:
+        // экраны живут в MoreStack и ремоунтятся при следующем открытии.
+        ['salary'],
+        ['salary-employee-month'],
+        ['motivation'],
+        ['financial-report'],
+        ['employee-ranking'],
+        ['client-checks'],
+        ['client-checks-full'],
+        ['retail-checks'],
+        ['retail-checks-full'],
       ];
       for (const queryKey of heavyKeys) {
         queryClient.invalidateQueries({ queryKey, refetchType: 'none' });
@@ -1875,11 +1945,11 @@ export default function CheckCreateScreen() {
   // оригинального мастера, а не редактирующего (#TASK-A). Новые строки в
   // редактируемом чеке тоже дефолтятся на его мастера, а не на open'нувшего.
   const defaultMasterId = masterId || (isFromBooking && route.params?.prefillMasterId) || currentUser?.id || '';
-  // Mirror warehouse role gating — directors / admins / superadmins see
-  // cost price inside the picker, masters don't. Same predicate as
-  // `ProductsScreen.tsx`'s `canSeeCostPrice`.
-  const canSeeCostPrice =
-    currentUser?.role === 'director' || currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
+  // Mirror warehouse gating — себестоимость в пикере видит держатель
+  // warehouse_manage (сервер стрипает costPrice:0 без него). Same predicate
+  // as `ProductsScreen.tsx`'s `canSeeCostPrice`; admin живёт по матрице из
+  // /auth/me, superadmin/director байпасятся внутри hasPermission.
+  const canSeeCostPrice = hasPermission('warehouse_manage');
 
   const addServiceLine = (service: Service) => {
     setServiceLines((prev) => [
@@ -2099,7 +2169,14 @@ export default function CheckCreateScreen() {
         date: checkDate.toISOString(),
         mileage: mileage ? parseMoneyInput(mileage) || undefined : undefined,
         comment: comment || undefined,
-        discount: discountNum || undefined,
+        // При РЕДАКТИРОВАНИИ скидка уходит явно числом — 0 тоже значение.
+        // Раньше `discountNum || undefined` превращал стёртую скидку в
+        // undefined, бэк трактовал это как «не менялось» (`dto.discount ??
+        // prior`) и старая скидка выживала в БД, при том что ноги оплаты
+        // ниже посчитаны от тотала БЕЗ скидки → cash+card превышали
+        // totalRevenue (та же коррупция кассы, что чинили для ног). На
+        // создании undefined безвреден (сервер: `dto.discount || 0`).
+        discount: editId ? discountNum : discountNum || undefined,
         paymentMethod: effectiveMethod,
         // Ноги оплаты уходят ЯВНО числами — 0 тоже значение. Раньше было
         // `finalCash || undefined`, и при ПРАВКЕ чека со сменой способа оплаты
@@ -2284,6 +2361,34 @@ export default function CheckCreateScreen() {
     claimProductPickerSession(pickerBridgeRef);
     navigation.navigate('ProductPicker', {});
   };
+
+  // Режим редактирования: пока свежий (после-mount) ответ ['check', editId]
+  // не пришёл, форму НЕ показываем — иначе пользователь начал бы править
+  // пустую/устаревшую (persisted-снапшот с диска) форму и сохранение
+  // затёрло бы реальный чек. Шеврон назад остаётся — с мёртвой сети можно
+  // уйти; при ошибке загрузки эффект выше уже алертит и делает goBack.
+  if (editId && !editCheckFresh) {
+    return (
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        {isStackScreen && (
+          <TouchableOpacity
+            onPress={() => navigation.goBack()}
+            style={[
+              styles.floatingBack,
+              buildShadow(palette, 'elevated'),
+              { backgroundColor: palette.bg.card, top: insetsTop + spacing[1] },
+            ]}
+            hitSlop={10}
+          >
+            <Ionicons name="chevron-back" size={22} color={palette.text.primary} />
+          </TouchableOpacity>
+        )}
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <ActivityIndicator size="large" color={colors.primary[500]} />
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -2740,7 +2845,40 @@ export default function CheckCreateScreen() {
                 : (normalizedSearch.length >= 2 || isPhoneSearch) && plateResults.length === 0) &&
                 networkSearch === currentSearch &&
                 !isFetchingPlate &&
-                !isFetchingCars && (
+                !isFetchingCars &&
+                (searchNetworkError ? (
+                  // Приоритетная ветка: проблема в СЕТИ, а не в отсутствии
+                  // клиента. Без «Создать клиента» — создание тоже упадёт /
+                  // риск дубля. Только «Повторить» (перезапуск обоих запросов).
+                  <View style={styles.notFoundBox}>
+                    <Ionicons name="cloud-offline-outline" size={22} color={palette.text.tertiary} />
+                    <Text style={[styles.inlineNoResults, { color: palette.text.tertiary, paddingVertical: 0 }]}>
+                      Нет связи с сервером — проверьте интернет
+                    </Text>
+                    <TouchableOpacity
+                      style={[
+                        styles.createClientBtn,
+                        isDark
+                          ? {
+                              backgroundColor: softTint(colors.primary[600], 'dark'),
+                              borderColor: 'rgba(79, 131, 232, 0.35)',
+                            }
+                          : { backgroundColor: colors.primary[50], borderColor: colors.primary[100] },
+                      ]}
+                      onPress={() => {
+                        haptic('tap');
+                        void refetchPlate();
+                        if (!isPhoneMode) void refetchCars();
+                      }}
+                      activeOpacity={0.8}
+                    >
+                      <Ionicons name="refresh-outline" size={15} color={colors.primary[600]} />
+                      <Text style={[styles.createClientBtnText, isDark && { color: colors.primary[300] }]}>
+                        Повторить
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                ) : (
                   <View style={styles.notFoundBox}>
                     <Text style={[styles.inlineNoResults, { color: palette.text.tertiary }]}>Клиент не найден</Text>
                     {/* M2: не тупик — создаём клиента с этим номером прямо из кассы. */}
@@ -2763,7 +2901,7 @@ export default function CheckCreateScreen() {
                       </Text>
                     </TouchableOpacity>
                   </View>
-                )}
+                ))}
 
               <View
                 style={[
@@ -3693,11 +3831,27 @@ export default function CheckCreateScreen() {
               <Text style={styles.pickerPrice}>{formatMoney(service.defaultPrice)}</Text>
             </TouchableOpacity>
           ))}
-          {serviceSearch && filteredServices.length === 0 && (
+          {servicePickerNetworkError ? (
+            <View style={{ alignItems: 'center', gap: spacing[2], paddingVertical: spacing[4] }}>
+              <Ionicons name="cloud-offline-outline" size={22} color={palette.text.tertiary} />
+              <Text style={{ textAlign: 'center', color: palette.text.tertiary }}>
+                Нет связи с сервером — проверьте интернет
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  haptic('tap');
+                  void refetchServices();
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={{ color: colors.primary[600], fontWeight: fontWeight.semibold }}>Повторить</Text>
+              </TouchableOpacity>
+            </View>
+          ) : serviceSearch && filteredServices.length === 0 ? (
             <Text style={{ textAlign: 'center', color: palette.text.tertiary, paddingVertical: spacing[4] }}>
               Ничего не найдено
             </Text>
-          )}
+          ) : null}
         </ScrollView>
       </Modal>
 

@@ -17,11 +17,19 @@ export const RequirePermission = (permission: string) => SetMetadata(PERMISSION_
  * Owner-class roles bypass the per-key permission check entirely. These are
  * the accounts that, by product rule, hold every permission implicitly:
  *   • superadmin — platform owner (also bypasses RolesGuard)
- *   • director   — tenant owner; AuthService grants directors ALL_PERMISSIONS
- *   • admin      — owner-class for now (we may carve out truly owner-only
- *                  actions later; keeping admin allowed avoids any lockout).
+ *   • director   — tenant owner («Директор всегда полные права» — продуктовое
+ *                  правило, роль «Директор» вечно read-only с полной матрицей).
+ *
+ * `admin` СНЯТ из owner-class (волна «права как в Битрикс24», 2026-07): матрица
+ * роли АВТОРИТЕТНА — администратор решается матрицей назначенной роли, как
+ * любой сотрудник. Системный «Администратор» засеян полным доступом (кроме
+ * owner-only ячеек: salary.payouts, equipment.permanentDelete,
+ * settings.company, employees.approveProfile — миграция 136), поэтому для
+ * нетронутых тенантов поведение 1:1; урезанная владельцем матрица «Администратора»
+ * теперь реально действует. admin с role_id NULL (аномалия после cutover 126)
+ * не запирается — падает на ADMIN_PERMISSION_DEFAULTS ниже.
  */
-const OWNER_CLASS_ROLES = new Set(['superadmin', 'director', 'admin']);
+const OWNER_CLASS_ROLES = new Set(['superadmin', 'director']);
 
 /**
  * Per-role DEFAULT applied when the user's stored permission map has no
@@ -92,10 +100,109 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   schedule_view: true,
   bookings_access: false,
   marketing_access: false,
+  // Управление маркетингом (волна F) — off by default для мастера (роут owner/
+  // admin-class). Значение и так резолвится в false, но фиксируем явно для
+  // консистентности с остальной картой.
+  marketing_manage: false,
   calls_view: false,
   calls_listen: false,
   // Управление — never for a master.
   user_management: false,
+  // ── v3 (миграция 136) — новые ключи: мастеру всё off (эти роуты и раньше
+  // были @Roles(d,a,sa) / owner-only — мастер туда не проходил, сид 1:1).
+  cash_shifts_manage: false,
+  checks_board_manage: false,
+  clients_delete: false,
+  debts_manage: false,
+  schedule_manage: false,
+  salary_payouts_manage: false,
+  salary_premiums_manage: false,
+  motivation_manage: false,
+  warehouse_analytics_view: false,
+  equipment_permanent_delete: false,
+  employees_approve_profile: false,
+  settings_manage: false,
+  company_manage: false,
+  knowledge_manage: false,
+  // Просмотр базы знаний (волна F) — true: чтение базы знаний было открыто ВСЕМ
+  // до появления ключа. Без явного дефолта легаси-мастер без матрицы (role_id
+  // NULL) потерял бы просмотр = регресс.
+  knowledge_view: true,
+};
+
+/**
+ * Зеркало матрицы системного «Администратора» (сиды 114/121/125/126/136) — тот
+ * же лок-аут-страховочный механизм, что MASTER_PERMISSION_DEFAULTS, но для
+ * строковой роли `admin`. Консультируется ТОЛЬКО когда у admin-пользователя нет
+ * матрицы (role_id NULL — аномалия после cutover-миграции 126): после снятия
+ * `admin` из OWNER_CLASS_ROLES такой пользователь без этого фолбэка оказался бы
+ * полностью заперт (риск R2 карты перевода). MUST stay in sync с сидом
+ * системной роли «Администратор»: всё true, КРОМЕ четырёх owner-only действий,
+ * где admin и сегодня исключён из @Roles (salary payouts/penalties, equipment
+ * permanentDelete, profile change-requests, /my-company) — они false.
+ */
+const ADMIN_PERMISSION_DEFAULTS: Record<string, boolean> = {
+  // Касса — полный доступ (сид «Администратора»: checks.* всё true/'all').
+  checks_view: true,
+  checks_view_all: true,
+  checks_create: true,
+  checks_edit: true,
+  checks_edit_all: true,
+  checks_delete: true,
+  checks_change_datetime: true,
+  edit_closed_check: true,
+  payment_edit: true,
+  accept_payment: true,
+  sell_installment: true,
+  cash_shifts_manage: true,
+  checks_board_manage: true,
+  // Услуги / Склад / Поставщики / Имущество.
+  services_view: true,
+  services_manage: true,
+  warehouse_access: true,
+  warehouse_manage: true,
+  warehouse_delete: true,
+  warehouse_analytics_view: true,
+  suppliers_access: true,
+  suppliers_manage: true,
+  equipment_view: true,
+  equipment_manage: true,
+  equipment_permanent_delete: false, // owner-only: DELETE /equipment/:id — @Roles(d,sa) без admin
+  // CRM.
+  clients_view: true,
+  clients_edit: true,
+  clients_delete: true,
+  debts_manage: true,
+  schedule_view: true,
+  schedule_manage: true,
+  bookings_access: true,
+  marketing_access: true,
+  // Управление маркетингом (волна F) — true: зеркало сида системного
+  // «Администратора» (миграция 137, marketing_manage=true).
+  marketing_manage: true,
+  calls_view: true,
+  calls_listen: true,
+  // Финансы.
+  profit_view: true,
+  financial_reports: true,
+  export_data: true,
+  cashflow_view: true,
+  cashflow_view_all: true,
+  can_add_expenses: true,
+  salary_view: true,
+  salary_view_all: true,
+  salary_payouts_manage: false, // owner-only: OWNER_ROLES=['director','superadmin'] в salary.controller
+  salary_premiums_manage: true,
+  motivation_manage: true,
+  // Управление / Настройки / База знаний.
+  user_management: true,
+  employees_approve_profile: false, // owner-only: profile change-requests — @Roles(d,sa) без admin
+  settings_manage: true,
+  company_manage: false, // owner-only: /my-company — @Roles(d,sa) без admin
+  knowledge_manage: true,
+  // Просмотр базы знаний (волна F) — true: зеркало сида системного
+  // «Администратора» (миграция 137, knowledge_view=true).
+  knowledge_view: true,
 };
 
 /**
@@ -103,11 +210,12 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
  * decision is unit-testable and reusable from services (e.g. checks_view_all).
  *
  * Rule:
- *   1. Owner-class role (superadmin/director/admin) → ALWAYS allowed.
+ *   1. Owner-class role (superadmin/director)       → ALWAYS allowed.
  *   2. Explicit `permissions[key] === true`         → allowed.
  *   3. Explicit `permissions[key] === false`        → denied.
  *   4. No explicit entry → fall back to the per-role default
- *      (master: MASTER_PERMISSION_DEFAULTS; any other non-owner role: deny).
+ *      (master: MASTER_PERMISSION_DEFAULTS; admin без матрицы (role_id NULL):
+ *      ADMIN_PERMISSION_DEFAULTS; any other non-owner role: deny).
  */
 export function userHasPermission(
   user: { role?: string; permissions?: Record<string, boolean> } | undefined,
@@ -122,6 +230,10 @@ export function userHasPermission(
 
   // No explicit grant/denial → per-role default.
   if (user.role === 'master') return MASTER_PERMISSION_DEFAULTS[permission] === true;
+  // admin без матрицы (role_id NULL — аномалия после cutover 126): зеркало сида
+  // системного «Администратора», иначе снятие admin из owner-class заперло бы
+  // его полностью (R2).
+  if (user.role === 'admin') return ADMIN_PERMISSION_DEFAULTS[permission] === true;
 
   // Unknown non-owner role with no explicit permission: deny (fail-closed).
   return false;

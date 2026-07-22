@@ -21,7 +21,6 @@ import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '.
 import { callsApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
-import { UserRole } from '../../../shared/types';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 
@@ -414,12 +413,13 @@ const TABS: { key: FilterTab; label: string }[] = [
 
 export default function CallsScreen({ navigation }: { navigation: any }) {
   const palette = useColors();
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   // ROLE-ONLY (консолидация 2026-07): список звонков доступен по calls_view (гейт
-  // меню), а ПРОСЛУШИВАНИЕ записей — отдельное право calls_listen. Owner-class
-  // (superadmin/director/admin) минует, как на сервере. Без права — кнопка play
-  // не показывается (бэкенд закрывает signed-URL 403 → не будет мёртвой кнопки).
-  const canListen = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('calls_listen');
+  // меню), а ПРОСЛУШИВАНИЕ записей — отдельное право calls_listen. «Права как в
+  // Битрикс24» (2026-07): admin живёт по матрице из /auth/me; superadmin/director
+  // байпасятся внутри hasPermission. Без права — кнопка play не показывается
+  // (бэкенд закрывает signed-URL 403 → не будет мёртвой кнопки).
+  const canListen = hasPermission('calls_listen');
   const tabBarHeight = useTabBarHeight();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<FilterTab>('all');

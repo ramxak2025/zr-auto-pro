@@ -67,6 +67,44 @@ test('canActivate bypasses only exact GET/HEAD public liveness paths', async () 
   }
 });
 
+test('canActivate meters /health/heavy against its own generous anonymous bucket (30/min per IP)', async () => {
+  const heavyRequests = [
+    { path: '/health/heavy' },
+    { path: '/health/heavy/' },
+    { path: '/api/health/heavy' },
+    { path: '/api/health/heavy', url: '/api/health/heavy?probe=ring' },
+    { path: undefined, url: '/api/health/heavy?probe=fallback' },
+    { path: '/api/health/heavy', method: 'HEAD' },
+  ];
+
+  for (const request of heavyRequests) {
+    const guard = createGuard();
+    const meterCalls = rejectAllMeteredRequests(guard);
+
+    await assert.rejects(
+      guard.canActivate(contextFor(request)),
+      (error) => error?.getStatus?.() === 429,
+      `${request.method || 'GET'} ${request.url || request.path} unexpectedly bypassed the heavy-probe bucket`,
+    );
+    assert.equal(meterCalls.length, 1);
+    assert.equal(meterCalls[0].max, 30);
+    assert.ok(meterCalls[0].key.startsWith('health-heavy:'), `unexpected bucket key ${meterCalls[0].key}`);
+  }
+
+  // Под лимитом проба проходит и тратит РОВНО свой бакет (не read-квоту).
+  const underLimitGuard = createGuard();
+  const underLimitCalls = [];
+  underLimitGuard.bump = async (key, max, now) => {
+    underLimitCalls.push({ key, max });
+    return { overLimit: false, resetAt: now + 60_000 };
+  };
+  assert.equal(await underLimitGuard.canActivate(contextFor({ path: '/api/health/heavy' })), true);
+  assert.deepEqual(
+    underLimitCalls.map((c) => c.max),
+    [30],
+  );
+});
+
 test('canActivate keeps /health/db and lookalike paths inside the ordinary quota', async () => {
   const meteredRequests = [
     { path: '/health/db' },

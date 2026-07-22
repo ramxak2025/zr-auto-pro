@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, AppState, StatusBar } from 'react-native';
 import { CommonActions, NavigationContainer, createNavigationContainerRef } from '@react-navigation/native';
-import { QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
+import { MutationCache, QueryClient, QueryClientProvider, onlineManager } from '@tanstack/react-query';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
 import NetInfo from '@react-native-community/netinfo';
@@ -17,6 +17,7 @@ import AppNavigator from './src/navigation/AppNavigator';
 import { ErrorBoundary } from './src/components/ErrorBoundary';
 import SplashOverlay from './src/components/SplashOverlay';
 import OfflineBanner from './src/components/OfflineBanner';
+import ToastHost, { showMutationErrorToast, showToast } from './src/components/Toast';
 import { colors } from './src/theme';
 import { haptic } from './src/platform/haptics';
 import UpdateGate from './src/components/UpdateGate';
@@ -30,13 +31,8 @@ import {
   type QueuedCheck,
 } from './src/utils/offlineCheckQueue';
 import { shouldRetryTransient, transientRetryDelay } from './src/utils/queryRetry';
-import {
-  ensureApiHostReady,
-  onNetworkClassFailure,
-  onRequestSucceeded,
-  reselectApiHost,
-} from './src/api/axios';
-import { checksApi } from './src/api/services';
+import { ensureApiHostReady, onNetworkClassFailure, onRequestSucceeded, reselectApiHost } from './src/api/axios';
+import { checksApi, clientsApi, loyaltyApi } from './src/api/services';
 
 // NetInfo's DEFAULT reachability probe hits clients3.google.com in the
 // background. The `isInternetReachable` verdict it produces is IGNORED
@@ -96,6 +92,31 @@ Notifications.setNotificationHandler({
 });
 
 const queryClient = new QueryClient({
+  // Глобальный перехват ошибок мутаций (волна C «Связь 2.0», C-1). Раньше
+  // фолбэк жил в defaultOptions.mutations.onError — и любой локальный onError
+  // (даже чисто для отката optimistic-кеша) МОЛЧА перекрывал глобальный Alert:
+  // так накопился десяток «молчаливых» мутаций, где несохранённая запись не
+  // показывала вообще ничего. mutationCache.onError вызывается ВСЕГДА, до
+  // локального обработчика, поэтому правило видимости живёт здесь:
+  //   • у мутации ЕСТЬ свой options.onError → cache-слой молчит: ~150 мутаций
+  //     показывают собственный Alert/inline-ошибку, двойных алертов нет;
+  //     rollback-only обработчики ОБЯЗАНЫ сами показать тост (см.
+  //     showMutationErrorToast — Schedule/WorkBoard/Booking/Notification и
+  //     др. уже добиты);
+  //   • onError НЕТ → тот же класс, что покрывал старый глобальный Alert
+  //     (options.onError после переноса существует ⇔ мутация объявила СВОЙ
+  //     обработчик), но теперь необлокирующий тост «Не сохранено…» с текстом
+  //     серверной ошибки, если она есть;
+  //   • meta.showsOwnError === true → opt-out для мутаций, которые рисуют
+  //     ошибку inline-состоянием без onError.
+  mutationCache: new MutationCache({
+    onError: (err, _variables, _context, mutation) => {
+      if (mutation.options.onError) return;
+      if (mutation.meta?.showsOwnError === true) return;
+      haptic('error');
+      showMutationErrorToast(err);
+    },
+  }),
   defaultOptions: {
     queries: {
       // Mobile: longer staleTime so revisiting a screen within 2 min doesn't
@@ -133,17 +154,12 @@ const queryClient = new QueryClient({
       // settles, so every button gated on `isPending` would hang until the
       // network returns. 'always' lets axios fail immediately → onError.
       networkMode: 'always',
-      // Global fallback for the many mutations without a local onError —
-      // a write that silently dies (offline, 500, validation) is the worst
-      // failure mode for учёт. A mutation that defines its own onError
-      // OVERRIDES this default, so there are never double alerts.
-      onError: (err: unknown) => {
-        haptic('error');
-        const e = err as { response?: { data?: { message?: string | string[] } }; message?: string };
-        const raw = e?.response?.data?.message;
-        const serverMsg = Array.isArray(raw) ? raw.join('\n') : raw;
-        Alert.alert('Ошибка', serverMsg || e?.message || 'Не удалось выполнить действие');
-      },
+      // Глобальный фолбэк для мутаций БЕЗ локального onError переехал в
+      // mutationCache.onError выше: класс покрытия тот же (options.onError
+      // после переноса существует только у мутаций со СВОИМ обработчиком),
+      // но новый rollback-only onError больше не может молча съесть
+      // глобальный фидбек — cache-слой видит его и знает, что экран сам
+      // отвечает за видимую ошибку.
     },
   },
 });
@@ -207,6 +223,18 @@ function invalidateAfterQueuedCheckSent(): void {
     ['low-stock'],
     ['all-products-check'],
     ['warehouse-analytics'],
+    // Деньги чека каскадно меняют зарплату, мотивацию, фин-отчёт, рейтинг и
+    // историю клиента (backend считает их ИЗ checks) — зеркало списка в
+    // CheckCreateScreen.onSuccess (mobile-audit C1).
+    ['salary'],
+    ['salary-employee-month'],
+    ['motivation'],
+    ['financial-report'],
+    ['employee-ranking'],
+    ['client-checks'],
+    ['client-checks-full'],
+    ['retail-checks'],
+    ['retail-checks-full'],
   ];
   for (const queryKey of heavyKeys) {
     queryClient.invalidateQueries({ queryKey, refetchType: 'none' });
@@ -216,22 +244,64 @@ function invalidateAfterQueuedCheckSent(): void {
 }
 
 /**
+ * Кешбэк лояльности для чека, досланного из офлайн-очереди (mobile-audit M3).
+ * Живой путь кассы начисляет его в createMutation.onSuccess
+ * (CheckCreateScreen: `!editId && savedCheckId && clientId &&
+ * !selectedClient?.isRetail`); при стэше в очередь чека на сервере ещё нет,
+ * поэтому начисление выполняем здесь — после успешной досылки. Payload не
+ * несёт isRetail, а ответ create его не отдаёт — переспрашиваем клиента
+ * (розничному покупателю бонусы не начисляются). Best-effort и fire-and-forget,
+ * как в живом пути: сумму считает СЕРВЕР, ошибки (422 «лояльность выключена»,
+ * сеть) глушим — чек уже отправлен, блокировать нечего.
+ */
+async function accrueLoyaltyForQueuedCheck(entry: QueuedCheck, result: unknown): Promise<void> {
+  const clientId = typeof entry.payload.clientId === 'string' ? entry.payload.clientId : '';
+  const checkId = (result as { id?: string } | null | undefined)?.id;
+  if (!clientId || !checkId) return;
+  try {
+    const client = await clientsApi.getById(clientId);
+    if (client.data?.isRetail) return;
+    await loyaltyApi.accrue({ clientId, checkId });
+    queryClient.invalidateQueries({ queryKey: ['loyalty', 'client', clientId] });
+  } catch {
+    /* лояльность выключена/не настроена/сеть — тихо, чек уже в журнале */
+  }
+}
+
+/**
  * Тихое подтверждение досылки — локальная нотификация (foreground-handler
  * выше уже показывает баннер), НЕ Alert: досылка фоновая, блокировать
- * пользователя посреди другого экрана нельзя. Без прав на нотификации —
- * молча ничего: бейдж «Ожидают отправки» в Журнале сам исчезнет.
+ * пользователя посреди другого экрана нельзя. Без прав на нотификации (или
+ * при отказе шедулера) раньше была ПОЛНАЯ тишина — теперь фолбэк-тост
+ * «Чек №N отправлен» (волна C, C-6): мастер видит подтверждение, а не
+ * гадает, ушёл ли чек.
  */
 function notifyQueuedCheckSent(entry: QueuedCheck, result: unknown): void {
   const number = (result as { number?: number } | null | undefined)?.number;
   const client = entry.meta?.clientName;
-  Notifications.scheduleNotificationAsync({
-    content: {
-      title: 'Отложенный чек отправлен',
-      body: `${number ? `Чек №${number}` : 'Чек'}${client ? ` · ${client}` : ''} записан в журнал`,
-      sound: false,
-    },
-    trigger: null,
-  }).catch(() => {});
+  void (async () => {
+    let delivered = false;
+    try {
+      const perms = await Notifications.getPermissionsAsync();
+      const canNotify = perms.granted || perms.ios?.status === Notifications.IosAuthorizationStatus.PROVISIONAL;
+      if (canNotify) {
+        await Notifications.scheduleNotificationAsync({
+          content: {
+            title: 'Отложенный чек отправлен',
+            body: `${number ? `Чек №${number}` : 'Чек'}${client ? ` · ${client}` : ''} записан в журнал`,
+            sound: false,
+          },
+          trigger: null,
+        });
+        delivered = true;
+      }
+    } catch {
+      // Права/шедулер недоступны — ниже покажем тост.
+    }
+    if (!delivered) {
+      showToast(number ? `Чек №${number} отправлен — записан в журнал` : 'Отложенный чек отправлен', 'success');
+    }
+  })();
 }
 
 /**
@@ -347,10 +417,14 @@ export default function App() {
         send: (payload) => checksApi.create(payload as never).then((res) => res.data),
         onSent: (entry, result) => {
           invalidateAfterQueuedCheckSent();
+          void accrueLoyaltyForQueuedCheck(entry, result);
           notifyQueuedCheckSent(entry, result);
         },
         onRejected: alertQueuedCheckRejected,
         appState: AppState,
+        // C-5: возврат сети (onlineManager ← NetInfo выше) кикает досылку
+        // СРАЗУ, а не через ≤60с-таймер / первый успешный axios-ответ.
+        online: onlineManager,
       });
       // Третий flush-триггер: ЛЮБОЙ успешный ответ axios — сеть доказуемо
       // вернулась (дебаунс внутри очереди, пустая очередь — мгновенный no-op).
@@ -586,6 +660,10 @@ function ThemedRoot({ apiRoutingReady, cacheReady, fontsReady, showSplash, onAut
                   {/* Offline strip mounts BEFORE the splash so the splash
                     still covers it during boot. Renders null while online. */}
                   <OfflineBanner />
+                  {/* Глобальный тост (C-1/C-2/C-6): «Не сохранено…» из
+                    mutationCache + подтверждение досылки чека. Renders null
+                    без активного тоста; под сплешем — как и баннер. */}
+                  <ToastHost />
                   {showSplash && <SplashOverlay />}
                 </NavigationContainer>
               </BroadcastNotificationProvider>

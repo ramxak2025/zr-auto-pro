@@ -226,13 +226,19 @@ const RequestCard = React.memo(function RequestCard({
 
 export default function ProfileScreen() {
   const navigation = useNavigation<any>();
-  const { user, refreshUser } = useAuth();
+  const { user, refreshUser, hasPermission } = useAuth();
   const palette = useColors();
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
 
+  // Свои правки директор/superadmin сохраняют напрямую, остальные — через
+  // заявку на согласование (строковая проверка зеркалит profile.service).
   const isOwner = user?.role === 'director' || user?.role === 'superadmin';
+  // Очередь «Запросы на правки» — ключ employees_approve_profile (сервер:
+  // GET /profile/change-requests + approve/reject; сид «Администратора» false
+  // — как прежний @Roles(d,sa); admin живёт по матрице из /auth/me).
+  const canApproveProfiles = hasPermission('employees_approve_profile');
   const initial = user?.fullName?.charAt(0) || 'U';
 
   // ── Profile-edit form state (batched under one «Сохранить») ──────────────────
@@ -271,7 +277,7 @@ export default function ProfileScreen() {
   } = useQuery<ProfileChangeRequest[]>({
     queryKey: QK_LIST,
     queryFn: async () => (await profileApi.listChangeRequests()).data,
-    enabled: !!user && isOwner,
+    enabled: !!user && canApproveProfiles,
     staleTime: 30 * 1000,
   });
 
@@ -678,8 +684,9 @@ export default function ProfileScreen() {
             </View>
           </View>
 
-          {/* Owner: «Запросы на правки» review queue (director / superadmin) */}
-          {isOwner && (
+          {/* «Запросы на правки» — очередь согласования, ключ
+              employees_approve_profile (матрица роли). */}
+          {canApproveProfiles && (
             <View style={styles.section}>
               <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
                 ЗАПРОСЫ НА ПРАВКИ{requests && requests.length > 0 ? ` · ${requests.length}` : ''}

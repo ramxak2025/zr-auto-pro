@@ -29,6 +29,13 @@ const ALL_TYPES: StockMovementType[] = [
   'defect_return_to_supplier',
 ];
 
+// Мусор от битых клиентов (' ', 'undefined', 'null') в uuid-фильтрах раньше
+// падал в pg 22P02 «invalid input syntax for type uuid» → 500 в Sentry
+// (тот же класс, что был захарден в warehouse.service.resolveWarehouseId).
+// Не-UUID трактуем как «фильтр не задан».
+const isUuid = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+
 interface CreateMovementDto {
   type: StockMovementType;
   productId: string;
@@ -421,28 +428,109 @@ export class StockMovementsService {
       throw new BadRequestException({ message: 'Склад источника и приёма должны отличаться' });
     }
 
+    // NEW-4 (защита от взаимоблокировки): перевод лочит строку-источник, затем
+    // строку-копию того же SKU на приёмнике. Фиксированный порядок источник→
+    // приёмник конфликтует с путём продажи чека / другими перемещениями, где те
+    // же две строки могут лочиться в обратном порядке → deadlock 40P01 →
+    // перемежающийся 500. Лочим ОБЕ строки заранее ОДНИМ оператором в
+    // детерминированном ГЛОБАЛЬНОМ порядке (по возрастанию id): `SELECT ... IN
+    // (...) ORDER BY id FOR UPDATE` — LockRows над Sort берёт блокировки в
+    // порядке сортировки. Дальнейшие FOR UPDATE-чтения ниже лишь пере-лочат уже
+    // удерживаемые строки (no-op), поэтому порядок захвата фиксирован. Имя/ед.
+    // источника читаем БЕЗ блокировки только чтобы найти копию; авторитетные
+    // значения берутся из блокирующего чтения ниже. Строку-копию, созданную
+    // INSERT'ом в этой же транзакции, лочить не нужно — она приватна до COMMIT.
+    const { rows: peekRows } = await client.query(
+      'SELECT name, unit FROM products WHERE id=$1 AND tenant_id=$2 LIMIT 1',
+      [dto.productId, tenantID],
+    );
+    if (peekRows.length > 0) {
+      const { rows: copyRows } = await client.query(
+        `SELECT id FROM products
+          WHERE tenant_id=$1 AND warehouse_id=$2 AND name=$3 AND unit IS NOT DISTINCT FROM $4
+            AND deleted_at IS NULL AND id <> $5`,
+        [tenantID, targetWarehouseId, peekRows[0].name, peekRows[0].unit, dto.productId],
+      );
+      const lockIds = [dto.productId, ...copyRows.map((r) => r.id as string)];
+      await client.query(`SELECT id FROM products WHERE id = ANY($1::uuid[]) AND tenant_id=$2 ORDER BY id FOR UPDATE`, [
+        lockIds,
+        tenantID,
+      ]);
+    }
+
     const { rows } = await client.query(
-      'SELECT stock, warehouse_id FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+      'SELECT stock, warehouse_id, name, unit FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
       [dto.productId, tenantID],
     );
     const stockBefore = parseFloat(rows[0].stock) || 0;
     const productWarehouseId = rows[0].warehouse_id as string | null;
 
-    // Source-stock model: the product belongs to one warehouse at a time
-    // (multi-warehouse SKU split is out of scope for v1). A transfer is
-    // valid only when the product currently lives in the source warehouse.
+    // Source-stock model: a product ROW belongs to one warehouse at a time.
+    // A transfer is valid only when the product currently lives in the source
+    // warehouse and holds enough stock to cover the transferred qty.
     if (productWarehouseId !== sourceWarehouseId) {
       throw new BadRequestException({ message: 'Товар не находится на исходном складе' });
     }
+    if (qty > stockBefore) {
+      throw new BadRequestException({ message: 'На исходном складе недостаточно товара' });
+    }
 
-    // Reduce source stock; the same SKU now points to the target warehouse.
-    const stockAfter = Math.max(stockBefore - qty, 0);
-    await client.query('UPDATE products SET stock=$1, warehouse_id=$2 WHERE id=$3 AND tenant_id=$4', [
-      stockAfter,
-      targetWarehouseId,
-      dto.productId,
-      tenantID,
-    ]);
+    // Transfer semantics (fix 2026-07): the TRANSFERRED qty arrives on the
+    // target warehouse; the remainder STAYS on the source. Before this fix the
+    // row was pointed at the target with stock = stockBefore - qty, which
+    // displayed the remaining GOOD units on брак/Б-У and erased the transferred
+    // units from the books (a full transfer landed on брак with stock = 0,
+    // making defect_return_to_supplier impossible).
+    //   • full transfer (qty == stock) → the row itself moves, stock unchanged;
+    //   • partial transfer → the source row keeps the remainder; the moved qty
+    //     lands on a separate row of the same SKU on the target warehouse
+    //     (matched by name + unit, created as a copy when missing).
+    // `stockAfter` is the SOURCE-side remainder — the movement row below always
+    // describes the source warehouse (было → осталось на исходном).
+    const stockAfter = stockBefore - qty;
+    let targetProductId: string = dto.productId;
+    if (stockAfter === 0) {
+      await client.query('UPDATE products SET warehouse_id=$1 WHERE id=$2 AND tenant_id=$3', [
+        targetWarehouseId,
+        dto.productId,
+        tenantID,
+      ]);
+    } else {
+      await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [
+        stockAfter,
+        dto.productId,
+        tenantID,
+      ]);
+      const { rows: targetRows } = await client.query(
+        `SELECT id, stock FROM products
+          WHERE tenant_id=$1 AND warehouse_id=$2 AND name=$3 AND unit IS NOT DISTINCT FROM $4
+            AND deleted_at IS NULL AND id <> $5
+          ORDER BY created_at LIMIT 1 FOR UPDATE`,
+        [tenantID, targetWarehouseId, rows[0].name, rows[0].unit, dto.productId],
+      );
+      if (targetRows.length > 0) {
+        targetProductId = targetRows[0].id;
+        const targetStockAfter = (parseFloat(targetRows[0].stock) || 0) + qty;
+        await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [
+          targetStockAfter,
+          targetProductId,
+          tenantID,
+        ]);
+      } else {
+        // Copy the SKU onto the target warehouse. min_stock = 0 on the copy —
+        // брак/Б-У stock must never ring low-stock alerts.
+        const { rows: insRows } = await client.query(
+          `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit,
+                                 is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode)
+           SELECT name, category, photo, cost_price, sell_price, $3, 0, unit,
+                  is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode
+             FROM products WHERE id=$1 AND tenant_id=$2
+           RETURNING id`,
+          [dto.productId, tenantID, qty, targetWarehouseId],
+        );
+        targetProductId = insRows[0].id;
+      }
+    }
 
     const { rows: mvRows } = await client.query(
       `INSERT INTO stock_movements (
@@ -471,6 +559,7 @@ export class StockMovementsService {
       stockAfter,
       sourceWarehouseId,
       targetWarehouseId,
+      targetProductId,
     };
   }
 
@@ -566,13 +655,13 @@ export class StockMovementsService {
     const params: any[] = [tenantID];
     let idx = 2;
 
-    if (query.warehouseId) {
+    if (isUuid(query.warehouseId)) {
       where += ` AND sm.warehouse_id = $${idx++}`;
-      params.push(query.warehouseId);
+      params.push(query.warehouseId.trim());
     }
-    if (query.productId) {
+    if (isUuid(query.productId)) {
       where += ` AND sm.product_id = $${idx++}`;
-      params.push(query.productId);
+      params.push(query.productId.trim());
     }
     if (query.type) {
       where += ` AND sm.type = $${idx++}`;

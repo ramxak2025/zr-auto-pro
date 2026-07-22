@@ -6,9 +6,11 @@
  * (ALL_FEATURES) so check_photos and everything else is editable with zero
  * drift from the backend / web editor.
  *
+ *   • «Голосовой ввод — платформа» card: globalFreeVoiceMinutes (116) via
+ *     adminApi.getSettings/updateSettings — parity with web AdminPlansPage.
  *   • List of plans (sorted by sortOrder) with subscriber counts.
- *   • Tap a plan → edit sheet (name, monthlyPrice, maxUsers, sortOrder,
- *     isActive, feature toggles).
+ *   • Tap a plan → edit sheet (name, description, monthlyPrice, maxUsers,
+ *     voiceMinutes, sortOrder, isActive, feature toggles).
  *   • «+» header → create a new plan.
  *   • Archive = isActive:false (soft, via update).
  */
@@ -26,7 +28,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { plansApi, tenantsApi } from '../../api/services';
+import { plansApi, tenantsApi, adminApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
@@ -35,14 +37,17 @@ import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius, softTint } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
 import { ALL_FEATURES } from '../../../../shared/constants/features';
-import type { Plan, Tenant, FeatureCatalogItem, FeatureGroup } from '../../../../shared/types';
+import type { Plan, Tenant, FeatureCatalogItem, PlatformSettings } from '../../../../shared/types';
 import { formatMoney, FEATURE_GROUP_LABELS, FEATURE_GROUP_ORDER } from './adminShared';
 
 interface PlanDraft {
   id?: string;
   name: string;
+  description: string;
   monthlyPrice: string;
   maxUsers: string;
+  /** 115 — пакет минут голосового ввода в месяц (0 = не входит в тариф). */
+  voiceMinutes: string;
   sortOrder: string;
   isActive: boolean;
   features: string[];
@@ -52,8 +57,10 @@ function toDraft(plan?: Plan): PlanDraft {
   return {
     id: plan?.id,
     name: plan?.name ?? '',
+    description: plan?.description ?? '',
     monthlyPrice: plan ? String(plan.monthlyPrice) : '',
     maxUsers: plan ? String(plan.maxUsers) : '',
+    voiceMinutes: plan ? String(plan.voiceMinutes ?? 0) : '0',
     sortOrder: plan ? String(plan.sortOrder) : '0',
     isActive: plan ? plan.isActive : true,
     features: Array.isArray(plan?.features) ? [...plan!.features] : [],
@@ -103,6 +110,34 @@ export default function AdminPlansScreen() {
 
   const sorted = React.useMemo(() => [...plans].sort((a, b) => a.sortOrder - b.sortOrder), [plans]);
 
+  // ── Платформенная настройка (116): бесплатные минуты голоса всем тенантам ──
+  const { data: settings } = useQuery<PlatformSettings>({
+    queryKey: ['admin-settings'],
+    queryFn: async () => (await adminApi.getSettings()).data,
+  });
+  const [freeMinutes, setFreeMinutes] = React.useState('');
+  const globalFree = settings?.globalFreeVoiceMinutes;
+  React.useEffect(() => {
+    if (globalFree !== undefined) setFreeMinutes(String(globalFree));
+  }, [globalFree]);
+
+  const settingsMutation = useMutation({
+    mutationFn: async (globalFreeVoiceMinutes: number) =>
+      (await adminApi.updateSettings({ globalFreeVoiceMinutes })).data,
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['admin-settings'] });
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось сохранить лимит платформы');
+    },
+  });
+
+  const freeMinutesNum = parseInt(freeMinutes, 10);
+  const freeMinutesDirty =
+    settings != null && Number.isFinite(freeMinutesNum) && freeMinutesNum >= 0 && freeMinutesNum !== (globalFree ?? 0);
+
   const invalidate = React.useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['admin-plans'] });
   }, [queryClient]);
@@ -112,8 +147,11 @@ export default function AdminPlansScreen() {
       setSaving(true);
       const scalars = {
         name: draft.name.trim(),
+        // Как на web: пустое описание не шлём (undefined = поле не меняется).
+        description: draft.description.trim() || undefined,
         monthlyPrice: parseInt(draft.monthlyPrice, 10) || 0,
         maxUsers: parseInt(draft.maxUsers, 10) || 1,
+        voiceMinutes: parseInt(draft.voiceMinutes, 10) || 0,
         sortOrder: parseInt(draft.sortOrder, 10) || 0,
       };
       if (draft.id) {
@@ -195,7 +233,58 @@ export default function AdminPlansScreen() {
         contentInset={contentInset}
         contentContainerStyle={[styles.scroll, { paddingBottom: contentContainerPaddingBottom }]}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
+        {/* Платформенный лимит бесплатных минут голосового ввода (116) */}
+        <View style={[styles.card, surface.card]}>
+          <View style={styles.settingsHead}>
+            <View style={[styles.settingsIcon, { backgroundColor: palette.accent.primarySoft }]}>
+              <Ionicons name="mic-outline" size={18} color={palette.accent.primaryText} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.settingsTitle, { color: palette.text.primary }]}>Голосовой ввод — платформа</Text>
+              <Text style={[styles.settingsHint, { color: palette.text.tertiary }]}>
+                Бесплатные минуты каждому автосервису в месяц. Лимит тенанта — максимум из пакета тарифа и этого
+                значения, плюс индивидуальная надбавка.
+              </Text>
+            </View>
+          </View>
+          <View style={styles.settingsRow}>
+            <View style={[styles.inputWrap, styles.settingsInputWrap, surface.cardCompact]}>
+              <TextInput
+                style={[styles.input, { color: palette.text.primary }]}
+                placeholder="0"
+                placeholderTextColor={palette.text.tertiary}
+                keyboardType="number-pad"
+                editable={settings != null}
+                value={freeMinutes}
+                onChangeText={(v) => setFreeMinutes(v.replace(/[^0-9]/g, ''))}
+              />
+            </View>
+            <Pressable
+              onPress={() => {
+                haptic('tap');
+                settingsMutation.mutate(freeMinutesNum);
+              }}
+              disabled={!freeMinutesDirty || settingsMutation.isPending}
+              style={[
+                styles.settingsSaveBtn,
+                { backgroundColor: freeMinutesDirty ? palette.accent.primary : palette.bg.muted },
+              ]}
+            >
+              {settingsMutation.isPending ? (
+                <ActivityIndicator size="small" color={colors.white} />
+              ) : (
+                <Text
+                  style={[styles.settingsSaveText, { color: freeMinutesDirty ? colors.white : palette.text.tertiary }]}
+                >
+                  Сохранить
+                </Text>
+              )}
+            </Pressable>
+          </View>
+        </View>
+
         {sorted.length === 0 ? (
           <View style={[styles.card, surface.card, styles.emptyBlock]}>
             <Ionicons name="pricetags-outline" size={40} color={palette.text.tertiary} />
@@ -217,8 +306,14 @@ export default function AdminPlansScreen() {
                 <View style={styles.planHead}>
                   <View style={{ flex: 1 }}>
                     <Text style={[styles.planName, { color: palette.text.primary }]}>{plan.name}</Text>
+                    {plan.description ? (
+                      <Text style={[styles.planDescription, { color: palette.text.secondary }]} numberOfLines={2}>
+                        {plan.description}
+                      </Text>
+                    ) : null}
                     <Text style={[styles.planMeta, { color: palette.text.tertiary }]}>
-                      до {plan.maxUsers} польз. · {subscribers} подписчиков · {features.length} функций
+                      до {plan.maxUsers} польз. · {subscribers} подписчиков · {features.length} функций ·{' '}
+                      {plan.voiceMinutes ?? 0} мин голоса
                     </Text>
                   </View>
                   <View
@@ -299,6 +394,15 @@ export default function AdminPlansScreen() {
                     onChangeText={(v) => setEditing({ ...editing, name: v })}
                   />
                 </Field>
+                <Field label="Описание" palette={palette} surface={surface}>
+                  <TextInput
+                    style={[styles.input, { color: palette.text.primary }]}
+                    placeholder="Краткое описание тарифа"
+                    placeholderTextColor={palette.text.tertiary}
+                    value={editing.description}
+                    onChangeText={(v) => setEditing({ ...editing, description: v })}
+                  />
+                </Field>
                 <View style={styles.fieldRow}>
                   <Field label="Цена, ₽/мес" palette={palette} surface={surface} flex>
                     <TextInput
@@ -322,6 +426,16 @@ export default function AdminPlansScreen() {
                   </Field>
                 </View>
                 <View style={styles.fieldRow}>
+                  <Field label="Минуты голоса / мес" palette={palette} surface={surface} flex>
+                    <TextInput
+                      style={[styles.input, { color: palette.text.primary }]}
+                      placeholder="0"
+                      placeholderTextColor={palette.text.tertiary}
+                      keyboardType="number-pad"
+                      value={editing.voiceMinutes}
+                      onChangeText={(v) => setEditing({ ...editing, voiceMinutes: v.replace(/[^0-9]/g, '') })}
+                    />
+                  </Field>
                   <Field label="Порядок" palette={palette} surface={surface} flex>
                     <TextInput
                       style={[styles.input, { color: palette.text.primary }]}
@@ -332,24 +446,25 @@ export default function AdminPlansScreen() {
                       onChangeText={(v) => setEditing({ ...editing, sortOrder: v.replace(/[^0-9]/g, '') })}
                     />
                   </Field>
-                  {editing.id ? (
-                    <View style={[styles.field, styles.fieldFlex]}>
-                      <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Активен</Text>
-                      <View style={[styles.switchBox, surface.cardCompact]}>
-                        <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
-                          {editing.isActive ? 'Да' : 'Архив'}
-                        </Text>
-                        <Switch
-                          value={editing.isActive}
-                          onValueChange={(v) => setEditing({ ...editing, isActive: v })}
-                          trackColor={{ true: palette.accent.primary }}
-                        />
-                      </View>
-                    </View>
-                  ) : (
-                    <View style={[styles.field, styles.fieldFlex]} />
-                  )}
                 </View>
+                <Text style={[styles.fieldHint, { color: palette.text.tertiary }]}>
+                  0 минут = только бесплатный лимит платформы. Работает при включённой функции «Голосовой ввод».
+                </Text>
+                {editing.id ? (
+                  <View style={styles.field}>
+                    <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Активен</Text>
+                    <View style={[styles.switchBox, surface.cardCompact]}>
+                      <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
+                        {editing.isActive ? 'Да' : 'Архив'}
+                      </Text>
+                      <Switch
+                        value={editing.isActive}
+                        onValueChange={(v) => setEditing({ ...editing, isActive: v })}
+                        trackColor={{ true: palette.accent.primary }}
+                      />
+                    </View>
+                  </View>
+                ) : null}
 
                 <Text style={[styles.featuresLabel, { color: palette.text.tertiary }]}>Функции тарифа</Text>
                 {groupedFeatures.map((grp) => {
@@ -468,7 +583,29 @@ const styles = StyleSheet.create({
   card: { padding: spacing[4], gap: spacing[2.5] },
   planHead: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
   planName: { fontSize: 17, fontWeight: '700' },
+  planDescription: { fontSize: 13, marginTop: 2, lineHeight: 18 },
   planMeta: { fontSize: 12, marginTop: 2 },
+  // Platform settings card (globalFreeVoiceMinutes)
+  settingsHead: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[3] },
+  settingsIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  settingsTitle: { fontSize: 15, fontWeight: '700' },
+  settingsHint: { fontSize: 12, marginTop: 2, lineHeight: 17 },
+  settingsRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  settingsInputWrap: { flex: 1 },
+  settingsSaveBtn: {
+    paddingHorizontal: spacing[5],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  settingsSaveText: { fontSize: 14, fontWeight: '700' },
   activePill: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -508,6 +645,7 @@ const styles = StyleSheet.create({
   fieldRow: { flexDirection: 'row', gap: spacing[3] },
   fieldFlex: { flex: 1 },
   fieldLabel: { fontSize: 12, fontWeight: '600', marginLeft: spacing[1] },
+  fieldHint: { fontSize: 11, marginLeft: spacing[1], marginTop: -spacing[1], lineHeight: 15 },
   inputWrap: { paddingHorizontal: spacing[3] },
   input: { fontSize: 16, paddingVertical: spacing[3] },
   switchBox: {

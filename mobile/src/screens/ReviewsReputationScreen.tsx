@@ -47,7 +47,6 @@ import SectionHeader from '../components/SectionHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import type { Client, EmployeeReviewRating, ReviewSettings } from '../../../shared/types';
-import { UserRole } from '../../../shared/types';
 
 const MAX_SOURCE_LEN = 100;
 
@@ -531,9 +530,10 @@ function LeaderboardCard() {
 
 function SettingsTab({ onRequestReview }: { onRequestReview: () => void }) {
   const palette = useColors();
-  const { isRole } = useAuth();
-  // Only owner-level roles configure the client-source list.
-  const canEditSources = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  // Справочник источников клиентов — ключ settings_manage (сервер: POST
+  // /client-sources → тот же ключ; admin живёт по матрице из /auth/me).
+  const canEditSources = hasPermission('settings_manage');
 
   return (
     <View style={{ gap: spacing[4] }}>

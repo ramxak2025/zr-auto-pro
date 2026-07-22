@@ -104,6 +104,78 @@ function round2(value: number): number {
 }
 
 /**
+ * Бизнес-таймзона продукта — Europe/Moscow (UTC+3, без переходов с 2014):
+ * календарный «день продажи» везде ниже считается по МСК, а не по TZ сервера.
+ */
+const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Календарный день (yyyy-MM-dd) момента `ts` в Europe/Moscow. */
+function mskDayOf(ts: number): string {
+  return new Date(ts + MSK_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+/** UTC-timestamp начала МСК-дня `yyyy-MM-dd`. NaN на кривом дне. */
+function mskDayStartMs(day: string): number {
+  return Date.parse(`${day}T00:00:00.000Z`) - MSK_OFFSET_MS;
+}
+
+/** Не старше ~5 лет — защита от опечатки года (2925 → 2025 и т.п.). */
+const CHECK_DATE_MAX_PAST_MS = 5 * 365 * DAY_MS;
+
+/**
+ * Пределы для ЯВНОЙ правки даты продажи чека (жалоба владельца «меняю дату —
+ * ничего не происходит»): задним числом можно (до 5 лет), вперёд — не дальше
+ * чем «завтра» по МСК. Возвращает нормализованный ISO — его и пишем в
+ * checks.date (и переиспользуем для warranty.started_at).
+ */
+function parseCheckDateEdit(raw: unknown): string {
+  const ts = new Date(String(raw)).getTime();
+  if (!Number.isFinite(ts)) {
+    throw new BadRequestException({ message: 'Дата продажи: некорректное значение' });
+  }
+  const now = Date.now();
+  // Конец «завтра» по МСК: сегодня(МСК) 00:00 + 2 суток.
+  const maxTs = mskDayStartMs(mskDayOf(now)) + 2 * DAY_MS;
+  if (ts >= maxTs) {
+    throw new BadRequestException({ message: 'Дата продажи не может быть дальше завтрашнего дня' });
+  }
+  if (ts < now - CHECK_DATE_MAX_PAST_MS) {
+    throw new BadRequestException({ message: 'Дата продажи не может быть старше 5 лет' });
+  }
+  return new Date(ts).toISOString();
+}
+
+/**
+ * Разрешить присланную клиентом дату продажи против персистентной.
+ * Возвращает null, если менять нечего (эхо той же даты: оба клиента шлют date
+ * в КАЖДОМ edit-payload, гидрированную из чека), иначе — валидированный ISO.
+ *   • web шлёт date-only ('yyyy-MM-dd' — календарный день, как его видит
+ *     владелец, т.е. МСК): тот же МСК-день, что у чека → эхо (время суток не
+ *     затираем); другой день → новый МСК-день с ПРЕЖНИМ временем суток
+ *     (позиция в журнале внутри дня и почасовой график не ломаются);
+ *   • mobile шлёт полный ISO: сравнение и запись точные, по миллисекундам.
+ */
+function resolveCheckDateEdit(raw: unknown, priorTs: number): string | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+  const rawStr = String(raw);
+  if (DATE_ONLY_RE.test(rawStr)) {
+    const priorDay = mskDayOf(priorTs);
+    if (rawStr === priorDay) return null;
+    const requestedDayStart = mskDayStartMs(rawStr);
+    if (!Number.isFinite(requestedDayStart)) {
+      throw new BadRequestException({ message: 'Дата продажи: некорректное значение' });
+    }
+    const timeOfDay = priorTs - mskDayStartMs(priorDay);
+    return parseCheckDateEdit(new Date(requestedDayStart + timeOfDay).toISOString());
+  }
+  const ts = new Date(rawStr).getTime();
+  if (Number.isFinite(ts) && ts === priorTs) return null;
+  return parseCheckDateEdit(rawStr);
+}
+
+/**
  * Opaque keyset cursor for the checks journal: base64url of `<date>|<id>`.
  * `date` is the row's ISO timestamp, `id` its UUID — together they form the
  * (date DESC, id DESC) keyset. Opaque on purpose so the FE just round-trips
@@ -242,11 +314,16 @@ export class ChecksService {
     // чтобы владелец видел, сколько «должны». Симметрично пути возврата/удаления
     // (stock + qty), поэтому отменённый оверселл восстанавливает сток ровно.
     // Tenant-scoped on both ends.
+    // NEW-4 (антидедлок): захват строк products по ВОЗРАСТАНИЮ product_id —
+    // единый глобальный порядок с stock-movements.applyTransfer (ORDER BY id
+    // FOR UPDATE) и остальными путями склада, иначе перенос/возврат того же SKU
+    // и продажа лочат две строки в обратном порядке → 40P01.
     const { rows: prodRows } = await client.query(
       `SELECT product_id, COALESCE(SUM(quantity), 0) AS qty
          FROM check_product_lines
         WHERE check_id = $1 AND product_id IS NOT NULL
-        GROUP BY product_id`,
+        GROUP BY product_id
+        ORDER BY product_id`,
       [checkId],
     );
     for (const r of prodRows) {
@@ -515,7 +592,19 @@ export class ChecksService {
     return map;
   }
 
-  private mapCheck(row: any) {
+  /**
+   * ROLE-ONLY v3 (R7): производные деньги чека (себестоимость / зарплатная
+   * часть / прибыль / убыток по гарантии) видны только держателю `profit_view`.
+   * Owner-class (director/superadmin) — всегда true; admin — по матрице роли
+   * (сид true); мастер по умолчанию false (UI и раньше прятал эти цифры — теперь
+   * их не отдаёт и API). Зеркало canSeeCost в ProductsService: undefined actor
+   * (внутренний вызов без актора) → скрываем (fail-closed).
+   */
+  private canSeeProfit(actor?: ChecksActor): boolean {
+    return userHasPermission(actor, 'profit_view');
+  }
+
+  private mapCheck(row: any, canSeeProfit = true) {
     return {
       id: row.id,
       number: row.number,
@@ -533,23 +622,31 @@ export class ChecksService {
       serviceTotal: parseFloat(row.service_total) || 0,
       productTotal: parseFloat(row.product_total) || 0,
       totalRevenue: parseFloat(row.total_revenue) || 0,
-      productCostTotal: parseFloat(row.product_cost_total) || 0,
-      serviceSalaryTotal: parseFloat(row.service_salary_total) || 0,
-      productSalaryTotal: parseFloat(row.product_salary_total) || 0,
-      totalCost: parseFloat(row.total_cost) || 0,
-      profit: parseFloat(row.profit) || 0,
+      // Прибыль/себестоимость — только держателю profit_view (R7): без него
+      // поля зануляются (не удаляются — клиентские типы ждут number).
+      productCostTotal: canSeeProfit ? parseFloat(row.product_cost_total) || 0 : 0,
+      serviceSalaryTotal: canSeeProfit ? parseFloat(row.service_salary_total) || 0 : 0,
+      productSalaryTotal: canSeeProfit ? parseFloat(row.product_salary_total) || 0 : 0,
+      totalCost: canSeeProfit ? parseFloat(row.total_cost) || 0 : 0,
+      profit: canSeeProfit ? parseFloat(row.profit) || 0 : 0,
       // ITEM 2 — «по гарантии» = УБЫТОК, не выручка. Флаг + производная сумма
       // убытка, отдаётся и в списке (журнал), и в детали (единый маппер).
       // warrantyLoss = закупка использованных запчастей (Σ cost_price×qty =
       // product_cost_total) + выплата мастеру за работу по этому чеку
-      // (service_salary_total) — формула владельца. Считается из уже сохранённых
-      // колонок строки, ничего не материализуем. Для НЕ-гарантийных чеков = 0.
-      // Отчёты/касса исключают гарантию из выручки и вычитают ровно этот убыток
-      // из прибыли (reports.service). Additive — старые клиенты поле игнорируют.
+      // (service_salary_total) + его товарная комиссия (product_salary_total —
+      // E-8/C2: salary начисляет её и по гарантии, поэтому без неё убыток занижен,
+      // а прибыль на дашборде завышена). Синхронно с reports.service. Считается
+      // из уже сохранённых колонок строки, ничего не материализуем. Для
+      // НЕ-гарантийных чеков = 0. Отчёты/касса исключают гарантию из выручки и
+      // вычитают ровно этот убыток из прибыли. Additive — старые клиенты игнорируют.
       isWarranty: row.payment_method === 'warranty',
       warrantyLoss:
-        row.payment_method === 'warranty'
-          ? round2((parseFloat(row.product_cost_total) || 0) + (parseFloat(row.service_salary_total) || 0))
+        canSeeProfit && row.payment_method === 'warranty'
+          ? round2(
+              (parseFloat(row.product_cost_total) || 0) +
+                (parseFloat(row.service_salary_total) || 0) +
+                (parseFloat(row.product_salary_total) || 0),
+            )
           : 0,
       // Returns metadata: 040 added is_returned + returned_at + return_destination + return_scope.
       // FE renders a strikethrough / red badge on returned checks in the journal.
@@ -601,16 +698,20 @@ export class ChecksService {
     let idx = 2;
 
     // ── checks_view_all ──────────────────────────────────────────────────
-    // A master who does NOT hold `checks_view_all` may only see their own
-    // checks — PLUS any check where a colleague added HIM as a service-line
-    // executor (owner, 2026-07-02: «даже если в правах только свои — всё
-    // равно видит чеки тех, кто добавил его работу»). Without the EXISTS arm
-    // the #59 executor tint could never fire for restricted masters: the
-    // narrowing filtered those checks out before the flag was computed.
-    // Owner-class roles (and a master who DOES hold the permission) see every
-    // check in the tenant. Layered ON TOP of the tenant scope above — never
-    // widens beyond the tenant. Flows into COUNT + page query (offset/keyset).
-    if (actor && actor.role === 'master' && !userHasPermission(actor, 'checks_view_all')) {
+    // ANY non-owner-class actor who does NOT hold `checks_view_all` (master
+    // by default, admin/custom role with checks.view='own' — матрица роли
+    // авторитетна) may only see their own checks — PLUS any check where a
+    // colleague added HIM as a service-line executor (owner, 2026-07-02:
+    // «даже если в правах только свои — всё равно видит чеки тех, кто добавил
+    // его работу»). Without the EXISTS arm the #59 executor tint could never
+    // fire for restricted actors: the narrowing filtered those checks out
+    // before the flag was computed. Owner-class (superadmin/director) and any
+    // holder of the permission see every check in the tenant —
+    // userHasPermission short-circuits owner-class to true, so this single
+    // condition IS «не owner-class И нет checks_view_all». Layered ON TOP of
+    // the tenant scope above — never widens beyond the tenant. Flows into
+    // COUNT + page query (offset/keyset).
+    if (actor && !userHasPermission(actor, 'checks_view_all')) {
       where += ` AND (ch.master_id = $${idx} OR EXISTS (
         SELECT 1 FROM check_service_lines sl
          WHERE sl.check_id = ch.id AND sl.master_id = $${idx}
@@ -631,13 +732,18 @@ export class ChecksService {
       where += ` AND ch.car_id = $${idx++}`;
       params.push(query.carId);
     }
+    // Границы периода — МОСКОВСКИЙ полуинтервал [from 00:00 МСК, to+1 00:00 МСК),
+    // зеркально reports.service (BUSINESS_TZ): журнал и drill-down дня из cash
+    // flow видят ровно один и тот же набор чеков. Раньше правый край клеился
+    // как UTC ('T23:59:59Z') — чек, пробитый после 02:59:59 МСК следующего
+    // дня по UTC-краю, выпадал из «своего» московского дня.
     if (query.dateFrom) {
-      where += ` AND ch.date >= $${idx++}`;
+      where += ` AND ch.date >= $${idx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`;
       params.push(query.dateFrom);
     }
     if (query.dateTo) {
-      where += ` AND ch.date <= $${idx++}`;
-      params.push(query.dateTo + 'T23:59:59Z');
+      where += ` AND ch.date < ($${idx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`;
+      params.push(query.dateTo);
     }
     if (query.retail === 'true') {
       where += ` AND ch.client_id IS NULL`;
@@ -732,8 +838,9 @@ export class ChecksService {
     }
 
     const fields = parseFields(query.fields);
+    const canSeeProfit = this.canSeeProfit(actor);
     const checks = rows.map((row) => {
-      const ch = this.mapCheck(row);
+      const ch = this.mapCheck(row, canSeeProfit);
       if (row.master_id) {
         (ch as any).master = { id: row.master_id, fullName: row.master_name, avatar: row.master_avatar };
       }
@@ -766,7 +873,37 @@ export class ChecksService {
     return { data: checks, total, page, limit };
   }
 
-  async getById(id: string, tenantID: string) {
+  /**
+   * GET /checks/:id — контроллерная обёртка над getById с ОХВАТОМ (fix «чужой
+   * чек по id»): любой не-owner-class актор без `checks_view_all` (мастер по
+   * дефолту, admin/кастомная роль с checks.view='own') видит по id только СВОЙ
+   * чек либо чек, где он ИСПОЛНИТЕЛЬ строки услуг — ровно то же правило, что
+   * сужает getAll/getBoard, иначе журнал и деталь противоречат друг другу.
+   * userHasPermission короткозамыкает owner-class → true, поэтому одно условие
+   * ниже и есть «не owner-class И нет checks_view_all». Чужой / несуществующий
+   * чек неразличимы снаружи — единый 404 (не подсвечиваем существование чужих
+   * чеков, как в updateOwnComment). Внутренние вызовы (create/update/restore/…)
+   * идут напрямую в getById: их own-гейты уже отработали, а ответ мутации не
+   * должен падать 404 (например, мастер создал чек НА другого мастера — чек
+   * его касса обязана вернуть).
+   */
+  async getByIdForActor(id: string, tenantID: string, actor: ChecksActor) {
+    if (actor && !userHasPermission(actor, 'checks_view_all')) {
+      const { rows: scopeRows } = await this.pool.query(
+        `SELECT 1 FROM checks ch
+          WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL
+            AND (ch.master_id = $3 OR EXISTS (
+              SELECT 1 FROM check_service_lines sl
+               WHERE sl.check_id = ch.id AND sl.master_id = $3
+            ))`,
+        [id, tenantID, actor.userID],
+      );
+      if (scopeRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+    }
+    return this.getById(id, tenantID, actor);
+  }
+
+  async getById(id: string, tenantID: string, actor?: ChecksActor) {
     const { rows } = await this.pool.query(
       `SELECT ch.*,
               m.full_name as master_name, m.avatar as master_avatar,
@@ -782,7 +919,7 @@ export class ChecksService {
     if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
 
     const row = rows[0];
-    const ch: any = this.mapCheck(row);
+    const ch: any = this.mapCheck(row, this.canSeeProfit(actor));
     if (row.master_id) ch.master = { id: row.master_id, fullName: row.master_name, avatar: row.master_avatar };
     if (row.client_id) ch.client = { id: row.client_id, fullName: row.client_name, phone: row.client_phone };
     if (row.car_id) ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
@@ -847,7 +984,7 @@ export class ChecksService {
    * Returns the full updated check (same shape as getById) so the FE can update
    * its detail/board cache in place.
    */
-  async setWorkStatus(id: string, tenantID: string, workStatus: unknown): Promise<any> {
+  async setWorkStatus(id: string, tenantID: string, workStatus: unknown, actor?: ChecksActor): Promise<any> {
     if (typeof workStatus !== 'string' || workStatus.length === 0) {
       throw new BadRequestException({ message: 'Не указан статус доски' });
     }
@@ -898,7 +1035,7 @@ export class ChecksService {
       this.fireCarReadyNotification(id, tenantID);
     }
 
-    return this.getById(id, tenantID);
+    return this.getById(id, tenantID, actor);
   }
 
   /**
@@ -920,7 +1057,7 @@ export class ChecksService {
    * несуществующий / в корзине → 404 (не раскрываем чужие чеки), свой живой,
    * но не сегодняшний → 403 с человеческим сообщением.
    */
-  async updateOwnComment(id: string, tenantID: string, actorUserId: string, comment: string) {
+  async updateOwnComment(id: string, tenantID: string, actorUserId: string, comment: string, actor?: ChecksActor) {
     const normalized = comment.trim().length === 0 ? null : comment;
     const { rowCount } = await this.pool.query(
       `UPDATE checks
@@ -951,7 +1088,7 @@ export class ChecksService {
       throw new ForbiddenException({ message: 'Комментарий можно изменить только в день создания чека' });
     }
 
-    return this.getById(id, tenantID);
+    return this.getById(id, tenantID, actor);
   }
 
   /**
@@ -1021,10 +1158,12 @@ export class ChecksService {
     const params: any[] = [tenantID, activeKeys];
     let idx = 3;
 
-    // Same narrowing as getAll: a master without checks_view_all sees their
-    // own checks + checks where he is a line EXECUTOR (доска должна совпадать
-    // с журналом — см. комментарий в getAll). Never widens beyond the tenant.
-    if (actor && actor.role === 'master' && !userHasPermission(actor, 'checks_view_all')) {
+    // Same narrowing as getAll: any non-owner-class actor without
+    // checks_view_all (master by default, admin/custom role with
+    // checks.view='own') sees their own checks + checks where he is a line
+    // EXECUTOR (доска должна совпадать с журналом — см. комментарий в getAll).
+    // Never widens beyond the tenant.
+    if (actor && !userHasPermission(actor, 'checks_view_all')) {
       where += ` AND (ch.master_id = $${idx} OR EXISTS (
         SELECT 1 FROM check_service_lines sl
          WHERE sl.check_id = ch.id AND sl.master_id = $${idx}
@@ -1052,8 +1191,9 @@ export class ChecksService {
       params,
     );
 
+    const canSeeProfit = this.canSeeProfit(actor);
     for (const row of rows) {
-      const ch: any = this.mapCheck(row);
+      const ch: any = this.mapCheck(row, canSeeProfit);
       if (row.master_id) {
         ch.master = { id: row.master_id, fullName: row.master_name, avatar: row.master_avatar };
       }
@@ -1347,7 +1487,7 @@ export class ChecksService {
         [tenantID, clientRequestId],
       );
       if (dupRows.length > 0) {
-        return this.getById(dupRows[0].id, tenantID);
+        return this.getById(dupRows[0].id, tenantID, actor);
       }
     }
 
@@ -1575,17 +1715,63 @@ export class ChecksService {
       const totalCost = round2(productCostTotal + serviceSalaryTotal + productSalaryTotal);
       const profit = round2(totalRevenue - totalCost);
 
-      // ── Кап ног оплаты (cash_card / installment): ноги ≤ оборота ──────────
-      // Мобилка клампит на клиенте (Math.min(cash, total)), web и сырой API —
-      // нет: «наличными 100 000» при чеке на 30 000 давал бы строку, где
-      // разбивка «Движения денег» навсегда превышает оборот (118 cash_card не
-      // чинит — раскладку из БД не восстановить). Лишнее срезаем с карты,
-      // потом с наличных. Для installment капнутые ноги ниже уходят и в
-      // down_payment плана — чек и план не расходятся. Одноканальные методы
-      // не трогаем: их ноги клиенты задают равными total.
+      // ── Нормализация ног оплаты (C5/M4: «разбивка ≠ оборота» не рождается) ──
+      // Инвариант активного чека: cash + card (+ installmentDebt) = total.
+      //   • Одноканальные ('cash'/'card'/'warranty'): ноги ВЫВОДИМ из total —
+      //     что бы ни прислал клиент (raw API с cash=0 или 999999 давал строку,
+      //     где «Движение денег» навсегда недобирает/превышает оборот; 118 такие
+      //     строки чинила одноразово).
+      //   • 'cash_card': ОБА клиента (web и mobile) всегда шлют ОБЕ ноги.
+      //     На дрейфе (конкурентная правка цены товара / округление сдвинули
+      //     клиентский итог относительно серверного) НЕ падаем 400 — иначе
+      //     основной поток Кассы блокируется на ровном месте. Реконсилируем к
+      //     серверному total: наличные — якорь доверия, карту добираем так, что
+      //     cash + card == total ТОЧНО (инвариант «Движения денег» сохранён).
+      //     Крупный дрейф (>5₽) логируем для наблюдаемости, но не блокируем.
+      //     Пришла одна нога (raw API) — вторая математически однозначна.
+      //   • 'installment': ноги = первый взнос (НЕ равны total, остаток — долг
+      //     плана) — только кап ≤ total; капнутые ноги уходят и в down_payment
+      //     плана, чек и план не расходятся.
+      // Отложенные (draft) не трогаем: нулевые ноги драфта — норма, их доводит
+      // закрытие (activateDeferred / fullUpdate).
       let cashLeg = effectiveCashAmount;
       let cardLeg = effectiveCardAmount;
-      if (dto.paymentMethod === 'cash_card' || dto.paymentMethod === 'installment') {
+      const effectiveMethod = dto.paymentMethod || 'cash';
+      if (!effectiveIsDeferred) {
+        if (effectiveMethod === 'cash') {
+          cashLeg = totalRevenue;
+          cardLeg = 0;
+        } else if (effectiveMethod === 'card') {
+          cashLeg = 0;
+          cardLeg = totalRevenue;
+        } else if (effectiveMethod === 'warranty') {
+          cashLeg = 0;
+          cardLeg = 0;
+        } else if (effectiveMethod === 'cash_card') {
+          if (dto.cardAmount !== undefined && dto.cashAmount === undefined) {
+            // Пришла только карта (raw API): наличные добираем, карта — якорь.
+            cardLeg = round2(Math.min(Math.max(cardLeg, 0), totalRevenue));
+            cashLeg = round2(totalRevenue - cardLeg);
+          } else {
+            // Пришли обе ноги (штатно для обоих клиентов) ИЛИ только наличные:
+            // реконсиляция к серверному total, наличные — якорь.
+            if (dto.cashAmount !== undefined && dto.cardAmount !== undefined) {
+              const drift = round2(cashLeg + cardLeg - totalRevenue);
+              if (Math.abs(drift) > 5) {
+                this.logger.warn(
+                  `cash_card leg drift ${drift}₽ on check create (tenant=${tenantID}) — reconciled to server total ${totalRevenue}`,
+                );
+              }
+            }
+            cashLeg = round2(Math.min(Math.max(cashLeg, 0), totalRevenue));
+            cardLeg = round2(totalRevenue - cashLeg);
+          }
+        } else if (effectiveMethod === 'installment') {
+          cashLeg = round2(Math.min(cashLeg, totalRevenue));
+          cardLeg = round2(Math.min(cardLeg, Math.max(totalRevenue - cashLeg, 0)));
+        }
+      } else if (dto.paymentMethod === 'cash_card' || dto.paymentMethod === 'installment') {
+        // Драфт: прежний кап ≤ total, чтобы и черновик не хранил перебор.
         cashLeg = round2(Math.min(cashLeg, totalRevenue));
         cardLeg = round2(Math.min(cardLeg, Math.max(totalRevenue - cashLeg, 0)));
       }
@@ -1593,8 +1779,11 @@ export class ChecksService {
       // Parse date
       let checkDate = dto.date || new Date().toISOString();
 
-      // Masters can only create checks for today
-      if (userRole === 'master' && dto.date) {
+      // «Меняет дату и время чека» (матрица v3): без `checks_change_datetime`
+      // чек создаётся только сегодняшним днём — чужая дата молча заменяется
+      // текущей (прежний хардкод userRole==='master'; сиды 1:1 — мастер false,
+      // admin/director true, грант мастеру теперь реально работает).
+      if (dto.date && !userHasPermission(actor, 'checks_change_datetime')) {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         const inputDate = new Date(dto.date);
@@ -1665,7 +1854,24 @@ export class ChecksService {
         );
       }
 
-      // Insert product lines and update stock
+      // Insert product lines and update stock.
+      // NEW-4 (антидедлок): при активной продаже строки products лочатся FOR
+      // UPDATE по ВОЗРАСТАНИЮ id ОДНИМ оператором ДО поштучных списаний — единый
+      // глобальный порядок с stock-movements.applyTransfer (ORDER BY id FOR
+      // UPDATE), иначе перенос/возврат того же SKU и продажа лочат две строки в
+      // обратном порядке → взаимоблокировка 40P01. Последующие UPDATE лишь
+      // пере-лочат уже удерживаемые строки, поэтому их порядок больше не важен.
+      if (!effectiveIsDeferred) {
+        const lockIds = Array.from(
+          new Set(productLines.map((p) => p.productId).filter((x: unknown): x is string => !!x)),
+        );
+        if (lockIds.length > 0) {
+          await client.query(
+            `SELECT id FROM products WHERE id = ANY($1::uuid[]) AND tenant_id = $2 ORDER BY id FOR UPDATE`,
+            [lockIds, tenantID],
+          );
+        }
+      }
       for (const prod of productLines) {
         await client.query(
           `INSERT INTO check_product_lines (check_id, product_id, name, sell_price, cost_price, quantity, total_sell, total_cost)
@@ -1770,7 +1976,7 @@ export class ChecksService {
         this.emitCashChanged(tenantID, userID);
       }
 
-      const savedCheck = await this.getById(checkId, tenantID);
+      const savedCheck = await this.getById(checkId, tenantID, actor);
 
       // Push notification to master when assigned by someone else
       if (this.pushService && dto.masterId && dto.masterId !== userID) {
@@ -1808,7 +2014,7 @@ export class ChecksService {
             [tenantID, clientRequestId],
           );
           if (winnerRows.length > 0) {
-            return await this.getById(winnerRows[0].id, tenantID);
+            return await this.getById(winnerRows[0].id, tenantID, actor);
           }
         } catch (recoveryErr) {
           this.logger.error(`Check create idempotent-recovery error: ${recoveryErr}`);
@@ -1860,22 +2066,29 @@ export class ChecksService {
       await this.assertCashierForPayment(tenantID, actor);
     }
 
-    // Round 7 item 12 (residual): masters may edit only THEIR OWN checks on the
-    // plain field-update path too. The close-transition and full-re-edit paths
-    // already enforce this (fullUpdate/activateDeferred/editClosedCheck guards);
-    // without this check a master could still PATCH paymentMethod/paymentStatus
-    // of a FOREIGN check via the raw API even though the UI never offers it.
+    // Round 7 item 12 → матрица v3: own-охват редактирования решает ключ
+    // `checks_edit_all`, а не строка роли. Мастер по умолчанию (false) правит
+    // только СВОИ чеки — как раньше; owner-class/admin (матрица true) — любые;
+    // грант «Редактирует чужие чеки» кастомной роли теперь реально работает.
     // Comment quick-edit has its own dedicated endpoint (updateOwnComment) with
     // the same own-check rule; work-status board moves use setWorkStatus and
-    // are deliberately NOT restricted here. Owner-class stays unrestricted.
-    if (userRole === 'master') {
-      const { rows: ownRows } = await this.pool.query(`SELECT master_id FROM checks WHERE id=$1 AND tenant_id=$2`, [
-        id,
-        tenantID,
-      ]);
-      if (ownRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
-      if (!actorUserId || String(ownRows[0].master_id) !== String(actorUserId)) {
+    // are deliberately NOT restricted here.
+    // R4 `payment_edit`: правка оплаты (method/ноги/статус) ПРОВЕДЁННОГО
+    // (не-отложенного) чека — только держателю ключа. Драфт не гейтится:
+    // подготовка оплаты черновика и его закрытие (activateDeferred) остаются
+    // свободными для мастера, как сегодня.
+    const ownOnly = !userHasPermission(actor, 'checks_edit_all');
+    if (ownOnly || touchesPayment) {
+      const { rows: gateRows } = await this.pool.query(
+        `SELECT master_id, is_deferred FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`,
+        [id, tenantID],
+      );
+      if (gateRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      if (ownOnly && (!actorUserId || String(gateRows[0].master_id) !== String(actorUserId))) {
         throw new ForbiddenException({ message: 'Можно редактировать только свои заказ-наряды' });
+      }
+      if (touchesPayment && gateRows[0].is_deferred !== true && !userHasPermission(actor, 'payment_edit')) {
+        throw new ForbiddenException({ message: 'Нет права изменять оплату проведённого заказ-наряда' });
       }
     }
 
@@ -1937,7 +2150,10 @@ export class ChecksService {
     let idx = 1;
 
     if (dto.date !== undefined) {
-      if (!['director', 'admin', 'superadmin'].includes(userRole)) {
+      // Матрица v3: «Меняет дату и время чека» — ключ checks_change_datetime
+      // вместо хардкода строковых ролей (сиды 1:1: мастер false → тот же 403;
+      // admin/director true; грант кастомной роли оживает).
+      if (!userHasPermission(actor, 'checks_change_datetime')) {
         throw new ForbiddenException({ message: 'Нет прав на изменение даты' });
       }
       sets.push(`date=$${idx++}`);
@@ -1970,7 +2186,7 @@ export class ChecksService {
       vals.push(dto.paymentStatus);
     }
 
-    if (sets.length === 0) return this.getById(id, tenantID);
+    if (sets.length === 0) return this.getById(id, tenantID, actor);
 
     vals.push(id, tenantID);
     const { rows } = await this.pool.query(
@@ -2010,7 +2226,7 @@ export class ChecksService {
       }
     }
 
-    return this.getById(id, tenantID);
+    return this.getById(id, tenantID, actor);
   }
 
   /**
@@ -2062,11 +2278,41 @@ export class ChecksService {
       // a no-op re-save that must NOT re-apply effects.
       const isActivating = checkRows[0].is_deferred === true;
 
-      // PERMISSION: master can close only their own draft.
-      if (isActivating && userRole === 'master') {
+      // PERMISSION (матрица v3): без `checks_edit_all` закрыть можно только СВОЙ
+      // драфт (мастер по умолчанию — как раньше); owner-class/admin — любой.
+      if (isActivating && !userHasPermission(actor, 'checks_edit_all')) {
         if (!actorUserId || String(checkRows[0].master_id) !== String(actorUserId)) {
           await client.query('ROLLBACK');
           throw new ForbiddenException({ message: 'Мастер может закрывать только свой отложенный заказ-наряд' });
+        }
+      }
+
+      // R4 `payment_edit` на «повторном» isDeferred:false ПО УЖЕ ПРОВЕДЁННОМУ
+      // чеку: этот путь применяет payment-поля/comment и при isActivating=false
+      // (no-op re-save), т.е. без гейта он был бы обходом плоского PATCH —
+      // правкой оплаты проведённого чека без ключа и без own-охвата. Гейтим
+      // только РЕАЛЬНОЕ изменение против персистентной строки: эхо-повтор
+      // закрытия (двойной тап / ретрай с теми же значениями) остаётся
+      // безобидным no-op'ом и не запирает мастера. Закрытие драфта
+      // (isActivating=true) сюда не попадает — оно свободно, как сегодня (R4).
+      if (!isActivating) {
+        const prior = checkRows[0];
+        const asMoney = (v: unknown) => round2(parseFloat(String(v)) || 0);
+        const changesPayment =
+          (dto.paymentMethod !== undefined && dto.paymentMethod !== prior.payment_method) ||
+          (dto.cashAmount !== undefined && asMoney(dto.cashAmount) !== asMoney(prior.cash_amount)) ||
+          (dto.cardAmount !== undefined && asMoney(dto.cardAmount) !== asMoney(prior.card_amount)) ||
+          (dto.paymentStatus !== undefined && dto.paymentStatus !== prior.payment_status);
+        const changesComment = dto.comment !== undefined && dto.comment !== (prior.comment ?? null);
+        if ((changesPayment || changesComment) && !userHasPermission(actor, 'checks_edit_all')) {
+          if (!actorUserId || String(prior.master_id) !== String(actorUserId)) {
+            await client.query('ROLLBACK');
+            throw new ForbiddenException({ message: 'Можно редактировать только свои заказ-наряды' });
+          }
+        }
+        if (changesPayment && !userHasPermission(actor, 'payment_edit')) {
+          await client.query('ROLLBACK');
+          throw new ForbiddenException({ message: 'Нет права изменять оплату проведённого заказ-наряда' });
         }
       }
 
@@ -2202,7 +2448,7 @@ export class ChecksService {
 
     this.invalidateReports(tenantID);
     this.emitCashChanged(tenantID, actorUserId);
-    return this.getById(id, tenantID);
+    return this.getById(id, tenantID, actor);
   }
 
   private async fullUpdate(
@@ -2236,13 +2482,16 @@ export class ChecksService {
       if (!userHasPermission(actor, 'edit_closed_check')) {
         throw new ForbiddenException({ message: 'Редактирование доступно только для отложенных чеков' });
       }
-      // Round 7 (item 12): мастер — даже держа edit_closed_check — правит только
-      // СВОИ заказ-наряды (master_id = actor), в точности как close-гейты ниже и
-      // в activateDeferred. Чужой проведённый чек мастер может только смотреть
-      // (в журнале он подсвечен isExecutor-оттенком). Owner-class (director/
-      // admin/superadmin) не затронут: userRole !== 'master'. checkRows уже
-      // прочитан выше — лишнего запроса нет.
-      if (userRole === 'master' && (!actorUserId || String(checkRows[0].master_id) !== String(actorUserId))) {
+      // Round 7 (item 12) → матрица v3: без `checks_edit_all` держатель
+      // edit_closed_check правит только СВОИ заказ-наряды (master_id = actor),
+      // в точности как close-гейты ниже и в activateDeferred. Чужой проведённый
+      // чек такой мастер может только смотреть (в журнале он подсвечен
+      // isExecutor-оттенком). Owner-class/admin (матрица true) не затронуты.
+      // checkRows уже прочитан выше — лишнего запроса нет.
+      if (
+        !userHasPermission(actor, 'checks_edit_all') &&
+        (!actorUserId || String(checkRows[0].master_id) !== String(actorUserId))
+      ) {
         throw new ForbiddenException({ message: 'Можно редактировать только свои заказ-наряды' });
       }
       return this.editClosedCheck(id, tenantID, dto, actorUserId, actor);
@@ -2264,11 +2513,12 @@ export class ChecksService {
       });
     }
 
-    // PERMISSION: a master may only close (activate) THEIR OWN draft. Plain
-    // re-edits of a still-deferred draft keep the existing rules; the extra
-    // gate applies only to the close transition. Director/admin/superadmin may
-    // close any draft. actorUserId is the JWT userID of the caller.
-    if (isActivating && userRole === 'master') {
+    // PERMISSION (матрица v3): без `checks_edit_all` закрыть (активировать)
+    // можно только СВОЙ драфт. Plain re-edits of a still-deferred draft keep
+    // the existing rules; the extra gate applies only to the close transition.
+    // Owner-class/admin (матрица true) may close any draft. actorUserId is the
+    // JWT userID of the caller.
+    if (isActivating && !userHasPermission(actor, 'checks_edit_all')) {
       if (!actorUserId || String(checkRows[0].master_id) !== String(actorUserId)) {
         throw new ForbiddenException({ message: 'Мастер может закрывать только свой отложенный заказ-наряд' });
       }
@@ -2571,19 +2821,36 @@ export class ChecksService {
 
       // ACCOUNTING: on a genuine draft→active transition (is_deferred true→false,
       // authority = lockedIsActivating from the FOR UPDATE read) move the check's
-      // date to the moment of activation (payment). That way revenue / salary /
-      // cash-flow reports and the warranty start land on the activation day, not
-      // the draft-creation day. created_at is left untouched (audit trail). A
-      // plain re-edit of an already-active check (lockedIsActivating=false) never
-      // rewrites the date; this is the only place fullUpdate touches `date`.
+      // date to the moment of activation (payment) — UNLESS the caller explicitly
+      // picked a date (dto.date, «меняю дату продажи»): then that date wins.
+      // «Явно» = отличается от персистентной даты драфта: оба клиента эхом шлют
+      // date в КАЖДОМ payload (гидрированную из чека), и неизменённое эхо не
+      // должно ни задним числом датировать закрытие, ни падать валидацией на
+      // старом драфте. Обычная правка черновика тоже уважает явную dto.date.
+      // Мастер, как и в create(), может ставить только сегодняшнюю дату — чужая
+      // молча игнорируется (не 403: date есть в каждом клиентском payload).
+      // created_at is left untouched (audit trail).
       // ONE timestamp, parameterised — reused for the warranty below so
       // checks.date and warranty.started_at are byte-identical (no now()-vs-JS
       // skew, which in fullUpdate would otherwise be 10-100ms+ apart across the
       // line DELETE/INSERTs between the UPDATE and the warranty call).
-      const activationDate = new Date().toISOString();
+      const priorDraftDateTs =
+        checkRows[0].date instanceof Date ? checkRows[0].date.getTime() : new Date(checkRows[0].date).getTime();
+      let requestedDateIso = resolveCheckDateEdit(dto.date, priorDraftDateTs);
+      if (requestedDateIso !== null && !userHasPermission(actor, 'checks_change_datetime')) {
+        // Без «Меняет дату и время чека» — только сегодняшний день (МСК),
+        // зеркально create(). Сиды 1:1: мастер false (прежний кламп), admin/
+        // director true (клампа не было).
+        if (mskDayOf(new Date(requestedDateIso).getTime()) !== mskDayOf(Date.now())) requestedDateIso = null;
+      }
+      const activationDate = requestedDateIso ?? new Date().toISOString();
       if (lockedIsActivating) {
         updateFields.push(`date=$${ui++}`);
         updateVals.push(activationDate);
+      } else if (requestedDateIso !== null) {
+        // Правка ещё отложенного черновика: дата — обычное поле.
+        updateFields.push(`date=$${ui++}`);
+        updateVals.push(requestedDateIso);
       }
 
       // Always update calculated fields
@@ -2694,7 +2961,7 @@ export class ChecksService {
           });
       }
 
-      return this.getById(id, tenantID);
+      return this.getById(id, tenantID, actor);
     } catch (err) {
       await client.query('ROLLBACK');
       throw err;
@@ -2912,8 +3179,11 @@ export class ChecksService {
   /**
    * Edit a CLOSED (проведённый) check (#61) — the cascade-recompute path. Gated
    * upstream by the `edit_closed_check` permission (owner-class bypasses). The
-   * check STAYS closed (is_deferred is never flipped, date/number/created_at are
-   * never rewritten); only its content + money are re-derived.
+   * check STAYS closed (is_deferred is never flipped, number/created_at are
+   * never rewritten); its content + money are re-derived, and an EXPLICITLY
+   * changed sale date (dto.date ≠ persisted, bounds-validated) is applied —
+   * every report reads checks.date on the fly (no denormalised daily
+   * aggregates), so the check moves between report days automatically.
    *
    * EVERY materialised side-effect of the original close is reversed + reapplied
    * in ONE transaction (single BEGIN/COMMIT, check row locked FOR UPDATE):
@@ -3040,6 +3310,38 @@ export class ChecksService {
         });
       }
 
+      // ── R4 `payment_edit`: смена СПОСОБА оплаты проведённого чека ──────────
+      // Гейтим только реальную смену payment_method (не эхо): держатель
+      // edit_closed_check без payment_edit продолжает править СОДЕРЖИМОЕ своего
+      // закрытого чека (ноги при этом доводятся из нового total автоматически —
+      // это следствие пересчёта, не «правка оплаты»), но перекинуть чек
+      // нал↔карта/гарантия может только держатель «Меняет оплату чека».
+      // Owner-class/admin — матрица true, поведение 1:1.
+      if (
+        dto.paymentMethod !== undefined &&
+        dto.paymentMethod !== prior.payment_method &&
+        !userHasPermission(actor, 'payment_edit')
+      ) {
+        throw new ForbiddenException({ message: 'Нет права изменять оплату проведённого заказ-наряда' });
+      }
+
+      // ── Дата продажи (жалоба владельца «меняю дату — ничего не происходит») ──
+      // dto.date раньше молча выбрасывался на этом пути. Применяем ТОЛЬКО
+      // реальное изменение (resolveCheckDateEdit: неизменённое эхо не должно
+      // ни падать валидацией на чеке старше 5 лет, ни затирать время суток).
+      // Право (матрица v3): «Меняет дату и время чека» — checks_change_datetime,
+      // тот же ключ, что и на плоском PATCH/fullUpdate. Без ключа реальная смена
+      // даты МОЛЧА игнорируется (не 403 — date эхом сидит в каждом клиентском
+      // payload, а сам closed-edit держателю edit_closed_check ломать нельзя).
+      // Отчёты/журнал/cashflow/зарплата читают checks.date на лету — чек
+      // переезжает между днями сам, пересчитывать нечего.
+      const priorDateTs = prior.date instanceof Date ? prior.date.getTime() : new Date(prior.date).getTime();
+      const priorDateIso = new Date(priorDateTs).toISOString();
+      let newDateIso = resolveCheckDateEdit(dto.date, priorDateTs);
+      if (newDateIso !== null && !userHasPermission(actor, 'checks_change_datetime')) {
+        newDateIso = null;
+      }
+
       // Cross-tenant integrity guards (same as create()/fullUpdate): every
       // client-supplied reference must belong to this tenant.
       const services = dto.services || [];
@@ -3074,6 +3376,27 @@ export class ChecksService {
       // Recompute lines + money from the edit DTO (same math as close).
       const c = await this.recomputeClosedCheckLines(client, tenantID, dto, prior);
 
+      // NEW-4 (антидедлок): реверс СТАРОГО и списание НОВОГО стока лочат строки
+      // products в РАЗНЫХ множествах внутри одной транзакции. Лочим ОБЪЕДИНЕНИЕ
+      // (старые + новые product_id) ОДНИМ оператором по ВОЗРАСТАНИЮ id ДО обоих
+      // циклов — единый глобальный порядок с stock-movements.applyTransfer,
+      // иначе перенос/возврат того же SKU и правка чека лочат пересекающиеся
+      // строки в обратном порядке → 40P01. Дальнейшие UPDATE лишь пере-лочат.
+      {
+        const lockIds = Array.from(
+          new Set<string>([
+            ...oldProdRows.map((r) => r.product_id as string),
+            ...c.productLines.map((p: any) => p.productId).filter((x: unknown): x is string => !!x),
+          ]),
+        );
+        if (lockIds.length > 0) {
+          await client.query(
+            `SELECT id FROM products WHERE id = ANY($1::uuid[]) AND tenant_id = $2 ORDER BY id FOR UPDATE`,
+            [lockIds, tenantID],
+          );
+        }
+      }
+
       // ── 1) Reverse OLD stock: add back exactly what the sale deducted ──────
       for (const r of oldProdRows) {
         const qty = parseFloat(r.qty) || 0;
@@ -3085,35 +3408,64 @@ export class ChecksService {
         ]);
       }
 
-      // ── Нормализация ног оплаты (fix «разбивка > оборота», см. fullUpdate) ──
-      // Смена способа оплаты без явных сумм не должна оставлять в БД ногу от
-      // прежнего способа: 'cash' → (total, 0); 'card' → (0, total);
-      // 'warranty' → (0, 0). Для 'cash_card' с РОВНО одной пришедшей ногой
-      // вторая математически однозначна (ноги обязаны сходиться к total) —
-      // старый (до-OTA) мобильный клиент с нулевой наличной частью шлёт только
-      // cardAmount. 'cash_card' совсем без сумм — не трогаем ('installment'
-      // отсечён гардом выше).
-      if (dto.paymentMethod === 'cash') {
-        if (dto.cashAmount === undefined) dto.cashAmount = c.totalRevenue;
-        if (dto.cardAmount === undefined) dto.cardAmount = 0;
-      } else if (dto.paymentMethod === 'card') {
-        if (dto.cashAmount === undefined) dto.cashAmount = 0;
-        if (dto.cardAmount === undefined) dto.cardAmount = c.totalRevenue;
-      } else if (dto.paymentMethod === 'warranty') {
-        if (dto.cashAmount === undefined) dto.cashAmount = 0;
-        if (dto.cardAmount === undefined) dto.cardAmount = 0;
-      } else if (dto.paymentMethod === 'cash_card') {
-        if (dto.cashAmount !== undefined && dto.cardAmount === undefined) {
-          dto.cardAmount = round2(Math.max(c.totalRevenue - (dto.cashAmount || 0), 0));
-        } else if (dto.cardAmount !== undefined && dto.cashAmount === undefined) {
-          dto.cashAmount = round2(Math.max(c.totalRevenue - (dto.cardAmount || 0), 0));
+      // ── Нормализация ног оплаты (C5/M4: «разбивка ≠ оборота» не рождается) ──
+      // Работает от ЭФФЕКТИВНОГО метода (пришедший или персистентный), а не
+      // только при dto.paymentMethod !== undefined: правка содержимого без
+      // смены способа тоже меняет total_revenue — ноги обязаны следовать за
+      // новым итогом, иначе тождество cash + card (+ debt) = total ломается.
+      //   • одноканальные ('cash'/'card'): нога = 100% НОВОГО total, вторая 0;
+      //   • 'warranty': (0, 0) — денег в кассе нет;
+      //   • 'cash_card': ОБА клиента всегда шлют ОБЕ ноги. На дрейфе (правка
+      //     содержимого/цены сдвинула итог) НЕ падаем 400 — реконсилируем к
+      //     новому total: наличные — якорь, карту добираем так, что
+      //     cash + card == total точно. Крупный дрейф (>5₽) логируем. Пришла
+      //     одна нога (raw API) — вторая однозначна; ни одной — переиспользуем
+      //     прежние ноги и так же реконсилируем к новому total.
+      //   • 'installment' сюда не доходит (гарды выше).
+      const effectiveMethod = dto.paymentMethod !== undefined ? dto.paymentMethod : prior.payment_method;
+      if (effectiveMethod === 'cash') {
+        dto.cashAmount = c.totalRevenue;
+        dto.cardAmount = 0;
+      } else if (effectiveMethod === 'card') {
+        dto.cashAmount = 0;
+        dto.cardAmount = c.totalRevenue;
+      } else if (effectiveMethod === 'warranty') {
+        dto.cashAmount = 0;
+        dto.cardAmount = 0;
+      } else if (effectiveMethod === 'cash_card') {
+        if (dto.cashAmount === undefined && dto.cardAmount === undefined) {
+          // Ни одной ноги — переиспользуем прежние (реконсиляция ниже).
+          dto.cashAmount = parseFloat(prior.cash_amount) || 0;
+          dto.cardAmount = parseFloat(prior.card_amount) || 0;
+        }
+        if (dto.cardAmount !== undefined && dto.cashAmount === undefined) {
+          // Пришла только карта (raw API): карта — якорь, наличные добираем.
+          dto.cardAmount = round2(Math.min(Math.max(dto.cardAmount || 0, 0), c.totalRevenue));
+          dto.cashAmount = round2(c.totalRevenue - dto.cardAmount);
+        } else {
+          // Обе ноги (штатно) или только наличные: наличные — якорь.
+          if (dto.cashAmount !== undefined && dto.cardAmount !== undefined) {
+            const drift = round2((dto.cashAmount || 0) + (dto.cardAmount || 0) - c.totalRevenue);
+            if (Math.abs(drift) > 5) {
+              this.logger.warn(
+                `cash_card leg drift ${drift}₽ on check edit (tenant=${tenantID}) — reconciled to server total ${c.totalRevenue}`,
+              );
+            }
+          }
+          dto.cashAmount = round2(Math.min(Math.max(dto.cashAmount || 0, 0), c.totalRevenue));
+          dto.cardAmount = round2(c.totalRevenue - dto.cashAmount);
         }
       }
 
-      // ── 2) Rewrite the check row — is_deferred/date/number/created_at stay ──
+      // ── 2) Rewrite the check row — is_deferred/number/created_at stay ──────
       const updateFields: string[] = [];
       const updateVals: any[] = [];
       let ui = 1;
+      // Дата продажи: только реальное изменение (см. валидацию выше).
+      if (newDateIso !== null) {
+        updateFields.push(`date=$${ui++}`);
+        updateVals.push(newDateIso);
+      }
       if (dto.masterId !== undefined) {
         updateFields.push(`master_id=$${ui++}`);
         updateVals.push(dto.masterId);
@@ -3211,7 +3563,10 @@ export class ChecksService {
       const newAgg: Record<string, number> = {};
       for (const prod of c.productLines) {
         if (!prod.productId) continue;
-        newAgg[prod.productId] = (newAgg[prod.productId] || 0) + (parseFloat(prod.quantity) || 0);
+        // ||1 — та же нормализация, что в строке чека и в деньгах (INSERT выше
+        // пишет `quantity || 1`): строка без quantity продаётся как 1 шт и
+        // списывается как 1 шт, склад не дрейфует.
+        newAgg[prod.productId] = (newAgg[prod.productId] || 0) + (parseFloat(prod.quantity) || 1);
       }
       for (const [productId, qty] of Object.entries(newAgg)) {
         if (qty <= 0) continue;
@@ -3228,11 +3583,14 @@ export class ChecksService {
       // ── 6) Warranty — re-derive unused claims, preserve redeemed history ────
       const effectiveClientId = dto.clientId !== undefined ? dto.clientId || null : (prior.client_id ?? null);
       const effectiveCarId = dto.carId !== undefined ? dto.carId || null : (prior.car_id ?? null);
+      // started_at следует за ЭФФЕКТИВНОЙ датой продажи: передатировали чек —
+      // гарантийное окно стартует с новой даты (checks.date и warranty.started_at
+      // остаются согласованы).
       await this.recomputeWarrantyForClosedEdit(
         client,
         tenantID,
         id,
-        prior.date instanceof Date ? prior.date.toISOString() : String(prior.date),
+        newDateIso ?? priorDateIso,
         effectiveClientId,
         effectiveCarId,
         c.serviceLines,
@@ -3255,6 +3613,7 @@ export class ChecksService {
         masterId: prior.master_id ?? null,
         clientId: prior.client_id ?? null,
         carId: prior.car_id ?? null,
+        date: priorDateIso,
       };
       const after = {
         totalRevenue: c.totalRevenue,
@@ -3271,6 +3630,7 @@ export class ChecksService {
         masterId: dto.masterId !== undefined ? dto.masterId : before.masterId,
         clientId: effectiveClientId,
         carId: effectiveCarId,
+        date: newDateIso ?? priorDateIso,
       };
       const actorName = await this.resolveActorNameTx(client, tenantID, actorUserId);
       await this.writeClosedEditAudit(client, actorUserId, actorName, id, prior.number, {
@@ -3296,7 +3656,7 @@ export class ChecksService {
     // aggregates and nudge other devices to refetch (mirrors create/fullUpdate).
     this.invalidateReports(tenantID);
     this.emitCashChanged(tenantID, actorUserId);
-    return this.getById(id, tenantID);
+    return this.getById(id, tenantID, actor);
   }
 
   /**
@@ -3459,8 +3819,11 @@ export class ChecksService {
    */
   private async reverseCheckFootprintTx(client: PoolClient, tenantID: string, id: string, prior: any): Promise<void> {
     if (!prior.is_deferred && !prior.is_returned) {
+      // NEW-4 (антидедлок): восстановление стока лочит строки products по
+      // ВОЗРАСТАНИЮ product_id — единый глобальный порядок с applyTransfer и
+      // прочими путями склада (иначе тот же SKU лочится в обратном порядке → 40P01).
       const { rows: lines } = await client.query(
-        'SELECT product_id, quantity FROM check_product_lines WHERE check_id=$1 AND product_id IS NOT NULL',
+        'SELECT product_id, quantity FROM check_product_lines WHERE check_id=$1 AND product_id IS NOT NULL ORDER BY product_id',
         [id],
       );
       for (const ln of lines) {
@@ -3517,9 +3880,12 @@ export class ChecksService {
       // check-then-deduct below is atomic against a concurrent sale/return —
       // without it a parallel writer could consume the stock between the read
       // and the UPDATE and the restore would drive stock negative anyway.
+      // NEW-4 (антидедлок): ORDER BY id — захват блокировок по ВОЗРАСТАНИЮ id,
+      // единый глобальный порядок с stock-movements.applyTransfer и прочими
+      // путями склада (иначе пересекающиеся SKU лочатся в обратном порядке → 40P01).
       const productIds = toDeduct.map((x) => x.productId);
       const { rows: stockRows } = await client.query(
-        'SELECT id, name, stock FROM products WHERE id = ANY($1) AND tenant_id=$2 FOR UPDATE',
+        'SELECT id, name, stock FROM products WHERE id = ANY($1) AND tenant_id=$2 ORDER BY id FOR UPDATE',
         [productIds, tenantID],
       );
       const stockMap: Record<string, number> = {};
@@ -3580,7 +3946,7 @@ export class ChecksService {
    * attribution, same stock deltas. Refuses (400) if stock is now insufficient to
    * re-deduct. Idempotent: a check that is NOT in the trash is a clean 404 no-op.
    */
-  async restore(id: string, tenantID: string) {
+  async restore(id: string, tenantID: string, actor?: ChecksActor) {
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -3616,7 +3982,7 @@ export class ChecksService {
     }
     this.invalidateReports(tenantID);
     this.emitCashChanged(tenantID, null);
-    return this.getById(id, tenantID);
+    return this.getById(id, tenantID, actor);
   }
 
   /**
@@ -3720,33 +4086,52 @@ export class ChecksService {
     }
   }
 
-  async getDashboard(tenantID: string) {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay() + 1).toISOString();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+  async getDashboard(tenantID: string, actor?: ChecksActor) {
+    // E-7 — границы дня/недели/месяца в БИЗНЕС-таймзоне (Europe/Moscow, UTC+3):
+    // единое определение «сегодня/этот месяц», как reports.getFinancial/
+    // getCashFlow/dashboardV2. Раньше — от контейнерного (UTC) времени, из-за
+    // чего в 00:00–02:59 МСК дашборд и «Движение денег» показывали разные суммы.
+    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
+    const mskNow = new Date(Date.now() + MSK_OFFSET_MS);
+    const mskY = mskNow.getUTCFullYear();
+    const mskM = mskNow.getUTCMonth();
+    const mskD = mskNow.getUTCDate();
+    const todayStart = new Date(Date.UTC(mskY, mskM, mskD) - MSK_OFFSET_MS).toISOString();
+    // Вс: getUTCDay()=0 — «date − day + 1» дал бы ПОНЕДЕЛЬНИК СЛЕДУЮЩЕЙ недели
+    // (weekRevenue = 0 весь день). ISO-неделя: Вс = 7-й день — та же формула,
+    // что в computeDashboardChart.
+    const dow = mskNow.getUTCDay() === 0 ? 7 : mskNow.getUTCDay();
+    const weekStart = new Date(Date.UTC(mskY, mskM, mskD - dow + 1) - MSK_OFFSET_MS).toISOString();
+    const monthStart = new Date(Date.UTC(mskY, mskM, 1) - MSK_OFFSET_MS).toISOString();
 
+    // Гарантия (ITEM-2, зеркально reports dashboardV2/getFinancial): warranty —
+    // не выручка, а в прибыли вместо сохранённого (положительного) profit —
+    // реальный убыток −(запчасти + выплата мастеру). Кол-во чеков считает все
+    // визиты, включая гарантийные (как checks_today в dashboardV2).
     const { rows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN date >= $2 THEN total_revenue END), 0) as today_revenue,
+         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) as today_revenue,
          COALESCE(COUNT(CASE WHEN date >= $2 THEN 1 END), 0) as today_checks,
-         COALESCE(SUM(CASE WHEN date >= $3 THEN total_revenue END), 0) as week_revenue,
-         COALESCE(SUM(CASE WHEN date >= $4 THEN total_revenue END), 0) as month_revenue,
-         COALESCE(SUM(CASE WHEN date >= $2 THEN profit END), 0) as today_profit,
-         COALESCE(SUM(CASE WHEN date >= $4 THEN profit END), 0) as month_profit
+         COALESCE(SUM(CASE WHEN date >= $3 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) as week_revenue,
+         COALESCE(SUM(CASE WHEN date >= $4 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) as month_revenue,
+         COALESCE(SUM(CASE WHEN date >= $2 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) END), 0) as today_profit,
+         COALESCE(SUM(CASE WHEN date >= $4 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) END), 0) as month_profit
        FROM checks
        WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL`,
       [tenantID, todayStart, weekStart, monthStart],
     );
 
     const r = rows[0];
+    // R7 profit_view: суммы прибыли — только держателю ключа; остальным нули
+    // (выручку/кол-во чеков мастер видит как раньше — 1:1 с прежним UI).
+    const canSeeProfit = this.canSeeProfit(actor);
     return {
       todayRevenue: parseFloat(r.today_revenue) || 0,
       todayChecks: parseInt(r.today_checks) || 0,
       weekRevenue: parseFloat(r.week_revenue) || 0,
       monthRevenue: parseFloat(r.month_revenue) || 0,
-      todayProfit: parseFloat(r.today_profit) || 0,
-      monthProfit: parseFloat(r.month_profit) || 0,
+      todayProfit: canSeeProfit ? parseFloat(r.today_profit) || 0 : 0,
+      monthProfit: canSeeProfit ? parseFloat(r.month_profit) || 0 : 0,
     };
   }
 
@@ -3794,7 +4179,7 @@ export class ChecksService {
     }));
   }
 
-  async getDashboardChart(tenantID: string, period: string, offset: number = 0) {
+  async getDashboardChart(tenantID: string, period: string, offset: number = 0, actor?: ChecksActor) {
     // Clamp the caller-supplied offset to a sane window (item 11): ±1200
     // periods ≈ 100 years even at monthly granularity. An unbounded offset
     // (e.g. ?offset=1e15) would overflow Date arithmetic into Invalid Date →
@@ -3804,60 +4189,90 @@ export class ChecksService {
     // 30s cache, in-flight de-duplicated (see TtlCache.wrap). Invalidated on
     // any check create/update/delete via `reports:<tenant>` prefix purge, so a
     // sale shows up immediately rather than up to 30s late.
-    return ttlCache.wrap(`reports:dashboard-chart:${tenantID}:${period}:${safeOffset}`, 30_000, () =>
+    const data = await ttlCache.wrap(`reports:dashboard-chart:${tenantID}:${period}:${safeOffset}`, 30_000, () =>
       this.computeDashboardChart(tenantID, period, safeOffset),
     );
+    if (this.canSeeProfit(actor)) return data;
+    // R7 profit_view: линия прибыли зануляется для не-держателей. Кэш общий на
+    // тенанта — стрипаем КОПИЮ, не мутируя закэшированный объект (иначе следом
+    // пришедший владелец получил бы обнулённые данные из того же кэша).
+    return {
+      ...data,
+      totalProfit: 0,
+      points: data.points.map((p) => ({ ...p, profit: 0 })),
+    };
   }
 
   private async computeDashboardChart(tenantID: string, period: string, offset: number = 0) {
     let dateFrom: Date;
     let dateTo: Date;
-    const now = new Date();
+    // E-9 — окно графика в МОСКОВСКОМ настенном времени (Europe/Moscow), тем же
+    // паттерном MSK_OFFSET, что getDashboard/getMasterRanking. Границы окна ОБЯЗАНЫ
+    // совпадать с дневными корзинами (GROUP BY (date AT TIME ZONE 'Europe/Moscow')
+    // ::date ниже). Раньше окно строилось в контейнерном (UTC) времени
+    // (new Date(now.getFullYear(), …)), и на границе месяца в ночном окне
+    // 00:00–02:59 МСК крайние корзины промахивались.
+    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
+    const mskNow = new Date(Date.now() + MSK_OFFSET_MS);
+    const mskY = mskNow.getUTCFullYear();
+    const mskM = mskNow.getUTCMonth();
+    const mskD = mskNow.getUTCDate();
+    // UTC-инстант московской настенной полуночи дня (y, m, d); переполнение
+    // дня/месяца/года нормализует Date.UTC.
+    const mskMidnight = (y: number, m: number, d: number) => new Date(Date.UTC(y, m, d) - MSK_OFFSET_MS);
+    // Верхняя ВКЛЮЧИТЕЛЬНАЯ граница = за секунду до следующей МСК-полуночи
+    // (сохраняет `date <= dateTo` из SQL ниже).
+    const mskEndOfDay = (y: number, m: number, d: number) => new Date(mskMidnight(y, m, d + 1).getTime() - 1000);
+    // Год оси (для year-периода) — в МСК-настенном времени.
+    let axisYear = mskY;
 
     switch (period) {
       case 'today': {
-        const base = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset);
-        dateFrom = new Date(base.getFullYear(), base.getMonth(), base.getDate());
-        dateTo = new Date(base.getFullYear(), base.getMonth(), base.getDate(), 23, 59, 59);
+        dateFrom = mskMidnight(mskY, mskM, mskD + offset);
+        dateTo = mskEndOfDay(mskY, mskM, mskD + offset);
         break;
       }
       case 'week': {
-        const dayOfWeek = now.getDay() === 0 ? 7 : now.getDay();
-        const mondayOffset = 1 - dayOfWeek;
-        const baseMonday = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mondayOffset + offset * 7);
-        dateFrom = new Date(baseMonday.getFullYear(), baseMonday.getMonth(), baseMonday.getDate());
-        dateTo = new Date(baseMonday.getFullYear(), baseMonday.getMonth(), baseMonday.getDate() + 6, 23, 59, 59);
+        const dow = mskNow.getUTCDay() === 0 ? 7 : mskNow.getUTCDay();
+        const monday = mskD + (1 - dow) + offset * 7;
+        dateFrom = mskMidnight(mskY, mskM, monday);
+        dateTo = mskEndOfDay(mskY, mskM, monday + 6);
         break;
       }
       case 'month': {
-        const baseMonth = new Date(now.getFullYear(), now.getMonth() + offset, 1);
-        dateFrom = new Date(baseMonth.getFullYear(), baseMonth.getMonth(), 1);
-        dateTo = new Date(baseMonth.getFullYear(), baseMonth.getMonth() + 1, 0, 23, 59, 59);
+        dateFrom = mskMidnight(mskY, mskM + offset, 1);
+        // Верхняя граница = последний день месяца: секунда до 1-го следующего.
+        dateTo = new Date(mskMidnight(mskY, mskM + offset + 1, 1).getTime() - 1000);
         break;
       }
       case 'year': {
-        const baseYear = now.getFullYear() + offset;
-        dateFrom = new Date(baseYear, 0, 1);
-        dateTo = new Date(baseYear, 11, 31, 23, 59, 59);
+        axisYear = mskY + offset;
+        dateFrom = mskMidnight(axisYear, 0, 1);
+        dateTo = new Date(mskMidnight(axisYear + 1, 0, 1).getTime() - 1000);
         break;
       }
       default: {
-        const dow = now.getDay() === 0 ? 7 : now.getDay();
-        const mo = 1 - dow;
-        const bm = new Date(now.getFullYear(), now.getMonth(), now.getDate() + mo + offset * 7);
-        dateFrom = new Date(bm.getFullYear(), bm.getMonth(), bm.getDate());
-        dateTo = new Date(bm.getFullYear(), bm.getMonth(), bm.getDate() + 6, 23, 59, 59);
+        const dow = mskNow.getUTCDay() === 0 ? 7 : mskNow.getUTCDay();
+        const monday = mskD + (1 - dow) + offset * 7;
+        dateFrom = mskMidnight(mskY, mskM, monday);
+        dateTo = mskEndOfDay(mskY, mskM, monday + 6);
       }
     }
 
+    // Гарантия (ITEM-2, зеркально dashboardV2): не выручка; в прибыли — убыток
+    // −(запчасти + выплата мастеру) вместо сохранённого положительного profit.
+    // E-7 — дневные корзины по МОСКОВСКОМУ календарю (Europe/Moscow), единое
+    // бизнес-определение дня с getFinancial/getCashFlow. E-8 — гарантийный
+    // убыток включает товарную комиссию мастера (+ product_salary_total),
+    // синхронно с reports.service (иначе прибыль на дашборде завышена).
     const { rows } = await this.pool.query(
-      `SELECT date::date as day,
-              COALESCE(SUM(total_revenue), 0) as revenue,
-              COALESCE(SUM(profit), 0) as profit,
+      `SELECT (date AT TIME ZONE 'Europe/Moscow')::date as day,
+              COALESCE(SUM(total_revenue) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
+              COALESCE(SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END), 0) as profit,
               COUNT(*) as check_count
        FROM checks
        WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false AND deleted_at IS NULL
-       GROUP BY date::date
+       GROUP BY (date AT TIME ZONE 'Europe/Moscow')::date
        ORDER BY day`,
       [tenantID, dateFrom.toISOString(), dateTo.toISOString()],
     );
@@ -3883,20 +4298,20 @@ export class ChecksService {
 
     if (period === 'today') {
       for (let h = 0; h < 24; h++) {
-        const d = new Date(dateFrom.getFullYear(), dateFrom.getMonth(), dateFrom.getDate(), h);
-        const key = d.toISOString().slice(0, 10);
-        // For hourly, we need to re-query per hour — instead, use the daily total spread across existing data
+        // Час h МСК-дня = dateFrom (МСК-полночь) + h часов, как UTC-инстант —
+        // согласовано с почасовой выборкой EXTRACT(HOUR … AT TIME ZONE 'Europe/Moscow').
+        const d = new Date(dateFrom.getTime() + h * 60 * 60 * 1000);
         points.push({ date: d.toISOString(), revenue: 0, profit: 0, checkCount: 0 });
       }
       // Overlay actual hourly data from a separate query
       const { rows: hourlyRows } = await this.pool.query(
-        `SELECT EXTRACT(HOUR FROM date) as hour,
-                COALESCE(SUM(total_revenue), 0) as revenue,
-                COALESCE(SUM(profit), 0) as profit,
+        `SELECT EXTRACT(HOUR FROM (date AT TIME ZONE 'Europe/Moscow')) as hour,
+                COALESCE(SUM(total_revenue) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
+                COALESCE(SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END), 0) as profit,
                 COUNT(*) as check_count
          FROM checks
          WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false AND deleted_at IS NULL
-         GROUP BY EXTRACT(HOUR FROM date)
+         GROUP BY EXTRACT(HOUR FROM (date AT TIME ZONE 'Europe/Moscow'))
          ORDER BY hour`,
         [tenantID, dateFrom.toISOString(), dateTo.toISOString()],
       );
@@ -3910,8 +4325,9 @@ export class ChecksService {
       }
     } else if (period === 'year') {
       for (let m = 0; m < 12; m++) {
-        const d = new Date(dateFrom.getFullYear(), m, 1);
-        const key = d.toISOString().slice(0, 7); // yyyy-MM
+        // Ключ месяца 'YYYY-MM' в МСК-настенном году (axisYear) — dataMap-ключи
+        // это МСК-даты 'YYYY-MM-DD', поэтому startsWith сходится.
+        const key = `${axisYear}-${String(m + 1).padStart(2, '0')}`; // yyyy-MM
         // Sum all matching days in this month
         let rev = 0,
           prof = 0,
@@ -3924,20 +4340,23 @@ export class ChecksService {
           }
         }
         points.push({
-          date: `${dateFrom.getFullYear()}-${String(m + 1).padStart(2, '0')}-01`,
+          date: `${key}-01`,
           revenue: rev,
           profit: prof,
           checkCount: cc,
         });
       }
     } else {
-      // week / month — fill each day
-      const cursor = new Date(dateFrom);
-      while (cursor <= dateTo) {
-        const key = cursor.toISOString().slice(0, 10);
+      // week / month — заполняем каждый МСК-день. Курсор идёт в МСК-настенном
+      // времени (dateFrom/dateTo — UTC-инстанты МСК-границ): ключ 'YYYY-MM-DD'
+      // совпадает с ключами dataMap (тоже МСК-даты).
+      const wallCursor = new Date(dateFrom.getTime() + MSK_OFFSET_MS);
+      const wallEnd = new Date(dateTo.getTime() + MSK_OFFSET_MS);
+      while (wallCursor <= wallEnd) {
+        const key = wallCursor.toISOString().slice(0, 10);
         const d = dataMap[key] || { revenue: 0, profit: 0, checkCount: 0 };
         points.push({ date: key, ...d });
-        cursor.setDate(cursor.getDate() + 1);
+        wallCursor.setUTCDate(wallCursor.getUTCDate() + 1);
       }
     }
 
@@ -4010,13 +4429,22 @@ export class ChecksService {
   }
 
   private async computeRanking(tenantID: string) {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+    // E-7 — границы дня/месяца в бизнес-таймзоне (Europe/Moscow, UTC+3), единое
+    // определение «сегодня/этот месяц» с остальными дашбордами и «Движением
+    // денег».
+    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
+    const mskNow = new Date(Date.now() + MSK_OFFSET_MS);
+    const mskY = mskNow.getUTCFullYear();
+    const mskM = mskNow.getUTCMonth();
+    const mskD = mskNow.getUTCDate();
+    const todayStart = new Date(Date.UTC(mskY, mskM, mskD) - MSK_OFFSET_MS).toISOString();
+    const monthStart = new Date(Date.UTC(mskY, mskM, 1) - MSK_OFFSET_MS).toISOString();
 
+    // Гарантия (ITEM-2, зеркально dashboardV2): warranty — не выручка мастера;
+    // визит в счётчике чеков остаётся.
     const { rows: todayRows } = await this.pool.query(
       `SELECT ch.master_id, u.full_name as master_name,
-              COALESCE(SUM(ch.total_revenue), 0) as revenue,
+              COALESCE(SUM(ch.total_revenue) FILTER (WHERE ch.payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
               COUNT(*) as check_count
        FROM checks ch JOIN users u ON u.id = ch.master_id
        WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false AND ch.deleted_at IS NULL
@@ -4027,7 +4455,7 @@ export class ChecksService {
 
     const { rows: monthRows } = await this.pool.query(
       `SELECT ch.master_id, u.full_name as master_name,
-              COALESCE(SUM(ch.total_revenue), 0) as revenue,
+              COALESCE(SUM(ch.total_revenue) FILTER (WHERE ch.payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
               COUNT(*) as check_count
        FROM checks ch JOIN users u ON u.id = ch.master_id
        WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false AND ch.deleted_at IS NULL

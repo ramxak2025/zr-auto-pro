@@ -172,12 +172,15 @@ export default function EmployeeDetailScreen() {
   const route = useRoute<RouteProp<RouteParams, 'EmployeeDetail'>>();
   const id = route.params?.id;
   const queryClient = useQueryClient();
-  const { user: viewer } = useAuth();
+  const { user: viewer, hasPermission } = useAuth();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
 
   const isSelf = !!viewer && viewer.id === id;
-  const isOwnerLike = viewer?.role === 'director' || viewer?.role === 'superadmin' || viewer?.role === 'admin';
+  // «Менеджер» = держатель user_management — тот же ключ, которым сервер
+  // гейтит расширенный профиль/документы/увольнение (employees.service,
+  // «права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me).
+  const isOwnerLike = hasPermission('user_management');
 
   // ── Full profile from the new endpoint ───────────────────────────────
   const {

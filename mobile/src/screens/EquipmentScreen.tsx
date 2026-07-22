@@ -60,7 +60,6 @@ import CachedImage from '../components/CachedImage';
 import IosScreenHeader from '../components/IosScreenHeader';
 import ModalBlurBackdrop from '../components/ModalBlurBackdrop';
 import { equipmentApi, uploadsApi } from '../api/services';
-import { UserRole } from '../../../shared/types';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '../theme';
@@ -1641,14 +1640,14 @@ function StorageTab({ canEdit, fabOffsetBottom }: { canEdit: boolean; fabOffsetB
 // ─── Main Equipment screen ─────────────────────────────────────────────────
 export default function EquipmentScreen() {
   const navigation = useNavigation<any>();
-  const { user, hasPermission, isRole } = useAuth();
+  const { user, hasPermission } = useAuth();
   const tabBarHeight = useTabBarHeight();
   const { width: screenWidth } = useWindowDimensions();
   const palette = useColors();
   const [tab, setTab] = useState<Tab>('employees');
   const [showTrash, setShowTrash] = useState(false);
 
-  const canEdit = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('equipment_manage');
+  const canEdit = hasPermission('equipment_manage');
   const isMaster = user?.role === 'master';
 
   // 2-column card width: (screen - left/right padding - gutter) / 2
@@ -1817,10 +1816,10 @@ export default function EquipmentScreen() {
 export function EquipmentEmployeeScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
   const emp = route.params?.emp;
-  const canEdit = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('equipment_manage');
+  const canEdit = hasPermission('equipment_manage');
 
   if (!emp) {
     return (

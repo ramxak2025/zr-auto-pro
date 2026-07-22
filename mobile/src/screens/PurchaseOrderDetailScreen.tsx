@@ -21,7 +21,7 @@
  * Android-safe: ScrollView + навигация на экран приёмки, без iOS-only API.
  */
 import React, { useCallback, useMemo, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import { Alert, View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -37,7 +37,7 @@ import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { UserRole, type PurchaseOrder, type Supplier } from '../../../shared/types';
+import type { PurchaseOrder, Supplier } from '../../../shared/types';
 import { getPoStatusMeta, formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purchaseOrderHelpers';
 
 export default function PurchaseOrderDetailScreen() {
@@ -46,8 +46,10 @@ export default function PurchaseOrderDetailScreen() {
   const queryClient = useQueryClient();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
-  const canWrite = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Заказы поставщикам / приёмка — ключ suppliers_manage (сервер: мутации
+  // purchase-orders → тот же ключ; admin живёт по матрице из /auth/me).
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('suppliers_manage');
 
   const id: string = route.params?.id;
   const seedPo: PurchaseOrder | undefined = route.params?.po;
@@ -93,6 +95,9 @@ export default function PurchaseOrderDetailScreen() {
   );
 
   // ── Mutations ────────────────────────────────────────────────────────────
+  // Ошибки — блокирующий Alert (волна C): раньше был только haptic, и без
+  // связи статус заказа молча не менялся — денежная операция обязана честно
+  // сказать «не сохранено».
   const orderMutation = useMutation({
     mutationFn: () => purchaseOrdersApi.order(id),
     onSuccess: (res) => {
@@ -100,7 +105,10 @@ export default function PurchaseOrderDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['purchase-orders'] });
       applyUpdated(res.data);
     },
-    onError: () => haptic('error'),
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось оформить заказ — нет связи с сервером');
+    },
   });
 
   const cancelMutation = useMutation({
@@ -110,7 +118,10 @@ export default function PurchaseOrderDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['purchase-orders'] });
       applyUpdated(res.data);
     },
-    onError: () => haptic('error'),
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось отменить заказ — нет связи с сервером');
+    },
   });
 
   const busy = orderMutation.isPending || cancelMutation.isPending;

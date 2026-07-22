@@ -41,7 +41,7 @@ import type {
   KnowledgeCategory,
   KnowledgeCourse,
 } from '../types';
-import { UserRole } from '../types';
+
 import { formatDateTime, formatDateShort } from '../../../shared/utils/formatters';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
@@ -96,9 +96,11 @@ const SECTION_TYPE: Record<'knowledge' | 'regulations', KnowledgeArticleType> = 
 };
 
 export default function KnowledgeBasePage() {
-  const { user } = useAuth();
+  const { hasPermission } = useAuth();
   const queryClient = useQueryClient();
-  const isManager = !!user && [UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN].includes(user.role);
+  // Мутации базы знаний — ключ knowledge_manage (backend knowledge/*; волна
+  // Битрикс24). Чтение открыто всем сотрудникам.
+  const isManager = hasPermission('knowledge_manage');
 
   const [section, setSection] = useState<Section>('knowledge');
   const [view, setView] = useState<View>({ mode: 'browse' });

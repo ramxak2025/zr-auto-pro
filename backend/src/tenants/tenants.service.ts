@@ -12,6 +12,7 @@ import { randomUUID } from 'crypto';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
+import { invalidateTenantSubscription } from '../common/interceptors/subscription-guard.interceptor';
 import { AuditService, AuditActor } from './audit.service';
 
 /**
@@ -700,6 +701,10 @@ export class TenantsService {
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
 
+    // Блокировка действует со СЛЕДУЮЩЕГО запроса пользователей тенанта, а не
+    // через TTL кэша статуса подписки (SubscriptionGuardInterceptor, 30с).
+    invalidateTenantSubscription(id);
+
     if (actor) {
       await this.audit.log(actor, 'tenant_suspend', {
         targetType: 'tenant',
@@ -729,6 +734,9 @@ export class TenantsService {
       [id],
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Тенант не найден' });
+
+    // Разблокировка немедленно — владелец оплатил/помилован, ждать TTL нельзя.
+    invalidateTenantSubscription(id);
 
     if (actor) {
       await this.audit.log(actor, 'tenant_unsuspend', {

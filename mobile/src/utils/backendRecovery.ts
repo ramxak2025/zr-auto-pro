@@ -97,11 +97,7 @@ const ROUTE_DETAIL_KEYS: readonly string[] = [
  */
 export function getNetworkRouteSignature(state: NetworkRouteStateLike): string {
   const details = (state.details ?? {}) as Record<string, unknown>;
-  return JSON.stringify([
-    state.isConnected,
-    state.type,
-    ...ROUTE_DETAIL_KEYS.map((key) => details[key] ?? null),
-  ]);
+  return JSON.stringify([state.isConnected, state.type, ...ROUTE_DETAIL_KEYS.map((key) => details[key] ?? null)]);
 }
 
 export interface ApiRouteRecoveryController {
@@ -122,10 +118,29 @@ interface ApiRouteRecoveryDeps {
  * Small state machine behind App.tsx's native listeners. Keeping transition
  * judgment here makes reconnect/VPN/foreground behaviour deterministic and
  * unit-testable without mounting React Native.
+ *
+ * `reselect(true)` — сигнал «маршрут реально сменился»: селектор (axios.ts)
+ * синхронно чистит circuit'ы кольца и серию гистерезиса primary-return, метит
+ * прежнюю активную базу подозрительной (укороченный бюджет мутаций, C-4) и
+ * гонит пробы ПОЛНЫМ кольцом primary-first (C-3). Сбойный сигнал
+ * (`reselect(false)`) ничего из этого не делает — гистерезис против маятника
+ * при операторском троттлинге сохраняется.
+ *
+ * FOREGROUND (C-фикс волны C.1): сам по себе вход в приложение НЕ доказывает
+ * смену маршрута. Форсить reselect(true) на каждом foreground — значит под
+ * операторским троттлингом каждый вход дёргает сессию на полуживой primary
+ * (тот самый маятник, который убирал гистерезис). Поэтому при уходе в фон
+ * запоминается текущая network-signature (последний NetInfo-снапшот —
+ * подписка живёт весь lifetime приложения, см. App.tsx), а на foreground она
+ * сравнивается с актуальной: изменилась → reselect(true); нет → мягкий
+ * reselect(false). Смена сети, чей NetInfo-снапшот доезжает уже ПОСЛЕ
+ * активации, форсится самим onNetworkState — этот путь не менялся.
  */
 export function createApiRouteRecoveryController(deps: ApiRouteRecoveryDeps): ApiRouteRecoveryController {
   let previousRoute: string | null = null;
   let previousAppState = deps.initialAppState;
+  /** Network-signature на момент ухода в фон (null — фона ещё не было / нет baseline). */
+  let backgroundRoute: string | null = null;
 
   const requestReselection = (forceFreshRoute = false) => {
     try {
@@ -146,8 +161,19 @@ export function createApiRouteRecoveryController(deps: ApiRouteRecoveryDeps): Ap
 
   const onAppState = (nextState: string) => {
     const cameToForeground = nextState === 'active' && previousAppState !== 'active';
+    const leftForeground = previousAppState === 'active' && nextState !== 'active';
     previousAppState = nextState;
-    if (cameToForeground) requestReselection(true);
+    if (leftForeground) {
+      // Снимок маршрута в момент ухода (active→inactive/background). Повторные
+      // background-события без active между ними снимок не перетирают.
+      backgroundRoute = previousRoute;
+      return;
+    }
+    if (cameToForeground) {
+      const routeChangedWhileBackgrounded =
+        backgroundRoute !== null && previousRoute !== null && backgroundRoute !== previousRoute;
+      requestReselection(routeChangedWhileBackgrounded);
+    }
   };
 
   // A final HTTP failure is not evidence that the native route changed, so it

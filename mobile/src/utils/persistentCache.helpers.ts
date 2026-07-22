@@ -222,6 +222,46 @@ export const PERSISTED_KEYS = [
   // отрицательный ответ сервера (configured:false / limitMinutes:0)
   // по-прежнему прячет кнопку.
   'voice',
+  // ── Волна C «Связь 2.0» — instant cold-start (2026-07-21) ─────────────
+  // Экраны ниже грузились с нуля на каждый холодный старт (карта разведки
+  // network-ux-map.md, C-7). Все ключи проверены по живым useQuery:
+  // не search-volatile, payload — объект/массив (переживает primitive guard),
+  // пустые списки отсекает empty-collection guard как везде.
+  //
+  // Касса — шаблоны чеков и папки: фиксированные слоты ['check-templates'] /
+  // ['check-template-folders'] (CheckCreateScreen / TemplatesScreen). Открытие
+  // Кассы офлайн больше не показывает пустые шаблоны.
+  'check-templates',
+  'check-template-folders',
+  // Кассовая смена — ['cash-shift', 'current' | 'list' | ('report', shiftId)].
+  // `current` без открытой смены отдаёт null → primitive guard классифицирует
+  // слот как corrupt и GC-ит, открытая смена (объект с shift) персистится.
+  'cash-shift',
+  // Рассрочка — ['installments', 'list', filter] + ['installments', 'client',
+  // clientId] + 'widget' + 'reminder-settings'. Per-client ledger не ограничен
+  // по природе → cap ниже.
+  'installments',
+  // Мотивация — ['motivation', 'promos'] + ['motivation', 'accruals', from, to].
+  'motivation',
+  // Планирование — ['planning', 'fixed-costs' | 'compensation'] (2 слота).
+  'planning',
+  // Лояльность — ['loyalty', 'settings'] (CompanySettings) + ['loyalty',
+  // 'client', clientId] (ClientDetail) и одиночный ['loyalty-settings']
+  // (LoyaltyScreen) — в коде живут ОБА первых сегмента.
+  'loyalty',
+  'loyalty-settings',
+  // Подписка / FeatureGate — единственный слот ['subscription']. FeatureGate
+  // и так fail-open (FeatureGate.tsx); персист убирает «прыжок»
+  // paywall-состояния на холодном старте. {updatedAt: storedAt} гарантирует
+  // refetch на mount — отменённый тариф не живёт дольше первого ответа.
+  'subscription',
+  // Деталки, открываемые из УЖЕ персистентных списков (products /
+  // purchase-orders): ['product', id] / ['purchase-order', id] — тот же
+  // контракт, что 'client' / 'check' (2026-06-18).
+  'product',
+  'purchase-order',
+  // Маркетинг-отчёты — ['marketing-report', from, to] (период-ключ).
+  'marketing-report',
 ] as const;
 
 export type PersistedKey = (typeof PERSISTED_KEYS)[number];
@@ -276,6 +316,23 @@ export const VARIANT_CAPS: Partial<Record<PersistedKey, number>> = {
   'checks-infinite': 2,
   // Записи — exactly two scopes (upcoming / past).
   bookings: 2,
+  // ── Волна C «Связь 2.0» (2026-07-21) ──────────────────────────────────
+  // Id-keyed деталки — 10 последних открытых, по образцу client/check.
+  product: 10,
+  'purchase-order': 10,
+  // Рассрочка: фиксированные слоты (list-фильтры / widget / reminder-settings)
+  // + безграничный ['installments', 'client', clientId] → cap как у id-деталек.
+  installments: 10,
+  // Лояльность: ['loyalty', 'settings'] + per-client ledger — тот же cap.
+  loyalty: 10,
+  // Кассовая смена: current + list + 3 последних Z-отчёта (report, shiftId).
+  'cash-shift': 5,
+  // Мотивация: promos + 3 последних периода accruals.
+  motivation: 4,
+  // Маркетинг-отчёты — период-ключ, как calls / schedule / salary.
+  'marketing-report': 3,
+  // Планирование — ровно два слота (fixed-costs / compensation).
+  planning: 2,
 };
 
 /**

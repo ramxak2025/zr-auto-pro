@@ -18,6 +18,13 @@ import { BulkDeleteDto } from './dto/bulk-delete.dto';
 /** Actor shape (JWT payload subset) needed to decide cost-price visibility. */
 type ProductActor = { role?: string; permissions?: Record<string, boolean> } | undefined;
 
+// Мусор от битых клиентов (' ', 'undefined', 'null') в query.warehouseId раньше
+// уходил в uuid-колонку и падал в pg 22P02 → 500 в Sentry (тот же класс, что
+// захарден в warehouse.service.resolveWarehouseId). Не-UUID трактуем как
+// «склад не указан» → мягкий фолбэк на основной склад.
+const isUuid = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+
 @Injectable()
 export class ProductsService {
   private readonly logger = new Logger('ProductsService');
@@ -122,13 +129,17 @@ export class ProductsService {
     // Default the product list to the "main" warehouse so existing clients
     // (which don't pass a warehouseId yet) keep seeing the same data. The
     // FE can opt-in to other warehouses by setting `warehouseId=...`.
-    // `warehouseId=all` short-circuits the filter entirely.
-    if (query.warehouseId && query.warehouseId !== 'all') {
-      where += ` AND p.warehouse_id = $${idx}`;
-      params.push(query.warehouseId);
-      idx++;
-    } else if (!query.warehouseId) {
-      where += ` AND p.warehouse_id = (SELECT id FROM warehouses WHERE tenant_id = $1 AND kind = 'main' LIMIT 1)`;
+    // `warehouseId=all` short-circuits the filter entirely. Non-UUID garbage
+    // is treated as «склад не указан» (see isUuid above) instead of 22P02→500.
+    const warehouseId = typeof query.warehouseId === 'string' ? query.warehouseId.trim() : '';
+    if (warehouseId !== 'all') {
+      if (isUuid(warehouseId)) {
+        where += ` AND p.warehouse_id = $${idx}`;
+        params.push(warehouseId);
+        idx++;
+      } else {
+        where += ` AND p.warehouse_id = (SELECT id FROM warehouses WHERE tenant_id = $1 AND kind = 'main' LIMIT 1)`;
+      }
     }
 
     const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM products p WHERE ${where}`, params);
@@ -330,6 +341,16 @@ export class ProductsService {
       [id, tenantID],
     );
 
+    // NEW-3: валидируем значение остатка ДО любой записи (то же правило, что в
+    // applyStockPatch), чтобы невалидный минус отклонял ВЕСЬ запрос до того, как
+    // основной UPDATE закоммитит правки полей — сохраняем прежний fail-fast.
+    if (dto.stock !== undefined) {
+      const parsedStock = parseFloat(String(dto.stock));
+      if (!isFinite(parsedStock) || parsedStock < 0) {
+        throw new BadRequestException({ message: 'Остаток не может быть отрицательным' });
+      }
+    }
+
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -356,10 +377,6 @@ export class ProductsService {
     if (dto.sellPrice !== undefined) {
       sets.push(`sell_price=$${idx++}`);
       vals.push(dto.sellPrice);
-    }
-    if (dto.stock !== undefined) {
-      sets.push(`stock=$${idx++}`);
-      vals.push(dto.stock);
     }
     if (dto.minStock !== undefined) {
       sets.push(`min_stock=$${idx++}`);
@@ -395,31 +412,107 @@ export class ProductsService {
       vals.push(dto.barcode ?? null);
     }
 
-    if (sets.length === 0) return this.getById(id, tenantID);
+    // NEW-3 (атомарность): основной UPDATE полей выполняется ПЕРВЫМ. Конкурентное
+    // удаление товара или ошибка ограничения прерывают запрос ЗДЕСЬ — до любой
+    // мутации остатка, — поэтому движение по складу никогда не коммитится против
+    // строки, которую основной UPDATE не смог тронуть. PATCH остатка применяется
+    // только ПОСЛЕ того, как строка подтверждена (или как единственная запись,
+    // если другие поля не менялись).
+    let mainRow: any = null;
+    if (sets.length > 0) {
+      vals.push(id, tenantID);
+      const { rows } = await this.pool.query(
+        `UPDATE products SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+        vals,
+      );
+      if (rows.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
+      mainRow = rows[0];
 
-    vals.push(id, tenantID);
-    const { rows } = await this.pool.query(
-      `UPDATE products SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
-      vals,
-    );
-    if (rows.length === 0) throw new NotFoundException({ message: 'Товар не найден' });
-
-    // Track price changes
-    if (current.length > 0) {
-      const oldCost = parseFloat(current[0].cost_price) || 0;
-      const oldSell = parseFloat(current[0].sell_price) || 0;
-      const newCost = dto.costPrice !== undefined ? parseFloat(dto.costPrice) : oldCost;
-      const newSell = dto.sellPrice !== undefined ? parseFloat(dto.sellPrice) : oldSell;
-      if (oldCost !== newCost || oldSell !== newSell) {
-        await this.pool.query(
-          `INSERT INTO price_history (product_id, cost_price_before, cost_price_after, sell_price_before, sell_price_after, user_id, tenant_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-          [id, oldCost, newCost, oldSell, newSell, userID || null, tenantID],
-        );
+      // Track price changes
+      if (current.length > 0) {
+        const oldCost = parseFloat(current[0].cost_price) || 0;
+        const oldSell = parseFloat(current[0].sell_price) || 0;
+        const newCost = dto.costPrice !== undefined ? parseFloat(dto.costPrice) : oldCost;
+        const newSell = dto.sellPrice !== undefined ? parseFloat(dto.sellPrice) : oldSell;
+        if (oldCost !== newCost || oldSell !== newSell) {
+          await this.pool.query(
+            `INSERT INTO price_history (product_id, cost_price_before, cost_price_after, sell_price_before, sell_price_after, user_id, tenant_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+            [id, oldCost, newCost, oldSell, newSell, userID || null, tenantID],
+          );
+        }
       }
     }
 
-    return this.mapProduct(rows[0]);
+    // stock через PATCH раньше был голым `stock=$n`: без записи в журнал
+    // движений («остаток сам изменился»), без FOR UPDATE (lost update с
+    // конкурентной продажей чека) и без запрета минуса. Абсолютное значение
+    // применяется как inventory-движение в отдельной транзакции — ровно как
+    // POST /products/:id/stock c type='inventory'. Выполняется ПОСЛЕ основного
+    // UPDATE (NEW-3): его FOR UPDATE-транзакция сама бросит NotFound, если товар
+    // исчез конкурентно, и остаток не мутирует на «провалившемся» запросе.
+    if (dto.stock !== undefined) {
+      const appliedStock = await this.applyStockPatch(id, tenantID, dto.stock, userID);
+      // Держим RETURNING-строку свежей: applyStockPatch закоммитил новый остаток
+      // уже после того, как основной UPDATE сделал свой снимок RETURNING.
+      if (mainRow) mainRow.stock = appliedStock;
+    }
+
+    if (mainRow === null) return this.getById(id, tenantID);
+    return this.mapProduct(mainRow);
+  }
+
+  /**
+   * Apply an absolute-stock PATCH as an `inventory` stock movement: FOR UPDATE
+   * lock (serialises with check sales — no lost update), journal row in
+   * stock_movements, minus forbidden. No-op when the value hasn't changed, so
+   * a client echoing the product object back doesn't spam the journal.
+   */
+  private async applyStockPatch(id: string, tenantID: string, stock: unknown, userID?: string): Promise<number> {
+    const newStock = parseFloat(String(stock));
+    if (!isFinite(newStock) || newStock < 0) {
+      throw new BadRequestException({ message: 'Остаток не может быть отрицательным' });
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        'SELECT stock, warehouse_id FROM products WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+        [id, tenantID],
+      );
+      if (rows.length === 0) {
+        throw new NotFoundException({ message: 'Товар не найден' });
+      }
+      const stockBefore = parseFloat(rows[0].stock) || 0;
+      if (stockBefore !== newStock) {
+        await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [newStock, id, tenantID]);
+        await client.query(
+          `INSERT INTO stock_movements (
+             product_id, type, quantity, stock_before, stock_after, reason,
+             tenant_id, user_id, warehouse_id, record_as_expense
+           ) VALUES ($1,'inventory',$2,$3,$4,$5,$6,$7,$8,false)`,
+          [
+            id,
+            newStock,
+            stockBefore,
+            newStock,
+            'Изменение остатка в карточке товара',
+            tenantID,
+            userID || null,
+            rows[0].warehouse_id ?? null,
+          ],
+        );
+      }
+      await client.query('COMMIT');
+      return newStock;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof NotFoundException || err instanceof BadRequestException) throw err;
+      this.logger.error(`Stock patch error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -986,6 +1079,14 @@ export class ProductsService {
     if (!type || quantity === undefined) {
       throw new BadRequestException({ message: 'Тип и количество обязательны' });
     }
+    // Серверный страж поверх DTO (@Min(0)) — как в StockMovementsService.create:
+    // отрицательное qty давало минусовой остаток (inventory), скрытый приход
+    // через income с минусом и отрицательную сумму в expenses (writeoff).
+    // inventory допускает 0 (полное обнуление остатка), остальные типы — только > 0.
+    const qty = parseFloat(String(quantity));
+    if (!isFinite(qty) || qty < 0 || (type !== 'inventory' && qty <= 0)) {
+      throw new BadRequestException({ message: 'Количество должно быть положительным' });
+    }
 
     const client = await this.pool.connect();
     try {
@@ -1007,14 +1108,14 @@ export class ProductsService {
 
       switch (type) {
         case 'income':
-          stockAfter = stockBefore + quantity;
+          stockAfter = stockBefore + qty;
           break;
         case 'expense':
         case 'writeoff':
-          stockAfter = Math.max(stockBefore - quantity, 0);
+          stockAfter = Math.max(stockBefore - qty, 0);
           break;
         case 'inventory':
-          stockAfter = quantity;
+          stockAfter = qty;
           break;
         default:
           await client.query('ROLLBACK');
@@ -1042,7 +1143,7 @@ export class ProductsService {
           );
           categoryId = ins.rows[0].id;
         }
-        const amount = quantity * purchasePrice;
+        const amount = qty * purchasePrice;
         const expIns = await client.query(
           `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id)
            VALUES ($1, $2, $3, now(), $4, $5) RETURNING id`,
@@ -1059,7 +1160,7 @@ export class ProductsService {
         [
           id,
           type,
-          quantity,
+          qty,
           stockBefore,
           stockAfter,
           reason,

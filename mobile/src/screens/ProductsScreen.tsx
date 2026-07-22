@@ -357,22 +357,21 @@ export default function ProductsScreen() {
     }),
     [palette],
   );
-  const { hasPermission, user } = useAuth();
-  const isOwner = user?.role === 'director' || user?.role === 'superadmin';
-  // #60 — Owner-class (superadmin/director/admin) минует все склад-гейты — бэкенд
-  // PermissionsGuard так же байпасит их по строковой роли.
-  const isOwnerClass = user?.role === 'superadmin' || user?.role === 'director' || user?.role === 'admin';
+  const { hasPermission } = useAuth();
   // ROLE-ONLY (консолидация 2026-07): УПРАВЛЕНИЕ складом (себестоимость + создание/
   // редактирование/цены/сток/инвентаризация/операции) — только warehouse_manage.
   // Просмотр товаров + добавление в чек — warehouse_access (гейт входа в раздел).
   // Бэкенд шлёт costPrice:0 и 403 на мутации не-менеджеру → прячем UT/кнопки,
   // чтобы не было «0 ₽ себестоимости» и мёртвых кнопок.
-  const canManageWarehouse = isOwnerClass || hasPermission('warehouse_manage');
+  // «Права как в Битрикс24» (2026-07): admin снят из owner-class — живёт по
+  // эффективным правам матрицы из /auth/me; superadmin/director байпасятся
+  // внутри самого hasPermission.
+  const canManageWarehouse = hasPermission('warehouse_manage');
   // Себестоимость видит только тот, кто управляет складом (manage ⇒ backend
   // отдаёт реальную costPrice; иначе costPrice:0 — показывать нельзя).
   const canSeeCostPrice = canManageWarehouse;
   // #60 — «Удаление на складе». manage ⇒ delete; либо явное warehouse_delete.
-  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
+  const canDeleteWarehouse = hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
 
   const [search, setSearch] = useState('');
   const limit = 500;
@@ -402,9 +401,9 @@ export default function ProductsScreen() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [showOpsModal, setShowOpsModal] = useState(false);
-  // «Массовая корректировка цен» — owner-class bulk sell-price tool. Opened
-  // from the warehouse-ops sheet; the entry itself is gated on isOwnerClass
-  // because the backend endpoint is director/admin/superadmin only.
+  // «Массовая корректировка цен» — bulk sell-price tool. Opened from the
+  // warehouse-ops sheet; the entry is gated on canManageWarehouse because the
+  // backend endpoint is @RequirePermission('warehouse_manage').
   const [showBulkPrice, setShowBulkPrice] = useState(false);
   // Корзина склада — full-screen modal hosted from the warehouse ops modal,
   // rather than a separate "Ещё" tab item, because soft-deleted products are
@@ -852,6 +851,10 @@ export default function ProductsScreen() {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      // Приход/списание/инвентаризация пишут stock_movement → документ в
+      // Журнале (вкладка «Документы склада») должен появиться без ручного
+      // pull-to-refresh.
+      queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
     },
   });
 
@@ -1500,6 +1503,8 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      // Инвентаризация — тоже документы склада в Журнале.
+      queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
     }
 
     if (failed.length === 0) {
@@ -1620,6 +1625,8 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      // Списание — документ склада в Журнале.
+      queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
       setShowWriteoffModal(false);
       Alert.alert(
         '\u0413\u043E\u0442\u043E\u0432\u043E',
@@ -1771,6 +1778,8 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      // Перенос в брак / Б/У — документ склада в Журнале.
+      queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
       const targetLabel = transferTarget === 'defect' ? 'брак' : 'Б/У';
       const productName = transferProduct.name;
       closeTransferDialog();
@@ -1832,6 +1841,8 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['inventory-movements'] });
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      // Корректировка остатка — документ склада в Журнале.
+      queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
       setShowCorrectionModal(false);
       const diff = newQty - correctionProductStock;
       Alert.alert(
@@ -2573,11 +2584,11 @@ export default function ProductsScreen() {
           <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
         </TouchableOpacity>
 
-        {/* Массовая корректировка цен — owner-class (director/admin/superadmin).
-            Скрыта от мастеров, даже если у них есть warehouse_access, потому что
-            бэкенд-эндпоинт разрешён только owner-class. Открывает bottom-sheet с
+        {/* Массовая корректировка цен — только warehouse_manage: бэкенд-эндпоинт
+            POST /products/bulk-adjust-price гейтится тем же ключом. Скрыта от
+            сотрудников с одним лишь warehouse_access. Открывает bottom-sheet с
             обязательным предпросмотром перед применением. */}
-        {isOwnerClass && (
+        {canManageWarehouse && (
           <TouchableOpacity
             style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
             onPress={() => {

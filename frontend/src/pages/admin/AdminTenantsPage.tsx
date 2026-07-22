@@ -1,23 +1,9 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import {
-  Plus,
-  Pencil,
-  Trash2,
-  Building2,
-  Loader2,
-  UserPlus,
-  ChevronDown,
-  Phone,
-  MapPin,
-  Mail,
-  Calendar,
-  StickyNote,
-  Users,
-} from 'lucide-react';
+import { Plus, Trash2, Building2, Loader2, UserPlus, Users, Search, ChevronLeft, ChevronRight } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { format, parseISO } from 'date-fns';
+import { format, parseISO, isPast } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
 import { tenantsApi, plansApi } from '../../api/services';
@@ -25,8 +11,15 @@ import { Tenant, Plan } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import QueryState from '../../components/QueryState';
-import Switch from '../../components/Switch';
 import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
+import { AdminPageHeader, Chip } from '../../components/admin/adminUi';
+
+/*
+ * Список автосервисов: плотная таблица с поиском, фильтрами по статусу/тарифу
+ * и клиентской пагинацией (getAll отдаёт весь список — режем на страницы на
+ * клиенте). Редактор тенанта ЕДИНЫЙ и живёт только на странице «Подробнее»
+ * (AdminTenantDetailPage) — здесь только просмотр, создание и удаление.
+ */
 
 interface TenantFormData {
   name: string;
@@ -35,8 +28,6 @@ interface TenantFormData {
   email: string;
   description: string;
   planId: string;
-  maxUsers: number;
-  isActive: boolean;
   subscriptionEnd: string;
   subscriptionNote: string;
   directorName: string;
@@ -51,14 +42,23 @@ const emptyForm: TenantFormData = {
   email: '',
   description: '',
   planId: '',
-  maxUsers: 5,
-  isActive: true,
   subscriptionEnd: '',
   subscriptionNote: '',
   directorName: '',
   directorPhone: '',
   directorPassword: '',
 };
+
+const PAGE_SIZE = 20;
+
+type StatusFilter = 'all' | 'active' | 'expired' | 'inactive';
+
+const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
+  { key: 'all', label: 'Все' },
+  { key: 'active', label: 'Активные' },
+  { key: 'expired', label: 'Истёкшие' },
+  { key: 'inactive', label: 'Отключённые' },
+];
 
 function formatPhone(raw: string): string {
   let digits = raw.replace(/\D/g, '');
@@ -74,15 +74,23 @@ function formatPhone(raw: string): string {
   return `+${digits.slice(0, 1)} (${digits.slice(1, 4)}) ${digits.slice(4, 7)}-${digits.slice(7, 9)}-${digits.slice(9, 11)}`;
 }
 
+function isTenantExpired(t: Tenant): boolean {
+  return !!t.subscriptionEnd && isPast(parseISO(t.subscriptionEnd));
+}
+
 export default function AdminTenantsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
 
   const [modalOpen, setModalOpen] = useState(false);
-  const [editingTenant, setEditingTenant] = useState<Tenant | null>(null);
   const [form, setForm] = useState<TenantFormData>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Поиск / фильтры / страница
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  const [planFilter, setPlanFilter] = useState('');
+  const [page, setPage] = useState(1);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['tenants'],
@@ -97,10 +105,37 @@ export default function AdminTenantsPage() {
   });
 
   const tenants = data ?? [];
-  const plans = (plansData ?? []).filter((p) => p.isActive);
+  const activePlans = (plansData ?? []).filter((p) => p.isActive);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (data ?? []).filter((t) => {
+      if (q) {
+        const hay = `${t.name} ${t.phone ?? ''} ${t.email ?? ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      if (statusFilter === 'active' && (!t.isActive || isTenantExpired(t))) return false;
+      if (statusFilter === 'expired' && !isTenantExpired(t)) return false;
+      if (statusFilter === 'inactive' && t.isActive) return false;
+      if (planFilter && t.planId !== planFilter) return false;
+      return true;
+    });
+  }, [data, search, statusFilter, planFilter]);
+
+  // Клампим страницу вместо useEffect-сброса: смена фильтра сразу показывает 1-ю.
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const currentPage = Math.min(page, totalPages);
+  const pageItems = filtered.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE);
+
+  const applyFilter =
+    <T,>(setter: (v: T) => void) =>
+    (v: T) => {
+      setter(v);
+      setPage(1);
+    };
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => tenantsApi.create(data),
+    mutationFn: (payload: any) => tenantsApi.create(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['tenants'] });
       queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
@@ -109,19 +144,6 @@ export default function AdminTenantsPage() {
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.message || 'Ошибка создания');
-    },
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: any }) => tenantsApi.update(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['tenants'] });
-      queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
-      toast.success('Автосервис обновлён');
-      closeModal();
-    },
-    onError: (err: any) => {
-      toast.error(err?.response?.data?.message || 'Ошибка обновления');
     },
   });
 
@@ -138,34 +160,12 @@ export default function AdminTenantsPage() {
   });
 
   const openCreate = () => {
-    setEditingTenant(null);
     setForm({ ...emptyForm });
-    setModalOpen(true);
-  };
-
-  const openEdit = (tenant: Tenant) => {
-    setEditingTenant(tenant);
-    setForm({
-      name: tenant.name,
-      phone: tenant.phone || '',
-      address: tenant.address || '',
-      email: tenant.email || '',
-      description: tenant.description || '',
-      planId: tenant.planId || '',
-      maxUsers: tenant.maxUsers,
-      isActive: tenant.isActive,
-      subscriptionEnd: tenant.subscriptionEnd ? tenant.subscriptionEnd.slice(0, 10) : '',
-      subscriptionNote: tenant.subscriptionNote || '',
-      directorName: '',
-      directorPhone: '',
-      directorPassword: '',
-    });
     setModalOpen(true);
   };
 
   const closeModal = () => {
     setModalOpen(false);
-    setEditingTenant(null);
     setForm({ ...emptyForm });
   };
 
@@ -175,64 +175,103 @@ export default function AdminTenantsPage() {
       toast.error('Введите название автосервиса');
       return;
     }
-
-    const isCreating = !editingTenant;
-
-    if (isCreating && !form.directorPhone.trim()) {
+    if (!form.directorPhone.trim()) {
       toast.error('Введите телефон директора');
       return;
     }
-    if (isCreating && !form.directorPassword.trim()) {
+    if (!form.directorPassword.trim()) {
       toast.error('Введите пароль директора');
       return;
     }
 
-    const selectedPlan = plans.find((p) => p.id === form.planId);
-    const payload: any = {
+    // Лимит сотрудников и цена задаются выбранным тарифом (без скрытого поля
+    // maxUsers в форме — раньше оно молча перетиралось тарифом).
+    const selectedPlan = activePlans.find((p) => p.id === form.planId);
+    createMutation.mutate({
       name: form.name,
       phone: form.phone || undefined,
       address: form.address || undefined,
       email: form.email || undefined,
       description: form.description || undefined,
       planId: form.planId || null,
-      maxUsers: selectedPlan ? selectedPlan.maxUsers : Number(form.maxUsers),
+      maxUsers: selectedPlan ? selectedPlan.maxUsers : 5,
       monthlyPrice: selectedPlan ? selectedPlan.monthlyPrice : 0,
-      isActive: form.isActive,
+      isActive: true,
       subscriptionEnd: form.subscriptionEnd || null,
       subscriptionNote: form.subscriptionNote || null,
-    };
-
-    if (isCreating) {
-      payload.directorName = form.directorName || undefined;
-      payload.directorPhone = form.directorPhone;
-      payload.directorPassword = form.directorPassword;
-    }
-
-    if (editingTenant) {
-      updateMutation.mutate({ id: editingTenant.id, data: payload });
-    } else {
-      createMutation.mutate(payload);
-    }
+      directorName: form.directorName || undefined,
+      directorPhone: form.directorPhone,
+      directorPassword: form.directorPassword,
+    });
   };
 
-  const isSaving = createMutation.isPending || updateMutation.isPending;
+  const isSaving = createMutation.isPending;
 
-  const toggleExpand = (id: string) => {
-    setExpandedId((prev) => (prev === id ? null : id));
-  };
+  const renderStatus = (tenant: Tenant) => (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {tenant.isActive ? <span className="badge-green">Активна</span> : <span className="badge-red">Отключена</span>}
+      {isTenantExpired(tenant) && tenant.isActive && <span className="badge-yellow">Истекла</span>}
+    </div>
+  );
 
   return (
     <div>
-      {/* Header */}
-      <div className="page-header">
-        <h1 className="page-title">Автосервисы</h1>
-        <button onClick={openCreate} className="btn-primary">
-          <Plus className="w-4 h-4" />
-          Новый автосервис
-        </button>
+      <AdminPageHeader
+        title="Автосервисы"
+        subtitle={`Всего: ${tenants.length}`}
+        actions={
+          <button onClick={openCreate} className="btn-primary">
+            <Plus className="w-4 h-4" />
+            Новый автосервис
+          </button>
+        }
+      />
+
+      {/* Toolbar: поиск + фильтры */}
+      <div className="mb-4 space-y-3">
+        <div className="relative max-w-md">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" />
+          <input
+            type="search"
+            className="input pl-9"
+            value={search}
+            onChange={(e) => applyFilter<string>(setSearch)(e.target.value)}
+            placeholder="Поиск: название, телефон, email"
+          />
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {STATUS_FILTERS.map((f) => (
+            <Chip
+              key={f.key}
+              active={statusFilter === f.key}
+              onClick={() => applyFilter<StatusFilter>(setStatusFilter)(f.key)}
+            >
+              {f.label}
+            </Chip>
+          ))}
+          {(plansData ?? []).length > 0 && (
+            <select
+              className="input w-auto py-1.5 text-sm"
+              value={planFilter}
+              onChange={(e) => applyFilter<string>(setPlanFilter)(e.target.value)}
+              aria-label="Фильтр по тарифу"
+            >
+              <option value="">Все тарифы</option>
+              {(plansData ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
+          {filtered.length !== tenants.length && (
+            <span className="text-sm text-gray-500">
+              Найдено: <span className="font-semibold tabular-nums">{filtered.length}</span>
+            </span>
+          )}
+        </div>
       </div>
 
-      {/* Accordion Cards */}
       <QueryState
         isLoading={isLoading}
         isError={isError}
@@ -248,148 +287,189 @@ export default function AdminTenantsPage() {
         }}
         minHeight="min-h-[40vh]"
       >
-        <div className="space-y-3">
-          {tenants.map((tenant) => {
-            const isExpanded = expandedId === tenant.id;
-            const userCount = tenant.userCount ?? tenant.users?.length ?? 0;
-
-            return (
-              <div key={tenant.id} className="bg-white rounded-xl border border-gray-200 overflow-hidden shadow-sm">
-                {/* Collapsed header - always visible */}
-                <button
-                  type="button"
-                  onClick={() => toggleExpand(tenant.id)}
-                  className="w-full flex items-center justify-between px-4 py-3.5 text-left hover:bg-gray-50 transition-colors"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <div className="flex-shrink-0 w-9 h-9 bg-primary-50 rounded-lg flex items-center justify-center">
-                      <Building2 className="w-4.5 h-4.5 text-primary-600" />
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-semibold text-gray-900 truncate">{tenant.name}</div>
-                      <div className="flex items-center gap-2 mt-0.5">
-                        {tenant.isActive ? (
-                          <span className="badge-green text-xs">Активна</span>
-                        ) : (
-                          <span className="badge-red text-xs">Неактивна</span>
-                        )}
-                        {tenant.plan?.name && (
-                          <span className="text-xs text-primary-600 font-medium">{tenant.plan.name}</span>
-                        )}
-                        <span className="flex items-center gap-1 text-xs text-gray-500 tabular-nums">
-                          <Users className="w-3 h-3" />
-                          {userCount} / {tenant.maxUsers}
-                        </span>
-                        <SubscriptionPeriodBadge
-                          kind={tenant.currentPeriodKind}
-                          until={tenant.subscriptionEnd}
-                          size="sm"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                  <ChevronDown
-                    className={`w-5 h-5 text-gray-400 flex-shrink-0 transition-transform duration-200 ${
-                      isExpanded ? 'rotate-180' : ''
-                    }`}
-                  />
-                </button>
-
-                {/* Expanded details */}
-                {isExpanded && (
-                  <div className="border-t border-gray-100 px-4 py-3 space-y-2.5 bg-gray-50/50">
-                    {/* Phone */}
-                    <div className="flex items-start gap-2.5 text-sm">
-                      <Phone className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <div className="text-gray-500 text-xs">Телефон</div>
-                        <div className="text-gray-800">{tenant.phone || '—'}</div>
-                      </div>
-                    </div>
-
-                    {/* Address */}
-                    <div className="flex items-start gap-2.5 text-sm">
-                      <MapPin className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <div className="text-gray-500 text-xs">Адрес</div>
-                        <div className="text-gray-800">{tenant.address || '—'}</div>
-                      </div>
-                    </div>
-
-                    {/* Email */}
-                    <div className="flex items-start gap-2.5 text-sm">
-                      <Mail className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <div className="text-gray-500 text-xs">Email</div>
-                        <div className="text-gray-800">{tenant.email || '—'}</div>
-                      </div>
-                    </div>
-
-                    {/* Subscription End */}
-                    <div className="flex items-start gap-2.5 text-sm">
-                      <Calendar className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                      <div>
-                        <div className="text-gray-500 text-xs">Подписка до</div>
-                        <div className="text-gray-800">
-                          {tenant.subscriptionEnd
-                            ? format(parseISO(tenant.subscriptionEnd), 'd MMM yyyy', { locale: ru })
-                            : '—'}
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Subscription Note */}
-                    {tenant.subscriptionNote && (
-                      <div className="flex items-start gap-2.5 text-sm">
-                        <StickyNote className="w-4 h-4 text-gray-400 mt-0.5 flex-shrink-0" />
-                        <div>
-                          <div className="text-gray-500 text-xs">Примечание</div>
-                          <div className="text-gray-800">{tenant.subscriptionNote}</div>
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Action buttons */}
-                    <div className="flex items-center gap-2 pt-2.5 border-t border-gray-200">
-                      <button
+        {filtered.length === 0 ? (
+          <div className="card flex flex-col items-center justify-center gap-2 py-12 text-center">
+            <Search className="h-8 w-8 text-gray-300" />
+            <p className="text-sm text-gray-500">Ничего не найдено — измените поиск или фильтры.</p>
+          </div>
+        ) : (
+          <>
+            {/* Desktop: плотная таблица */}
+            <div className="table-container hidden md:block">
+              <table className="table">
+                <thead>
+                  <tr>
+                    <th>Автосервис</th>
+                    <th>Статус</th>
+                    <th>Тариф</th>
+                    <th>Сотрудники</th>
+                    <th>Подписка</th>
+                    <th className="w-24 text-right">Действия</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {pageItems.map((tenant) => {
+                    const userCount = tenant.userCount ?? tenant.users?.length ?? 0;
+                    return (
+                      <tr
+                        key={tenant.id}
                         onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
-                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-primary-700 bg-primary-50 hover:bg-primary-100 rounded-lg transition-colors"
+                        className="cursor-pointer"
                       >
-                        <Building2 className="w-4 h-4" />
-                        Подробнее
-                      </button>
-                      <button
-                        onClick={() => openEdit(tenant)}
-                        className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-200 hover:bg-gray-100 rounded-lg transition-colors"
-                        title="Редактировать"
-                      >
-                        <Pencil className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => setDeleteId(tenant.id)}
-                        className="flex items-center justify-center gap-1.5 px-3 py-2 text-sm font-medium text-red-600 bg-white border border-gray-200 hover:bg-red-50 hover:border-red-200 rounded-lg transition-colors"
-                        title="Удалить"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                        <td>
+                          <div className="flex items-center gap-3">
+                            <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-primary-50">
+                              <Building2 className="h-4 w-4 text-primary-600" />
+                            </div>
+                            <div className="min-w-0">
+                              <p className="truncate font-medium text-gray-900">{tenant.name}</p>
+                              <p className="truncate text-xs text-gray-500">{tenant.phone || tenant.email || '—'}</p>
+                            </div>
+                          </div>
+                        </td>
+                        <td>{renderStatus(tenant)}</td>
+                        <td>
+                          {tenant.plan?.name ? (
+                            <div>
+                              <p className="text-gray-900">{tenant.plan.name}</p>
+                              <p className="text-xs tabular-nums text-gray-500">
+                                {tenant.monthlyPrice.toLocaleString('ru-RU')} ₽/мес
+                              </p>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">Не назначен</span>
+                          )}
+                        </td>
+                        <td>
+                          <span className="inline-flex items-center gap-1.5 tabular-nums text-gray-700">
+                            <Users className="h-3.5 w-3.5 text-gray-400" />
+                            {userCount} / {tenant.maxUsers}
+                          </span>
+                        </td>
+                        <td>
+                          <div className="flex flex-col gap-1">
+                            {tenant.subscriptionEnd ? (
+                              <span
+                                className={`tabular-nums ${
+                                  isTenantExpired(tenant) ? 'font-medium text-red-600' : 'text-gray-700'
+                                }`}
+                              >
+                                до {format(parseISO(tenant.subscriptionEnd), 'd MMM yyyy', { locale: ru })}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                            <SubscriptionPeriodBadge
+                              kind={tenant.currentPeriodKind}
+                              until={tenant.subscriptionEnd}
+                              size="sm"
+                            />
+                          </div>
+                        </td>
+                        <td onClick={(e) => e.stopPropagation()}>
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
+                              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-gray-100 hover:text-primary-600"
+                              title="Подробнее"
+                            >
+                              <ChevronRight className="h-4 w-4" />
+                            </button>
+                            <button
+                              onClick={() => setDeleteId(tenant.id)}
+                              className="rounded-lg p-1.5 text-gray-400 transition-colors hover:bg-red-50 hover:text-red-600"
+                              title="Удалить"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile: карточки */}
+            <div className="space-y-2.5 md:hidden">
+              {pageItems.map((tenant) => {
+                const userCount = tenant.userCount ?? tenant.users?.length ?? 0;
+                return (
+                  <button
+                    key={tenant.id}
+                    type="button"
+                    onClick={() => navigate(`/admin/tenants/${tenant.id}`)}
+                    className="card w-full p-4 text-left"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex min-w-0 items-center gap-3">
+                        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-primary-50">
+                          <Building2 className="h-4 w-4 text-primary-600" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold text-gray-900">{tenant.name}</p>
+                          <p className="truncate text-xs text-gray-500">
+                            {tenant.plan?.name || 'Тариф не назначен'} ·{' '}
+                            <span className="tabular-nums">
+                              {userCount}/{tenant.maxUsers}
+                            </span>{' '}
+                            польз.
+                          </p>
+                        </div>
+                      </div>
+                      <ChevronRight className="h-5 w-5 flex-shrink-0 text-gray-400" />
                     </div>
-                  </div>
-                )}
+                    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+                      {renderStatus(tenant)}
+                      <SubscriptionPeriodBadge
+                        kind={tenant.currentPeriodKind}
+                        until={tenant.subscriptionEnd}
+                        size="sm"
+                      />
+                    </div>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Пагинация */}
+            {totalPages > 1 && (
+              <div className="mt-4 flex items-center justify-between gap-3">
+                <p className="text-sm text-gray-500">
+                  Стр. <span className="tabular-nums">{currentPage}</span> из{' '}
+                  <span className="tabular-nums">{totalPages}</span> ·{' '}
+                  <span className="tabular-nums">{filtered.length}</span> автосервисов
+                </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setPage(currentPage - 1)}
+                    disabled={currentPage <= 1}
+                    className="btn-secondary btn-sm"
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                    Назад
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPage(currentPage + 1)}
+                    disabled={currentPage >= totalPages}
+                    className="btn-secondary btn-sm"
+                  >
+                    Вперёд
+                    <ChevronRight className="h-4 w-4" />
+                  </button>
+                </div>
               </div>
-            );
-          })}
-        </div>
+            )}
+          </>
+        )}
       </QueryState>
 
-      {/* Create / Edit Modal */}
-      <Modal
-        isOpen={modalOpen}
-        onClose={closeModal}
-        title={editingTenant ? 'Редактировать автосервис' : 'Новый автосервис'}
-        size="lg"
-      >
+      {/* Create Modal — редактирование существующего тенанта только в «Подробнее» */}
+      <Modal isOpen={modalOpen} onClose={closeModal} title="Новый автосервис" size="lg">
         <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Name */}
           <div>
             <label className="label">Название</label>
             <input
@@ -402,19 +482,29 @@ export default function AdminTenantsPage() {
             />
           </div>
 
-          {/* Phone */}
-          <div>
-            <label className="label">Телефон автосервиса</label>
-            <input
-              type="tel"
-              className="input"
-              value={form.phone}
-              onChange={(e) => setForm({ ...form, phone: e.target.value })}
-              placeholder="+7 (XXX) XXX-XX-XX"
-            />
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label">Телефон автосервиса</label>
+              <input
+                type="tel"
+                className="input"
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                placeholder="+7 (XXX) XXX-XX-XX"
+              />
+            </div>
+            <div>
+              <label className="label">Email</label>
+              <input
+                type="email"
+                className="input"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                placeholder="info@example.com"
+              />
+            </div>
           </div>
 
-          {/* Address */}
           <div>
             <label className="label">Адрес</label>
             <input
@@ -426,19 +516,6 @@ export default function AdminTenantsPage() {
             />
           </div>
 
-          {/* Email */}
-          <div>
-            <label className="label">Email</label>
-            <input
-              type="email"
-              className="input"
-              value={form.email}
-              onChange={(e) => setForm({ ...form, email: e.target.value })}
-              placeholder="info@example.com"
-            />
-          </div>
-
-          {/* Description */}
           <div>
             <label className="label">Описание</label>
             <textarea
@@ -450,67 +527,65 @@ export default function AdminTenantsPage() {
             />
           </div>
 
-          {/* Director section — only for new tenants */}
-          {!editingTenant && (
-            <div className="bg-primary-50 rounded-xl p-4 space-y-3 border border-primary-100">
-              <div className="flex items-center gap-2 text-primary-700 font-medium text-sm">
-                <UserPlus className="w-4 h-4" />
-                Директор (владелец автосервиса)
-              </div>
-
-              <div>
-                <label className="label">ФИО директора</label>
-                <input
-                  type="text"
-                  className="input"
-                  value={form.directorName}
-                  onChange={(e) => setForm({ ...form, directorName: e.target.value })}
-                  placeholder="Иванов Иван Иванович"
-                />
-              </div>
-
-              <div>
-                <label className="label">Телефон директора (для входа) *</label>
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  className="input"
-                  value={form.directorPhone}
-                  onChange={(e) => {
-                    const digits = e.target.value.replace(/\D/g, '');
-                    setForm({ ...form, directorPhone: formatPhone(digits) });
-                  }}
-                  placeholder="+7 (XXX) XXX-XX-XX"
-                  required
-                />
-              </div>
-
-              <div>
-                <label className="label">Пароль директора *</label>
-                <input
-                  type="text"
-                  className="input"
-                  value={form.directorPassword}
-                  onChange={(e) => setForm({ ...form, directorPassword: e.target.value })}
-                  placeholder="Минимум 4 символа"
-                  required
-                />
-              </div>
+          {/* Директор — владелец нового автосервиса */}
+          <div className="space-y-3 rounded-xl border border-primary-100 bg-primary-50 p-4">
+            <div className="flex items-center gap-2 text-sm font-medium text-primary-700">
+              <UserPlus className="h-4 w-4" />
+              Директор (владелец автосервиса)
             </div>
-          )}
 
-          {/* Tariff / Plan selection */}
+            <div>
+              <label className="label">ФИО директора</label>
+              <input
+                type="text"
+                className="input"
+                value={form.directorName}
+                onChange={(e) => setForm({ ...form, directorName: e.target.value })}
+                placeholder="Иванов Иван Иванович"
+              />
+            </div>
+
+            <div>
+              <label className="label">Телефон директора (для входа) *</label>
+              <input
+                type="tel"
+                inputMode="numeric"
+                className="input"
+                value={form.directorPhone}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, '');
+                  setForm({ ...form, directorPhone: formatPhone(digits) });
+                }}
+                placeholder="+7 (XXX) XXX-XX-XX"
+                required
+              />
+            </div>
+
+            <div>
+              <label className="label">Пароль директора *</label>
+              <input
+                type="text"
+                className="input"
+                value={form.directorPassword}
+                onChange={(e) => setForm({ ...form, directorPassword: e.target.value })}
+                placeholder="Минимум 4 символа"
+                required
+              />
+            </div>
+          </div>
+
+          {/* Тариф — задаёт лимит сотрудников и цену */}
           <div>
             <label className="label">Тариф</label>
-            {plans.length > 0 ? (
+            {activePlans.length > 0 ? (
               <div className="space-y-2">
-                {plans.map((plan) => {
+                {activePlans.map((plan) => {
                   const isSelected = form.planId === plan.id;
                   return (
                     <button
                       key={plan.id}
                       type="button"
-                      onClick={() => setForm({ ...form, planId: plan.id, maxUsers: plan.maxUsers })}
+                      onClick={() => setForm({ ...form, planId: isSelected ? '' : plan.id })}
                       className={`w-full flex items-center justify-between p-3 rounded-xl border-2 text-left transition-all ${
                         isSelected
                           ? 'border-primary-500 bg-primary-50'
@@ -534,6 +609,7 @@ export default function AdminTenantsPage() {
                     </button>
                   );
                 })}
+                <p className="text-xs text-gray-500">Лимит сотрудников и стоимость берутся из выбранного тарифа.</p>
               </div>
             ) : (
               <p className="text-sm text-gray-500">
@@ -542,36 +618,28 @@ export default function AdminTenantsPage() {
             )}
           </div>
 
-          {/* Active Toggle */}
-          <div className="flex items-center gap-3">
-            <Switch checked={form.isActive} onChange={(v) => setForm({ ...form, isActive: v })} label="Активна" />
-            <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активна' : 'Неактивна'}</span>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="label">Подписка до</label>
+              <input
+                type="date"
+                className="input"
+                value={form.subscriptionEnd}
+                onChange={(e) => setForm({ ...form, subscriptionEnd: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="label">Примечание к подписке</label>
+              <input
+                type="text"
+                className="input"
+                value={form.subscriptionNote}
+                onChange={(e) => setForm({ ...form, subscriptionNote: e.target.value })}
+                placeholder="Например: Оплачено до марта"
+              />
+            </div>
           </div>
 
-          {/* Subscription End */}
-          <div>
-            <label className="label">Подписка до</label>
-            <input
-              type="date"
-              className="input"
-              value={form.subscriptionEnd}
-              onChange={(e) => setForm({ ...form, subscriptionEnd: e.target.value })}
-            />
-          </div>
-
-          {/* Subscription Note */}
-          <div>
-            <label className="label">Примечание к подписке</label>
-            <input
-              type="text"
-              className="input"
-              value={form.subscriptionNote}
-              onChange={(e) => setForm({ ...form, subscriptionNote: e.target.value })}
-              placeholder="Например: Оплачено до марта"
-            />
-          </div>
-
-          {/* Actions */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
             <button type="button" onClick={closeModal} className="btn-secondary">
               Отмена
@@ -582,8 +650,6 @@ export default function AdminTenantsPage() {
                   <Loader2 className="w-4 h-4 animate-spin" />
                   Сохранение...
                 </>
-              ) : editingTenant ? (
-                'Сохранить'
               ) : (
                 'Создать'
               )}

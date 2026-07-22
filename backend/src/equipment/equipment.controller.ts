@@ -1,7 +1,7 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { EquipmentService } from './equipment.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
@@ -133,8 +133,11 @@ export class EquipmentController {
     return this.service.returnToStorage(id, user.tenantID);
   }
 
-  // Полное удаление — строже: только director/superadmin (не admin), сохраняем.
-  @Roles('director', 'superadmin')
+  // Полное удаление — строже: 'equipment_permanent_delete'
+  // (equipment.permanentDelete, миграция 136). Owner-only ячейка: сид
+  // «Администратора» false (сегодня @Roles(d,sa) БЕЗ admin — 1:1);
+  // director/superadmin обходят через PermissionsGuard.
+  @RequirePermission('equipment_permanent_delete')
   @Delete(':id')
   permanentDelete(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.service.permanentDelete(id, user.tenantID);

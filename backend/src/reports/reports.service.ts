@@ -35,6 +35,13 @@ export interface MarketingTrendPoint {
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
+// Бизнес-таймзона продукта (UTC+3). Сервер и Postgres живут в UTC, но владелец
+// считает кассу по МОСКОВСКОМУ календарному дню: чек, пробитый 00:00–03:00 МСК,
+// обязан попадать в «сегодня», а не во «вчера». Все дневные группировки и границы
+// периодов в отчётах режутся полуинтервалом [from 00:00 МСК, to+1 00:00 МСК) —
+// синхронно с checks.service.ts / schedule.service.ts (AT TIME ZONE 'Europe/Moscow').
+const BUSINESS_TZ = 'Europe/Moscow';
+
 @Injectable()
 export class ReportsService {
   constructor(
@@ -75,20 +82,27 @@ export class ReportsService {
     // (payment_method='warranty') ИСКЛЮЧАЮТСЯ из revenue / productCost /
     // salaries (FILTER … IS DISTINCT FROM 'warranty' — NULL считается
     // не-гарантией), а вместо них учитывается ОТДЕЛЬНЫЙ убыток warrantyLoss =
-    // Σ(product_cost_total + service_salary_total) по гарантийным чекам
-    // (закупка запчастей + выплата мастеру за работу). netProfit уменьшается
-    // ровно на этот убыток. Чистый вклад гарантийного чека в netProfit =
-    // −(запчасти+зарплата), выручка = 0. Полностью derived из колонок checks —
-    // ничего не материализуем, двойного счёта с «Расходами» нет (см. expenses).
+    // Σ(product_cost_total + service_salary_total + product_salary_total) по
+    // гарантийным чекам (закупка запчастей + выплата мастеру за работу + товарная
+    // комиссия мастера: salary.service начисляет product_salary_total и по
+    // гарантии, поэтому без него netProfit был бы завышен — money-audit C2).
+    // netProfit уменьшается ровно на этот убыток. Чистый вклад гарантийного
+    // чека в netProfit = −(запчасти+зарплата), выручка = 0. Полностью derived
+    // из колонок checks — ничего не материализуем, двойного счёта с
+    // «Расходами» нет (см. expenses).
+    // Границы периода — московский полуинтервал [from, to+1) (BUSINESS_TZ).
     const { rows } = await this.pool.query(
       `SELECT
          COALESCE(SUM(total_revenue) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
          COALESCE(SUM(product_cost_total) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as product_cost,
          COALESCE(SUM(service_salary_total + COALESCE(product_salary_total, 0)) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as salaries,
-         COALESCE(SUM(product_cost_total + service_salary_total) FILTER (WHERE payment_method = 'warranty'), 0) as warranty_loss,
+         COALESCE(SUM(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) FILTER (WHERE payment_method = 'warranty'), 0) as warranty_loss,
          COUNT(*) as check_count
        FROM checks
-       WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false
+       WHERE tenant_id = $1
+         AND date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND is_deferred = false
          AND deleted_at IS NULL`,
       [tenantID, dateFrom, dateTo],
     );
@@ -111,7 +125,9 @@ export class ReportsService {
       `SELECT COALESCE(SUM(e.amount), 0) as total
          FROM expenses e
          LEFT JOIN expense_categories ec ON ec.id = e.category_id
-        WHERE e.tenant_id = $1 AND e.date >= $2 AND e.date <= ($3::date + 1)::timestamptz
+        WHERE e.tenant_id = $1
+          AND e.date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+          AND e.date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
           AND COALESCE(e.approval_status, 'approved') = 'approved'
           AND COALESCE(ec.name, '') <> 'Зарплата'`,
       [tenantID, dateFrom, dateTo],
@@ -167,8 +183,8 @@ export class ReportsService {
        FROM stock_movements sm
        JOIN products p ON p.id = sm.product_id
        WHERE sm.tenant_id = $1
-         AND sm.created_at >= $2
-         AND sm.created_at <= ($3::date + 1)::timestamptz
+         AND sm.created_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND sm.created_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
          AND sm.type IN ('defect_transfer','writeoff','defect_return_to_supplier')`,
       [tenantID, dateFrom, dateTo],
     );
@@ -307,41 +323,85 @@ export class ReportsService {
           installmentPaid: 0,
           installmentPaidCash: 0,
           installmentPaidCard: 0,
+          received: 0,
+          refunds: 0,
+          unallocated: 0,
+          supplierPayments: 0,
+          expensesOut: 0,
+          netCash: 0,
         },
       };
     }
 
     const params: any[] = [tenantID, dateFrom, dateTo];
     let masterFilter = '';
+    let refundMasterFilter = '';
     if (masterId) {
       params.push(masterId);
-      masterFilter = ` AND master_id = $${params.length}`;
+      const mIdx = params.length;
+      if (canViewAll) {
+        // Явный фильтр владельца «по сотруднику» — по главному мастеру чека,
+        // тем же предикатом, что journal-фильтр ?masterId (checks.getAll).
+        masterFilter = ` AND master_id = $${mIdx}`;
+        refundMasterFilter = ` AND ch.master_id = $${mIdx}`;
+      } else {
+        // Охват 'own' (мастер видит только свою кассу): предикат тот же, что у
+        // ЕГО журнала (checks.getAll для restricted-мастера) — главный мастер
+        // ИЛИ исполнитель строки. Иначе раскрытый список дня (журнальное
+        // правило) был шире суммы дня и цифры не сходились (cashflow M3).
+        masterFilter = ` AND (master_id = $${mIdx} OR EXISTS (
+          SELECT 1 FROM check_service_lines sl
+           WHERE sl.check_id = checks.id AND sl.master_id = $${mIdx}
+        ))`;
+        refundMasterFilter = ` AND (ch.master_id = $${mIdx} OR EXISTS (
+          SELECT 1 FROM check_service_lines sl
+           WHERE sl.check_id = ch.id AND sl.master_id = $${mIdx}
+        ))`;
+      }
     }
 
     // ITEM 2 — гарантия ИСКЛЮЧЕНА из оборота (total): работа по гарантии денег
     // в кассу не приносит. total теперь = нал + карта + долг по рассрочке
     // (гарантийные чеки имеют cash=card=0 и в total НЕ входят). Новое тождество:
-    // cash + card + installmentDebt = total.
+    // cash + card + installmentDebt (+ unallocated) = total.
     //   • warranty (справочно, для совместимости) — «отпускная» стоимость
     //     гарантийных работ = Σ total_revenue по гарантии (сколько было бы
     //     выручки, если бы не гарантия). НЕ входит в total.
-    //   • warrantyLoss (НОВОЕ) — реальный УБЫТОК по гарантии = Σ(product_cost_total
-    //     + service_salary_total): закупка запчастей + выплата мастеру за работу.
-    //     Показывается как затрата в «Движении денег». Derived из checks, в
-    //     таблицу расходов не пишется → двойного счёта нет.
+    //   • warrantyLoss — реальный УБЫТОК по гарантии = Σ(product_cost_total
+    //     + service_salary_total + product_salary_total): запчасти + выплата
+    //     мастеру за работу + его товарная комиссия (money-audit C2 — она
+    //     начисляется и по гарантии). Показывается как затрата в «Движении
+    //     денег». Derived из checks, в таблицу расходов не пишется → двойного
+    //     счёта нет.
+    //   • unallocated (НОВОЕ) — остаток «Итого», не разнесённый по нал/карта/
+    //     долг (битые ноги легаси cash_card-чеков, которые миграция 118
+    //     сознательно не чинила). С ним тождество сходится АРИФМЕТИЧЕСКИ:
+    //     cash + card + installmentDebt + unallocated = total. 0 на чистых данных.
+    // День = МОСКОВСКИЙ календарный день (BUSINESS_TZ), границы — полуинтервал
+    // [from 00:00 МСК, to+1 00:00 МСК): ночные чеки 00:00–03:00 МСК больше не
+    // падают во «вчера», а чек, датированный dateTo+1 (веб пишет голую дату =
+    // ровно полночь), в период НЕ попадает. День отдаётся строкой 'YYYY-MM-DD'
+    // (to_char), чтобы pg-драйвер не превращал DATE в JS Date с TZ-сдвигом.
     const { rows } = await this.pool.query(
-      `SELECT date::date as day,
+      `SELECT to_char((date AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
               COALESCE(SUM(cash_amount), 0) as cash,
               COALESCE(SUM(card_amount), 0) as card,
               COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN total_revenue ELSE 0 END), 0) as warranty,
-              COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN product_cost_total + service_salary_total ELSE 0 END), 0) as warranty_loss,
+              COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN product_cost_total + service_salary_total + COALESCE(product_salary_total, 0) ELSE 0 END), 0) as warranty_loss,
               COALESCE(SUM(CASE WHEN payment_method = 'installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) ELSE 0 END), 0) as installment_debt,
-              COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0) as total
+              COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0) as total,
+              COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0)
+                - COALESCE(SUM(cash_amount), 0)
+                - COALESCE(SUM(card_amount), 0)
+                - COALESCE(SUM(CASE WHEN payment_method = 'installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) ELSE 0 END), 0) as unallocated
        FROM checks
-       WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz AND is_deferred = false
+       WHERE tenant_id = $1
+         AND date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND is_deferred = false
          AND deleted_at IS NULL${masterFilter}
-       GROUP BY date::date
-       ORDER BY day`,
+       GROUP BY 1
+       ORDER BY 1`,
       params,
     );
 
@@ -369,16 +429,39 @@ export class ReportsService {
     // paid_cash (строки до миграции считаются налом — решение владельца).
     // paid = paid_cash + paid_card — поле остаётся суммой для совместимости.
     const { rows: paidRows } = await this.pool.query(
-      `SELECT p.paid_at::date as day,
+      `SELECT to_char((p.paid_at AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
               COALESCE(SUM(p.amount), 0) as paid,
               COALESCE(SUM(CASE WHEN p.payment_method = 'card' THEN p.amount ELSE 0 END), 0) as paid_card,
               COALESCE(SUM(CASE WHEN COALESCE(p.payment_method, 'cash') <> 'card' THEN p.amount ELSE 0 END), 0) as paid_cash
        FROM installment_payments p
        JOIN installment_plans pl ON pl.id = p.plan_id AND pl.tenant_id = $1
        ${masterId ? 'LEFT JOIN checks ch ON ch.id = pl.check_id AND ch.deleted_at IS NULL' : ''}
-       WHERE p.tenant_id = $1 AND p.paid_at >= $2 AND p.paid_at < ($3::date + 1)::timestamptz${paidMasterFilter}
-       GROUP BY p.paid_at::date
-       ORDER BY day`,
+       WHERE p.tenant_id = $1
+         AND p.paid_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND p.paid_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'${paidMasterFilter}
+       GROUP BY 1
+       ORDER BY 1`,
+      params,
+    );
+
+    // Возвраты по ДАТЕ ФАКТИЧЕСКОГО ВОЗВРАТА (check_returns.created_at, cashflow
+    // M2). Политика владельца (2026-06) «возврат гасит продажу в её периоде»
+    // сохранена — деньги уже вычтены из дня ПРОДАЖИ реверсом ног в
+    // returns.service. refunds — ИНФОРМАЦИОННАЯ строка дня возврата («в этот
+    // день выдали клиентам N ₽»), в total НЕ входит и из cash/card дня возврата
+    // НЕ вычитается (иначе был бы двойной минус). netCash её тоже НЕ вычитает
+    // повторно: received уже уменьшен на возврат в дне ПРОДАЖИ. JOIN checks —
+    // для симметрии с основной выборкой (deleted_at IS NULL) и фильтра по мастеру.
+    const { rows: refundRows } = await this.pool.query(
+      `SELECT to_char((cr.created_at AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
+              COALESCE(SUM(cr.refund_amount), 0) as refunds
+       FROM check_returns cr
+       JOIN checks ch ON ch.id = cr.check_id AND ch.tenant_id = $1 AND ch.deleted_at IS NULL
+       WHERE cr.tenant_id = $1
+         AND cr.created_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND cr.created_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'${refundMasterFilter}
+       GROUP BY 1
+       ORDER BY 1`,
       params,
     );
 
@@ -395,38 +478,140 @@ export class ReportsService {
       installmentPaidCash: 0,
       installmentPaidCard: 0,
       total: parseFloat(r.total) || 0,
+      // Не разнесённый по нал/карта/долг остаток «Итого» (легаси cash_card):
+      // cash + card + installmentDebt + unallocated = total — точно.
+      unallocated: parseFloat(r.unallocated) || 0,
+      refunds: 0,
+      // «Касса за день» — реально принятые деньги (нал+карта+погашения
+      // рассрочки), считается после вливания погашений ниже.
+      received: 0,
+      // ОТТОКИ (E-1): оплаты поставщикам (supplier_payments — вкл. авто-платежи
+      // «Оплатить сразу» и погашения Б/У-долга) и операционные расходы
+      // (expenses, approved, кроме «Зарплата» — та же категорийная логика, что
+      // otherExpenses в getFinancial). Вливаются ниже. netCash = «осталось в
+      // кассе» = received − supplierPayments − expensesOut (refunds уже учтён в
+      // received на дне продажи, повторно не вычитается).
+      supplierPayments: 0,
+      expensesOut: 0,
+      netCash: 0,
     }));
 
-    // Вливаем погашения в дни: совпавший день дополняем, день без чеков (было
-    // только погашение) добавляем нулевой строкой, затем восстанавливаем
-    // хронологию.
+    // Вливаем погашения и возвраты в дни: совпавший день дополняем, день без
+    // чеков (было только погашение / только возврат) добавляем нулевой строкой,
+    // затем восстанавливаем хронологию.
+    const emptyDay = (date: any) => ({
+      date,
+      cash: 0,
+      card: 0,
+      warranty: 0,
+      warrantyLoss: 0,
+      installmentDebt: 0,
+      installmentPaid: 0,
+      installmentPaidCash: 0,
+      installmentPaidCard: 0,
+      total: 0,
+      unallocated: 0,
+      refunds: 0,
+      received: 0,
+      supplierPayments: 0,
+      expensesOut: 0,
+      netCash: 0,
+    });
+
+    // ОТТОКИ (E-1) — считаются ТОЛЬКО на уровне всего тенанта (masterId === null):
+    // оплаты поставщикам и операционные расходы не атрибутируются конкретному
+    // мастеру, поэтому при фильтре по сотруднику (или у мастера с охватом 'own')
+    // оттоки не показываем — иначе чужие расходы искажали бы «его кассу».
+    // Границы — тот же московский полуинтервал [from 00:00, to+1 00:00), что и
+    // притоки; source-таблицы уже существуют, двойного счёта с прибылью нет
+    // (cashflow ≠ P&L, закупки в expenses не пишутся).
+    let supplierRows: any[] = [];
+    let expenseRows: any[] = [];
+    if (!masterId) {
+      const outParams = [tenantID, dateFrom, dateTo];
+      const supplierRes = await this.pool.query(
+        `SELECT to_char((date AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
+                COALESCE(SUM(amount), 0) as amount
+           FROM supplier_payments
+          WHERE tenant_id = $1
+            AND date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+            AND date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+          GROUP BY 1
+          ORDER BY 1`,
+        outParams,
+      );
+      supplierRows = supplierRes.rows;
+      // Категорийная логика идентична otherExpenses в getFinancial: approved
+      // (NULL = legacy approved), кроме категории «Зарплата» (salary payouts
+      // зеркалятся туда — в cashflow они уже учтены отдельно и не дублируются).
+      const expenseRes = await this.pool.query(
+        `SELECT to_char((e.date AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
+                COALESCE(SUM(e.amount), 0) as amount
+           FROM expenses e
+           LEFT JOIN expense_categories ec ON ec.id = e.category_id
+          WHERE e.tenant_id = $1
+            AND e.date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+            AND e.date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+            AND COALESCE(e.approval_status, 'approved') = 'approved'
+            AND COALESCE(ec.name, '') <> 'Зарплата'
+          GROUP BY 1
+          ORDER BY 1`,
+        outParams,
+      );
+      expenseRows = expenseRes.rows;
+    }
+
     const byKey = new Map(days.map((d) => [dayKey(d.date), d]));
     for (const r of paidRows) {
       const key = dayKey(r.day);
-      const existing = byKey.get(key);
-      const paid = parseFloat(r.paid) || 0;
-      const paidCash = parseFloat(r.paid_cash) || 0;
-      const paidCard = parseFloat(r.paid_card) || 0;
-      if (existing) {
-        existing.installmentPaid += paid;
-        existing.installmentPaidCash += paidCash;
-        existing.installmentPaidCard += paidCard;
-      } else {
-        const row = {
-          date: r.day,
-          cash: 0,
-          card: 0,
-          warranty: 0,
-          warrantyLoss: 0,
-          installmentDebt: 0,
-          installmentPaid: paid,
-          installmentPaidCash: paidCash,
-          installmentPaidCard: paidCard,
-          total: 0,
-        };
-        byKey.set(key, row);
-        days.push(row);
+      let existing = byKey.get(key);
+      if (!existing) {
+        existing = emptyDay(r.day);
+        byKey.set(key, existing);
+        days.push(existing);
       }
+      existing.installmentPaid += parseFloat(r.paid) || 0;
+      existing.installmentPaidCash += parseFloat(r.paid_cash) || 0;
+      existing.installmentPaidCard += parseFloat(r.paid_card) || 0;
+    }
+    for (const r of refundRows) {
+      const key = dayKey(r.day);
+      let existing = byKey.get(key);
+      if (!existing) {
+        existing = emptyDay(r.day);
+        byKey.set(key, existing);
+        days.push(existing);
+      }
+      existing.refunds += parseFloat(r.refunds) || 0;
+    }
+    for (const r of supplierRows) {
+      const key = dayKey(r.day);
+      let existing = byKey.get(key);
+      if (!existing) {
+        existing = emptyDay(r.day);
+        byKey.set(key, existing);
+        days.push(existing);
+      }
+      existing.supplierPayments += parseFloat(r.amount) || 0;
+    }
+    for (const r of expenseRows) {
+      const key = dayKey(r.day);
+      let existing = byKey.get(key);
+      if (!existing) {
+        existing = emptyDay(r.day);
+        byKey.set(key, existing);
+        days.push(existing);
+      }
+      existing.expensesOut += parseFloat(r.amount) || 0;
+    }
+    for (const d of days) {
+      d.received = d.cash + d.card + d.installmentPaid;
+      // «Осталось в кассе» = приток − оплаты поставщикам − расходы. Возвраты
+      // (refunds) НЕ вычитаются повторно: политика владельца «возврат гасит
+      // продажу в её периоде» — returns.service реверсирует ноги нал/карта в дне
+      // ПРОДАЖИ, поэтому received уже уменьшен на возврат. refunds остаётся
+      // информационной строкой дня возврата (в netCash не участвует).
+      d.netCash = d.received - d.supplierPayments - d.expensesOut;
     }
     days.sort((a, b) => dayKey(a.date).localeCompare(dayKey(b.date)));
 
@@ -440,6 +625,12 @@ export class ReportsService {
       installmentPaid: 0,
       installmentPaidCash: 0,
       installmentPaidCard: 0,
+      received: 0,
+      refunds: 0,
+      unallocated: 0,
+      supplierPayments: 0,
+      expensesOut: 0,
+      netCash: 0,
     };
     for (const d of days) {
       totals.cash += d.cash;
@@ -451,6 +642,12 @@ export class ReportsService {
       totals.installmentPaidCash += d.installmentPaidCash;
       totals.installmentPaidCard += d.installmentPaidCard;
       totals.total += d.total;
+      totals.received += d.received;
+      totals.refunds += d.refunds;
+      totals.unallocated += d.unallocated;
+      totals.supplierPayments += d.supplierPayments;
+      totals.expensesOut += d.expensesOut;
+      totals.netCash += d.netCash;
     }
 
     return { days, totals };
@@ -469,19 +666,32 @@ export class ReportsService {
   }
 
   private async computeDashboardV2(tenantID: string, period: 'today' | 'week' | 'month' | 'year') {
-    const now = new Date();
-    const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
-    const prevMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString();
+    // E-7 — границы дня/месяца в БИЗНЕС-таймзоне (Europe/Moscow, UTC+3 без
+    // летнего времени), как getFinancial/getCashFlow и shifts/salary. Раньше
+    // границы строились от контейнерного (UTC) настенного времени, поэтому в
+    // 00:00–02:59 МСК чек попадал в «сегодня/этот месяц» на дашборде иначе, чем
+    // на экранах денег, и «Финансы» расходились с «Движением денег». Считаем
+    // компоненты московского «сейчас» (UTC-геттеры от сдвинутого времени) и
+    // отдаём границы как UTC-инстанты московской полуночи (паттерн salary).
+    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
+    const mskNow = new Date(Date.now() + MSK_OFFSET_MS);
+    const mskY = mskNow.getUTCFullYear();
+    const mskM = mskNow.getUTCMonth();
+    const mskD = mskNow.getUTCDate();
+    const todayStart = new Date(Date.UTC(mskY, mskM, mskD) - MSK_OFFSET_MS).toISOString();
+    const monthStart = new Date(Date.UTC(mskY, mskM, 1) - MSK_OFFSET_MS).toISOString();
+    const prevMonthStart = new Date(Date.UTC(mskY, mskM - 1, 1) - MSK_OFFSET_MS).toISOString();
 
     // Existing dashboard numbers (preserve compatibility — caller sees them too).
     // ITEM 2 — гарантия ИСКЛЮЧЕНА из выручки; в прибыли заменена на убыток.
     //   • revenue_today/month: FILTER … IS DISTINCT FROM 'warranty' — гарантия
     //     не выручка.
     //   • profit_today/month: для гарантийного чека вместо сохранённого
-    //     (положительного) profit берём −(product_cost_total + service_salary_total)
-    //     — реальный убыток (запчасти + выплата мастеру). netProfit = profit −
-    //     расходы, поэтому убыток корректно уменьшает чистую прибыль.
+    //     (положительного) profit берём −(product_cost_total + service_salary_total
+    //     + product_salary_total) — реальный убыток (запчасти + выплата мастеру +
+    //     его товарная комиссия, money-audit C2: она начисляется и по гарантии).
+    //     netProfit = profit − расходы, поэтому убыток корректно уменьшает
+    //     чистую прибыль.
     //   • warranty_today (справочно) — «отпускная» сумма гарантийных работ.
     //   • warranty_loss_today (НОВОЕ) — тот же убыток за сегодня для cashPosition.
     const { rows: baseRows } = await this.pool.query(
@@ -489,12 +699,12 @@ export class ReportsService {
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) AS revenue_today,
          COALESCE(COUNT(CASE WHEN date >= $2 THEN 1 END), 0) AS checks_today,
          COALESCE(SUM(CASE WHEN date >= $3 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) AS revenue_month,
-         COALESCE(SUM(CASE WHEN date >= $2 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total) ELSE profit END) END), 0) AS profit_today,
-         COALESCE(SUM(CASE WHEN date >= $3 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total) ELSE profit END) END), 0) AS profit_month,
+         COALESCE(SUM(CASE WHEN date >= $2 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) END), 0) AS profit_today,
+         COALESCE(SUM(CASE WHEN date >= $3 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) END), 0) AS profit_month,
          COALESCE(SUM(CASE WHEN date >= $2 THEN cash_amount END), 0) AS cash_today,
          COALESCE(SUM(CASE WHEN date >= $2 THEN card_amount END), 0) AS card_today,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN total_revenue END), 0) AS warranty_today,
-         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN product_cost_total + service_salary_total END), 0) AS warranty_loss_today,
+         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN product_cost_total + service_salary_total + COALESCE(product_salary_total, 0) END), 0) AS warranty_loss_today,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) END), 0) AS installment_debt_today
        FROM checks
        WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL`,
@@ -560,7 +770,7 @@ export class ReportsService {
     const { rows: prevRows } = await this.pool.query(
       `SELECT
          COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0) AS revenue,
-         COALESCE(SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total) ELSE profit END), 0) AS profit
+         COALESCE(SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END), 0) AS profit
          FROM checks
         WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
           AND date >= $2 AND date < $3`,
@@ -581,7 +791,7 @@ export class ReportsService {
          ) d
          LEFT JOIN (
            SELECT date::date AS day,
-                  SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total) ELSE profit END) AS profit
+                  SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) AS profit
              FROM checks
             WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
               AND date >= now() - interval '30 days'
@@ -682,9 +892,11 @@ export class ReportsService {
     };
 
     // Month forecast: project current MTD revenue to end of month linearly.
-    const today = new Date();
-    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
-    const dayOfMonth = Math.max(today.getDate(), 1);
+    // Дни месяца/день месяца — в московской бизнес-таймзоне (E-7), чтобы
+    // амортизация постоянки и прогноз считались от того же «сегодня», что и
+    // MTD-агрегаты выше (иначе в 00:00–02:59 МСК dayOfMonth отставал на сутки).
+    const daysInMonth = new Date(Date.UTC(mskY, mskM + 1, 0)).getUTCDate();
+    const dayOfMonth = Math.max(mskD, 1);
     const monthForecast = (revenueMonth / dayOfMonth) * daysInMonth;
 
     // ── v3.0.1 ФИЧА 1 — ЧИСТАЯ ПРИБЫЛЬ ПО НАЧИСЛЕНИЮ (accrual) ────────────────
@@ -910,7 +1122,7 @@ export class ReportsService {
     const { rows } = await this.pool.query(
       `WITH window_checks AS (
          -- Чеки периода + дата ЗАВЕДЕНИЯ клиента (created_at) для когорты.
-         SELECT ch.client_id, ch.total_revenue, cl.created_at AS client_created_at
+         SELECT ch.client_id, ch.total_revenue, ch.payment_method, cl.created_at AS client_created_at
            FROM checks ch
            JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = $1
           WHERE ch.tenant_id=$1 AND ch.is_deferred=false
@@ -927,9 +1139,12 @@ export class ReportsService {
          -- «существующие», НЕ в «новые»: иначе они выпадали из обоих сегментов и
          -- их выручка периода терялась. new_count/new_revenue не трогаем (NULL в
          -- BETWEEN и так не попадает).
+         -- ВЫРУЧКА без гарантии (ITEM 2 / money-audit M8): гарантийный ремонт —
+         -- убыток, не marketing-выручка. Счётчики активности гарантию сохраняют
+         -- (визит был), фильтруется только SUM.
          COUNT(DISTINCT CASE WHEN client_created_at IS NULL OR client_created_at::date < $2::date THEN client_id END) AS returning_count,
-         COALESCE(SUM(CASE WHEN client_created_at::date BETWEEN $2::date AND $3::date THEN total_revenue END), 0) AS new_revenue,
-         COALESCE(SUM(CASE WHEN client_created_at IS NULL OR client_created_at::date < $2::date THEN total_revenue END), 0) AS returning_revenue
+         COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' AND client_created_at::date BETWEEN $2::date AND $3::date THEN total_revenue END), 0) AS new_revenue,
+         COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' AND (client_created_at IS NULL OR client_created_at::date < $2::date) THEN total_revenue END), 0) AS returning_revenue
        FROM window_checks`,
       [tenantID, params.from, params.to],
     );
@@ -1299,6 +1514,8 @@ export class ReportsService {
        SELECT
          COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника') AS source,
          COUNT(DISTINCT nc.client_id) AS count,
+         -- Без гарантии (M8): выручка по источнику — только реальные деньги,
+         -- как в revenue.bySource/trends этого же отчёта.
          COALESCE(SUM(ch.total_revenue), 0) AS revenue
        FROM new_clients nc
        JOIN clients cl ON cl.id = nc.client_id AND cl.tenant_id = $1
@@ -1307,6 +1524,7 @@ export class ReportsService {
         AND ch.tenant_id = $1
         AND ch.is_deferred = false
         AND ch.deleted_at IS NULL
+        AND ch.payment_method IS DISTINCT FROM 'warranty'
         AND ch.date::date BETWEEN $2::date AND $3::date
        GROUP BY COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника')
        ORDER BY count DESC, revenue DESC`,

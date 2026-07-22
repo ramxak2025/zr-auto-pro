@@ -39,7 +39,6 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { formatPhone } from '../../../shared/validation/phone';
-import { UserRole } from '../../../shared/types';
 import type { InstallmentPlan, InstallmentClientLedger, InstallmentReminderSettings } from '../../../shared/types';
 
 function formatDateTime(iso?: string | null): string {
@@ -55,13 +54,15 @@ export default function InstallmentDetailScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
+  const { hasPermission } = useAuth();
 
   const initialPlan: InstallmentPlan = route.params?.plan;
   const planId = initialPlan?.id;
   const clientId = initialPlan?.clientId;
 
-  const canManage = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+  // Приём платежа / досрочное погашение / правка плана — debts_manage
+  // (сервер: POST :planId/pay, payoff, PATCH → тот же ключ).
+  const canManage = hasPermission('debts_manage');
 
   const [showPay, setShowPay] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);

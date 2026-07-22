@@ -8,6 +8,7 @@
 import {
   apiPathOf,
   buildApiHosts,
+  isBodyLimitedGatewayHost,
   isHtmlApiPayload,
   nextUntriedApiHost,
   normalizeReserveApiBase,
@@ -73,6 +74,19 @@ describe('обход кольца', () => {
     expect(nextUntriedApiHost(hosts, 'h1', ['h1'])).toBe('h2');
     expect(nextUntriedApiHost(hosts, 'h2', ['h1', 'h2'])).toBe('h3');
     expect(nextUntriedApiHost(hosts, 'h3', ['h1', 'h2', 'h3'])).toBeNull();
+  });
+});
+
+describe('isBodyLimitedGatewayHost — шлюз с лимитом тела ~3.5МБ', () => {
+  it('распознаёт Яндекс API Gateway', () => {
+    expect(isBodyLimitedGatewayHost('https://d5dpq4hcfoor5l4q1a97.wnq2w1o5.apigw.yandexcloud.net/api')).toBe(true);
+  });
+  it('прямые домены и мусор — не шлюз', () => {
+    expect(isBodyLimitedGatewayHost('https://autexa.pw/api')).toBe(false);
+    expect(isBodyLimitedGatewayHost('https://autexa-cloud.ru/api')).toBe(false);
+    // apigw.yandexcloud.net в ПУТИ, а не в хосте — не шлюз
+    expect(isBodyLimitedGatewayHost('https://evil.test/x.apigw.yandexcloud.net')).toBe(false);
+    expect(isBodyLimitedGatewayHost('not a url')).toBe(false);
   });
 });
 

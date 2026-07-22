@@ -8,8 +8,9 @@
  * The «+» header opens a create/edit sheet (same visual language as
  * AdminPlansScreen) so the superadmin can register a new car service without
  * leaving the app:
- *   • Компания — название (обяз.), телефон, адрес, email.
- *   • Подписка — тариф (plansApi), макс. польз., дата окончания.
+ *   • Компания — название (обяз.), телефон, адрес, email, описание.
+ *   • Подписка — тариф (plansApi), макс. польз., дата окончания, примечание;
+ *     при редактировании — надбавка минут голоса (115, voiceMinutesExtra).
  *   • Директор — имя, телефон, пароль (опционально, только при создании).
  *   • Активен — тумблер (только при редактировании).
  */
@@ -37,6 +38,7 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
+import { toLocalISODate } from '../../utils/dates';
 import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
 import type { Tenant, Plan } from '../../../../shared/types';
 import type { CreateTenantRequest, UpdateTenantRequest } from '../../../../shared/api/types';
@@ -58,16 +60,20 @@ interface TenantDraft {
   phone: string;
   address: string;
   email: string;
+  description: string;
   // Subscription
   planId: string | null;
   maxUsers: string;
   subscriptionEnd: string; // YYYY-MM-DD
+  subscriptionNote: string;
   // Director (create only)
   directorName: string;
   directorPhone: string;
   directorPassword: string;
   // Edit only
   isActive: boolean;
+  /** 115 — индивидуальная надбавка минут голоса (edit only, нет в CreateTenantRequest). */
+  voiceMinutesExtra: string;
 }
 
 /** ISO date (or null) → YYYY-MM-DD for the input. */
@@ -75,7 +81,9 @@ function toDateInput(iso?: string | null): string {
   if (!iso) return '';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toISOString().slice(0, 10);
+  // ЛОКАЛЬНЫЙ срез, не toISOString(): UTC-срез в RU-зонах (UTC+3…+12)
+  // сдвигал дату окончания подписки на день назад (см. utils/dates.ts).
+  return toLocalISODate(d);
 }
 
 function toDraft(tenant?: Tenant): TenantDraft {
@@ -85,13 +93,16 @@ function toDraft(tenant?: Tenant): TenantDraft {
     phone: tenant?.phone ? formatPhone(tenant.phone) : '',
     address: tenant?.address ?? '',
     email: tenant?.email ?? '',
+    description: tenant?.description ?? '',
     planId: tenant?.planId ?? null,
     maxUsers: tenant ? String(tenant.maxUsers) : '',
     subscriptionEnd: toDateInput(tenant?.subscriptionEnd),
+    subscriptionNote: tenant?.subscriptionNote ?? '',
     directorName: '',
     directorPhone: '',
     directorPassword: '',
     isActive: tenant ? tenant.isActive : true,
+    voiceMinutesExtra: tenant ? String(tenant.voiceMinutesExtra ?? 0) : '0',
   };
 }
 
@@ -156,17 +167,26 @@ export default function AdminTenantsScreen() {
       const maxUsers = parseInt(draft.maxUsers, 10);
       const subscriptionEnd = parseDate(draft.subscriptionEnd);
 
+      // Индивидуальная надбавка минут голоса (115): NaN (пустой ввод) — поле
+      // не шлём, значение на сервере не меняется.
+      const voiceMinutesExtra = parseInt(draft.voiceMinutesExtra, 10);
+
       if (draft.id) {
         const payload: UpdateTenantRequest = {
           name: draft.name.trim(),
           phone: draft.phone.trim() ? normalizePhone(draft.phone) : '',
           address: draft.address.trim(),
           email: draft.email.trim(),
+          // Пустая строка сознательно шлётся — так поле можно очистить
+          // (тот же контракт, что у phone/address/email выше).
+          description: draft.description.trim(),
+          subscriptionNote: draft.subscriptionNote.trim(),
           isActive: draft.isActive,
           planId: draft.planId ?? undefined,
           ...(Number.isFinite(maxUsers) && maxUsers > 0 ? { maxUsers } : {}),
           ...(selectedPlan ? { monthlyPrice: selectedPlan.monthlyPrice } : {}),
           ...(subscriptionEnd ? { subscriptionEnd } : {}),
+          ...(Number.isFinite(voiceMinutesExtra) && voiceMinutesExtra >= 0 ? { voiceMinutesExtra } : {}),
         };
         await tenantsApi.update(draft.id, payload);
       } else {
@@ -175,6 +195,8 @@ export default function AdminTenantsScreen() {
           ...(draft.phone.trim() ? { phone: normalizePhone(draft.phone) } : {}),
           ...(draft.address.trim() ? { address: draft.address.trim() } : {}),
           ...(draft.email.trim() ? { email: draft.email.trim() } : {}),
+          ...(draft.description.trim() ? { description: draft.description.trim() } : {}),
+          ...(draft.subscriptionNote.trim() ? { subscriptionNote: draft.subscriptionNote.trim() } : {}),
           ...(draft.planId ? { planId: draft.planId } : {}),
           ...(selectedPlan ? { monthlyPrice: selectedPlan.monthlyPrice } : {}),
           ...(Number.isFinite(maxUsers) && maxUsers > 0
@@ -472,6 +494,16 @@ export default function AdminTenantsScreen() {
                     onChangeText={(v) => setEditing({ ...editing, email: v })}
                   />
                 </Field>
+                <Field label="Описание" palette={palette} surface={surface}>
+                  <TextInput
+                    style={[styles.input, styles.inputMultiline, { color: palette.text.primary }]}
+                    placeholder="Заметка об автосервисе"
+                    placeholderTextColor={palette.text.tertiary}
+                    multiline
+                    value={editing.description}
+                    onChangeText={(v) => setEditing({ ...editing, description: v })}
+                  />
+                </Field>
 
                 {/* ── Подписка ── */}
                 <Text style={[styles.sectionLabel, { color: palette.text.tertiary }]}>Подписка</Text>
@@ -522,6 +554,32 @@ export default function AdminTenantsScreen() {
                     />
                   </Field>
                 </View>
+                <Field label="Примечание к подписке" palette={palette} surface={surface}>
+                  <TextInput
+                    style={[styles.input, { color: palette.text.primary }]}
+                    placeholder="Например, договорённость об оплате"
+                    placeholderTextColor={palette.text.tertiary}
+                    value={editing.subscriptionNote}
+                    onChangeText={(v) => setEditing({ ...editing, subscriptionNote: v })}
+                  />
+                </Field>
+                {editing.id ? (
+                  <>
+                    <Field label="Доп. минуты голоса (надбавка)" palette={palette} surface={surface}>
+                      <TextInput
+                        style={[styles.input, { color: palette.text.primary }]}
+                        placeholder="0"
+                        placeholderTextColor={palette.text.tertiary}
+                        keyboardType="number-pad"
+                        value={editing.voiceMinutesExtra}
+                        onChangeText={(v) => setEditing({ ...editing, voiceMinutesExtra: v.replace(/[^0-9]/g, '') })}
+                      />
+                    </Field>
+                    <Text style={[styles.fieldHint, { color: palette.text.tertiary }]}>
+                      Прибавляется к пакету минут голосового ввода из тарифа. 0 = без надбавки.
+                    </Text>
+                  </>
+                ) : null}
 
                 {/* ── Директор (только при создании) ── */}
                 {!editing.id ? (
@@ -749,8 +807,10 @@ const styles = StyleSheet.create({
   fieldRow: { flexDirection: 'row', gap: spacing[3] },
   fieldFlex: { flex: 1 },
   fieldLabel: { fontSize: 12, fontWeight: '600', marginLeft: spacing[1] },
+  fieldHint: { fontSize: 11, marginLeft: spacing[1], marginTop: -spacing[1], lineHeight: 15 },
   inputWrap: { paddingHorizontal: spacing[3] },
   input: { fontSize: 16, paddingVertical: spacing[3] },
+  inputMultiline: { minHeight: 72, textAlignVertical: 'top' },
   pickerRow: {
     flexDirection: 'row',
     alignItems: 'center',

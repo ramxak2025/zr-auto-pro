@@ -11,19 +11,18 @@ import Pagination from '../components/Pagination';
 import PageHeader from '../components/PageHeader';
 import QueryState from '../components/QueryState';
 import IconButton from '../components/IconButton';
-import { Service, PaginatedResponse, UserRole } from '../types';
+import { Service, PaginatedResponse } from '../types';
 
 const SERVICE_CATEGORIES: string[] = [];
 
 export default function ServicesPage() {
   const queryClient = useQueryClient();
-  const { hasPermission, user } = useAuth();
+  const { hasPermission } = useAuth();
   // ROLE-ONLY: управление каталогом (add/edit/delete + %/гарантия) — только с
-  // services_manage. Owner-class видит и делает всё. services_view (просмотр +
-  // в чек) — у всех, кто сюда попал; backend всё равно вернёт 403 без права.
-  const isOwnerClass =
-    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
-  const canManage = isOwnerClass || hasPermission('services_manage');
+  // services_manage (байпас superadmin/director — внутри hasPermission; admin —
+  // по матрице роли). services_view (просмотр + в чек) — у всех, кто сюда
+  // попал; backend всё равно вернёт 403 без права.
+  const canManage = hasPermission('services_manage');
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);

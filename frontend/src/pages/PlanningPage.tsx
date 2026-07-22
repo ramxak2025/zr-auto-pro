@@ -701,12 +701,15 @@ function CompensationSection() {
 // ---------------------------------------------------------------------------
 
 export default function PlanningPage() {
-  const { user } = useAuth();
-  const isOwner = user?.role === 'director' || user?.role === 'superadmin';
+  const { hasPermission } = useAuth();
+  // Планирование (fixed-costs/compensation) — ключ financial_reports (backend
+  // planning/ класс-гейт; волна Битрикс24). Байпас superadmin/director — внутри
+  // hasPermission; admin — по матрице роли из /auth/me.
+  const canView = hasPermission('financial_reports');
 
-  // Defensive route guard — the menu entry is already owner-gated, but a direct
-  // URL hit by a non-owner is bounced to the dashboard (server also 403s).
-  if (!isOwner) return <Navigate to="/dashboard" replace />;
+  // Defensive route guard — the menu entry is already permission-gated, but a
+  // direct URL hit without the right is bounced to the dashboard (server 403s).
+  if (!canView) return <Navigate to="/dashboard" replace />;
 
   return (
     <div className="space-y-5">

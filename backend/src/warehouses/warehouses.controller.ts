@@ -2,7 +2,8 @@ import { Controller, Get, Patch, Param, Body, UseGuards } from '@nestjs/common';
 import { IsOptional, IsString, MaxLength, IsInt, Min } from 'class-validator';
 import { WarehousesService } from './warehouses.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
 // DTO is defined inline because the warehouses module has a tiny surface
@@ -20,20 +21,22 @@ class UpdateWarehouseDto {
   sortOrder?: number;
 }
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('warehouses')
 export class WarehousesController {
   constructor(private warehousesService: WarehousesService) {}
 
   // Anyone authenticated in the tenant needs to see the warehouse list —
-  // the FE uses it to render filter tabs / dropdowns. Mutations are
-  // restricted to director / admin / superadmin below.
+  // the FE uses it to render filter tabs / dropdowns. Mutations require
+  // 'warehouse_manage' below (ROLE-ONLY, волна «права как в Битрикс24»,
+  // 2026-07: @Roles(d,a,sa) снят — «управляет складом» и есть переименование
+  // складов; сиды — мастер false, админ true).
   @Get()
   list(@CurrentUser() user: JwtPayload) {
     return this.warehousesService.listByTenant(user.tenantID);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('warehouse_manage')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateWarehouseDto) {
     return this.warehousesService.update(user.tenantID, id, dto);

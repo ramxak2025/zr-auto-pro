@@ -171,13 +171,14 @@ export default function WorkBoardScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const { width } = useWindowDimensions();
-  const { user, hasPermission } = useAuth();
+  const { hasPermission } = useAuth();
   // Перемещение разрешено тем, кто редактирует чеки (director/admin/master/
   // superadmin — director/superadmin всегда true, остальным по матрице прав).
   const canMove = hasPermission('checks_edit');
-  // Настраивать колонки может только owner-class (director/admin/superadmin) —
-  // бэкенд гейтит create/update/remove, UI прячет шестерёнку для остальных.
-  const canConfigure = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  // Настраивать колонки может держатель checks_board_manage — бэкенд гейтит
+  // create/update/remove тем же ключом («права как в Битрикс24», 2026-07:
+  // admin живёт по матрице из /auth/me), UI прячет шестерёнку для остальных.
+  const canConfigure = hasPermission('checks_board_manage');
   // Cash-shift-mode (092): мастеру без права оплаты центральная кнопка таб-бара
   // открывает эту доску, поэтому здесь же даём ему «+» для создания нового
   // заказ-наряда (order-режим CheckCreate). orderMode=false → кнопки нет, доска

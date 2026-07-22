@@ -55,7 +55,7 @@ import type {
   Warehouse,
   PosSettings,
 } from '../types';
-import { UserRole } from '../types';
+
 import { formatPhone } from '../../../shared/validation/phone';
 import { DEFAULT_UNIT, MIN_QTY, formatQty, parseQtyInput, roundQty, unitLabel } from '../utils/units';
 import LastVisitBadge from '../components/LastVisitBadge';
@@ -88,6 +88,36 @@ function generateClientRequestId(): string {
 
 /** Мерные единицы — только они получают дробный шаг 0.5 при добавлении. */
 const METERED_UNITS = new Set(['м', 'кг', 'л']);
+
+/**
+ * Чек двигает деньги И склад — единый список зависимых query-ключей для
+ * инвалидации после create/update (staleTime 2 мин иначе прячет изменение).
+ * ['dashboard-v2'] — реальный ключ дашборда (['dashboard'] — исторический,
+ * оставлен для совместимости); ['salary'] покрывает ['salary','my-summary'].
+ * Зеркальный список — в ChecksPage/CheckDetailPage (delete/restore/finalize).
+ */
+const MONEY_STOCK_QUERY_KEYS: readonly string[][] = [
+  ['checks'],
+  ['dashboard'],
+  ['dashboard-v2'],
+  ['dashboard-chart'],
+  ['financial-report'],
+  ['employee-ranking'],
+  ['cashflow'],
+  ['cash-shift'],
+  ['salary-all'],
+  ['salary-my'],
+  ['salary'],
+  ['employee-salary'],
+  ['products'],
+  ['products-all'],
+  ['low-stock'],
+  ['installments'],
+];
+
+/** SW-офлайн-очередь отвечает 202 {queued:true} — сервер запрос ещё НЕ видел. */
+const isQueuedOffline = (res: { status?: number; data?: { queued?: boolean } } | undefined): boolean =>
+  res?.status === 202 && res?.data?.queued === true;
 
 interface ServiceLineForm {
   serviceId: string;
@@ -474,12 +504,14 @@ export default function CheckCreatePage() {
   const { id: editCheckId } = useParams<{ id: string }>();
   const isEditMode = !!editCheckId;
   const queryClient = useQueryClient();
-  const { user, isRole, hasPermission } = useAuth();
-  const canEditDate = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
-  // «Сменить владельца» (feature #9) — gated by clients_edit; owner-class
-  // (superadmin/director/admin) bypasses. hasPermission already returns true for
-  // superadmin/director; ADMIN is added explicitly to match ClientDetailPage.
-  const canReassignOwner = isRole(UserRole.ADMIN) || hasPermission('clients_edit');
+  const { user, hasPermission } = useAuth();
+  // Смена даты чека — ключ checks_change_datetime (сервер проверяет его же в
+  // ChecksService; волна Битрикс24 — вместо строкового @Roles d/a/sa).
+  const canEditDate = hasPermission('checks_change_datetime');
+  // «Сменить владельца» (feature #9) — gated by clients_edit (backend
+  // POST /cars/:id/transfer-owner). Байпас superadmin/director — внутри
+  // hasPermission; admin — по матрице роли.
+  const canReassignOwner = hasPermission('clients_edit');
   const canSellInstallment = hasPermission('sell_installment');
   // Рассрочка — только на НОВОМ чеке (parity с mobile: canOfferInstallment).
   // План создаётся сервером в create(); правка чека план создать не умеет,
@@ -502,6 +534,11 @@ export default function CheckCreatePage() {
   // Form fields (no top-level master — current user is the default)
   const [date, setDate] = useState(format(new Date(), 'yyyy-MM-dd'));
   const [editingDate, setEditingDate] = useState(false);
+  // true только после РУЧНОЙ правки даты. Если пользователь дату не трогал,
+  // поле date в payload не уходит вовсе: create получает серверный now()
+  // (полный timestamp, а не yyyy-MM-dd → 00:00), edit не переписывает
+  // оригинальный timestamp чека.
+  const [dateTouched, setDateTouched] = useState(false);
   const [mileage, setMileage] = useState('');
   const [paymentMethod, setPaymentMethod] = useState<string>('cash');
   const [comment, setComment] = useState('');
@@ -682,6 +719,14 @@ export default function CheckCreatePage() {
     setDate(existingCheck.date ? format(new Date(existingCheck.date), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'));
     setMileage(existingCheck.mileage ? String(existingCheck.mileage) : '');
     setPaymentMethod(existingCheck.paymentMethod || 'cash');
+    // «Сплит»: восстановить РЕАЛЬНУЮ разбивку нал/карта. Без этого cashAmount
+    // оставался 0, и сабмит молча переписывал разбивку в 0 нал / всё картой —
+    // порча «Движения денег». Авто-sync эффект трогает суммы только для
+    // 'cash'/'card', так что гидрированные значения не затираются.
+    if (existingCheck.paymentMethod === 'cash_card') {
+      setCashAmount(existingCheck.cashAmount ?? 0);
+      setCardAmount(existingCheck.cardAmount ?? 0);
+    }
     setComment(existingCheck.comment || '');
     setDiscount(existingCheck.discount || 0);
     setIsDeferred(existingCheck.isDeferred || false);
@@ -717,14 +762,19 @@ export default function CheckCreatePage() {
   const createMutation = useMutation({
     mutationFn: (data: any) => checksApi.create(data),
     onSuccess: (res: any) => {
+      if (isQueuedOffline(res)) {
+        // SW-офлайн: сервер чек ещё НЕ создал. clientRequestIdRef НЕ сбрасываем —
+        // replay из очереди и любой ручной повтор уходят с ТЕМ ЖЕ ключом
+        // идемпотентности, дубль невозможен. Никакой навигации на detail:
+        // res.data.id не существует (раньше уезжали на /checks/undefined
+        // с тостом «успешно создан»).
+        toast('Нет сети — чек поставлен в очередь и отправится автоматически', { icon: '📡', duration: 5000 });
+        navigate('/checks');
+        return;
+      }
       // Чек создан — следующий сабмит это уже НОВЫЙ логический чек.
       clientRequestIdRef.current = null;
-      queryClient.invalidateQueries({ queryKey: ['checks'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
-      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
-      queryClient.invalidateQueries({ queryKey: ['employee-ranking'] });
-      queryClient.invalidateQueries({ queryKey: ['products-all'] });
+      MONEY_STOCK_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
       toast.success('Чек успешно создан');
       navigate(`/checks/${res.data.id}`);
     },
@@ -743,13 +793,16 @@ export default function CheckCreatePage() {
   // Update mutation (edit mode)
   const updateMutation = useMutation({
     mutationFn: (data: any) => checksApi.update(editCheckId!, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['checks'] });
+    onSuccess: (res: any) => {
+      if (isQueuedOffline(res)) {
+        // SW-офлайн: правка ещё не дошла до сервера — честный тост без
+        // «Чек обновлён» и без инвалидаций (сервер ничего нового не отдаст).
+        toast('Нет сети — изменения поставлены в очередь и отправятся автоматически', { icon: '📡', duration: 5000 });
+        navigate(`/checks/${editCheckId}`);
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ['check', editCheckId] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
-      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
-      queryClient.invalidateQueries({ queryKey: ['products-all'] });
+      MONEY_STOCK_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
       toast.success('Чек обновлён');
       navigate(`/checks/${editCheckId}`);
     },
@@ -1078,15 +1131,41 @@ export default function CheckCreatePage() {
 
     const isInstallment = paymentMethod === 'installment';
 
+    // Дата: шлём ТОЛЬКО когда пользователь её менял (dateTouched).
+    // - create без правки → сервер ставит now() — полный timestamp вместо
+    //   yyyy-MM-dd → 00:00 (время в журнале, внутрисуточная сортировка);
+    // - edit без правки → сервер не трогает оригинальный timestamp чека;
+    // - правка → полный ISO: выбранный день + текущее время (create) либо
+    //   время оригинального чека (edit) — день меняется, порядок внутри дня жив.
+    let dateIso: string | undefined;
+    if (dateTouched && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      const [y, m, d] = date.split('-').map(Number);
+      const timeSource = isEditMode && existingCheck?.date ? new Date(existingCheck.date) : new Date();
+      dateIso = new Date(
+        y,
+        m - 1,
+        d,
+        timeSource.getHours(),
+        timeSource.getMinutes(),
+        timeSource.getSeconds(),
+      ).toISOString();
+    }
+
     const payload = {
       clientId: selectedClient?.id || '',
       carId: selectedCarId || '',
-      masterId: user?.id || '',
-      date,
+      // В edit-режиме top-level masterId = владелец чека, НЕ редактор: иначе
+      // серверная защита от «кражи чека» (Round-7) принимает редактора за
+      // самозванца и переписывает его строки услуг обратно на мастера чека.
+      masterId: (isEditMode && existingCheck?.masterId) || user?.id || '',
+      ...(dateIso ? { date: dateIso } : {}),
       mileage: mileage ? Number(mileage) : undefined,
       services,
       products,
-      discount,
+      // Скидка действует только на товары — всё сверх их суммы и фронт, и бэк
+      // молча игнорируют, но полная сумма печаталась в чеке и журнале
+      // (несходящаяся арифметика). Кламп выравнивает сохранённое с применённым.
+      discount: Math.min(discount, productTotal),
       paymentMethod,
       cashAmount: finalCash,
       cardAmount: finalCard,
@@ -1155,7 +1234,10 @@ export default function CheckCreatePage() {
                   <input
                     type="date"
                     value={date}
-                    onChange={(e) => setDate(e.target.value)}
+                    onChange={(e) => {
+                      setDate(e.target.value);
+                      setDateTouched(true);
+                    }}
                     onBlur={() => setEditingDate(false)}
                     autoFocus
                     className="bg-gray-800 border border-gray-600 rounded px-2 py-0.5 text-xs text-white focus:outline-none focus:ring-1 focus:ring-primary-400"
@@ -1593,7 +1675,12 @@ export default function CheckCreatePage() {
                 type="number"
                 value={discount || ''}
                 min={0}
-                onChange={(e) => setDiscount(Number(e.target.value))}
+                max={productTotal}
+                // Кламп к сумме товаров: скидка больше товаров молча
+                // игнорируется расчётом, но печаталась бы полной — арифметика
+                // клиентского чека не сходилась бы. Дублируется в сабмите
+                // (товары могли удалить после ввода скидки).
+                onChange={(e) => setDiscount(Math.min(Math.max(Number(e.target.value) || 0, 0), productTotal))}
                 className="input text-sm w-28 text-right"
                 placeholder="0"
               />

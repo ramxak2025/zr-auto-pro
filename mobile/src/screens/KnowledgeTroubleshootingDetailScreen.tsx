@@ -22,7 +22,6 @@ import { knowledgeApi } from '../api/services';
 import { spacing, borderRadius } from '../theme';
 import { haptic } from '../platform/haptics';
 import { severityStyle } from '../components/knowledge/severity';
-import { UserRole } from '../../../shared/types';
 import type { Troubleshooting } from '../../../shared/types';
 
 type ParamList = { KnowledgeTroubleshootingDetail: { id: string; title?: string } };
@@ -32,12 +31,19 @@ export default function KnowledgeTroubleshootingDetailScreen() {
   const route = useRoute<RouteProp<ParamList, 'KnowledgeTroubleshootingDetail'>>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
-  const isManager = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Мутации базы знаний — ключ knowledge_manage (сервер гейтит тем же ключом;
+  // «права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me).
+  const { hasPermission } = useAuth();
+  const isManager = hasPermission('knowledge_manage');
 
   const id = route.params?.id;
 
-  const { data: entry, isLoading, isError, refetch } = useQuery<Troubleshooting>({
+  const {
+    data: entry,
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery<Troubleshooting>({
     queryKey: ['knowledge-troubleshooting-entry', id],
     queryFn: async () => (await knowledgeApi.getTroubleshooting(id)).data,
     enabled: !!id,

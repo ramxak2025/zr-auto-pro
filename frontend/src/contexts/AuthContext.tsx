@@ -219,6 +219,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const hasPermission = (perm: keyof UserPermissions): boolean => {
     if (!user) return false;
+    // Байпас ТОЛЬКО для superadmin/director («Директор всегда полные права»).
+    // admin НЕ байпасит: он живёт по permissions из /auth/me — сервер отдаёт
+    // эффективные права из матрицы назначенной роли (волна «права как в
+    // Битрикс24»: admin снят и из серверного OWNER_CLASS_ROLES). После правки
+    // роли клиент должен рефетчить /auth/me (см. refreshUser в RolesManagement).
     if (user.role === UserRole.SUPERADMIN || user.role === UserRole.DIRECTOR) return true;
     return !!user.permissions?.[perm];
   };

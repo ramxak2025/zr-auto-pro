@@ -23,13 +23,12 @@
  *  10. Approval-flow: owner видит на pending-строках кнопки Одобрить /
  *      Отклонить (вызывают expensesApi.approve / .reject).
  *
- * Контракт permissions:
- *   • role ∈ {director, admin, superadmin} — owner-режим: видит всё,
- *     может одобрять / отклонять / редактировать / удалять, имеет
- *     фильтр "По сотруднику".
- *   • остальные — режим сотрудника: видят только свои расходы. Если
- *     user.canAddExpenses=true — могут создать. Сверх dailyExpenseLimit
- *     запись летит в pending и помечается значком "Ожидает подтверждения".
+ * Контракт permissions («права как в Битрикс24», 2026-07 — матрица роли):
+ *   • financial_reports — owner-режим: видит всё, может одобрять /
+ *     отклонять / редактировать / удалять, имеет фильтр "По сотруднику".
+ *   • can_add_expenses — режим сотрудника: видит свои расходы и может
+ *     создать. Сверх dailyExpenseLimit запись летит в pending и помечается
+ *     значком "Ожидает подтверждения".
  *
  * Перформанс:
  *   • Один useQuery с (dateFrom, dateTo, createdBy?) — попадает в
@@ -530,10 +529,15 @@ const CategoryTile = React.memo(function CategoryTile({
 export default function ExpensesScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const palette = useColors();
-  const isOwnerRole = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
-  const canCreate = isOwnerRole || user?.canAddExpenses === true;
+  // «Права как в Битрикс24» (2026-07): управление расходами (одобрение/
+  // отклонение/удаление, сравнение периодов) — ключ financial_reports; внесение
+  // расхода — can_add_expenses. Сервер гейтит теми же ключами (expenses.controller),
+  // admin живёт по матрице из /auth/me, superadmin/director байпасятся внутри
+  // hasPermission.
+  const isOwnerRole = hasPermission('financial_reports');
+  const canCreate = hasPermission('can_add_expenses');
   const tabBarHeight = useTabBarHeight();
 
   // ── State ────────────────────────────────────────────────────────────
@@ -1496,7 +1500,7 @@ export default function ExpensesScreen() {
         />
       )}
 
-      {/* FAB — Создать расход. Видна owner'у и сотруднику с canAddExpenses. */}
+      {/* FAB — Создать расход. Видна держателю can_add_expenses (матрица роли). */}
       {canCreate && (
         <TouchableOpacity
           style={[styles.fab, { bottom: tabBarHeight + spacing[3] }]}

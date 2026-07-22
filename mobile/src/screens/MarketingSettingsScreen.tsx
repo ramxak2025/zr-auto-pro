@@ -38,7 +38,6 @@ import { BottomSheet } from '../components/BottomSheet';
 import EmptyState from '../components/EmptyState';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
 import type { ReviewPlatformLink, ReviewSettings } from '../../../shared/types';
 
 // ─────────────────────────────────────────────────────────────────────
@@ -699,9 +698,11 @@ export default function MarketingSettingsScreen() {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
+  const { hasPermission } = useAuth();
 
-  const isOwner = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Сервер: PATCH /marketing/settings, platform-links → marketing_access
+  // («права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me).
+  const isOwner = hasPermission('marketing_access');
 
   if (!isOwner) {
     return (
@@ -710,7 +711,7 @@ export default function MarketingSettingsScreen() {
         <EmptyState
           icon="lock"
           title="Доступ ограничен"
-          description="Настройки маркетинга доступны владельцу и администраторам."
+          description="Настройки маркетинга доступны сотрудникам с правом «Доступ к маркетингу»."
         />
       </View>
     );

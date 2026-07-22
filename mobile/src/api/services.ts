@@ -1,4 +1,4 @@
-import api, { loginAcrossHosts } from './axios';
+import api, { loginAcrossHosts, postPublicAcrossHosts } from './axios';
 import {
   createAuthApi,
   createRegistrationApi,
@@ -67,12 +67,21 @@ export const authApi: typeof authApiBase = {
     loginAcrossHosts<Awaited<ReturnType<typeof authApiBase.login>>['data']>(data),
 };
 // Self-service registration (migration 123). ONE public method — submit() from
-// the LOGIN screen (pre-auth). It is UNAUTHENTICATED by design: it rides the same
-// axios instance, and the request interceptor only attaches a Bearer when a token
-// is cached — on the login screen there is none, so the call goes through tokenless
-// exactly like the login request. Superadmin review (list/approve/reject) lives on
-// `adminApi` below (createAdminApi already exposes those three methods).
-export const registrationApi = createRegistrationApi(api);
+// the LOGIN screen (pre-auth). It is UNAUTHENTICATED by design and, как и
+// login, идёт через последовательное кольцо хостов (postPublicAcrossHosts):
+// на отфильтрованной сети вход работал, а регистрация нового автосервиса
+// умирала на одном primary. Повтор безопасен — серверный телефонный дедуп
+// отвечает детерминированным 409, а не второй записью. Superadmin review
+// (list/approve/reject) lives on `adminApi` below.
+const registrationApiBase = createRegistrationApi(api);
+export const registrationApi: typeof registrationApiBase = {
+  ...registrationApiBase,
+  submit: (data: Parameters<typeof registrationApiBase.submit>[0]) =>
+    postPublicAcrossHosts<Awaited<ReturnType<typeof registrationApiBase.submit>>['data']>(
+      '/registration-requests',
+      data,
+    ),
+};
 // «Мой профиль» (migration 099). Self profile edit + self password change for
 // every role; владелец (director/superadmin) edits apply directly, сотрудник
 // (admin/master) edits create a pending change-request that an owner approves.

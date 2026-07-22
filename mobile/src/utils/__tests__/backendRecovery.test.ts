@@ -163,7 +163,8 @@ describe('createApiRouteRecoveryController', () => {
   };
 
   it('reselects only for meaningful NetInfo route changes and reconnect', () => {
-    const reselect = jest.fn<Promise<string | null>, [forceFreshRoute?: boolean]>()
+    const reselect = jest
+      .fn<Promise<string | null>, [forceFreshRoute?: boolean]>()
       .mockResolvedValue('https://autexa.pw/api');
     const controller = createApiRouteRecoveryController({ initialAppState: 'active', reselect });
 
@@ -186,21 +187,74 @@ describe('createApiRouteRecoveryController', () => {
     expect(reselect).toHaveBeenLastCalledWith(true);
   });
 
-  it('reselects on a real foreground transition and every final network failure', () => {
-    const reselect = jest.fn<Promise<string | null>, [forceFreshRoute?: boolean]>()
+  it('reselects softly on foreground and on every final network failure', () => {
+    const reselect = jest
+      .fn<Promise<string | null>, [forceFreshRoute?: boolean]>()
       .mockResolvedValue('https://autexa.pw/api');
     const controller = createApiRouteRecoveryController({ initialAppState: 'active', reselect });
 
     controller.onAppState('active');
     controller.onAppState('background');
     expect(reselect).not.toHaveBeenCalled();
+    // Foreground сам по себе НЕ доказывает смену маршрута — мягкий reselect
+    // (без primary-first / сброса circuit'ов и гистерезиса).
     controller.onAppState('active');
     expect(reselect).toHaveBeenCalledTimes(1);
-    expect(reselect).toHaveBeenLastCalledWith(true);
+    expect(reselect).toHaveBeenLastCalledWith(false);
 
     controller.onNetworkFailure();
     controller.onNetworkFailure();
     expect(reselect).toHaveBeenCalledTimes(3);
+    expect(reselect).toHaveBeenLastCalledWith(false);
+  });
+
+  it('foreground форсит reselect(true) ТОЛЬКО когда network-signature сменилась в фоне', () => {
+    const reselect = jest
+      .fn<Promise<string | null>, [forceFreshRoute?: boolean]>()
+      .mockResolvedValue('https://autexa.pw/api');
+    const controller = createApiRouteRecoveryController({ initialAppState: 'active', reselect });
+    controller.onNetworkState(wifi); // baseline
+
+    // Фон → foreground при НЕизменной сети: под операторским троттлингом
+    // каждый вход в приложение НЕ должен дёргать сессию на полуживой primary.
+    controller.onAppState('background');
+    controller.onAppState('active');
+    expect(reselect).toHaveBeenCalledTimes(1);
+    expect(reselect).toHaveBeenLastCalledWith(false);
+
+    // Сеть реально сменилась, пока приложение было в фоне: NetInfo-снапшот
+    // доехал в фоне (сам форсит — существующий путь)…
+    controller.onAppState('background');
+    controller.onNetworkState({
+      isConnected: true,
+      type: 'cellular',
+      details: { isConnectionExpensive: true, carrier: 'Megafon', cellularGeneration: '5g' },
+    });
+    expect(reselect).toHaveBeenCalledTimes(2);
+    expect(reselect).toHaveBeenLastCalledWith(true);
+    // …и foreground сравнивает снимок ухода с актуальной signature → форс.
+    controller.onAppState('active');
+    expect(reselect).toHaveBeenCalledTimes(3);
+    expect(reselect).toHaveBeenLastCalledWith(true);
+
+    // Следующий цикл фон→foreground на уже стабильной новой сети — снова мягко.
+    controller.onAppState('background');
+    controller.onAppState('active');
+    expect(reselect).toHaveBeenCalledTimes(4);
+    expect(reselect).toHaveBeenLastCalledWith(false);
+  });
+
+  it('iOS-хоп active→inactive→active (шторка/звонок) не форсит перезапуск кольца', () => {
+    const reselect = jest
+      .fn<Promise<string | null>, [forceFreshRoute?: boolean]>()
+      .mockResolvedValue('https://autexa.pw/api');
+    const controller = createApiRouteRecoveryController({ initialAppState: 'active', reselect });
+    controller.onNetworkState(wifi);
+
+    controller.onAppState('inactive');
+    expect(reselect).not.toHaveBeenCalled();
+    controller.onAppState('active');
+    expect(reselect).toHaveBeenCalledTimes(1);
     expect(reselect).toHaveBeenLastCalledWith(false);
   });
 

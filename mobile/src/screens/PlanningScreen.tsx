@@ -105,9 +105,12 @@ export default function PlanningScreen() {
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
+  const { hasPermission } = useAuth();
 
-  const isOwner = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
+  // Постоянные расходы/мотивация — ключ financial_reports (сервер: класс
+  // planning.controller → @RequirePermission('financial_reports'); admin живёт
+  // по матрице из /auth/me, сид reports.view=true — доступ как у API).
+  const isOwner = hasPermission('financial_reports');
 
   // ── Queries ────────────────────────────────────────────────────────────
   const {
@@ -341,7 +344,7 @@ export default function PlanningScreen() {
         <View style={styles.restricted}>
           <Ionicons name="lock-closed-outline" size={40} color={palette.text.tertiary} />
           <Text style={[styles.restrictedText, { color: palette.text.secondary }]}>
-            Планирование постоянных расходов и мотивации доступно только владельцу.
+            Планирование постоянных расходов и мотивации доступно сотрудникам с правом «Финансовые отчёты».
           </Text>
         </View>
       </View>

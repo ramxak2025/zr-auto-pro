@@ -32,7 +32,6 @@ import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { SemanticPalette } from '../theme/palette';
-import { UserRole } from '../../../shared/types';
 import type { MasterSalary } from '../../../shared/types';
 import {
   formatMoney,
@@ -240,16 +239,18 @@ function ListSeparator() {
 export default function SalaryScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { isRole, user } = useAuth();
+  const { hasPermission, user } = useAuth();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
 
-  // «Владелец» = director + superadmin. Everyone else (admin / master) is an
-  // employee and sees ONLY their own card.
-  const isOwner = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
+  // Список зарплат всей команды — ключ salary_view_all (сервер: GET /salary →
+  // тот же ключ; «права как в Битрикс24», 2026-07: admin живёт по матрице из
+  // /auth/me — сид salary.view='all' даёт ему командный список, как и API;
+  // superadmin/director байпасятся внутри hasPermission).
+  const isOwner = hasPermission('salary_view_all');
 
   // ── Employee self-view ─────────────────────────────────────────────────────
-  // A master/admin opening «Зарплата» sees their own full-screen card — no
+  // Без salary_view_all открывший «Зарплату» видит свою full-screen карту — no
   // list, no owner actions. Rendered from the SAME component the owner's
   // drill-down uses, so the two views can't drift.
   if (!isOwner) {
@@ -259,7 +260,8 @@ export default function SalaryScreen() {
         employeeId={user.id}
         employeeName={user.fullName}
         title="Моя зарплата"
-        canManage={false}
+        canManagePayouts={false}
+        canManagePremiums={false}
         onBack={() => navigation.goBack()}
       />
     );

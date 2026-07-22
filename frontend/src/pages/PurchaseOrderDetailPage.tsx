@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Pencil, PackageCheck, XCircle, Send } from 'lucide-react';
+import { ArrowLeft, Pencil, PackageCheck, XCircle, Send, Clock, Wallet } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { purchaseOrdersApi } from '../api/services';
@@ -11,21 +11,37 @@ import QueryState from '../components/QueryState';
 import EmptyState from '../components/EmptyState';
 import ConfirmDialog from '../components/ConfirmDialog';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
-import { UserRole } from '../types';
+
 import type { PurchaseOrder, PurchaseOrderItem } from '../types';
 import { formatMoney, formatDateTime } from '../../../shared/utils/formatters';
 
 const outstanding = (it: PurchaseOrderItem) => Math.max(0, it.quantity - it.receivedQuantity);
 
+// Закупочная цена из free-text поля («12,5» → 12.5); мусор/отрицательное → 0.
+const parsePrice = (t: string): number => {
+  const n = parseFloat((t || '').replace(',', '.'));
+  return Number.isNaN(n) || n < 0 ? 0 : n;
+};
+
+type PayMode = 'debt' | 'paid';
+type ReceiveLine = { itemId: string; receivedQuantity: number; purchasePrice: number };
+
 export default function PurchaseOrderDetailPage() {
   const navigate = useNavigate();
   const { id } = useParams<{ id: string }>();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const canWrite = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  // Мутации заказа (приёмка/отмена/правка) — suppliers_manage (волна Битрикс24).
+  const canWrite = hasPermission('suppliers_manage');
 
   const [receiveMode, setReceiveMode] = useState(false);
   const [deltas, setDeltas] = useState<Record<string, number>>({});
+  // Закупочная цена за единицу по строке (free-text, чтобы «12,5» печаталось
+  // чисто) — приёмка в supply-режиме обновляет cost_price товара (миграция 098).
+  const [prices, setPrices] = useState<Record<string, string>>({});
+  // Выбранный способ приёмки для подтверждения: 'debt' (в долг) / 'paid'
+  // (оплатить сразу). null — диалог закрыт.
+  const [pendingMode, setPendingMode] = useState<PayMode | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
 
   const {
@@ -76,15 +92,32 @@ export default function PurchaseOrderDetailPage() {
     onError: () => toast.error('Не удалось отменить заказ'),
   });
 
+  // Каждая приёмка на вебе теперь идёт в supply-режиме (миграция 098): шлём
+  // paymentMode + закупочные цены → сервер обновляет cost_price товара, заводит
+  // поставку и либо растит долг поставщику ('debt'), либо создаёт авто-платёж
+  // ('paid'). Инвалидируем леджер поставщика, чтобы Поставки/Платежи/Долг
+  // освежились сразу.
   const receiveMutation = useMutation({
-    mutationFn: (payload?: { items?: Array<{ itemId: string; receivedQuantity: number }> }) =>
-      purchaseOrdersApi.receive(id!, payload),
-    onSuccess: (res) => {
+    mutationFn: (vars: { items: ReceiveLine[]; paymentMode: PayMode }) => purchaseOrdersApi.receive(id!, vars),
+    onSuccess: (res, vars) => {
       invalidateAfterMutation(res.data);
       invalidateStock();
+      const supplierId = res.data.supplierId;
+      if (supplierId) {
+        queryClient.invalidateQueries({ queryKey: ['supplier', supplierId] });
+        queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', supplierId] });
+        queryClient.invalidateQueries({ queryKey: ['supplier-payments', supplierId] });
+      }
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
       setReceiveMode(false);
       setDeltas({});
-      toast.success(res.data.status === 'received' ? 'Заказ получен полностью' : 'Приёмка проведена');
+      setPrices({});
+      const total = vars.items.reduce((s, l) => s + l.receivedQuantity * l.purchasePrice, 0);
+      toast.success(
+        vars.paymentMode === 'paid'
+          ? `Поставка на ${formatMoney(total)} принята и оплачена`
+          : `Поставка на ${formatMoney(total)} принята в долг поставщику`,
+      );
     },
     onError: () => toast.error('Не удалось провести приёмку'),
   });
@@ -94,21 +127,55 @@ export default function PurchaseOrderDetailPage() {
   const items = useMemo(() => po?.items || [], [po]);
 
   const enterReceiveMode = () => {
-    const init: Record<string, number> = {};
-    for (const it of items) init[it.id] = outstanding(it);
-    setDeltas(init);
+    const initDeltas: Record<string, number> = {};
+    const initPrices: Record<string, string> = {};
+    for (const it of items) {
+      initDeltas[it.id] = outstanding(it);
+      // По умолчанию — цена из заказа (снимок costPrice); владелец правит по факту.
+      initPrices[it.id] = it.costPrice ? String(it.costPrice) : '';
+    }
+    setDeltas(initDeltas);
+    setPrices(initPrices);
     setReceiveMode(true);
   };
 
-  const confirmPartialReceive = () => {
-    const payloadItems = items
-      .map((it) => ({ itemId: it.id, receivedQuantity: Math.min(deltas[it.id] || 0, outstanding(it)) }))
-      .filter((x) => x.receivedQuantity > 0);
+  // Строки к приёмке — только с положительным «принять сейчас» (кламп к остатку).
+  const buildReceiveItems = (): ReceiveLine[] =>
+    items
+      .map((it) => {
+        const qty = Math.min(deltas[it.id] || 0, outstanding(it));
+        if (qty <= 0) return null;
+        return { itemId: it.id, receivedQuantity: qty, purchasePrice: parsePrice(prices[it.id] ?? '') };
+      })
+      .filter((x): x is ReceiveLine => x != null);
+
+  // «Стоимость накладной» = Σ(принято × закупочная цена) по принимаемым строкам.
+  const invoiceTotal = useMemo(
+    () =>
+      items.reduce((sum, it) => {
+        const qty = Math.min(deltas[it.id] || 0, outstanding(it));
+        if (qty <= 0) return sum;
+        return sum + qty * parsePrice(prices[it.id] ?? '');
+      }, 0),
+    [items, deltas, prices],
+  );
+
+  const choosePayMode = (mode: PayMode) => {
+    if (buildReceiveItems().length === 0) {
+      toast.error('Укажите количество для приёмки');
+      return;
+    }
+    setPendingMode(mode);
+  };
+
+  const confirmReceive = () => {
+    if (!pendingMode) return;
+    const payloadItems = buildReceiveItems();
     if (payloadItems.length === 0) {
       toast.error('Укажите количество для приёмки');
       return;
     }
-    receiveMutation.mutate({ items: payloadItems });
+    receiveMutation.mutate({ items: payloadItems, paymentMode: pendingMode });
   };
 
   if (isLoading) return <InlineLoader minHeight="min-h-[60vh]" />;
@@ -189,7 +256,7 @@ export default function PurchaseOrderDetailPage() {
               <th className="text-center">Заказано</th>
               <th className="text-center">Принято</th>
               {receiveMode && <th className="text-center">Принять сейчас</th>}
-              <th className="text-right">Цена</th>
+              <th className="text-right">{receiveMode ? 'Цена закупки' : 'Цена'}</th>
               <th className="text-right">Сумма</th>
             </tr>
           </thead>
@@ -219,7 +286,23 @@ export default function PurchaseOrderDetailPage() {
                     />
                   </td>
                 )}
-                <td className="text-right text-gray-600 tabular-nums">{formatMoney(it.costPrice)}</td>
+                <td className="text-right text-gray-600 tabular-nums">
+                  {receiveMode ? (
+                    <input
+                      type="number"
+                      min={0}
+                      step="any"
+                      inputMode="decimal"
+                      className="input w-28 ml-auto text-right"
+                      placeholder="Цена"
+                      value={prices[it.id] ?? ''}
+                      disabled={outstanding(it) === 0}
+                      onChange={(e) => setPrices((prev) => ({ ...prev, [it.id]: e.target.value }))}
+                    />
+                  ) : (
+                    formatMoney(it.costPrice)
+                  )}
+                </td>
                 <td className="text-right font-medium text-gray-900 tabular-nums">{formatMoney(it.total)}</td>
               </tr>
             ))}
@@ -229,6 +312,12 @@ export default function PurchaseOrderDetailPage() {
           <span className="text-sm font-medium text-gray-600">Итого</span>
           <span className="text-lg font-bold text-gray-900 tabular-nums">{formatMoney(po.total)}</span>
         </div>
+        {receiveMode && (
+          <div className="flex items-center justify-between px-4 py-2.5 border-t border-gray-100 bg-primary-50/60">
+            <span className="text-sm font-medium text-gray-600">Стоимость накладной</span>
+            <span className="text-lg font-bold text-primary-700 tabular-nums">{formatMoney(invoiceTotal)}</span>
+          </div>
+        )}
       </div>
 
       {/* Actions */}
@@ -241,15 +330,25 @@ export default function PurchaseOrderDetailPage() {
                 onClick={() => {
                   setReceiveMode(false);
                   setDeltas({});
+                  setPrices({});
                 }}
                 disabled={isBusy}
                 className="btn-secondary"
               >
                 Отмена
               </button>
-              <button type="button" onClick={confirmPartialReceive} disabled={isBusy} className="btn-primary">
-                <PackageCheck className="w-4 h-4" />
-                {receiveMutation.isPending ? 'Приёмка...' : 'Подтвердить приёмку'}
+              <button type="button" onClick={() => choosePayMode('debt')} disabled={isBusy} className="btn-primary">
+                <Clock className="w-4 h-4" />
+                {receiveMutation.isPending ? 'Приёмка...' : 'Принять без оплаты'}
+              </button>
+              <button
+                type="button"
+                onClick={() => choosePayMode('paid')}
+                disabled={isBusy}
+                className="btn bg-green-600 text-white hover:bg-green-700 focus:ring-green-500 shadow-sm"
+              >
+                <Wallet className="w-4 h-4" />
+                Оплатить сразу
               </button>
             </>
           ) : (
@@ -286,17 +385,9 @@ export default function PurchaseOrderDetailPage() {
                     <XCircle className="w-4 h-4" />
                     Отменить
                   </button>
-                  <button type="button" onClick={enterReceiveMode} disabled={isBusy} className="btn-secondary">
-                    Принять частично
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => receiveMutation.mutate(undefined)}
-                    disabled={isBusy}
-                    className="btn-primary"
-                  >
+                  <button type="button" onClick={enterReceiveMode} disabled={isBusy} className="btn-primary">
                     <PackageCheck className="w-4 h-4" />
-                    {receiveMutation.isPending ? 'Приёмка...' : 'Принять всё'}
+                    Принять поставку
                   </button>
                 </>
               )}
@@ -313,6 +404,20 @@ export default function PurchaseOrderDetailPage() {
         message="Заказ будет переведён в статус «Отменён». Это действие нельзя отменить."
         confirmText="Отменить заказ"
         variant="danger"
+      />
+
+      <ConfirmDialog
+        isOpen={pendingMode !== null}
+        onClose={() => setPendingMode(null)}
+        onConfirm={confirmReceive}
+        title={pendingMode === 'paid' ? 'Оплатить и принять?' : 'Принять в долг?'}
+        message={
+          pendingMode === 'paid'
+            ? `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад, а платёж на эту сумму создастся автоматически.`
+            : `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад. Сумма добавится в долг поставщику — погасите позже через «Новая оплата».`
+        }
+        confirmText={pendingMode === 'paid' ? 'Оплатить сразу' : 'Принять в долг'}
+        variant="primary"
       />
     </div>
   );

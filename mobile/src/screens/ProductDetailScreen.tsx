@@ -156,21 +156,20 @@ export default function ProductDetailScreen() {
   const queryClient = useQueryClient();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { user, hasPermission } = useAuth();
+  const { hasPermission } = useAuth();
 
-  // Owner-class (superadmin/director/admin) минует все склад-гейты — как на
-  // сервере (PermissionsGuard байпасит их по строковой роли).
-  const isOwnerClass = user?.role === 'superadmin' || user?.role === 'director' || user?.role === 'admin';
   // ROLE-ONLY (консолидация 2026-07): управление складом (себестоимость +
   // редактирование) — только warehouse_manage. Бэкенд шлёт costPrice:0 и 403 на
   // PATCH не-менеджеру, поэтому себестоимость/маржу/редактор прячем (иначе
   // «0 ₽ себестоимости» и мёртвая кнопка «Сохранить»). Mirror ProductRow.
-  const canManageWarehouse = isOwnerClass || hasPermission('warehouse_manage');
+  // «Права как в Битрикс24» (2026-07): admin живёт по матрице из /auth/me;
+  // superadmin/director байпасятся внутри самого hasPermission.
+  const canManageWarehouse = hasPermission('warehouse_manage');
   // Себестоимость и маржу видит только тот, кто управляет складом (manage ⇒
   // backend отдаёт реальную costPrice; иначе costPrice:0 — показывать нельзя).
   const canSeeCostPrice = canManageWarehouse;
   // #60 — «Удаление на складе». manage ⇒ delete; либо явное warehouse_delete.
-  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
+  const canDeleteWarehouse = hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
 
   const passedProduct = (route.params as ProductDetailParams).product;
   const productId = passedProduct.id;

@@ -50,6 +50,7 @@ export const paymentMethodLabels: Record<string, string> = {
   card: 'Карта',
   warranty: 'Гарантия',
   cash_card: 'Нал/Карта',
+  installment: 'Рассрочка',
 };
 
 /**

@@ -376,7 +376,12 @@ export function createTenantsApi(api: HttpClient) {
 /** Superadmin platform-operator endpoints not tied to a single tenant. */
 export function createAdminApi(api: HttpClient) {
   return {
-    listAuditLog: () => api.get<AuditLogEntry[]>('/admin/audit-log'),
+    /**
+     * Журнал действий платформы. `limit`/`offset` — аддитивная пагинация
+     * (backend без параметров отдаёт прежние 50; limit клампится сервером).
+     */
+    listAuditLog: (params?: { limit?: number; offset?: number }) =>
+      api.get<AuditLogEntry[]>('/admin/audit-log', { params }),
     /**
      * Monthly MRR trend for the admin dashboard (096). `months` defaults to 12
      * server-side and is clamped to 1..36. Oldest month first.
@@ -877,7 +882,23 @@ export function createReportsApi(api: HttpClient) {
         // погашения рассрочки по дате платежа, в total НЕ входят (деньги за
         // прошлые продажи). installmentPaidCash/Card (119) — разбивка погашений
         // по способу оплаты (installmentPaid = Cash + Card; до-миграционные
-        // платежи считаются налом). Все поля опциональны — старый бэкенд их не
+        // платежи считаются налом). Поля ручной сверки (2026-07):
+        //   • received — «касса за день»: реально принятые деньги = cash + card
+        //     + installmentPaid (владелец сверяет ящик с received − refunds);
+        //   • refunds — возвраты клиентам по ДАТЕ ВОЗВРАТА, информационно (из
+        //     дня ПРОДАЖИ деньги уже вычтены реверсом, в total не входит);
+        //   • unallocated — остаток «Итого», не разнесённый по нал/карта/долг
+        //     (битые ноги легаси cash_card-чеков): cash + card + installmentDebt
+        //     + unallocated = total сходится арифметически.
+        // ОТТОКИ (E-1) — расходная сторона кассы за день (только при просмотре
+        // всего тенанта; при фильтре по мастеру не атрибутируются и равны 0):
+        //   • supplierPayments — оплаты поставщикам (supplier_payments по date,
+        //     вкл. авто-платежи «Оплатить сразу» и погашения Б/У-долга);
+        //   • expensesOut — операционные расходы (expenses, approved, кроме
+        //     «Зарплата» — та же логика, что otherExpenses в фин.отчёте);
+        //   • netCash — «осталось в кассе» = received − refunds −
+        //     supplierPayments − expensesOut.
+        // Все поля опциональны — старый бэкенд их не
         // шлёт, клиенты рендерят строки только когда поле пришло числом.
         days: Array<{
           date: string;
@@ -890,6 +911,12 @@ export function createReportsApi(api: HttpClient) {
           installmentPaid?: number;
           installmentPaidCash?: number;
           installmentPaidCard?: number;
+          received?: number;
+          refunds?: number;
+          unallocated?: number;
+          supplierPayments?: number;
+          expensesOut?: number;
+          netCash?: number;
         }>;
         totals: {
           cash: number;
@@ -901,6 +928,12 @@ export function createReportsApi(api: HttpClient) {
           installmentPaid?: number;
           installmentPaidCash?: number;
           installmentPaidCard?: number;
+          received?: number;
+          refunds?: number;
+          unallocated?: number;
+          supplierPayments?: number;
+          expensesOut?: number;
+          netCash?: number;
         };
       }>('/reports/cashflow', { params }),
     /**

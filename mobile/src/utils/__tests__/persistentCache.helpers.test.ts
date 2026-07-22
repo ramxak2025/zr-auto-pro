@@ -18,7 +18,13 @@
  * Imports ONLY the pure helpers module (no react-native / AsyncStorage) so it
  * runs under the default node jest environment, like the other util tests.
  */
-import { isEmptyCollection, classifyStoredPair, MAX_STALE_MS, type StoredEntry } from '../persistentCache.helpers';
+import {
+  isEmptyCollection,
+  classifyStoredPair,
+  MAX_STALE_MS,
+  VARIANT_CAPS,
+  type StoredEntry,
+} from '../persistentCache.helpers';
 
 const NOW = 1_700_000_000_000; // fixed deterministic "now"
 
@@ -195,5 +201,83 @@ describe('classifyStoredPair', () => {
         ).status,
       ).toBe('ok');
     }
+  });
+
+  // ── Волна C «Связь 2.0» — расширение whitelist (2026-07-21) ─────────────
+  // Шаблоны Кассы / смена / рассрочка / мотивация / планирование / лояльность /
+  // подписка / деталки товара и заказа / маркетинг-отчёты теперь персистятся —
+  // экраны открываются мгновенно на холодном старте. Формы ключей взяты из
+  // живых useQuery соответствующих экранов.
+  describe('wave-C persisted keys', () => {
+    const storedAt = NOW - 60_000;
+    const okCases: Array<{ queryKey: StoredEntry['queryKey']; data: unknown }> = [
+      { queryKey: ['check-templates'], data: [{ id: 't1', name: 'ТО-1' }] },
+      { queryKey: ['check-template-folders'], data: [{ id: 'f1', name: 'Двигатель' }] },
+      { queryKey: ['cash-shift', 'current'], data: { shift: { id: 's1', status: 'open' } } },
+      { queryKey: ['cash-shift', 'list'], data: { data: [{ id: 's0', status: 'closed' }], total: 1 } },
+      { queryKey: ['cash-shift', 'report', 's0'], data: { shift: { id: 's0' }, totals: {} } },
+      { queryKey: ['installments', 'list', 'active'], data: [{ id: 'p1' }] },
+      { queryKey: ['installments', 'client', 'c1'], data: { plans: [{ id: 'p1' }] } },
+      { queryKey: ['motivation', 'promos'], data: [{ productId: 'p1', percent: 5 }] },
+      { queryKey: ['motivation', 'accruals', '2026-07-01', '2026-07-21'], data: [{ id: 'a1' }] },
+      { queryKey: ['planning', 'fixed-costs'], data: [{ id: 'fc1' }] },
+      { queryKey: ['loyalty', 'settings'], data: { enabled: true, percent: 3 } },
+      { queryKey: ['loyalty-settings'], data: { enabled: true } },
+      { queryKey: ['subscription'], data: { plan: 'pro', features: ['voice'] } },
+      { queryKey: ['product', 'p42'], data: { id: 'p42', name: 'Масло 5W-30' } },
+      { queryKey: ['purchase-order', 'po7'], data: { id: 'po7', status: 'ordered' } },
+      { queryKey: ['marketing-report', '2026-07-01', '2026-07-21'], data: { newClients: 3 } },
+    ];
+
+    it.each(okCases)('classifies a fresh non-empty $queryKey snapshot as ok', ({ queryKey, data }) => {
+      const res = classifyStoredPair(serialise({ queryKey, data, storedAt }), NOW);
+      expect(res.status).toBe('ok');
+      if (res.status === 'ok') {
+        expect(res.queryKey).toEqual(queryKey);
+        expect(res.storedAt).toBe(storedAt);
+      }
+    });
+
+    it('still skips EMPTY list snapshots of the new keys (guard not weakened)', () => {
+      expect(
+        classifyStoredPair(serialise({ queryKey: ['check-templates'], data: [], storedAt: NOW }), NOW).status,
+      ).toBe('skip');
+      expect(
+        classifyStoredPair(serialise({ queryKey: ['installments', 'list', 'all'], data: [], storedAt: NOW }), NOW)
+          .status,
+      ).toBe('skip');
+    });
+
+    it('still rejects primitive / null payloads of the new keys (HTML-poison guard)', () => {
+      // ['cash-shift','current'] без открытой смены → null; строка = HTML-яд.
+      expect(
+        classifyStoredPair(serialise({ queryKey: ['cash-shift', 'current'], data: null, storedAt: NOW }), NOW).status,
+      ).toBe('corrupt');
+      expect(
+        classifyStoredPair(serialise({ queryKey: ['subscription'], data: '<html>502</html>', storedAt: NOW }), NOW)
+          .status,
+      ).toBe('corrupt');
+    });
+
+    it('still ages an old snapshot of the new keys out via MAX_STALE_MS', () => {
+      const raw = serialise({ queryKey: ['product', 'p42'], data: { id: 'p42' }, storedAt: NOW - MAX_STALE_MS - 1 });
+      expect(classifyStoredPair(raw, NOW).status).toBe('stale');
+    });
+
+    it('bounds every unbounded new family with a VARIANT_CAP (AsyncStorage must not bloat)', () => {
+      // Id-keyed деталки — по образцу client/check.
+      expect(VARIANT_CAPS.product).toBe(10);
+      expect(VARIANT_CAPS['purchase-order']).toBe(10);
+      // Per-client семейства.
+      expect(VARIANT_CAPS.installments).toBe(10);
+      expect(VARIANT_CAPS.loyalty).toBe(10);
+      // Per-id Z-отчёты + 2 фиксированных слота.
+      expect(VARIANT_CAPS['cash-shift']).toBe(5);
+      // Период-ключи.
+      expect(VARIANT_CAPS.motivation).toBe(4);
+      expect(VARIANT_CAPS['marketing-report']).toBe(3);
+      // Фиксированная пара слотов.
+      expect(VARIANT_CAPS.planning).toBe(2);
+    });
   });
 });

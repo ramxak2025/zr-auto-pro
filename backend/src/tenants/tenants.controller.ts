@@ -3,6 +3,7 @@ import { TenantsService } from './tenants.service';
 import { AuditService, AuditActor } from './audit.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { ExtendSubscriptionDto, AssignPlanDto, SuspendTenantDto } from './dto/subscription.dto';
@@ -13,7 +14,10 @@ import { ExtendSubscriptionDto, AssignPlanDto, SuspendTenantDto } from './dto/su
 // tenants WHERE id=<sentinel>` for a tenant-less caller, which matches no row
 // and returns a clean 404 (its existing behaviour) — never an FK-500.
 @AllowNoTenant()
-@UseGuards(JwtAuthGuard, RolesGuard)
+// PermissionsGuard добавлен для матричного ключа 'company_manage' на
+// /my-company-роутах ниже; на superadmin-роутах без @RequirePermission он
+// no-op (нет ключа → allow, как RolesGuard без @Roles).
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller()
 export class TenantsController {
   constructor(
@@ -111,15 +115,20 @@ export class TenantsController {
     return this.tenantsService.impersonate(id, await this.actor(user));
   }
 
-  // ─── Director routes (own company settings) ─────────────────────
+  // ─── Company settings (own tenant) ─────────────────────────────────
+  // Матричный ключ 'company_manage' (settings.company) вместо прежнего
+  // @Roles('director','superadmin'): owner-class обходит внутри
+  // userHasPermission, сид «Администратора» держит company_manage=false
+  // (owner-only ячейка R6) — поведение 1:1, но кастомная роль теперь может
+  // получить право явно.
 
-  @Roles('director', 'superadmin')
+  @RequirePermission('company_manage')
   @Get('my-company')
   getMyCompany(@CurrentUser() user: JwtPayload) {
     return this.tenantsService.getMyCompany(user.tenantID);
   }
 
-  @Roles('director', 'superadmin')
+  @RequirePermission('company_manage')
   @Patch('my-company')
   updateMyCompany(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.tenantsService.updateMyCompany(user.tenantID, dto);
@@ -147,10 +156,21 @@ export class AdminAuditController {
     private tenantsService: TenantsService,
   ) {}
 
+  /**
+   * Аддитивная пагинация журнала: без параметров поведение прежнее (последние
+   * 50 записей). `limit` клампится в 1..200, `offset` ≥ 0. AuditService.list
+   * принимает только limit, поэтому смещение реализовано поверх (тянем
+   * offset+limit новейших строк и отрезаем) — объём журнала небольшой, а
+   * audit.service остаётся нетронутым.
+   */
   @Roles('superadmin')
   @Get('audit-log')
-  listAuditLog() {
-    return this.audit.list(50);
+  async listAuditLog(@Query('limit') limitRaw?: string, @Query('offset') offsetRaw?: string) {
+    const limit = Math.min(Math.max(parseInt(limitRaw ?? '', 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(offsetRaw ?? '', 10) || 0, 0);
+    if (offset === 0) return this.audit.list(limit);
+    const rows = await this.audit.list(limit + offset);
+    return rows.slice(offset);
   }
 
   /**

@@ -20,7 +20,8 @@ import * as Busboy from 'busboy';
 import * as path from 'path';
 import { EmployeesService } from './employees.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { LocalStorageAdapter } from '../uploads/storage.service';
 
@@ -28,7 +29,10 @@ const MAX_SIZE = 10 * 1024 * 1024;
 const ALLOWED_PHOTO_EXTS = new Set(['.jpg', '.jpeg', '.png', '.webp', '.heic', '.heif']);
 const ALLOWED_DOC_EXTS = new Set(['.jpg', '.jpeg', '.png', '.pdf', '.webp', '.heic', '.heif']);
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+// Мутации документов/достижений — под матричным ключом 'user_management'
+// (волна «права как в Битрикс24», 2026-07). Self-роуты (PATCH своего профиля,
+// фото) остаются открытыми — split self-vs-manager живёт в сервисе.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('employees')
 export class EmployeesController {
   private readonly logger = new Logger('EmployeesController');
@@ -41,7 +45,7 @@ export class EmployeesController {
   // Update an employee — see service for permission split.
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() body: Record<string, unknown>) {
-    return this.employees.update(user.userID, user.role, user.tenantID, id, body);
+    return this.employees.update(user, user.tenantID, id, body);
   }
 
   // Multipart photo upload — saves a 512×512 WebP under uploads/<tenant>/employees/.
@@ -80,7 +84,7 @@ export class EmployeesController {
         });
 
         this.employees
-          .uploadPhoto(user.userID, user.role, user.tenantID, id, stream, ext)
+          .uploadPhoto(user, user.tenantID, id, stream, ext)
           .then((res) => {
             if (truncated) {
               done(new BadRequestException({ message: 'Файл слишком большой' }));
@@ -165,7 +169,7 @@ export class EmployeesController {
     });
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('user_management')
   @Post(':id/documents')
   uploadDocument(@Param('id') id: string, @Req() req: Request, @CurrentUser() user: JwtPayload): Promise<unknown> {
     return new Promise((resolve, reject) => {
@@ -237,7 +241,7 @@ export class EmployeesController {
     });
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('user_management')
   @Delete(':id/documents/:docId')
   removeDocument(@Param('id') id: string, @Param('docId') docId: string, @CurrentUser() user: JwtPayload) {
     return this.employees.removeDocument(user.tenantID, id, docId);
@@ -250,7 +254,7 @@ export class EmployeesController {
     return this.employees.listAchievements(user.tenantID, id);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('user_management')
   @Post(':id/achievements')
   addAchievement(
     @Param('id') id: string,
@@ -260,7 +264,7 @@ export class EmployeesController {
     return this.employees.addAchievement(user.tenantID, user.userID, id, body);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('user_management')
   @Delete(':id/achievements/:achId')
   removeAchievement(@Param('id') id: string, @Param('achId') achId: string, @CurrentUser() user: JwtPayload) {
     return this.employees.removeAchievement(user.tenantID, id, achId);

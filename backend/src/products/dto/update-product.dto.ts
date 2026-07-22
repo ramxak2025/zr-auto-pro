@@ -25,7 +25,9 @@ export class UpdateProductDto {
   sellPrice?: number;
 
   // Дробные остатки (120): 12.5 м / 0.75 кг; не глубже 3 знаков — NUMERIC(12,3).
+  // @Min(0) — отрицательный остаток через PATCH запрещён (страж и в сервисе).
   @IsNumber({ maxDecimalPlaces: 3 })
+  @Min(0)
   @IsOptional()
   stock?: number;
 

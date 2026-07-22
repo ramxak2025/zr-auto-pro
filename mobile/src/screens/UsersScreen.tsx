@@ -325,7 +325,7 @@ interface CommissionItem {
 
 export default function UsersScreen() {
   const navigation = useNavigation<any>();
-  const { hasPermission, user: currentUser } = useAuth();
+  const { hasPermission, user: currentUser, refreshUser } = useAuth();
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
@@ -433,6 +433,9 @@ export default function UsersScreen() {
         await usersApi.updateItemVisibility(variables.id, mapToItems(items)).catch(() => {});
       }
       queryClient.invalidateQueries({ queryKey: ['users'] });
+      // Правка СЕБЯ (например, смена собственной роли) меняет эффективные
+      // права — рефетчим /auth/me, чтобы hasPermission-гейты обновились сразу.
+      if (variables.id === currentUser?.id) void refreshUser();
       haptic('success');
       Alert.alert('Готово', 'Сотрудник обновлён');
       closeModal();
@@ -465,14 +468,14 @@ export default function UsersScreen() {
   });
 
   // ── Роли (ROLE-ONLY) ────────────────────────────────────────────────────────
-  // Server gate is director/admin/superadmin — match it so the gated GET /roles
-  // is never hit by a plain `user_management` admin who'd just get a 403. Роли —
-  // для пилюли «Роль» в edit-форме и шита выбора. Ленивая: грузится только пока
-  // открыта форма сотрудника (нужна, чтобы отрисовать ИМЯ уже назначенной роли,
-  // а не только список в шите). Канонический хук useRoles — тот же слот
-  // ['roles'], что у RolesScreen/RoleEditorScreen.
-  const canManageRoles =
-    currentUser?.role === 'director' || currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
+  // Server gate is user_management (roles.controller, «права как в Битрикс24»):
+  // матрица авторитетна, superadmin/director байпасятся внутри hasPermission,
+  // admin — по эффективным правам из /auth/me. Роли — для пилюли «Роль» в
+  // edit-форме и шита выбора. Ленивая: грузится только пока открыта форма
+  // сотрудника (нужна, чтобы отрисовать ИМЯ уже назначенной роли, а не только
+  // список в шите). Канонический хук useRoles — тот же слот ['roles'], что у
+  // RolesScreen/RoleEditorScreen.
+  const canManageRoles = hasPermission('user_management');
   const { data: rolesData } = useRoles(canManageRoles && modalOpen);
   const roles = Array.isArray(rolesData) ? rolesData : [];
 

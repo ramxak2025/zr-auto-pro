@@ -1,14 +1,21 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Autexa PWA Service Worker v14
+//  Autexa PWA Service Worker v15
 //
 //  SPEED STRATEGY:
 //  - GET /api/auth/* → bypass SW, always network (auth must be fresh)
-//  - GET /api/*      → stale-while-revalidate by URL (instant from cache,
-//                       background refresh). Cache key = URL only, ignoring
+//  - GET /api/*      → network-first (fresh data always; Cache Storage —
+//                       ТОЛЬКО офлайн-фолбэк). Cache key = URL only, ignoring
 //                       Authorization header so Vary doesn't break matching.
 //  - POST/PATCH/DELETE /api/* → network, offline queue fallback
 //  - Static assets   → cache-first (immutable hashed filenames)
 //  - Navigation HTML  → network-first, offline fallback to cached shell
+//
+//  v15 — API-GET: network-first вместо stale-while-revalidate. SWR отдавал
+//  закэшированный ответ ЛЮБОГО возраста, свежий доезжал только до Cache
+//  Storage — refetch после invalidateQueries получал ДО-мутационный список,
+//  React Query был всегда на один fetch позади (класс жалоб «не вижу
+//  изменений» / stale-client). Теперь свежесть гарантирует сеть; кэш
+//  используется только когда сети нет.
 //
 //  v14 — надёжность офлайн-очереди (финансовые операции не теряются молча):
 //  - replay: успех = ТОЛЬКО 2xx. Детерминированные отказы (4xx кроме 408/429)
@@ -28,12 +35,11 @@
 //    Ничего не дропается.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v14';
-const API_CACHE = 'autexa-api-v14';
+const STATIC_CACHE = 'autexa-static-v15';
+const API_CACHE = 'autexa-api-v15';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
 const FAILED_STORE = 'autexa-offline-failed';
 const IDB_VERSION = 2; // v2: + FAILED_STORE
-const API_CACHE_TTL = 30_000; // 30 seconds — serve cache if younger
 
 // Retriable-отказ (5xx/408/429) жжёт попытку; после MAX запись уходит в
 // failed-store — иначе вечный ретрай заведомо мёртвой операции скрывал бы
@@ -84,8 +90,8 @@ self.addEventListener('fetch', (event) => {
       return;
     }
 
-    // GET /api: stale-while-revalidate — INSTANT from cache, fresh in background
-    event.respondWith(apiSWR(url.href, request));
+    // GET /api: network-first — сеть даёт свежие данные, кэш только офлайн
+    event.respondWith(apiNetworkFirst(url.href, request));
     return;
   }
 
@@ -108,60 +114,49 @@ self.addEventListener('fetch', (event) => {
   }
 });
 
-// ─── API: Stale-While-Revalidate ─────────────────────────────────────────────
+// ─── API: Network-First (cache = offline fallback only) ──────────────────────
 //
 // Key insight: cache.match() by URL string (not Request object) so that
 // Authorization / Vary headers don't break matching. Every logged-in user
 // shares the same URL cache entry — React Query handles per-user data
 // separation at the app level.
 //
+// Почему НЕ stale-while-revalidate: SWR отдавал кэш ЛЮБОГО возраста, а
+// свежий ответ клал только в Cache Storage — refetch после мутации
+// (invalidateQueries) получал до-мутационные данные, и UI отставал на цикл
+// (до staleTime 2 мин или перезагрузки). Мгновенность UI обеспечивают
+// placeholderData + persist на уровне React Query, а не SW.
+//
 // Flow:
-//   1. Cache hit + age < 30s → return INSTANTLY (0ms perceived latency)
-//   2. Cache hit + age > 30s → return cache + background refresh
-//   3. Cache miss → wait for network, cache result
-//   4. Network fail + cache → return stale cache (any age)
-//   5. Network fail + no cache → honest 503 (axios rejects, RQ shows error)
+//   1. Network OK → cache by URL, return fresh
+//   2. Network fail + cache → return stale cache (offline, any age)
+//   3. Network fail + no cache → honest 503 (axios rejects, RQ shows error)
 
-async function apiSWR(urlHref, request) {
+async function apiNetworkFirst(urlHref, request) {
   const cache = await caches.open(API_CACHE);
-  const cached = await cache.match(urlHref);
 
-  // Always start the network fetch in background
-  const networkPromise = fetch(request).then((response) => {
+  try {
+    const response = await fetch(request);
     if (response.ok) {
       // Store by URL string so future matches ignore headers
       cache.put(urlHref, response.clone()).catch(() => {});
     }
     return response;
-  }).catch(() => null);
+  } catch {
+    // Сеть недоступна — офлайн-фолбэк из кэша (любого возраста).
+    const cached = await cache.match(urlHref);
+    if (cached) return cached;
 
-  if (cached) {
-    const dateHeader = cached.headers.get('date');
-    const age = dateHeader ? Date.now() - new Date(dateHeader).getTime() : Infinity;
-
-    if (age < API_CACHE_TTL) {
-      // Fresh enough — return instantly, don't wait for network
-      return cached;
-    }
-
-    // Stale but exists — return stale immediately, update in background
-    networkPromise.catch(() => {});
-    return cached;
+    // Offline and no cache — честная 503-ошибка. Раньше тут возвращался
+    // 200 '[]': axios считал его успехом, React Query кэшировал «пустой список»
+    // (склад/журнал/клиенты «обнулялись»), а persist-снапшот отравлялся до
+    // следующего успешного рефетча. 503 → reject → штатный error-state.
+    return new Response(JSON.stringify({ offline: true, message: 'Нет сети' }), {
+      status: 503,
+      statusText: 'Offline',
+      headers: { 'Content-Type': 'application/json', 'X-Offline': 'true' },
+    });
   }
-
-  // No cache — must wait for network
-  const networkResponse = await networkPromise;
-  if (networkResponse) return networkResponse;
-
-  // Offline and no cache — честная 503-ошибка. Раньше тут возвращался
-  // 200 '[]': axios считал его успехом, React Query кэшировал «пустой список»
-  // (склад/журнал/клиенты «обнулялись»), а persist-снапшот отравлялся до
-  // следующего успешного рефетча. 503 → reject → штатный error-state.
-  return new Response(JSON.stringify({ offline: true, message: 'Нет сети' }), {
-    status: 503,
-    statusText: 'Offline',
-    headers: { 'Content-Type': 'application/json', 'X-Offline': 'true' },
-  });
 }
 
 // ─── Static: Cache-First ─────────────────────────────────────────────────────

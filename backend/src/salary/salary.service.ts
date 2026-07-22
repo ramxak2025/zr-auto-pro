@@ -41,10 +41,14 @@ export class SalaryService {
   private async workedShiftsByUser(tenantID: string, dateFrom: string, dateTo: string): Promise<Map<string, number>> {
     const filter = await this.schedule.buildShiftFilter(tenantID);
     if (!filter) return new Map();
+    // Верхняя отсечка LEAST(dateTo, сегодня): будущие размеченные дни месяца
+    // сменами НЕ считаются (клиенты шлют полный календарный месяц). Бизнес-
+    // «сегодня» — Europe/Moscow, как в getToday / shift-auto-close.
     const { rows } = await this.pool.query(
       `SELECT user_id, COUNT(*)::int AS worked
          FROM schedule_entries
-        WHERE tenant_id = $1 AND date >= $2::date AND date <= $3::date
+        WHERE tenant_id = $1 AND date >= $2::date
+          AND date <= LEAST($3::date, (now() AT TIME ZONE 'Europe/Moscow')::date)
           AND ${filter.sql}
         GROUP BY user_id`,
       [tenantID, dateFrom, dateTo],
@@ -52,6 +56,32 @@ export class SalaryService {
     const map = new Map<string, number>();
     for (const r of rows) map.set(r.user_id as string, parseInt(r.worked, 10) || 0);
     return map;
+  }
+
+  /** Бизнес-таймзона продукта (UTC+3, без летнего времени) — как BUSINESS_TZ
+   *  в reports.service. */
+  private static readonly BUSINESS_TZ = 'Europe/Moscow';
+  private static readonly DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+  /**
+   * SQL-предикат зарплатного периода [dateFrom..dateTo] для timestamptz-колонки
+   * `col` (значения — параметры $2/$3). Строка `YYYY-MM-DD` трактуется как
+   * МОСКОВСКИЙ календарный день: полуинтервал [from 00:00 МСК, to+1 00:00 МСК)
+   * — паттерн reports.service (BUSINESS_TZ). Раньше границы строились кастом
+   * `::date + 1` в СЕРВЕРНОЙ TZ (UTC в контейнере) с ВКЛЮЧЁННОЙ верхней
+   * полуночью: чеки/начисления 00:00–03:00 МСК первого дня уезжали в соседний
+   * период, а момент ровно to+1 00:00 попадал в оба смежных периода. Полный
+   * timestamp в параметре — прежняя семантика 1:1 (guard, чтобы не менять
+   * поведение нестандартных клиентов).
+   */
+  private static periodPredicate(col: string, dateFrom: string, dateTo: string): string {
+    const lower = SalaryService.DATE_ONLY_RE.test(dateFrom)
+      ? `${col} >= $2::date::timestamp AT TIME ZONE '${SalaryService.BUSINESS_TZ}'`
+      : `${col} >= $2`;
+    const upper = SalaryService.DATE_ONLY_RE.test(dateTo)
+      ? `${col} < ($3::date + 1)::timestamp AT TIME ZONE '${SalaryService.BUSINESS_TZ}'`
+      : `${col} <= ($3::date + 1)::timestamptz`;
+    return `${lower} AND ${upper}`;
   }
 
   private static readonly MONTH_NAMES = [
@@ -73,6 +103,9 @@ export class SalaryService {
     const dateFrom =
       query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
+    // Единые границы периода для ВСЕХ компонент зарплаты (чеки / премии /
+    // штрафы / мотивация) — московский полуинтервал, см. periodPredicate.
+    const period = (col: string) => SalaryService.periodPredicate(col, dateFrom, dateTo);
 
     const { rows } = await this.pool.query(
       `WITH svc AS (
@@ -85,7 +118,7 @@ export class SalaryService {
            FROM checks ch
            JOIN check_service_lines sl ON sl.check_id = ch.id
           WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
-            AND ch.date >= $2 AND ch.date <= ($3::date + 1)::timestamptz
+            AND ${period('ch.date')}
           GROUP BY COALESCE(sl.master_id, ch.master_id)
        ),
        prod AS (
@@ -97,7 +130,7 @@ export class SalaryService {
                 COUNT(ch.id) AS check_count
            FROM checks ch
           WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
-            AND ch.date >= $2 AND ch.date <= ($3::date + 1)::timestamptz
+            AND ${period('ch.date')}
           GROUP BY ch.master_id
        )
        SELECT u.id as master_id, u.full_name as master_name,
@@ -161,7 +194,7 @@ export class SalaryService {
        LEFT JOIN users u ON u.id = sp.user_id
        LEFT JOIN users a ON a.id = sp.awarded_by
        WHERE sp.tenant_id = $1
-         AND (sp.created_at >= $2::timestamptz AND sp.created_at <= ($3::date + 1)::timestamptz)`,
+         AND (${period('sp.created_at')})`,
       [tenantID, dateFrom, dateTo],
     );
     const premiumsByUser: Record<string, any[]> = {};
@@ -191,7 +224,7 @@ export class SalaryService {
        LEFT JOIN users u ON u.id = pen.user_id
        LEFT JOIN users c ON c.id = pen.created_by
        WHERE pen.tenant_id = $1
-         AND pen.date >= $2::timestamptz AND pen.date <= ($3::date + 1)::timestamptz`,
+         AND ${period('pen.date')}`,
       [tenantID, dateFrom, dateTo],
     );
     const penaltiesByUser: Record<string, any[]> = {};
@@ -203,17 +236,16 @@ export class SalaryService {
     // «Мотивация» (095_motivation_promo_products): sum each master's promo-product
     // bonuses accrued inside the period. ADDITIVE — a tenant with no accruals
     // yields an empty map, so motivationAmount is 0 and totalEarnings /
-    // remainingAmount stay byte-identical to before this feature. Same inclusive
-    // date-range convention as the checks / premiums queries above (accrued_at
-    // within [dateFrom, dateTo + 1 day)). Attributed by employee_id = the credited
+    // remainingAmount stay byte-identical to before this feature. Same period
+    // convention as the checks / premiums queries above (periodPredicate —
+    // московский полуинтервал). Attributed by employee_id = the credited
     // master, mirroring how product revenue is attributed to checks.master_id.
     const { rows: motivationRows } = await this.pool.query(
       `SELECT employee_id, COALESCE(SUM(amount), 0) AS amount
          FROM motivation_accruals
         WHERE tenant_id = $1
           AND employee_id IS NOT NULL
-          AND accrued_at >= $2::timestamptz
-          AND accrued_at <= ($3::date + 1)::timestamptz
+          AND ${period('accrued_at')}
         GROUP BY employee_id`,
       [tenantID, dateFrom, dateTo],
     );
@@ -345,56 +377,63 @@ export class SalaryService {
     }
     const userName = userTenantRows[0].full_name || 'Сотрудник';
 
-    // 1. Insert salary payment
-    const { rows: paymentRows } = await this.pool.query(
-      `INSERT INTO salary_payments (tenant_id, user_id, amount, month_year, type, comment, created_by, date)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-       RETURNING *`,
-      [tenantID, dto.userId, dto.amount, dto.monthYear, dto.type || 'salary', dto.comment || null, createdBy],
-    );
-    const payment = paymentRows[0];
+    // Денежный путь: выплата и её зеркальный расход пишутся АТОМАРНО — одна
+    // транзакция, как в новом flow decidePayout. Раньше два независимых INSERT
+    // на this.pool: падение между ними оставляло выплату без расхода — долг
+    // сотруднику уменьшался, а «Движение денег» / netProfit расход не видели.
+    const client = await this.pool.connect();
+    let payment: any;
+    try {
+      await client.query('BEGIN');
 
-    // 2. Find or create "Зарплата" expense category for this tenant
-    let categoryId: string;
-    const { rows: catRows } = await this.pool.query(
-      `SELECT id FROM expense_categories WHERE tenant_id = $1 AND name = 'Зарплата' LIMIT 1`,
-      [tenantID],
-    );
-    if (catRows.length > 0) {
-      categoryId = catRows[0].id;
-    } else {
-      const { rows: newCatRows } = await this.pool.query(
-        `INSERT INTO expense_categories (name, tenant_id) VALUES ('Зарплата', $1) RETURNING id`,
+      // 1. Insert salary payment
+      const { rows: paymentRows } = await client.query(
+        `INSERT INTO salary_payments (tenant_id, user_id, amount, month_year, type, comment, created_by, date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+         RETURNING *`,
+        [tenantID, dto.userId, dto.amount, dto.monthYear, dto.type || 'salary', dto.comment || null, createdBy],
+      );
+      payment = paymentRows[0];
+
+      // 2. Find or create "Зарплата" expense category for this tenant
+      let categoryId: string;
+      const { rows: catRows } = await client.query(
+        `SELECT id FROM expense_categories WHERE tenant_id = $1 AND name = 'Зарплата' LIMIT 1`,
         [tenantID],
       );
-      categoryId = newCatRows[0].id;
+      if (catRows.length > 0) {
+        categoryId = catRows[0].id;
+      } else {
+        const { rows: newCatRows } = await client.query(
+          `INSERT INTO expense_categories (name, tenant_id) VALUES ('Зарплата', $1) RETURNING id`,
+          [tenantID],
+        );
+        categoryId = newCatRows[0].id;
+      }
+
+      // Format month_year for description (e.g., "2026-02" -> "Февраль 2026")
+      const [year, month] = dto.monthYear.split('-');
+      const monthName = SalaryService.MONTH_NAMES[parseInt(month, 10) - 1] || dto.monthYear;
+      const description = `Зарплата: ${userName} за ${monthName} ${year}`;
+
+      // 4. Create expense record
+      await client.query(
+        `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [categoryId, dto.amount, description, payment.date, createdBy, tenantID],
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
     }
-
-    // Format month_year for description (e.g., "2026-02" -> "Февраль 2026")
-    const monthNames = [
-      'Январь',
-      'Февраль',
-      'Март',
-      'Апрель',
-      'Май',
-      'Июнь',
-      'Июль',
-      'Август',
-      'Сентябрь',
-      'Октябрь',
-      'Ноябрь',
-      'Декабрь',
-    ];
-    const [year, month] = dto.monthYear.split('-');
-    const monthName = monthNames[parseInt(month, 10) - 1] || dto.monthYear;
-    const description = `Зарплата: ${userName} за ${monthName} ${year}`;
-
-    // 4. Create expense record
-    await this.pool.query(
-      `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [categoryId, dto.amount, description, payment.date, createdBy, tenantID],
-    );
 
     // 5. Push notification to the employee — non-blocking; failure is logged
     // inside push.service. We use a short Russian title so the iOS lock
@@ -670,7 +709,11 @@ export class SalaryService {
   async getMy(tenantID: string, userID: string) {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
-    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - now.getDay() + 1).toISOString();
+    // Вс: getDay()=0 — «date − getDay() + 1» дал бы ПОНЕДЕЛЬНИК СЛЕДУЮЩЕЙ
+    // недели (week-суммы = 0 всё воскресенье). ISO-неделя: Вс = 7-й день —
+    // та же формула, что в checks.service.getDashboard.
+    const dow = now.getDay() === 0 ? 7 : now.getDay();
+    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dow + 1).toISOString();
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
 
     const { rows: userRows } = await this.pool.query(
@@ -1081,9 +1124,13 @@ export class SalaryService {
     const [yearStr, monStr] = monthYear.split('-');
     const year = parseInt(yearStr, 10);
     const mon = parseInt(monStr, 10); // 1-12
-    // Half-open [monthStart, nextMonthStart) in UTC.
-    const monthStart = new Date(Date.UTC(year, mon - 1, 1)).toISOString();
-    const nextMonthStart = new Date(Date.UTC(year, mon, 1)).toISOString();
+    // Half-open [monthStart, nextMonthStart) по бизнес-таймзоне продукта —
+    // Europe/Moscow (UTC+3, без летнего времени). Раньше границы строились в
+    // чистом UTC: чеки/начисления 00:00–03:00 МСК первого числа уезжали в
+    // соседний месяц относительно остальных зарплатных экранов.
+    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
+    const monthStart = new Date(Date.UTC(year, mon - 1, 1) - MSK_OFFSET_MS).toISOString();
+    const nextMonthStart = new Date(Date.UTC(year, mon, 1) - MSK_OFFSET_MS).toISOString();
 
     const { rows: userRows } = await this.pool.query(
       `SELECT full_name, COALESCE(salary_percent, 0) AS salary_percent,

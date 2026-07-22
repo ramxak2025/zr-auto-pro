@@ -50,7 +50,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
 import type { PaymentProviderName, FiscalSno, FiscalVat, WalletSettings } from '../../../shared/types';
 
 // ── Option catalogues ─────────────────────────────────────────────────
@@ -88,10 +87,12 @@ export default function PaymentIntegrationsScreen() {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { user } = useAuth();
+  const { hasPermission } = useAuth();
 
-  const isOwner =
-    user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN || user?.role === UserRole.SUPERADMIN;
+  // Настройки приёма оплат / онлайн-кассы / кошелька — ключ settings_manage
+  // (сервер: GET/PATCH /payments/settings, /fiscal/settings, /wallet/settings
+  // → тот же ключ; admin живёт по матрице из /auth/me).
+  const isOwner = hasPermission('settings_manage');
 
   if (!isOwner) {
     return (

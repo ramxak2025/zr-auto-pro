@@ -45,7 +45,6 @@ import {
   InstallmentPlan,
   ClientBonusSummary,
   BonusType,
-  UserRole,
   WalletSettings,
 } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -282,8 +281,11 @@ function ClientDebtSection({ clientId, clientName }: { clientId: string; clientN
 function ClientLoyaltySection({ clientId, clientName }: { clientId: string; clientName: string }) {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  // Ручная корректировка бонусов — backend POST /loyalty/adjust требует
+  // settings_manage (волна Битрикс24; байпас superadmin/director — внутри
+  // hasPermission, admin — по матрице роли).
+  const canManage = hasPermission('settings_manage');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [mode, setMode] = useState<BonusType>('accrual');
@@ -583,15 +585,13 @@ export default function ClientDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { hasPermission, user } = useAuth();
+  const { hasPermission } = useAuth();
 
   // ROLE/PERMISSION: editing an existing client profile (ФИО / телефон /
-  // комментарий) requires `clients_edit`. Owner-class roles bypass, matching the
-  // per-page gate pattern used across this batch. Creating a new client,
-  // attaching/editing a car, and adding a client to a check stay ungated.
-  const isOwnerClass =
-    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
-  const canEditClient = isOwnerClass || hasPermission('clients_edit');
+  // комментарий) requires `clients_edit`. Байпас superadmin/director — внутри
+  // hasPermission; admin — по матрице роли из /auth/me (волна Битрикс24).
+  // Creating a new client, attaching a car, adding to a check stay ungated.
+  const canEditClient = hasPermission('clients_edit');
 
   // Client edit modal
   const [clientModalOpen, setClientModalOpen] = useState(false);

@@ -61,7 +61,9 @@ export default function InventoryScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const { hasPermission } = useAuth();
-  const canWrite = hasPermission('warehouse_access');
+  // Проведение инвентаризации пишет остатки (POST /products/:id/stock) —
+  // сервер гейтит warehouse_manage; warehouse_access здесь недостаточно.
+  const canWrite = hasPermission('warehouse_manage');
 
   const [selectedWarehouseId, setSelectedWarehouseId] = useState<string | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<string | null>(null);
@@ -289,7 +291,7 @@ export default function InventoryScreen() {
   const handleApply = useCallback(() => {
     if (progress) return;
     if (!canWrite) {
-      Alert.alert('Недостаточно прав', 'Проведение инвентаризации доступно сотрудникам с доступом к складу.');
+      Alert.alert('Недостаточно прав', 'Проведение инвентаризации доступно сотрудникам с правом управления складом.');
       return;
     }
     const entries: { id: string; name: string; actual: number }[] = [];

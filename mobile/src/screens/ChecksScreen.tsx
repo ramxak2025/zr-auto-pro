@@ -11,6 +11,10 @@ import { useNavigation, useFocusEffect } from '@react-navigation/native';
 // должен всегда вести в CheckDetail, а не на клиента/авто/мастера.
 // Переходы на сущности живут внутри открытой деталки чека.
 import { checksApi, usersApi, journalApi } from '../api/services';
+// Единый список денежных ключей, пересчитываемых backend'ом из checks
+// (зарплата / мотивация / фин-отчёт / рейтинг / история клиента) — живёт
+// рядом с мутациями деталки (mobile-audit C1).
+import { CHECK_MONEY_DEPENDENT_KEYS } from './CheckDetailScreen';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
@@ -39,7 +43,7 @@ import {
   retryOfflineCheck,
   type QueuedCheck,
 } from '../utils/offlineCheckQueue';
-import { UserRole, type Check, type PaginatedResponse, type User, type JournalDoc } from '../../../shared/types';
+import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
 
 const paymentLabels: Record<string, string> = {
   cash: 'Наличные',
@@ -536,13 +540,14 @@ export default function ChecksScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
-  // «Корзина» — owner-class только (director/admin/superadmin): бэкенд гейтит
-  // GET /checks/trash и POST /checks/:id/restore той же ролью. Тот же паттерн,
-  // что isOwnerClass в BookingCreateScreen / InstallmentsScreen.
-  const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+  // «Корзина» — часть цикла удаления: бэкенд гейтит GET /checks/trash и
+  // POST /checks/:id/restore ключом checks_delete («права как в Битрикс24»,
+  // 2026-07: admin живёт по матрице из /auth/me, superadmin/director
+  // байпасятся внутри hasPermission).
+  const canSeeTrash = canDelete;
 
   // ── Офлайн-очередь чеков (Round 9) ────────────────────────────────────
   // Бейдж «Ожидают отправки: N» над поиском (виден только при N > 0) + шит
@@ -856,12 +861,18 @@ export default function ChecksScreen() {
         { queryKey: ['checks-infinite'] },
         (old) => {
           if (!old?.pages) return old;
+          // `total` каждой страницы — ОБЩИЙ счётчик чеков (getNextPageParam
+          // читает lastPage.total). Декрементируем его на ВСЕХ страницах,
+          // если строка нашлась хоть на одной — иначе страницы несли разные
+          // total и пагинация могла запросить лишнюю/пропустить хвостовую
+          // страницу до сервер-инвалидации (mobile-audit M6).
+          const found = old.pages.some((p) => (p?.data ?? []).some((c) => c.id === id));
           return {
             ...old,
             pages: old.pages.map((p) => ({
               ...p,
               data: (p?.data ?? []).filter((c) => c.id !== id),
-              total: (p?.total ?? 0) - ((p?.data ?? []).some((c) => c.id === id) ? 1 : 0),
+              total: (p?.total ?? 0) - (found ? 1 : 0),
             })),
           };
         },
@@ -888,6 +899,11 @@ export default function ChecksScreen() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
       queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      // Деньги чека каскадно меняют зарплату / отчёты / рейтинг / историю
+      // клиента (backend считает их из checks) — mobile-audit C1.
+      for (const queryKey of CHECK_MONEY_DEPENDENT_KEYS) {
+        queryClient.invalidateQueries({ queryKey });
+      }
       // Корзина (106): удалённый чек тут же должен появиться в списке
       // CheckTrashScreen, если owner откроет его следом.
       queryClient.invalidateQueries({ queryKey: ['checks-trash'] });
@@ -1055,10 +1071,10 @@ export default function ChecksScreen() {
           </TouchableOpacity>
           {/* «Корзина» (106) — рядом с Доской, тот же pill-паттерн (owner
               brief: «корзина должна быть в разделе журнал рядом с доской»).
-              Только owner-class: бэкенд гейтит trash/restore той же ролью,
-              мастеру кнопку не показываем. Тоже пуш внутри ChecksStack —
+              Гейт checks_delete — бэкенд гейтит trash/restore тем же ключом,
+              без права кнопку не показываем. Тоже пуш внутри ChecksStack —
               таб-бар остаётся, back возвращает в Журнал. */}
-          {isOwnerClass && (
+          {canSeeTrash && (
             <TouchableOpacity
               style={[styles.boardEntryBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               onPress={() => {

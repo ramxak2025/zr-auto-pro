@@ -217,7 +217,9 @@ function formatDeltaPct(curr: number, prev: number): { text: string; tone: 'up' 
 
 // ── 1. HERO ─────────────────────────────────────────────────────────────────
 // Глубокий primary градиент с radial-glow. Hero-число — netProfitToday
-// (чистая прибыль за сегодня), под ним оборот за сегодня и за месяц.
+// (ОПЕРАЦИОННАЯ прибыль за сегодня = прибыль по чекам − разовые расходы, БЕЗ
+// амортизированной постоянки/окладов), под ним оборот за сегодня и за месяц.
+// «Чистая прибыль» с постоянкой живёт ниже, в NetProfitAccrualCard — не путать.
 // Дельта vs вчера. Данные — dashboardV2 + dashboard-chart для дельты.
 function OwnerHero({ name }: { name: string }) {
   // Канонический источник числа дня — dashboardV2 (netProfitToday + revenueToday).
@@ -324,7 +326,7 @@ function OwnerHero({ name }: { name: string }) {
         </View>
 
         <View style={styles.heroValueBlock}>
-          <Text style={styles.heroValueLabel}>Чистая прибыль сегодня</Text>
+          <Text style={styles.heroValueLabel}>Операционная прибыль</Text>
           {isLoading ? (
             <Skeleton width={220} height={36} radius={10} style={{ backgroundColor: 'rgba(255,255,255,0.10)' }} />
           ) : (
@@ -332,6 +334,7 @@ function OwnerHero({ name }: { name: string }) {
               {formatMoney(profitToday)}
             </Text>
           )}
+          {!isLoading && <Text style={styles.heroValueSub}>за сегодня · без постоянных расходов</Text>}
           {!isLoading && (
             <Text style={styles.heroSecondary}>
               Оборот: <Text style={styles.heroSecondaryBold}>{formatMoney(revenueToday)}</Text>
@@ -401,6 +404,10 @@ interface KpiTileSpec {
 function KpiStrip() {
   const navigation = useNavigation<any>();
   const palette = useColors();
+  // Прибыль — только держателю profit_view (R7): сервер зануляет profit в
+  // dashboard-chart без права, поэтому тайл прячем — честнее, чем «0 ₽».
+  const { hasPermission } = useAuth();
+  const canSeeProfit = hasPermission('profit_view');
   const month = useQuery({
     queryKey: ['dashboard-chart', 'month', 0],
     queryFn: async () => (await checksApi.getDashboardChart('month', 0)).data,
@@ -420,8 +427,8 @@ function KpiStrip() {
   const prevAvg = p && p.totalChecks > 0 ? p.totalRevenue / p.totalChecks : 0;
   const isLoading = c === undefined && month.isLoading;
 
-  const tiles: KpiTileSpec[] = useMemo(
-    () => [
+  const tiles: KpiTileSpec[] = useMemo(() => {
+    const all: KpiTileSpec[] = [
       {
         key: 'revenue',
         title: 'Оборот',
@@ -454,9 +461,9 @@ function KpiStrip() {
         total: (_d, avgValue) => avgValue,
         navTo: () => ({ stack: 'MoreTab', screen: 'Reports' }),
       },
-    ],
-    [],
-  );
+    ];
+    return canSeeProfit ? all : all.filter((t) => t.key !== 'profit');
+  }, [canSeeProfit]);
 
   const points = Array.isArray(c?.points) ? c.points : [];
 
@@ -687,6 +694,10 @@ function OwnerAnalyticsChart() {
   const [offset, setOffset] = useState(0);
   const [selectedIdx, setSelectedIdx] = useState<number | null>(null);
   const palette = useColors();
+  // Линия/ячейка прибыли — только держателю profit_view (R7): сервер зануляет
+  // profit в dashboard-chart без права, поэтому прячем, а не рисуем нули.
+  const { hasPermission } = useAuth();
+  const canSeeProfit = hasPermission('profit_view');
 
   const { data, isLoading, isError, refetch } = useQuery({
     queryKey: ['dashboard-chart', period, offset],
@@ -1046,15 +1057,19 @@ function OwnerAnalyticsChart() {
                     strokeLinecap="round"
                     fill="none"
                   />
-                  <Path d={profAreaPath} fill="url(#profGradLight)" />
-                  <Path
-                    d={profLinePath}
-                    stroke={colors.cyan[600]}
-                    strokeWidth={2}
-                    strokeLinecap="round"
-                    fill="none"
-                    strokeDasharray="4,4"
-                  />
+                  {canSeeProfit && (
+                    <>
+                      <Path d={profAreaPath} fill="url(#profGradLight)" />
+                      <Path
+                        d={profLinePath}
+                        stroke={colors.cyan[600]}
+                        strokeWidth={2}
+                        strokeLinecap="round"
+                        fill="none"
+                        strokeDasharray="4,4"
+                      />
+                    </>
+                  )}
                   {/* Скраб-линия + точки: всегда смонтированы, позиция и
                       видимость управляются worklet'ами на UI-потоке —
                       ни одного JS-вызова на move-событие. */}
@@ -1073,13 +1088,15 @@ function OwnerAnalyticsChart() {
                     stroke="white"
                     strokeWidth={2}
                   />
-                  <AnimatedSvgCircle
-                    animatedProps={scrubProfDotProps}
-                    r={4}
-                    fill={colors.cyan[600]}
-                    stroke="white"
-                    strokeWidth={1.5}
-                  />
+                  {canSeeProfit && (
+                    <AnimatedSvgCircle
+                      animatedProps={scrubProfDotProps}
+                      r={4}
+                      fill={colors.cyan[600]}
+                      stroke="white"
+                      strokeWidth={1.5}
+                    />
+                  )}
                 </Svg>
 
                 {/* The floating tooltip that previously overlaid the scrubbed
@@ -1157,18 +1174,20 @@ function OwnerAnalyticsChart() {
                 {formatMoney(displayRevenue)}
               </Text>
             </View>
-            <View
-              style={[
-                styles.chartStatItemLight,
-                styles.chartStatBorderLight,
-                { borderLeftColor: palette.border.subtle },
-              ]}
-            >
-              <Text style={[styles.chartStatLabelLight, { color: palette.text.secondary }]}>Прибыль</Text>
-              <Text style={[styles.chartStatValueLight, { color: colors.cyan[600] }]}>
-                {formatMoney(displayProfit)}
-              </Text>
-            </View>
+            {canSeeProfit && (
+              <View
+                style={[
+                  styles.chartStatItemLight,
+                  styles.chartStatBorderLight,
+                  { borderLeftColor: palette.border.subtle },
+                ]}
+              >
+                <Text style={[styles.chartStatLabelLight, { color: palette.text.secondary }]}>Прибыль</Text>
+                <Text style={[styles.chartStatValueLight, { color: colors.cyan[600] }]}>
+                  {formatMoney(displayProfit)}
+                </Text>
+              </View>
+            )}
             <View
               style={[
                 styles.chartStatItemLight,
@@ -1794,7 +1813,7 @@ function MarginCard() {
               {margin.toFixed(1)}%
             </Text>
           )}
-          <Text style={[styles.marginCaption, { color: palette.text.tertiary }]}>Чистая прибыль / Оборот</Text>
+          <Text style={[styles.marginCaption, { color: palette.text.tertiary }]}>Операционная прибыль / Оборот</Text>
         </View>
         {!isLoading && (
           <View style={[styles.marginChip, { backgroundColor: chipBg }]}>
@@ -4507,6 +4526,11 @@ const styles = StyleSheet.create({
     color: colors.white,
     letterSpacing: -1.4,
     fontVariant: ['tabular-nums'],
+  },
+  heroValueSub: {
+    fontSize: 11.5,
+    color: 'rgba(255,255,255,0.6)',
+    marginTop: 3,
   },
   heroDeltaRow: {
     flexDirection: 'row',

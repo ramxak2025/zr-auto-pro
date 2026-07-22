@@ -3,7 +3,8 @@ import { IsOptional, IsString, IsIn, IsInt, Min, Max } from 'class-validator';
 import { Type } from 'class-transformer';
 import { WarehouseAnalyticsService } from './warehouse-analytics.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
 class SummaryQueryDto {
@@ -41,10 +42,13 @@ class ReorderForecastQueryDto {
   warehouseId?: string;
 }
 
-// All analytics is owner / director / admin / superadmin level. Master role
-// stays out of cost/margin numbers.
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('director', 'admin', 'superadmin')
+// Cost/margin analytics — держатели 'warehouse_analytics_view' (ячейка
+// warehouse.analytics, миграция 136). ROLE-ONLY (волна «права как в Битрикс24»,
+// 2026-07): @Roles(d,a,sa) снят, матрица авторитетна; сиды системных ролей
+// (мастер false, админ true) — поведение 1:1, мастер остаётся вне цифр
+// себестоимости/маржи, пока владелец явно не выдаст ключ.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+@RequirePermission('warehouse_analytics_view')
 @Controller('warehouse-analytics')
 export class WarehouseAnalyticsController {
   constructor(private analytics: WarehouseAnalyticsService) {}

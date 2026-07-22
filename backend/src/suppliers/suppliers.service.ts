@@ -278,15 +278,19 @@ export class SuppliersService {
 
       if (existingRows.length > 0) {
         productId = existingRows[0].id;
-        // Bump stock; keep the existing cost_price (user might have
-        // bought the same SKU at a different price previously). The
-        // current purchase price is logged on the stock_movement row
-        // for audit / cost basis recomputation.
-        await client.query('UPDATE products SET stock = $1 WHERE id = $2 AND tenant_id = $3', [
-          stockAfter,
-          productId,
-          tenantID,
-        ]);
+        // E-5: bump stock AND refresh the cost basis to the price just paid
+        // (last-cost — согласовано с purchase-orders.receive в supply-режиме).
+        // Раньше cost_price существующего Б/У-товара НЕ обновлялся на повторной
+        // закупке → при продаже COGS занижен → прибыль тихо завышена (тот же
+        // класс, что чинила migr. 131 для чеков). Guard `> 0`: неоценённая
+        // (нулевая) закупка никогда не затирает известную себестоимость.
+        await client.query(
+          `UPDATE products
+              SET stock = $1,
+                  cost_price = CASE WHEN $2::numeric > 0 THEN $2::numeric ELSE cost_price END
+            WHERE id = $3 AND tenant_id = $4`,
+          [stockAfter, purchasePrice, productId, tenantID],
+        );
       } else {
         // Create a fresh Б/У product. sellPrice can be NULL if the owner
         // hasn't decided yet — they patch it later via
@@ -515,12 +519,20 @@ export class SuppliersService {
 
         // Increase product stock — scoped to tenant (defense-in-depth so a
         // crafted productId from another tenant cannot mutate stock here).
+        // E-5: ручная поставка растит долг поставщику — обязана и задавать
+        // себестоимость (last-cost — согласовано с purchase-orders.receive в
+        // supply-режиме). Без этого поставка добавляла остаток, но оставляла
+        // cost_price=0 → при продаже COGS=0 → прибыль тихо завышена. Guard
+        // `> 0`: пустая/нулевая цена не затирает известную себестоимость.
         if (item.productId) {
-          const upd = await client.query('UPDATE products SET stock = stock + $1 WHERE id = $2 AND tenant_id = $3', [
-            item.quantity || 0,
-            item.productId,
-            tenantID,
-          ]);
+          const purchasePrice = Number(item.price) || 0;
+          const upd = await client.query(
+            `UPDATE products
+                SET stock = stock + $1,
+                    cost_price = CASE WHEN $4::numeric > 0 THEN $4::numeric ELSE cost_price END
+              WHERE id = $2 AND tenant_id = $3`,
+            [item.quantity || 0, item.productId, tenantID, purchasePrice],
+          );
           if (upd.rowCount === 0) {
             throw new BadRequestException({ message: `Товар ${item.productId} не найден` });
           }

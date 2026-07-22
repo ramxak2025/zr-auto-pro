@@ -3,6 +3,7 @@ import { IsString, IsOptional } from 'class-validator';
 import { WarrantyService } from './warranty.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
 class RedeemWarrantyDto {
@@ -20,7 +21,11 @@ class ActiveWarrantyQueryDto {
   carId?: string;
 }
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+// Reads (active / active-for-car) — открыты любому аутентифицированному:
+// Касса подсвечивает активные гарантии при выборе клиента/авто. `redeem` —
+// часть проведения чека → 'checks_create' (сид мастера true — 1:1);
+// owner-class (director/superadmin) обходит через PermissionsGuard.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('warranty-claims')
 export class WarrantyController {
   constructor(private warrantyService: WarrantyService) {}
@@ -53,6 +58,7 @@ export class WarrantyController {
    * Idempotent in the sense that re-calling for an already-used claim
    * throws BadRequest (the FE blocks it but we never silently re-use).
    */
+  @RequirePermission('checks_create')
   @Post(':id/redeem')
   redeem(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: RedeemWarrantyDto) {
     return this.warrantyService.redeem(user.tenantID, id, dto.checkId);

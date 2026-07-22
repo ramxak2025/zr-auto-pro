@@ -20,7 +20,7 @@ import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import Switch from '../components/Switch';
 import QueryState from '../components/QueryState';
-import { UserRole } from '../types';
+
 import type { Tenant, LoyaltySettings, PosSettings } from '../types';
 
 interface CompanyForm {
@@ -36,15 +36,15 @@ interface CompanyForm {
   receiptFooter: string;
 }
 
-// ---- POS «Кассовая смена + роли» (owner-class only) ----
-// Single owner-gated switch. GET /checks/pos-settings is readable by anyone,
-// PATCH is owner-class (director/admin/superadmin). One boolean → mutate on
-// toggle (no separate Save step). The server enforces the cashier rules; this
-// switch just turns the regime on/off tenant-wide.
+// ---- POS «Кассовая смена + роли» ----
+// Single permission-gated switch. GET /checks/pos-settings is readable by
+// anyone, PATCH requires settings_manage (волна Битрикс24). One boolean →
+// mutate on toggle (no separate Save step). The server enforces the cashier
+// rules; this switch just turns the regime on/off tenant-wide.
 function ShiftModeSection() {
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  const canManage = hasPermission('settings_manage');
 
   const {
     data: settings,
@@ -112,11 +112,12 @@ function ShiftModeSection() {
   );
 }
 
-// ---- Loyalty program settings (owner-class only) ----
+// ---- Loyalty program settings (settings_manage) ----
 function LoyaltySettingsSection() {
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  // Backend PATCH /loyalty/settings → settings_manage (волна Битрикс24).
+  const canManage = hasPermission('settings_manage');
 
   const {
     data: settings,
@@ -269,6 +270,11 @@ function LoyaltySettingsSection() {
 export default function CompanySettingsPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  // Реквизиты компании (/my-company) — owner-only ключ company_manage (у
+  // системного «Администратора» сид false — как прежний @Roles d/sa). Секции
+  // «Кассовая смена» и «Лояльность» — settings_manage и self-gate'ятся сами.
+  const canManageCompany = hasPermission('company_manage');
 
   const {
     data: company,
@@ -279,6 +285,7 @@ export default function CompanySettingsPage() {
   } = useQuery<Tenant>({
     queryKey: ['my-company'],
     queryFn: async () => (await myCompanyApi.get()).data,
+    enabled: canManageCompany,
   });
 
   const [form, setForm] = useState<CompanyForm>({
@@ -343,6 +350,26 @@ export default function CompanySettingsPage() {
       receiptFooter: form.receiptFooter || undefined,
     });
   };
+
+  // Без company_manage реквизиты компании скрыты (сервер отвечает 403 на
+  // GET/PATCH /my-company), но секции на settings_manage остаются доступны.
+  if (!canManageCompany) {
+    return (
+      <div className="space-y-5 max-w-2xl mx-auto pb-8">
+        <div className="flex items-center gap-3">
+          <button onClick={() => navigate(-1)} className="btn-ghost btn-sm" aria-label="Назад">
+            <ArrowLeft className="w-4 h-4" />
+          </button>
+          <div>
+            <h1 className="page-title">Настройки компании</h1>
+            <p className="text-sm text-gray-500">Кассовая смена и программа лояльности</p>
+          </div>
+        </div>
+        <ShiftModeSection />
+        <LoyaltySettingsSection />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-5 max-w-2xl mx-auto pb-8">

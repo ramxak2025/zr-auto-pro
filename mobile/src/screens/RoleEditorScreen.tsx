@@ -67,6 +67,8 @@ const GROUP_ICONS: Record<PermissionGroupTitle, keyof typeof Ionicons.glyphMap> 
   Имущество: 'construct-outline',
   CRM: 'people-outline',
   Управление: 'shield-checkmark-outline',
+  Настройки: 'settings-outline',
+  'База знаний': 'book-outline',
 };
 
 // Подсказки под строками, где название не раскрывает нюанс. Контекст —
@@ -161,9 +163,10 @@ export default function RoleEditorScreen() {
   const palette = useColors();
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
-  const { user: currentUser } = useAuth();
-  const canManage =
-    currentUser?.role === 'director' || currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
+  const { hasPermission, refreshUser } = useAuth();
+  // Матрица авторитетна: сервер (roles.controller) гейтит user_management —
+  // superadmin/director байпасятся внутри hasPermission, admin по матрице.
+  const canManage = hasPermission('user_management');
 
   const { data: rolesData, isSuccess, isError, refetch } = useRoles(canManage);
   const roles = Array.isArray(rolesData) ? rolesData : [];
@@ -262,6 +265,9 @@ export default function RoleEditorScreen() {
     mutationFn: (body: Parameters<typeof rolesApi.create>[0]) => rolesApi.create(body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [...ROLES_QUERY_KEY] });
+      // Права клиента живут в /auth/me (эффективная матрица) — после правки
+      // ролей рефетчим себя, чтобы гейты UI применились без перезахода.
+      void refreshUser();
       haptic('success');
       leavingRef.current = true;
       navigation.goBack();
@@ -277,6 +283,11 @@ export default function RoleEditorScreen() {
       rolesApi.update(id, body),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [...ROLES_QUERY_KEY] });
+      // Смена матрицы роли меняет эффективные права её носителей — включая,
+      // возможно, текущего пользователя (admin правит свою системную роль).
+      // refreshUser подтягивает свежий /auth/me → все hasPermission-гейты UI
+      // обновляются сразу (сервер применит через ~30 c из-за auth-кэша).
+      void refreshUser();
       haptic('success');
       leavingRef.current = true;
       navigation.goBack();

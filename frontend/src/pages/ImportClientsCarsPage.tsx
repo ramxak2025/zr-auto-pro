@@ -206,7 +206,7 @@ type Step = 'upload' | 'mapping' | 'preview' | 'done';
 
 export default function ImportClientsCarsPage() {
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { hasPermission } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<Step>('upload');
@@ -237,7 +237,10 @@ export default function ImportClientsCarsPage() {
   const [dupOverrides, setDupOverrides] = useState<Record<string, DuplicateAction>>({});
 
   // ─── Permission gate ──────────────────────────────────────────────────────
-  const canImport = !!user && (user.role === 'director' || user.role === 'admin' || user.role === 'superadmin');
+  // Импорт создаёт/меняет клиентов и авто — backend imports/ гейтится ключом
+  // clients_edit (волна Битрикс24; байпас superadmin/director — внутри
+  // hasPermission, admin — по матрице роли).
+  const canImport = hasPermission('clients_edit');
 
   // ─── Desktop-only gate ────────────────────────────────────────────────────
   // Import is a desktop workflow (file picker, big mapping table, large preview

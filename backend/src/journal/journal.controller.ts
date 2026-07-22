@@ -2,7 +2,8 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common';
 import { IsOptional, IsString, IsIn } from 'class-validator';
 import { JournalService } from './journal.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
 class WarehouseDocsQueryDto {
@@ -38,9 +39,11 @@ class WarehouseDocsQueryDto {
     | 'used_purchase';
 }
 
-// All financial documents — finance role only.
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('director', 'admin', 'superadmin')
+// All financial documents — держатели 'financial_reports' (ROLE-ONLY, волна
+// «права как в Битрикс24», 2026-07: @Roles(d,a,sa) снят, матрица авторитетна;
+// сиды системных ролей — мастер false, админ true — дают поведение 1:1).
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+@RequirePermission('financial_reports')
 @Controller('journal')
 export class JournalController {
   constructor(private journal: JournalService) {}

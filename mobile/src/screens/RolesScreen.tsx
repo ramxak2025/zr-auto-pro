@@ -141,12 +141,11 @@ export default function RolesScreen() {
   const palette = useColors();
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
-  const { user: currentUser } = useAuth();
+  const { hasPermission } = useAuth();
 
-  // Тот же owner-class-гейт, что на сервере (roles.controller MANAGER_ROLES)
-  // и что у permission-templates в UsersScreen.
-  const canManage =
-    currentUser?.role === 'director' || currentUser?.role === 'admin' || currentUser?.role === 'superadmin';
+  // Тот же гейт, что на сервере (roles.controller → user_management): матрица
+  // авторитетна, superadmin/director байпасятся внутри hasPermission.
+  const canManage = hasPermission('user_management');
 
   const { data: rolesData, isLoading, isError, refetch } = useRoles(canManage);
   const roles = Array.isArray(rolesData) ? rolesData : [];

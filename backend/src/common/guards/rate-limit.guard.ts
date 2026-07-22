@@ -92,6 +92,24 @@ export class RateLimitGuard implements CanActivate {
     const isPublicLiveness = (method === 'GET' || method === 'HEAD') && /^(?:\/api)?\/health\/?$/.test(path);
     if (isPublicLiveness) return true;
 
+    // /health/heavy — публичная ТЯЖЁЛАЯ проба кольца хостов (~32 КБ случайного
+    // паддинга, анти-DPI). Безлимитной, как liveness выше, её делать нельзя —
+    // это дармовые 32 КБ на запрос для любого анонима; но и в общий anon-бакет
+    // её не сажаем (шторм проб при failover не должен выедать чужую квоту).
+    // Отдельный щедрый бакет на IP: 30/мин хватает любому легитимному циклу
+    // проб клиента и ставит потолок абузу (~16 МБ/мин с одного IP).
+    if ((method === 'GET' || method === 'HEAD') && /^(?:\/api)?\/health\/heavy\/?$/.test(path)) {
+      const res = await this.bump(`health-heavy:${ip}`, 30, now);
+      if (res.overLimit) {
+        const retryAfter = Math.ceil((res.resetAt - now) / 1000);
+        throw new HttpException(
+          { message: `Слишком много запросов. Повторите через ${retryAfter} сек.` },
+          HttpStatus.TOO_MANY_REQUESTS,
+        );
+      }
+      return true;
+    }
+
     // Identify the user behind a shared NAT by a fingerprint of their JWT.
     // We hash the FULL token (not a fixed slice — see the class doc: the first
     // ~48 chars are identical across all tokens, so a slice collapses every

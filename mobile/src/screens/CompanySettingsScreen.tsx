@@ -24,7 +24,6 @@ import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { Tenant, LoyaltySettings, PosSettings } from '../../../shared/types';
 import { POS_SETTINGS_KEY } from '../hooks/usePosSettings';
-import { UserRole } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { haptic } from '../platform/haptics';
 
@@ -47,12 +46,13 @@ export default function CompanySettingsScreen() {
   const queryClient = useQueryClient();
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
-  const { user } = useAuth();
-  // Тумблер «Смены» доступен только директору/владельцу — это управление
-  // фичей тенанта, не персональная настройка. (Мастеру экран настроек
-  // компании и так недоступен, но гейтим явно.)
-  const canManageShifts =
-    user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN || user?.role === UserRole.SUPERADMIN;
+  const { hasPermission } = useAuth();
+  // «Права как в Битрикс24» (2026-07): данные компании и тумблер «Смены»
+  // (часть PATCH /my-company) — ключ company_manage (сид «Администратора»
+  // false — сервер и раньше пускал только director/superadmin). Кассовый
+  // режим и лояльность — отдельные эндпоинты под settings_manage.
+  const canManageShifts = hasPermission('company_manage');
+  const canManagePosSettings = hasPermission('settings_manage');
 
   const { data: company, isLoading } = useQuery<Tenant>({
     queryKey: ['my-company'],
@@ -331,17 +331,17 @@ export default function CompanySettingsScreen() {
             </AnimatedCard>
           )}
 
-          {/* Режим кассовой смены (092) — owner-class. Self-contained card
-              (own query + save), decoupled from the company «Сохранить» flow so
-              flipping the mode is one tap and never entangles with tenant
-              fields. OFF by default → весь поток байт-в-байт как сейчас. */}
-          {canManageShifts && <PosShiftModeSection index={3} />}
+          {/* Режим кассовой смены (092) — ключ settings_manage (сервер: PATCH
+              /checks/pos-settings). Self-contained card (own query + save),
+              decoupled from the company «Сохранить» flow so flipping the mode
+              is one tap and never entangles with tenant fields. */}
+          {canManagePosSettings && <PosShiftModeSection index={3} />}
 
-          {/* Программа лояльности — owner-class. Self-contained card: owns its
-              own query + form + save (decoupled from the company «Сохранить»
-              flow above), so saving cashback config never touches tenant
+          {/* Программа лояльности — ключ settings_manage (сервер: PATCH
+              /loyalty/settings). Self-contained card: owns its own query +
+              form + save, so saving cashback config never touches tenant
               fields and vice-versa. */}
-          {canManageShifts && <LoyaltySettingsSection index={4} />}
+          {canManagePosSettings && <LoyaltySettingsSection index={4} />}
 
           {/* Save */}
           {dirty && (

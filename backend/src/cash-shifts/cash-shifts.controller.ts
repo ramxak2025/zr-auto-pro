@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CashShiftsService } from './cash-shifts.service';
 import { OpenShiftDto } from './dto/open-shift.dto';
@@ -11,12 +12,14 @@ import { CollectCashDto } from './dto/collect-cash.dto';
  * Кассовая смена / Z-отчёт / Инкассация — tenant-scoped from the JWT.
  *
  * Read endpoints (current / report / list) are open to ANY authenticated user
- * in the tenant (no @Roles ⇒ RolesGuard passes everyone) so a cashier who runs
+ * in the tenant (undecorated ⇒ guards pass everyone) so a cashier who runs
  * the Касса can see the live figures — consistent with /checks and /expenses
  * GET being role-open. The MUTATIONS that move the drawer (open / close /
- * collect) are restricted to owner-class roles.
+ * collect) are gated by the 'cash_shifts_manage' matrix cell (checks.cashShifts,
+ * миграция 136) — the matrix is authoritative; owner-class (director/superadmin)
+ * bypasses via PermissionsGuard.
  */
-@UseGuards(JwtAuthGuard, RolesGuard)
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('cash-shifts')
 export class CashShiftsController {
   constructor(private cashShifts: CashShiftsService) {}
@@ -37,20 +40,20 @@ export class CashShiftsController {
     return this.cashShifts.report(user.tenantID, id);
   }
 
-  // ─── Mutations (owner-class only) ──────────────────────────────────────
-  @Roles('director', 'admin', 'superadmin')
+  // ─── Mutations ('cash_shifts_manage') ──────────────────────────────────
+  @RequirePermission('cash_shifts_manage')
   @Post('open')
   open(@CurrentUser() user: JwtPayload, @Body() dto: OpenShiftDto) {
     return this.cashShifts.open(user, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('cash_shifts_manage')
   @Post(':id/close')
   close(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: CloseShiftDto) {
     return this.cashShifts.close(user, id, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('cash_shifts_manage')
   @Post(':id/collect')
   collect(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: CollectCashDto) {
     return this.cashShifts.collect(user, id, dto);

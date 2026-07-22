@@ -14,6 +14,11 @@ import { invalidateReportsForTenant } from '../common/reports-cache';
 export type ReturnDestination = 'warehouse' | 'defect';
 export type ReturnScope = 'full' | 'partial';
 
+/** Round to 2 decimals — money columns are NUMERIC(…,2); avoids float drift. */
+function round2(n: number): number {
+  return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
 export interface ReturnLineInput {
   productLineId?: string;
   serviceLineId?: string;
@@ -52,9 +57,12 @@ export class ReturnsService {
    *      Destination=warehouse → main warehouse (customer_return, returned to
    *      stock — a distinct type so the journal shows «Возврат клиента», NOT
    *      a supplier «Поступление»; stock still increments exactly as income did).
-   *      Destination=defect    → defect warehouse (defect_transfer, stock NOT
-   *      added back to main; instead it lands on the defect warehouse
-   *      so it shows up in the defect/writeoff report).
+   *      Destination=defect    → defect warehouse (defect_transfer): the
+   *      returned units are ADDED to a same-SKU row on the defect warehouse
+   *      (matched by name+unit, created as a copy when missing — the exact
+   *      model of stock-movements.applyTransfer), so they are visible on
+   *      брак and available for defect_return_to_supplier. Main stock is NOT
+   *      touched (the units came back from the client, not from the shelf).
    */
   async createReturn(tenantID: string, userID: string, checkId: string, dto: CreateReturnDto) {
     if (!dto || !dto.destination || !dto.scope) {
@@ -118,44 +126,66 @@ export class ReturnsService {
       }
 
       const totalRevenue = parseFloat(checkRows[0].total_revenue) || 0;
-      const requestedRefund =
-        dto.refundAmount !== undefined && dto.refundAmount !== null
-          ? Math.max(0, parseFloat(String(dto.refundAmount)))
-          : dto.scope === 'full'
-            ? totalRevenue
-            : 0;
-      // A refund can never exceed what was actually charged on the check —
-      // otherwise reversing it would drive the check's revenue/cash negative.
-      const refundAmount = Math.min(requestedRefund, totalRevenue);
 
-      // Insert the header row first.
-      const { rows: retRows } = await client.query(
-        `INSERT INTO check_returns
-           (check_id, tenant_id, returned_by, destination, reason, refund_amount, scope)
-         VALUES ($1, $2, $3, $4, $5, $6, $7)
-         RETURNING id, created_at`,
-        [checkId, tenantID, userID || null, dto.destination, dto.reason ?? null, refundAmount, dto.scope],
-      );
-      const returnId = retRows[0].id;
-
-      // Collect the product lines we need to move stock for.
+      // Collect the check's lines WITH their money columns: the sell side
+      // drives the default refund for partial scope (money-audit M6), the cost
+      // side drives the COGS reversal for warehouse returns (money-audit C1).
       const allProductLines = await client.query(
-        `SELECT id, product_id, quantity FROM check_product_lines WHERE check_id = $1`,
+        `SELECT id, product_id, quantity, sell_price, cost_price, total_sell, total_cost
+           FROM check_product_lines WHERE check_id = $1`,
+        [checkId],
+      );
+      const allServiceLines = await client.query(
+        `SELECT id, price, quantity, total FROM check_service_lines WHERE check_id = $1`,
         [checkId],
       );
 
-      // For full scope we move every product line; for partial we honour caller's list.
-      const productMoves: Array<{ productLineId: string | null; productId: string | null; quantity: number }> = [];
+      // Sell/cost value of `qty` units of a product line. A full-line return
+      // reuses the persisted line totals verbatim (no per-unit rounding drift);
+      // a partial quantity derives per-unit values from the line totals (they
+      // already carry any discounts), falling back to the raw prices when the
+      // stored quantity is 0/broken.
+      const lineMoney = (row: any, qty: number): { sell: number; cost: number } => {
+        const lineQty = parseFloat(row.quantity) || 0;
+        const totalSell = parseFloat(row.total_sell) || 0;
+        const totalCost = parseFloat(row.total_cost) || 0;
+        if (lineQty > 0 && qty >= lineQty) return { sell: totalSell, cost: totalCost };
+        const unitSell = lineQty > 0 ? totalSell / lineQty : parseFloat(row.sell_price) || 0;
+        const unitCost = lineQty > 0 ? totalCost / lineQty : parseFloat(row.cost_price) || 0;
+        return { sell: round2(unitSell * qty), cost: round2(unitCost * qty) };
+      };
+
+      // For full scope we move every product line; for partial we honour the
+      // caller's list. Lines are resolved BEFORE the header insert because the
+      // default refund of a partial return is derived from them (M6).
+      const productMoves: Array<{
+        productLineId: string | null;
+        productId: string | null;
+        quantity: number;
+        /** Себестоимость возвращаемого количества — реверс COGS (C1). */
+        cost: number;
+      }> = [];
+      // Per-line rows for check_return_lines (partial scope only) — inserted
+      // after the header row exists (FK on return_id).
+      const pendingReturnLines: Array<{
+        productLineId: string | null;
+        productId: string | null;
+        serviceLineId: string | null;
+        quantity: number;
+        amount: number;
+      }> = [];
       if (dto.scope === 'full') {
         for (const pl of allProductLines.rows) {
+          const qty = parseFloat(pl.quantity) || 0;
           productMoves.push({
             productLineId: pl.id,
             productId: pl.product_id,
-            quantity: parseFloat(pl.quantity) || 0,
+            quantity: qty,
+            cost: lineMoney(pl, qty).cost,
           });
         }
       } else if (dto.lines) {
-        // Resolve each user-provided line back to a product line in this check.
+        // Resolve each user-provided line back to a line in this check.
         for (const ln of dto.lines) {
           if (ln.productLineId) {
             const match = allProductLines.rows.find((r) => r.id === ln.productLineId);
@@ -168,27 +198,78 @@ export class ReturnsService {
             // Never return more than was sold on that line — a forged quantity
             // would otherwise inflate stock on add-back.
             const qty = Math.max(0, Math.min(requestedQty, lineQty));
+            const money = lineMoney(match, qty);
             productMoves.push({
               productLineId: match.id,
               productId: match.product_id,
               quantity: qty,
+              cost: money.cost,
             });
-            // Per-line return row.
-            await client.query(
-              `INSERT INTO check_return_lines (return_id, product_line_id, product_id, quantity, amount)
-               VALUES ($1, $2, $3, $4, 0)`,
-              [returnId, match.id, match.product_id, qty],
-            );
+            pendingReturnLines.push({
+              productLineId: match.id,
+              productId: match.product_id,
+              serviceLineId: null,
+              quantity: qty,
+              amount: money.sell,
+            });
           } else if (ln.serviceLineId) {
-            // Services are intangible — no stock move. Still record the line so
-            // the partial-return summary can show what was refunded.
-            await client.query(
-              `INSERT INTO check_return_lines (return_id, service_line_id, quantity, amount)
-               VALUES ($1, $2, $3, 0)`,
-              [returnId, ln.serviceLineId, ln.quantity ?? 1],
-            );
+            // Services are intangible — no stock move. The line must still
+            // belong to THIS check (needed for the price-derived amount; also
+            // closes the hole where a foreign line id was recorded blindly).
+            const match = allServiceLines.rows.find((r) => r.id === ln.serviceLineId);
+            if (!match) {
+              throw new BadRequestException({ message: 'Позиция не найдена в заказ-наряде' });
+            }
+            const lineQty = parseFloat(match.quantity) || 0;
+            const requestedQty =
+              ln.quantity !== undefined && ln.quantity !== null ? parseFloat(String(ln.quantity)) : 1;
+            const qty = lineQty > 0 ? Math.max(0, Math.min(requestedQty, lineQty)) : Math.max(0, requestedQty);
+            const lineTotal = parseFloat(match.total) || 0;
+            const amount =
+              lineQty > 0 && qty >= lineQty
+                ? lineTotal
+                : round2((lineQty > 0 ? lineTotal / lineQty : parseFloat(match.price) || 0) * qty);
+            pendingReturnLines.push({
+              productLineId: null,
+              productId: null,
+              serviceLineId: match.id,
+              quantity: qty,
+              amount,
+            });
           }
         }
+      }
+
+      const requestedRefund =
+        dto.refundAmount !== undefined && dto.refundAmount !== null
+          ? Math.max(0, parseFloat(String(dto.refundAmount)))
+          : dto.scope === 'full'
+            ? totalRevenue
+            : // M6 — дефолт ЧАСТИЧНОГО возврата = продажная стоимость возвращаемых
+              // позиций (раньше 0: товар восстанавливался на складе, а деньги
+              // молча оставались на чеке — сток и выручка задваивались).
+              round2(pendingReturnLines.reduce((acc, l) => acc + l.amount, 0));
+      // A refund can never exceed what was actually charged on the check —
+      // otherwise reversing it would drive the check's revenue/cash negative.
+      const refundAmount = Math.min(requestedRefund, totalRevenue);
+
+      // Insert the header row first (return lines FK to it).
+      const { rows: retRows } = await client.query(
+        `INSERT INTO check_returns
+           (check_id, tenant_id, returned_by, destination, reason, refund_amount, scope)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
+         RETURNING id, created_at`,
+        [checkId, tenantID, userID || null, dto.destination, dto.reason ?? null, refundAmount, dto.scope],
+      );
+      const returnId = retRows[0].id;
+
+      for (const l of pendingReturnLines) {
+        // `amount` — продажная стоимость позиции (для сверки refund ↔ строки).
+        await client.query(
+          `INSERT INTO check_return_lines (return_id, product_line_id, product_id, service_line_id, quantity, amount)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [returnId, l.productLineId, l.productId, l.serviceLineId, l.quantity, l.amount],
+        );
       }
 
       // Resolve target warehouse once.
@@ -197,42 +278,162 @@ export class ReturnsService {
           ? await this.warehouses.resolveByKind(tenantID, 'main')
           : await this.warehouses.resolveByKind(tenantID, 'defect');
 
+      // NEW-4 (защита от взаимоблокировки): цикл ниже лочит по строке-источнику
+      // на позицию, а для возврата в брак ещё и строку-копию того же SKU на
+      // складе брака — с фиксированным порядком источник→приёмник и в порядке
+      // позиций чека. Это конфликтует с путём продажи чека / перемещениями,
+      // которые могут лочить те же строки в обратном порядке → deadlock 40P01 →
+      // перемежающийся 500. Заранее лочим ВСЕ затрагиваемые строки (источники +
+      // существующие копии SKU на складе брака) ОДНИМ оператором в
+      // детерминированном ГЛОБАЛЬНОМ порядке (по возрастанию id): `ORDER BY id
+      // FOR UPDATE` берёт блокировки в порядке сортировки. FOR UPDATE-чтения в
+      // цикле затем лишь пере-лочат уже удерживаемые строки (no-op), поэтому
+      // порядок захвата фиксирован. Новые копии, созданные INSERT'ом в цикле,
+      // приватны до COMMIT — их лочить не нужно.
+      const sourceIds = Array.from(new Set(productMoves.map((m) => m.productId).filter((x): x is string => !!x)));
+      if (sourceIds.length > 0) {
+        const lockIds = new Set<string>(sourceIds);
+        if (dto.destination === 'defect') {
+          const { rows: copyRows } = await client.query(
+            `SELECT c.id FROM products c
+               JOIN products s
+                 ON s.name = c.name AND s.unit IS NOT DISTINCT FROM c.unit
+              WHERE c.tenant_id = $1 AND c.warehouse_id = $2 AND c.deleted_at IS NULL
+                AND s.tenant_id = $1 AND s.id = ANY($3::uuid[]) AND c.id <> s.id`,
+            [tenantID, targetWh.id, sourceIds],
+          );
+          for (const r of copyRows) lockIds.add(r.id as string);
+        }
+        await client.query(
+          `SELECT id FROM products WHERE id = ANY($1::uuid[]) AND tenant_id = $2 ORDER BY id FOR UPDATE`,
+          [Array.from(lockIds), tenantID],
+        );
+      }
+
+      // COGS-реверс (money-audit C1): при возврате НА СКЛАД себестоимость
+      // возвращённого товара снимается с чека — товар снова продаваем, и его
+      // cost будет заново записан чеком перепродажи; без реверса он считался
+      // бы в прибыли ДВАЖДЫ. Накапливаем только по позициям, реально
+      // вернувшимся в сток (товар не удалён). Брак (defect) — реальный убыток:
+      // сток ОСНОВНОГО склада не восстанавливается (единицы ложатся на склад
+      // брака ниже), cost остаётся на чеке.
+      let reversedCost = 0;
       for (const mv of productMoves) {
         if (!mv.productId || mv.quantity <= 0) continue;
         const { rows: prodRows } = await client.query(
-          `SELECT stock FROM products WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+          `SELECT stock, warehouse_id, name, unit FROM products WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
           [mv.productId, tenantID],
         );
         if (prodRows.length === 0) continue; // product deleted — skip stock, but keep the return line
+
         const stockBefore = parseFloat(prodRows[0].stock) || 0;
-        const stockAfter = dto.destination === 'warehouse' ? stockBefore + mv.quantity : stockBefore; // defect destination doesn't add back to main
 
         if (dto.destination === 'warehouse') {
+          const stockAfter = stockBefore + mv.quantity;
           await client.query(`UPDATE products SET stock = $1 WHERE id = $2 AND tenant_id = $3`, [
             stockAfter,
             mv.productId,
             tenantID,
           ]);
+          reversedCost = round2(reversedCost + mv.cost);
+
+          await client.query(
+            `INSERT INTO stock_movements
+               (product_id, type, quantity, stock_before, stock_after, reason,
+                tenant_id, user_id, warehouse_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [
+              mv.productId,
+              // Customer return to the main warehouse gets its OWN type so the
+              // journal classifies it as «Возврат клиента» (not a supplier
+              // «Поступление»). Stock still adds back identically (see stockAfter
+              // above) — only the type label differs from the old 'income'.
+              'customer_return',
+              mv.quantity,
+              stockBefore,
+              stockAfter,
+              dto.reason ?? `Возврат заказ-наряда`,
+              tenantID,
+              userID || null,
+              targetWh.id,
+            ],
+          );
+          continue;
         }
 
+        // Destination=defect: единицы вернулись ОТ КЛИЕНТА (со склада они ушли
+        // ещё при продаже), поэтому основной сток не трогаем — но возвращённое
+        // количество обязано ФИЗИЧЕСКИ появиться на складе брака, иначе оно
+        // невидимо в остатках и недоступно для defect_return_to_supplier.
+        // Модель — зеркально applyTransfer из stock-movements.service: строка
+        // товара живёт на одном складе; брак-единицы ложатся на строку того же
+        // SKU на складе брака (совпадение name + unit, копия при отсутствии,
+        // min_stock = 0 — брак не должен звенеть low-stock алертами).
+        let defectProductId: string = mv.productId;
+        let defectBefore: number;
+        let defectAfter: number;
+        if (prodRows[0].warehouse_id === targetWh.id) {
+          // Сама строка товара уже живёт на складе брака — просто пополняем её.
+          defectBefore = stockBefore;
+          defectAfter = stockBefore + mv.quantity;
+          await client.query(`UPDATE products SET stock = $1 WHERE id = $2 AND tenant_id = $3`, [
+            defectAfter,
+            mv.productId,
+            tenantID,
+          ]);
+        } else {
+          const { rows: targetRows } = await client.query(
+            `SELECT id, stock FROM products
+              WHERE tenant_id=$1 AND warehouse_id=$2 AND name=$3 AND unit IS NOT DISTINCT FROM $4
+                AND deleted_at IS NULL AND id <> $5
+              ORDER BY created_at LIMIT 1 FOR UPDATE`,
+            [tenantID, targetWh.id, prodRows[0].name, prodRows[0].unit, mv.productId],
+          );
+          if (targetRows.length > 0) {
+            defectProductId = targetRows[0].id;
+            defectBefore = parseFloat(targetRows[0].stock) || 0;
+            defectAfter = defectBefore + mv.quantity;
+            await client.query(`UPDATE products SET stock = $1 WHERE id = $2 AND tenant_id = $3`, [
+              defectAfter,
+              defectProductId,
+              tenantID,
+            ]);
+          } else {
+            defectBefore = 0;
+            defectAfter = mv.quantity;
+            const { rows: insRows } = await client.query(
+              `INSERT INTO products (name, category, photo, cost_price, sell_price, stock, min_stock, unit,
+                                     is_bundle, bundle_items, supplier_id, tenant_id, warehouse_id, warranty_days, barcode)
+               SELECT name, category, photo, cost_price, sell_price, $3, 0, unit,
+                      is_bundle, bundle_items, supplier_id, tenant_id, $4, warranty_days, barcode
+                 FROM products WHERE id=$1 AND tenant_id=$2
+               RETURNING id`,
+              [mv.productId, tenantID, mv.quantity, targetWh.id],
+            );
+            defectProductId = insRows[0].id;
+          }
+        }
+
+        // Движение описывает ПРИНИМАЮЩУЮ строку на складе брака (было →
+        // стало), как и customer_return выше описывает принимающий основной
+        // склад. source_warehouse_id — NULL сознательно: единицы пришли от
+        // клиента, ни один склад их не терял (web-журнал отрисует
+        // «Основной → Брак» через свой фолбэк источника).
         await client.query(
           `INSERT INTO stock_movements
              (product_id, type, quantity, stock_before, stock_after, reason,
-              tenant_id, user_id, warehouse_id)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              tenant_id, user_id, warehouse_id, target_warehouse_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
           [
-            mv.productId,
-            // Customer return to the main warehouse gets its OWN type so the
-            // journal classifies it as «Возврат клиента» (not a supplier
-            // «Поступление»). Stock still adds back identically (see stockAfter
-            // above) — only the type label differs from the old 'income'.
-            dto.destination === 'warehouse' ? 'customer_return' : 'defect_transfer',
+            defectProductId,
+            'defect_transfer',
             mv.quantity,
-            stockBefore,
-            stockAfter,
+            defectBefore,
+            defectAfter,
             dto.reason ?? `Возврат заказ-наряда`,
             tenantID,
             userID || null,
+            targetWh.id,
             targetWh.id,
           ],
         );
@@ -249,6 +450,11 @@ export class ReturnsService {
       // already capped at total_revenue above, so these never go negative.
       // The card reduction takes whatever the refund couldn't draw from cash
       // (cash first, then card) — a full return zeroes both exactly.
+      // COGS (C1): $6 = себестоимость товара, вернувшегося В СТОК — снимается
+      // с product_cost_total/total_cost (товар снова продаваем, его cost
+      // запишет чек перепродажи), а profit корректируется на (−refund +
+      // reversedCost), т.е. чек теряет ровно свою маржу по возвращённому.
+      // Для defect $6 = 0 — прежняя семантика реального убытка сохранена.
       // `AND is_returned = false` + rowCount check: belt-and-braces on top of
       // the FOR UPDATE above. Even if a future refactor drops the row lock,
       // the money reversal can only ever apply to a not-yet-returned check —
@@ -261,15 +467,29 @@ export class ReturnsService {
                 return_destination = $1,
                 return_scope = $2,
                 total_revenue = GREATEST(COALESCE(total_revenue, 0) - $5, 0),
-                profit = COALESCE(profit, 0) - $5,
+                profit = COALESCE(profit, 0) - $5 + $6,
+                product_cost_total = GREATEST(COALESCE(product_cost_total, 0) - $6, 0),
+                total_cost = GREATEST(COALESCE(total_cost, 0) - $6, 0),
                 cash_amount = GREATEST(COALESCE(cash_amount, 0) - $5, 0),
                 card_amount = GREATEST(COALESCE(card_amount, 0) - GREATEST($5 - COALESCE(cash_amount, 0), 0), 0)
           WHERE id = $3 AND tenant_id = $4 AND is_returned = false`,
-        [dto.destination, dto.scope, checkId, tenantID, refundAmount],
+        [dto.destination, dto.scope, checkId, tenantID, refundAmount, reversedCost],
       );
       if (!returnedNow) {
         // Rolls back via the catch below — nothing of this return persists.
         throw new BadRequestException({ message: 'Заказ-наряд уже возвращён' });
+      }
+
+      if (dto.scope === 'full') {
+        // M9 — полный возврат СТОРНИРУЕТ мотивационные начисления чека: маржа
+        // реверсирована (товар на складе, выручка снята), бонус за неё не
+        // должен оставаться в зарплате. Симметрия с reverseCheckFootprintTx
+        // (softDelete чека) в checks.service. Частичный возврат начисления
+        // сохраняет — пересчёт по остатку строк требует продуктового решения.
+        await client.query('DELETE FROM motivation_accruals WHERE tenant_id = $1 AND check_id = $2', [
+          tenantID,
+          checkId,
+        ]);
       }
 
       await client.query('COMMIT');
@@ -307,12 +527,26 @@ export class ReturnsService {
     const conds: string[] = ['cr.tenant_id = $1'];
     const params: unknown[] = [tenantID];
     let idx = 2;
+    // Границы окна: строка YYYY-MM-DD трактуется как МОСКОВСКИЙ календарный
+    // день — полуинтервал [from 00:00 МСК, to+1 00:00 МСК), паттерн
+    // reports.service (BUSINESS_TZ). Раньше касты шли в СЕРВЕРНОЙ TZ (UTC) с
+    // включённой верхней полуночью — возвраты 00:00–03:00 МСК граничного дня
+    // уезжали в соседнее окно. Полный timestamp — прежняя семантика 1:1.
+    const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
     if (query.from) {
-      conds.push(`cr.created_at >= $${idx++}`);
+      conds.push(
+        DATE_ONLY_RE.test(query.from)
+          ? `cr.created_at >= $${idx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`
+          : `cr.created_at >= $${idx++}`,
+      );
       params.push(query.from);
     }
     if (query.to) {
-      conds.push(`cr.created_at <= ($${idx++}::date + 1)::timestamptz`);
+      conds.push(
+        DATE_ONLY_RE.test(query.to)
+          ? `cr.created_at < ($${idx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`
+          : `cr.created_at <= ($${idx++}::date + 1)::timestamptz`,
+      );
       params.push(query.to);
     }
 

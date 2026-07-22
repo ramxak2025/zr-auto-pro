@@ -17,25 +17,34 @@
  * ── Секции и действия (view-vs-manage гранулярность) ─────────────────────────
  *   checks:
  *     view (own|all), create, edit (own|all), delete, changeDatetime,
- *     editClosed, editPayment, acceptPayment, sellInstallment
+ *     editClosed, editPayment, acceptPayment, sellInstallment,
+ *     cashShifts (кассовые смены: open/close/collect), board (колонки доски)
  *   services:  view, manage
  *     • view   — смотреть услуги + добавлять в чек (→ services_view);
  *     • manage — создавать/редактировать/менять %+гарантию/удалять (→ services_manage).
- *   warehouse: view, manage, delete
+ *   warehouse: view, manage, delete, analytics
  *     • view   — товары БЕЗ себестоимости + в чек (→ warehouse_access);
  *     • manage — себестоимость + add/edit/цены/сток/инвентаризация (→ warehouse_manage);
- *     • delete — удаление товаров/папок (→ warehouse_delete, legacy back-compat).
+ *     • delete — удаление товаров/папок (→ warehouse_delete, legacy back-compat);
+ *     • analytics — /warehouse-analytics/* (маржа/себестоимость) (→ warehouse_analytics_view).
  *   suppliers: view, manage   (→ suppliers_access / suppliers_manage)
- *   equipment: view, manage   (→ equipment_view / equipment_manage)
- *   clients:   view, edit
- *   schedule:  view
+ *   equipment: view, manage, permanentDelete (безвозвратное удаление — owner-only)
+ *   clients:   view, edit, delete, debts (долги + рассрочка)
+ *   schedule:  view, manage (мутации расписания / work-modes)
  *   bookings:  view
- *   salary:    view (none|own|all)   (→ salary_view (own|all) + salary_view_all (all))
+ *   salary:    view (none|own|all)   (→ salary_view (own|all) + salary_view_all (all)),
+ *              payouts (выплаты/авансы/штрафы), premiums (премии), motivation (акции)
  *   reports:   view, profit, export, cashflow (none|own|all)
  *   expenses:  add
- *   marketing: view
+ *   marketing: view, manage
+ *     • view   — смотреть раздел «Маркетинг» (dashboard/reviews/…) (→ marketing_access);
+ *     • manage — все мутации (интеграции/площадки/настройки/рассылки/alerts) (→ marketing_manage). manage ⇒ view.
  *   calls:     view, listen
- *   employees: manage
+ *   employees: manage, approveProfile (согласование заявок на смену профиля)
+ *   settings:  manage (интеграции/касса/справочники), company (данные компании)
+ *   knowledge: view, manage
+ *     • view   — смотреть базу знаний (курсы/статьи/troubleshooting/…) (→ knowledge_view);
+ *     • manage — мутации + менеджерские чтения (→ knowledge_manage). manage ⇒ view.
  *
  * Таблица соответствия «PermissionKey → путь в матрице» (плоский словарь):
  *
@@ -71,10 +80,27 @@
  *   cashflow_view          ← reports.cashflow  ('own'|'all' → true)
  *   cashflow_view_all      ← reports.cashflow  ('all' → true)
  *   can_add_expenses       ← expenses.add
- *   marketing_access       ← marketing.view
+ *   marketing_access       ← marketing.view   (manage ⇒ view)
+ *   marketing_manage       ← marketing.manage
  *   calls_view             ← calls.view
  *   calls_listen           ← calls.listen
  *   user_management        ← employees.manage
+ *   ── v3 (миграция 136) — перевод @Roles-гейтов на матрицу ──
+ *   cash_shifts_manage         ← checks.cashShifts
+ *   checks_board_manage        ← checks.board
+ *   clients_delete             ← clients.delete
+ *   debts_manage               ← clients.debts
+ *   schedule_manage            ← schedule.manage
+ *   salary_payouts_manage      ← salary.payouts       (у системного «Администратора» сид false!)
+ *   salary_premiums_manage     ← salary.premiums
+ *   motivation_manage          ← salary.motivation
+ *   warehouse_analytics_view   ← warehouse.analytics
+ *   equipment_permanent_delete ← equipment.permanentDelete (сид Админ=false)
+ *   employees_approve_profile  ← employees.approveProfile  (сид Админ=false)
+ *   settings_manage            ← settings.manage
+ *   company_manage             ← settings.company          (сид Админ=false)
+ *   knowledge_view             ← knowledge.view            (manage ⇒ view)
+ *   knowledge_manage           ← knowledge.manage
  *
  * ВАЖНО: словарь обязан оставаться зеркалом PermissionKey из
  * shared/types/index.ts (backend не может импортировать shared — вне rootDir).
@@ -103,20 +129,32 @@ const SCOPE_ACTIONS: Record<string, readonly string[]> = {
 
 /** Действия-тумблеры: секция → список boolean-ключей. */
 const BOOL_ACTIONS: Record<string, readonly string[]> = {
-  checks: ['create', 'delete', 'changeDatetime', 'editClosed', 'editPayment', 'acceptPayment', 'sellInstallment'],
+  checks: [
+    'create',
+    'delete',
+    'changeDatetime',
+    'editClosed',
+    'editPayment',
+    'acceptPayment',
+    'sellInstallment',
+    'cashShifts',
+    'board',
+  ],
   services: ['view', 'manage'],
-  warehouse: ['view', 'manage', 'delete'],
+  warehouse: ['view', 'manage', 'delete', 'analytics'],
   suppliers: ['view', 'manage'],
-  equipment: ['view', 'manage'],
-  clients: ['view', 'edit'],
-  schedule: ['view'],
+  equipment: ['view', 'manage', 'permanentDelete'],
+  clients: ['view', 'edit', 'delete', 'debts'],
+  schedule: ['view', 'manage'],
   bookings: ['view'],
-  salary: [],
+  salary: ['payouts', 'premiums', 'motivation'],
   reports: ['view', 'profit', 'export'],
   expenses: ['add'],
-  marketing: ['view'],
+  marketing: ['view', 'manage'],
   calls: ['view', 'listen'],
-  employees: ['manage'],
+  employees: ['manage', 'approveProfile'],
+  settings: ['manage', 'company'],
+  knowledge: ['view', 'manage'],
 };
 
 /** Все известные секции матрицы (стабильный порядок для sanitize). */
@@ -135,6 +173,8 @@ const MATRIX_SECTIONS: readonly string[] = [
   'marketing',
   'calls',
   'employees',
+  'settings',
+  'knowledge',
 ];
 
 function readScope(matrix: RawRoleMatrix, section: string, action: string): RoleScopeValue {
@@ -176,6 +216,8 @@ export function flattenRoleMatrix(rawMatrix: unknown): Record<string, boolean> {
   const warehouseManage = readBool(matrix, 'warehouse', 'manage');
   const suppliersManage = readBool(matrix, 'suppliers', 'manage');
   const equipmentManage = readBool(matrix, 'equipment', 'manage');
+  const marketingManage = readBool(matrix, 'marketing', 'manage');
+  const knowledgeManage = readBool(matrix, 'knowledge', 'manage');
 
   return {
     checks_view: checksView !== 'none',
@@ -215,10 +257,38 @@ export function flattenRoleMatrix(rawMatrix: unknown): Record<string, boolean> {
     cashflow_view: reportsCashflow !== 'none',
     cashflow_view_all: reportsCashflow === 'all',
     can_add_expenses: readBool(matrix, 'expenses', 'add'),
-    marketing_access: readBool(matrix, 'marketing', 'view'),
+    // Маркетинг — view (смотреть раздел) / manage (мутации: интеграции/площадки/
+    // настройки/рассылки/alerts). manage ⇒ view.
+    marketing_access: readBool(matrix, 'marketing', 'view') || marketingManage,
+    marketing_manage: marketingManage,
     calls_view: readBool(matrix, 'calls', 'view'),
     calls_listen: readBool(matrix, 'calls', 'listen'),
     user_management: readBool(matrix, 'employees', 'manage'),
+    // ── v3 (миграция 136) — новые ячейки перевода @Roles-гейтов на матрицу ──
+    // Касса — кассовые смены (open/close/collect) и колонки доски.
+    cash_shifts_manage: readBool(matrix, 'checks', 'cashShifts'),
+    checks_board_manage: readBool(matrix, 'checks', 'board'),
+    // CRM — удаление клиентов, долги/рассрочка, мутации расписания.
+    clients_delete: readBool(matrix, 'clients', 'delete'),
+    debts_manage: readBool(matrix, 'clients', 'debts'),
+    schedule_manage: readBool(matrix, 'schedule', 'manage'),
+    // Финансы — выплаты/штрафы (owner-only у системных ролей), премии, мотивация.
+    salary_payouts_manage: readBool(matrix, 'salary', 'payouts'),
+    salary_premiums_manage: readBool(matrix, 'salary', 'premiums'),
+    motivation_manage: readBool(matrix, 'salary', 'motivation'),
+    // Склад — аналитика (маржа/себестоимость).
+    warehouse_analytics_view: readBool(matrix, 'warehouse', 'analytics'),
+    // Имущество — безвозвратное удаление (owner-only у системных ролей).
+    equipment_permanent_delete: readBool(matrix, 'equipment', 'permanentDelete'),
+    // Управление — согласование заявок на смену профиля (owner-only у системных).
+    employees_approve_profile: readBool(matrix, 'employees', 'approveProfile'),
+    // Настройки — интеграции/касса/справочники и данные компании (owner-only).
+    settings_manage: readBool(matrix, 'settings', 'manage'),
+    company_manage: readBool(matrix, 'settings', 'company'),
+    // База знаний — view (смотреть базу) / manage (мутации + менеджерские чтения:
+    // категории/курсы/статьи/troubleshooting). manage ⇒ view.
+    knowledge_view: readBool(matrix, 'knowledge', 'view') || knowledgeManage,
+    knowledge_manage: knowledgeManage,
   };
 }
 
@@ -274,8 +344,10 @@ export function mergeRoleMatrix(base: RawRoleMatrix, patch: RawRoleMatrix): RawR
  * 2026-07). Персональные overrides УДАЛЕНЫ: второй аргумент игнорируется (оставлен
  * в сигнатуре, чтобы не переписывать все вызовы разом; будет вычищен в следующей
  * волне). roleMatrix == null/undefined → пустая карта: deny-by-default. Owner-class
- * (superadmin/director/admin) обходит гейты по строковой роли в userHasPermission,
- * поэтому пустая база им не мешает.
+ * (superadmin/director) обходит гейты по строковой роли в userHasPermission,
+ * поэтому пустая база им не мешает; admin живёт по матрице своей роли, а при
+ * role_id NULL (аномалия после cutover 126) падает на ADMIN_PERMISSION_DEFAULTS
+ * внутри userHasPermission — пустая карта его тоже не запирает.
  *
  * @param roleMatrix матрица назначенной роли (или null, если роль не назначена)
  * @param _legacyUserPermissions — DEPRECATED, игнорируется (ROLE-ONLY cutover)

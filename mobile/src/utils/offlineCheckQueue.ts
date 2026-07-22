@@ -23,7 +23,11 @@
  *   2. таймер каждые 60 с, ПОКА очередь непуста (старт/стоп по подписке);
  *   3. любой успешный ответ axios — сеть доказуемо вернулась
  *      (kickFromNetworkSuccess, дебаунс 15 с, чтобы волна запросов не спамила);
- *   4. ручное «Отправить сейчас» из шита в Журнале.
+ *   4. ручное «Отправить сейчас» из шита в Журнале;
+ *   5. возврат online-статуса (инжектированный onlineManager ← NetInfo,
+ *      волна C, C-5) — досылка стартует СРАЗУ при возврате сети, без
+ *      ожидания таймера/чужого запроса; onlineManager эмитит только СМЕНУ
+ *      статуса, так что триггер не спамит.
  *
  * FLUSH-СЕМАНТИКА: строго последовательно, по одному, в порядке добавления.
  *   • успех → запись удаляется, вызывается onSent (инвалидация журнала/
@@ -673,8 +677,20 @@ export interface AttachOfflineCheckQueueOptions {
   onRejected?: (entry: QueuedCheck, message: string) => void;
   /** react-native AppState (инжектится, чтобы модуль остался jest-чистым). */
   appState?: AppStateLike | null;
+  /**
+   * Online-статус приложения (App.tsx инжектит onlineManager из
+   * @tanstack/react-query — тот же источник, что ставит queries на паузу;
+   * DI по той же причине, что и appState). Возврат online при непустой
+   * очереди → немедленный flush (C-5).
+   */
+  online?: OnlineStatusLike | null;
   /** Период фонового таймера (тестовый override). */
   flushIntervalMs?: number;
+}
+
+/** Минимальный интерфейс onlineManager: подписка на смену online-статуса. */
+export interface OnlineStatusLike {
+  subscribe(listener: (isOnline: boolean) => void): () => void;
 }
 
 /**
@@ -724,6 +740,14 @@ export function attachOfflineCheckQueue(options: AttachOfflineCheckQueueOptions)
     if (cameToForeground && queue.pendingCount() > 0) void queue.flush();
   });
 
+  // Возврат сети → немедленный flush (C-5). Без этого триггера досылка после
+  // reconnect ждала до 60 с (таймер) или первого успешного axios-запроса
+  // где-то ещё в приложении. onlineManager дедуплицирует статус (эмитит
+  // только смену), flush() сливает конкурентные вызовы — спама нет.
+  const unsubscribeOnline = options.online?.subscribe((isOnline) => {
+    if (isOnline && queue.pendingCount() > 0) void queue.flush();
+  });
+
   return () => {
     detached = true;
     unsubscribe();
@@ -732,6 +756,7 @@ export function attachOfflineCheckQueue(options: AttachOfflineCheckQueueOptions)
       timer = null;
     }
     appStateSub?.remove();
+    unsubscribeOnline?.();
     // Сендер намеренно НЕ сбрасываем: поздний flush в полёте должен уметь
     // завершиться; повторный attach просто перезапишет его.
   };

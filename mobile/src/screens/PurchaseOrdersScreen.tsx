@@ -39,7 +39,7 @@ import { purchaseOrdersApi, suppliersApi } from '../api/services';
 import { haptic } from '../platform/haptics';
 import { colors, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { UserRole, type PurchaseOrder, type PurchaseOrderStatus, type Supplier } from '../../../shared/types';
+import type { PurchaseOrder, PurchaseOrderStatus, Supplier } from '../../../shared/types';
 import {
   PO_STATUS_META,
   PO_STATUS_ORDER,
@@ -131,8 +131,10 @@ export default function PurchaseOrdersScreen({ embedded = false }: { embedded?: 
   const queryClient = useQueryClient();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
-  const canWrite = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Заказы поставщикам / приёмка — ключ suppliers_manage (сервер: мутации
+  // purchase-orders → тот же ключ; admin живёт по матрице из /auth/me).
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('suppliers_manage');
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [supplierId, setSupplierId] = useState<string | null>(null);

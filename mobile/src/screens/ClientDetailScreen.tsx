@@ -33,7 +33,6 @@ import ClientCallsSection from '../components/ClientCallsSection';
 import ClientInstallmentSection from '../components/installments/ClientInstallmentSection';
 import LoyaltyBadge from '../components/LoyaltyBadge';
 import SectionHeader from '../components/SectionHeader';
-import { UserRole } from '../../../shared/types';
 import {
   colors,
   fontSize,
@@ -189,27 +188,28 @@ export default function ClientDetailScreen() {
   const route = useRoute<any>();
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
   const canViewProfit = hasPermission('profit_view');
   // Редактирование СУЩЕСТВУЮЩЕГО профиля клиента (имя/телефон/комментарий +
-  // заметки/источник + правка/удаление авто в гараже) — гейт `clients_edit`;
-  // owner-class (superadmin/director/admin) минует его, как и остальные
-  // per-screen гейты этого батча (зеркалит серверный PermissionsGuard, который
-  // байпасит гейт по строковой роли). Добавление НОВОГО клиента, привязка авто
-  // и выбор клиента в чек НЕ гейтятся — мастерам это нужно в Кассе.
-  // Карточка «Только для сотрудников» видна ВСЕМ (#19.4); гейт лишь запрещает
-  // ИЗМЕНЯТЬ данные — мастер видит профиль read-only.
-  const isOwnerClass = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
-  const canEditMeta = isOwnerClass || hasPermission('clients_edit');
+  // заметки/источник + правка авто в гараже) — гейт `clients_edit`.
+  // «Права как в Битрикс24» (2026-07): admin снят из owner-class на сервере,
+  // /auth/me отдаёт эффективные права матрицы — ручной isOwnerClass-байпас
+  // больше не нужен, superadmin/director байпасятся внутри hasPermission.
+  // Добавление НОВОГО клиента, привязка авто и выбор клиента в чек НЕ
+  // гейтятся — мастерам это нужно в Кассе. Карточка «Только для сотрудников»
+  // видна ВСЕМ (#19.4); гейт лишь запрещает ИЗМЕНЯТЬ данные.
+  const canEditMeta = hasPermission('clients_edit');
+  // Удаление авто из гаража — отдельный ключ (DELETE /cars/:id →
+  // @RequirePermission('clients_delete') на сервере).
+  const canDeleteCar = hasPermission('clients_delete');
   // Дебиторка — начисление долга / приём оплаты внутри карточки клиента.
-  // Role-gated to director/admin/superadmin (and enforced server-side); a
-  // master sees the balance + ledger read-only without the action buttons.
-  const canManageDebt = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
-  // Бонусы / лояльность — ручное начисление/списание (adjust) внутри карточки.
-  // Owner-class (director/admin/superadmin), enforced server-side. A master
-  // sees the balance + ledger read-only without the action buttons.
-  const canManageLoyalty = isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN);
+  // Сервер: /debts charge/payment/delete → debts_manage (сид: Директор/Админ
+  // true, Мастер false). Мастер видит баланс + журнал read-only.
+  const canManageDebt = hasPermission('debts_manage');
+  // Бонусы / лояльность — ручное начисление/списание (POST /loyalty/adjust →
+  // settings_manage на сервере). Мастер видит баланс + журнал read-only.
+  const canManageLoyalty = hasPermission('settings_manage');
   const { id, focusCarId } = route.params as { id: string; focusCarId?: string };
   const isRetail = id === '__retail__';
   const [refreshing, setRefreshing] = useState(false);
@@ -1264,6 +1264,7 @@ export default function ClientDetailScreen() {
                   spent={cs?.spent ?? 0}
                   lastMileage={cs?.lastMileage ?? null}
                   canEdit={canEditMeta}
+                  canDelete={canDeleteCar}
                   onPress={() => {
                     haptic('select');
                     navigation.navigate('CarDetail', {
@@ -1752,6 +1753,8 @@ interface CarCardProps {
   /** Последний пробег (из самого свежего чека с пробегом). */
   lastMileage: number | null;
   canEdit: boolean;
+  /** Удаление авто — отдельный ключ clients_delete (DELETE /cars/:id). */
+  canDelete: boolean;
   /** Drill-down — open the dedicated car screen (per-car stats + history). */
   onPress: () => void;
   /** Fires on finger-down so the car-history prefetch lands before the push. */
@@ -1759,7 +1762,7 @@ interface CarCardProps {
   onEdit: () => void;
   onDelete: () => void;
   /** Feature #9 — сменить владельца (перенести авто другому клиенту). Гейт —
-   *  тот же `canEdit` (canEditMeta): owner-class OR clients_edit. */
+   *  тот же `canEdit` (canEditMeta = clients_edit, PATCH /cars/:id). */
   onReassign: () => void;
 }
 function CarCard({
@@ -1769,6 +1772,7 @@ function CarCard({
   spent,
   lastMileage,
   canEdit,
+  canDelete,
   onPress,
   onPressIn,
   onEdit,
@@ -1809,23 +1813,29 @@ function CarCard({
             card is now a navigable drill-down. The icon buttons are their own
             touch targets, so they fire instead of the card's onPress. */}
         <View style={styles.carTopRight}>
-          {canEdit ? (
+          {canEdit || canDelete ? (
             <View style={styles.carActions}>
-              <TouchableOpacity
-                onPress={onReassign}
-                style={styles.iconBtn}
-                hitSlop={8}
-                accessibilityRole="button"
-                accessibilityLabel="Сменить владельца авто"
-              >
-                <Ionicons name="swap-horizontal" size={16} color={palette.text.tertiary} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={onEdit} style={styles.iconBtn} hitSlop={8}>
-                <Ionicons name="create-outline" size={16} color={palette.text.tertiary} />
-              </TouchableOpacity>
-              <TouchableOpacity onPress={onDelete} style={styles.iconBtn} hitSlop={8}>
-                <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
-              </TouchableOpacity>
+              {canEdit && (
+                <>
+                  <TouchableOpacity
+                    onPress={onReassign}
+                    style={styles.iconBtn}
+                    hitSlop={8}
+                    accessibilityRole="button"
+                    accessibilityLabel="Сменить владельца авто"
+                  >
+                    <Ionicons name="swap-horizontal" size={16} color={palette.text.tertiary} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={onEdit} style={styles.iconBtn} hitSlop={8}>
+                    <Ionicons name="create-outline" size={16} color={palette.text.tertiary} />
+                  </TouchableOpacity>
+                </>
+              )}
+              {canDelete && (
+                <TouchableOpacity onPress={onDelete} style={styles.iconBtn} hitSlop={8}>
+                  <Ionicons name="trash-outline" size={16} color={colors.red[400]} />
+                </TouchableOpacity>
+              )}
             </View>
           ) : null}
           <Ionicons name="chevron-forward" size={18} color={palette.text.tertiary} style={styles.carChevron} />

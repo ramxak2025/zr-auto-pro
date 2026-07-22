@@ -6,10 +6,15 @@ import * as path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
+import { userHasPermission } from '../common/guards/permissions.guard';
 
-// Roles that can edit "private" employee data (KPI targets, owner notes,
-// hire date). Other roles can still edit their own photo + whatsapp.
-const PRIVATE_ROLES = new Set(['director', 'admin', 'superadmin']);
+/** Actor shape (JWT payload subset) needed for the manager-vs-self split. */
+type EmployeeActor = { userID: string; role?: string; permissions?: Record<string, boolean> };
+
+// «Менеджер» = держатель матричного ключа 'user_management' (волна «права как
+// в Битрикс24», 2026-07; раньше — строковый список director/admin/superadmin):
+// может править "private" employee data (KPI targets, owner notes, hire date).
+// Остальные по-прежнему правят СВОИ photo + whatsapp (self-ветка не трогается).
 
 // Keys that ONLY a manager can touch on PATCH.
 const MANAGER_ONLY_FIELDS = new Set([
@@ -53,13 +58,13 @@ export class EmployeesService {
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
   /** Update an employee's profile fields. Permission split:
-   *  - Manager (director/admin/superadmin) may set any extension field.
+   *  - Manager ('user_management' holder) may set any extension field.
    *  - The employee themselves may only update photoUrl + whatsapp on their own row.
    *  Anything outside this matrix is rejected with 403.
    */
-  async update(actorID: string, actorRole: string, tenantID: string, employeeId: string, dto: Record<string, unknown>) {
-    const isManager = PRIVATE_ROLES.has(actorRole);
-    const isSelf = actorID === employeeId;
+  async update(actor: EmployeeActor, tenantID: string, employeeId: string, dto: Record<string, unknown>) {
+    const isManager = userHasPermission(actor, 'user_management');
+    const isSelf = actor.userID === employeeId;
     if (!isManager && !isSelf) {
       throw new ForbiddenException({ message: 'Нет доступа к этому сотруднику' });
     }
@@ -169,14 +174,13 @@ export class EmployeesService {
    * persist the URL on the user row. Returns the same shape getProfile does.
    */
   async uploadPhoto(
-    actorID: string,
-    actorRole: string,
+    actor: EmployeeActor,
     tenantID: string,
     employeeId: string,
     stream: NodeJS.ReadableStream,
     ext: string,
   ) {
-    if (!PRIVATE_ROLES.has(actorRole) && actorID !== employeeId) {
+    if (!userHasPermission(actor, 'user_management') && actor.userID !== employeeId) {
       throw new ForbiddenException({ message: 'Нет доступа к этому сотруднику' });
     }
 

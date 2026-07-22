@@ -208,7 +208,9 @@ export class InstallmentsService {
 
   /**
    * Record a partial payment against a plan. Transactional + FOR UPDATE so two
-   * concurrent payments can't double-spend the remaining. Reduces remaining,
+   * concurrent payments can't double-spend the remaining. The recorded amount
+   * is CAPPED at the remaining debt read under the lock (money-audit M1) — the
+   * payments ledger can never exceed the plan total. Reduces remaining,
    * optionally moves the next date; when remaining hits 0 the plan closes.
    */
   async pay(user: JwtPayload, planId: string, dto: PayInstallmentDto) {
@@ -236,29 +238,51 @@ export class InstallmentsService {
       }
 
       const total = num(plan.total);
-      const newPaid = round2(num(plan.paid) + amount);
-      const newRemaining = round2(Math.max(0, total - newPaid));
-      const newStatus = newRemaining <= 0 ? 'closed' : 'open';
+      const alreadyPaid = num(plan.paid);
+      // Кап по ОСТАТКУ ДОЛГА, посчитанному под FOR UPDATE (money-audit M1):
+      // ledger платежей не может превысить total — иначе излишек раздувал бы
+      // installmentPaid/Cash в «Движении денег» и today_cash принявшего.
+      // Заодно закрывает TOCTOU в payoff(): его remaining читается БЕЗ лока,
+      // но здесь всё равно клампится к актуальному остатку.
+      const remainingBefore = round2(Math.max(0, total - alreadyPaid));
+      const applied = round2(Math.min(amount, remainingBefore));
       const nextDate = dto.nextPaymentDate !== undefined ? toDateOrNull(dto.nextPaymentDate) : undefined;
 
-      await dbClient.query(
-        `INSERT INTO installment_payments (tenant_id, plan_id, amount, payment_method, comment, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
-        [user.tenantID, planId, amount, method, dto.comment?.trim() || null, user.userID],
-      );
+      if (applied <= 0) {
+        // Долга уже нет, но план ещё open (рассинхрон/гонка) — платёж не
+        // записываем, просто закрываем план (зеркало ветки payoff «нечего
+        // платить»).
+        await dbClient.query(
+          `UPDATE installment_plans
+              SET remaining = 0, status = 'closed', closed_at = COALESCE(closed_at, now())
+            WHERE id = $1 AND tenant_id = $2`,
+          [planId, user.tenantID],
+        );
+        await dbClient.query('COMMIT');
+      } else {
+        const newPaid = round2(alreadyPaid + applied);
+        const newRemaining = round2(Math.max(0, total - newPaid));
+        const newStatus = newRemaining <= 0 ? 'closed' : 'open';
 
-      await dbClient.query(
-        `UPDATE installment_plans
-            SET paid = $1,
-                remaining = $2,
-                status = $3,
-                closed_at = CASE WHEN $3 = 'closed' THEN COALESCE(closed_at, now()) ELSE NULL END,
-                next_payment_date = CASE WHEN $5 THEN $4 ELSE next_payment_date END
-          WHERE id = $6 AND tenant_id = $7`,
-        [newPaid, newRemaining, newStatus, nextDate ?? null, nextDate !== undefined, planId, user.tenantID],
-      );
+        await dbClient.query(
+          `INSERT INTO installment_payments (tenant_id, plan_id, amount, payment_method, comment, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [user.tenantID, planId, applied, method, dto.comment?.trim() || null, user.userID],
+        );
 
-      await dbClient.query('COMMIT');
+        await dbClient.query(
+          `UPDATE installment_plans
+              SET paid = $1,
+                  remaining = $2,
+                  status = $3,
+                  closed_at = CASE WHEN $3 = 'closed' THEN COALESCE(closed_at, now()) ELSE NULL END,
+                  next_payment_date = CASE WHEN $5 THEN $4 ELSE next_payment_date END
+            WHERE id = $6 AND tenant_id = $7`,
+          [newPaid, newRemaining, newStatus, nextDate ?? null, nextDate !== undefined, planId, user.tenantID],
+        );
+
+        await dbClient.query('COMMIT');
+      }
     } catch (err) {
       try {
         await dbClient.query('ROLLBACK');
@@ -273,7 +297,12 @@ export class InstallmentsService {
     return this.getPlanOrThrow(user.tenantID, planId);
   }
 
-  /** Pay off the whole remaining at once (close the plan). */
+  /**
+   * Pay off the whole remaining at once (close the plan). The pre-read below is
+   * NOT locked (best-effort UX checks); the authoritative amount is re-clamped
+   * to the live remaining inside pay()'s FOR UPDATE transaction, so a
+   * concurrent partial payment can't drive paid above total (M1 TOCTOU).
+   */
   async payoff(user: JwtPayload, planId: string, method?: 'cash' | 'card') {
     const { rows } = await this.pool.query(
       `SELECT remaining, status FROM installment_plans WHERE id = $1 AND tenant_id = $2`,

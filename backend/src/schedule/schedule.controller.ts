@@ -1,19 +1,28 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { ScheduleService } from './schedule.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
-@UseGuards(JwtAuthGuard, RolesGuard)
+// Матрица ролей АВТОРИТЕТНА (волна «права как в Битрикс24», 2026-07):
+//   • 'schedule_view' (schedule.view) — чтение графика команды. Сид true у
+//     всех трёх системных ролей (мастер видит расписание — не запирается).
+//   • 'schedule_manage' (schedule.manage) — все мутации (прежний
+//     @Roles(director, admin, superadmin); сид: Директор/Админ true, миграция 136).
+// my-stats / work-modes GET / settings GET — открыты (self / справочники для
+// отображения графика).
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('schedule')
 export class ScheduleController {
   constructor(private scheduleService: ScheduleService) {}
 
+  @RequirePermission('schedule_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.scheduleService.getAll(user.tenantID, query);
   }
 
+  @RequirePermission('schedule_view')
   @Get('today')
   getToday(@CurrentUser() user: JwtPayload) {
     return this.scheduleService.getToday(user.tenantID);
@@ -35,43 +44,43 @@ export class ScheduleController {
     return this.scheduleService.getSettings(user.tenantID);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('schedule_manage')
   @Post('settings')
   updateSettings(@CurrentUser() user: JwtPayload, @Body() body: { shiftStatuses?: string[] }) {
     return this.scheduleService.updateSettings(user.tenantID, body);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('schedule_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.scheduleService.create(user.tenantID, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('schedule_manage')
   @Post('work-modes')
   createWorkMode(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.scheduleService.createWorkMode(user.tenantID, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('schedule_manage')
   @Post('apply-work-mode')
   applyWorkMode(@CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.scheduleService.applyWorkMode(user.tenantID, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('schedule_manage')
   @Patch('work-modes/:id')
   updateWorkMode(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.scheduleService.updateWorkMode(id, user.tenantID, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('schedule_manage')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
     return this.scheduleService.update(id, user.tenantID, dto);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('schedule_manage')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.scheduleService.remove(id, user.tenantID);

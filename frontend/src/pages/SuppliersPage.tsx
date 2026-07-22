@@ -13,7 +13,7 @@ import PhoneInput from '../components/PhoneInput';
 import PageHeader from '../components/PageHeader';
 import QueryState from '../components/QueryState';
 import { useClickableRow } from '../hooks/useClickableRow';
-import { Supplier, PaginatedResponse, UserRole } from '../types';
+import { Supplier, PaginatedResponse } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 
 // `useClickableRow` returns a static prop bag (no React state) — aliasing lets
@@ -37,12 +37,11 @@ const emptyForm: SupplierFormData = {
 export default function SuppliersPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { hasPermission, user } = useAuth();
+  const { hasPermission } = useAuth();
   // ROLE-ONLY: создание/редактирование/удаление поставщиков — только с
-  // suppliers_manage. Просмотр (suppliers_access) — у всех, кто сюда попал.
-  const isOwnerClass =
-    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
-  const canManage = isOwnerClass || hasPermission('suppliers_manage');
+  // suppliers_manage (байпас superadmin/director — внутри hasPermission;
+  // admin — по матрице роли). Просмотр (suppliers_access) — у всех, кто попал.
+  const canManage = hasPermission('suppliers_manage');
 
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);

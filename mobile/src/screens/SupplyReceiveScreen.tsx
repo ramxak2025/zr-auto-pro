@@ -50,7 +50,7 @@ import { haptic } from '../platform/haptics';
 import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { UserRole, type PurchaseOrder } from '../../../shared/types';
+import type { PurchaseOrder } from '../../../shared/types';
 import { formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purchaseOrderHelpers';
 import { roundQty } from '../utils/units';
 
@@ -76,8 +76,10 @@ export default function SupplyReceiveScreen() {
   const queryClient = useQueryClient();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
-  const canWrite = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Заказы поставщикам / приёмка — ключ suppliers_manage (сервер: мутации
+  // purchase-orders → тот же ключ; admin живёт по матрице из /auth/me).
+  const { hasPermission } = useAuth();
+  const canWrite = hasPermission('suppliers_manage');
 
   const dark = palette.mode === 'dark';
   const orderId: string = route.params?.orderId;
@@ -195,6 +197,8 @@ export default function SupplyReceiveScreen() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      // Журнал → вкладка «Документы склада»: приёмка должна появиться там сразу.
+      queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
       queryClient.invalidateQueries({ queryKey: ['low-stock'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-analytics'] });
       // Леджер поставщика — Поставки / Платежи / Долг.

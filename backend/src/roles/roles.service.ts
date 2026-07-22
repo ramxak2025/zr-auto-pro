@@ -3,6 +3,7 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { invalidateAuthUser } from '../common/auth-cache';
 import { mergeRoleMatrix, RawRoleMatrix, sanitizeRoleMatrix } from '../common/role-matrix';
+import { assertPrivilegeCeiling, RoleActor } from './privilege-ceiling';
 
 /** Разбор jsonb-строки без падения: кривой JSON → {} (fail-closed, ничего не выдаёт). */
 function safeJsonParse(raw: string): unknown {
@@ -141,6 +142,7 @@ export class RolesService {
       copyFromRoleId?: string;
       sort?: number;
     },
+    actor?: RoleActor,
   ): Promise<RoleRow> {
     const name = dto.name.trim();
     if (!name) throw new BadRequestException({ message: 'Название роли обязательно' });
@@ -153,6 +155,11 @@ export class RolesService {
       );
       matrix = mergeRoleMatrix(sourceMatrix, matrix);
     }
+
+    // R6/E-6 — новая роль создаётся «с нуля» (before={}): любая ячейка,
+    // поднятая выше собственных прав актора (в т.ч. пришедшая через
+    // copyFromRoleId), — эскалация для не-owner-класса. Потолок + owner-only.
+    assertPrivilegeCeiling({}, matrix, actor);
 
     try {
       const { rows } = await this.pool.query(
@@ -173,14 +180,20 @@ export class RolesService {
   /**
    * Обновить роль. Три ветки (ITEM 5):
    *
-   *   1. Кастомная роль тенанта (is_system=false)     → правка на месте, matrix
-   *      ЗАМЕНЯЕТ сохранённую целиком (прежнее поведение, ноль регрессии).
-   *   2. Тенантный override системной роли             → правка на месте, matrix
-   *      МЕРЖИТСЯ поверх сохранённой (override всегда держит ПОЛНУЮ матрицу, а
-   *      частичный патч не должен обнулить соседние ячейки).
+   *   1. Кастомная роль тенанта (is_system=false)     → правка на месте.
+   *   2. Тенантный override системной роли             → правка на месте.
    *   3. ГЛОБАЛЬНАЯ системная роль «Мастер»/«Администратор» → copy-on-write:
    *      материализуем тенантный override и переводим на него пользователей
    *      этого тенанта. Глобальная строка НЕ трогается.
+   *
+   * Matrix во ВСЕХ ветках МЕРЖИТСЯ поверх сохранённой (R12): парк мобильных
+   * клиентов обновляется через OTA не мгновенно, и редактор СТАРОГО словаря
+   * шлёт «полную» матрицу без новых секций/ячеек (settings/knowledge,
+   * checks.cashShifts, …) — replace молча обнулил бы их у роли при любой
+   * правке старым клиентом. Мерж действует на уровне «секция → действие»:
+   * всё, что клиент прислал явно, применяется; недостающее сохраняется.
+   * Новый редактор шлёт каждую ячейку явно (matrixFromDraft материализует
+   * полную матрицу), поэтому для него мерж эквивалентен замене.
    *
    * «Директор» — ветка 3 запрещена: 403, роль остаётся глобальным шаблоном с
    * полными правами (директор и так обходит все гейты по строковой роли).
@@ -192,6 +205,7 @@ export class RolesService {
     id: string,
     tenantID: string,
     patch: { name?: string; description?: string; matrix?: Record<string, Record<string, unknown>>; sort?: number },
+    actor?: RoleActor,
   ): Promise<RoleRow> {
     const existing = await this.loadVisible(id, tenantID);
     const systemKey = (existing.system_key ?? null) as RoleSystemKey | null;
@@ -215,35 +229,35 @@ export class RolesService {
         `SELECT ${SELECT_COLUMNS} FROM roles WHERE tenant_id = $1 AND system_key = $2`,
         [tenantID, systemKey],
       );
-      if (ov.length > 0) return this.writeOwnRole(ov[0], tenantID, patch, true);
-      return this.materializeSystemOverride(existing, tenantID, patch, systemKey);
+      if (ov.length > 0) return this.writeOwnRole(ov[0], tenantID, patch, actor);
+      return this.materializeSystemOverride(existing, tenantID, patch, systemKey, actor);
     }
 
-    // Ветки 1–2 — правка СВОЕЙ тенантной строки. override (is_system && system_key)
-    // → мерж; кастомная → замена (как раньше).
-    const isOverride = existing.is_system && !!systemKey;
-    return this.writeOwnRole(existing, tenantID, patch, isOverride);
+    // Ветки 1–2 — правка СВОЕЙ тенантной строки (кастомной или override) — мерж.
+    return this.writeOwnRole(existing, tenantID, patch, actor);
   }
 
   /**
-   * Записать СВОЮ (тенантную) роль: кастомную или override. `mergeMatrix`:
-   *   • false — matrix из патча ЗАМЕНЯЕТ сохранённую (кастомная роль);
-   *   • true  — matrix из патча МЕРЖИТСЯ поверх сохранённой (override — держим
-   *             полную матрицу, частичный патч не обнуляет соседние ячейки).
+   * Записать СВОЮ (тенантную) роль: кастомную или override. Matrix из патча
+   * МЕРЖИТСЯ поверх сохранённой (R12 — см. update(): старый OTA-клиент шлёт
+   * матрицу старого словаря, replace обнулил бы новые секции/ячейки; новый
+   * клиент шлёт все ячейки явно, для него мерж ≡ замена).
    * Всё строго `WHERE tenant_id` — чужую строку тронуть нельзя (плюс RLS).
    */
   private async writeOwnRole(
     existing: { id: string; matrix: unknown },
     tenantID: string,
     patch: { name?: string; description?: string; matrix?: Record<string, Record<string, unknown>>; sort?: number },
-    mergeMatrix: boolean,
+    actor?: RoleActor,
   ): Promise<RoleRow> {
     let matrixParam: string | null = null;
     if (patch.matrix !== undefined) {
-      const patchMatrix = sanitizeRoleMatrix(patch.matrix);
-      matrixParam = JSON.stringify(
-        mergeMatrix ? mergeRoleMatrix(sanitizeRoleMatrix(this.parseMatrix(existing.matrix)), patchMatrix) : patchMatrix,
-      );
+      const storedMatrix = sanitizeRoleMatrix(this.parseMatrix(existing.matrix));
+      const merged = mergeRoleMatrix(storedMatrix, sanitizeRoleMatrix(patch.matrix));
+      // R6/E-6 — не-owner-класс не может поднять ни одну ячейку выше своих прав
+      // (потолок привилегий) и owner-only ячейки — вообще.
+      assertPrivilegeCeiling(storedMatrix, merged, actor);
+      matrixParam = JSON.stringify(merged);
     }
 
     try {
@@ -300,10 +314,14 @@ export class RolesService {
     tenantID: string,
     patch: { name?: string; description?: string; matrix?: Record<string, Record<string, unknown>>; sort?: number },
     systemKey: RoleSystemKey,
+    actor?: RoleActor,
   ): Promise<RoleRow> {
     const baseMatrix = sanitizeRoleMatrix(this.parseMatrix(globalRow.matrix));
     const patchMatrix = patch.matrix !== undefined ? sanitizeRoleMatrix(patch.matrix) : {};
     const mergedMatrix = mergeRoleMatrix(baseMatrix, patchMatrix);
+    // R6/E-6 — не-owner-класс не может поднять относительно шаблона ни одну
+    // ячейку выше своих прав (потолок) и owner-only ячейки — вообще.
+    assertPrivilegeCeiling(baseMatrix, mergedMatrix, actor);
     const name = patch.name !== undefined ? patch.name.trim() : globalRow.name;
     const description = patch.description !== undefined ? patch.description.trim() : (globalRow.description ?? null);
     const sort = patch.sort ?? (parseInt(String(globalRow.sort), 10) || 0);
@@ -330,7 +348,7 @@ export class RolesService {
             [tenantID, systemKey],
           );
           if (ov.length === 0) throw new NotFoundException({ message: 'Роль не найдена' });
-          return this.writeOwnRole(ov[0], tenantID, patch, true);
+          return this.writeOwnRole(ov[0], tenantID, patch, actor);
         }
         if (e.code === '23505' && e.constraint === 'roles_tenant_name_uniq') {
           await client.query('ROLLBACK');

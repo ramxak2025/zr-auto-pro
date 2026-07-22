@@ -2,11 +2,11 @@
  * SalaryEmployeeCard — full-screen, month-paged salary card for ONE employee.
  *
  * Replaces the old bottom-sheet popup. Two entry points share this one body:
- *   • Owner (director/superadmin) taps an employee in «Зарплата» →
- *     SalaryEmployeeScreen renders this with `canManage` and the employee's
- *     name as the title.
+ *   • Owner drill-down: taps an employee in «Зарплата» → SalaryEmployeeScreen
+ *     renders this with `canManagePayouts` / `canManagePremiums` (два разных
+ *     матричных ключа — см. ниже) and the employee's name as the title.
  *   • Employee (admin/master) opens «Зарплата» → SalaryScreen renders this
- *     inline with their OWN id, `canManage={false}`, title «Моя зарплата».
+ *     inline with their OWN id, оба can-props false, title «Моя зарплата».
  *
  * Data comes from `salaryApi.getEmployeeMonth(employeeId, 'YYYY-MM')` — a full
  * month breakdown (service / product earnings, motivation, premiums, fines,
@@ -17,13 +17,14 @@
  * is the backend's already-netted number (earnings − fines − accepted payouts);
  * we render the server's figure verbatim and never re-subtract client-side.
  *
- * Owner actions (canManage):
- *   • «Выдать зарплату» / «Аванс» → createPayout (starts pending; the employee
- *     accepts/rejects via the global SalaryReceivedModal).
- *   • «Добавить штраф» → createFine (comment MANDATORY — submit blocked while
- *     the reason is empty). Fines are listed with a remove action.
- *   • «Премия» → premiums.create (cash / +% к ставке) — preserved from the old
- *     popup so the capability isn't lost.
+ * Owner actions — два независимых серверных ключа (у системного «Администратора»
+ * payouts=false, а premiums=true, поэтому один общий prop нельзя):
+ *   • canManagePayouts (salary_payouts_manage): «Выдать зарплату» / «Аванс» →
+ *     createPayout (starts pending; the employee accepts/rejects via the global
+ *     SalaryReceivedModal) + «Добавить штраф» → createFine (comment MANDATORY —
+ *     submit blocked while the reason is empty; fines listed with remove).
+ *   • canManagePremiums (salary_premiums_manage): «Премия» → premiums.create
+ *     (cash / +% к ставке) — preserved from the old popup.
  */
 import React, { useCallback, useMemo, useState } from 'react';
 import {
@@ -82,8 +83,11 @@ export interface SalaryEmployeeCardProps {
   title: string;
   /** Header back handler. */
   onBack: () => void;
-  /** Owner (director/superadmin) — surface payout / fine / premium actions. */
-  canManage: boolean;
+  /** Держатель salary_payouts_manage — выплаты / авансы / штрафы. */
+  canManagePayouts: boolean;
+  /** Держатель salary_premiums_manage — премии (у системного «Администратора»
+   *  true при payouts=false — ключи независимы). */
+  canManagePremiums: boolean;
   /** 'YYYY-MM' to open on. Defaults to the current month. */
   initialMonth?: string;
 }
@@ -144,7 +148,8 @@ export default function SalaryEmployeeCard({
   employeeName,
   title,
   onBack,
-  canManage,
+  canManagePayouts,
+  canManagePremiums,
   initialMonth,
 }: SalaryEmployeeCardProps) {
   const palette = useColors();
@@ -333,69 +338,75 @@ export default function SalaryEmployeeCard({
             <FinesSection
               fines={data.fines}
               palette={palette}
-              canManage={canManage}
+              canManage={canManagePayouts}
               onRemove={confirmRemoveFine}
               removingId={removeFineMutation.isPending ? removeFineMutation.variables : undefined}
             />
             <PremiumsSection premiums={data.premiums} palette={palette} />
             <PaymentsSection payments={data.payments} palette={palette} />
 
-            {canManage ? (
+            {canManagePayouts || canManagePremiums ? (
               <View style={styles.actions}>
-                <View style={styles.actionRow}>
-                  <TouchableOpacity
-                    style={styles.actionPrimary}
-                    activeOpacity={0.85}
-                    onPress={() => openPayout('salary')}
-                  >
-                    <LinearGradient
-                      colors={[colors.green[500], colors.green[700]] as [string, string]}
-                      style={styles.actionGradient}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
+                {canManagePayouts && (
+                  <>
+                    <View style={styles.actionRow}>
+                      <TouchableOpacity
+                        style={styles.actionPrimary}
+                        activeOpacity={0.85}
+                        onPress={() => openPayout('salary')}
+                      >
+                        <LinearGradient
+                          colors={[colors.green[500], colors.green[700]] as [string, string]}
+                          style={styles.actionGradient}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                        >
+                          <Ionicons name="paper-plane-outline" size={18} color={colors.white} />
+                          <Text style={styles.actionPrimaryText}>Выдать зарплату</Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.actionSecondary}
+                        activeOpacity={0.85}
+                        onPress={() => openPayout('advance')}
+                      >
+                        <LinearGradient
+                          colors={[colors.amber[600], colors.orange[600]] as [string, string]}
+                          style={styles.actionGradient}
+                          start={{ x: 0, y: 0 }}
+                          end={{ x: 1, y: 0 }}
+                        >
+                          <Ionicons name="card-outline" size={18} color={colors.white} />
+                          <Text style={styles.actionPrimaryText}>Аванс</Text>
+                        </LinearGradient>
+                      </TouchableOpacity>
+                    </View>
+                    <TouchableOpacity
+                      style={[styles.actionOutline, { borderColor: palette.border.strong }]}
+                      activeOpacity={0.8}
+                      onPress={() => {
+                        haptic('tap');
+                        setActiveForm('fine');
+                      }}
                     >
-                      <Ionicons name="paper-plane-outline" size={18} color={colors.white} />
-                      <Text style={styles.actionPrimaryText}>Выдать зарплату</Text>
-                    </LinearGradient>
-                  </TouchableOpacity>
+                      <Ionicons name="remove-circle-outline" size={18} color={colors.red[600]} />
+                      <Text style={[styles.actionOutlineText, { color: palette.text.primary }]}>Добавить штраф</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+                {canManagePremiums && (
                   <TouchableOpacity
-                    style={styles.actionSecondary}
-                    activeOpacity={0.85}
-                    onPress={() => openPayout('advance')}
+                    style={[styles.actionOutline, { borderColor: palette.border.strong }]}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      haptic('tap');
+                      setActiveForm('premium');
+                    }}
                   >
-                    <LinearGradient
-                      colors={[colors.amber[600], colors.orange[600]] as [string, string]}
-                      style={styles.actionGradient}
-                      start={{ x: 0, y: 0 }}
-                      end={{ x: 1, y: 0 }}
-                    >
-                      <Ionicons name="card-outline" size={18} color={colors.white} />
-                      <Text style={styles.actionPrimaryText}>Аванс</Text>
-                    </LinearGradient>
+                    <Ionicons name="gift-outline" size={18} color={colors.rose[600]} />
+                    <Text style={[styles.actionOutlineText, { color: palette.text.primary }]}>Премия</Text>
                   </TouchableOpacity>
-                </View>
-                <TouchableOpacity
-                  style={[styles.actionOutline, { borderColor: palette.border.strong }]}
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    haptic('tap');
-                    setActiveForm('fine');
-                  }}
-                >
-                  <Ionicons name="remove-circle-outline" size={18} color={colors.red[600]} />
-                  <Text style={[styles.actionOutlineText, { color: palette.text.primary }]}>Добавить штраф</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.actionOutline, { borderColor: palette.border.strong }]}
-                  activeOpacity={0.8}
-                  onPress={() => {
-                    haptic('tap');
-                    setActiveForm('premium');
-                  }}
-                >
-                  <Ionicons name="gift-outline" size={18} color={colors.rose[600]} />
-                  <Text style={[styles.actionOutlineText, { color: palette.text.primary }]}>Премия</Text>
-                </TouchableOpacity>
+                )}
               </View>
             ) : null}
           </ScrollView>

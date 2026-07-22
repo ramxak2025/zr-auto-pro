@@ -2,6 +2,7 @@ import {
   Injectable,
   Inject,
   BadRequestException,
+  ConflictException,
   NotFoundException,
   ForbiddenException,
   InternalServerErrorException,
@@ -14,6 +15,7 @@ import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthUser, NO_TENANT_ID } from '../common/auth-cache';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import { assertRoleAssignable } from '../roles/privilege-ceiling';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 import { SECTION_KEYS, SectionKey } from './dto/section-visibility.dto';
 import { ALL_ITEM_KEYS, OWNER_PROTECTED_ITEM_KEYS } from './dto/item-visibility.dto';
@@ -27,6 +29,12 @@ const ALLOWED_ROLES = new Set(['master', 'admin', 'director', 'superadmin']);
 // Only `superadmin` may mint or grant the `superadmin` role. A `director`
 // cannot escalate themselves or anyone else to `superadmin`.
 const SUPERADMIN_ONLY_ROLES = new Set(['superadmin']);
+
+// Roles allowed to hand out «Директор» (строковую роль ИЛИ role_id роли с
+// system_key='director'). Без этого admin с user_management назначал бы
+// директора себе/любому мастеру и получал owner-class навсегда (эскалация,
+// карта 6.3).
+const DIRECTOR_GRANTING_ROLES = new Set(['director', 'superadmin']);
 
 @Injectable()
 export class UsersService {
@@ -47,6 +55,48 @@ export class UsersService {
     if (SUPERADMIN_ONLY_ROLES.has(requestedRole) && actorRole !== 'superadmin') {
       throw new ForbiddenException({ message: 'Только суперадмин может назначить эту роль' });
     }
+    // «Директора» выдаёт только директор/суперадмин — admin с user_management
+    // не может самоповыситься (или повысить сообщника) до owner-class.
+    if (requestedRole === 'director' && !DIRECTOR_GRANTING_ROLES.has(actorRole)) {
+      throw new ForbiddenException({ message: 'Только директор может назначить роль «Директор»' });
+    }
+  }
+
+  /**
+   * Назначение role_id роли с system_key='director' — та же прерогатива
+   * директора/суперадмина, что и строковая роль 'director' (карта 6.3): иначе
+   * admin обошёл бы assertCanAssignRole, выдав СИСТЕМНУЮ роль «Директор» через
+   * roleId (клиент шлёт role и roleId независимо).
+   */
+  private assertCanAssignRoleId(actorRole: string, roleSystemKey: string | null | undefined) {
+    if (roleSystemKey === 'director' && !DIRECTOR_GRANTING_ROLES.has(actorRole)) {
+      throw new ForbiddenException({ message: 'Только директор может назначить роль «Директор»' });
+    }
+  }
+
+  /**
+   * Смена телефона на уже занятый: create() проверяет дубль заранее, а update()
+   * ловит гонку/пропуск на уникальном индексе users(phone) — 23505 переводится
+   * в понятный 409 вместо генерик-500 (передача волны A).
+   */
+  private mapDuplicatePhone(err: unknown): unknown {
+    if ((err as { code?: string }).code === '23505') {
+      return new ConflictException({ message: 'Пользователь с таким телефоном уже существует' });
+    }
+    return err;
+  }
+
+  /** jsonb-матрица приходит объектом (node-pg) или строкой (легаси text) —
+   *  нормализуем к объекту (кривой JSON → {}, fail-closed). */
+  private parseRoleMatrix(raw: unknown): unknown {
+    if (typeof raw === 'string') {
+      try {
+        return JSON.parse(raw);
+      } catch {
+        return {};
+      }
+    }
+    return raw;
   }
 
   /**
@@ -206,7 +256,7 @@ export class UsersService {
     return this.mapUser(rows[0]);
   }
 
-  async create(tenantID: string, actorRole: string, dto: any) {
+  async create(tenantID: string, actorRole: string, dto: any, actorPermissions?: Record<string, boolean>) {
     if (!dto.phone || !dto.password || !dto.fullName) {
       throw new BadRequestException({ message: 'Телефон, пароль и имя обязательны' });
     }
@@ -245,19 +295,23 @@ export class UsersService {
     // «новый сотрудник видит пустое приложение». superadmin (без тенанта) роли не
     // требует — он обходит все гейты по строковой роли, ему role_id не нужен.
     let roleId: string | null = null;
+    let assignedMatrix: unknown = null;
     if (dto.roleId) {
       const { rows: roleRows } = await this.pool.query(
-        `SELECT 1 FROM roles WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
+        `SELECT system_key, COALESCE(matrix, '{}') AS matrix FROM roles WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
         [dto.roleId, tenantID],
       );
       if (roleRows.length === 0) throw new BadRequestException({ message: 'Роль не найдена' });
+      // system_key='director' → только директор/суперадмин (карта 6.3).
+      this.assertCanAssignRoleId(actorRole, roleRows[0].system_key as string | null);
       roleId = dto.roleId;
+      assignedMatrix = roleRows[0].matrix;
     } else if (role !== 'superadmin') {
       // Дефолт роли по строковой роли: сначала per-tenant override с этим
       // system_key, иначе глобальный системный шаблон. Один запрос: ORDER BY
       // (tenant_id IS NOT NULL) DESC ставит тенантный override перед глобальным.
       const { rows: sysRoleRows } = await this.pool.query(
-        `SELECT id FROM roles
+        `SELECT id, COALESCE(matrix, '{}') AS matrix FROM roles
           WHERE system_key = $1 AND (tenant_id = $2 OR tenant_id IS NULL)
           ORDER BY (tenant_id IS NOT NULL) DESC
           LIMIT 1`,
@@ -266,7 +320,23 @@ export class UsersService {
       // Если системная роль-шаблон почему-то отсутствует (не должно случаться —
       // 3 глобальные строки сидятся миграцией 114/121), не блокируем создание:
       // роль остаётся NULL, и guard применит легаси-дефолты строковой роли.
-      roleId = sysRoleRows.length > 0 ? (sysRoleRows[0].id as string) : null;
+      if (sysRoleRows.length > 0) {
+        roleId = sysRoleRows[0].id as string;
+        assignedMatrix = sysRoleRows[0].matrix;
+      }
+    }
+
+    // E-6 доводка — ПОТОЛОК НАЗНАЧЕНИЯ роли (см. assertRoleAssignable): не-owner
+    // держатель user_management не может выдать новому сотруднику роль (в т.ч.
+    // системного «Администратора» или дефолт по строковой роли) с правами ВЫШЕ
+    // собственных эффективных — иначе поднял бы аккаунт с известным паролем до
+    // всех финансов в обход потолка ролей. Owner-class (director/superadmin) — без
+    // потолка. roleId=null (роль не разрешилась) — проверять нечего: guard
+    // применит легаси-дефолты строковой роли (⊆ прав любого актора).
+    // assertCanAssignRole/assertCanAssignRoleId (запрет назначать 'director') —
+    // дополняющая проверка, сохранена выше.
+    if (assignedMatrix !== null) {
+      assertRoleAssignable(this.parseRoleMatrix(assignedMatrix), { role: actorRole, permissions: actorPermissions });
     }
 
     try {
@@ -295,7 +365,14 @@ export class UsersService {
     }
   }
 
-  async update(id: string, tenantID: string, actorRole: string, actorID: string, dto: any) {
+  async update(
+    id: string,
+    tenantID: string,
+    actorRole: string,
+    actorID: string,
+    dto: any,
+    actorPermissions?: Record<string, boolean>,
+  ) {
     // Confirm the target lives in the actor's tenant. Without this the
     // surrounding `WHERE id=$ AND tenant_id=$` only protects mutation;
     // we'd still leak existence via different error paths.
@@ -331,6 +408,13 @@ export class UsersService {
       if (targetRole === 'superadmin' && actorRole !== 'superadmin') {
         throw new ForbiddenException({ message: 'Только суперадмин может менять роль суперадмина' });
       }
+      // Симметрично назначению (карта 6.3): МЕНЯТЬ роль существующего директора
+      // может только директор/суперадмин. Для чужого директора это уже отбито
+      // editingPrivilegedTarget выше; явный guard закрывает остаточные пути
+      // (самоправка и будущие рефакторинги privileged-логики) fail-closed.
+      if (targetRole === 'director' && dto.role !== 'director' && !DIRECTOR_GRANTING_ROLES.has(actorRole)) {
+        throw new ForbiddenException({ message: 'Только директор может менять роль директора' });
+      }
     }
 
     if (dto.password !== undefined && typeof dto.password === 'string') {
@@ -349,16 +433,27 @@ export class UsersService {
     // от несуществующего.
     if (dto.roleId !== undefined && dto.roleId !== null) {
       const { rows: roleRows } = await this.pool.query(
-        `SELECT COALESCE(matrix, '{}') AS matrix FROM roles WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
+        `SELECT COALESCE(matrix, '{}') AS matrix, system_key FROM roles WHERE id=$1 AND (tenant_id=$2 OR tenant_id IS NULL)`,
         [dto.roleId, tenantID],
       );
       if (roleRows.length === 0) throw new BadRequestException({ message: 'Роль не найдена' });
+      // system_key='director' → только директор/суперадмин (карта 6.3).
+      this.assertCanAssignRoleId(actorRole, roleRows[0].system_key as string | null);
+
+      const roleMatrix = this.parseRoleMatrix(roleRows[0].matrix);
+
+      // E-6 доводка — ПОТОЛОК НАЗНАЧЕНИЯ роли (см. assertRoleAssignable): не-owner
+      // держатель user_management не может назначить (СЕБЕ или другому) роль с
+      // правами ВЫШЕ собственных эффективных — иначе назначил бы себе/сообщнику
+      // системного «Администратора» (profit_view / cashflow_view_all…) и получил
+      // все финансы в обход потолка ролей. Owner-class (director/superadmin) — без
+      // потолка (assertRoleAssignable сам это учитывает).
+      assertRoleAssignable(roleMatrix, { role: actorRole, permissions: actorPermissions });
 
       // Самолокаут-guard по ЭФФЕКТИВНОМУ результату (теперь только flatten(matrix)):
       // назначая роль СЕБЕ, нельзя получить user_management=false. superadmin/
       // director исключены — их клиентский обход безусловный, самолокаут невозможен.
       if (id === actorID && actorRole !== 'superadmin' && actorRole !== 'director') {
-        const roleMatrix = typeof roleRows[0].matrix === 'string' ? JSON.parse(roleRows[0].matrix) : roleRows[0].matrix;
         const effective = mergeEffectivePermissions(roleMatrix);
         if (effective.user_management !== true) {
           throw new BadRequestException({ message: 'Нельзя снять у себя право «Управление пользователями»' });
@@ -473,13 +568,18 @@ export class UsersService {
           /* already rolled back */
         }
         client.release();
-        throw err;
+        throw this.mapDuplicatePhone(err);
       }
       client.release();
       // Current-month check salary / profit moved — drop cached report aggregates.
       invalidateReportsForTenant(tenantID);
     } else {
-      const { rows } = await this.pool.query(updateSql, vals);
+      let rows: any[];
+      try {
+        ({ rows } = await this.pool.query(updateSql, vals));
+      } catch (err) {
+        throw this.mapDuplicatePhone(err);
+      }
       if (rows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
       updatedRow = rows[0];
     }

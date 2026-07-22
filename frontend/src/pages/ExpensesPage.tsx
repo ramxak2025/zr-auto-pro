@@ -20,8 +20,15 @@ const formatCurrency = (value: number) =>
 
 export default function ExpensesPage() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
-  const isDirector = user?.role === 'director' || user?.role === 'superadmin';
+  const { hasPermission } = useAuth();
+  // Волна «права как в Битрикс24» — зеркало backend expenses/:
+  //   can_add_expenses  → POST /expenses («Добавить»);
+  //   settings_manage   → CRUD категорий («Категории»);
+  //   financial_reports → approve/reject/DELETE (удаление расхода).
+  // Байпас superadmin/director — внутри hasPermission; admin — по матрице.
+  const canAddExpense = hasPermission('can_add_expenses');
+  const canManageCategories = hasPermission('settings_manage');
+  const canDeleteExpense = hasPermission('financial_reports');
 
   const today = format(new Date(), 'yyyy-MM-dd');
   const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
@@ -150,14 +157,18 @@ export default function ExpensesPage() {
         icon={Wallet}
         subtitle="Учёт расходов по статьям"
         actions={
-          isDirector ? (
+          canManageCategories || canAddExpense ? (
             <>
-              <button onClick={() => setCatModalOpen(true)} className="btn-secondary text-xs justify-center">
-                <Tag className="w-3.5 h-3.5" /> Категории
-              </button>
-              <button onClick={() => setModalOpen(true)} className="btn-primary justify-center">
-                <Plus className="w-4 h-4" /> Добавить
-              </button>
+              {canManageCategories && (
+                <button onClick={() => setCatModalOpen(true)} className="btn-secondary text-xs justify-center">
+                  <Tag className="w-3.5 h-3.5" /> Категории
+                </button>
+              )}
+              {canAddExpense && (
+                <button onClick={() => setModalOpen(true)} className="btn-primary justify-center">
+                  <Plus className="w-4 h-4" /> Добавить
+                </button>
+              )}
             </>
           ) : undefined
         }
@@ -247,7 +258,7 @@ export default function ExpensesPage() {
                       {exp.userName ? ` · ${exp.userName}` : ''}
                     </p>
                   </div>
-                  {isDirector && !isWarranty && (
+                  {canDeleteExpense && !isWarranty && (
                     <button
                       type="button"
                       aria-label="Удалить расход"
@@ -273,7 +284,7 @@ export default function ExpensesPage() {
                   <th>Описание</th>
                   <th>Дата</th>
                   <th>Сотрудник</th>
-                  {isDirector && <th className="w-10"></th>}
+                  {canDeleteExpense && <th className="w-10"></th>}
                 </tr>
               </thead>
               <tbody>
@@ -307,7 +318,7 @@ export default function ExpensesPage() {
                         {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
                       </td>
                       <td className="text-gray-500">{exp.userName || '—'}</td>
-                      {isDirector && (
+                      {canDeleteExpense && (
                         <td>
                           {!isWarranty && (
                             <button

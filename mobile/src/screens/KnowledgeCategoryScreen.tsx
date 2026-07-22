@@ -43,7 +43,6 @@ import { knowledgeApi } from '../api/services';
 import { spacing } from '../theme';
 import { haptic } from '../platform/haptics';
 import { childCategories, categoryAncestors, rootCategories } from '../utils/knowledgeTree';
-import { UserRole } from '../../../shared/types';
 import type {
   KnowledgeArticle,
   KnowledgeArticleType,
@@ -74,8 +73,10 @@ export default function KnowledgeCategoryScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
-  const { isRole } = useAuth();
-  const isManager = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Мутации базы знаний — ключ knowledge_manage (сервер гейтит тем же ключом;
+  // «права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me).
+  const { hasPermission } = useAuth();
+  const isManager = hasPermission('knowledge_manage');
 
   const categoryId = route.params?.categoryId;
   const type = route.params?.type;

@@ -657,10 +657,13 @@ function GridTab() {
   const tabBarHeight = useTabBarHeight();
   const reduceMotion = useReduceMotion();
   const navigation = useNavigation<any>();
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
   const palette = useColors();
   const dark = palette.mode === 'dark';
-  const canEdit = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
+  // Мутации расписания — ключ schedule_manage (сервер: POST/PATCH/DELETE
+  // /schedule → тот же ключ; «права как в Битрикс24», 2026-07: admin живёт по
+  // матрице из /auth/me, superadmin/director байпасятся внутри hasPermission).
+  const canEdit = hasPermission('schedule_manage');
   // Lifted month state — same Date instance across the screen, driven
   // from the IosScreenHeader month picker.
   const { currentMonth, setCurrentMonth } = useScheduleMonth();
@@ -865,7 +868,12 @@ function GridTab() {
       return prev;
     },
     onError: (_e, _v, ctx) => {
+      // Откат + ВИДИМЫЙ фидбек (волна C): молчаливый откат перестановки
+      // выглядел как «приложение не слушается» — без связи порядок тихо
+      // прыгал обратно.
       if (ctx) queryClient.setQueryData(['users'], ctx);
+      haptic('error');
+      showQuickError('Не удалось сохранить порядок. Попробуйте ещё раз.');
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
@@ -960,7 +968,11 @@ function GridTab() {
       return previous;
     },
     onError: (_e: any, _d: any, ctx: any) => {
+      // Откат + видимый фидбек (волна C): ячейка исчезала оптимистично и
+      // молча возвращалась — мастер думал, что смена удалена, а связи не было.
       if (ctx) queryClient.setQueryData(scheduleQueryKey, ctx);
+      haptic('error');
+      showQuickError('Не удалось удалить смену. Попробуйте ещё раз.');
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['schedule'] });
@@ -997,14 +1009,21 @@ function GridTab() {
       return dt.toISOString();
     };
 
+    // Бизнес-«сегодня» продукта — Europe/Moscow (UTC+3, без летнего времени).
+    // Будущий день — это ПЛАН: факт прихода (actualArrival) ему не пришиваем,
+    // иначе зарплата считала смену раньше, чем она отработана.
+    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+    const isFutureDay = date > new Date(Date.now() + MSK_OFFSET_MS).toISOString().slice(0, 10);
+
     if (type === 'shift') {
       base.shiftStart = shiftStartStr;
       base.shiftEnd = shiftEndStr;
       base.isDayOff = false;
       base.note = '';
-      base.lateStatus = 'on_time';
+      base.lateStatus = isFutureDay ? null : 'on_time';
       base.lateMinutes = 0;
-      base.actualArrival = arrivalForDate(0);
+      // null явно: частичный PATCH иначе оставил бы устаревший факт прихода.
+      base.actualArrival = isFutureDay ? null : arrivalForDate(0);
     } else if (type === 'dayoff') {
       base.isDayOff = true;
       base.shiftStart = null;
@@ -1012,6 +1031,7 @@ function GridTab() {
       base.note = '';
       base.lateStatus = null;
       base.lateMinutes = 0;
+      base.actualArrival = null;
     } else if (type === 'sick') {
       base.isDayOff = true;
       base.shiftStart = null;
@@ -1019,6 +1039,7 @@ function GridTab() {
       base.note = 'Больничный';
       base.lateStatus = null;
       base.lateMinutes = 0;
+      base.actualArrival = null;
     } else if (type === 'late_minor') {
       base.shiftStart = shiftStartStr;
       base.shiftEnd = shiftEndStr;
@@ -1042,6 +1063,7 @@ function GridTab() {
       base.note = 'Прогул';
       base.lateStatus = null;
       base.lateMinutes = 0;
+      base.actualArrival = null;
     }
 
     // INSTANT apply — no «Применить» step. Repaint the cell immediately by
@@ -2484,13 +2506,15 @@ const SHIFT_STATUS_OPTIONS: {
 
 function SettingsTab() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
   const dark = palette.mode === 'dark';
   const [settingsTab, setSettingsTab] = useState<'daysoff' | 'modes' | 'shifts'>('daysoff');
   const tabBarHeight = useTabBarHeight();
 
-  const canEditSettings = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
+  // Настройки расписания/режимов — schedule_manage (сервер: POST /schedule/
+  // settings, work-modes, apply-work-mode → тот же ключ).
+  const canEditSettings = hasPermission('schedule_manage');
 
   // ['users'] через общий хук — единая форма (`User[]`) у всех читателей слота.
   const { data: usersData } = useUsers();
@@ -2688,8 +2712,9 @@ function SettingsTab() {
               Какие статусы считать сменой
             </Text>
             <Text style={[styles.shiftSectionHint, { color: palette.text.tertiary }]}>
-              Эти статусы учитываются при расчёте рейтинга мастеров и графика выручки. Например, если «Опоздание
-              {' <1ч'}» включено — оно считается отработанной сменой и идёт в рейтинг.
+              Эти статусы считаются отработанной сменой при расчёте зарплаты («ЗП за день» = заработок ÷ смены).
+              Например, если «Опоздание{' <1ч'}» включено — такой день идёт в счётчик смен. Будущие дни месяца не
+              учитываются, пока не наступят.
             </Text>
           </View>
 
@@ -3044,9 +3069,11 @@ function SettingsTab() {
 // ============== MAIN SCREEN ==============
 export default function ScheduleScreen() {
   const navigation = useNavigation<any>();
-  const { user } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
-  const isAdmin = user?.role === 'director' || user?.role === 'superadmin' || user?.role === 'admin';
+  // Таб «Настройки» — только держателю schedule_manage (те же мутации, что
+  // гейтит сервер; admin живёт по матрице из /auth/me).
+  const isAdmin = hasPermission('schedule_manage');
   const [tab, setTab] = useState<TabType>('grid');
   // Single source of truth for the schedule month — provided to GridTab
   // and ShiftsTab via context, manipulated from the header trailing slot.

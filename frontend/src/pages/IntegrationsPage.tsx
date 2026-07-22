@@ -20,7 +20,7 @@ import { paymentsApi, fiscalApi, telephonyApi, walletApi } from '../api/services
 import { useAuth } from '../contexts/AuthContext';
 import Switch from '../components/Switch';
 import QueryState from '../components/QueryState';
-import { UserRole } from '../types';
+
 import type {
   PaymentIntegrationSettings,
   FiscalSettings,
@@ -1073,8 +1073,10 @@ function WalletCard() {
 
 export default function IntegrationsPage() {
   const navigate = useNavigate();
-  const { isRole } = useAuth();
-  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  // Настройки интеграций (fiscal/payments/telephony/wallet) — settings_manage
+  // (волна Битрикс24; так же гейтится backend PATCH */settings).
+  const canManage = hasPermission('settings_manage');
 
   if (!canManage) {
     return <Navigate to="/" replace />;

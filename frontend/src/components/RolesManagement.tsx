@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
   BarChart3,
+  BookOpen,
   Box,
   Copy,
   Info,
@@ -12,6 +13,7 @@ import {
   Package,
   Plus,
   Receipt,
+  Settings,
   ShieldCheck,
   Trash2,
   Truck,
@@ -22,6 +24,7 @@ import type { LucideIcon } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { rolesApi } from '../api/services';
+import { useAuth } from '../contexts/AuthContext';
 import { PERMISSION_GROUPS } from '../types';
 import type { PermissionKey, Role, RoleMatrix, RoleScope, User } from '../types';
 import Modal from './Modal';
@@ -66,6 +69,9 @@ const MATRIX_CELLS: Partial<Record<PermissionKey, CellDef>> = {
   payment_edit: { section: 'checks', action: 'editPayment', kind: 'bool' },
   accept_payment: { section: 'checks', action: 'acceptPayment', kind: 'bool' },
   sell_installment: { section: 'checks', action: 'sellInstallment', kind: 'bool' },
+  // Словарь v3 (миграция 136) — кассовые смены и колонки доски.
+  cash_shifts_manage: { section: 'checks', action: 'cashShifts', kind: 'bool' },
+  checks_board_manage: { section: 'checks', action: 'board', kind: 'bool' },
   // Услуги: view (смотреть + в чек) / manage (CRUD + %/гарантия). manage ⇒ view.
   services_view: { section: 'services', action: 'view', kind: 'bool' },
   services_manage: { section: 'services', action: 'manage', kind: 'bool' },
@@ -74,18 +80,26 @@ const MATRIX_CELLS: Partial<Record<PermissionKey, CellDef>> = {
   warehouse_access: { section: 'warehouse', action: 'view', kind: 'bool' },
   warehouse_manage: { section: 'warehouse', action: 'manage', kind: 'bool' },
   warehouse_delete: { section: 'warehouse', action: 'delete', kind: 'bool' },
+  warehouse_analytics_view: { section: 'warehouse', action: 'analytics', kind: 'bool' },
   // Поставщики: view / manage. manage ⇒ view.
   suppliers_access: { section: 'suppliers', action: 'view', kind: 'bool' },
   suppliers_manage: { section: 'suppliers', action: 'manage', kind: 'bool' },
-  // Имущество: view (справочник) / manage (выдача/CRUD). manage ⇒ view.
+  // Имущество: view (справочник) / manage (выдача/CRUD) / permanentDelete. manage ⇒ view.
   equipment_view: { section: 'equipment', action: 'view', kind: 'bool' },
   equipment_manage: { section: 'equipment', action: 'manage', kind: 'bool' },
+  equipment_permanent_delete: { section: 'equipment', action: 'permanentDelete', kind: 'bool' },
   clients_view: { section: 'clients', action: 'view', kind: 'bool' },
   clients_edit: { section: 'clients', action: 'edit', kind: 'bool' },
+  clients_delete: { section: 'clients', action: 'delete', kind: 'bool' },
+  debts_manage: { section: 'clients', action: 'debts', kind: 'bool' },
   schedule_view: { section: 'schedule', action: 'view', kind: 'bool' },
+  schedule_manage: { section: 'schedule', action: 'manage', kind: 'bool' },
   bookings_access: { section: 'bookings', action: 'view', kind: 'bool' },
   // Охват salary.view ('all' → salary_view + salary_view_all).
   salary_view: { section: 'salary', action: 'view', kind: 'scope', label: 'Зарплата' },
+  salary_payouts_manage: { section: 'salary', action: 'payouts', kind: 'bool' },
+  salary_premiums_manage: { section: 'salary', action: 'premiums', kind: 'bool' },
+  motivation_manage: { section: 'salary', action: 'motivation', kind: 'bool' },
   financial_reports: { section: 'reports', action: 'view', kind: 'bool' },
   profit_view: { section: 'reports', action: 'profit', kind: 'bool' },
   export_data: { section: 'reports', action: 'export', kind: 'bool' },
@@ -94,10 +108,19 @@ const MATRIX_CELLS: Partial<Record<PermissionKey, CellDef>> = {
   // ячейки не имеет (как checks_view_all у охвата checks.view).
   cashflow_view: { section: 'reports', action: 'cashflow', kind: 'scope', label: 'Движение денег' },
   can_add_expenses: { section: 'expenses', action: 'add', kind: 'bool' },
+  // Маркетинг: view (смотреть раздел) / manage (мутации: интеграции/рассылки/…). manage ⇒ view.
   marketing_access: { section: 'marketing', action: 'view', kind: 'bool' },
+  marketing_manage: { section: 'marketing', action: 'manage', kind: 'bool' },
   calls_view: { section: 'calls', action: 'view', kind: 'bool' },
   calls_listen: { section: 'calls', action: 'listen', kind: 'bool' },
   user_management: { section: 'employees', action: 'manage', kind: 'bool' },
+  employees_approve_profile: { section: 'employees', action: 'approveProfile', kind: 'bool' },
+  // Настройки / База знаний (новые секции словаря v3).
+  settings_manage: { section: 'settings', action: 'manage', kind: 'bool' },
+  company_manage: { section: 'settings', action: 'company', kind: 'bool' },
+  // База знаний: view (смотреть базу) / manage (мутации). manage ⇒ view.
+  knowledge_view: { section: 'knowledge', action: 'view', kind: 'bool' },
+  knowledge_manage: { section: 'knowledge', action: 'manage', kind: 'bool' },
 };
 
 /**
@@ -138,9 +161,26 @@ const MATRIX_LABELS: Record<PermissionKey, string> = {
   schedule_view: 'Доступ к расписанию',
   bookings_access: 'Доступ к записям',
   marketing_access: 'Доступ к маркетингу',
+  marketing_manage: 'Управляет маркетингом',
   calls_view: 'Видит звонки',
   calls_listen: 'Слушает записи звонков',
   user_management: 'Управление сотрудниками',
+  // Словарь v3 (миграция 136) — паритет с mobile PERMISSION_LABELS.
+  cash_shifts_manage: 'Открывает и закрывает кассовые смены',
+  checks_board_manage: 'Настраивает колонки доски',
+  clients_delete: 'Удаляет клиентов',
+  debts_manage: 'Управляет долгами и рассрочкой',
+  schedule_manage: 'Управляет расписанием',
+  salary_payouts_manage: 'Выплаты, авансы и штрафы',
+  salary_premiums_manage: 'Начисляет премии',
+  motivation_manage: 'Управляет акциями мотивации',
+  warehouse_analytics_view: 'Видит аналитику склада',
+  equipment_permanent_delete: 'Удаляет имущество безвозвратно',
+  employees_approve_profile: 'Согласует изменения профиля',
+  settings_manage: 'Управляет настройками и интеграциями',
+  company_manage: 'Управляет данными компании',
+  knowledge_view: 'Доступ к базе знаний',
+  knowledge_manage: 'Управляет базой знаний',
 };
 
 /** Пояснения к неочевидным строкам. */
@@ -155,6 +195,13 @@ const MATRIX_HINTS: Partial<Record<PermissionKey, string>> = {
   suppliers_manage: 'Управление включает просмотр: создание, редактирование и удаление поставщиков.',
   equipment_manage: 'Управление включает просмотр: выдача, возврат и редактирование имущества.',
   calls_listen: 'Прослушивание записей разговоров.',
+  marketing_manage: 'Управление включает просмотр: интеграции, площадки, настройки и отправку рассылок.',
+  knowledge_view: 'Разрешает открыть базу знаний. Без него роль раздел не видит.',
+  knowledge_manage: 'Управление включает просмотр: создание и редактирование курсов, статей и регламентов.',
+  salary_payouts_manage: 'Владельческое право: включить его в роли может только директор.',
+  equipment_permanent_delete: 'Владельческое право: включить его в роли может только директор.',
+  employees_approve_profile: 'Владельческое право: включить его в роли может только директор.',
+  company_manage: 'Владельческое право: включить его в роли может только директор.',
 };
 
 /** Иконка секции редактора (по ключу PERMISSION_GROUPS). */
@@ -167,6 +214,8 @@ const GROUP_ICONS: Record<string, LucideIcon> = {
   Имущество: Box,
   CRM: Users2,
   Управление: ShieldCheck,
+  Настройки: Settings,
+  'База знаний': BookOpen,
 };
 
 /**
@@ -231,19 +280,36 @@ function buildMatrix(m: EditableMatrix): RoleMatrix {
       editPayment: bool('checks', 'editPayment'),
       acceptPayment: bool('checks', 'acceptPayment'),
       sellInstallment: bool('checks', 'sellInstallment'),
+      cashShifts: bool('checks', 'cashShifts'),
+      board: bool('checks', 'board'),
     },
     services: { view: bool('services', 'view'), manage: bool('services', 'manage') },
     warehouse: {
       view: bool('warehouse', 'view'),
       manage: bool('warehouse', 'manage'),
       delete: bool('warehouse', 'delete'),
+      analytics: bool('warehouse', 'analytics'),
     },
     suppliers: { view: bool('suppliers', 'view'), manage: bool('suppliers', 'manage') },
-    equipment: { view: bool('equipment', 'view'), manage: bool('equipment', 'manage') },
-    clients: { view: bool('clients', 'view'), edit: bool('clients', 'edit') },
-    schedule: { view: bool('schedule', 'view') },
+    equipment: {
+      view: bool('equipment', 'view'),
+      manage: bool('equipment', 'manage'),
+      permanentDelete: bool('equipment', 'permanentDelete'),
+    },
+    clients: {
+      view: bool('clients', 'view'),
+      edit: bool('clients', 'edit'),
+      delete: bool('clients', 'delete'),
+      debts: bool('clients', 'debts'),
+    },
+    schedule: { view: bool('schedule', 'view'), manage: bool('schedule', 'manage') },
     bookings: { view: bool('bookings', 'view') },
-    salary: { view: scope('salary', 'view') },
+    salary: {
+      view: scope('salary', 'view'),
+      payouts: bool('salary', 'payouts'),
+      premiums: bool('salary', 'premiums'),
+      motivation: bool('salary', 'motivation'),
+    },
     reports: {
       view: bool('reports', 'view'),
       profit: bool('reports', 'profit'),
@@ -251,9 +317,11 @@ function buildMatrix(m: EditableMatrix): RoleMatrix {
       cashflow: scope('reports', 'cashflow'),
     },
     expenses: { add: bool('expenses', 'add') },
-    marketing: { view: bool('marketing', 'view') },
+    marketing: { view: bool('marketing', 'view'), manage: bool('marketing', 'manage') },
     calls: { view: bool('calls', 'view'), listen: bool('calls', 'listen') },
-    employees: { manage: bool('employees', 'manage') },
+    employees: { manage: bool('employees', 'manage'), approveProfile: bool('employees', 'approveProfile') },
+    settings: { manage: bool('settings', 'manage'), company: bool('settings', 'company') },
+    knowledge: { view: bool('knowledge', 'view'), manage: bool('knowledge', 'manage') },
   };
 }
 
@@ -489,6 +557,7 @@ function RoleEditor({
   onCopy: (role: Role) => void;
 }) {
   const queryClient = useQueryClient();
+  const { refreshUser } = useAuth();
   // Волна 3 (миграция 121): системные «Мастер»/«Администратор» теперь РЕДАКТИРУЕМЫ
   // — сервер делает copy-on-write (тенантный override). Read-only остаётся ТОЛЬКО
   // у заблокированной роли (`locked: true` — это «Директор», полные права).
@@ -520,6 +589,10 @@ function RoleEditor({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['roles'] });
+      // Матрица роли — источник эффективных прав /auth/me. Если правили роль
+      // ТЕКУЩЕГО пользователя (например, admin — свою), локальные hasPermission-
+      // гейты должны обновиться сразу, не дожидаясь перезагрузки страницы.
+      void refreshUser();
       toast.success(
         mode === 'edit' ? 'Роль сохранена. Права сотрудников обновятся в течение ~30 секунд' : 'Роль создана',
       );

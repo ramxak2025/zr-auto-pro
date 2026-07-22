@@ -4,20 +4,25 @@
  *
  *   • Fields: title, body, optional imageUrl (URL or upload), up to 3 buttons
  *     ({ label, action: 'dismiss' | 'link', url? }).
+ *   • Таргетинг (096): «Всем» или сегмент — тарифы, статус подписки
+ *     (триал/платящие/истёкшие), активность за окно дней, отключённые.
+ *   • Планирование (096): «Сейчас» или отложенная отправка на дату+время
+ *     (scheduledAt) — паритет с web AdminBroadcastPage.
  *   • LIVE PREVIEW reuses the real <BroadcastModal> so what the superadmin
  *     sees is exactly what owners get — no duplicated card markup.
- *   • «Отправить всем владельцам» → notificationsApi.createBroadcast(...) with
- *     a confirm dialog, success haptic + toast.
+ *   • Отправка → notificationsApi.createBroadcast(...) with a confirm dialog,
+ *     success haptic + toast.
  */
 import React from 'react';
-import { View, StyleSheet, ScrollView, Pressable, TextInput, Alert, ActivityIndicator } from 'react-native';
+import { View, StyleSheet, ScrollView, Pressable, TextInput, Switch, Alert, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { notificationsApi, uploadsApi } from '../../api/services';
+import { notificationsApi, uploadsApi, plansApi } from '../../api/services';
 import { getImageUrl } from '../../api/axios';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import BroadcastModal from '../../components/BroadcastModal';
+import DateTimePickerModal from '../../components/DateTimePickerModal';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useAuth } from '../../contexts/AuthContext';
@@ -25,7 +30,14 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius, softTint } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { Broadcast, BroadcastButton, BroadcastHistoryItem } from '../../../../shared/types';
+import type {
+  Broadcast,
+  BroadcastButton,
+  BroadcastHistoryItem,
+  BroadcastSegment,
+  BroadcastSubscriptionStatus,
+  Plan,
+} from '../../../../shared/types';
 import { formatDateTime } from './adminShared';
 
 /** Russian plural for «N просмотр / просмотра / просмотров». */
@@ -44,6 +56,48 @@ interface DraftButton {
 }
 
 const MAX_BUTTONS = 3;
+
+// ── 096 — таргетинг + планирование (зеркалит web AdminBroadcastPage) ──
+type TargetMode = 'all' | 'segment';
+type ScheduleMode = 'now' | 'later';
+type ActivityMode = 'any' | 'active' | 'dormant';
+
+const STATUS_OPTIONS: { value: BroadcastSubscriptionStatus; label: string }[] = [
+  { value: 'trial', label: 'Триал' },
+  { value: 'paid', label: 'Платящие' },
+  { value: 'expired', label: 'Истёкшие' },
+];
+
+const STATUS_LABELS: Record<BroadcastSubscriptionStatus, string> = {
+  trial: 'триал',
+  paid: 'платящие',
+  expired: 'истёкшие',
+};
+
+/** Human Russian summary of a segment — та же сводка, что на web. */
+function describeSegment(segment: BroadcastSegment | null | undefined, plans: Plan[] | undefined): string {
+  if (!segment) return 'Все владельцы';
+  const parts: string[] = [];
+  if (segment.planIds?.length) {
+    const names = segment.planIds.map((id) => plans?.find((p) => p.id === id)?.name ?? 'тариф');
+    parts.push(`тарифы: ${names.join(', ')}`);
+  }
+  if (segment.subscriptionStatuses?.length) {
+    parts.push(`статус: ${segment.subscriptionStatuses.map((s) => STATUS_LABELS[s]).join(', ')}`);
+  }
+  if (segment.activity) {
+    parts.push(`${segment.activity === 'active' ? 'активные' : 'спящие'} за ${segment.activityWindowDays ?? 30} дн.`);
+  }
+  if (segment.includeInactive) parts.push('включая отключённые');
+  return parts.length ? parts.join(' · ') : 'Все владельцы';
+}
+
+/** Дефолт отложенной отправки — ровный час, минимум через полчаса от «сейчас». */
+function defaultScheduledDate(): Date {
+  const d = new Date(Date.now() + 90 * 60 * 1000);
+  d.setMinutes(0, 0, 0);
+  return d;
+}
 
 /**
  * Pull a legible reason out of an axios error. class-validator returns
@@ -78,6 +132,17 @@ export default function AdminBroadcastScreen() {
   const [uploading, setUploading] = React.useState(false);
   const [previewOpen, setPreviewOpen] = React.useState(false);
   const [toast, setToast] = React.useState<string | null>(null);
+  // ── 096 — таргетинг ──
+  const [targetMode, setTargetMode] = React.useState<TargetMode>('all');
+  const [planIds, setPlanIds] = React.useState<string[]>([]);
+  const [statuses, setStatuses] = React.useState<BroadcastSubscriptionStatus[]>([]);
+  const [activity, setActivity] = React.useState<ActivityMode>('any');
+  const [activityWindowDays, setActivityWindowDays] = React.useState('30');
+  const [includeInactive, setIncludeInactive] = React.useState(false);
+  // ── 096 — планирование ──
+  const [scheduleMode, setScheduleMode] = React.useState<ScheduleMode>('now');
+  const [scheduledDate, setScheduledDate] = React.useState<Date | null>(null);
+  const [pickerMode, setPickerMode] = React.useState<'date' | 'time' | null>(null);
   // Self-preview: the actual broadcast returned by the server, shown to the
   // superadmin right after sending (the fan-out targets directors, not the
   // sender, so without this the superadmin sees «ничего не пришло»).
@@ -94,6 +159,32 @@ export default function AdminBroadcastScreen() {
     enabled: isSuperadmin,
   });
   const history = historyQuery.data ?? [];
+
+  // Тарифы — чипы сегмента + имена в сводках истории (тот же ключ, что у
+  // остальных админ-экранов, чтобы кэш был общий).
+  const { data: plans = [] } = useQuery<Plan[]>({
+    queryKey: ['admin-plans'],
+    queryFn: async () => (await plansApi.getAll()).data,
+    enabled: isSuperadmin,
+  });
+  const activePlans = React.useMemo(() => plans.filter((p) => p.isActive), [plans]);
+
+  /** Собрать сегмент из формы; undefined = всем (back-compat контракта 096). */
+  const buildSegment = React.useCallback((): BroadcastSegment | undefined => {
+    if (targetMode === 'all') return undefined;
+    const seg: BroadcastSegment = {};
+    if (planIds.length) seg.planIds = planIds;
+    if (statuses.length) seg.subscriptionStatuses = statuses;
+    if (activity !== 'any') {
+      seg.activity = activity;
+      seg.activityWindowDays = parseInt(activityWindowDays, 10) || 30;
+    }
+    if (includeInactive) seg.includeInactive = true;
+    return Object.keys(seg).length > 0 ? seg : undefined;
+  }, [targetMode, planIds, statuses, activity, activityWindowDays, includeInactive]);
+
+  const recipientsText = targetMode === 'all' ? 'Все владельцы автосервисов' : describeSegment(buildSegment(), plans);
+  const isDeferred = scheduleMode === 'later';
 
   const cancelMutation = useMutation({
     mutationFn: async (id: string) => {
@@ -169,6 +260,7 @@ export default function AdminBroadcastScreen() {
 
   const sendMutation = useMutation({
     mutationFn: async () => {
+      const deferred = scheduleMode === 'later' && scheduledDate != null;
       const res = await notificationsApi.createBroadcast({
         title: title.trim(),
         body: body.trim(),
@@ -177,19 +269,31 @@ export default function AdminBroadcastScreen() {
         // path is resolved here too as a safety net.
         imageUrl: imageUrl.trim() ? (getImageUrl(imageUrl.trim()) ?? imageUrl.trim()) : undefined,
         buttons: cleanButtons.length > 0 ? cleanButtons : undefined,
+        // 096 — сегмент (undefined = всем) + отложенная отправка.
+        segment: buildSegment(),
+        scheduledAt: deferred ? scheduledDate.toISOString() : undefined,
       });
-      return res.data;
+      return { created: res.data, deferred };
     },
-    onSuccess: (created) => {
+    onSuccess: ({ created, deferred }) => {
       haptic('success');
       setTitle('');
       setBody('');
       setImageUrl('');
       setButtons([]);
-      setToast('Объявление отправлено всем владельцам');
+      setTargetMode('all');
+      setPlanIds([]);
+      setStatuses([]);
+      setActivity('any');
+      setActivityWindowDays('30');
+      setIncludeInactive(false);
+      setScheduleMode('now');
+      setScheduledDate(null);
+      setToast(deferred ? 'Рассылка запланирована' : 'Объявление отправлено');
       setTimeout(() => setToast(null), 2800);
       // Show the superadmin the EXACT card owners will receive (confirmation).
-      setSentBroadcast(created);
+      // Для отложенной рассылки карточка ещё никому не ушла — не открываем.
+      if (!deferred) setSentBroadcast(created);
       // Surface it in the history list immediately.
       queryClient.invalidateQueries({ queryKey: ['admin-broadcasts'] });
     },
@@ -230,20 +334,36 @@ export default function AdminBroadcastScreen() {
       Alert.alert('Укажите текст', 'Текст объявления обязателен.');
       return;
     }
+    if (scheduleMode === 'later') {
+      if (!scheduledDate) {
+        Alert.alert('Выберите время', 'Укажите дату и время отправки.');
+        return;
+      }
+      if (scheduledDate.getTime() <= Date.now()) {
+        Alert.alert('Время в прошлом', 'Время отправки должно быть в будущем.');
+        return;
+      }
+    }
     haptic('warning');
     // Final review — show the superadmin exactly what will go out before the
-    // irreversible fan-out (push + in-app card to every tenant owner).
+    // irreversible fan-out (push + in-app card to the targeted owners).
     const buttonsLine = cleanButtons.length > 0 ? `\nКнопки: ${cleanButtons.map((b) => b.label).join(', ')}` : '';
     const imageLine = imageUrl.trim() ? '\nС изображением' : '';
+    const deferred = scheduleMode === 'later' && scheduledDate != null;
+    const whenLine = deferred ? formatDateTime(scheduledDate.toISOString()) : 'сейчас';
     Alert.alert(
-      'Отправить всем владельцам?',
-      `«${title.trim()}»\n\n${body.trim()}${imageLine}${buttonsLine}\n\nОбъявление получат владельцы всех тенантов в виде push-уведомления и карточки в приложении.`,
+      deferred ? 'Запланировать рассылку?' : 'Отправить рассылку?',
+      `«${title.trim()}»\n\n${body.trim()}${imageLine}${buttonsLine}\n\nКому: ${recipientsText}\nКогда: ${whenLine}\n\nВладельцы получат push-уведомление и карточку в приложении.`,
       [
         { text: 'Отмена', style: 'cancel' },
-        { text: 'Отправить', style: 'destructive', onPress: () => sendMutation.mutate() },
+        {
+          text: deferred ? 'Запланировать' : 'Отправить',
+          style: 'destructive',
+          onPress: () => sendMutation.mutate(),
+        },
       ],
     );
-  }, [title, body, imageUrl, cleanButtons, sendMutation]);
+  }, [title, body, imageUrl, cleanButtons, scheduleMode, scheduledDate, recipientsText, sendMutation]);
 
   const addButton = React.useCallback(() => {
     if (buttons.length >= MAX_BUTTONS) return;
@@ -425,6 +545,216 @@ export default function AdminBroadcastScreen() {
           </View>
         ))}
 
+        {/* ── Кому отправить (096 — сегменты) ── */}
+        <Text style={[styles.label, { color: palette.text.tertiary }]}>Кому отправить</Text>
+        <View style={[styles.inputCard, surface.card, styles.targetCard]}>
+          <View style={styles.modeRow}>
+            {(
+              [
+                { value: 'all', label: 'Всем' },
+                { value: 'segment', label: 'По сегменту' },
+              ] as { value: TargetMode; label: string }[]
+            ).map((opt) => {
+              const on = targetMode === opt.value;
+              return (
+                <Pressable
+                  key={opt.value}
+                  onPress={() => {
+                    haptic('select');
+                    setTargetMode(opt.value);
+                  }}
+                  style={[styles.actionChip, { backgroundColor: on ? palette.accent.primary : palette.bg.muted }]}
+                >
+                  <Text style={[styles.actionChipText, { color: on ? '#fff' : palette.text.secondary }]}>
+                    {opt.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+
+          {targetMode === 'segment' && (
+            <>
+              {activePlans.length > 0 && (
+                <>
+                  <Text style={[styles.subLabel, { color: palette.text.tertiary }]}>Тарифы</Text>
+                  <View style={styles.chipsWrap}>
+                    {activePlans.map((p) => {
+                      const on = planIds.includes(p.id);
+                      return (
+                        <Pressable
+                          key={p.id}
+                          onPress={() => {
+                            haptic('select');
+                            setPlanIds((prev) =>
+                              prev.includes(p.id) ? prev.filter((x) => x !== p.id) : [...prev, p.id],
+                            );
+                          }}
+                          style={[
+                            styles.actionChip,
+                            { backgroundColor: on ? palette.accent.primary : palette.bg.muted },
+                          ]}
+                        >
+                          <Text style={[styles.actionChipText, { color: on ? '#fff' : palette.text.secondary }]}>
+                            {p.name}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </>
+              )}
+
+              <Text style={[styles.subLabel, { color: palette.text.tertiary }]}>Статус подписки</Text>
+              <View style={styles.chipsWrap}>
+                {STATUS_OPTIONS.map((s) => {
+                  const on = statuses.includes(s.value);
+                  return (
+                    <Pressable
+                      key={s.value}
+                      onPress={() => {
+                        haptic('select');
+                        setStatuses((prev) =>
+                          prev.includes(s.value) ? prev.filter((x) => x !== s.value) : [...prev, s.value],
+                        );
+                      }}
+                      style={[styles.actionChip, { backgroundColor: on ? palette.accent.primary : palette.bg.muted }]}
+                    >
+                      <Text style={[styles.actionChipText, { color: on ? '#fff' : palette.text.secondary }]}>
+                        {s.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+
+              <Text style={[styles.subLabel, { color: palette.text.tertiary }]}>Активность</Text>
+              <View style={styles.chipsWrap}>
+                {(
+                  [
+                    { value: 'any', label: 'Любая' },
+                    { value: 'active', label: 'Активные' },
+                    { value: 'dormant', label: 'Спящие' },
+                  ] as { value: ActivityMode; label: string }[]
+                ).map((opt) => {
+                  const on = activity === opt.value;
+                  return (
+                    <Pressable
+                      key={opt.value}
+                      onPress={() => {
+                        haptic('select');
+                        setActivity(opt.value);
+                      }}
+                      style={[styles.actionChip, { backgroundColor: on ? palette.accent.primary : palette.bg.muted }]}
+                    >
+                      <Text style={[styles.actionChipText, { color: on ? '#fff' : palette.text.secondary }]}>
+                        {opt.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+                {activity !== 'any' && (
+                  <View style={[styles.windowBox, { borderColor: palette.border.subtle }]}>
+                    <TextInput
+                      style={[styles.windowInput, { color: palette.text.primary }]}
+                      keyboardType="number-pad"
+                      value={activityWindowDays}
+                      onChangeText={(v) => setActivityWindowDays(v.replace(/[^0-9]/g, ''))}
+                      maxLength={3}
+                    />
+                    <Text style={[styles.windowSuffix, { color: palette.text.tertiary }]}>дн.</Text>
+                  </View>
+                )}
+              </View>
+
+              <View style={styles.switchRow}>
+                <Text style={[styles.switchRowLabel, { color: palette.text.primary }]}>Включая отключённые</Text>
+                <Switch
+                  value={includeInactive}
+                  onValueChange={(v) => {
+                    haptic('select');
+                    setIncludeInactive(v);
+                  }}
+                  trackColor={{ true: palette.accent.primary }}
+                />
+              </View>
+            </>
+          )}
+
+          <Text style={[styles.summaryText, { color: palette.text.tertiary }]} numberOfLines={2}>
+            Получатели: {recipientsText}
+          </Text>
+        </View>
+
+        {/* ── Когда отправить (096 — планирование) ── */}
+        <Text style={[styles.label, { color: palette.text.tertiary }]}>Когда отправить</Text>
+        <View style={[styles.inputCard, surface.card, styles.targetCard]}>
+          <View style={styles.modeRow}>
+            {(
+              [
+                { value: 'now', label: 'Сейчас' },
+                { value: 'later', label: 'Запланировать' },
+              ] as { value: ScheduleMode; label: string }[]
+            ).map((opt) => {
+              const on = scheduleMode === opt.value;
+              return (
+                <Pressable
+                  key={opt.value}
+                  onPress={() => {
+                    haptic('select');
+                    setScheduleMode(opt.value);
+                    if (opt.value === 'later' && !scheduledDate) setScheduledDate(defaultScheduledDate());
+                  }}
+                  style={[styles.actionChip, { backgroundColor: on ? palette.accent.primary : palette.bg.muted }]}
+                >
+                  <Text style={[styles.actionChipText, { color: on ? '#fff' : palette.text.secondary }]}>
+                    {opt.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+          {isDeferred && (
+            <>
+              <View style={styles.scheduleRow}>
+                <Pressable
+                  onPress={() => {
+                    haptic('tap');
+                    setPickerMode('date');
+                  }}
+                  style={[styles.scheduleBtn, { backgroundColor: palette.bg.muted }]}
+                >
+                  <Ionicons name="calendar-outline" size={16} color={palette.text.secondary} />
+                  <Text style={[styles.scheduleBtnText, { color: palette.text.primary }]}>
+                    {scheduledDate
+                      ? scheduledDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', year: 'numeric' })
+                      : 'Дата'}
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => {
+                    haptic('tap');
+                    setPickerMode('time');
+                  }}
+                  style={[styles.scheduleBtn, { backgroundColor: palette.bg.muted }]}
+                >
+                  <Ionicons name="time-outline" size={16} color={palette.text.secondary} />
+                  <Text style={[styles.scheduleBtnText, { color: palette.text.primary }]}>
+                    {scheduledDate
+                      ? scheduledDate.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+                      : 'Время'}
+                  </Text>
+                </Pressable>
+              </View>
+              {scheduledDate && scheduledDate.getTime() <= Date.now() && (
+                <Text style={[styles.summaryText, { color: colors.red[500] }]}>
+                  Время отправки должно быть в будущем.
+                </Text>
+              )}
+            </>
+          )}
+        </View>
+
         {/* Send */}
         <Pressable
           onPress={handleSend}
@@ -435,8 +765,14 @@ export default function AdminBroadcastScreen() {
             <ActivityIndicator size="small" color={colors.white} />
           ) : (
             <>
-              <Ionicons name="megaphone" size={18} color={colors.white} />
-              <Text style={styles.sendText}>Отправить всем владельцам</Text>
+              <Ionicons name={isDeferred ? 'time' : 'megaphone'} size={18} color={colors.white} />
+              <Text style={styles.sendText}>
+                {isDeferred
+                  ? 'Запланировать рассылку'
+                  : targetMode === 'all'
+                    ? 'Отправить всем владельцам'
+                    : 'Отправить по сегменту'}
+              </Text>
             </>
           )}
         </Pressable>
@@ -474,6 +810,9 @@ export default function AdminBroadcastScreen() {
         ) : (
           history.map((item) => {
             const cancelled = item.cancelledAt != null;
+            // 096 — запланирована, но fan-out ещё не сработал.
+            const scheduledPending = !cancelled && item.sentAt === null && item.scheduledAt != null;
+            const targetText = item.targetAll ? 'Всем владельцам' : describeSegment(item.segment, plans);
             return (
               <Pressable
                 key={item.id}
@@ -491,18 +830,32 @@ export default function AdminBroadcastScreen() {
                         backgroundColor: cancelled
                           ? colors.gray[100]
                           : palette.mode === 'dark'
-                            ? softTint(colors.green[600], 'dark')
-                            : colors.green[50],
+                            ? softTint(scheduledPending ? colors.blue[600] : colors.green[600], 'dark')
+                            : scheduledPending
+                              ? colors.blue[50]
+                              : colors.green[50],
                       },
                     ]}
                   >
-                    <Text style={[styles.badgeText, { color: cancelled ? colors.gray[600] : colors.green[700] }]}>
-                      {cancelled ? 'Отменена' : 'Активна'}
+                    <Text
+                      style={[
+                        styles.badgeText,
+                        {
+                          color: cancelled ? colors.gray[600] : scheduledPending ? colors.blue[700] : colors.green[700],
+                        },
+                      ]}
+                    >
+                      {cancelled ? 'Отменена' : scheduledPending ? 'Запланирована' : 'Активна'}
                     </Text>
                   </View>
                 </View>
                 <Text style={[styles.historyMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
-                  {formatDateTime(item.createdAt)} · {pluralViews(item.seenCount)}
+                  {scheduledPending && item.scheduledAt
+                    ? `отправка ${formatDateTime(item.scheduledAt)}`
+                    : `${formatDateTime(item.createdAt)} · ${pluralViews(item.seenCount)}`}
+                </Text>
+                <Text style={[styles.historyMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  {targetText}
                 </Text>
                 {!cancelled && (
                   <Pressable
@@ -536,6 +889,19 @@ export default function AdminBroadcastScreen() {
 
       {/* History row preview — re-open exactly what directors received. */}
       <BroadcastModal broadcast={historyPreview} onDismiss={() => setHistoryPreview(null)} />
+
+      {/* 096 — пикер даты/времени отложенной отправки. Пикер сохраняет
+          «другую половину» даты из value, поэтому date/time не конфликтуют. */}
+      <DateTimePickerModal
+        visible={pickerMode !== null}
+        value={scheduledDate ?? defaultScheduledDate()}
+        mode={pickerMode ?? 'date'}
+        onConfirm={(d) => {
+          setScheduledDate(d);
+          setPickerMode(null);
+        }}
+        onCancel={() => setPickerMode(null)}
+      />
 
       {/* Toast */}
       {toast && (
@@ -585,6 +951,36 @@ const styles = StyleSheet.create({
     paddingTop: spacing[2],
     marginBottom: spacing[1],
   },
+  // 096 — targeting + scheduling
+  targetCard: { paddingVertical: spacing[3], gap: spacing[2.5] },
+  modeRow: { flexDirection: 'row', gap: spacing[2] },
+  chipsWrap: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing[2] },
+  subLabel: { fontSize: 12, fontWeight: '600', marginTop: spacing[1] },
+  windowBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1],
+  },
+  windowInput: { fontSize: 14, fontWeight: '600', minWidth: 28, textAlign: 'center', paddingVertical: 2 },
+  windowSuffix: { fontSize: 12 },
+  switchRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: spacing[1] },
+  switchRowLabel: { fontSize: 14, fontWeight: '500', flex: 1 },
+  summaryText: { fontSize: 12, lineHeight: 16 },
+  scheduleRow: { flexDirection: 'row', gap: spacing[2] },
+  scheduleBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.xl,
+  },
+  scheduleBtnText: { fontSize: 14, fontWeight: '600' },
   sendBtn: {
     flexDirection: 'row',
     alignItems: 'center',

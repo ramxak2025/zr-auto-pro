@@ -2,28 +2,35 @@ import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards, Re
 import { Response } from 'express';
 import { ClientsService } from './clients.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
-// SPLIT client permissions (build-50). Enforcement on the server:
+// SPLIT client permissions (build-50 → матрица, миграция 136). Enforcement:
+//   • Reading (GET /, lookup-by-phone, :id, :id/checks-by-car) → 'clients_view'
+//     (сид true у всех трёх системных ролей, включая мастера — прогрессивный
+//     поиск по телефону в Кассе сохраняется 1:1).
 //   • Editing an EXISTING client's profile (name/phone/comment/source/notes) →
 //     'clients_edit' (defaults FALSE for masters). Gates the three PATCH /:id* routes.
-//   • CREATE a walk-in client (POST /clients), reading (GET *), selecting a client
-//     for a check, and attaching a car (cars controller) stay OPEN — masters need
-//     them in Касса and hold 'clients_view' (defaults true) but not 'clients_edit'.
-//   • DELETE stays owner-class via @Roles below.
-// Owner-class (director/admin/superadmin) bypasses the key gate via PermissionsGuard.
+//   • CREATE a walk-in client (POST /clients) stays OPEN — masters need it in
+//     Касса and hold 'clients_view' but not 'clients_edit'.
+//   • DELETE → 'clients_delete' (clients.delete, миграция 136).
+// Owner-class (director/superadmin) bypasses the key gates via PermissionsGuard.
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('clients')
 export class ClientsController {
   constructor(private clientsService: ClientsService) {}
 
+  @RequirePermission('clients_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.clientsService.getAll(user.tenantID, query);
   }
 
+  // Выгрузка всей клиентской базы (имя+телефон) — ровно то, от чего защищает
+  // дефолт export_data=false у мастера (увод базы при увольнении). Гейт тем же
+  // ключом; owner-class обходит через PermissionsGuard.
+  @RequirePermission('export_data')
   @Get('export-csv')
   async exportCsv(@CurrentUser() user: JwtPayload, @Res() res: Response) {
     const csv = await this.clientsService.exportCsv(user.tenantID);
@@ -38,11 +45,13 @@ export class ClientsController {
    * UI to warn the user before creating a duplicate. Returns null when no
    * match found, or the client record otherwise.
    */
+  @RequirePermission('clients_view')
   @Get('lookup-by-phone')
   lookupByPhone(@CurrentUser() user: JwtPayload, @Query('phone') phone: string) {
     return this.clientsService.findByPhone(user.tenantID, phone || '');
   }
 
+  @RequirePermission('clients_view')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.clientsService.getById(id, user.tenantID);
@@ -53,6 +62,7 @@ export class ClientsController {
    * `PerCarChecks[]` so the FE can render a tab-per-car layout without an
    * extra merge step on its side.
    */
+  @RequirePermission('clients_view')
   @Get(':id/checks-by-car')
   getChecksByCar(
     @Param('id') id: string,
@@ -101,7 +111,9 @@ export class ClientsController {
     return this.clientsService.updateNotes(id, user.tenantID, dto?.notes ?? null);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  // Удаление клиента — 'clients_delete' (clients.delete, миграция 136);
+  // owner-class (director/superadmin) обходит через PermissionsGuard.
+  @RequirePermission('clients_delete')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.clientsService.remove(id, user.tenantID);

@@ -231,12 +231,13 @@ export default function DismissedEmployeesScreen() {
   const queryClient = useQueryClient();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { user: me } = useAuth();
+  const { hasPermission } = useAuth();
   const [refreshing, setRefreshing] = useState(false);
 
-  // Manager-role gate (mirrors the delete gate). director / admin /
-  // superadmin manage the recycle bin; a master never reaches it.
-  const canManage = me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin';
+  // Гейт user_management — сервер гейтит restore/purge тем же ключом
+  // («права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me,
+  // superadmin/director байпасятся внутри hasPermission).
+  const canManage = hasPermission('user_management');
 
   const {
     data: items,

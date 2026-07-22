@@ -347,3 +347,59 @@ describe('persistent-cache tenant session boundary', () => {
     queryClient.clear();
   });
 });
+
+// ── Волна C «Связь 2.0» — variant-cap prune на новых ключах (2026-07-21) ────
+// `hydrateCache` обязан ограничивать id-keyed семейства (product,
+// purchase-order, installments, …) N самыми свежими вариантами на диске,
+// иначе AsyncStorage растёт бесконечно и замедляет каждый холодный старт.
+// Прунится ТОЛЬКО диск — уже гидрированные in-memory копии не трогаются.
+describe('persistent-cache variant-cap prune', () => {
+  beforeEach(() => {
+    jest.useFakeTimers();
+    jest.clearAllMocks();
+    mockInteractionCallbacks.length = 0;
+    mockAsyncStorage.getItem.mockImplementation(async (key) =>
+      key === AUTH_SESSION_ENVELOPE_KEY ? authEnvelope('token-A') : 'token-A',
+    );
+    mockAsyncStorage.setItem.mockResolvedValue(undefined);
+    mockAsyncStorage.multiRemove.mockResolvedValue(undefined);
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
+  function productDetailPair(id: string, storedAt: number): readonly [string, string] {
+    const skey = `rqcache:v1:["product","${id}"]`;
+    return [skey, JSON.stringify({ queryKey: ['product', id], data: { id, name: `Товар ${id}` }, storedAt })];
+  }
+
+  it("keeps the 10 most-recent ['product', id] slots on disk and GCs the rest", async () => {
+    const { hydrateCache } = loadPersistentCache();
+    const queryClient = new QueryClient();
+
+    // 12 деталек товара; p0 и p1 — самые старые (cap для 'product' = 10).
+    const base = Date.now() - 60_000;
+    const pairs = Array.from({ length: 12 }, (_, i) => productDetailPair(`p${i}`, base + i * 1_000));
+    mockAsyncStorage.getAllKeys.mockResolvedValue(pairs.map(([skey]) => skey));
+    mockAsyncStorage.multiGet.mockResolvedValue(pairs);
+
+    const hydration = hydrateCache(queryClient);
+    // 12 пар → чанки по 5 → два setTimeout(0)-yield'а между чанками.
+    await jest.advanceTimersByTimeAsync(10);
+    await jest.advanceTimersByTimeAsync(10);
+    await hydration;
+
+    // Все 12 гидрированы в память — prune касается только диска.
+    expect(queryClient.getQueryData(['product', 'p0'])).toEqual({ id: 'p0', name: 'Товар p0' });
+    expect(queryClient.getQueryData(['product', 'p11'])).toEqual({ id: 'p11', name: 'Товар p11' });
+
+    // С диска сняты ровно 2 самых старых варианта сверх cap=10.
+    expect(mockAsyncStorage.multiRemove).toHaveBeenCalledTimes(1);
+    const removed = mockAsyncStorage.multiRemove.mock.calls[0][0];
+    expect(removed).toHaveLength(2);
+    expect(removed).toEqual(expect.arrayContaining(['rqcache:v1:["product","p0"]', 'rqcache:v1:["product","p1"]']));
+
+    queryClient.clear();
+  });
+});

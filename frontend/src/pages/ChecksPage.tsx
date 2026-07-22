@@ -36,7 +36,7 @@ import Pagination from '../components/Pagination';
 import DatePeriodPicker from '../components/DatePeriodPicker';
 import SearchInput from '../components/SearchInput';
 import { useClickableRow } from '../hooks/useClickableRow';
-import { UserRole } from '../types';
+
 import type { Check, User, PaginatedResponse, StockMovement, TrashedCheck } from '../types';
 import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 
@@ -93,10 +93,35 @@ const paymentMethodBadge: Record<string, string> = {
   installment: 'badge-blue',
 };
 
-// Shared `paymentMethodLabels` predates «Рассрочка»; extend it locally so an
-// installment check never surfaces the raw English «installment».
-const paymentMethodLabel = (method: string): string =>
-  method === 'installment' ? 'Рассрочка' : (paymentMethodLabels[method] ?? method);
+/**
+ * Удаление/восстановление чека двигает деньги И склад — единый список
+ * зависимых query-ключей (staleTime 2 мин иначе прячет изменение до 2 минут).
+ * Зеркало MONEY_STOCK_QUERY_KEYS из CheckCreatePage. ['checks'] префиксом
+ * покрывает журнал, доску (['checks','board-columns']) и корзину
+ * (['checks','trash']).
+ */
+const MONEY_STOCK_QUERY_KEYS: readonly string[][] = [
+  ['checks'],
+  ['dashboard'],
+  ['dashboard-v2'],
+  ['dashboard-chart'],
+  ['financial-report'],
+  ['employee-ranking'],
+  ['cashflow'],
+  ['cash-shift'],
+  ['salary-all'],
+  ['salary-my'],
+  ['salary'],
+  ['employee-salary'],
+  ['products'],
+  ['products-all'],
+  ['low-stock'],
+  ['installments'],
+];
+
+/** SW-офлайн-очередь отвечает 202 {queued:true} — сервер запрос ещё НЕ видел. */
+const isQueuedOffline = (res: { status?: number; data?: { queued?: boolean } } | undefined): boolean =>
+  res?.status === 202 && res?.data?.queued === true;
 
 // ─── Memoized mobile check card ──────────────────────────────────────────────
 const MobileCheckCard = memo(function MobileCheckCard({
@@ -149,7 +174,7 @@ const MobileCheckCard = memo(function MobileCheckCard({
               </span>
             ) : (
               <span className={`flex-shrink-0 ${paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}`}>
-                {paymentMethodLabel(check.paymentMethod)}
+                {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
               </span>
             )}
           </div>
@@ -413,12 +438,12 @@ function TrashSection({
 export default function ChecksPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
-  // Корзина (106) — owner-class only (director/admin/superadmin), the same
-  // gate the server enforces on GET /checks/trash and POST /checks/:id/restore.
-  const canSeeTrash = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Корзина (106) — часть цикла удаления: тот же ключ checks_delete, что сервер
+  // проверяет на GET /checks/trash и POST /checks/:id/restore (волна Битрикс24).
+  const canSeeTrash = canDelete;
   // Pre-fill the master filter from ?masterId=… so deep-links from the
   // Employees page ("Чеки сотрудника" button) drop the user straight into
   // a pre-filtered view.
@@ -462,14 +487,16 @@ export default function ChecksPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => checksApi.remove(id),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
+      if (isQueuedOffline(res)) {
+        // SW-офлайн: сервер удаление ещё не видел — чек в списке остаётся,
+        // тост честный, без «перемещён в корзину».
+        toast('Нет сети — удаление поставлено в очередь и выполнится автоматически', { icon: '📡', duration: 5000 });
+        return;
+      }
       toast.success('Заказ-наряд перемещён в корзину (хранится 30 дней)');
-      // ['checks'] prefix also covers the board (['checks','board']) and the
-      // trash (['checks','trash']), so the trashed check shows up there at once.
-      queryClient.invalidateQueries({ queryKey: ['checks'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
-      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
+      // Удаление возвращает товары на склад и вычитает чек из кассы/отчётов.
+      MONEY_STOCK_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
     },
     onError: (err: any) => {
       toast.error(err?.response?.data?.message || 'Не удалось удалить чек');
@@ -501,14 +528,17 @@ export default function ChecksPage() {
 
   const restoreMutation = useMutation({
     mutationFn: (id: string) => checksApi.restore(id),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
+      if (isQueuedOffline(res)) {
+        toast('Нет сети — восстановление поставлено в очередь и выполнится автоматически', {
+          icon: '📡',
+          duration: 5000,
+        });
+        return;
+      }
       toast.success('Заказ-наряд восстановлен');
-      // Same set the delete flow invalidates: ['checks'] prefix covers the
-      // journal pages, the work board and the trash list itself.
-      queryClient.invalidateQueries({ queryKey: ['checks'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
-      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
+      // Восстановление заново списывает склад и возвращает чек в кассу/отчёты.
+      MONEY_STOCK_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
     },
     onError: (err: any) => {
       // Surface the backend refusal verbatim — e.g. «Недостаточно товара на
@@ -702,7 +732,10 @@ export default function ChecksPage() {
             </div>
           )}
           <div className="rounded-xl bg-indigo-50 p-3">
-            <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Средний чек</p>
+            {/* «(стр.)» обязательна: среднее считается по 20 видимым строкам,
+                а сосед «Всего чеков» — по всей выборке; без пометки владелец
+                читал бы это как средний чек периода. */}
+            <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Средний чек (стр.)</p>
             <p className="text-base sm:text-lg font-bold text-indigo-700 mt-0.5 tabular-nums">
               {formatMoney(avgCheck)}
             </p>
@@ -876,7 +909,7 @@ export default function ChecksPage() {
                           </span>
                         ) : (
                           <span className={paymentMethodBadge[check.paymentMethod] ?? 'badge-gray'}>
-                            {paymentMethodLabel(check.paymentMethod)}
+                            {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
                           </span>
                         )}
                       </td>

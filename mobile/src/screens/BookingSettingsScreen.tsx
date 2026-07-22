@@ -28,6 +28,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import QueryErrorState from '../components/QueryErrorState';
+import { showMutationErrorToast } from '../components/Toast';
 import { ListSkeleton } from '../components/Skeleton';
 import { useColors } from '../contexts/ThemeContext';
 import { bookingsApi } from '../api/services';
@@ -69,10 +70,12 @@ export default function BookingSettingsScreen() {
       queryClient.setQueryData(['booking-settings'], res.data);
       setLocal(res.data);
     },
-    onError: () => {
+    onError: (err) => {
       haptic('error');
-      // Откат к серверному снимку.
+      // Откат к серверному снимку + видимый фидбек (волна C): тумблер/поле
+      // молча возвращались — пользователь думал, что настройка сохранена.
       if (settings) setLocal(settings);
+      showMutationErrorToast(err);
     },
   });
 

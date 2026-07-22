@@ -34,6 +34,7 @@ import { Text } from '../platform/Typography';
 import { colors } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
 import { usePosSettings } from '../hooks/usePosSettings';
+import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
 import { KassaButton } from './KassaButton';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
@@ -66,6 +67,13 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // без права «Приём оплаты». OFF/loading → false → центральная кнопка остаётся
   // «Касса» байт-в-байт. В board-режиме она открывает «Доску».
   const { orderMode } = usePosSettings();
+
+  // Офлайн-очередь чеков (паритет с TabBar.ios.tsx, волна C, C-6): пока есть
+  // несотправленные записи (pending + отклонённые), таб «Журнал» несёт
+  // маленький амбер-бейдж со счётчиком — пилюля «Ожидают отправки» внутри
+  // Журнала не видна с других экранов, а мастер должен ЗНАТЬ, что чек ещё не
+  // на сервере. Снапшот useSyncExternalStore стабилен — лишних ререндеров нет.
+  const queuedCheckCount = useOfflineCheckQueue().length;
 
   const focusedIndex = TAB_DEFINITIONS.findIndex(
     (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
@@ -254,6 +262,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
                   focused={focused}
                   onPress={onPress}
                   palette={palette}
+                  badgeCount={tab.routeName === 'Checks' ? queuedCheckCount : 0}
                 />
               );
             })}
@@ -270,9 +279,11 @@ interface TabItemProps {
   focused: boolean;
   onPress: () => void;
   palette: ReturnType<typeof useColors>;
+  /** >0 → маленький амбер-бейдж на иконке (офлайн-очередь чеков у Журнала). */
+  badgeCount?: number;
 }
 
-function TabItem({ routeName, label, focused, onPress, palette }: TabItemProps) {
+function TabItem({ routeName, label, focused, onPress, palette, badgeCount = 0 }: TabItemProps) {
   const focusValue = useSharedValue(focused ? 1 : 0);
   React.useEffect(() => {
     focusValue.value = withSpring(focused ? 1 : 0, SPRING_TIGHT);
@@ -295,6 +306,11 @@ function TabItem({ routeName, label, focused, onPress, palette }: TabItemProps) 
     >
       <Animated.View style={iconStyle}>
         {Cmp ? <Cmp size={22} color={tint} strokeWidth={focused ? 2.2 : 1.7} fill="none" /> : null}
+        {badgeCount > 0 && (
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{badgeCount > 9 ? '9+' : badgeCount}</Text>
+          </View>
+        )}
       </Animated.View>
       <Text
         variant="caption"
@@ -361,6 +377,27 @@ const styles = StyleSheet.create({
     marginTop: 1,
     fontSize: 10,
     letterSpacing: -0.1,
+  },
+  // Бейдж офлайн-очереди на иконке «Журнал» — амбер (язык пилюли «Ожидают
+  // отправки» в самом Журнале), белая цифра, сигнальный цвет одинаков в
+  // light/dark. Зеркально TabBar.ios.tsx.
+  badge: {
+    position: 'absolute',
+    top: -5,
+    right: -11,
+    minWidth: 15,
+    height: 15,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    backgroundColor: colors.amber[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: {
+    color: colors.white,
+    fontSize: 9,
+    fontWeight: '700',
+    lineHeight: 11,
   },
   kassaSlot: {
     flex: 1,

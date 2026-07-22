@@ -2,6 +2,8 @@ import { Injectable, Inject, NotFoundException, BadRequestException, Logger } fr
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { isTenantLess } from '../common/auth-cache';
+import { userHasPermission } from '../common/guards/permissions.guard';
+import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { PushService } from '../push/push.service';
 import {
   CreateCategoryDto,
@@ -298,9 +300,13 @@ const SEED_COURSE: {
   ],
 };
 
-// Roles allowed to write (create/update/delete). Read is open to any
-// authenticated user — enforced at the controller via @Roles.
-export const KNOWLEDGE_MANAGER_ROLES = ['director', 'admin', 'superadmin'];
+// «Менеджер базы знаний» = держатель ключа 'knowledge_manage' (knowledge.manage,
+// миграция 136). Мутации гейтятся в контроллере (@RequirePermission), а здесь
+// та же проверка через userHasPermission(actor, 'knowledge_manage') управляет
+// видимостью черновиков / чужого прогресса / правильных ответов квизов.
+// Owner-class (director/superadmin) проходит по строковой роли внутри
+// userHasPermission — матрица авторитетна для всех остальных.
+const isKnowledgeManager = (actor: JwtPayload): boolean => userHasPermission(actor, 'knowledge_manage');
 
 // Quiz pass rule: a lesson quiz is passed only when ALL questions are answered
 // correctly. Documented in the contract handed to mobile/web.
@@ -590,14 +596,14 @@ export class KnowledgeService {
    * indexed columns are never wrapped in a function. Non-managers only see
    * published articles; managers see drafts too.
    */
-  async listArticles(tenantID: string, role: string, userID: string, query: ListArticlesQueryDto) {
+  async listArticles(tenantID: string, actor: JwtPayload, userID: string, query: ListArticlesQueryDto) {
     await this.ensureSeed(tenantID);
 
     const where: string[] = ['tenant_id=$1'];
     const params: any[] = [tenantID];
     let i = 2;
 
-    const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+    const isManager = isKnowledgeManager(actor);
     if (!isManager) {
       where.push('published = true');
       // #54: a targeted regulation (target_all=false) is visible only to the
@@ -680,14 +686,14 @@ export class KnowledgeService {
    * chars returns empty buckets (avoids whole-table ILIKE scans). The title/body
    * predicates hit the pg_trgm GIN indexes (063); block text is a JSONB scan.
    */
-  async search(tenantID: string, role: string, userID: string, rawQ: string) {
+  async search(tenantID: string, actor: JwtPayload, userID: string, rawQ: string) {
     await this.ensureSeed(tenantID);
     const q = (rawQ ?? '').trim();
     if (q.length < 2) {
       return { query: q, articles: [], categories: [], courses: [] };
     }
     const term = `%${q}%`;
-    const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+    const isManager = isKnowledgeManager(actor);
 
     // Articles — title + body + block text. The block-text EXISTS subquery reads
     // every block's `text`/`caption` so a hit only inside a block still matches.
@@ -771,8 +777,8 @@ export class KnowledgeService {
    * Full article. For type='regulation' includes `acknowledged` = whether the
    * CURRENT user has acked it. Non-managers can't open unpublished drafts.
    */
-  async getArticle(tenantID: string, role: string, userID: string, id: string) {
-    const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+  async getArticle(tenantID: string, actor: JwtPayload, userID: string, id: string) {
+    const isManager = isKnowledgeManager(actor);
     const { rows } = await this.pool.query(
       `SELECT a.id, a.category_id, a.type, a.title, a.body, a.cover_image, a.attachments,
               a.pinned, a.published, a.created_by, a.created_at, a.updated_at,
@@ -1309,9 +1315,9 @@ export class KnowledgeService {
    * courses; managers see drafts too. `lessonCount` + `completedLessons` drive
    * the progress bar; `completed` reflects the course_completion row.
    */
-  async listCourses(tenantID: string, role: string, userID: string) {
+  async listCourses(tenantID: string, actor: JwtPayload, userID: string) {
     await this.ensureSeed(tenantID);
-    const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+    const isManager = isKnowledgeManager(actor);
     // NOTE: `isManager` is interpolated into the SQL text (it only toggles the
     // `published` predicate) and must NOT appear in the parameter array — an
     // unused $n placeholder makes Postgres fail the parse with
@@ -1337,8 +1343,8 @@ export class KnowledgeService {
   }
 
   /** Full course: lessons (with quiz presence + per-user completed flags) + progress. */
-  async getCourse(tenantID: string, role: string, userID: string, id: string) {
-    const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+  async getCourse(tenantID: string, actor: JwtPayload, userID: string, id: string) {
+    const isManager = isKnowledgeManager(actor);
     const { rows: cRows } = await this.pool.query(
       `SELECT c.id, c.title, c.description, c.cover_image, c.category_id, c.published,
               c.sort_order, c.created_at, c.updated_at,
@@ -1820,9 +1826,9 @@ export class KnowledgeService {
    * `model` is accepted for forward-compat but not yet filtered on (we key on
    * make only — keeps it simple, as specified).
    */
-  async forCar(tenantID: string, role: string, userID: string, query: ForCarQueryDto) {
+  async forCar(tenantID: string, actor: JwtPayload, userID: string, query: ForCarQueryDto) {
     await this.ensureSeed(tenantID);
-    const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+    const isManager = isKnowledgeManager(actor);
     const make = query.make?.trim() || null;
 
     // Articles: general (car_make null) + make-specific. When no make is given,
@@ -1878,9 +1884,9 @@ export class KnowledgeService {
    * over listArticles. No check-flow data model is touched; the mobile agent
    * just surfaces these. Returns [] if no such category exists.
    */
-  async listChecklists(tenantID: string, role: string, userID: string) {
+  async listChecklists(tenantID: string, actor: JwtPayload, userID: string) {
     await this.ensureSeed(tenantID);
-    const isManager = KNOWLEDGE_MANAGER_ROLES.includes(role);
+    const isManager = isKnowledgeManager(actor);
     // Non-managers see only published checklists and only regulations in their
     // audience (#54). userID ($2) is bound on that branch only.
     const params: any[] = [tenantID];

@@ -1,6 +1,8 @@
 import { Injectable, Inject, InternalServerErrorException, ForbiddenException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { userHasPermission } from '../common/guards/permissions.guard';
+import { JwtPayload } from '../common/decorators/current-user.decorator';
 
 @Injectable()
 export class ShiftsService {
@@ -80,8 +82,11 @@ export class ShiftsService {
         [userID, tenantID],
       );
 
-      // Create new shift
-      const today = new Date().toISOString().split('T')[0];
+      // Create new shift. Бизнес-дата «сегодня» — Europe/Moscow (UTC+3, без
+      // летнего времени), как в getToday / shift-auto-close: чистая UTC-дата
+      // (toISOString) с 00:00 до 03:00 МСК относила открытую смену на вчера.
+      const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
+      const today = new Date(Date.now() + MSK_OFFSET_MS).toISOString().split('T')[0];
       const { rows } = await client.query(
         `INSERT INTO shifts (user_id, date, tenant_id) VALUES ($1, $2, $3)
          RETURNING *`,
@@ -100,7 +105,10 @@ export class ShiftsService {
         const schedEntry = schedRows[0];
         const now = new Date();
         const [h, m] = schedEntry.shift_start.split(':').map(Number);
-        const scheduled = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m);
+        // Плановое начало — московское настенное время бизнес-даты `today`
+        // (не серверная локаль: контейнер живёт в UTC, и `new Date(y,m,d,h,m)`
+        // давал момент, смещённый на 3 часа от реального планового старта).
+        const scheduled = new Date(`${today}T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:00+03:00`);
         const lateMinutes = Math.round((now.getTime() - scheduled.getTime()) / 60000);
 
         let lateStatus = 'on_time';
@@ -133,11 +141,14 @@ export class ShiftsService {
     }
   }
 
-  async close(id: string, tenantID: string, userID?: string) {
+  async close(id: string, tenantID: string, actor: JwtPayload) {
     await this.ensureShiftsEnabled(tenantID);
-    // Directors/admins can close any shift, masters only their own
-    const ownerCheck = userID ? ` AND user_id = $3` : '';
-    const params = userID ? [id, tenantID, userID] : [id, tenantID];
+    // Чужую смену закрывает только держатель 'schedule_manage' (матрица роли
+    // АВТОРИТЕТНА: owner-class и системный «Админ» — true, кастомные роли — по
+    // ячейке schedule.manage); все остальные — только СВОЮ (self-scope в WHERE).
+    const canCloseAny = userHasPermission(actor, 'schedule_manage');
+    const ownerCheck = canCloseAny ? '' : ` AND user_id = $3`;
+    const params = canCloseAny ? [id, tenantID] : [id, tenantID, actor.userID];
     const { rows } = await this.pool.query(
       `UPDATE shifts SET closed_at = now() WHERE id = $1 AND tenant_id = $2${ownerCheck}
        RETURNING *`,

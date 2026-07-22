@@ -30,16 +30,7 @@ import Modal from '../components/Modal';
 import InlineLoader from '../components/InlineLoader';
 import EmptyState from '../components/EmptyState';
 import PhoneInput from '../components/PhoneInput';
-import {
-  Supplier,
-  Delivery,
-  SupplierPayment,
-  Product,
-  PaginatedResponse,
-  StockMovement,
-  Warehouse,
-  UserRole,
-} from '../types';
+import { Supplier, Delivery, SupplierPayment, Product, PaginatedResponse, StockMovement, Warehouse } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -255,12 +246,11 @@ export default function SupplierDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { hasPermission, user } = useAuth();
+  const { hasPermission } = useAuth();
   // ROLE-ONLY: редактирование поставщика + приход/оплата/возврат/б/у-закупка —
-  // только с suppliers_manage. Просмотр карточки — suppliers_access.
-  const isOwnerClass =
-    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
-  const canManage = isOwnerClass || hasPermission('suppliers_manage');
+  // только с suppliers_manage (байпас superadmin/director — внутри
+  // hasPermission; admin — по матрице роли). Просмотр — suppliers_access.
+  const canManage = hasPermission('suppliers_manage');
 
   const [activeTab, setActiveTab] = useState<TabType>('deliveries');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);

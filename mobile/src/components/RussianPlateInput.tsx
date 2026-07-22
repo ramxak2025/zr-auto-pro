@@ -1,9 +1,18 @@
-import React, { useCallback, useMemo, useRef } from 'react';
-import { View, TextInput, Text, StyleSheet, Platform } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  View,
+  TextInput,
+  Text,
+  StyleSheet,
+  Platform,
+  NativeSyntheticEvent,
+  TextInputSelectionChangeEventData,
+} from 'react-native';
 import { colors, spacing } from '../theme';
 import {
   processPlateMainInput,
   processPlateRegionInput,
+  processPlateInput,
   combinePlate,
   formatMain,
   splitPlate,
@@ -61,49 +70,137 @@ export default function RussianPlateInput({
   const effectiveMode: PlateMode = mode ?? (!value || isRussianInput(value) ? 'ru' : 'foreign');
   const isRu = effectiveMode === 'ru';
 
-  const { main, region } = useMemo(() => splitPlate(value), [value]);
-  const mainDisplay = useMemo(() => formatMain(main), [main]);
+  // ── Decoupled local buffer (fix C) ──
+  // The MAIN/REGION text lives in local state, NOT read straight from the
+  // `value` prop on every keystroke. Previously `value` round-tripped through
+  // the heavy CheckCreateScreen (~4200 lines, async setState) and came back
+  // late; on Fabric a controlled TextInput whose value lags desyncs
+  // `mostRecentEventCount` and swaps a just-typed letter with its neighbour.
+  // Now each keystroke updates local state synchronously (instant, local
+  // re-render of this tiny component) and only THEN propagates the normalized
+  // clean plate upward via onChangeText — the async round-trip window is gone.
+  const [mainClean, setMainClean] = useState<string>(() => splitPlate(value).main);
+  const [regionClean, setRegionClean] = useState<string>(() => splitPlate(value).region);
+  // Controlled caret (fix A). Undefined = let native decide (first mount / taps
+  // are honoured via onSelectionChange); after a transform we pin it
+  // deterministically so the cursor can never jump backwards over a fresh char.
+  const [mainSel, setMainSel] = useState<{ start: number; end: number } | undefined>(undefined);
+  // Ring of values WE emitted whose echo through the (pass-through) parent may
+  // still be in flight. The parent (`setPlateSearch`) bounces every emitted
+  // value straight back into `value`; during fast typing several emits are in
+  // flight at once. A single-slot guard only remembers the LATEST emit, so the
+  // echo of an EARLIER one looks external and resyncs the buffer to a stale
+  // value — the intermittent «прыгающая буква». Recognising ANY recent
+  // self-emit (and pruning it once its echo passes) closes that window, while
+  // still resyncing on a genuinely external change (X clear, client/car
+  // selected, editing an existing record).
+  const emittedRef = useRef<string[]>([value]);
+  const rememberEmit = useCallback((next: string) => {
+    const ring = emittedRef.current;
+    ring.push(next);
+    // Cap: a full plate is at most ~9 emits from empty; 16 leaves generous head-
+    // room for in-flight echoes without ever growing unbounded.
+    if (ring.length > 16) ring.shift();
+  }, []);
+
+  useEffect(() => {
+    const ring = emittedRef.current;
+    const idx = ring.indexOf(value);
+    if (idx !== -1) {
+      // Echo of one of our own emits. Drop it and everything it superseded, but
+      // keep newer still-in-flight emits so their echoes are recognised too.
+      // Never resync from our own echo — the local buffer is already ahead.
+      emittedRef.current = ring.slice(idx + 1);
+      return;
+    }
+    // Genuinely external value.
+    const { main: m, region: r } = splitPlate(value);
+    setMainClean(m);
+    setRegionClean(r);
+    setMainSel(undefined);
+    emittedRef.current = [];
+  }, [value]);
+
+  // On a RU↔INT mode flip, re-derive the RU buffers from the current `value`.
+  // Foreign edits (handleForeignChange) intentionally never touch mainClean/
+  // regionClean, so without this a plate typed in RU, then edited in INT, would
+  // leave the RU buffers stale when the user switches back. Re-parsing through
+  // the RU mask yields a consistent partial (or empty) buffer instead.
+  useEffect(() => {
+    const { main: m, region: r } = splitPlate(processPlateInput(value.replace(/\s/g, '')));
+    setMainClean(m);
+    setRegionClean(r);
+    setMainSel(undefined);
+    // Intentionally keyed on the mode only — `value` sync is owned by the effect
+    // above; re-deriving here on every keystroke would fight the caret logic.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveMode]);
+
+  const mainDisplay = useMemo(() => formatMain(mainClean), [mainClean]);
+
+  const emit = useCallback(
+    (nextMain: string, nextRegion: string) => {
+      const next = combinePlate(nextMain, nextRegion);
+      rememberEmit(next);
+      onChangeText(next);
+      if (isValidPlate(next) && onValidPlate) onValidPlate(next);
+    },
+    [onChangeText, onValidPlate, rememberEmit],
+  );
 
   const handleMainChange = useCallback(
     (text: string) => {
       const raw = text.replace(/\s/g, '');
       const cleanMain = processPlateMainInput(raw);
-      const next = combinePlate(cleanMain, region);
-      onChangeText(next);
+      const wasComplete = mainClean.length >= 6;
+      setMainClean(cleanMain);
+      // Deterministic caret at end of the freshly formatted text. The mask
+      // never reorders chars (it only uppercases, maps latin→cyrillic and
+      // inserts spaces at fixed indices), so end-of-text is the correct
+      // landing spot for append typing, for backspace, and for single-char
+      // latin→cyrillic substitution — the very cases the swap bug hit.
+      const end = formatMain(cleanMain).length;
+      setMainSel({ start: end, end });
+      emit(cleanMain, regionClean);
       // Auto-advance to region once main is complete
-      if (cleanMain.length === 6 && main.length < 6) {
+      if (cleanMain.length === 6 && !wasComplete) {
         setTimeout(() => regionRef.current?.focus(), 0);
       }
-      if (isValidPlate(next) && onValidPlate) onValidPlate(next);
     },
-    [region, main.length, onChangeText, onValidPlate],
+    [mainClean.length, regionClean, emit],
   );
+
+  // Honour manual caret moves (taps / drags) so mid-field editing still works.
+  const handleMainSelectionChange = useCallback((e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
+    setMainSel(e.nativeEvent.selection);
+  }, []);
 
   const handleRegionChange = useCallback(
     (text: string) => {
       const cleanRegion = processPlateRegionInput(text);
-      const next = combinePlate(main, cleanRegion);
-      onChangeText(next);
-      if (isValidPlate(next) && onValidPlate) onValidPlate(next);
+      setRegionClean(cleanRegion);
+      emit(mainClean, cleanRegion);
     },
-    [main, onChangeText, onValidPlate],
+    [mainClean, emit],
   );
 
   // Backspace on an empty region jumps focus back to main
   const handleRegionKeyPress = useCallback(
     (e: { nativeEvent: { key: string } }) => {
-      if (e.nativeEvent.key === 'Backspace' && region.length === 0) {
+      if (e.nativeEvent.key === 'Backspace' && regionClean.length === 0) {
         mainRef.current?.focus();
       }
     },
-    [region.length],
+    [regionClean.length],
   );
 
   const handleForeignChange = useCallback(
     (text: string) => {
-      onChangeText(normalizeForeignPlate(text));
+      const next = normalizeForeignPlate(text);
+      rememberEmit(next);
+      onChangeText(next);
     },
-    [onChangeText],
+    [onChangeText, rememberEmit],
   );
 
   if (!isRu) {
@@ -120,6 +217,10 @@ export default function RussianPlateInput({
           placeholderTextColor={colors.gray[300]}
           autoCapitalize="characters"
           autoCorrect={false}
+          spellCheck={false}
+          textContentType="none"
+          autoComplete="off"
+          importantForAutofill="no"
           autoFocus={autoFocus}
           maxLength={20}
           returnKeyType="search"
@@ -134,12 +235,20 @@ export default function RussianPlateInput({
       <TextInput
         ref={mainRef}
         value={mainDisplay}
+        selection={mainSel}
         onChangeText={handleMainChange}
+        onSelectionChange={handleMainSelectionChange}
         style={styles.mainInput}
         placeholder="А 000 АА"
         placeholderTextColor={colors.gray[300]}
         autoCapitalize="characters"
         autoCorrect={false}
+        // (fix D) Kill any IME / autofill / suggestion substitution — a stray
+        // keyboard suggestion was another way a typed letter got replaced.
+        spellCheck={false}
+        textContentType="none"
+        autoComplete="off"
+        importantForAutofill="no"
         autoFocus={autoFocus}
         maxLength={8} // "А 000 АА" = 8 visible chars
         returnKeyType="next"
@@ -153,13 +262,16 @@ export default function RussianPlateInput({
       <View style={styles.regionSection}>
         <TextInput
           ref={regionRef}
-          value={region}
+          value={regionClean}
           onChangeText={handleRegionChange}
           onKeyPress={handleRegionKeyPress}
           style={styles.regionInput}
           placeholder="00"
           placeholderTextColor={colors.gray[300]}
           keyboardType="number-pad"
+          autoComplete="off"
+          importantForAutofill="no"
+          textContentType="none"
           maxLength={3}
           returnKeyType="search"
         />

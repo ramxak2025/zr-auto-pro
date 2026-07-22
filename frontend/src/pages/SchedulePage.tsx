@@ -283,8 +283,10 @@ function AttendanceRatingTab({
 
 export default function SchedulePage() {
   const queryClient = useQueryClient();
-  const { user: authUser } = useAuth();
-  const canEdit = authUser?.role === 'director' || authUser?.role === 'superadmin' || authUser?.role === 'admin';
+  const { hasPermission } = useAuth();
+  // Мутации расписания/режимов работы — ключ schedule_manage (backend
+  // POST/PATCH/DELETE /schedule*; волна Битрикс24). Просмотр — schedule_view.
+  const canEdit = hasPermission('schedule_manage');
 
   const [tab, setTab] = useState<TabType>('schedule');
 
@@ -442,6 +444,7 @@ export default function SchedulePage() {
     },
     onError: (_e, _v, ctx) => {
       if (ctx) queryClient.setQueryData(['users'], ctx);
+      toast.error('Не сохранено: порядок мастеров не изменён');
     },
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['users'] }),
   });
@@ -627,6 +630,9 @@ export default function SchedulePage() {
       shiftEnd: isDayOff ? null : entryForm.shiftEnd,
       isDayOff,
       note,
+      // Выходной/больничный стирает факт прихода явно (PATCH частичный) —
+      // иначе зарплата продолжала считать такой день отработанной сменой.
+      ...(isDayOff ? { actualArrival: null } : {}),
     };
     if (editingEntry) {
       updateMutation.mutate({ id: editingEntry.id, data: payload });
@@ -675,12 +681,19 @@ export default function SchedulePage() {
 
     const isDayOff = status === 'dayoff' || status === 'sick';
     const note = status === 'sick' ? 'Больничный' : status === 'absent' ? 'Прогул' : '';
+
+    // Бизнес-«сегодня» продукта — Europe/Moscow (UTC+3, без летнего времени).
+    // Будущий день — это ПЛАН: факт прихода (actualArrival) и статус «вовремя»
+    // ему не пришиваем, иначе зарплата считала смену раньше, чем она отработана.
+    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+    const isFutureDay = date > new Date(Date.now() + MSK_OFFSET_MS).toISOString().slice(0, 10);
+
     const lateStatus =
       status === 'late_minor'
         ? 'late_minor'
         : status === 'late_major'
           ? 'late_major'
-          : status === 'shift'
+          : status === 'shift' && !isFutureDay
             ? 'on_time'
             : undefined;
     const lateMinutes = status === 'late_minor' ? 15 : status === 'late_major' ? 60 : 0;
@@ -696,13 +709,13 @@ export default function SchedulePage() {
       return dt.toISOString();
     };
     const actualArrival =
-      status === 'shift'
+      status === 'shift' && !isFutureDay
         ? arrivalForDate(0)
         : status === 'late_minor'
           ? arrivalForDate(15)
           : status === 'late_major'
             ? arrivalForDate(60)
-            : undefined;
+            : null;
 
     const payload: any = {
       userId,
@@ -713,7 +726,10 @@ export default function SchedulePage() {
       note: note || '',
       lateStatus: lateStatus || null,
       lateMinutes: lateMinutes || 0,
-      ...(actualArrival ? { actualArrival } : {}),
+      // null явно (не опускаем поле): PATCH частичный — Выходной/Больничный/
+      // Прогул обязаны СТЕРЕТЬ устаревший факт прихода, иначе зарплата
+      // продолжала считать такой день отработанной сменой.
+      actualArrival,
     };
 
     if (entry && !isDayOff && entry.shiftStart) {

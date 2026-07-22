@@ -10,7 +10,12 @@ import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 import { PushService } from '../push/push.service';
+import { userHasPermission } from '../common/guards/permissions.guard';
+import { JwtPayload } from '../common/decorators/current-user.decorator';
 
+// «Привилегированный» здесь — про СЕМАНТИКУ записи (source='owner', без дневного
+// лимита и очереди утверждения), НЕ про доступ. Право вносить расходы решает
+// матрица роли ('can_add_expenses'), включая admin — он больше не owner-class.
 const PRIVILEGED_ROLES = new Set(['director', 'admin', 'superadmin']);
 
 // A real expense id is a uuid. The «Гарантия (убыток)» rows injected into the
@@ -126,12 +131,16 @@ export class ExpensesService {
     const params: any[] = [tenantID];
     let idx = 2;
 
+    // Границы периода — МОСКОВСКИЙ полуинтервал [from 00:00 МСК, to+1 00:00 МСК),
+    // зеркально reports.service (BUSINESS_TZ). Раньше правый край
+    // «<= (to+1)::timestamptz» резался по TZ сервера и ВКЛЮЧАЛ ровно полночь
+    // следующего дня — расход в 00:00 попадал в оба соседних периода.
     if (dateFrom) {
-      where += ` AND e.date >= $${idx++}`;
+      where += ` AND e.date >= $${idx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`;
       params.push(dateFrom);
     }
     if (dateTo) {
-      where += ` AND e.date <= ($${idx++}::date + 1)::timestamptz`;
+      where += ` AND e.date < ($${idx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`;
       params.push(dateTo);
     }
     if (query.createdBy) {
@@ -206,12 +215,13 @@ export class ExpensesService {
         `ch.tenant_id = $1 AND ch.payment_method = 'warranty' AND ch.is_deferred = false ` +
         `AND ch.deleted_at IS NULL AND (ch.product_cost_total + ch.service_salary_total) > 0`;
       let wIdx = 2;
+      // Тот же московский полуинтервал, что и у основного списка расходов выше.
       if (dateFrom) {
-        wWhere += ` AND ch.date >= $${wIdx++}`;
+        wWhere += ` AND ch.date >= $${wIdx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`;
         wParams.push(dateFrom);
       }
       if (dateTo) {
-        wWhere += ` AND ch.date <= ($${wIdx++}::date + 1)::timestamptz`;
+        wWhere += ` AND ch.date < ($${wIdx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`;
         wParams.push(dateTo);
       }
       const { rows: wRows } = await this.pool.query(
@@ -251,7 +261,10 @@ export class ExpensesService {
     return expenses;
   }
 
-  async create(tenantID: string, userID: string, userRole: string, dto: any) {
+  async create(actor: JwtPayload, dto: any) {
+    const tenantID = actor.tenantID;
+    const userID = actor.userID;
+
     // If a category is referenced, confirm it lives in the caller's tenant.
     // Without this, a director could store an expense under a foreign
     // tenant's category and have it surface in their own listing JOIN'd
@@ -268,21 +281,16 @@ export class ExpensesService {
       categoryApprovalRequired = !!catRows[0].approval_required;
     }
 
-    const isPrivileged = PRIVILEGED_ROLES.has(userRole);
+    const isPrivileged = PRIVILEGED_ROLES.has(actor.role);
     const source = isPrivileged ? 'owner' : 'employee';
 
-    // Non-privileged users need the `can_add_expenses` permission flag set.
-    if (!isPrivileged) {
-      const { rows: userRows } = await this.pool.query(
-        'SELECT can_add_expenses, daily_expense_limit FROM users WHERE id=$1 AND tenant_id=$2',
-        [userID, tenantID],
-      );
-      if (userRows.length === 0) {
-        throw new ForbiddenException({ message: 'Пользователь не найден' });
-      }
-      if (!userRows[0].can_add_expenses) {
-        throw new ForbiddenException({ message: 'У вас нет права добавлять расходы' });
-      }
+    // Право вносить расходы — из МАТРИЦЫ роли ('can_add_expenses'), не из
+    // легаси-колонки users.can_add_expenses (та осталась только носителем
+    // daily_expense_limit-семантики тумблера в карточке сотрудника). Дубль
+    // route-гейта @RequirePermission('can_add_expenses') — defence-in-depth
+    // на случай прямого вызова сервиса.
+    if (!userHasPermission(actor, 'can_add_expenses')) {
+      throw new ForbiddenException({ message: 'У вас нет права добавлять расходы' });
     }
 
     const amount = parseFloat(String(dto.amount));
@@ -311,10 +319,14 @@ export class ExpensesService {
           : parseFloat(limitRows[0].daily_expense_limit);
       if (limit !== null && limit > 0) {
         const dayStartIso = new Date(date).toISOString().slice(0, 10);
+        // Отклонённые владельцем заявки — не потраченные деньги: они не должны
+        // съедать дневной лимит (иначе несколько rejected-заявок загоняют весь
+        // день в pending при фактических тратах 0).
         const { rows: totalRows } = await this.pool.query(
           `SELECT COALESCE(SUM(amount), 0) as total FROM expenses
             WHERE tenant_id=$1 AND created_by=$2
-              AND date >= $3::date AND date < ($3::date + 1)`,
+              AND date >= $3::date AND date < ($3::date + 1)
+              AND COALESCE(approval_status, 'approved') <> 'rejected'`,
           [tenantID, userID, dayStartIso],
         );
         const sumSoFar = parseFloat(totalRows[0].total) || 0;
@@ -451,10 +463,14 @@ export class ExpensesService {
   }
 
   async getTotalForPeriod(tenantID: string, dateFrom: string, dateTo: string) {
+    // Московский полуинтервал [from 00:00 МСК, to+1 00:00 МСК) — зеркально
+    // getAll выше и reports.service (BUSINESS_TZ).
     const { rows } = await this.pool.query(
       `SELECT COALESCE(SUM(amount), 0) as total
        FROM expenses
-       WHERE tenant_id = $1 AND date >= $2 AND date <= ($3::date + 1)::timestamptz`,
+       WHERE tenant_id = $1
+         AND date >= $2::date::timestamp AT TIME ZONE 'Europe/Moscow'
+         AND date < ($3::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`,
       [tenantID, dateFrom, dateTo],
     );
     return parseFloat(rows[0].total) || 0;

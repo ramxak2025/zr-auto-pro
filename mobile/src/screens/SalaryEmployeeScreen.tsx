@@ -22,7 +22,6 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import SalaryEmployeeCard from '../components/salary/SalaryEmployeeCard';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { UserRole } from '../../../shared/types';
 
 interface SalaryEmployeeRouteParams {
   employeeId: string;
@@ -33,16 +32,22 @@ interface SalaryEmployeeRouteParams {
 export default function SalaryEmployeeScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute();
-  const { isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
 
   const params = (route.params || {}) as SalaryEmployeeRouteParams;
   const employeeId = params.employeeId;
   const employeeName = params.employeeName || 'Сотрудник';
-  // «Владелец» = director + superadmin — only they get the payout / fine /
-  // premium actions. An employee never reaches this screen (they get their own
-  // self-view inside SalaryScreen), but gate defensively all the same.
-  const canManage = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
+  // Два независимых серверных ключа (сид «Администратора»: payouts=false,
+  // premiums=true — один общий prop скрывал бы ему «Премию» или, наоборот,
+  // показывал бы выплаты):
+  //   • salary_payouts_manage — POST /salary/payments, payouts, penalties
+  //     (выплаты / авансы / штрафы; сид Директор true, Админ false).
+  //   • salary_premiums_manage — POST /salary/premiums (премии; сид Директор
+  //     И Админ true).
+  // Держатель salary_view_all без обоих прав видит карту read-only.
+  const canManagePayouts = hasPermission('salary_payouts_manage');
+  const canManagePremiums = hasPermission('salary_premiums_manage');
 
   if (!employeeId) {
     // Defensive — a malformed deep-link without an id just bounces back.
@@ -54,7 +59,8 @@ export default function SalaryEmployeeScreen() {
       employeeId={employeeId}
       employeeName={employeeName}
       title={employeeName}
-      canManage={canManage}
+      canManagePayouts={canManagePayouts}
+      canManagePremiums={canManagePremiums}
       initialMonth={params.month}
       onBack={() => navigation.goBack()}
     />

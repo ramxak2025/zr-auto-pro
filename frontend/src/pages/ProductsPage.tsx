@@ -32,7 +32,7 @@ import {
 } from 'lucide-react';
 import { productsApi, uploadsApi, warehouseCategoriesApi, warehousesApi, stockMovementsApi } from '../api/services';
 import type { Product, BundleItem, PaginatedResponse, StockMovement, Warehouse as WarehouseRecord } from '../types';
-import { UserRole } from '../types';
+
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import TrashModal from '../components/TrashModal';
@@ -1530,23 +1530,20 @@ function ProductDetailModal({
 
 export default function ProductsPage() {
   const queryClient = useQueryClient();
-  const { isRole, hasPermission, user } = useAuth();
-  // ROLE-ONLY permission gating for the warehouse manage-controls.
-  // Owner-class (superadmin / director / admin) always bypasses; everyone else
-  // needs the explicit `warehouse_manage` permission. `hasPermission` already
-  // returns true for superadmin/director but NOT admin, so the isOwnerClass OR
-  // is required for admin to bypass too. When `canManageWarehouse` is false we
-  // hide every manage-control AND the cost-price everywhere (backend also
-  // returns costPrice:0 for these users — never render that as a real value).
-  const isOwnerClass =
-    user?.role === UserRole.SUPERADMIN || user?.role === UserRole.DIRECTOR || user?.role === UserRole.ADMIN;
-  const canManageWarehouse = isOwnerClass || hasPermission('warehouse_manage');
+  const { hasPermission } = useAuth();
+  // Волна «права как в Битрикс24»: только матрица. Байпас superadmin/director —
+  // внутри hasPermission; admin — по правам роли из /auth/me. When
+  // `canManageWarehouse` is false we hide every manage-control AND the
+  // cost-price everywhere (backend also returns costPrice:0 for these users —
+  // never render that as a real value).
+  const canManageWarehouse = hasPermission('warehouse_manage');
   // Destructive delete (bulk / «весь товар») is gated separately on
-  // `warehouse_delete` (owner-class bypasses) — matches the backend guard on
-  // POST /products/bulk-delete. Off by default even for warehouse managers.
-  const canDeleteWarehouse = isOwnerClass || hasPermission('warehouse_delete');
-  const isOwner = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN);
+  // `warehouse_delete` — matches the backend guard on POST /products/
+  // bulk-delete. Off by default even for warehouse managers.
+  const canDeleteWarehouse = hasPermission('warehouse_delete');
 
+  // Сводка склада (себестоимость/продажная стоимость) — backend GET
+  // /products/warehouse-stats гейтится warehouse_manage, зеркалим его же.
   const { data: warehouseStats } = useQuery({
     queryKey: ['warehouse-stats'],
     queryFn: async () => {
@@ -1554,7 +1551,7 @@ export default function ProductsPage() {
       return res.data;
     },
     staleTime: 60_000,
-    enabled: isOwner,
+    enabled: canManageWarehouse,
   });
 
   const [searchText, setSearchText] = useState('');
@@ -2291,7 +2288,13 @@ export default function ProductsPage() {
         // Show first few failing rows so user knows what went wrong
         result.errors.forEach((e) => toast.error(e, { duration: 6000 }));
       }
+      // Импорт создаёт товары И новые группы: обновляем не только список склада,
+      // но и полный каталог пикера Кассы (['products-all']) с деревом папок
+      // (['warehouse-categories']) — иначе свежеимпортированное не видно в Кассе
+      // до истечения staleTime.
       queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['products-all'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
       setShowImportModal(false);
       setImportData(null);
     } catch (err: any) {
@@ -2579,8 +2582,8 @@ export default function ProductsPage() {
         </div>
       )}
 
-      {/* Warehouse stats for owner */}
-      {isOwner && warehouseStats && (
+      {/* Warehouse stats — warehouse_manage (same key the backend enforces) */}
+      {canManageWarehouse && warehouseStats && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5">
           <div className="rounded-xl bg-indigo-50 p-3">
             <p className="text-[10px] font-semibold text-indigo-500 uppercase tracking-wider">Себестоимость склада</p>

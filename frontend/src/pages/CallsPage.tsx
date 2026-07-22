@@ -24,7 +24,6 @@ import { format, subDays, addDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import { useAuth } from '../contexts/AuthContext';
 import { callsApi } from '../api/services';
-import { UserRole } from '../types';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -347,15 +346,15 @@ const filterTabs: { key: FilterTab; label: string; icon: typeof Phone }[] = [
 ];
 
 export default function CallsPage() {
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
 
-  // Owner-class (superadmin/director/admin) видит и слушает всё; иначе — по правам.
-  const isOwnerClass = isRole(UserRole.DIRECTOR, UserRole.SUPERADMIN, UserRole.ADMIN);
-  const canView = isOwnerClass || hasPermission('calls_view' as any);
-  const canListen = isOwnerClass || hasPermission('calls_listen' as any);
+  // Волна «права как в Битрикс24»: только матрица (байпас superadmin/director —
+  // внутри hasPermission; admin — по правам роли из /auth/me).
+  const canView = hasPermission('calls_view');
+  const canListen = hasPermission('calls_listen');
 
   const dateStr = format(selectedDate, 'yyyy-MM-dd');
 

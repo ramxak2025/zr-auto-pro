@@ -36,6 +36,8 @@ import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
 import { useColors } from '../contexts/ThemeContext';
 import { usePosSettings } from '../hooks/usePosSettings';
+import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
+import { colors } from '../theme';
 import { TAB_DEFINITIONS } from './TabBarShared';
 
 // Floating island geometry — owner explicitly wants the bar to read as
@@ -80,6 +82,13 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // тот же premium-сквиркл меняет только символ + цель нажатия — открывает
   // «Доску» внутри Checks-стека.
   const { orderMode } = usePosSettings();
+
+  // Офлайн-очередь чеков (волна C, C-6): пока есть несотправленные записи
+  // (pending + отклонённые), таб «Журнал» несёт маленький амбер-бейдж со
+  // счётчиком — пилюля «Ожидают отправки» внутри Журнала не видна с других
+  // экранов, а мастер должен ЗНАТЬ, что чек ещё не на сервере. Снапшот
+  // useSyncExternalStore стабилен между изменениями — лишних ререндеров нет.
+  const queuedCheckCount = useOfflineCheckQueue().length;
   const openBoard = React.useCallback(() => {
     // Nested navigate (tab → stack screen) — cast to any for the 2-arg overload,
     // same convention as the screens' useNavigation<any>() callers.
@@ -162,7 +171,14 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
               }
 
               return (
-                <TabItem key={tab.routeName} focused={focused} label={tab.label} icon={tab.icon} palette={palette} />
+                <TabItem
+                  key={tab.routeName}
+                  focused={focused}
+                  label={tab.label}
+                  icon={tab.icon}
+                  palette={palette}
+                  badgeCount={tab.routeName === 'Checks' ? queuedCheckCount : 0}
+                />
               );
             })}
           </View>
@@ -193,9 +209,11 @@ interface TabItemProps {
   label: string;
   icon: (typeof TAB_DEFINITIONS)[number]['icon'];
   palette: ReturnType<typeof useColors>;
+  /** >0 → маленький амбер-бейдж на иконке (офлайн-очередь чеков у Журнала). */
+  badgeCount?: number;
 }
 
-function TabItem({ focused, label, icon, palette }: TabItemProps) {
+function TabItem({ focused, label, icon, palette, badgeCount = 0 }: TabItemProps) {
   const scale = useSharedValue(focused ? 1.06 : 1);
   React.useEffect(() => {
     scale.value = withSpring(focused ? 1.06 : 1, SPRING_TIGHT);
@@ -208,6 +226,11 @@ function TabItem({ focused, label, icon, palette }: TabItemProps) {
     <View style={styles.item}>
       <Animated.View style={iconStyle}>
         <Icon name={icon} size={22} color={tint} weight={focused ? 'semibold' : 'regular'} />
+        {badgeCount > 0 && (
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>{badgeCount > 9 ? '9+' : badgeCount}</Text>
+          </View>
+        )}
       </Animated.View>
       {label.length > 0 && (
         <Text
@@ -277,6 +300,27 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     minHeight: 44,
+  },
+  // Бейдж офлайн-очереди на иконке «Журнал» — амбер (язык пилюли «Ожидают
+  // отправки» в самом Журнале), белая цифра, сигнальный цвет одинаков в
+  // light/dark. Слой иконок pointerEvents="none" — тапы не перехватывает.
+  badge: {
+    position: 'absolute',
+    top: -5,
+    right: -11,
+    minWidth: 15,
+    height: 15,
+    borderRadius: 8,
+    paddingHorizontal: 3,
+    backgroundColor: colors.amber[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  badgeText: {
+    color: colors.white,
+    fontSize: 9,
+    fontWeight: '700',
+    lineHeight: 11,
   },
   // Fills the unclipped island frame (NOT the island itself) so the
   // button's brand-glow shadow isn't cut off by the island's

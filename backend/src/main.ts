@@ -11,9 +11,12 @@ import helmet from 'helmet';
 // in production. require() avoids the interop wrapper entirely.
 // eslint-disable-next-line @typescript-eslint/no-var-requires, @typescript-eslint/no-require-imports
 const compression = require('compression');
+import { Pool } from 'pg';
 import { AppModule } from './app.module';
+import { PG_POOL } from './database.module';
 import { HttpExceptionFilter } from './common/filters/http-exception.filter';
 import { ETagInterceptor } from './common/interceptors/etag.interceptor';
+import { SubscriptionGuardInterceptor } from './common/interceptors/subscription-guard.interceptor';
 import { RateLimitGuard } from './common/guards/rate-limit.guard';
 
 async function bootstrap() {
@@ -63,7 +66,12 @@ async function bootstrap() {
   app.setGlobalPrefix('api');
   app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
   app.useGlobalFilters(new HttpExceptionFilter());
-  app.useGlobalInterceptors(new ETagInterceptor());
+  // SubscriptionGuardInterceptor — enforcement подписки тенанта (R10). Именно
+  // interceptor, а не guard: JwtAuthGuard стоит пер-контроллерно, глобальный
+  // guard исполнился бы ДО него (request.user пуст) — interceptors же идут
+  // ПОСЛЕ всех guards. Приостановленный/истёкший тенант → 403
+  // SUBSCRIPTION_BLOCKED (не 401 — клиент показывает paywall, не разлогинивает).
+  app.useGlobalInterceptors(new ETagInterceptor(), new SubscriptionGuardInterceptor(app.get<Pool>(PG_POOL)));
   app.useGlobalGuards(new RateLimitGuard());
   app.enableCors({
     origin: process.env.CORS_ORIGIN

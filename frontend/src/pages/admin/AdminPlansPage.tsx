@@ -1,14 +1,28 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, CreditCard, Loader2, Check, X, Mic } from 'lucide-react';
+import {
+  Plus,
+  Pencil,
+  Trash2,
+  CreditCard,
+  Loader2,
+  Check,
+  X,
+  Mic,
+  Archive,
+  ArchiveRestore,
+  Users,
+  Building2,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { plansApi, adminApi } from '../../api/services';
-import { Plan, PlatformSettings } from '../../types';
+import { plansApi, adminApi, tenantsApi } from '../../api/services';
+import { Plan, PlatformSettings, Tenant } from '../../types';
 import Modal from '../../components/Modal';
 import ConfirmDialog from '../../components/ConfirmDialog';
 import QueryState from '../../components/QueryState';
 import Switch from '../../components/Switch';
+import { AdminPageHeader } from '../../components/admin/adminUi';
 // Feature toggles bucketed by `group` (core / section / integration) so the editor
 // and plan cards render the 23 keys under section headings. FEATURE_GROUPS wraps
 // the shared single-source-of-truth registry (web + mobile), so it never drifts.
@@ -42,7 +56,7 @@ export default function AdminPlansPage() {
   const [modalOpen, setModalOpen] = useState(false);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [form, setForm] = useState<PlanFormData>({ ...emptyForm });
-  const [deleteId, setDeleteId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Plan | null>(null);
   const [freeMinutes, setFreeMinutes] = useState('');
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
@@ -52,6 +66,23 @@ export default function AdminPlansPage() {
   });
 
   const plans = data ?? [];
+
+  // Число подключённых автосервисов на каждом тарифе — тот же кэш ['tenants'],
+  // что и у списка клиентов. Показывает цену ошибки перед удалением тарифа.
+  const { data: tenantsData } = useQuery({
+    queryKey: ['tenants'],
+    queryFn: () => tenantsApi.getAll(),
+    select: (res) => res.data as Tenant[],
+    staleTime: 60_000,
+  });
+
+  const subscribersByPlan = useMemo(() => {
+    const map = new Map<string, number>();
+    (tenantsData ?? []).forEach((t) => {
+      if (t.planId) map.set(t.planId, (map.get(t.planId) ?? 0) + 1);
+    });
+    return map;
+  }, [tenantsData]);
 
   // Платформенная настройка (superadmin): бесплатные минуты голосового ввода,
   // которые получает КАЖДЫЙ автосервис ежемесячно. Держим здесь же, чтобы весь
@@ -68,7 +99,7 @@ export default function AdminPlansPage() {
   }, [settings?.globalFreeVoiceMinutes]);
 
   const createMutation = useMutation({
-    mutationFn: (data: any) => plansApi.create(data),
+    mutationFn: (payload: any) => plansApi.create(payload),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['plans'] });
       toast.success('Тариф создан');
@@ -93,6 +124,17 @@ export default function AdminPlansPage() {
       closeModal();
     },
     onError: () => toast.error('Ошибка обновления'),
+  });
+
+  // Архивация (isActive=false) — безопасная альтернатива удалению: тариф
+  // исчезает из выбора, подключённые автосервисы продолжают работать.
+  const toggleActiveMutation = useMutation({
+    mutationFn: ({ id, isActive }: { id: string; isActive: boolean }) => plansApi.update(id, { isActive }),
+    onSuccess: (_res, vars) => {
+      queryClient.invalidateQueries({ queryKey: ['plans'] });
+      toast.success(vars.isActive ? 'Тариф активирован' : 'Тариф в архиве');
+    },
+    onError: () => toast.error('Не удалось изменить статус тарифа'),
   });
 
   const deleteMutation = useMutation({
@@ -192,15 +234,20 @@ export default function AdminPlansPage() {
     settingsMutation.mutate(Math.round(freeMinutesNum));
   };
 
+  const deleteSubscribers = deleteTarget ? (subscribersByPlan.get(deleteTarget.id) ?? 0) : 0;
+
   return (
     <div>
-      <div className="page-header">
-        <h1 className="page-title">Тарифы</h1>
-        <button onClick={openCreate} className="btn-primary">
-          <Plus className="w-4 h-4" />
-          Новый тариф
-        </button>
-      </div>
+      <AdminPageHeader
+        title="Тарифы"
+        subtitle="Планы подписки и платформенные лимиты"
+        actions={
+          <button onClick={openCreate} className="btn-primary">
+            <Plus className="w-4 h-4" />
+            Новый тариф
+          </button>
+        }
+      />
 
       {/* Платформенная настройка: бесплатные минуты голосового ввода всем автосервисам */}
       <div className="card card-body mb-6">
@@ -262,62 +309,66 @@ export default function AdminPlansPage() {
         }}
         minHeight="min-h-[40vh]"
       >
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
           {plans.map((plan) => {
             const features: string[] = Array.isArray(plan.features) ? plan.features : [];
+            const subscribers = subscribersByPlan.get(plan.id) ?? 0;
             return (
-              <div key={plan.id} className="card card-body space-y-3">
-                <div className="flex items-center justify-between">
-                  <h3 className="font-semibold text-gray-900">{plan.name}</h3>
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => openEdit(plan)}
-                      className="p-1.5 text-gray-400 hover:text-primary-600 rounded-lg"
-                      aria-label="Редактировать тариф"
-                      title="Редактировать"
-                    >
-                      <Pencil className="w-4 h-4" />
-                    </button>
-                    <button
-                      onClick={() => setDeleteId(plan.id)}
-                      className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg"
-                      aria-label="Удалить тариф"
-                      title="Удалить"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
+              <div key={plan.id} className={`card flex flex-col p-5 ${plan.isActive ? '' : 'opacity-75'}`}>
+                {/* Header: имя + статус */}
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <h3 className="truncate font-semibold text-gray-900">{plan.name}</h3>
+                    <div className="mt-1">
+                      <span className="text-2xl font-bold tabular-nums text-gray-900">
+                        {plan.monthlyPrice.toLocaleString('ru-RU')}
+                      </span>
+                      <span className="ml-1 text-gray-500">₽/мес</span>
+                    </div>
                   </div>
+                  {plan.isActive ? (
+                    <span className="badge-green flex-shrink-0">Активен</span>
+                  ) : (
+                    <span className="badge-gray flex-shrink-0">В архиве</span>
+                  )}
                 </div>
 
-                <div>
-                  <span className="text-2xl font-bold text-gray-900 tabular-nums">
-                    {plan.monthlyPrice.toLocaleString('ru-RU')}
+                {plan.description && <p className="mt-1.5 text-sm text-gray-500">{plan.description}</p>}
+
+                {/* Meta */}
+                <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-gray-600">
+                  <span className="inline-flex items-center gap-1.5">
+                    <Users className="h-3.5 w-3.5 text-gray-400" />
+                    до <span className="tabular-nums">{plan.maxUsers}</span> сотр.
                   </span>
-                  <span className="text-gray-500 ml-1">₽/мес</span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <Mic className="h-3.5 w-3.5 text-gray-400" />
+                    <span className="tabular-nums">{plan.voiceMinutes ?? 0}</span> мин/мес
+                  </span>
+                  <span className="inline-flex items-center gap-1.5">
+                    <Building2 className="h-3.5 w-3.5 text-gray-400" />
+                    <span className="tabular-nums">{subscribers}</span> подключено
+                  </span>
                 </div>
-
-                {plan.description && <p className="text-sm text-gray-500">{plan.description}</p>}
-
-                <div className="text-sm text-gray-600">До {plan.maxUsers} сотрудников</div>
 
                 {/* Feature availability — grouped by section */}
-                <div className="space-y-2.5">
+                <div className="mt-4 flex-1 space-y-2.5 border-t border-gray-100 pt-3">
                   {FEATURE_GROUPS.map((grp) => (
                     <div key={grp.group}>
                       <p className="text-[11px] font-semibold uppercase tracking-wide text-gray-400 mb-1">
                         {grp.label}
                       </p>
-                      <ul className="text-sm space-y-1">
+                      <ul className="space-y-0.5 text-[13px]">
                         {grp.items.map((feat) => {
                           const included = features.includes(feat.key);
                           return (
                             <li key={feat.key} className="flex items-center gap-2">
                               {included ? (
-                                <Check className="w-4 h-4 text-green-500 flex-shrink-0" />
+                                <Check className="w-3.5 h-3.5 text-green-500 flex-shrink-0" />
                               ) : (
-                                <X className="w-4 h-4 text-gray-300 flex-shrink-0" />
+                                <X className="w-3.5 h-3.5 text-gray-300 flex-shrink-0" />
                               )}
-                              <span className={included ? 'text-gray-700' : 'text-gray-500'}>{feat.label}</span>
+                              <span className={included ? 'text-gray-700' : 'text-gray-400'}>{feat.label}</span>
                             </li>
                           );
                         })}
@@ -326,12 +377,29 @@ export default function AdminPlansPage() {
                   ))}
                 </div>
 
-                <div className="pt-2 border-t border-gray-100">
-                  {plan.isActive ? (
-                    <span className="badge-green">Активен</span>
-                  ) : (
-                    <span className="badge-red">Неактивен</span>
-                  )}
+                {/* Actions */}
+                <div className="mt-4 flex items-center gap-2 border-t border-gray-100 pt-3">
+                  <button onClick={() => openEdit(plan)} className="btn-secondary btn-sm flex-1 justify-center">
+                    <Pencil className="w-3.5 h-3.5" />
+                    Редактировать
+                  </button>
+                  <button
+                    onClick={() => toggleActiveMutation.mutate({ id: plan.id, isActive: !plan.isActive })}
+                    disabled={toggleActiveMutation.isPending}
+                    className="btn-ghost btn-sm"
+                    title={plan.isActive ? 'В архив (скрыть из выбора)' : 'Вернуть из архива'}
+                  >
+                    {plan.isActive ? <Archive className="w-3.5 h-3.5" /> : <ArchiveRestore className="w-3.5 h-3.5" />}
+                    {plan.isActive ? 'В архив' : 'Активировать'}
+                  </button>
+                  <button
+                    onClick={() => setDeleteTarget(plan)}
+                    className="p-1.5 text-gray-400 hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                    aria-label="Удалить тариф"
+                    title="Удалить безвозвратно"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
             );
@@ -359,16 +427,28 @@ export default function AdminPlansPage() {
             />
           </div>
 
-          <div>
-            <label className="label">Цена (₽/мес)</label>
-            <input
-              type="number"
-              className="input"
-              value={form.monthlyPrice}
-              onChange={(e) => setForm({ ...form, monthlyPrice: Number(e.target.value) })}
-              min={0}
-              step={100}
-            />
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Цена (₽/мес)</label>
+              <input
+                type="number"
+                className="input"
+                value={form.monthlyPrice}
+                onChange={(e) => setForm({ ...form, monthlyPrice: Number(e.target.value) })}
+                min={0}
+                step={100}
+              />
+            </div>
+            <div>
+              <label className="label">Макс. сотрудников</label>
+              <input
+                type="number"
+                className="input"
+                value={form.maxUsers}
+                onChange={(e) => setForm({ ...form, maxUsers: Number(e.target.value) })}
+                min={1}
+              />
+            </div>
           </div>
 
           <div>
@@ -379,17 +459,6 @@ export default function AdminPlansPage() {
               value={form.description}
               onChange={(e) => setForm({ ...form, description: e.target.value })}
               placeholder="Краткое описание тарифа"
-            />
-          </div>
-
-          <div>
-            <label className="label">Макс. сотрудников</label>
-            <input
-              type="number"
-              className="input"
-              value={form.maxUsers}
-              onChange={(e) => setForm({ ...form, maxUsers: Number(e.target.value) })}
-              min={1}
             />
           </div>
 
@@ -421,35 +490,36 @@ export default function AdminPlansPage() {
             </div>
           </div>
 
-          <div>
-            <label className="label">Минуты голосового ввода / мес</label>
-            <input
-              type="number"
-              className="input"
-              value={form.voiceMinutes}
-              onChange={(e) => setForm({ ...form, voiceMinutes: Number(e.target.value) })}
-              min={0}
-              step={1}
-            />
-            <p className="mt-1 text-xs text-gray-500">
-              0 = только бесплатный лимит платформы. Работает при включённой функции «Голосовой ввод (пакет минут)».
-            </p>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="label">Минуты голоса / мес</label>
+              <input
+                type="number"
+                className="input"
+                value={form.voiceMinutes}
+                onChange={(e) => setForm({ ...form, voiceMinutes: Number(e.target.value) })}
+                min={0}
+                step={1}
+              />
+            </div>
+            <div>
+              <label className="label">Порядок сортировки</label>
+              <input
+                type="number"
+                className="input"
+                value={form.sortOrder}
+                onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })}
+                min={0}
+              />
+            </div>
           </div>
-
-          <div>
-            <label className="label">Порядок сортировки</label>
-            <input
-              type="number"
-              className="input"
-              value={form.sortOrder}
-              onChange={(e) => setForm({ ...form, sortOrder: Number(e.target.value) })}
-              min={0}
-            />
-          </div>
+          <p className="text-xs text-gray-500">
+            0 минут = только бесплатный лимит платформы. Работает при включённой функции «Голосовой ввод (пакет минут)».
+          </p>
 
           <div className="flex items-center gap-3">
             <Switch checked={form.isActive} onChange={(v) => setForm({ ...form, isActive: v })} label="Тариф активен" />
-            <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активен' : 'Неактивен'}</span>
+            <span className="text-sm font-medium text-gray-700">{form.isActive ? 'Активен' : 'В архиве'}</span>
           </div>
 
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
@@ -472,16 +542,20 @@ export default function AdminPlansPage() {
         </form>
       </Modal>
 
-      {/* Delete Confirmation */}
+      {/* Delete Confirmation — предупреждаем о подключённых автосервисах */}
       <ConfirmDialog
-        isOpen={!!deleteId}
-        onClose={() => setDeleteId(null)}
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
         onConfirm={() => {
-          if (deleteId) deleteMutation.mutate(deleteId);
-          setDeleteId(null);
+          if (deleteTarget) deleteMutation.mutate(deleteTarget.id);
+          setDeleteTarget(null);
         }}
-        title="Удалить тариф"
-        message="Вы уверены, что хотите удалить этот тариф?"
+        title="Удалить тариф безвозвратно"
+        message={
+          deleteSubscribers > 0
+            ? `На тарифе «${deleteTarget?.name}» сейчас ${deleteSubscribers} автосервис(ов). После удаления они останутся без тарифа и ПОТЕРЯЮТ доступ ко всем функциям до назначения нового. Обычно достаточно «В архив». Точно удалить?`
+            : `Тариф «${deleteTarget?.name}» будет удалён безвозвратно. Если нужно просто скрыть его из выбора — используйте «В архив». Продолжить?`
+        }
         confirmText="Удалить"
         variant="danger"
       />

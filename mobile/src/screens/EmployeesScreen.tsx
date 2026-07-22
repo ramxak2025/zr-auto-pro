@@ -175,13 +175,15 @@ const EmployeeRow = React.memo(function EmployeeRow({
 export default function EmployeesScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { user: me, hasPermission } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const [refreshing, setRefreshing] = React.useState(false);
 
-  const showFinancials =
-    me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin' || hasPermission('profit_view');
+  // Финансовые цифры рейтинга — ключ profit_view («права как в Битрикс24»,
+  // 2026-07: admin живёт по матрице из /auth/me, сид reports.profit=true —
+  // поведение 1:1; superadmin/director байпасятся внутри hasPermission).
+  const showFinancials = hasPermission('profit_view');
 
   // ['users-all'] — отдельный ключ (не ['users']) с той же resilient формой
   // (`User[]`) через общий хук. См. hooks/useUsers.ts: единая queryFn гарантирует,
@@ -228,10 +230,10 @@ export default function EmployeesScreen() {
     placeholderData: (prev) => prev,
   });
 
-  // «Уволенные» recycle-bin count for the footer affordance. Manager roles
-  // only (director / admin / superadmin manage dismissals) — a master never
-  // sees the entry point and we don't fire the request for them.
-  const canManageDismissed = me?.role === 'director' || me?.role === 'superadmin' || me?.role === 'admin';
+  // «Уволенные» recycle-bin count for the footer affordance. Гейт
+  // user_management (тот же ключ, что у сервера на dismissed/restore/purge) —
+  // без права не показываем вход и не дёргаем запрос.
+  const canManageDismissed = hasPermission('user_management');
 
   const { data: dismissed } = useQuery<User[]>({
     queryKey: ['users-dismissed'],

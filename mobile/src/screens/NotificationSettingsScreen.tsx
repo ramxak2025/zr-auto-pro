@@ -20,6 +20,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { showMutationErrorToast } from '../components/Toast';
 import { Text } from '../platform/Typography';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
@@ -170,12 +171,14 @@ export default function NotificationSettingsScreen() {
       queryClient.setQueryData<NotificationPreferences>(QK, { muted: newMuted });
       return { previous };
     },
-    onError: (_err, _newMuted, context) => {
-      // Roll back to the pre-toggle snapshot.
+    onError: (err, _newMuted, context) => {
+      // Roll back to the pre-toggle snapshot + видимый фидбек (волна C):
+      // тумблер молча прыгал обратно — пользователь думал, что сохранил.
       if (context?.previous) {
         queryClient.setQueryData(QK, context.previous);
       }
       haptic('error');
+      showMutationErrorToast(err);
     },
     onSuccess: (server) => {
       // Trust the server's canonical `muted` set.

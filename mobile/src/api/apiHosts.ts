@@ -83,7 +83,23 @@ export function nextUntriedApiHost(
 ): string | null {
   const tried = new Set(attempted);
   tried.add(current);
-  return orderApiHosts(hosts, current).slice(1).find((host) => !tried.has(host)) ?? null;
+  return (
+    orderApiHosts(hosts, current)
+      .slice(1)
+      .find((host) => !tried.has(host)) ?? null
+  );
+}
+
+/**
+ * Хост-шлюз с лимитом тела запроса. Яндекс API Gateway (третий рубеж кольца)
+ * режет request body ~3.5 МБ (docs/YANDEX_RESERVE_SETUP.md) — типичное фото
+ * iPhone через него детерминированно не проходит, поэтому multipart-аплоады
+ * пиннятся к прямым хостам (см. request-интерсептор в axios.ts).
+ */
+export function isBodyLimitedGatewayHost(base: string): boolean {
+  const m = base.match(/^https?:\/\/([^/]+)/i);
+  if (!m) return false;
+  return /\.apigw\.yandexcloud\.net$/i.test(m[1].split(':')[0]);
 }
 
 /**

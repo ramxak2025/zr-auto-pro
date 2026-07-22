@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Patch, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { TelephonyService } from './telephony.service';
 import { UpdateTelephonySettingsDto } from './dto/update-telephony-settings.dto';
@@ -15,12 +16,14 @@ import { UpdateTelephonySettingsDto } from './dto/update-telephony-settings.dto'
  * apply JwtAuthGuard — that is how Mango reaches us without a token, with the
  * authenticated surface left fully intact.
  *
- * Config (settings) is owner-class only (director/admin/superadmin). The Mango
- * api_key / api_salt are WRITE-ONLY — getSettings returns only masks + "configured"
- * flags, never the raw secrets.
+ * Config (settings) rides the class-level 'settings_manage' matrix cell
+ * (миграция 136) — the matrix is authoritative; owner-class (director/
+ * superadmin) bypasses via PermissionsGuard. The Mango api_key / api_salt are
+ * WRITE-ONLY — getSettings returns only masks + "configured" flags, never the
+ * raw secrets.
  */
-@UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('director', 'admin', 'superadmin')
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+@RequirePermission('settings_manage')
 @Controller('telephony')
 export class TelephonyController {
   constructor(private telephony: TelephonyService) {}

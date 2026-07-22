@@ -56,9 +56,33 @@ const paymentMethodColors: Record<string, string> = {
   installment: 'text-violet-600 bg-violet-50',
 };
 
-// Shared `paymentMethodLabels` predates «Рассрочка»; extend locally.
-const paymentMethodLabel = (method: string): string =>
-  method === 'installment' ? 'Рассрочка' : (paymentMethodLabels[method] ?? method);
+/**
+ * Денежные мутации чека (завершение отложенного, удаление) двигают деньги И
+ * склад — единый список зависимых query-ключей (staleTime 2 мин иначе прячет
+ * изменение до 2 минут). Зеркало MONEY_STOCK_QUERY_KEYS из CheckCreatePage.
+ */
+const MONEY_STOCK_QUERY_KEYS: readonly string[][] = [
+  ['checks'],
+  ['dashboard'],
+  ['dashboard-v2'],
+  ['dashboard-chart'],
+  ['financial-report'],
+  ['employee-ranking'],
+  ['cashflow'],
+  ['cash-shift'],
+  ['salary-all'],
+  ['salary-my'],
+  ['salary'],
+  ['employee-salary'],
+  ['products'],
+  ['products-all'],
+  ['low-stock'],
+  ['installments'],
+];
+
+/** SW-офлайн-очередь отвечает 202 {queued:true} — сервер запрос ещё НЕ видел. */
+const isQueuedOffline = (res: { status?: number; data?: { queued?: boolean } } | undefined): boolean =>
+  res?.status === 202 && res?.data?.queued === true;
 
 export default function CheckDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -102,10 +126,15 @@ export default function CheckDetailPage() {
 
   const finalizeMutation = useMutation({
     mutationFn: () => checksApi.update(id!, { isDeferred: false }),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
+      if (isQueuedOffline(res)) {
+        // SW-офлайн: сервер завершение ещё не видел — без «Чек завершён».
+        toast('Нет сети — завершение чека поставлено в очередь', { icon: '📡', duration: 5000 });
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ['check', id] });
-      queryClient.invalidateQueries({ queryKey: ['checks'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      // Закрытие отложенного чека списывает склад и двигает кассу.
+      MONEY_STOCK_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
       toast.success('Чек завершён');
     },
     onError: (err: any) => {
@@ -115,7 +144,11 @@ export default function CheckDetailPage() {
 
   const workStatusMutation = useMutation({
     mutationFn: (workStatus: string) => checksApi.setWorkStatus(id!, workStatus),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
+      if (isQueuedOffline(res)) {
+        toast('Нет сети — смена статуса поставлена в очередь', { icon: '📡', duration: 5000 });
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ['check', id] });
       queryClient.invalidateQueries({ queryKey: ['checks'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
@@ -134,7 +167,12 @@ export default function CheckDetailPage() {
   // Комментарий не двигает деньги — инвалидируем только деталь + журнал.
   const commentMutation = useMutation({
     mutationFn: (comment: string) => checksApi.updateComment(id!, comment),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
+      if (isQueuedOffline(res)) {
+        setCommentModalOpen(false);
+        toast('Нет сети — комментарий поставлен в очередь', { icon: '📡', duration: 5000 });
+        return;
+      }
       setCommentModalOpen(false);
       queryClient.invalidateQueries({ queryKey: ['check', id] });
       queryClient.invalidateQueries({ queryKey: ['checks'] });
@@ -154,9 +192,16 @@ export default function CheckDetailPage() {
 
   const deleteMutation = useMutation({
     mutationFn: () => checksApi.remove(id!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['checks'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+    onSuccess: (res: any) => {
+      if (isQueuedOffline(res)) {
+        // Уходим со страницы, чтобы не спровоцировать второй DELETE
+        // (повторный replay уже удалённого чека упал бы в failed-store).
+        toast('Нет сети — удаление поставлено в очередь и выполнится автоматически', { icon: '📡', duration: 5000 });
+        navigate('/checks');
+        return;
+      }
+      // Удаление возвращает товары на склад и вычитает чек из кассы/отчётов.
+      MONEY_STOCK_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
       toast.success('Заказ-наряд перемещён в корзину (хранится 30 дней)');
       navigate('/checks');
     },
@@ -726,7 +771,9 @@ export default function CheckDetailPage() {
             className={`inline-flex items-center gap-2.5 rounded-xl px-4 py-3 ${paymentMethodColors[check.paymentMethod] ?? 'text-gray-600 bg-gray-100'}`}
           >
             <PaymentIcon className="w-5 h-5" />
-            <span className="text-sm font-semibold">{paymentMethodLabel(check.paymentMethod)}</span>
+            <span className="text-sm font-semibold">
+              {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
+            </span>
           </div>
           {check.paymentMethod === 'cash_card' && (check.cashAmount > 0 || check.cardAmount > 0) && (
             <div className="mt-4 space-y-2.5">

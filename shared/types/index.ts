@@ -620,6 +620,12 @@ export interface User {
    * персональные {@link User.permissions} действуют поверх.
    */
   roleId?: string | null;
+  /**
+   * Имя назначенной роли (roles.name) — для бэйджа роли на клиенте. Отдаётся
+   * /auth/login и /auth/me (LEFT JOIN roles); null/absent у пользователей без
+   * role_id и в ответах, которые roles не джойнят.
+   */
+  roleName?: string | null;
   salaryPercent: number;
   productSalaryPercent?: number;
   permissions: UserPermissions;
@@ -805,6 +811,50 @@ export interface UserPermissions {
    * Owner-class roles are implicit. Same staging note as `cashflow_view` above.
    */
   cashflow_view_all?: boolean;
+  // ── Словарь v3 (миграция 136, волна «права как в Битрикс24») ────────────────
+  // Перевод хардкод-@Roles('director','admin','superadmin') на ключи матрицы.
+  // Все optional (легаси literal-карты остаются валидны); каждое выводится из
+  // своей ячейки RoleMatrix (см. backend/src/common/role-matrix.ts).
+  /** Кассовые смены: открытие/закрытие/инкассация (checks.cashShifts). */
+  cash_shifts_manage?: boolean;
+  /** CRUD колонок доски заказ-нарядов (checks.board). */
+  checks_board_manage?: boolean;
+  /** Удаление клиентов (clients.delete). */
+  clients_delete?: boolean;
+  /** Долги и рассрочка: начисление/погашение/напоминания (clients.debts). */
+  debts_manage?: boolean;
+  /** Мутации расписания и режимов работы (schedule.manage). */
+  schedule_manage?: boolean;
+  /** Выплаты/авансы/штрафы по зарплате (salary.payouts). У системного «Администратора» сид false — owner-only. */
+  salary_payouts_manage?: boolean;
+  /** Премии (salary.premiums). */
+  salary_premiums_manage?: boolean;
+  /** Акции «Мотивации» (salary.motivation). */
+  motivation_manage?: boolean;
+  /** Аналитика склада: маржа/себестоимость (warehouse.analytics). */
+  warehouse_analytics_view?: boolean;
+  /** Безвозвратное удаление имущества (equipment.permanentDelete). Сид Админ=false — owner-only. */
+  equipment_permanent_delete?: boolean;
+  /** Согласование заявок на изменение профиля (employees.approveProfile). Сид Админ=false — owner-only. */
+  employees_approve_profile?: boolean;
+  /** Настройки интеграций/кассы/справочников (settings.manage). */
+  settings_manage?: boolean;
+  /** Данные компании /my-company (settings.company). Сид Админ=false — owner-only. */
+  company_manage?: boolean;
+  /** Мутации базы знаний (knowledge.manage). */
+  knowledge_manage?: boolean;
+  // ── Уровень «смотрит vs редактирует» для маркетинга и базы знаний (миграция 137) ──
+  /**
+   * Маркетинг: УПРАВЛЕНИЕ (marketing.manage) — все мутации раздела «Маркетинг»
+   * (интеграции/площадки/настройки/car-ready/reminders(+send)/winback/send/
+   * broadcast/send/alerts read). marketing_access = только ПРОСМОТР. manage ⇒ view.
+   */
+  marketing_manage?: boolean;
+  /**
+   * База знаний: ПРОСМОТР (knowledge.view) — гейт GET-чтений базы знаний, которые
+   * раньше были открыты всем. knowledge_manage = УПРАВЛЕНИЕ (мутации). manage ⇒ view.
+   */
+  knowledge_view?: boolean;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -857,9 +907,27 @@ export type PermissionKey =
   | 'schedule_view'
   | 'bookings_access'
   | 'marketing_access'
+  | 'marketing_manage'
   | 'calls_view'
   | 'calls_listen'
-  | 'user_management';
+  | 'user_management'
+  // ── Словарь v3 (миграция 136) ──
+  | 'cash_shifts_manage'
+  | 'checks_board_manage'
+  | 'clients_delete'
+  | 'debts_manage'
+  | 'schedule_manage'
+  | 'salary_payouts_manage'
+  | 'salary_premiums_manage'
+  | 'motivation_manage'
+  | 'warehouse_analytics_view'
+  | 'equipment_permanent_delete'
+  | 'employees_approve_profile'
+  | 'settings_manage'
+  | 'company_manage'
+  // ── Уровень «смотрит vs редактирует» (миграция 137) ──
+  | 'knowledge_view'
+  | 'knowledge_manage';
 
 /**
  * Permission keys grouped for UI rendering (Касса / Услуги / Финансы / Склад /
@@ -879,6 +947,8 @@ export const PERMISSION_GROUPS = {
     'accept_payment',
     'sell_installment',
     'edit_closed_check',
+    'cash_shifts_manage',
+    'checks_board_manage',
   ],
   Услуги: ['services_view', 'services_manage'],
   Финансы: [
@@ -890,20 +960,29 @@ export const PERMISSION_GROUPS = {
     'can_add_expenses',
     'salary_view',
     'salary_view_all',
+    'salary_payouts_manage',
+    'salary_premiums_manage',
+    'motivation_manage',
   ],
-  Склад: ['warehouse_access', 'warehouse_manage', 'warehouse_delete'],
+  Склад: ['warehouse_access', 'warehouse_manage', 'warehouse_delete', 'warehouse_analytics_view'],
   Поставщики: ['suppliers_access', 'suppliers_manage'],
-  Имущество: ['equipment_view', 'equipment_manage'],
+  Имущество: ['equipment_view', 'equipment_manage', 'equipment_permanent_delete'],
   CRM: [
     'clients_view',
     'clients_edit',
+    'clients_delete',
+    'debts_manage',
     'schedule_view',
+    'schedule_manage',
     'bookings_access',
     'marketing_access',
+    'marketing_manage',
     'calls_view',
     'calls_listen',
   ],
-  Управление: ['user_management'],
+  Управление: ['user_management', 'employees_approve_profile'],
+  Настройки: ['settings_manage', 'company_manage'],
+  'База знаний': ['knowledge_view', 'knowledge_manage'],
 } as const satisfies Record<string, readonly PermissionKey[]>;
 
 /** Flat set of every canonical permission key (deduped, stable order). */
@@ -969,10 +1048,30 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     schedule_view: true,
     bookings_access: false,
     marketing_access: false,
+    marketing_manage: false, // маркетинг мастеру недоступен — управление тем более
     calls_view: false,
     calls_listen: false,
     // Управление — never for a master.
     user_management: false,
+    // ── Словарь v3 (миграция 136) — мастеру всё off: эти роуты и раньше были
+    // @Roles(d,a,sa) / owner-only, сиды 1:1 (зеркало MASTER_PERMISSION_DEFAULTS).
+    cash_shifts_manage: false,
+    checks_board_manage: false,
+    clients_delete: false,
+    debts_manage: false,
+    schedule_manage: false,
+    salary_payouts_manage: false,
+    salary_premiums_manage: false,
+    motivation_manage: false,
+    warehouse_analytics_view: false,
+    equipment_permanent_delete: false,
+    employees_approve_profile: false,
+    settings_manage: false,
+    company_manage: false,
+    // База знаний — мастер СМОТРИТ базу знаний (чтения были открыты всем), но не
+    // редактирует. Миграция 137: view=true (1:1 с сегодняшним поведением), manage=false.
+    knowledge_view: true,
+    knowledge_manage: false,
   },
 };
 
@@ -1013,8 +1112,19 @@ export type RoleScope = 'none' | 'own' | 'all';
  *   bookings.view→bookings_access, salary.view→salary_view(+salary_view_all при 'all'),
  *   reports.view→financial_reports, reports.profit→profit_view, reports.export→export_data,
  *   reports.cashflow→cashflow_view(+cashflow_view_all при 'all'), expenses.add→can_add_expenses,
- *   marketing.view→marketing_access, calls.view→calls_view, calls.listen→calls_listen,
+ *   marketing.view→marketing_access (manage⇒view), marketing.manage→marketing_manage,
+ *   calls.view→calls_view, calls.listen→calls_listen,
  *   employees.manage→user_management.
+ *   Словарь v3 (миграция 136): checks.cashShifts→cash_shifts_manage,
+ *   checks.board→checks_board_manage, clients.delete→clients_delete,
+ *   clients.debts→debts_manage, schedule.manage→schedule_manage,
+ *   salary.payouts→salary_payouts_manage, salary.premiums→salary_premiums_manage,
+ *   salary.motivation→motivation_manage, warehouse.analytics→warehouse_analytics_view,
+ *   equipment.permanentDelete→equipment_permanent_delete,
+ *   employees.approveProfile→employees_approve_profile, settings.manage→settings_manage,
+ *   settings.company→company_manage.
+ *   Уровень «смотрит vs редактирует» (миграция 137): marketing.manage→marketing_manage,
+ *   knowledge.view→knowledge_view (manage⇒view), knowledge.manage→knowledge_manage.
  *
  * «manage ⇒ view/delete»: manage — надмножество view (и для склада delete):
  * ячейка { manage: true } проходит и view-гейты (add-to-check, list) — сервер
@@ -1031,26 +1141,38 @@ export interface RoleMatrix {
     editPayment?: boolean;
     acceptPayment?: boolean;
     sellInstallment?: boolean;
+    /** Кассовые смены: открытие/закрытие/инкассация (→ cash_shifts_manage). */
+    cashShifts?: boolean;
+    /** CRUD колонок доски заказ-нарядов (→ checks_board_manage). */
+    board?: boolean;
   };
   /** Услуги: view (смотреть + в чек) / manage (CRUD + %/гарантия). manage ⇒ view. */
   services?: { view?: boolean; manage?: boolean };
   /**
    * Склад: view (товары БЕЗ себестоимости + в чек) / manage (себестоимость +
-   * add/edit/цены/сток/инвентаризация) / delete (удаление). manage ⇒ view И delete.
+   * add/edit/цены/сток/инвентаризация) / delete (удаление) / analytics
+   * (/warehouse-analytics/* — маржа/себестоимость). manage ⇒ view И delete.
    */
-  warehouse?: { view?: boolean; manage?: boolean; delete?: boolean };
+  warehouse?: { view?: boolean; manage?: boolean; delete?: boolean; analytics?: boolean };
   /** Поставщики: view / manage. manage ⇒ view. */
   suppliers?: { view?: boolean; manage?: boolean };
-  /** Имущество: view (справочник) / manage (выдача/CRUD). manage ⇒ view. */
-  equipment?: { view?: boolean; manage?: boolean };
-  clients?: { view?: boolean; edit?: boolean };
-  schedule?: { view?: boolean };
+  /**
+   * Имущество: view (справочник) / manage (выдача/CRUD) / permanentDelete
+   * (безвозвратное удаление — owner-only, сид Админ=false). manage ⇒ view.
+   */
+  equipment?: { view?: boolean; manage?: boolean; permanentDelete?: boolean };
+  /** Клиенты: view / edit / delete / debts (долги + рассрочка). */
+  clients?: { view?: boolean; edit?: boolean; delete?: boolean; debts?: boolean };
+  /** Расписание: view / manage (мутации расписания и режимов работы). */
+  schedule?: { view?: boolean; manage?: boolean };
   bookings?: { view?: boolean };
   /**
    * Зарплата: охват 'own' → только своя ЗП (salary_view), 'all' → вся команда
    * (salary_view + salary_view_all). Отсутствует → 'none' (fail-closed).
+   * payouts — выплаты/авансы/штрафы (owner-only, сид Админ=false);
+   * premiums — премии; motivation — акции «Мотивации».
    */
-  salary?: { view?: RoleScope };
+  salary?: { view?: RoleScope; payouts?: boolean; premiums?: boolean; motivation?: boolean };
   reports?: {
     view?: boolean;
     profit?: boolean;
@@ -1063,9 +1185,27 @@ export interface RoleMatrix {
     cashflow?: RoleScope;
   };
   expenses?: { add?: boolean };
-  marketing?: { view?: boolean };
+  /**
+   * Маркетинг: view — смотреть раздел (→ marketing_access); manage — все мутации
+   * (интеграции/площадки/настройки/рассылки/alerts) (→ marketing_manage). manage ⇒ view.
+   */
+  marketing?: { view?: boolean; manage?: boolean };
   calls?: { view?: boolean; listen?: boolean };
-  employees?: { manage?: boolean };
+  /**
+   * Управление сотрудниками: manage (→ user_management) / approveProfile
+   * (согласование заявок на смену профиля — owner-only, сид Админ=false).
+   */
+  employees?: { manage?: boolean; approveProfile?: boolean };
+  /**
+   * Настройки (новая секция v3): manage — интеграции/касса/справочники
+   * (→ settings_manage); company — /my-company (→ company_manage, owner-only).
+   */
+  settings?: { manage?: boolean; company?: boolean };
+  /**
+   * База знаний (секция v3): view — просмотр базы (→ knowledge_view, миграция 137);
+   * manage — все мутации + менеджерские чтения (→ knowledge_manage). manage ⇒ view.
+   */
+  knowledge?: { view?: boolean; manage?: boolean };
 }
 
 /** Стабильный ключ системной роли (миграция 121). Null у кастомных ролей. */

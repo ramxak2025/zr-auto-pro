@@ -15,14 +15,21 @@ import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthToken } from '../common/auth-cache';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
+import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
+import { userHasPermission } from '../common/guards/permissions.guard';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 
-// Shared SQL fragment for fetching user with tenant info
+// Shared SQL fragment for fetching user with tenant info.
+// ROLE-ONLY (волна «права как в Битрикс24», 2026-07): permissions клиенту
+// строятся из МАТРИЦЫ назначенной роли (LEFT JOIN roles — тот же источник, что
+// enforcement в jwt.strategy), а не из легаси-колонки users.permissions
+// (заморожена cutover-миграцией 126: у новых сотрудников '{}'). role_name —
+// для бэйджа роли на клиенте.
 const USER_WITH_TENANT_COLUMNS = `
-  u.id, u.phone, u.full_name, u.avatar, u.role,
+  u.id, u.phone, u.full_name, u.avatar, u.role, u.role_id,
+  r.name as role_name, r.matrix as role_matrix,
   COALESCE(u.salary_percent, 0) as salary_percent,
-  COALESCE(u.permissions, '{}') as permissions,
   u.is_active, u.dismissed_at, u.purged_at, u.tenant_id, u.created_at,
   CASE WHEN t.id IS NOT NULL THEN
     json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
@@ -34,6 +41,34 @@ const USER_WITH_TENANT_COLUMNS = `
       'createdAt',t.created_at,'updatedAt',t.updated_at)::text
   ELSE NULL END as tenant_json`;
 
+/** LEFT JOIN матрицы роли — парный к USER_WITH_TENANT_COLUMNS (алиас r). */
+const ROLE_JOIN = `LEFT JOIN roles r ON r.id = u.role_id`;
+
+/**
+ * ЭФФЕКТИВНЫЕ права клиенту — ровно та же логика, что серверный enforcement
+ * (GET /users/:id/effective-permissions делает то же самое): flatten(матрицы
+ * роли) прогоняется через userHasPermission по каждому каноническому ключу.
+ * Директор/суперадмин получают карту «всё true» (owner-class байпас в
+ * userHasPermission — клиентские гейты owner-bypass не знают и читают карту);
+ * master/admin без матрицы (role_id NULL) падают на свои дефолты в guard'е.
+ */
+function effectivePermissionsFor(role: string | undefined, rawMatrix: unknown): Record<string, boolean> {
+  let matrix: unknown = rawMatrix ?? null;
+  if (typeof matrix === 'string') {
+    try {
+      matrix = JSON.parse(matrix);
+    } catch {
+      matrix = null; // fail-closed: кривой jsonb → дефолты строковой роли
+    }
+  }
+  const probe = { role, permissions: mergeEffectivePermissions(matrix) };
+  const effective: Record<string, boolean> = {};
+  for (const key of CANONICAL_PERMISSION_KEYS) {
+    effective[key] = userHasPermission(probe, key);
+  }
+  return effective;
+}
+
 /** Map a raw DB row to a camelCase user object with parsed tenant */
 function mapUserRow(row: any) {
   const user: any = {
@@ -42,8 +77,11 @@ function mapUserRow(row: any) {
     fullName: row.full_name,
     avatar: row.avatar,
     role: row.role,
+    // 114 — назначенная роль: id + имя для бэйджа на клиенте.
+    roleId: row.role_id ?? null,
+    roleName: row.role_name ?? null,
     salaryPercent: parseFloat(row.salary_percent) || 0,
-    permissions: typeof row.permissions === 'string' ? JSON.parse(row.permissions) : row.permissions,
+    permissions: effectivePermissionsFor(row.role, row.role_matrix),
     isActive: row.is_active,
     tenantId: row.tenant_id,
     createdAt: row.created_at,
@@ -59,26 +97,6 @@ function mapUserRow(row: any) {
 
   return user;
 }
-
-// All permissions enabled by default for new directors
-const ALL_PERMISSIONS = JSON.stringify({
-  checks_view: true,
-  checks_create: true,
-  checks_edit: true,
-  checks_delete: true,
-  checks_change_datetime: true,
-  profit_view: true,
-  clients_view: true,
-  clients_edit: true,
-  warehouse_access: true,
-  suppliers_access: true,
-  financial_reports: true,
-  export_data: true,
-  user_management: true,
-  schedule_view: true,
-  salary_view: true,
-  marketing_access: true,
-});
 
 @Injectable()
 export class AuthService {
@@ -153,6 +171,7 @@ export class AuthService {
       `SELECT u.password, ${USER_WITH_TENANT_COLUMNS}
        FROM users u
        LEFT JOIN tenants t ON t.id = u.tenant_id
+       ${ROLE_JOIN}
        WHERE u.phone = $1 OR u.phone = $2
        LIMIT 1`,
       [phone, dto.phone],
@@ -224,11 +243,22 @@ export class AuthService {
       );
       const tenantID = tenantRows[0].id;
 
+      // ROLE-ONLY: новому директору назначается СИСТЕМНАЯ роль «Директор» (по
+      // system_key, как UsersService.create) — права живут в матрице роли;
+      // легаси-колонка users.permissions больше не сеется ('{}'). Тенант только
+      // что создан — override'ов у него нет, глобальный шаблон единственный.
+      // Если шаблона вдруг нет (не должно случаться — сеется миграцией 114/121),
+      // не блокируем регистрацию: role_id NULL, директор и так owner-class.
+      const { rows: dirRoleRows } = await client.query(
+        `SELECT id FROM roles WHERE system_key = 'director' AND tenant_id IS NULL LIMIT 1`,
+      );
+      const directorRoleId = dirRoleRows.length > 0 ? dirRoleRows[0].id : null;
+
       const { rows: userRows } = await client.query(
-        `INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions)
-         VALUES ($1, $2, $3, 'director', true, $4, $5)
-         RETURNING id, phone, full_name, role, salary_percent, permissions, is_active, tenant_id, created_at`,
-        [phone, hash, dto.fullName, tenantID, ALL_PERMISSIONS],
+        `INSERT INTO users (phone, password, full_name, role, is_active, tenant_id, permissions, role_id)
+         VALUES ($1, $2, $3, 'director', true, $4, '{}'::jsonb, $5)
+         RETURNING id, phone, full_name, role, role_id, salary_percent, is_active, tenant_id, created_at`,
+        [phone, hash, dto.fullName, tenantID, directorRoleId],
       );
 
       // Seed the three default warehouses for this self-registered tenant —
@@ -265,6 +295,7 @@ export class AuthService {
       `SELECT ${USER_WITH_TENANT_COLUMNS}
        FROM users u
        LEFT JOIN tenants t ON t.id = u.tenant_id
+       ${ROLE_JOIN}
        WHERE u.id = $1`,
       [userID],
     );

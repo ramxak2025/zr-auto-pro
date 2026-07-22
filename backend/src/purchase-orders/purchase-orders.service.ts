@@ -14,6 +14,13 @@ import { CreatePurchaseOrderDto, PurchaseOrderItemInputDto } from './dto/create-
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
 import { ReceivePurchaseOrderDto } from './dto/receive-purchase-order.dto';
 
+// Мусор от битых клиентов (' ', 'undefined', 'null') в query.supplierId раньше
+// уходил в uuid-колонку и падал в pg 22P02 «invalid input syntax for type
+// uuid» → 500 (тот же класс, что захарден в products/stock-movements).
+// Не-UUID трактуем как «фильтр не задан».
+const isUuid = (value: unknown): value is string =>
+  typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+
 @Injectable()
 export class PurchaseOrdersService {
   private readonly logger = new Logger('PurchaseOrdersService');
@@ -180,9 +187,9 @@ export class PurchaseOrdersService {
       where += ` AND po.status = $${idx++}`;
       params.push(query.status);
     }
-    if (query.supplierId) {
+    if (isUuid(query.supplierId)) {
       where += ` AND po.supplier_id = $${idx++}`;
-      params.push(query.supplierId);
+      params.push(query.supplierId.trim());
     }
 
     const countResult = await this.pool.query(

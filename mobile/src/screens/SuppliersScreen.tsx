@@ -31,7 +31,7 @@ import PurchaseOrdersScreen from './PurchaseOrdersScreen';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { UserRole, type Supplier } from '../../../shared/types';
+import type { Supplier } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 
 // Top-level segment: the «Поставщики» section now hosts BOTH the supplier
@@ -261,7 +261,7 @@ const SystemSupplierCard = React.memo(function SystemSupplierCard({
 export default function SuppliersScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
   const dark = palette.mode === 'dark';
   const tabBarHeight = useTabBarHeight();
@@ -276,13 +276,11 @@ export default function SuppliersScreen() {
 
   // Single manage gate for the WHOLE control surface (create / edit /
   // delete / приёмка-поставка / возврат брака / заказы). `suppliers_access`
-  // is VIEW-only — it must never expose a mutating control. Owner-class
-  // roles (superadmin / director / admin) bypass by string role: the
-  // backend PermissionsGuard bypasses them too, so their flattened
-  // permission map may not even contain `suppliers_manage`. The server
+  // is VIEW-only — it must never expose a mutating control. «Права как в
+  // Битрикс24» (2026-07): admin живёт по матрице из /auth/me;
+  // superadmin/director байпасятся внутри hasPermission. The server
   // re-checks `suppliers_manage` on every mutation regardless.
-  const canManageSuppliers =
-    isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('suppliers_manage');
+  const canManageSuppliers = hasPermission('suppliers_manage');
 
   // Confirm dialog state — driven by row swipe.
   const [pendingDelete, setPendingDelete] = useState<Supplier | null>(null);

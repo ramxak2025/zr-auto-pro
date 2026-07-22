@@ -1,8 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { Toaster } from 'react-hot-toast';
+import { QueryClient, QueryClientProvider, MutationCache } from '@tanstack/react-query';
+import toast, { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './contexts/AuthContext';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -50,7 +50,41 @@ setInterval(() => {
   }
 }, 2000);
 
+// ─── Глобальная видимость ошибок мутаций ────────────────────────────────────
+// Часть мутаций в проекте не имеет собственного onError — раньше их ошибка
+// умирала молча: пользователь думал, что запись сохранена, а связи не было.
+// mutationCache.onError вызывается для КАЖДОЙ мутации (в отличие от
+// defaultOptions.mutations.onError, который перекрывается локальным onError),
+// поэтому анти-дубль: тост показываем ТОЛЬКО когда у мутации нет своего
+// onError (локальные обработчики сами показывают toast/alert) и нет
+// meta.silentError (осознанный opt-out для best-effort мутаций).
+function describeMutationError(error: unknown): string {
+  const err = error as {
+    response?: { data?: { message?: string | string[] } };
+    message?: string;
+  };
+  const serverMsg = err?.response?.data?.message;
+  const msg = Array.isArray(serverMsg) ? serverMsg[0] : serverMsg;
+  if (typeof msg === 'string' && msg.trim()) return msg;
+  if (!err?.response) return 'нет соединения с сервером. Проверьте интернет и повторите';
+  return 'ошибка сервера. Повторите попытку';
+}
+
+const mutationCache = new MutationCache({
+  onError: (error, _variables, _context, mutation) => {
+    if (mutation.options.onError) return; // локальный обработчик сам покажет ошибку
+    if (mutation.meta?.silentError) return;
+    // SW-офлайн-очередь отвечает 202 {queued:true} — это «поставлено в
+    // очередь», НЕ ошибка. Axios резолвит 2xx как успех, так что сюда 202 не
+    // попадает; guard — защита от будущих обёрток, бросающих не-2xx-подобное.
+    const response = (error as { response?: { status?: number; data?: { queued?: boolean } } })?.response;
+    if (response?.status === 202 && response?.data?.queued === true) return;
+    toast.error(`Не сохранено: ${describeMutationError(error)}`, { duration: 5000 });
+  },
+});
+
 const queryClient = new QueryClient({
+  mutationCache,
   defaultOptions: {
     queries: {
       retry: 1,

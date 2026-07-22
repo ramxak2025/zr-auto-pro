@@ -22,6 +22,7 @@ import { adminApi } from '../../api/services';
 import { RegistrationRequest } from '../../types';
 import Modal from '../../components/Modal';
 import QueryState from '../../components/QueryState';
+import { AdminPageHeader, Segmented } from '../../components/admin/adminUi';
 import { formatPhone } from '../../../../shared/validation/phone';
 
 type StatusFilter = 'pending' | 'approved' | 'rejected' | 'all';
@@ -125,28 +126,15 @@ export default function AdminRegistrationRequestsPage() {
 
   return (
     <div>
-      {/* Header */}
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Заявки на регистрацию</h1>
-          <p className="mt-1 text-sm text-gray-500">Самостоятельные заявки автосервисов со страницы входа</p>
-        </div>
-      </div>
+      <AdminPageHeader title="Заявки на регистрацию" subtitle="Самостоятельные заявки автосервисов со страницы входа" />
 
       {/* Status filter */}
-      <div className="mb-5 inline-flex flex-wrap gap-1 rounded-xl bg-gray-100 p-1">
-        {FILTERS.map((f) => (
-          <button
-            key={f.key}
-            type="button"
-            onClick={() => setFilter(f.key)}
-            className={`rounded-lg px-3.5 py-1.5 text-sm font-medium transition-all ${
-              filter === f.key ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-            }`}
-          >
-            {f.label}
-          </button>
-        ))}
+      <div className="mb-5">
+        <Segmented<StatusFilter>
+          value={filter}
+          onChange={setFilter}
+          options={FILTERS.map((f) => ({ value: f.key, label: f.label }))}
+        />
       </div>
 
       <QueryState

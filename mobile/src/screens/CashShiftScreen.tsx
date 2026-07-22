@@ -131,11 +131,15 @@ const Tile = React.memo(function Tile({ label, value, icon, tint, tintBg, palett
 export default function CashShiftScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { user } = useAuth();
+  const { hasPermission } = useAuth();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
 
-  const isOwner = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  // Открытие/закрытие/инкассация кассовой смены — ключ cash_shifts_manage
+  // (сервер: POST /cash-shifts open/close/collect → тот же ключ; «права как в
+  // Битрикс24», 2026-07: admin живёт по матрице из /auth/me). Просмотр
+  // Z-отчёта остаётся открытым любому сотруднику.
+  const isOwner = hasPermission('cash_shifts_manage');
 
   // ── State ──────────────────────────────────────────────────────────────
   const [refreshing, setRefreshing] = useState(false);

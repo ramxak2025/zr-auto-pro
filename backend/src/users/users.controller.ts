@@ -1,21 +1,24 @@
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
+import { RolesGuard } from '../common/guards/roles.guard';
+import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { UpdateSectionVisibilityDto } from './dto/section-visibility.dto';
 import { UpdateItemVisibilityDto } from './dto/item-visibility.dto';
 
-// Roles allowed to manage other users (create / update / delete / reorder /
-// edit per-product commissions). Masters and admin-light users CANNOT touch
-// other accounts because the update path is also the role-escalation path
-// (UpdateUserDto.role is honoured by the service). Self-avatar updates go
-// through /auth/avatar — never this controller.
-const MANAGER_ROLES = ['director', 'admin', 'superadmin'] as const;
-
-@UseGuards(JwtAuthGuard, RolesGuard)
+// Управление сотрудниками (create / update / delete / reorder / visibility /
+// per-product commissions) — под матричным ключом 'user_management' (волна
+// «права как в Битрикс24», 2026-07): owner-class (director/superadmin) обходит,
+// admin решается матрицей его роли (системный «Администратор» — true), мастер —
+// false. Update-путь — это одновременно путь эскалации роли (UpdateUserDto.role
+// honoured by the service), защита от самоповышения — assertCanAssignRole в
+// UsersService. Self-avatar updates go through /auth/avatar — never this
+// controller. Открытые GET (/, /masters, /:id) — пикеры мастеров в Кассе и
+// расписании, нужны всем аутентифицированным.
+@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
 @Controller('users')
 export class UsersController {
   constructor(private usersService: UsersService) {}
@@ -33,13 +36,13 @@ export class UsersController {
   // ─── «Уволенные» (dismissed recycle bin) ────────────────────────────
   // Declared BEFORE the `:id` route so "dismissed" isn't captured as an id.
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Get('dismissed')
   getDismissed(@CurrentUser() user: JwtPayload) {
     return this.usersService.listDismissed(user.tenantID);
   }
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Post(':id/restore')
   async restore(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
@@ -47,14 +50,14 @@ export class UsersController {
   }
 
   // "Delete completely" — keeps the row (FK/history) but hides it forever.
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Post(':id/purge')
   async purge(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
     return this.usersService.purge(id, tenantID, user.userID);
   }
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Post('order')
   updateOrder(@CurrentUser() user: JwtPayload, @Body() dto: { orderedIds: string[] }) {
     return this.usersService.updateOrder(user.tenantID, dto.orderedIds);
@@ -66,7 +69,7 @@ export class UsersController {
     return this.usersService.getById(id, tenantID);
   }
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateUserDto) {
     // Superadmin adds an employee INTO a specific tenant from the admin cabinet
@@ -75,17 +78,20 @@ export class UsersController {
     // tenants. Without this, a superadmin (whose own tenant is the nil-UUID
     // sentinel) hit a tenant_id FK violation → «автосервис не найден».
     const targetTenant = user.role === 'superadmin' && dto.tenantId ? dto.tenantId : user.tenantID;
-    return this.usersService.create(targetTenant, user.role, dto);
+    // user.permissions — эффективная (flatten) карта актора для потолка назначения
+    // роли (E-6): нельзя назначить роль с правами выше своих (assertRoleAssignable).
+    return this.usersService.create(targetTenant, user.role, dto, user.permissions);
   }
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Patch(':id')
   async update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateUserDto) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
-    return this.usersService.update(id, tenantID, user.role, user.userID, dto);
+    // user.permissions — эффективная карта актора для потолка назначения роли (E-6).
+    return this.usersService.update(id, tenantID, user.role, user.userID, dto, user.permissions);
   }
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Delete(':id')
   async remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
@@ -93,17 +99,17 @@ export class UsersController {
   }
 
   // ─── Section Visibility (071) ───────────────────────────────────────
-  // Only owner-class roles may read or change which top-level sections an
-  // employee sees. Both routes are tenant-scoped via the JWT in the service.
+  // Only 'user_management' holders may read or change which top-level sections
+  // an employee sees. Both routes are tenant-scoped via the JWT in the service.
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Get(':id/section-visibility')
   async getSectionVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
     return this.usersService.getSectionVisibility(id, tenantID);
   }
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Patch(':id/section-visibility')
   async updateSectionVisibility(
     @Param('id') id: string,
@@ -116,17 +122,17 @@ export class UsersController {
 
   // ─── Item Visibility (073) ──────────────────────────────────────────
   // Granular sub-section visibility, ADDITIVE to section-visibility above.
-  // Same owner-class role gate; tenant-scoped via the JWT in the service (a
+  // Same 'user_management' gate; tenant-scoped via the JWT in the service (a
   // foreign userId 404s rather than leaking another tenant's defaults).
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Get(':id/item-visibility')
   async getItemVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
     return this.usersService.getItemVisibility(id, tenantID);
   }
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Patch(':id/item-visibility')
   async updateItemVisibility(
     @Param('id') id: string,
@@ -145,7 +151,7 @@ export class UsersController {
 
   // ЭФФЕКТИВНЫЕ права (плоско): flatten(матрицы назначенной роли), прогнанные
   // через ту же userHasPermission, что и серверный enforcement.
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Get(':id/effective-permissions')
   async getEffectivePermissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
@@ -154,13 +160,13 @@ export class UsersController {
 
   // ─── Product Commissions ────────────────────────────────────────────
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Get(':id/product-commissions')
   getProductCommissions(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.usersService.getProductCommissions(id, user.tenantID);
   }
 
-  @Roles(...MANAGER_ROLES)
+  @RequirePermission('user_management')
   @Post(':id/product-commissions')
   setProductCommissions(
     @Param('id') id: string,

@@ -12,17 +12,59 @@ import {
   UserPlus,
   Megaphone,
   ScrollText,
+  Inbox,
 } from 'lucide-react';
 
-import { tenantsApi } from '../../api/services';
+import { tenantsApi, adminApi } from '../../api/services';
 import { PlatformStats } from '../../types';
 import QueryState from '../../components/QueryState';
 import MrrTrendChart from '../../components/MrrTrendChart';
 import SubscriptionRevenuePanel from '../../components/SubscriptionRevenuePanel';
+import { AdminPageHeader, StatTile } from '../../components/admin/adminUi';
 
 function formatRub(value: number | undefined): string {
   return `${(value ?? 0).toLocaleString('ru-RU')} ₽`;
 }
+
+// «1 заявка ждёт / 2 заявки ждут / 5 заявок ждут»
+function pendingPhrase(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'заявка на регистрацию ждёт решения';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'заявки на регистрацию ждут решения';
+  return 'заявок на регистрацию ждут решения';
+}
+
+const QUICK_LINKS = [
+  {
+    to: '/admin/tenants',
+    icon: Building2,
+    iconClass: 'bg-primary-50 text-primary-600',
+    title: 'Управление клиентами',
+    subtitle: 'Просмотр, создание и редактирование автосервисов',
+  },
+  {
+    to: '/admin/plans',
+    icon: CreditCard,
+    iconClass: 'bg-green-50 text-green-600',
+    title: 'Управление тарифами',
+    subtitle: 'Настройка тарифных планов и цен',
+  },
+  {
+    to: '/admin/broadcast',
+    icon: Megaphone,
+    iconClass: 'bg-violet-50 text-violet-600',
+    title: 'Рассылка владельцам',
+    subtitle: 'Объявление со ссылкой и кнопками — директорам',
+  },
+  {
+    to: '/admin/audit-log',
+    icon: ScrollText,
+    iconClass: 'bg-amber-50 text-amber-600',
+    title: 'Журнал действий',
+    subtitle: 'История операций администраторов платформы',
+  },
+];
 
 export default function AdminDashboardPage() {
   const {
@@ -37,27 +79,40 @@ export default function AdminDashboardPage() {
     select: (res) => res.data as PlatformStats,
   });
 
+  // Тот же ключ, что и бейдж в AdminLayout — кэш общий, лишнего запроса нет.
+  const { data: pendingCount } = useQuery({
+    queryKey: ['registration-requests', 'pending'],
+    queryFn: () => adminApi.listRegistrationRequests('pending'),
+    select: (res) => res.data.length,
+    staleTime: 60_000,
+  });
+
   return (
     <div>
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Панель управления</h1>
-          <p className="mt-1 text-sm text-gray-500">Платная выручка по подпискам и состояние платформы</p>
-        </div>
-      </div>
+      <AdminPageHeader title="Панель управления" subtitle="Платная выручка по подпискам и состояние платформы" />
 
-      {/* Paid subscription revenue — front and center */}
-      <SubscriptionRevenuePanel />
+      {/* Ожидающие заявки — самое срочное, поэтому первым */}
+      {!!pendingCount && (
+        <Link
+          to="/admin/registration"
+          className="mb-5 flex items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 transition-colors hover:bg-amber-100"
+        >
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-amber-100">
+              <Inbox className="h-[18px] w-[18px] text-amber-600" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-amber-800">
+                {pendingCount} {pendingPhrase(pendingCount)}
+              </p>
+              <p className="text-xs text-amber-700">Открыть раздел «Заявки»</p>
+            </div>
+          </div>
+          <ArrowRight className="h-5 w-5 flex-shrink-0 text-amber-500" />
+        </Link>
+      )}
 
-      {/* Platform overview */}
-      <div className="mb-3 flex items-center gap-2.5">
-        <div className="rounded-lg bg-blue-50 p-2">
-          <Building2 className="h-4 w-4 text-blue-600" />
-        </div>
-        <h2 className="text-lg font-semibold text-gray-900">Обзор платформы</h2>
-      </div>
-
-      {/* Stats */}
+      {/* KPI платформы — плотная сетка */}
       <QueryState
         isLoading={isLoading}
         isError={isError}
@@ -66,165 +121,56 @@ export default function AdminDashboardPage() {
         errorTitle="Не удалось загрузить статистику"
         minHeight="min-h-[200px]"
       >
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-          <div className="stat-card">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-blue-50 rounded-xl">
-                <Building2 className="w-5 h-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="stat-label">Всего клиентов</p>
-                <p className="stat-value tabular-nums">{stats?.totalTenants ?? 0}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-green-50 rounded-xl">
-                <Activity className="w-5 h-5 text-green-600" />
-              </div>
-              <div>
-                <p className="stat-label">Активных</p>
-                <p className="stat-value tabular-nums">{stats?.activeTenants ?? 0}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-red-50 rounded-xl">
-                <CalendarClock className="w-5 h-5 text-red-600" />
-              </div>
-              <div>
-                <p className="stat-label">Истёкших</p>
-                <p className="stat-value tabular-nums">{stats?.expiredTenants ?? 0}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-emerald-50 rounded-xl">
-                <BadgeRussianRuble className="w-5 h-5 text-emerald-600" />
-              </div>
-              <div>
-                <p className="stat-label">MRR (мес. выручка)</p>
-                <p className="stat-value tabular-nums">{formatRub(stats?.mrr)}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-teal-50 rounded-xl">
-                <TrendingUp className="w-5 h-5 text-teal-600" />
-              </div>
-              <div>
-                <p className="stat-label">ARPU (на клиента)</p>
-                <p className="stat-value tabular-nums">{formatRub(stats?.arpu)}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-indigo-50 rounded-xl">
-                <UserPlus className="w-5 h-5 text-indigo-600" />
-              </div>
-              <div>
-                <p className="stat-label">Новых в этом месяце</p>
-                <p className="stat-value tabular-nums">{stats?.newTenantsThisMonth ?? 0}</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="stat-card">
-            <div className="flex items-center gap-3">
-              <div className="p-2.5 bg-purple-50 rounded-xl">
-                <Users className="w-5 h-5 text-purple-600" />
-              </div>
-              <div>
-                <p className="stat-label">Всего пользователей</p>
-                <p className="stat-value tabular-nums">{stats?.totalUsers ?? 0}</p>
-              </div>
-            </div>
-          </div>
+        <div className="mb-8 grid grid-cols-2 gap-3 lg:grid-cols-4">
+          <StatTile icon={Building2} tone="blue" label="Всего клиентов" value={stats?.totalTenants ?? 0} />
+          <StatTile icon={Activity} tone="green" label="Активных" value={stats?.activeTenants ?? 0} />
+          <StatTile icon={CalendarClock} tone="red" label="Истёкших" value={stats?.expiredTenants ?? 0} />
+          <StatTile icon={Users} tone="purple" label="Пользователей" value={stats?.totalUsers ?? 0} />
+          <StatTile
+            icon={BadgeRussianRuble}
+            tone="emerald"
+            label="MRR"
+            value={formatRub(stats?.mrr)}
+            sub="месячная выручка"
+          />
+          <StatTile icon={TrendingUp} tone="teal" label="ARPU" value={formatRub(stats?.arpu)} sub="на клиента" />
+          <StatTile icon={UserPlus} tone="indigo" label="Новых за месяц" value={stats?.newTenantsThisMonth ?? 0} />
+          <StatTile icon={Inbox} tone="amber" label="Заявки ждут" value={pendingCount ?? 0} sub="на регистрацию" />
         </div>
       </QueryState>
 
-      {/* MRR trend — owner cabinet widget */}
+      {/* Платная выручка по подпискам */}
+      <SubscriptionRevenuePanel />
+
+      {/* Динамика MRR */}
       <div className="mb-8">
         <MrrTrendChart />
       </div>
 
-      {/* Quick Links */}
-      <div className="space-y-3">
-        <h2 className="text-lg font-semibold text-gray-900">Быстрые действия</h2>
-
-        <Link
-          to="/admin/tenants"
-          className="card card-body flex items-center justify-between hover:shadow-md transition-shadow"
-        >
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-primary-50 rounded-lg">
-              <Building2 className="w-5 h-5 text-primary-600" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">Управление клиентами</p>
-              <p className="text-sm text-gray-500">Просмотр, создание и редактирование автосервисов</p>
-            </div>
-          </div>
-          <ArrowRight className="w-5 h-5 text-gray-400" />
-        </Link>
-
-        <Link
-          to="/admin/plans"
-          className="card card-body flex items-center justify-between hover:shadow-md transition-shadow"
-        >
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-green-50 rounded-lg">
-              <CreditCard className="w-5 h-5 text-green-600" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">Управление тарифами</p>
-              <p className="text-sm text-gray-500">Настройка тарифных планов и цен</p>
-            </div>
-          </div>
-          <ArrowRight className="w-5 h-5 text-gray-400" />
-        </Link>
-
-        <Link
-          to="/admin/broadcast"
-          className="card card-body flex items-center justify-between hover:shadow-md transition-shadow"
-        >
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-violet-50 rounded-lg">
-              <Megaphone className="w-5 h-5 text-violet-600" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">Рассылка владельцам</p>
-              <p className="text-sm text-gray-500">Объявление со ссылкой и кнопками — всем директорам</p>
-            </div>
-          </div>
-          <ArrowRight className="w-5 h-5 text-gray-400" />
-        </Link>
-
-        <Link
-          to="/admin/audit-log"
-          className="card card-body flex items-center justify-between hover:shadow-md transition-shadow"
-        >
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-50 rounded-lg">
-              <ScrollText className="w-5 h-5 text-amber-600" />
-            </div>
-            <div>
-              <p className="font-medium text-gray-900">Журнал действий</p>
-              <p className="text-sm text-gray-500">История операций администраторов платформы</p>
-            </div>
-          </div>
-          <ArrowRight className="w-5 h-5 text-gray-400" />
-        </Link>
+      {/* Быстрые действия */}
+      <h2 className="mb-3 text-lg font-semibold text-gray-900">Быстрые действия</h2>
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {QUICK_LINKS.map((link) => {
+          const Icon = link.icon;
+          return (
+            <Link
+              key={link.to}
+              to={link.to}
+              className="card flex items-center justify-between gap-3 p-4 transition-shadow hover:shadow-md"
+            >
+              <div className="flex min-w-0 items-center gap-3">
+                <div className={`flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg ${link.iconClass}`}>
+                  <Icon className="h-[18px] w-[18px]" />
+                </div>
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-medium text-gray-900">{link.title}</p>
+                  <p className="truncate text-xs text-gray-500">{link.subtitle}</p>
+                </div>
+              </div>
+              <ArrowRight className="h-4 w-4 flex-shrink-0 text-gray-400" />
+            </Link>
+          );
+        })}
       </div>
     </div>
   );

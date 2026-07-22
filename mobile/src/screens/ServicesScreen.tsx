@@ -28,7 +28,6 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { UserRole } from '../../../shared/types';
 import type { Service, PaginatedResponse } from '../../../shared/types';
 
 function formatMoney(v: number) {
@@ -90,14 +89,14 @@ export default function ServicesScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
   const palette = useColors();
-  const { hasPermission, isRole } = useAuth();
+  const { hasPermission } = useAuth();
   // ROLE-ONLY (консолидация 2026-07): управление каталогом (создать/редактировать/
-  // удалить, менять %+гарантию) — только с services_manage. Owner-class
-  // (superadmin/director/admin) минует, как на сервере. Без права — просмотр
-  // (screen открыт по services_view) + добавление в чек (в Кассе). Бэкенд шлёт
-  // 403 на мутации, поэтому кнопки прячем — никаких мёртвых кнопок.
-  const canManageServices =
-    isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('services_manage');
+  // удалить, менять %+гарантию) — только с services_manage. «Права как в
+  // Битрикс24» (2026-07): admin живёт по матрице из /auth/me; superadmin/
+  // director байпасятся внутри hasPermission. Без права — просмотр (screen
+  // открыт по services_view) + добавление в чек (в Кассе). Бэкенд шлёт 403 на
+  // мутации, поэтому кнопки прячем — никаких мёртвых кнопок.
+  const canManageServices = hasPermission('services_manage');
   const tabBarHeight = useTabBarHeight();
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);

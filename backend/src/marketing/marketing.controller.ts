@@ -20,132 +20,154 @@ export class MarketingController {
     private reminderService: ReminderService,
   ) {}
 
-  // ─── Dashboard (protected) ────────────────────────────────────────
-  @UseGuards(JwtAuthGuard)
+  // Два уровня доступа к разделу «Маркетинг» (запрос владельца, миграция 137):
+  //   • ПРОСМОТР  — 'marketing_access': все GET-чтения (dashboard, reviews,
+  //     alerts, integrations, platform-links, settings, car-ready, reminders,
+  //     winback, auto-mailings). Мастер видит раздел, только если владелец дал
+  //     marketing_access;
+  //   • УПРАВЛЕНИЕ — 'marketing_manage': ВСЕ мутации (POST/PATCH/DELETE
+  //     integrations, platform-links, settings, car-ready, reminders(+send),
+  //     winback/send, broadcast/send, alerts/:id/read). Отправлять рассылки и
+  //     менять интеграции можно только с marketing_manage.
+  // manage ⇒ view (flattenRoleMatrix): роль с marketing_manage проходит и
+  // read-гейты. Owner-class (director/superadmin) обходит через PermissionsGuard;
+  // у системного «Администратора» оба сида true — поведение 1:1.
+  // Публичные /review/:token (страница отзыва клиента) — без auth, не трогаем.
+
+  // ─── Dashboard (marketing_access) ─────────────────────────────────
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Get('dashboard')
   getDashboard(@CurrentUser() user: JwtPayload) {
     return this.marketingService.getDashboard(user.tenantID);
   }
 
-  // ─── Reviews list (protected) ─────────────────────────────────────
-  @UseGuards(JwtAuthGuard)
+  // ─── Reviews list (marketing_access) ──────────────────────────────
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Get('reviews')
   getReviews(@CurrentUser() user: JwtPayload, @Query() query: any) {
     return this.marketingService.getReviews(user.tenantID, query);
   }
 
-  // ─── Alerts (protected) ───────────────────────────────────────────
-  @UseGuards(JwtAuthGuard)
+  // ─── Alerts (marketing_access) ────────────────────────────────────
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Get('alerts')
   getAlerts(@CurrentUser() user: JwtPayload) {
     return this.marketingService.getAlerts(user.tenantID);
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_manage')
   @Patch('alerts/:id/read')
   markAlertRead(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.marketingService.markAlertRead(id, user.tenantID);
   }
 
-  // ─── Messaging Integrations (protected) ───────────────────────────
-  @UseGuards(JwtAuthGuard)
+  // ─── Messaging Integrations (marketing_access) ────────────────────
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Get('integrations')
   getIntegrations(@CurrentUser() user: JwtPayload) {
     return this.marketingService.getIntegrations(user.tenantID);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Post('integrations')
   upsertIntegration(@CurrentUser() user: JwtPayload, @Body() dto: UpsertIntegrationDto) {
     return this.marketingService.upsertIntegration(user.tenantID, dto);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Delete('integrations/:id')
   removeIntegration(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.marketingService.removeIntegration(id, user.tenantID);
   }
 
-  // ─── Platform Links (protected) ───────────────────────────────────
-  @UseGuards(JwtAuthGuard)
+  // ─── Platform Links (marketing_access) ────────────────────────────
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Get('platform-links')
   getPlatformLinks(@CurrentUser() user: JwtPayload) {
     return this.marketingService.getPlatformLinks(user.tenantID);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Post('platform-links')
   upsertPlatformLink(@CurrentUser() user: JwtPayload, @Body() dto: UpsertPlatformLinkDto) {
     return this.marketingService.upsertPlatformLink(user.tenantID, dto);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Delete('platform-links/:id')
   removePlatformLink(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.marketingService.removePlatformLink(id, user.tenantID);
   }
 
-  // ─── Review Settings (protected) ──────────────────────────────────
-  @UseGuards(JwtAuthGuard)
+  // ─── Review Settings (marketing_access) ───────────────────────────
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Get('settings')
   getSettings(@CurrentUser() user: JwtPayload) {
     return this.marketingService.getSettings(user.tenantID);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Patch('settings')
   updateSettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateReviewSettingsDto) {
     return this.marketingService.updateSettings(user.tenantID, dto);
   }
 
   // ─── Car-ready («машина готова») notification settings ───────────
-  // Read open to any tenant user (like review settings); write gated by
-  // marketing_access (owner-class roles bypass via permissions.guard).
-  @UseGuards(JwtAuthGuard)
+  // Read — marketing_access, write — marketing_manage (owner-class bypasses via
+  // permissions.guard).
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Get('car-ready')
   getCarReadySettings(@CurrentUser() user: JwtPayload) {
     return this.marketingService.getCarReadySettings(user.tenantID);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Patch('car-ready')
   updateCarReadySettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateCarReadySettingsDto) {
     return this.marketingService.updateCarReadySettings(user.tenantID, dto);
   }
 
-  // ─── Reminder Settings (protected) ───────────────────────────────
-  @UseGuards(JwtAuthGuard)
+  // ─── Reminder Settings (marketing_access) ────────────────────────
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Get('reminders')
   getReminderSettings(@CurrentUser() user: JwtPayload) {
     return this.reminderService.getSettings(user.tenantID);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Post('reminders')
   updateReminderSettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdateReminderSettingsDto) {
     return this.reminderService.updateSettings(user.tenantID, dto);
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Post('reminders/send')
   sendReminders(@CurrentUser() user: JwtPayload) {
     return this.reminderService.sendForTenant(user.tenantID);
   }
 
   // ─── Win-back («давно не приезжал») ──────────────────────────────
-  // Both read and send are gated by marketing_access. Owner-class roles
-  // (superadmin / director / admin) bypass the permission check entirely
-  // (permissions.guard OWNER_CLASS_ROLES) — so the read is open to owner-class
-  // and the send is effectively restricted to them; a master needs an explicit
-  // marketing_access grant. Mirrors the existing reminders/send gate.
+  // Read — marketing_access (просмотр сегмента), send — marketing_manage
+  // (отправка рассылки). Owner-class roles (superadmin / director) bypass the
+  // permission check entirely (permissions.guard); a master needs an explicit
+  // marketing_manage grant to send. Mirrors the reminders/send gate.
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission('marketing_access')
   @Get('winback')
@@ -155,18 +177,18 @@ export class MarketingController {
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Post('winback/send')
   winbackSend(@CurrentUser() user: JwtPayload, @Body() dto: WinbackSendDto) {
     return this.marketingService.winbackSend(user.tenantID, dto.days, dto.message);
   }
 
   // ─── Manual segment broadcast («Рассылки») ───────────────────────
-  // Owner-class / marketing_access gated (same gate as winback/reminders).
+  // Owner-class / marketing_manage gated (same gate as winback/reminders send).
   // Every recipient passes the anti-spam gate; the call is idempotent so a
   // retried request can't double-charge a client.
   @UseGuards(JwtAuthGuard, PermissionsGuard)
-  @RequirePermission('marketing_access')
+  @RequirePermission('marketing_manage')
   @Post('broadcast/send')
   sendSegmentBroadcast(@CurrentUser() user: JwtPayload, @Body() dto: SegmentBroadcastDto) {
     return this.marketingService.sendSegmentBroadcast(
@@ -182,11 +204,12 @@ export class MarketingController {
     );
   }
 
-  // ─── Auto-mailings overview (read-only) ──────────────────────────
+  // ─── Auto-mailings overview (read-only, marketing_access) ────────
   // Lists the AUTO mailing surfaces (review / car-ready / installment &
   // service reminders) so the UI can show enabled-state + deep-link to each
-  // existing settings editor. Read is open to any tenant user (like settings).
-  @UseGuards(JwtAuthGuard)
+  // existing settings editor.
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
   @Get('auto-mailings')
   getAutoMailings(@CurrentUser() user: JwtPayload) {
     return this.marketingService.getAutoMailings(user.tenantID);

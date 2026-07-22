@@ -12,7 +12,7 @@ import {
   Loader2,
   History,
 } from 'lucide-react';
-import { format, startOfMonth, subMonths } from 'date-fns';
+import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import { ru } from 'date-fns/locale';
 import toast from 'react-hot-toast';
 
@@ -241,12 +241,21 @@ function MasterSalaryView() {
 
 function AdminSalaryView() {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  // Проведение выплат/авансов — owner-only ключ salary_payouts_manage (backend
+  // POST /salary/payments; у системного «Администратора» сид false — прежний
+  // @Roles director/superadmin БЕЗ admin). Кнопки «Выплатить» прячем без права.
+  const canPayout = hasPermission('salary_payouts_manage');
 
-  const today = format(new Date(), 'yyyy-MM-dd');
+  // Полный календарный месяц — как mobile OwnerSalaryList (monthBounds).
+  // Раньше web слал dateTo = сегодня, mobile — конец месяца, и один сотрудник
+  // показывал разные workedShifts/premiums на двух клиентах. Будущие дни
+  // сервер теперь клампит сам (workedShiftsByUser ≤ сегодня).
   const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+  const monthEnd = format(endOfMonth(new Date()), 'yyyy-MM-dd');
 
   const [dateFrom, setDateFrom] = useState(monthStart);
-  const [dateTo, setDateTo] = useState(today);
+  const [dateTo, setDateTo] = useState(monthEnd);
 
   // Payment dialog
   const [payModalOpen, setPayModalOpen] = useState(false);
@@ -288,9 +297,23 @@ function AdminSalaryView() {
       type: 'salary' | 'advance';
       comment?: string;
     }) => salaryApi.createPayment(data),
-    onSuccess: () => {
+    onSuccess: (res: any) => {
+      // SW-офлайн-очередь: 202 {queued:true} — сервер выплату ещё НЕ видел.
+      // Честный тост без «Выплата проведена»; модал закрываем, чтобы не
+      // спровоцировать повторную (уже задублированную) выплату.
+      if (res?.status === 202 && res?.data?.queued) {
+        toast('Нет сети — выплата поставлена в очередь и отправится автоматически', { icon: '📡', duration: 5000 });
+        setPayModalOpen(false);
+        setPayForm(emptyPaymentForm);
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ['salary-all'] });
       queryClient.invalidateQueries({ queryKey: ['salary-payments'] });
+      // Выплата — расход из кассы: движение денег, смена, дашборд, отчёт.
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-shift'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
       toast.success('Выплата проведена');
       setPayModalOpen(false);
       setPayForm(emptyPaymentForm);
@@ -300,12 +323,18 @@ function AdminSalaryView() {
 
   // ── Handlers ───────────────────────────────────────────────────────────
 
+  // Месяц ВЫБРАННОГО периода: сумма «Остаток» посчитана за dateFrom..dateTo,
+  // поэтому и month_year выплаты обязан быть из этого периода. Раньше всегда
+  // штамповался текущий месяц — апрельский долг «уезжал» в июль, апрельский
+  // «Остаток» не гас, и его можно было выплатить второй раз.
+  const periodMonthYear = dateFrom.slice(0, 7);
+
   function openPayModal(master: MasterSalary) {
     setPayForm({
       userId: master.masterId,
       userName: master.masterName,
       amount: String(Math.max(0, Math.round(master.remainingAmount ?? master.totalEarnings))),
-      monthYear: getCurrentMonthYear(),
+      monthYear: periodMonthYear,
       type: 'salary',
       comment: '',
     });
@@ -341,11 +370,12 @@ function AdminSalaryView() {
   }
 
   // ── Month options for the selector ─────────────────────────────────────
+  // Месяц выбранного периода — первым (он и предвыбран), текущий/прошлый —
+  // как быстрые альтернативы; Set убирает дубли, когда период = текущий месяц.
 
-  const monthOptions = [
-    { value: getCurrentMonthYear(), label: formatMonthYear(getCurrentMonthYear()) },
-    { value: getPreviousMonthYear(), label: formatMonthYear(getPreviousMonthYear()) },
-  ];
+  const monthOptions = Array.from(new Set([periodMonthYear, getCurrentMonthYear(), getPreviousMonthYear()])).map(
+    (value) => ({ value, label: formatMonthYear(value) }),
+  );
 
   return (
     <div className="space-y-6">
@@ -457,13 +487,15 @@ function AdminSalaryView() {
 
                     {/* Actions */}
                     <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => openPayModal(master)}
-                        className="btn-primary flex-1 justify-center text-xs py-2"
-                      >
-                        <Banknote className="w-3.5 h-3.5" />
-                        Выплатить
-                      </button>
+                      {canPayout && (
+                        <button
+                          onClick={() => openPayModal(master)}
+                          className="btn-primary flex-1 justify-center text-xs py-2"
+                        >
+                          <Banknote className="w-3.5 h-3.5" />
+                          Выплатить
+                        </button>
+                      )}
                       <button
                         onClick={() => toggleHistory(master.masterId)}
                         className="btn-secondary flex-shrink-0 text-xs py-2 px-3"
@@ -546,10 +578,12 @@ function AdminSalaryView() {
                         <td className="text-right text-gray-600 tabular-nums">{master.checkCount}</td>
                         <td className="text-right">
                           <div className="flex items-center justify-end gap-1">
-                            <button onClick={() => openPayModal(master)} className="btn-primary text-xs py-1.5 px-3">
-                              <Banknote className="w-3.5 h-3.5" />
-                              Выплатить
-                            </button>
+                            {canPayout && (
+                              <button onClick={() => openPayModal(master)} className="btn-primary text-xs py-1.5 px-3">
+                                <Banknote className="w-3.5 h-3.5" />
+                                Выплатить
+                              </button>
+                            )}
                             <button
                               onClick={() => toggleHistory(master.masterId)}
                               className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"

@@ -23,6 +23,7 @@ import { ru } from 'date-fns/locale';
 
 import { notificationsApi, plansApi } from '../../api/services';
 import ConfirmDialog from '../../components/ConfirmDialog';
+import { AdminPageHeader, Chip, Segmented } from '../../components/admin/adminUi';
 import type {
   BroadcastButton,
   BroadcastHistoryItem,
@@ -77,49 +78,6 @@ function describeSegment(segment: BroadcastSegment | null | undefined, plans: Pl
 function toLocalInputValue(d: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
-}
-
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`press-soft rounded-full border px-3 py-1.5 text-sm font-medium transition-colors ${
-        active
-          ? 'border-primary-600 bg-primary-600 text-white'
-          : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50'
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function Segmented<T extends string>({
-  value,
-  options,
-  onChange,
-}: {
-  value: T;
-  options: { value: T; label: string }[];
-  onChange: (v: T) => void;
-}) {
-  return (
-    <div className="inline-flex rounded-lg bg-gray-100 p-1">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          type="button"
-          onClick={() => onChange(o.value)}
-          className={`rounded-md px-3 py-1.5 text-sm font-medium transition-colors ${
-            value === o.value ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-700'
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
 }
 
 export default function AdminBroadcastPage() {
@@ -281,9 +239,10 @@ export default function AdminBroadcastPage() {
 
   return (
     <div>
-      <div className="page-header">
-        <h1 className="page-title">Рассылка владельцам</h1>
-      </div>
+      <AdminPageHeader
+        title="Рассылка владельцам"
+        subtitle="Объявления директорам автосервисов — с сегментами и планированием"
+      />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Composer */}
@@ -553,8 +512,8 @@ export default function AdminBroadcastPage() {
           </div>
         </form>
 
-        {/* Live preview — center card */}
-        <div className="self-start">
+        {/* Live preview — прилипает при прокрутке длинного композера */}
+        <div className="self-start lg:sticky lg:top-4">
           <p className="text-sm font-medium text-gray-500 mb-3">Предпросмотр</p>
           <div className="rounded-3xl bg-gray-100 p-6 flex items-center justify-center min-h-[320px]">
             <div className="w-full max-w-sm rounded-2xl bg-white shadow-xl overflow-hidden">

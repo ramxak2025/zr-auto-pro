@@ -2,6 +2,7 @@ import { Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nest
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { MarketingService } from '../marketing/marketing.service';
+import { PushService } from '../push/push.service';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 
 /**
@@ -25,6 +26,12 @@ import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
  *   (network/provider error), the stamp stays (we already claimed it): we
  *   accept "reminded-but-maybe-not-delivered" over a retry storm. Delivery is
  *   best-effort, exactly like every other messaging path in the app.
+ *
+ *   SMS-MUTED FALLBACK: a tenant can pass the claim filter (active integration)
+ *   while its SMS channel is muted by the 127 toggle — sendClientMessage then
+ *   reports `no_provider`. Such a reminder must not burn silently: we push the
+ *   booking's master + owner-class staff («напомните клиенту звонком») and log
+ *   the reason.
  */
 @Injectable()
 export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
@@ -35,6 +42,8 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
   constructor(
     @Inject(PG_POOL) private pool: Pool,
     private marketingService: MarketingService,
+    // PushModule is @Global — injectable here without a module import.
+    private pushService: PushService,
   ) {}
 
   onModuleInit() {
@@ -84,7 +93,7 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
              LIMIT 200
              FOR UPDATE SKIP LOCKED
           )
-          RETURNING b.id, b.tenant_id, b.scheduled_at, b.client_id`,
+          RETURNING b.id, b.tenant_id, b.scheduled_at, b.client_id, b.master_id`,
       );
 
       if (rows.length === 0) return;
@@ -110,6 +119,12 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
             this.logger.warn(
               `Booking reminder not delivered (booking ${row.id}, tenant ${row.tenant_id}): ${result.reason}${result.error ? ` — ${result.error}` : ''}`,
             );
+            if (result.reason === 'no_provider') {
+              // Claim-фильтр пройден (активная интеграция есть), но SMS-канал
+              // замьючен (тумблер 127) → клиенту написать нечем. Не сгораем
+              // молча — будим персонал push-ем, чтобы напомнили звонком.
+              await this.notifyStaffSmsMuted(row, clientRows[0]?.full_name || phone);
+            }
           }
         } catch (err) {
           this.logger.error(`Booking reminder send failed for booking ${row.id}: ${err}`);
@@ -119,6 +134,38 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`Booking reminder scheduler error: ${err}`);
     } finally {
       this.running = false;
+    }
+  }
+
+  /**
+   * SMS недоступна (канал замьючен) — пушим персоналу (мастер записи +
+   * owner-class), чтобы клиенту напомнили звонком. Best-effort: ошибка пуша
+   * не роняет цикл напоминаний.
+   */
+  private async notifyStaffSmsMuted(
+    row: { id: string; tenant_id: string; scheduled_at: Date | string; master_id?: string | null },
+    clientName: string,
+  ): Promise<void> {
+    try {
+      const { rows: staff } = await this.pool.query(
+        `SELECT id FROM users
+          WHERE tenant_id = $1
+            AND (role IN ('director', 'admin') OR id = $2)
+            AND is_active = true
+            AND dismissed_at IS NULL`,
+        [row.tenant_id, row.master_id ?? null],
+      );
+      const body = `SMS-напоминание не отправлено (SMS отключены): ${clientName}, запись на ${this.formatWhen(row.scheduled_at)}`;
+      await Promise.all(
+        staff.map((s: { id: string }) =>
+          this.pushService.sendToUser(s.id, 'Напоминание о записи', body, {
+            type: 'booking_reminder_sms_muted',
+            bookingId: row.id,
+          }),
+        ),
+      );
+    } catch (err) {
+      this.logger.warn(`Booking reminder staff-push fallback failed for ${row.id}: ${err}`);
     }
   }
 

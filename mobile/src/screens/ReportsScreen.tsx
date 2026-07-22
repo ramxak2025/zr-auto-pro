@@ -274,14 +274,23 @@ const DEFAULT_TARGETS: KpiTargets = {
   netProfitMonth: 500_000,
 };
 
-function useKpiTargets() {
+function useKpiTargets(userId?: string) {
   const [targets, setTargets] = useState<KpiTargets>(DEFAULT_TARGETS);
+  // Ключ скоупится по user.id (mobile-audit M4): глобальный ключ переживал
+  // logout, и директор другого тенанта на том же устройстве видел и
+  // наследовал план выручки предыдущего владельца. Паттерн per-uid — как
+  // seenKey(uid) в BroadcastNotificationContext.
+  const storageKey = userId ? `${KPI_TARGETS_KEY}:${userId}` : null;
 
   // Загрузка происходит асинхронно. До первой записи показываем
   // дефолты — это лучше, чем держать кольца пустыми.
   useEffect(() => {
     let cancelled = false;
-    AsyncStorage.getItem(KPI_TARGETS_KEY)
+    // Смена аккаунта без перезапуска: сбрасываемся на дефолты, чтобы цели
+    // предыдущего пользователя не мигали, пока грузится его ключ.
+    setTargets(DEFAULT_TARGETS);
+    if (!storageKey) return;
+    AsyncStorage.getItem(storageKey)
       .then((raw) => {
         if (cancelled || !raw) return;
         try {
@@ -299,17 +308,21 @@ function useKpiTargets() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [storageKey]);
 
-  const save = useCallback(async (next: KpiTargets) => {
-    setTargets(next);
-    try {
-      await AsyncStorage.setItem(KPI_TARGETS_KEY, JSON.stringify(next));
-    } catch {
-      /* AsyncStorage в принципе не должен падать здесь, но если — UI уже
+  const save = useCallback(
+    async (next: KpiTargets) => {
+      setTargets(next);
+      if (!storageKey) return;
+      try {
+        await AsyncStorage.setItem(storageKey, JSON.stringify(next));
+      } catch {
+        /* AsyncStorage в принципе не должен падать здесь, но если — UI уже
          обновлён через setTargets, потеряется только персистентность. */
-    }
-  }, []);
+      }
+    },
+    [storageKey],
+  );
 
   return { targets, save };
 }
@@ -404,7 +417,7 @@ export default function ReportsScreen() {
   );
   const prevRange = useMemo<DateRange>(() => getPreviousRange(range), [range]);
 
-  const { targets, save: saveTargets } = useKpiTargets();
+  const { targets, save: saveTargets } = useKpiTargets(user?.id);
 
   // ── ОСНОВНЫЕ ЗАПРОСЫ ──────────────────────────────────────────────────────
   // FinancialReport за текущий период
@@ -1212,7 +1225,7 @@ export default function ReportsScreen() {
                     />
                     <KpiLegendRow
                       color={colors.amber[600]}
-                      label="Чистая прибыль"
+                      label="Операционная прибыль"
                       current={formatMoneyCompact(monthlyProfit)}
                       target={formatMoneyCompact(targets.netProfitMonth)}
                       progress={profitProgress}

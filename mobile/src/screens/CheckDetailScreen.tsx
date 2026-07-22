@@ -39,6 +39,7 @@ import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
 import FeatureGate from '../components/FeatureGate';
 import Modal from '../components/Modal';
+import ProductMovementHistoryModal from '../components/ProductMovementHistoryModal';
 import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
 import { useColors } from '../contexts/ThemeContext';
@@ -84,6 +85,29 @@ function formatTime(d: string) {
   return new Date(d).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
 }
 
+/**
+ * Ключи денег, которые backend пересчитывает ИЗ checks (salary.service /
+ * reports.service): зарплата, мотивация, фин-отчёт, рейтинг сотрудников,
+ * история клиента. Каждая мутация чека (удаление / приём оплаты / возврат)
+ * обязана их инвалидировать — иначе Зарплата и Отчёты показывают старые
+ * суммы до ручного pull-to-refresh (mobile-audit C1). Список зеркалит
+ * heavyKeys в CheckCreateScreen.onSuccess / App.invalidateAfterQueuedCheckSent.
+ * Обычный invalidate (refetchType 'active'): рефетчится только то, на что
+ * прямо сейчас смотрит наблюдатель (например ClientDetail под этим экраном
+ * в стеке) — скрытого веера запросов нет.
+ */
+export const CHECK_MONEY_DEPENDENT_KEYS: string[][] = [
+  ['salary'],
+  ['salary-employee-month'],
+  ['motivation'],
+  ['financial-report'],
+  ['employee-ranking'],
+  ['client-checks'],
+  ['client-checks-full'],
+  ['retail-checks'],
+  ['retail-checks-full'],
+];
+
 const paymentLabels: Record<string, string> = {
   cash: 'Наличные',
   card: 'Карта',
@@ -110,12 +134,10 @@ export default function CheckDetailScreen() {
   const isDark = palette.mode === 'dark';
   const { id } = route.params;
   // ── Возврат заказ-наряда ────────────────────────────────────────────
-  // Видна только для директора / администратора / superadmin: оформление
-  // возврата — финансово ответственное действие, мастер не должен иметь
-  // к нему доступ. Mapping роли на permission — собственно роли (бэк
-  // PermissionGuard не проверяет наш новый endpoint, но UI-уровень
-  // отрезает мастеров сразу).
-  const canFileReturn = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  // Возврат — денежная операция над проведённым чеком → ключ матрицы
+  // payment_edit («Меняет оплату чека»). Сид «Администратора» true — админ
+  // сохраняет доступ 1:1; superadmin/director байпасятся внутри hasPermission.
+  const canFileReturn = hasPermission('payment_edit');
   const [returnModalOpen, setReturnModalOpen] = useState(false);
   // ── Канбан work-status (доска заказ-нарядов, 082) ───────────────────
   // Чип статуса + пикер. ОРТОГОНАЛЕН оплате/отложенности — отдельный
@@ -135,6 +157,10 @@ export default function CheckDetailScreen() {
   // Map: stable line key → { selected, qty } для partial-режима. Ключ —
   // `s-<id>` для услуг, `p-<id>` для товаров, чтобы не было коллизий.
   const [returnLines, setReturnLines] = useState<Record<string, { selected: boolean; qty: number }>>({});
+  // Тап по строке товара чека → инлайн-модалка «Движение товара» (тот же
+  // компонент, что в Складе — НЕ роут). Только для строк с productId; у
+  // произвольных (free-text) строк productId нет → строка неинтерактивна.
+  const [movementProduct, setMovementProduct] = useState<{ id: string; name: string; unit?: string } | null>(null);
   // Floating tab bar covers the bottom edge (CheckDetail lives inside the
   // tab navigator's stack, so the bar IS visible). Reserve its height so
   // the last block can scroll fully into view + leaves a small breathing
@@ -278,6 +304,9 @@ export default function CheckDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
       queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      for (const queryKey of CHECK_MONEY_DEPENDENT_KEYS) {
+        queryClient.invalidateQueries({ queryKey });
+      }
       // Корзина (106): чек ушёл в trash — список CheckTrashScreen должен
       // показать его сразу, если owner откроет корзину следом.
       queryClient.invalidateQueries({ queryKey: ['checks-trash'] });
@@ -315,6 +344,9 @@ export default function CheckDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
       queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      for (const queryKey of CHECK_MONEY_DEPENDENT_KEYS) {
+        queryClient.invalidateQueries({ queryKey });
+      }
     },
     onError: (err: any) => {
       haptic('error');
@@ -562,7 +594,17 @@ export default function CheckDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
       queryClient.invalidateQueries({ queryKey: ['check', id] });
       queryClient.invalidateQueries({ queryKey: ['products'] });
-      queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      // Вкладка «Складские документы» Журнала читает единый фид
+      // ['journal-warehouse-docs'] (пришёл на смену списковому
+      // 'stock-movements' — mobile-audit M2): без него оформленный возврат
+      // не появлялся в списке до ручного pull-to-refresh. Пер-товарные
+      // истории живут на ['stock-movements','product',id] — бустим этим
+      // префиксом (возврат пишет movement по каждой возвращённой строке).
+      queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-movements', 'product'] });
+      // Возврат ВЕРНУЛ сток на сервере — oversell-гвард кассы и пикер читают
+      // ['all-products-check'], без сброса они занижали остаток.
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       // Real dashboard/journal keys (the legacy `['dashboard']` slug
       // didn't match any active query — see commit fixing CheckCreate).
       queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
@@ -571,6 +613,9 @@ export default function CheckDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['low-stock'] });
       queryClient.invalidateQueries({ queryKey: ['warehouse-analytics'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      for (const queryKey of CHECK_MONEY_DEPENDENT_KEYS) {
+        queryClient.invalidateQueries({ queryKey });
+      }
       setReturnModalOpen(false);
       Alert.alert('Возврат оформлен', 'Чек помечен как возвращённый.');
     },
@@ -752,17 +797,15 @@ export default function CheckDetailScreen() {
   // Рассрочка (093): у чека есть долговой план (installment_plans). Бэкенд
   // отказывает в его правке (рассрочку меняют отдельно) — кнопку прячем.
   const isInstallment = check.paymentMethod === 'installment';
-  // Owner-class (директор/админ/superadmin) на бэке всегда обходит проверку
-  // прав (userHasPermission) — зеркалим здесь явно: мобильный hasPermission
-  // обходит только director/superadmin, поэтому admin проверяем по роли, иначе
-  // спрятали бы доступное ему действие.
-  const isOwnerClass = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  // «Права как в Битрикс24» (2026-07): admin снят из owner-class на сервере,
+  // /auth/me отдаёт эффективные права матрицы — ручной admin-байпас больше не
+  // нужен, hasPermission сам байпасит только superadmin/director.
   // «Редактирование проведённого чека» (#61): закрытый чек — финансово
   // ответственная правка. Бэкенд проводит её через editClosedCheck (каскадный
-  // пересчёт склада/зарплаты/кассы/прибыли) и гейтит правом edit_closed_check
-  // (owner-class обходит). Возврат и рассрочку бэкенд редактировать
-  // отказывается (403/400) → для них кнопку прячем, чтобы не завести в ошибку.
-  const canEditClosedCheck = isOwnerClass || hasPermission('edit_closed_check');
+  // пересчёт склада/зарплаты/кассы/прибыли) и гейтит правом edit_closed_check.
+  // Возврат и рассрочку бэкенд редактировать отказывается (403/400) → для них
+  // кнопку прячем, чтобы не завести в ошибку.
+  const canEditClosedCheck = hasPermission('edit_closed_check');
   // «Чужой чек» (round 7, item 12): мастер видит чужой чек в журнале
   // (isExecutor-оттенок) и может открыть-посмотреть, но «Изменить» не получает —
   // даже держа checks_edit / edit_closed_check. Зеркалит серверный гейт
@@ -794,10 +837,10 @@ export default function CheckDetailScreen() {
     checkDay.getMonth() === today.getMonth() &&
     checkDay.getDate() === today.getDate();
   const canQuickEditComment = isOwnCheck && isCheckToday && !isReturned;
-  // Фискализация — кассовые роли (те же, что работают кассу/закрывают чеки).
-  // Сервер всё равно гейтит endpoint; UI отрезает остальных сразу.
-  const canFiscalize =
-    user?.role === 'director' || user?.role === 'admin' || user?.role === 'master' || user?.role === 'superadmin';
+  // Фискализация — часть проведения чека → ключ checks_create (сид true у всех
+  // трёх системных ролей, мастера не запираются). Сервер гейтит endpoint тем же
+  // ключом; UI отрезает урезанные кастомные роли сразу.
+  const canFiscalize = hasPermission('checks_create');
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   const badge = getBadgeColors(palette.mode)[badgeKey];
   // Work-status (board) — отдельный флаг. Менять может тот, кто
@@ -1380,31 +1423,64 @@ export default function CheckDetailScreen() {
                 <Text style={[styles.sectionBadgeText, { color: palette.text.secondary }]}>{products.length}</Text>
               </View>
             </View>
-            {products.map((line, idx) => (
-              <View
-                key={idx}
-                style={[styles.lineItem, idx > 0 && [styles.lineItemBorder, { borderTopColor: palette.border.subtle }]]}
-              >
-                <View style={styles.lineItemLeft}>
-                  <Text style={[styles.lineItemName, { color: palette.text.primary }]}>{line.name}</Text>
-                  {/* 120: дробные количества — «0.5 м x 1 200 ₽» показываем и
+            {products.map((line, idx) => {
+              // Строка каталожного товара (есть productId) — открывает журнал
+              // движения. Free-text строка без productId остаётся статичной:
+              // движения по ней нет, тап неактивен (disabled).
+              const interactive = !!line.productId;
+              return (
+                <PressableScale
+                  key={idx}
+                  disabled={!interactive}
+                  hapticIntent={interactive ? 'select' : null}
+                  onPress={
+                    interactive
+                      ? () =>
+                          setMovementProduct({
+                            id: line.productId as string,
+                            name: line.name,
+                            unit: line.unit,
+                          })
+                      : undefined
+                  }
+                  accessibilityRole={interactive ? 'button' : undefined}
+                  accessibilityLabel={interactive ? `Движение товара: ${line.name}` : undefined}
+                  style={[
+                    styles.lineItem,
+                    idx > 0 && [styles.lineItemBorder, { borderTopColor: palette.border.subtle }],
+                  ]}
+                >
+                  <View style={styles.lineItemLeft}>
+                    <Text style={[styles.lineItemName, { color: palette.text.primary }]}>{line.name}</Text>
+                    {/* 120: дробные количества — «0.5 м x 1 200 ₽» показываем и
                       при quantity < 1, скрываем только ровно 1. Единицу
                       рендерим ТОЛЬКО когда она пришла: free-text строка без
                       unit иначе получала бы ложное «0.5 шт». */}
-                  {line.quantity !== 1 && (
-                    <View style={styles.lineItemMeta}>
-                      <Text style={[styles.lineItemMetaText, { color: palette.text.tertiary }]}>
-                        {line.unit ? formatQtyUnit(line.quantity, line.unit) : formatQty(line.quantity)} x{' '}
-                        {formatMoney(line.sellPrice)}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                <Text style={[styles.lineItemPrice, { color: palette.text.primary }]}>
-                  {formatMoney(line.totalSell)}
-                </Text>
-              </View>
-            ))}
+                    {line.quantity !== 1 && (
+                      <View style={styles.lineItemMeta}>
+                        <Text style={[styles.lineItemMetaText, { color: palette.text.tertiary }]}>
+                          {line.unit ? formatQtyUnit(line.quantity, line.unit) : formatQty(line.quantity)} x{' '}
+                          {formatMoney(line.sellPrice)}
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                  <View style={styles.lineItemRight}>
+                    <Text style={[styles.lineItemPrice, { color: palette.text.primary }]}>
+                      {formatMoney(line.totalSell)}
+                    </Text>
+                    {interactive && (
+                      <Ionicons
+                        name="chevron-forward"
+                        size={14}
+                        color={palette.text.tertiary}
+                        style={styles.lineItemChevron}
+                      />
+                    )}
+                  </View>
+                </PressableScale>
+              );
+            })}
             <View
               style={[
                 styles.sectionSubtotal,
@@ -2207,6 +2283,16 @@ export default function CheckDetailScreen() {
           />
         )}
       </Modal>
+
+      {/* «Движение товара» — инлайн-модалка (тот же компонент, что в Складе).
+          Открывается тапом по строке каталожного товара чека. */}
+      <ProductMovementHistoryModal
+        visible={!!movementProduct}
+        onClose={() => setMovementProduct(null)}
+        productId={movementProduct?.id ?? null}
+        productName={movementProduct?.name}
+        productUnit={movementProduct?.unit}
+      />
     </SafeAreaView>
   );
 }
@@ -2550,6 +2636,8 @@ const styles = StyleSheet.create({
   lineItemName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   lineItemMeta: { flexDirection: 'row', gap: spacing[2], marginTop: 3 },
   lineItemMetaText: { fontSize: 11 },
+  lineItemRight: { flexDirection: 'row', alignItems: 'center' },
+  lineItemChevron: { marginLeft: spacing[1] },
   lineItemPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
 
   // Subtotal

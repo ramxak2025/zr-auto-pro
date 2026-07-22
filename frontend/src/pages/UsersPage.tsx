@@ -100,15 +100,14 @@ const emptyForm: UserFormData = {
 };
 
 export default function UsersPage() {
-  const { hasPermission, user: currentUser } = useAuth();
+  const { hasPermission, refreshUser, user: currentUser } = useAuth();
   const queryClient = useQueryClient();
 
-  // Роли (Bitrix24-style, 114): backend routes director/admin/superadmin-gated,
-  // поэтому и кнопка «Роли», и select назначения видны только owner-class.
-  const isOwnerClass =
-    currentUser?.role === UserRole.SUPERADMIN ||
-    currentUser?.role === UserRole.DIRECTOR ||
-    currentUser?.role === UserRole.ADMIN;
+  // Волна «права как в Битрикс24»: backend users/ и roles/ гейтятся ключом
+  // user_management (не строкой роли), а /auth/me отдаёт эффективные права из
+  // матрицы — гейт честный и для admin, и для кастомных ролей. Ручной
+  // owner-class-байпас снят: superadmin/director проходят внутри hasPermission.
+  const canManageUsers = hasPermission('user_management');
 
   const [modalOpen, setModalOpen] = useState(false);
   const [rolesOpen, setRolesOpen] = useState(false);
@@ -131,7 +130,7 @@ export default function UsersPage() {
     queryKey: ['roles'],
     queryFn: () => rolesApi.list(),
     select: (res) => res.data as Role[],
-    enabled: isOwnerClass,
+    enabled: canManageUsers,
   });
   const roles = rolesData ?? [];
   const systemRoles = roles.filter((r) => r.isSystem);
@@ -158,8 +157,11 @@ export default function UsersPage() {
     // назначенной ролью (PATCH /users/:id { roleId }). Персональные права
     // (GET/PATCH /users/:id/permissions) сняты — общий PATCH их больше не везёт.
     mutationFn: ({ id, data }: { id: string; data: any }) => usersApi.update(id, data),
-    onSuccess: () => {
+    onSuccess: (_res, vars) => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
+      // Смена СВОЕЙ роли (roleId) меняет собственные эффективные права —
+      // рефетчим /auth/me, чтобы hasPermission-гейты обновились сразу.
+      if (vars.id === currentUser?.id) void refreshUser();
       toast.success('Сотрудник обновлён');
       closeModal();
     },
@@ -242,11 +244,12 @@ export default function UsersPage() {
       if (form.password) {
         payload.password = form.password;
       }
-      // Назначение роли (единственный источник прав). Только owner-class (select
-      // виден только ему) и только в edit-режиме: CreateUserRequest roleId не
-      // принимает. null снимает роль (возврат к легаси-дефолтам строковой роли).
-      // Сервер сам защищает от самолокаута (нельзя снять с себя user_management).
-      if (isOwnerClass) {
+      // Назначение роли (единственный источник прав). Только держатель
+      // user_management (select виден только ему) и только в edit-режиме:
+      // CreateUserRequest roleId не принимает. null снимает роль (возврат к
+      // легаси-дефолтам строковой роли). Сервер сам защищает от самолокаута
+      // (нельзя снять с себя user_management).
+      if (canManageUsers) {
         payload.roleId = form.roleId;
       }
       updateMutation.mutate({ id: editingUser.id, data: payload });
@@ -263,7 +266,7 @@ export default function UsersPage() {
       <div className="page-header">
         <h1 className="page-title">Сотрудники</h1>
         <div className="flex items-center gap-2 flex-wrap">
-          {isOwnerClass && (
+          {canManageUsers && (
             <button onClick={() => setRolesOpen(true)} className="btn-secondary">
               <KeyRound className="w-4 h-4" />
               Роли
@@ -474,7 +477,7 @@ export default function UsersPage() {
           {/* Назначенная роль прав — ЕДИНСТВЕННЫЙ источник доступа (ROLE-ONLY).
               Только edit-режим: создание её не принимает (роль назначается после
               создания). Виден только owner-class. */}
-          {editingUser && isOwnerClass && (
+          {editingUser && canManageUsers && (
             <div>
               <label className="label">Роль (доступ)</label>
               <select
@@ -576,7 +579,7 @@ export default function UsersPage() {
           {/* Права доступа — ROLE-ONLY (консолидация 2026-07). Персональных
               галочек прав больше нет: доступ сотрудника = его роль. Настройка
               возможностей — во вкладке «Роли». */}
-          {isOwnerClass && (
+          {canManageUsers && (
             <div className="flex items-start gap-2.5 bg-gray-50 border border-gray-100 rounded-xl px-4 py-3">
               <ShieldCheck className="w-4 h-4 text-gray-400 flex-shrink-0 mt-0.5" />
               <p className="text-xs text-gray-500">
@@ -646,7 +649,7 @@ export default function UsersPage() {
       <DismissedModal isOpen={dismissedOpen} onClose={() => setDismissedOpen(false)} />
 
       {/* Роли и права (Bitrix24-style) — только owner-class */}
-      {isOwnerClass && (
+      {canManageUsers && (
         <RolesManagement
           isOpen={rolesOpen}
           onClose={() => setRolesOpen(false)}

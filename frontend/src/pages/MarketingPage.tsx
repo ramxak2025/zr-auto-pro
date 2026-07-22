@@ -3,6 +3,7 @@ import { BarChart3, Gift, Megaphone, Plug, Send, Settings, Star, type LucideIcon
 
 import { useAuth } from '../contexts/AuthContext';
 import PageHeader from '../components/PageHeader';
+import EmptyState from '../components/EmptyState';
 import { UserRole } from '../types';
 import MarketingReportsView from '../components/marketing/MarketingReportsView';
 import ReputationView from '../components/marketing/ReputationView';
@@ -23,8 +24,11 @@ const TABS: { key: Tab; label: string; icon: LucideIcon }[] = [
 ];
 
 export default function MarketingPage() {
-  const { isRole } = useAuth();
+  const { isRole, hasPermission } = useAuth();
   const isMaster = isRole(UserRole.MASTER);
+  // Волна «права как в Битрикс24»: ВСЕ чтения /marketing/* на сервере гейтятся
+  // marketing_access — без права страница рисовала бы только 403-ошибки.
+  const canAccess = hasPermission('marketing_access');
 
   const [activeTab, setActiveTab] = useState<Tab>('reports');
   const [settingsFocus, setSettingsFocus] = useState<SettingsSection | null>(null);
@@ -34,6 +38,10 @@ export default function MarketingPage() {
     setSettingsFocus(section ?? null);
     setActiveTab('settings');
   };
+
+  if (!canAccess) {
+    return <EmptyState icon={Megaphone} title="Нет доступа" description="У вас нет права на раздел «Маркетинг»" />;
+  }
 
   // Masters get the restricted leaderboard only — no page chrome, no tabs.
   if (isMaster) {

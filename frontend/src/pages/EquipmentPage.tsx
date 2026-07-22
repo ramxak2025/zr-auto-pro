@@ -714,6 +714,11 @@ function CreateStorageItemModal({ categoryId, onClose, onSave, saving }: any) {
 // ─── Trash Tab ──────────────────────────────────────────────────────
 function TrashTab() {
   const queryClient = useQueryClient();
+  const { hasPermission } = useAuth();
+  // Безвозвратное удаление — owner-only ключ equipment_permanent_delete
+  // (backend DELETE /equipment/:id; у системного «Администратора» сид false —
+  // как прежний @Roles директор/superadmin). Кнопку прячем без права.
+  const canPermanentDelete = hasPermission('equipment_permanent_delete');
   const { data: trashItems = [] } = useQuery({
     queryKey: ['eq-trash'],
     queryFn: async () => (await equipmentApi.getTrash()).data,
@@ -765,15 +770,17 @@ function TrashTab() {
             >
               <RotateCcw className="h-4 w-4" />
             </button>
-            <button
-              type="button"
-              onClick={() => deleteMut.mutate(item.id)}
-              className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"
-              aria-label="Удалить навсегда"
-              title="Удалить навсегда"
-            >
-              <X className="h-4 w-4" />
-            </button>
+            {canPermanentDelete && (
+              <button
+                type="button"
+                onClick={() => deleteMut.mutate(item.id)}
+                className="p-1.5 rounded-lg hover:bg-red-50 text-red-500"
+                aria-label="Удалить навсегда"
+                title="Удалить навсегда"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            )}
           </div>
         );
       })}
@@ -783,12 +790,13 @@ function TrashTab() {
 
 // ─── Main Page ──────────────────────────────────────────────────────
 export default function EquipmentPage() {
-  const { user, isRole, hasPermission } = useAuth();
+  const { user, hasPermission } = useAuth();
   const [tab, setTab] = useState<Tab>('employees');
   const [selectedEmployee, setSelectedEmployee] = useState<any>(null);
-  // ROLE-ONLY: CRUD имущества (выдача/возврат/списание/склад/корзина) — только
-  // owner-class ИЛИ роль с equipment_manage. Просмотр — equipment_view.
-  const canEdit = isRole('director' as any, 'admin' as any, 'superadmin' as any) || hasPermission('equipment_manage');
+  // Волна «права как в Битрикс24»: CRUD имущества (выдача/возврат/списание/
+  // склад/корзина) — только с equipment_manage; байпас superadmin/director —
+  // внутри hasPermission, admin — по матрице роли. Просмотр — equipment_view.
+  const canEdit = hasPermission('equipment_manage');
   const isMaster = user?.role === 'master';
 
   const {

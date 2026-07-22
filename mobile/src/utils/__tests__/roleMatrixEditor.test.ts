@@ -30,8 +30,8 @@ describe('MATRIX_GROUPS — покрытие словаря редактора',
     expect([...groupKeys].sort()).toEqual([...EDITOR_PERMISSION_KEYS].sort()); // полное покрытие
   });
 
-  it('36 канонических ключей − 4 свёрнутых (checks_view_all + checks_edit_all + cashflow_view_all + salary_view_all) = 32 строки редактора', () => {
-    expect(ALL_MATRIX_ROWS).toHaveLength(32);
+  it('52 канонических ключа − 4 свёрнутых (checks_view_all + checks_edit_all + cashflow_view_all + salary_view_all) = 48 строк редактора', () => {
+    expect(ALL_MATRIX_ROWS).toHaveLength(48);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'checks_view_all')).toBe(false);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'checks_edit_all')).toBe(false);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'cashflow_view_all')).toBe(false);
@@ -53,6 +53,8 @@ describe('MATRIX_GROUPS — покрытие словаря редактора',
       'Имущество',
       'CRM',
       'Управление',
+      'Настройки',
+      'База знаний',
     ]);
   });
 });
@@ -113,12 +115,20 @@ describe('matrixFromDraft — полная материализация и round
     draft.bools.warehouse_access = true;
     draft.bools.calls_listen = true;
     draft.bools.user_management = true;
+    // Словарь v3 — новые ячейки тоже без потерь.
+    draft.bools.cash_shifts_manage = true;
+    draft.bools.salary_payouts_manage = true;
+    draft.bools.settings_manage = true;
+    draft.bools.knowledge_manage = true;
+    // Уровень «смотрит vs редактирует» (миграция 137) — тоже без потерь.
+    draft.bools.marketing_manage = true;
+    draft.bools.knowledge_view = true;
     expect(draftFromMatrix(matrixFromDraft(draft))).toEqual(draft);
   });
 
   it('каждая ячейка записана явно — PATCH заменяет матрицу без «дыр»', () => {
     const matrix = matrixFromDraft(emptyDraft());
-    // Все 14 секций матрицы присутствуют, scope-ячейки материализованы.
+    // Все 16 секций матрицы присутствуют, scope-ячейки материализованы.
     expect(Object.keys(matrix).sort()).toEqual(
       [
         'bookings',
@@ -128,20 +138,27 @@ describe('matrixFromDraft — полная материализация и round
         'employees',
         'equipment',
         'expenses',
+        'knowledge',
         'marketing',
         'reports',
         'salary',
         'services',
         'schedule',
+        'settings',
         'suppliers',
         'warehouse',
       ].sort(),
     );
     expect(matrix.checks?.view).toBe('none');
     expect(matrix.checks?.create).toBe(false);
+    expect(matrix.checks?.cashShifts).toBe(false);
     expect(matrix.salary?.view).toBe('none');
+    expect(matrix.salary?.payouts).toBe(false);
     expect(matrix.reports?.cashflow).toBe('none');
     expect(matrix.employees?.manage).toBe(false);
+    expect(matrix.settings?.manage).toBe(false);
+    expect(matrix.settings?.company).toBe(false);
+    expect(matrix.knowledge?.manage).toBe(false);
   });
 });
 

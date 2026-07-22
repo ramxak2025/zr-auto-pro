@@ -17,7 +17,7 @@ import toast from 'react-hot-toast';
 
 import { cashShiftsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import { UserRole } from '../types';
+
 import type { CashShift, CashShiftReport } from '../../../shared/types';
 import { formatMoney, formatDateTime } from '../../../shared/utils/formatters';
 import QueryState from '../components/QueryState';
@@ -173,9 +173,11 @@ function StatCard({
 }
 
 export default function CashShiftPage() {
-  const { isRole } = useAuth();
+  const { hasPermission } = useAuth();
   const queryClient = useQueryClient();
-  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Открытие/закрытие/инкассация кассовой смены — ключ cash_shifts_manage
+  // (backend POST /cash-shifts/*, волна Битрикс24). Просмотр статуса — всем.
+  const canManage = hasPermission('cash_shifts_manage');
 
   const [page, setPage] = useState(1);
   const [reportShiftId, setReportShiftId] = useState<string | null>(null);

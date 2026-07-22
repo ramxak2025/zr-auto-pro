@@ -30,7 +30,6 @@ import { useAuth } from '../contexts/AuthContext';
 import { knowledgeApi } from '../api/services';
 import { spacing } from '../theme';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
 import type { Troubleshooting } from '../../../shared/types';
 
 const STALE = 60_000;
@@ -39,8 +38,10 @@ export default function KnowledgeTroubleshootingScreen() {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
-  const isManager = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  // Мутации базы знаний — ключ knowledge_manage (сервер гейтит тем же ключом;
+  // «права как в Битрикс24», 2026-07: admin живёт по матрице из /auth/me).
+  const { hasPermission } = useAuth();
+  const isManager = hasPermission('knowledge_manage');
 
   const [search, setSearch] = React.useState('');
   const debouncedSearch = useDebouncedValue(search.trim(), 300);

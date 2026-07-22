@@ -41,6 +41,7 @@ import { checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { showMutationErrorToast } from '../components/Toast';
 import LoadingSpinner from '../components/LoadingSpinner';
 import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
@@ -60,8 +61,10 @@ export default function WorkBoardSettingsScreen() {
   const queryClient = useQueryClient();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { user } = useAuth();
-  const canConfigure = user?.role === 'director' || user?.role === 'admin' || user?.role === 'superadmin';
+  // Тот же серверный гейт, что у CRUD /checks/board-columns —
+  // @RequirePermission('checks_board_manage'); admin живёт по матрице.
+  const { hasPermission } = useAuth();
+  const canConfigure = hasPermission('checks_board_manage');
 
   const {
     data: columns,
@@ -174,9 +177,12 @@ export default function WorkBoardSettingsScreen() {
       );
       return { prev };
     },
-    onError: (_err, _vars, ctx) => {
+    onError: (err, _vars, ctx) => {
+      // Откат + видимый фидбек (волна C): порядок колонок молча прыгал
+      // обратно при отказе сети — теперь честный тост «Не сохранено».
       if (ctx?.prev) queryClient.setQueryData(COLUMNS_KEY, ctx.prev);
       haptic('error');
+      showMutationErrorToast(err);
     },
     onSuccess: () => haptic('select'),
     onSettled: invalidateBoard,

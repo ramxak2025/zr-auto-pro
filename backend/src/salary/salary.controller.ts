@@ -1,7 +1,6 @@
 import { Controller, Get, Post, Delete, Body, Query, Param, UseGuards } from '@nestjs/common';
 import { SalaryService } from './salary.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
-import { RolesGuard, Roles } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission, userHasPermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateSalaryPaymentDto } from './dto/create-payment.dto';
@@ -10,19 +9,22 @@ import { CreatePenaltyDto } from './dto/create-penalty.dto';
 import { CreatePayoutDto } from './dto/create-payout.dto';
 import { DecidePayoutDto } from './dto/decide-payout.dto';
 
-// «Владелец» (issues payouts / fines) = director + superadmin. admin + master
-// are employees: they never issue, and see only their own salary. superadmin is
-// always allowed via the RolesGuard bypass; listed explicitly for clarity.
-const OWNER_ROLES = ['director', 'superadmin'];
+// Матрица ролей АВТОРИТЕТНА (волна «права как в Битрикс24», 2026-07):
+//   • 'salary_payouts_manage' (salary.payouts) — выплаты / авансы / штрафы.
+//     Сид: Директор true, Админ FALSE, Мастер false — ровно прежний
+//     OWNER_ROLES=['director','superadmin'] БЕЗ admin (миграция 136).
+//   • 'salary_premiums_manage' (salary.premiums) — премии. Сид: Директор и
+//     Админ true — прежний @Roles(director, admin, superadmin).
+// Owner-class (director/superadmin) обходит проверку в PermissionsGuard.
 
-// ROLE-ONLY (консолидация 2026-07). Охват просмотра ЧУЖОЙ зарплаты решает матрица:
-// 'salary_view_all' → вся команда; иначе (и для 'salary_view' own) — только своё.
-// Owner-class (director/admin/superadmin) — всегда true через userHasPermission.
+// Охват просмотра ЧУЖОЙ зарплаты решает матрица: 'salary_view_all' → вся
+// команда; иначе (и для 'salary_view' own) — только своё. Owner-class
+// (director/superadmin) — всегда true через userHasPermission.
 function canViewAllSalary(user: JwtPayload): boolean {
   return userHasPermission(user, 'salary_view_all');
 }
 
-@UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
+@UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('salary')
 export class SalaryController {
   constructor(private salaryService: SalaryService) {}
@@ -52,7 +54,7 @@ export class SalaryController {
     return this.salaryService.getPayments(user.tenantID, query);
   }
 
-  @Roles('director', 'superadmin')
+  @RequirePermission('salary_payouts_manage')
   @Post('payments')
   createPayment(@CurrentUser() user: JwtPayload, @Body() dto: CreateSalaryPaymentDto) {
     return this.salaryService.createPayment(user.tenantID, user.userID, dto);
@@ -69,7 +71,7 @@ export class SalaryController {
   // ── Payouts with confirmation (100_salary_payouts_and_fines) ─────────────
 
   // Owner issues a ЗП / АВАНС; employee then accepts or rejects it.
-  @Roles(...OWNER_ROLES)
+  @RequirePermission('salary_payouts_manage')
   @Post('payouts')
   createPayout(@CurrentUser() user: JwtPayload, @Body() dto: CreatePayoutDto) {
     return this.salaryService.createPayout(user.tenantID, user.userID, dto);
@@ -115,7 +117,7 @@ export class SalaryController {
 
   // ── Premiums ───────────────────────────────────────────────────────────
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('salary_premiums_manage')
   @Post('premiums')
   createPremium(@CurrentUser() user: JwtPayload, @Body() dto: CreatePremiumDto) {
     return this.salaryService.createPremium(user.tenantID, user.userID, dto);
@@ -138,20 +140,19 @@ export class SalaryController {
     return this.salaryService.listPremiums(user.tenantID, q);
   }
 
-  @Roles('director', 'admin', 'superadmin')
+  @RequirePermission('salary_premiums_manage')
   @Delete('premiums/:id')
   removePremium(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.salaryService.removePremium(id, user.tenantID);
   }
 
   // ── Fines / penalties (штрафы, 056_salary_penalties) ─────────────────────
-  // The owner's «штрафы». Issued by владелец (director + superadmin) only —
-  // admin + master are employees and never fine. Comment («за что») is
+  // The owner's «штрафы» — 'salary_payouts_manage' (сид: Директор true, Админ
+  // FALSE — ровно прежний OWNER_ROLES-гейт без admin). Comment («за что») is
   // MANDATORY (DTO @IsNotEmpty + DB NOT NULL/CHECK). The shared contract
-  // exposes these via createFine / listFines / removeFine. No consumer used
-  // the previous admin-inclusive gate, so tightening breaks nothing.
+  // exposes these via createFine / listFines / removeFine.
 
-  @Roles(...OWNER_ROLES)
+  @RequirePermission('salary_payouts_manage')
   @Post('penalties')
   createPenalty(@CurrentUser() user: JwtPayload, @Body() dto: CreatePenaltyDto) {
     return this.salaryService.createPenalty(user.tenantID, user.userID, dto);
@@ -159,16 +160,16 @@ export class SalaryController {
 
   /**
    * Fines for the tenant (or one employee via `?userId=`). Owner-only finance
-   * data — director / superadmin. Employees see their fines via the per-month
-   * detail (getEmployeeMonth), not here.
+   * data — 'salary_payouts_manage'. Employees see their fines via the
+   * per-month detail (getEmployeeMonth), not here.
    */
-  @Roles(...OWNER_ROLES)
+  @RequirePermission('salary_payouts_manage')
   @Get('penalties')
   listPenalties(@CurrentUser() user: JwtPayload, @Query() query: { userId?: string }) {
     return this.salaryService.listPenalties(user.tenantID, query || {});
   }
 
-  @Roles(...OWNER_ROLES)
+  @RequirePermission('salary_payouts_manage')
   @Delete('penalties/:id')
   deletePenalty(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.salaryService.deletePenalty(id, user.tenantID);

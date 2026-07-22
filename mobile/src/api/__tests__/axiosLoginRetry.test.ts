@@ -277,15 +277,7 @@ describe('границы failover axios-интерсептора', () => {
     jest.advanceTimersByTime(8_000);
     const recovered = await mod.default.get('/products');
     expect(recovered.status).toBe(200);
-    expect(calls.map((call) => call.baseURL)).toEqual([
-      PRIMARY,
-      RESERVE,
-      THIRD,
-      PRIMARY,
-      PRIMARY,
-      RESERVE,
-      THIRD,
-    ]);
+    expect(calls.map((call) => call.baseURL)).toEqual([PRIMARY, RESERVE, THIRD, PRIMARY, PRIMARY, RESERVE, THIRD]);
     expect(mod.getActiveApiBaseUrl()).toBe(THIRD);
   });
 
@@ -302,13 +294,10 @@ describe('границы failover axios-интерсептора', () => {
 
     const recovered = await mod.default.get('/products');
     expect(recovered.status).toBe(200);
-    expect(calls.map((call) => call.baseURL)).toEqual([
-      PRIMARY,
-      RESERVE,
-      THIRD,
-      PRIMARY,
-      RESERVE,
-    ]);
+    // Circuits очищены → оба оставшихся хоста снова кандидаты и гоняются
+    // ПАРАЛЛЕЛЬНО (M1, happy-eyeballs реального GET); побеждает первый
+    // успешный — RESERVE (диспатчится раньше THIRD).
+    expect(calls.map((call) => call.baseURL)).toEqual([PRIMARY, RESERVE, THIRD, PRIMARY, RESERVE, THIRD]);
     expect(mod.getActiveApiBaseUrl()).toBe(RESERVE);
   });
 });

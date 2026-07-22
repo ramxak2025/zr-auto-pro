@@ -22,7 +22,7 @@ import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import { useClickableRow } from '../hooks/useClickableRow';
 import { dueLabel } from '../components/InstallmentsWidget';
-import { UserRole } from '../types';
+
 import type { InstallmentPlan, InstallmentClientLedger, InstallmentReminderSettings } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -57,6 +57,25 @@ function fmtDateTime(d?: string | null): string {
 // us spread it inside a `.map()` without tripping react-hooks/rules-of-hooks.
 const clickableRowProps = useClickableRow;
 
+/**
+ * Погашение рассрочки двигает деньги: платёж ложится в кассу принявшего.
+ * Денежное подмножество MONEY_STOCK_QUERY_KEYS из ChecksPage (склад не
+ * двигается) — иначе «Движение денег» / смена / дашборд прячут платёж до
+ * истечения staleTime.
+ */
+const MONEY_QUERY_KEYS: readonly string[][] = [
+  ['installments'],
+  ['cashflow'],
+  ['cash-shift'],
+  ['dashboard-v2'],
+  ['financial-report'],
+  ['checks'],
+];
+
+/** SW-офлайн-очередь отвечает 202 {queued:true} — сервер запрос ещё НЕ видел. */
+const isQueuedOffline = (res: { status?: number; data?: unknown } | undefined): boolean =>
+  res?.status === 202 && (res?.data as { queued?: boolean } | undefined)?.queued === true;
+
 function StatusBadge({ plan }: { plan: InstallmentPlan }) {
   if (plan.status === 'closed') return <span className="badge-green">Закрыта</span>;
   if (plan.overdue) return <span className="badge-red">Просрочена</span>;
@@ -69,8 +88,10 @@ function StatusBadge({ plan }: { plan: InstallmentPlan }) {
 
 export default function InstallmentsPage() {
   const navigate = useNavigate();
-  const { isRole } = useAuth();
-  const canManage = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
+  // Погашения/закрытие/напоминания рассрочки — ключ debts_manage (backend
+  // installments/*; волна Битрикс24). Список планов читается всеми.
+  const canManage = hasPermission('debts_manage');
 
   const [segment, setSegment] = useState<Segment>('open');
   const [selected, setSelected] = useState<InstallmentPlan | null>(null);
@@ -334,13 +355,20 @@ function InstallmentDetailModal({
   const payments = useMemo(() => (ledger?.payments ?? []).filter((p) => p.planId === planId), [ledger, planId]);
 
   const invalidate = () => {
-    queryClient.invalidateQueries({ queryKey: ['installments'] });
+    MONEY_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
   };
 
   const payMutation = useMutation({
     mutationFn: (data: { amount: number; comment?: string; nextPaymentDate?: string; method?: 'cash' | 'card' }) =>
       installmentsApi.pay(planId, data),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (isQueuedOffline(res)) {
+        // SW-офлайн: сервер платёж ещё НЕ видел — честный тост без «Оплата
+        // принята» и без инвалидаций (сервер ничего нового не отдаст).
+        toast('Нет сети — платёж поставлен в очередь и отправится автоматически', { icon: '📡', duration: 5000 });
+        onClose();
+        return;
+      }
       invalidate();
       toast.success('Оплата принята');
       setAmount('');
@@ -353,7 +381,12 @@ function InstallmentDetailModal({
 
   const rescheduleMutation = useMutation({
     mutationFn: (data: { nextPaymentDate?: string; comment?: string }) => installmentsApi.update(planId, data),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (isQueuedOffline(res)) {
+        toast('Нет сети — перенос даты поставлен в очередь и отправится автоматически', { icon: '📡', duration: 5000 });
+        onClose();
+        return;
+      }
       invalidate();
       toast.success('Дата платежа обновлена');
       onClose();
@@ -364,7 +397,13 @@ function InstallmentDetailModal({
   const payoffMutation = useMutation({
     // Финальное погашение уходит с тем же выбранным способом оплаты (119).
     mutationFn: () => installmentsApi.payoff(planId, { method }),
-    onSuccess: () => {
+    onSuccess: (res) => {
+      if (isQueuedOffline(res)) {
+        toast('Нет сети — погашение поставлено в очередь и отправится автоматически', { icon: '📡', duration: 5000 });
+        setPayoffOpen(false);
+        onClose();
+        return;
+      }
       invalidate();
       toast.success('Рассрочка погашена');
       setPayoffOpen(false);

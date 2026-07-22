@@ -57,6 +57,11 @@ const FOREGROUND_REVALIDATE_KEYS: readonly (readonly string[])[] = [
   ['checks-dashboard'],
   // Cashflow screen — money in / money out by day.
   ['cashflow'],
+  // Зарплата + финансовый отчёт — денежные экраны, на которые владелец
+  // смотрит после возврата в приложение (волна A: смены/зарплата/cash flow
+  // пересчитаны по московским суткам — цифры должны освежаться сами).
+  ['salary'],
+  ['financial-report'],
   // Warehouse analytics (summary + reorder forecast) — owner cares about
   // these every morning.
   ['warehouse-analytics'],

@@ -41,7 +41,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
 import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
-import { UserRole } from '../../../shared/types';
+import type { UserPermissions } from '../../../shared/types';
 
 interface Direction {
   key: string;
@@ -51,8 +51,11 @@ interface Direction {
   icon: keyof typeof Ionicons.glyphMap;
   iconBg: string;
   iconColor: string;
-  /** Owner-class only (director / admin / superadmin). */
-  ownerOnly?: boolean;
+  /**
+   * Ключ матрицы, гейтящий вход («права как в Битрикс24», 2026-07). Без
+   * ключа строка видна любому, кто дошёл до хаба (сам хаб — marketing_access).
+   */
+  permission?: keyof UserPermissions;
 }
 
 interface Group {
@@ -98,7 +101,8 @@ const GROUPS: Group[] = [
         icon: 'paper-plane-outline',
         iconBg: colors.blue[50],
         iconColor: colors.blue[600],
-        ownerOnly: true,
+        // Сервер: broadcast/winback/reminders → marketing_access.
+        permission: 'marketing_access',
       },
       {
         key: 'loyalty',
@@ -108,7 +112,8 @@ const GROUPS: Group[] = [
         icon: 'ribbon-outline',
         iconBg: colors.emerald[50],
         iconColor: colors.emerald[700],
-        ownerOnly: true,
+        // Сервер: PATCH /loyalty/settings → settings_manage.
+        permission: 'settings_manage',
       },
     ],
   },
@@ -124,7 +129,8 @@ const GROUPS: Group[] = [
         icon: 'git-network-outline',
         iconBg: colors.slate[100],
         iconColor: colors.slate[600],
-        ownerOnly: true,
+        // Сервер: телефония/касса/эквайринг → settings_manage.
+        permission: 'settings_manage',
       },
       {
         key: 'settings',
@@ -134,7 +140,8 @@ const GROUPS: Group[] = [
         icon: 'options-outline',
         iconBg: colors.indigo[50],
         iconColor: colors.indigo[600],
-        ownerOnly: true,
+        // Сервер: PATCH /marketing/settings, platform-links → marketing_access.
+        permission: 'marketing_access',
       },
     ],
   },
@@ -144,13 +151,11 @@ export default function MarketingScreen() {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { isRole } = useAuth();
-
-  const isOwner = isRole(UserRole.DIRECTOR, UserRole.ADMIN, UserRole.SUPERADMIN);
+  const { hasPermission } = useAuth();
 
   const visibleGroups = GROUPS.map((g) => ({
     ...g,
-    items: g.items.filter((d) => !d.ownerOnly || isOwner),
+    items: g.items.filter((d) => !d.permission || hasPermission(d.permission)),
   })).filter((g) => g.items.length > 0);
 
   return (

@@ -32,7 +32,6 @@ import { useColors } from '../contexts/ThemeContext';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint, getBadgeColors } from '../theme';
 import {
-  UserRole,
   type Supplier,
   type Delivery,
   type SupplierPayment,
@@ -78,17 +77,15 @@ export default function SupplierDetailScreen() {
     : null;
   const actionTextDark = dark ? { color: colors.primary[300] } : null;
   const accentIconColor = dark ? colors.primary[300] : colors.primary[600];
-  const { isRole, hasPermission } = useAuth();
+  const { hasPermission } = useAuth();
   // Single manage gate for every mutating control on this screen
   // (платёж / приёмка-поставка / возврат брака / покупка б/у / заказы /
   // погашение долга). `suppliers_access` is VIEW-only, so a viewer sees
-  // the history but NO write actions. Owner-class roles bypass by string
-  // role (backend PermissionsGuard bypasses them too, so their flattened
-  // permission map may lack `suppliers_manage`). Computed identically to
-  // SuppliersScreen. The server re-checks `suppliers_manage` on every
-  // mutation regardless.
-  const canManageSuppliers =
-    isRole(UserRole.SUPERADMIN, UserRole.DIRECTOR, UserRole.ADMIN) || hasPermission('suppliers_manage');
+  // the history but NO write actions. «Права как в Битрикс24» (2026-07):
+  // admin живёт по матрице из /auth/me; superadmin/director байпасятся внутри
+  // hasPermission. Computed identically to SuppliersScreen. The server
+  // re-checks `suppliers_manage` on every mutation regardless.
+  const canManageSuppliers = hasPermission('suppliers_manage');
   // Theme-aware fragments spread over the static (light-default) modal-form
   // styles so the sheets read correctly in dark mode. Values match the
   // already-converted form inputs across the app (UsersScreen/Suppliers).
@@ -364,6 +361,10 @@ export default function SupplierDetailScreen() {
       // Stock-movements feed (the warehouse-documents tab on the
       // journal). Used-purchase rows show up there immediately.
       queryClient.invalidateQueries({ queryKey: ['stock-movements'] }),
+      // Unified journal feed (['journal-warehouse-docs'] merges
+      // stock_movements + supplier_payments serverside) — defect returns,
+      // used purchases and payments must land there without pull-to-refresh.
+      queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] }),
     ]);
 
   const createPaymentMutation = useMutation({
@@ -1290,17 +1291,20 @@ export default function SupplierDetailScreen() {
         title="Покупка б/у запчасти"
       >
         <ScrollView style={{ maxHeight: 480 }} keyboardShouldPersistTaps="handled">
-          {/* Informational chip — owner needs to know the financial
-              side of this action ends up in the «Покупка товара»
-              expenses bucket. Backend handles the bookkeeping; UI
-              just makes that contract visible so there's no surprise
-              when reviewing expenses. */}
+          {/* Informational chip — honest bookkeeping contract (matches web
+              SupplierDetailPage). Backend `usedPurchase` does NOT write an
+              expense; it adds the item to the Б/У warehouse and grows supplier
+              debt. The money leaves the till only when that debt is paid off
+              via «Новый платёж», and that payment shows up in «Движение денег»
+              as an outflow. The old copy («попадёт в расходы в категорию
+              „Покупка товара"») promised something the backend never did. */}
           <View
             style={[styles.expenseNotice, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
           >
             <Ionicons name="information-circle-outline" size={16} color={colors.primary[600]} />
             <Text style={[styles.expenseNoticeText, { color: palette.text.secondary }]}>
-              Эта покупка автоматически попадёт в расходы в категорию «Покупка товара».
+              Товар добавится на склад Б/У, а долг поставщику вырастет на сумму закупки — погасите его позже через
+              «Новый платёж». Оплата долга отразится в «Движении денег» как отток.
             </Text>
           </View>
           <View style={styles.formField}>
