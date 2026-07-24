@@ -194,7 +194,7 @@ export default function FeatureDetailPage() {
         {/* pt компактный (4/6, а не 12/16): крошки+заголовок начинаются сразу под
             шапкой, без пустого экрана; нижний ритм секции сохранён */}
         <section className="pb-12 pt-4 sm:pb-16 sm:pt-6">
-          <div className="grid items-center gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-12">
+          <div className="grid grid-cols-1 items-center gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-12">
             {/* Hero: иконка → заголовок → подзаголовок оседают каскадом снизу */}
             <GsapReveal type="stagger" duration={0.7} className="max-w-3xl">
               <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${tint.chip}`}>

@@ -136,7 +136,11 @@ export default function NetProfit() {
 
   return (
     <section id="profit" className="scroll-mt-24 border-t border-slate-200/60">
-      <div className="mx-auto grid max-w-6xl gap-12 px-4 py-16 sm:px-6 sm:py-24 lg:grid-cols-2 lg:items-center lg:gap-16">
+      {/* grid-cols-1 обязателен: без базовой колонки неявная grid-колонка на
+          мобиле = auto (max-content) и растягивается по виджету за экран (это и
+          был корень «выходит за рамки» + распирало всю страницу). minmax(0,1fr)
+          из grid-cols-1 даёт колонке усадку по вьюпорту — виджет и glow влезают. */}
+      <div className="mx-auto grid max-w-6xl grid-cols-1 gap-12 px-4 py-16 sm:px-6 sm:py-24 lg:grid-cols-2 lg:items-center lg:gap-16">
         {/* ── Левая колонка: копия (каскад-stagger при въезде) ── */}
         <GsapReveal type="stagger" stagger={0.07}>
           <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-4xl text-balance">{title}</h2>

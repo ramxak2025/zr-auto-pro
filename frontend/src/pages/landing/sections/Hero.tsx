@@ -506,7 +506,7 @@ function DesktopHero() {
 
       {/* Оркестрованный вход: badge → заголовок → подзаголовок → буллеты → CTA →
           мокап. reduced-motion — контент сразу на месте (см. useHeroIntro). */}
-      <div className="relative mx-auto grid max-w-6xl items-center gap-8 px-4 pb-10 pt-16 sm:px-6 sm:pt-24 md:gap-14 md:pb-20 lg:grid-cols-[1.15fr_0.85fr] lg:pb-28">
+      <div className="relative mx-auto grid max-w-6xl grid-cols-1 items-center gap-8 px-4 pb-10 pt-16 sm:px-6 sm:pt-24 md:gap-14 md:pb-20 lg:grid-cols-[1.15fr_0.85fr] lg:pb-28">
         <div className="text-center lg:text-left">
           <div data-hero-badge>
             <AnchorBadge />

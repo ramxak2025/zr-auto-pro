@@ -68,12 +68,12 @@ export default function LandingPage() {
   return (
     <div
       id="top"
-      // overflow-x-clip: ни один декоративный bleed/glow/трансформ секций не
-      // создаёт горизонтального скролла на мобиле (баг: CTA-ряд NetProfit уезжал
-      // за правый край). clip (не hidden) не коэрсит overflow-y в auto → sticky
-      // Header и fixed GlassTabBar не ломаются (fixed не клипается предком без
-      // containing block, а его тут нет — PageTransition анимирует только opacity).
-      className="min-h-screen overflow-x-clip bg-[#FAFAFA] pb-28 font-display text-slate-900 antialiased selection:bg-primary-500/20 md:pb-0"
+      // Корневого overflow-x-clip тут НЕТ намеренно: он оборачивал fixed
+      // GlassTabBar, а на iOS Safari clip у предка фиксированного элемента ломает
+      // его тап-зону («кнопки не работают»). Горизонтальное переполнение убрано в
+      // источнике (grid-cols-1 в секциях), декоративные bleed'ы клиппятся своими
+      // секциями (у Hero — overflow-hidden). Так фикс-бар вне любого клипа.
+      className="min-h-screen bg-[#FAFAFA] pb-28 font-display text-slate-900 antialiased selection:bg-primary-500/20 md:pb-0"
     >
       <Header />
       <Hero />

@@ -15,13 +15,12 @@ import PageTransition from './gsap/PageTransition';
  * lazy-чанком, что и сами страницы сайта (см. App.tsx).
  */
 export default function PublicLandingLayout() {
-  // overflow-x-clip на обёртке — общий страж горизонтального переполнения для
-  // всех публичных страниц (главная, /f/:slug, /tarify, /voprosy), которые
-  // переиспользуют секции с декоративными glow/bleed. clip не создаёт scroll-
-  // контейнер (overflow-y остаётся visible) и не ломает sticky/fixed; обёртка
-  // анимирует только opacity, поэтому containing block для fixed не появляется.
+  // Без overflow-x-clip на обёртке: он оборачивал бы fixed GlassTabBar страниц,
+  // а на iOS Safari clip у предка фиксированного элемента ломает его тап-зону.
+  // Горизонтальное переполнение убрано в источнике (grid-cols-1 в секциях),
+  // декоративные bleed'ы клиппятся своими секциями.
   return (
-    <PageTransition className="overflow-x-clip">
+    <PageTransition>
       <Outlet />
     </PageTransition>
   );
