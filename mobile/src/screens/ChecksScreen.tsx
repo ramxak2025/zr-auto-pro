@@ -1,7 +1,16 @@
 import React, { useState, useMemo, useCallback, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, RefreshControl, Alert, ScrollView, Platform } from 'react-native';
-import { FlashList } from '@shopify/flash-list';
-import { ActivityIndicator } from 'react-native';
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  RefreshControl,
+  Alert,
+  ScrollView,
+  Platform,
+  FlatList,
+  ActivityIndicator,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -172,7 +181,7 @@ const KIND_CHIPS: Array<{ key: JournalKind | null; label: string }> = [
 
 type ActiveTab = 'checks' | 'warehouse';
 
-// Stable separator — module-level so FlashList doesn't get a new
+// Stable separator — module-level so the list doesn't get a new
 // component identity each parent render (would force unnecessary
 // separator unmounts/remounts between rows).
 const ListGap = () => <View style={{ height: spacing[2] }} />;
@@ -701,9 +710,6 @@ export default function ChecksScreen() {
     fetchNextPage,
     hasNextPage,
     isFetchingNextPage,
-    fetchPreviousPage,
-    hasPreviousPage,
-    isFetchingPreviousPage,
   } = useInfiniteQuery<PaginatedResponse<Check>>({
     // Page key intentionally excludes the page number so all loaded
     // pages share a single cache entry. This is what lets the user
@@ -735,24 +741,20 @@ export default function ChecksScreen() {
       const res = await checksApi.getAll(params);
       return res.data;
     },
-    // ВАЖНО: считаем по НОМЕРУ страницы (lastPageParam), а не по длине
-    // allPages — с maxPages TanStack выбрасывает самые старые страницы
-    // из кеша, и allPages.length перестаёт совпадать с номером последней.
+    // Считаем по НОМЕРУ страницы (lastPageParam), а не по длине allPages —
+    // устойчиво к тому, сколько страниц реально удержано в кеше.
     getNextPageParam: (lastPage, _allPages, lastPageParam) => {
       const page = (lastPageParam as number) ?? 1;
       return page * limit < (lastPage?.total ?? 0) ? page + 1 : undefined;
     },
-    getPreviousPageParam: (_firstPage, _allPages, firstPageParam) => {
-      const page = (firstPageParam as number) ?? 1;
-      return page > 1 ? page - 1 : undefined;
-    },
-    // RNPERF-7: держим в кеше максимум 5 страниц (100 строк). 30-секундный
-    // focus-poll перезапрашивает ТОЛЬКО удержанные страницы — без maxPages
-    // глубокий скролл превращал каждый poll в десятки последовательных
-    // запросов. Выпавшие при глубоком скролле свежие страницы дозагружаются
-    // обратно через fetchPreviousPage (onStartReached на FlashList) при
-    // скролле к началу списка.
-    maxPages: 5,
+    // Пагинация теперь ТОЛЬКО вниз (append) на обычном RN FlatList — как на
+    // экране Клиентов. Убрали maxPages / fetchPreviousPage / getPreviousPageParam:
+    // симметричная догрузка вверх работала лишь на FlashList (onStartReached +
+    // maintainVisibleContentPosition) и как раз давала ре-анкор / мерцание /
+    // пропадание строк на Android. Без maxPages массив данных только РАСТЁТ,
+    // никогда не усыхает сверху, поэтому строки не прыгают. Журнал редко
+    // превышает пару сотен строк; gcTime 30 мин ограничивает память, а
+    // focus-poll обновляет удержанные страницы на месте.
     // Журнал — холодный список, который меняется редко (новые чеки идут
     // через invalidate в delete/create мутациях). 5 минут «свежо», 30 минут
     // живёт в памяти — возврат с CheckDetail попадает прямо в кеш.
@@ -1644,43 +1646,41 @@ export default function ChecksScreen() {
           ) : checks.length === 0 && !isLoading ? (
             <EmptyState title="Чеков не найдено" description="Попробуйте изменить фильтры" />
           ) : (
-            <FlashList
+            <FlatList
               data={checks}
               keyExtractor={(item) => item.id}
               renderItem={renderCheck}
-              // FlashList v2 auto-measures rows; no estimatedItemSize.
               contentContainerStyle={[styles.list, Platform.OS === 'android' ? { paddingBottom: tabBarHeight } : null]}
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
-              // removeClippedSubviews is iOS-default; on Android the
-              // journal can grow to hundreds of rows so we opt in
-              // explicitly to avoid offscreen draws dragging the UI
-              // thread during fast flings.
-              removeClippedSubviews
+              // Обычный RN FlatList (НЕ FlashList) — тот же фикс, что вылечил
+              // экран Клиентов. FlashList РЕЦИКЛИТ ячейки; на Fabric/Android
+              // рециклированная ячейка может на кадр показать пустую / устаревшую
+              // строку — ровно «то показывает, то нет, то мерцает» у владельца.
+              // FlatList монтирует по строке на чек и не переиспользует их,
+              // поэтому строка физически не может «побелеть». removeClippedSubviews
+              // OFF — офскрин-строку никогда не отсоединяют/присоединяют заново
+              // (ещё один источник пустого кадра на Android). Список только
+              // ДОПОЛНЯЕТСЯ снизу (onEndReached), верх не переанкорится.
+              removeClippedSubviews={false}
+              initialNumToRender={12}
+              windowSize={11}
+              maxToRenderPerBatch={12}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }
               onEndReached={() => {
-                if (hasNextPage && !isFetchingNextPage) fetchNextPage();
+                // Догружаем следующую страницу вниз. `!isPlaceholderData`
+                // критичен: сразу после смены поиска/фильтра список ещё
+                // показывает страницы ПРЕДЫДУЩЕГО ключа через глобальный
+                // placeholderData — пагинация этого «одолженного» снапшота
+                // гонялась бы с загрузкой page-1 нового ключа и подменяла бы
+                // видимые строки (как раз мерцание / пропадание).
+                if (hasNextPage && !isFetchingNextPage && !isPlaceholderData) fetchNextPage();
               }}
-              onEndReachedThreshold={0.6}
-              // Симметричная подгрузка вверх: когда maxPages выкинул
-              // страницу 1 (самые свежие чеки), скролл к началу списка
-              // дотягивает её обратно. FlashList v2 держит позицию через
-              // maintainVisibleContentPosition (включён по умолчанию).
-              onStartReached={() => {
-                if (hasPreviousPage && !isFetchingPreviousPage) fetchPreviousPage();
-              }}
-              onStartReachedThreshold={0.2}
+              onEndReachedThreshold={0.5}
               ItemSeparatorComponent={ListGap}
-              ListHeaderComponent={
-                isFetchingPreviousPage ? (
-                  <View style={{ paddingVertical: spacing[4], alignItems: 'center' }}>
-                    <ActivityIndicator size="small" color={colors.primary[500]} />
-                  </View>
-                ) : null
-              }
               ListFooterComponent={
                 isFetchingNextPage ? (
                   <View style={{ paddingVertical: spacing[4], alignItems: 'center' }}>
@@ -1711,7 +1711,7 @@ export default function ChecksScreen() {
               <EmptyState title="Документов не найдено" description="Складские движения и поставки появятся здесь" />
             )
           ) : (
-            <FlashList
+            <FlatList
               data={warehouseDocs}
               keyExtractor={(item) => `${item.kind}-${item.id}`}
               renderItem={renderWarehouseDoc}
@@ -1719,7 +1719,13 @@ export default function ChecksScreen() {
               contentInset={{ bottom: tabBarHeight }}
               scrollIndicatorInsets={{ bottom: tabBarHeight }}
               automaticallyAdjustContentInsets={false}
-              removeClippedSubviews
+              // Обычный RN FlatList (НЕ FlashList) — см. пояснение у списка
+              // чеков выше. removeClippedSubviews=false убирает пустые кадры
+              // от отсоединения офскрин-строк на Android.
+              removeClippedSubviews={false}
+              initialNumToRender={12}
+              windowSize={11}
+              maxToRenderPerBatch={12}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }
@@ -2240,11 +2246,11 @@ const styles = StyleSheet.create({
   clearFiltersBtnText: { fontSize: fontSize.xs, color: colors.red[500], fontWeight: fontWeight.medium },
 
   // ── List ────────────────────────────────────────────────────────
-  // iOS: bottom space reserved via FlashList's contentInset prop so
+  // iOS: bottom space reserved via the list's contentInset prop so
   // the floating Liquid Glass bar shows live content scrolling under
   // it. Android: contentInset is silently ignored by the platform, so
   // we add an explicit paddingBottom equal to the M3 NavigationBar
-  // height (added inline at the FlashList consumers below to avoid
+  // height (added inline at the FlatList consumers below to avoid
   // hard-coding the bar height here).
   list: { paddingHorizontal: spacing[4] },
 

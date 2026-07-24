@@ -13,7 +13,7 @@ import {
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import Reveal from './sections/Reveal';
+import { GsapReveal, useReveal } from './gsap';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
 import { linkifyContacts } from './sections/linkify';
@@ -220,6 +220,10 @@ export default function VoprosyPage() {
   const listAnchorRef = useRef<HTMLDivElement>(null);
   /** Заголовок раскрытой категории — цель авто-скролла после тапа по карточке. */
   const qaTopRef = useRef<HTMLElement>(null);
+  // Сетка категорий-карточек мягко приподнимается при появлении в вьюпорте.
+  // Элемент рендерится на маунте (searching=false по умолчанию) — reveal
+  // отработает; при reduced-motion/без JS сетка видима по CSS-дефолту.
+  const catGridRef = useReveal<HTMLDivElement>({ type: 'rise', start: 'top 92%', distance: 20 });
 
   const whatsapp = getWhatsAppUrl();
   const telegram = getTelegramUrl();
@@ -315,15 +319,15 @@ export default function VoprosyPage() {
         </div>
 
         {/* Hero-строка: pt-4/6 — единый ритм публичных страниц (контент сразу под шапкой) */}
-        <Reveal className="pt-4 sm:pt-6">
+        <GsapReveal type="stagger" className="pt-4 sm:pt-6">
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
             Вопросы и ответы
           </h1>
           <p className="mt-3 text-lg text-slate-600">Всё, что спрашивают владельцы автосервисов</p>
-        </Reveal>
+        </GsapReveal>
 
         {/* Поиск: text-base = 16px — iOS не автозумит инпут при фокусе */}
-        <Reveal delay={0.05}>
+        <GsapReveal type="rise" delay={0.05}>
           <div className="relative mt-6">
             <Search
               className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400"
@@ -365,7 +369,7 @@ export default function VoprosyPage() {
               Найдено: {foundCount} из {TOTAL_COUNT}
             </p>
           )}
-        </Reveal>
+        </GsapReveal>
 
         {/* Якорь для snapToListTop: scroll-mt-16 ставит его ровно под MiniHeader */}
         <div ref={listAnchorRef} aria-hidden className="scroll-mt-16" />
@@ -408,7 +412,7 @@ export default function VoprosyPage() {
         ) : (
           /* Хаб: сетка категорий-карточек + вопросы выбранной категории под ней */
           <>
-            <div role="group" aria-label="Категории вопросов" className="mt-6">
+            <div ref={catGridRef} role="group" aria-label="Категории вопросов" className="mt-6">
               {/* Сквозные категории (Общие, Цены) — верхний ряд без заголовка */}
               <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3">
                 {META_GROUPS.map((g) => (
@@ -439,17 +443,27 @@ export default function VoprosyPage() {
                 scroll-mt-20 = sticky MiniHeader (64px) + воздух */}
             <section ref={qaTopRef} className="scroll-mt-20 pt-10" aria-live="polite">
               <GroupHeading group={activeGroup} />
-              <div className="mt-4 space-y-3">
+              {/* Вопросы каскадом. key={activeKey} перемонтирует reveal при смене
+                  категории → свежий стаггер, когда pickCategory доводит список в
+                  вьюпорт (reduced-motion → сразу видимо). Аккордеон .acc-details
+                  раскрывается CSS-плавно (index.css) — reveal его не касается. */}
+              <GsapReveal
+                key={activeKey}
+                type="stagger"
+                childSelector=".acc-details"
+                start="top 90%"
+                className="mt-4 space-y-3"
+              >
                 {activeGroup.items.map((item) => (
                   <QaItem key={item.q} item={item} />
                 ))}
-              </div>
+              </GsapReveal>
             </section>
           </>
         )}
 
         {/* CTA-карточка внизу */}
-        <Reveal className="pt-14 sm:pt-20">
+        <GsapReveal type="scale-in" className="pt-14 sm:pt-20">
           <div className="relative overflow-hidden rounded-3xl border border-slate-200/60 bg-white px-6 py-12 text-center shadow-sm">
             <div aria-hidden className="pointer-events-none absolute inset-0">
               <div className="absolute -top-20 left-1/2 h-48 w-[420px] -translate-x-1/2 rounded-full bg-primary-200/50 blur-[90px]" />
@@ -488,7 +502,7 @@ export default function VoprosyPage() {
               </div>
             </div>
           </div>
-        </Reveal>
+        </GsapReveal>
 
         <div className="pb-16" />
       </main>

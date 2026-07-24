@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { ArrowRight, LayoutGrid, Mic } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import CarouselDots from './CarouselDots';
-import Reveal from './Reveal';
+import { GsapReveal, gsap, useGSAP, EASE, DUR } from '../gsap';
 import { features } from '../content';
 import { DEFAULT_TINT, groupBySections, SECTION_ICONS, SECTION_TINTS, type SectionTint } from '../icons';
 
@@ -206,24 +206,103 @@ const GROUPED_FEATURES = groupBySections(features);
 export default function Features() {
   const bySlug = new Map(features.map((f) => [f.slug, f]));
   const scrollerRef = useRef<HTMLDivElement>(null);
+  const gridRef = useRef<HTMLDivElement>(null);
+
+  /**
+   * Bento собирается «из центра наружу»: задержка каждой плитки пропорциональна
+   * пиксельному расстоянию её центра от центра сетки — верно при любых span'ах
+   * 12-колоночной раскладки (индексный stagger 'from:center' про span'ы не
+   * знает). Иконка-чип каждой плитки чуть позже делает микро-pop. Контент виден
+   * по CSS-дефолту: from ставится только в ветке no-preference; на мобиле сетка
+   * display:none — ветка (min-width:768) не матчится. gsap.context (useGSAP)
+   * киллит ScrollTrigger'ы при уходе со страницы (SPA-роутинг).
+   */
+  useGSAP(
+    () => {
+      const grid = gridRef.current;
+      if (!grid) return;
+      const mm = gsap.matchMedia();
+      mm.add('(min-width: 768px) and (prefers-reduced-motion: no-preference)', () => {
+        const tiles = gsap.utils.toArray<HTMLElement>('[data-reveal-tile]', grid);
+        if (!tiles.length) return;
+        const chips = gsap.utils.toArray<HTMLElement>('[data-reveal-chip]', grid);
+        try {
+          const gr = grid.getBoundingClientRect();
+          const cx = gr.left + gr.width / 2;
+          const cy = gr.top + gr.height / 2;
+          const dist = tiles.map((el) => {
+            const r = el.getBoundingClientRect();
+            return Math.hypot(r.left + r.width / 2 - cx, r.top + r.height / 2 - cy);
+          });
+          const maxD = Math.max(...dist, 1);
+          const tileDelay = (i: number) => (dist[i] / maxD) * 0.5;
+
+          // transition-all (hover-lift плиток) конфликтует с per-frame transform
+          // GSAP — глушим переход на время входа, восстанавливаем в onComplete.
+          tiles.forEach((el) => (el.style.transition = 'none'));
+
+          gsap.set(tiles, {
+            autoAlpha: 0,
+            y: 26,
+            scale: 0.965,
+            transformOrigin: '50% 50%',
+            willChange: 'transform, opacity',
+          });
+          gsap.set(chips, { autoAlpha: 0, scale: 0.5, transformOrigin: '50% 50%' });
+
+          gsap.to(tiles, {
+            autoAlpha: 1,
+            y: 0,
+            scale: 1,
+            duration: DUR.base,
+            ease: EASE.out,
+            stagger: (i: number) => tileDelay(i),
+            overwrite: 'auto',
+            scrollTrigger: { trigger: grid, start: 'top 78%', once: true },
+            onComplete: () => {
+              tiles.forEach((el) => (el.style.transition = ''));
+              gsap.set(tiles, { clearProps: 'all' });
+            },
+          });
+
+          gsap.to(chips, {
+            autoAlpha: 1,
+            scale: 1,
+            duration: 0.42,
+            ease: EASE.out,
+            delay: 0.12,
+            stagger: (i: number) => tileDelay(i),
+            overwrite: 'auto',
+            scrollTrigger: { trigger: grid, start: 'top 78%', once: true },
+            onComplete: () => gsap.set(chips, { clearProps: 'all' }),
+          });
+        } catch {
+          tiles.forEach((el) => (el.style.transition = ''));
+          gsap.set(tiles, { clearProps: 'all' });
+          gsap.set(chips, { clearProps: 'all' });
+        }
+      });
+    },
+    { scope: gridRef },
+  );
 
   return (
     <section id="features" className="scroll-mt-24 border-t border-slate-200/60">
       <div className="mx-auto max-w-6xl px-4 py-12 sm:px-6 sm:py-28">
-        <Reveal className="mx-auto max-w-2xl text-center">
+        <GsapReveal type="clip" className="mx-auto max-w-2xl text-center">
           <h2 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
             Всё, что нужно сервису
           </h2>
           <p className="mt-4 text-lg text-slate-600">
             От первого звонка клиента до зарплаты мастера — один инструмент вместо тетради, Excel и калькулятора.
           </p>
-        </Reveal>
+        </GsapReveal>
 
         {/* < md: вместо 17 стековых карточек — фото-карусель «Главное» (6 rich-карточек)
             + компактная сетка чипов «Все возможности». Скролл страницы короче в разы,
             фото продают вместо простыней текста. md+ — прежний bento без изменений. */}
         <div className="md:hidden">
-          <Reveal delay={0.05}>
+          <GsapReveal start="top 90%">
             <p className="mt-8 text-xs font-semibold uppercase tracking-wider text-slate-600">Главное</p>
             {/* CSS scroll-snap: карточка ~78vw + peek следующей; JS — только
                 passive-слушатель точек-индикаторов ниже, жесты не трогает */}
@@ -277,9 +356,9 @@ export default function Features() {
               itemLabel="Раздел"
               className="mt-1"
             />
-          </Reveal>
+          </GsapReveal>
 
-          <Reveal delay={0.05}>
+          <GsapReveal type="stagger" start="top 90%">
             <p className="mt-8 text-xs font-semibold uppercase tracking-wider text-slate-600">Все возможности</p>
             {/* Группы направлений из SECTION_GROUPS (icons.ts) — те же, что в шторке
                 «Разделы». Заголовок группы — slate-500: тише лейбла секции (slate-600),
@@ -311,45 +390,49 @@ export default function Features() {
                 </div>
               </div>
             ))}
-          </Reveal>
+          </GsapReveal>
         </div>
 
-        <div className="mt-14 hidden gap-4 md:grid md:grid-cols-2 lg:auto-rows-[minmax(11rem,auto)] lg:grid-cols-12">
-          {LAYOUT.map(({ slug, className }, i) => {
+        <div
+          ref={gridRef}
+          className="mt-14 hidden gap-4 md:grid md:grid-cols-2 lg:auto-rows-[minmax(11rem,auto)] lg:grid-cols-12"
+        >
+          {LAYOUT.map(({ slug, className }) => {
             const section = bySlug.get(slug);
             if (!section) return null;
             const Icon = SECTION_ICONS[section.icon] ?? LayoutGrid;
             const tint = SECTION_TINTS[slug] ?? DEFAULT_TINT;
             return (
-              <Reveal key={slug} className={className} delay={Math.min(i * 0.04, 0.28)}>
-                <Link
-                  to={`/f/${slug}`}
-                  className="group relative flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200/60 bg-white p-6 shadow-sm transition-all duration-300 motion-safe:hover:-translate-y-0.5 hover:shadow-md motion-safe:active:scale-[0.98]"
+              <Link
+                key={slug}
+                data-reveal-tile
+                to={`/f/${slug}`}
+                className={`${className} group relative flex h-full flex-col overflow-hidden rounded-3xl border border-slate-200/60 bg-white p-6 shadow-sm transition-all duration-300 motion-safe:hover:-translate-y-0.5 hover:shadow-md motion-safe:active:scale-[0.98]`}
+              >
+                {/* Карточкам без мокапа — большая полупрозрачная иконка раздела
+                    в правом верхнем углу: глубина без шума */}
+                {!MOCKS[slug] && (
+                  <Icon
+                    aria-hidden
+                    strokeWidth={1.5}
+                    className={`pointer-events-none absolute -right-4 -top-4 h-24 w-24 rotate-6 ${tint.icon} opacity-[0.12]`}
+                  />
+                )}
+                <span
+                  data-reveal-chip
+                  className={`relative inline-flex h-10 w-10 items-center justify-center rounded-xl ${tint.chip}`}
                 >
-                  {/* Карточкам без мокапа — большая полупрозрачная иконка раздела
-                      в правом верхнем углу: глубина без шума */}
-                  {!MOCKS[slug] && (
-                    <Icon
-                      aria-hidden
-                      strokeWidth={1.5}
-                      className={`pointer-events-none absolute -right-4 -top-4 h-24 w-24 rotate-6 ${tint.icon} opacity-[0.12]`}
-                    />
-                  )}
-                  <span
-                    className={`relative inline-flex h-10 w-10 items-center justify-center rounded-xl ${tint.chip}`}
-                  >
-                    <Icon className={`h-5 w-5 ${tint.icon}`} />
-                  </span>
-                  <h3 className="mt-4 text-lg font-semibold text-slate-900">{section.title}</h3>
-                  <p className="mt-1 text-sm font-medium leading-relaxed text-slate-700">{section.tagline}</p>
-                  <p className="mt-1.5 text-sm leading-relaxed text-slate-500">{section.summary}</p>
-                  {MOCKS[slug]}
-                  <span className="mt-auto inline-flex items-center gap-1 pt-4 text-sm font-semibold text-primary-600 transition-colors group-hover:text-primary-700">
-                    Подробнее
-                    <ArrowRight className="h-4 w-4 transition-transform duration-200 motion-safe:group-hover:translate-x-0.5" />
-                  </span>
-                </Link>
-              </Reveal>
+                  <Icon className={`h-5 w-5 ${tint.icon}`} />
+                </span>
+                <h3 className="mt-4 text-lg font-semibold text-slate-900">{section.title}</h3>
+                <p className="mt-1 text-sm font-medium leading-relaxed text-slate-700">{section.tagline}</p>
+                <p className="mt-1.5 text-sm leading-relaxed text-slate-500">{section.summary}</p>
+                {MOCKS[slug]}
+                <span className="mt-auto inline-flex items-center gap-1 pt-4 text-sm font-semibold text-primary-600 transition-colors group-hover:text-primary-700">
+                  Подробнее
+                  <ArrowRight className="h-4 w-4 transition-transform duration-200 motion-safe:group-hover:translate-x-0.5" />
+                </span>
+              </Link>
             );
           })}
         </div>

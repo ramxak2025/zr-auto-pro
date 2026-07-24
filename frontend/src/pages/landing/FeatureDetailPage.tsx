@@ -3,7 +3,7 @@ import { Link, Navigate, useParams } from 'react-router-dom';
 import { ArrowRight, Check, ChevronDown, ChevronRight, LayoutGrid, MessageCircle, Send, X } from 'lucide-react';
 import { ctaSection, features, type FeatureSection, type RoleBenefits } from './content';
 import { getTelegramUrl, getWhatsAppUrl, WHATSAPP_ACCESS_MESSAGE } from './config';
-import Reveal from './sections/Reveal';
+import { GsapReveal } from './gsap';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
 import OptionalImage from './OptionalImage';
@@ -195,7 +195,8 @@ export default function FeatureDetailPage() {
             шапкой, без пустого экрана; нижний ритм секции сохранён */}
         <section className="pb-12 pt-4 sm:pb-16 sm:pt-6">
           <div className="grid items-center gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] lg:gap-12">
-            <Reveal className="max-w-3xl">
+            {/* Hero: иконка → заголовок → подзаголовок оседают каскадом снизу */}
+            <GsapReveal type="stagger" duration={0.7} className="max-w-3xl">
               <span className={`inline-flex h-12 w-12 items-center justify-center rounded-2xl ${tint.chip}`}>
                 <SectionIcon className={`h-6 w-6 ${tint.icon}`} />
               </span>
@@ -203,18 +204,21 @@ export default function FeatureDetailPage() {
                 {detail.heroTitle}
               </h1>
               <p className="mt-4 text-lg leading-relaxed text-slate-600">{detail.heroSubtitle}</p>
-            </Reveal>
-            <OptionalImage
-              src={`/img/landing/f-${section.slug}.webp`}
-              alt={`${section.title} в Autexa`}
-              width={800}
-              height={600}
-              className="w-full rounded-3xl border border-slate-200/60 object-cover shadow-sm"
-            />
+            </GsapReveal>
+            {/* Иллюстрация раскрывается маской снизу вверх (когда владелец её положит) */}
+            <GsapReveal type="clip" delay={0.1}>
+              <OptionalImage
+                src={`/img/landing/f-${section.slug}.webp`}
+                alt={`${section.title} в Autexa`}
+                width={800}
+                height={600}
+                className="w-full rounded-3xl border border-slate-200/60 object-cover shadow-sm"
+              />
+            </GsapReveal>
           </div>
 
           {/* «Знакомо?» — боли без продукта */}
-          <Reveal delay={0.08}>
+          <GsapReveal type="rise" delay={0.08}>
             <div className="mt-10 rounded-3xl border border-slate-200 bg-white p-6 sm:p-8">
               <h2 className="text-sm font-semibold uppercase tracking-wider text-slate-500">Знакомо?</h2>
               <ul className="mt-4 space-y-3">
@@ -228,19 +232,19 @@ export default function FeatureDetailPage() {
                 ))}
               </ul>
             </div>
-          </Reveal>
+          </GsapReveal>
         </section>
 
         {/* Возможности */}
         <section className="pb-12 sm:pb-16">
-          <Reveal>
+          <GsapReveal type="rise">
             <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
               Как это работает в Autexa
             </h2>
-          </Reveal>
+          </GsapReveal>
           <div className="mt-8 grid grid-cols-1 gap-4 sm:grid-cols-2">
             {detail.capabilities.map((cap, i) => (
-              <Reveal key={cap.title} delay={Math.min(i * 0.04, 0.24)}>
+              <GsapReveal type="rise" key={cap.title} delay={Math.min(i * 0.04, 0.24)}>
                 <div className="h-full rounded-2xl border border-slate-200 bg-white p-6 transition-colors hover:border-primary-300">
                   <span className="inline-flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-50">
                     <Check className="h-5 w-5 text-emerald-600" />
@@ -248,38 +252,38 @@ export default function FeatureDetailPage() {
                   <h3 className="mt-3 font-semibold text-slate-900">{cap.title}</h3>
                   <p className="mt-1.5 text-sm leading-relaxed text-slate-600">{cap.text}</p>
                 </div>
-              </Reveal>
+              </GsapReveal>
             ))}
           </div>
         </section>
 
         {/* Кому это */}
         <section className="pb-12 sm:pb-16">
-          <Reveal>
+          <GsapReveal type="rise">
             <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">Кому это</h2>
-          </Reveal>
+          </GsapReveal>
           <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
             {roleCards.map(({ key, label }, i) => (
-              <Reveal key={key} delay={Math.min(i * 0.06, 0.18)}>
+              <GsapReveal type="scale-in" key={key} delay={Math.min(i * 0.06, 0.18)}>
                 <div className="h-full rounded-2xl border border-slate-200 bg-white p-6">
                   <p className="text-sm font-semibold text-primary-600">{label}</p>
                   <p className="mt-2 leading-relaxed text-slate-600">{detail.roleBenefits[key]}</p>
                 </div>
-              </Reveal>
+              </GsapReveal>
             ))}
           </div>
         </section>
 
         {/* Мини-FAQ */}
         <section className="pb-12 sm:pb-16">
-          <Reveal>
+          <GsapReveal type="rise">
             <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
               Частые вопросы
             </h2>
-          </Reveal>
+          </GsapReveal>
           <div className="mt-8 space-y-3">
             {detail.faq.map((item, i) => (
-              <Reveal key={item.q} delay={Math.min(i * 0.05, 0.15)}>
+              <GsapReveal type="rise" key={item.q} delay={Math.min(i * 0.05, 0.15)}>
                 {/* acc-details — плавное раскрытие (interpolate-size, см. index.css) */}
                 <details className="acc-details group rounded-2xl border border-slate-200 bg-white transition-colors hover:border-slate-300">
                   <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
@@ -288,14 +292,14 @@ export default function FeatureDetailPage() {
                   </summary>
                   <p className="px-5 pb-5 text-sm leading-relaxed text-slate-600">{item.a}</p>
                 </details>
-              </Reveal>
+              </GsapReveal>
             ))}
           </div>
         </section>
 
         {/* CTA */}
         <section className="pb-12 sm:pb-16">
-          <Reveal>
+          <GsapReveal type="scale-in">
             <div className="rounded-3xl border border-slate-200 bg-white p-8 text-center sm:p-12">
               <p className="mx-auto max-w-2xl text-lg leading-relaxed text-slate-900">{detail.ctaText}</p>
               <p className="mx-auto mt-3 max-w-2xl text-sm text-slate-500">{ctaSection.riskReversal}</p>
@@ -303,21 +307,21 @@ export default function FeatureDetailPage() {
                 <CtaButtons />
               </div>
             </div>
-          </Reveal>
+          </GsapReveal>
         </section>
 
         {/* Смотрите также */}
         <section className="pb-16 sm:pb-20">
-          <Reveal>
+          <GsapReveal type="rise">
             <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
               Смотрите также
             </h2>
-          </Reveal>
+          </GsapReveal>
           <div className="mt-8 grid grid-cols-1 gap-4 md:grid-cols-3">
             {related.map((rel, i) => (
-              <Reveal key={rel.slug} delay={Math.min(i * 0.06, 0.18)}>
+              <GsapReveal type="rise" key={rel.slug} delay={Math.min(i * 0.06, 0.18)}>
                 <RelatedCard section={rel} />
-              </Reveal>
+              </GsapReveal>
             ))}
           </div>
         </section>

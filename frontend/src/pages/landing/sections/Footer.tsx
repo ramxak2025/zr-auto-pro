@@ -1,5 +1,6 @@
 import { Link } from 'react-router-dom';
 import { MessageCircle, Send } from 'lucide-react';
+import { useReveal } from '../gsap';
 import { WHATSAPP_ACCESS_MESSAGE, getTelegramUrl, getWhatsAppUrl } from '../config';
 import { features } from '../content';
 
@@ -34,10 +35,21 @@ export default function Footer() {
     (f): f is NonNullable<typeof f> => Boolean(f),
   );
 
+  // Тонкий reveal: фон/бордер футера остаются на месте, поднимается только
+  // контент (childSelector). Контракт видимости соблюдён — контент виден по
+  // CSS-дефолту, from ставится лишь в no-preference, сбой форсит показ.
+  const footerRef = useReveal<HTMLElement>({
+    type: 'rise',
+    childSelector: '[data-footer-reveal]',
+    start: 'top 92%',
+    distance: 14,
+    stagger: 0.06,
+  });
+
   return (
-    <footer className="border-t border-slate-200/70 bg-slate-50">
+    <footer ref={footerRef} className="border-t border-slate-200/70 bg-slate-50">
       {/* ── Мобильный минимализм (< md): лого+иконки в одну строку, ниже — © ── */}
-      <div className="px-4 py-5 md:hidden">
+      <div data-footer-reveal className="px-4 py-5 md:hidden">
         <div className="flex items-center justify-between">
           <img
             src="/logo.png"
@@ -86,7 +98,7 @@ export default function Footer() {
       </div>
 
       {/* ── Полный футер (md+) ── */}
-      <div className="mx-auto hidden max-w-6xl px-4 pb-10 pt-12 sm:px-6 md:block">
+      <div data-footer-reveal className="mx-auto hidden max-w-6xl px-4 pb-10 pt-12 sm:px-6 md:block">
         <div className="grid grid-cols-2 gap-x-6 gap-y-10 md:grid-cols-[1.4fr_1fr_1fr_1fr]">
           {/* Бренд */}
           <div className="col-span-2 md:col-span-1">

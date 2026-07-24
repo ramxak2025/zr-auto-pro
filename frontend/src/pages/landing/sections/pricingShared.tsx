@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, MessageCircle, Minus, Wrench } from 'lucide-react';
+import { gsap, useGSAP, EASE } from '../gsap';
 import { pricing, type PlanCellValue, type PricingPlan } from '../content';
 import { getWhatsAppUrl, WHATSAPP_IMPLEMENTATION_MESSAGE } from '../config';
 
@@ -50,16 +51,67 @@ function CompareCell({ value }: { value: PlanCellValue }) {
   return <span className="text-sm font-semibold text-slate-900">{value}</span>;
 }
 
-/** Карточка тарифа; «Легенда» — primary-бордер, бейдж и подъём на desktop. */
+/**
+ * Карточка тарифа; «Легенда» — primary-бордер, бейдж и подъём на desktop.
+ *
+ * Рекомендованный (highlighted) план дополнительно акцентирован мягким
+ * primary-glow'ом (без фиолетового), который «распускается» при въезде карточки
+ * в вьюпорт — декоративный слой (aria-hidden, прозрачный центр, ореол через
+ * box-shadow) с собственным ScrollTrigger'ом. Он анимирует ОТДЕЛЬНЫЙ элемент,
+ * а не саму карточку, — не конфликтует с reveal'ом обёртки страницы. Контракт
+ * видимости: glow виден по CSS-дефолту; from:opacity ставится лишь в
+ * no-preference; при reduced-motion / сбое остаётся видимым (clearProps).
+ */
 export function PlanCard({ plan }: { plan: PricingPlan }) {
+  const scope = useRef<HTMLDivElement>(null);
+
+  useGSAP(
+    () => {
+      const root = scope.current;
+      if (!root) return;
+      const glow = root.querySelector<HTMLElement>('[data-plancard-glow]');
+      if (!glow) return; // только у highlighted-карточки
+
+      const mm = gsap.matchMedia();
+      mm.add(
+        { reduce: '(prefers-reduced-motion: reduce)', ok: '(prefers-reduced-motion: no-preference)' },
+        (ctx: gsap.Context) => {
+          if (ctx.conditions?.reduce) return; // reduced-motion → glow остаётся видимым
+          try {
+            gsap.set(glow, { autoAlpha: 0, scale: 0.9, transformOrigin: '50% 50%', willChange: 'transform, opacity' });
+            gsap.to(glow, {
+              autoAlpha: 1,
+              scale: 1,
+              duration: 0.9,
+              ease: EASE.out,
+              scrollTrigger: { trigger: root, start: 'top 85%', once: true },
+              onComplete: () => gsap.set(glow, { clearProps: 'all' }),
+            });
+          } catch {
+            gsap.set(glow, { clearProps: 'all' });
+          }
+        },
+      );
+    },
+    { scope },
+  );
+
   return (
     <div
+      ref={scope}
       className={`relative flex h-full flex-col rounded-3xl bg-white p-6 sm:p-7 ${
         plan.highlighted
           ? 'border border-primary-300 shadow-md ring-1 ring-primary-200/60 md:-translate-y-2'
           : 'border border-slate-200/60 shadow-sm'
       }`}
     >
+      {plan.highlighted && (
+        <span
+          data-plancard-glow
+          aria-hidden
+          className="pointer-events-none absolute inset-0 rounded-3xl shadow-[0_16px_50px_-14px_rgba(37,99,235,0.4)]"
+        />
+      )}
       {plan.badge && (
         <span className="absolute -top-3 left-1/2 -translate-x-1/2 whitespace-nowrap rounded-full bg-primary-600 px-3 py-1 text-[11px] font-semibold text-white shadow-md shadow-primary-600/25">
           {plan.badge}

@@ -22,9 +22,10 @@ import SectionsSheet from './SectionsSheet';
  */
 
 function itemCls(active: boolean) {
-  // color 200ms — мягкий переход тинта активного пункта; transform — для active:scale-95
-  return `flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center rounded-full px-1 py-1 transition-[color,transform] duration-200 motion-safe:active:scale-95 ${
-    active ? 'text-primary-600' : 'text-slate-600'
+  // Активный пункт получает мягкую pill-подсветку (bg-primary-50) — ясная
+  // «где я» без нового элемента; переход color+bg 200ms, transform — active:scale-95.
+  return `flex min-h-[48px] min-w-0 flex-1 flex-col items-center justify-center rounded-full px-1 py-1 transition-[color,background-color,transform] duration-200 motion-safe:active:scale-95 ${
+    active ? 'bg-primary-50 text-primary-600' : 'text-slate-600'
   }`;
 }
 

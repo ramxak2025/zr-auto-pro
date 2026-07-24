@@ -47,6 +47,9 @@ function lazyWithRetry<T extends ComponentType<any>>(
 // Each page loads only when the user navigates to its route.
 // lazyWithRetry adds retry logic to handle stale-cache chunk load failures.
 
+// Персистентный layout сайта: держит один <PageTransition> для кросс-фейда между
+// публичными страницами. Lazy — чтобы GSAP не попал в главный бандл приложения.
+const PublicLandingLayout = lazyWithRetry(() => import('./pages/landing/PublicLandingLayout'));
 const LandingPage = lazyWithRetry(() => import('./pages/landing/LandingPage'));
 const FeatureDetailPage = lazyWithRetry(() => import('./pages/landing/FeatureDetailPage'));
 const TarifyPage = lazyWithRetry(() => import('./pages/landing/TarifyPage'));
@@ -209,28 +212,34 @@ export default function App() {
           <Route path="/privacy" element={<PrivacyPage />} />
           <Route path="/terms" element={<TermsPage />} />
 
-          {/* Public: Landing on the root for anonymous visitors.
-              Logged-in users are redirected exactly like on /login. */}
-          <Route
-            path="/"
-            element={
-              user ? (
-                <Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace />
-              ) : (
-                <LandingPage />
-              )
-            }
-          />
+          {/* Logged-in visitors to «/» are bounced to their home BEFORE the landing
+              layout (and its GSAP chunk) loads — этот роут матчится вместо
+              LandingPage внутри layout ниже, так что редирект остаётся мгновенным. */}
+          {user && (
+            <Route
+              path="/"
+              element={<Navigate to={user.role === UserRole.SUPERADMIN ? '/admin/dashboard' : '/dashboard'} replace />}
+            />
+          )}
 
-          {/* Public: страницы-разделы лендинга /f/:slug. Доступны всем — залогиненных
-              НЕ редиректим: пусть изучают возможности из-под своего аккаунта. */}
-          <Route path="/f/:slug" element={<FeatureDetailPage />} />
+          {/* Публичные страницы сайта под общим layout: один персистентный
+              <PageTransition> даёт плавный кросс-фейд при переходах между «/»,
+              «/f/:slug», «/tarify», «/voprosy». reduced-motion → мгновенно.
+              Приватные/app-роуты ниже — вне layout, их анимация не касается. */}
+          <Route element={<PublicLandingLayout />}>
+            {/* «/» — лендинг только для анонимных; для залогиненных выше стоит редирект */}
+            {!user && <Route path="/" element={<LandingPage />} />}
 
-          {/* Public: страница тарифов — по образцу /f/:slug, доступна и залогиненным */}
-          <Route path="/tarify" element={<TarifyPage />} />
+            {/* Страницы-разделы лендинга /f/:slug. Доступны всем — залогиненных
+                НЕ редиректим: пусть изучают возможности из-под своего аккаунта. */}
+            <Route path="/f/:slug" element={<FeatureDetailPage />} />
 
-          {/* Public: все вопросы и ответы — по образцу /tarify */}
-          <Route path="/voprosy" element={<VoprosyPage />} />
+            {/* Страница тарифов — по образцу /f/:slug, доступна и залогиненным */}
+            <Route path="/tarify" element={<TarifyPage />} />
+
+            {/* Все вопросы и ответы — по образцу /tarify */}
+            <Route path="/voprosy" element={<VoprosyPage />} />
+          </Route>
 
           {/* Public: Login */}
           <Route

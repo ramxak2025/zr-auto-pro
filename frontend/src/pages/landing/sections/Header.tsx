@@ -12,8 +12,13 @@ const NAV = [
   { label: 'Вопросы', to: '/voprosy' },
 ] as const;
 
+// Микро-взаимодействие desktop-nav: тонкое подчёркивание «выезжает» слева-направо
+// на ховере/фокусе (transform origin-left, только opacity/scale — 60fps, без layout).
+// motion-reduce: подчёркивание появляется мгновенно, без анимации.
 const NAV_LINK =
-  'inline-flex min-h-[44px] items-center rounded-xl px-4 text-sm font-medium text-slate-500 transition-colors hover:text-slate-900';
+  'relative inline-flex min-h-[44px] items-center rounded-xl px-4 text-sm font-medium text-slate-500 transition-colors hover:text-slate-900 ' +
+  'after:pointer-events-none after:absolute after:inset-x-4 after:bottom-1.5 after:h-px after:origin-left after:scale-x-0 after:bg-slate-900 after:transition-transform after:duration-300 after:ease-out ' +
+  'hover:after:scale-x-100 focus-visible:after:scale-x-100 motion-reduce:after:transition-none';
 
 export default function Header() {
   return (

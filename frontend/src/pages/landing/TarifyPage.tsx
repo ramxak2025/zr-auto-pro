@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { Link, useNavigationType } from 'react-router-dom';
 import { Building2, ChevronDown, ChevronRight } from 'lucide-react';
-import Reveal from './sections/Reveal';
+import { GsapReveal, useReveal } from './gsap';
 import CtaSection from './sections/CtaSection';
 import Footer from './sections/Footer';
 import GlassTabBar from './sections/GlassTabBar';
@@ -68,6 +68,10 @@ function Breadcrumbs() {
 
 export default function TarifyPage() {
   const navigationType = useNavigationType();
+  // Карточки планов въезжают каскадом снизу (как ценовые блоки на главной).
+  // Стаггер по прямым детям сетки — обёрткам планов; их внутренний md:-translate-y-2
+  // (подъём «Легенды») живёт на самой карточке и не задевается transform reveal'а.
+  const plansRef = useReveal<HTMLDivElement>({ type: 'stagger', start: 'top 85%', stagger: 0.09 });
 
   // Заголовок вкладки с восстановлением при уходе
   useEffect(() => {
@@ -121,15 +125,15 @@ export default function TarifyPage() {
         </div>
 
         {/* Hero-строка: pt-4/6 — единый ритм публичных страниц (контент сразу под шапкой) */}
-        <Reveal className="max-w-3xl pt-4 sm:pt-6">
+        <GsapReveal type="stagger" className="max-w-3xl pt-4 sm:pt-6">
           <h1 className="text-3xl font-extrabold tracking-tight text-slate-900 sm:text-5xl text-balance">
             {tarifyHero.title}
           </h1>
           <p className="mt-3 text-lg text-slate-600">{tarifyHero.subtitle}</p>
-        </Reveal>
+        </GsapReveal>
 
         {/* Плашка B2B-позиционирования: доступ — для организаций */}
-        <Reveal delay={0.05}>
+        <GsapReveal type="rise" delay={0.05}>
           <div className="mt-6 flex items-start gap-3 rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm">
             <span className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary-50">
               <Building2 className="h-5 w-5 text-primary-600" aria-hidden />
@@ -139,50 +143,48 @@ export default function TarifyPage() {
               заявку — менеджер подберёт тариф под вашу команду и подключит организацию.
             </p>
           </div>
-        </Reveal>
+        </GsapReveal>
 
-        {/* Карточки планов: мобиле — стопка («Легенда» первой), desktop — 3 колонки */}
-        <Reveal delay={0.1}>
-          <div className="mt-8 flex flex-col gap-4 pt-3 md:grid md:grid-cols-3">
-            {pricing.plans.map((plan) => (
-              <div key={plan.key} className={plan.highlighted ? 'order-first md:order-none' : ''}>
-                <PlanCard plan={plan} />
-              </div>
-            ))}
-          </div>
-        </Reveal>
+        {/* Карточки планов: мобиле — стопка («Легенда» первой), desktop — 3 колонки;
+            ref = стаггер-контейнер (каждая обёртка плана оседает по очереди) */}
+        <div ref={plansRef} className="mt-8 flex flex-col gap-4 pt-3 md:grid md:grid-cols-3">
+          {pricing.plans.map((plan) => (
+            <div key={plan.key} className={plan.highlighted ? 'order-first md:order-none' : ''}>
+              <PlanCard plan={plan} />
+            </div>
+          ))}
+        </div>
 
         {/* Внедрение под ключ */}
-        <Reveal delay={0.1}>
-          <div className="mt-10">
-            <ImplementationCard />
-          </div>
-        </Reveal>
+        <GsapReveal type="rise" delay={0.1} className="mt-10">
+          <ImplementationCard />
+        </GsapReveal>
 
-        {/* Полное сравнение: desktop-таблица / mobile — свайп-таблица */}
-        <Reveal delay={0.1} className="hidden md:block">
+        {/* Полное сравнение: desktop-таблица / mobile — свайп-таблица.
+            fade (без transform): не двигаем крупную листаемую таблицу на входе */}
+        <GsapReveal type="fade" delay={0.1} className="hidden md:block">
           <h2 className="mt-16 text-center text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
             {pricing.comparisonTitle}
           </h2>
           <ComparisonTable />
-        </Reveal>
-        <Reveal delay={0.1} className="md:hidden">
+        </GsapReveal>
+        <GsapReveal type="fade" delay={0.1} className="md:hidden">
           <h2 className="mt-14 text-xl font-extrabold tracking-tight text-slate-900 text-balance">
             {pricing.comparisonTitle}
           </h2>
           <ComparisonTableMobile />
-        </Reveal>
+        </GsapReveal>
 
         {/* Mini-FAQ */}
         <section className="pt-14 sm:pt-20">
-          <Reveal>
+          <GsapReveal type="rise">
             <h2 className="text-2xl font-extrabold tracking-tight text-slate-900 sm:text-3xl text-balance">
               Частые вопросы
             </h2>
-          </Reveal>
+          </GsapReveal>
           <div className="mt-6 space-y-3">
             {pricingFaq.map((item, i) => (
-              <Reveal key={item.q} delay={Math.min(i * 0.05, 0.15)}>
+              <GsapReveal type="rise" key={item.q} delay={Math.min(i * 0.05, 0.15)}>
                 {/* acc-details — плавное раскрытие (interpolate-size, см. index.css) */}
                 <details className="acc-details group rounded-2xl border border-slate-200/60 bg-white shadow-sm transition-colors hover:border-slate-300">
                   <summary className="flex min-h-[56px] cursor-pointer list-none items-center justify-between gap-4 px-5 py-4 text-left text-base font-medium text-slate-900 [&::-webkit-details-marker]:hidden">
@@ -191,7 +193,7 @@ export default function TarifyPage() {
                   </summary>
                   <p className="px-5 pb-5 text-sm leading-relaxed text-slate-600">{item.a}</p>
                 </details>
-              </Reveal>
+              </GsapReveal>
             ))}
           </div>
         </section>
