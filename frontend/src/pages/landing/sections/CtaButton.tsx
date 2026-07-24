@@ -5,7 +5,7 @@ import { gsap, useGSAP } from '../gsap';
 import { getTelegramUrl } from '../config';
 
 const PRIMARY =
-  'inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-primary-600 px-8 text-base font-semibold text-white shadow-lg shadow-primary-600/25 transition hover:bg-primary-500 motion-safe:active:scale-[0.98] active:bg-primary-700';
+  'inline-flex min-h-[52px] items-center justify-center gap-2 rounded-2xl bg-primary-600 px-6 text-base font-semibold text-white shadow-lg shadow-primary-600/25 transition hover:bg-primary-500 motion-safe:active:scale-[0.98] active:bg-primary-700 sm:px-8';
 
 /**
  * Primary-CTA «Оставить заявку» → B2B-заявка на подключение автосервиса
@@ -51,7 +51,7 @@ export default function CtaButton({ className = '' }: { className?: string }) {
   });
 
   return (
-    <div className={`flex items-stretch gap-3 ${className}`}>
+    <div className={`flex max-w-full items-stretch gap-3 ${className}`}>
       <Link ref={btnRef} to="/register" className={`${PRIMARY} min-w-0 flex-1 sm:flex-none`}>
         Оставить заявку
         <ArrowRight className="h-5 w-5" />

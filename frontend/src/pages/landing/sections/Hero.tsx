@@ -1,8 +1,16 @@
-import { useRef, useState, useSyncExternalStore, type CSSProperties, type RefObject } from 'react';
+import {
+  Fragment,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+  type ReactNode,
+  type RefObject,
+} from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Banknote, Building2, CheckCircle2, TrendingUp, Gauge } from 'lucide-react';
 import CtaButton from './CtaButton';
-import { gsap, useGSAP, SplitText, useCountUp, useParallax, EASE } from '../gsap';
+import { gsap, useGSAP, useCountUp, useParallax, EASE } from '../gsap';
 import { b2bNotice, hero, heroLightReady } from '../content';
 
 /* ---------- Атмосфера: сетка + шум (только CSS/data-uri, ноль запросов) ---------- */
@@ -42,13 +50,12 @@ const HERO_ANIM_SELECTOR =
 
 /**
  * Строит и запускает вступительный таймлайн hero. Возвращает cleanup, который
- * реверсирует SplitText и убивает бесконечный idle-float (важно для чистого
- * размонтирования). Все from-состояния применяются здесь — до первого paint
- * (useGSAP работает в layout-effect), поэтому вспышки видимого→скрытого нет.
+ * убивает бесконечный idle-float (важно для чистого размонтирования). Все
+ * from-состояния применяются здесь — до первого paint (useGSAP работает в
+ * layout-effect), поэтому вспышки видимого→скрытого нет.
  */
 function buildHeroIntro(root: HTMLElement, variant: HeroVariant): () => void {
   const q = gsap.utils.selector(root);
-  const splits: SplitText[] = [];
   const disposers: Array<() => void> = [];
 
   try {
@@ -57,13 +64,13 @@ function buildHeroIntro(root: HTMLElement, variant: HeroVariant): () => void {
     const badge = q('[data-hero-badge]');
     if (badge.length) tl.from(badge, { y: 16, autoAlpha: 0, duration: 0.5 }, 0.05);
 
-    // Заголовок: SplitText по строкам с маской + слова выезжают снизу из-под
-    // клип-маски строки (power4.out) — премиальный «набор» текста.
-    const title = root.querySelector<HTMLElement>('[data-hero-title]');
-    if (title) {
-      const split = new SplitText(title, { type: 'lines,words', mask: 'lines' });
-      splits.push(split);
-      tl.from(split.words, { yPercent: 120, autoAlpha: 0, duration: 0.9, ease: EASE.outStrong, stagger: 0.055 }, 0.12);
+    // Заголовок: слова разбиты в разметке (TitleWords) — каждое слово в inline-
+    // block-спане [data-hero-word] внутри clip-маски (overflow:hidden). Слова
+    // выезжают снизу из-под маски (power4.out) — премиальный «набор» текста.
+    // Ручное разбиение вместо GSAP SplitText: тот же rise+clip, минус вес плагина.
+    const words = q('[data-hero-word]');
+    if (words.length) {
+      tl.from(words, { yPercent: 120, autoAlpha: 0, duration: 0.9, ease: EASE.outStrong, stagger: 0.055 }, 0.12);
     }
 
     const subtitle = q('[data-hero-subtitle]');
@@ -130,22 +137,22 @@ function buildHeroIntro(root: HTMLElement, variant: HeroVariant): () => void {
       }
     }
   } catch {
-    // Любой сбой моушена не должен оставить hero пустым.
-    splits.forEach((s) => s.revert());
-    gsap.set(root.querySelectorAll(HERO_ANIM_SELECTOR), { clearProps: 'all' });
+    // Любой сбой моушена не должен оставить hero пустым: сбрасываем все from-
+    // состояния, включая слова заголовка (их анимирует таймлайн выше).
+    gsap.set(root.querySelectorAll(`${HERO_ANIM_SELECTOR},[data-hero-word]`), { clearProps: 'all' });
   }
 
   return () => {
     disposers.forEach((fn) => fn());
-    splits.forEach((s) => s.revert());
   };
 }
 
 /**
  * Хук вступительного моушена hero. Гейтит по ширине (mobile/desktop рендерятся
- * одновременно, скрытый вариант через display:none — SplitText на скрытом узле
- * даёт неверные строки, поэтому мобильный таймлайн живёт только под mobile-шириной,
- * desktop — под md+). reduced-motion или «не та» ширина → ничего не прячем.
+ * одновременно, скрытый вариант через display:none): таймлайн играет только для
+ * видимого варианта — мобильный под mobile-шириной, desktop под md+, чтобы не
+ * гонять анимацию по скрытому поддереву. reduced-motion или «не та» ширина →
+ * ничего не прячем, контент виден по CSS-дефолту.
  */
 function useHeroIntro(variant: HeroVariant): RefObject<HTMLElement> {
   const scope = useRef<HTMLElement>(null);
@@ -262,6 +269,29 @@ function splitTitle(title: string): { head: string; tail: string } {
 }
 
 /**
+ * Разбивает строку заголовка на слова для GSAP-«набора» текста (замена SplitText).
+ * Каждое слово — inline-block-спан [data-hero-word] внутри clip-маски
+ * (overflow-hidden, align-top): таймлайн hero поднимает слово из-под маски
+ * (yPercent 120 → 0). Высота маски = line-height (как у SplitText mask:'lines'),
+ * поэтому статичный текст не режется, а между словами стоят обычные пробелы —
+ * заголовок переносится по словам как обычно и виден целиком без JS / при
+ * reduced-motion. `accent` красит слова в primary-600 (акцентный «хвост»).
+ */
+function TitleWords({ text, accent = false }: { text: string; accent?: boolean }): ReactNode {
+  const words = text.split(' ');
+  return words.map((word, i) => (
+    <Fragment key={`${word}-${i}`}>
+      <span className="inline-block overflow-hidden align-top">
+        <span data-hero-word className={accent ? 'inline-block text-primary-600' : 'inline-block'}>
+          {word}
+        </span>
+      </span>
+      {i < words.length - 1 ? ' ' : null}
+    </Fragment>
+  ));
+}
+
+/**
  * Бейдж hero. Вариант-якорь «Старт бесплатно · от 1 000 ₽/мес» ОТВЕРГНУТ
  * владельцем (07.07) — нейтральная пилюля с мини-логотипом, без ссылки и пульса.
  */
@@ -370,7 +400,7 @@ function B2bNotice({ className = '' }: { className?: string }) {
 /**
  * < md: светлый hero в палитре главной. Сверху вниз: бейдж → H1 → подзаголовок →
  * CTA → workshop/hero-light-карточка. Вход оркестрован GSAP-таймлайном
- * (useHeroIntro), заголовок — SplitText по строкам с клип-маской. Атмосфера
+ * (useHeroIntro), заголовок — слова в клип-масках (TitleWords). Атмосфера
  * mesh-блобов/сетки — как на desktop. Шапка с wordmark-логотипом и «Войти»
  * видна и на мобиле (Header.tsx).
  */
@@ -402,11 +432,11 @@ function MobileHero() {
           data-hero-title
           className="mt-5 text-[clamp(34px,9vw,42px)] font-extrabold leading-[1.08] tracking-tight text-slate-900"
         >
-          {head}
+          <TitleWords text={head} />
           {tail && (
             <>
               <br />
-              <span className="text-primary-600">{tail}</span>
+              <TitleWords text={tail} accent />
             </>
           )}
         </h1>
@@ -486,11 +516,11 @@ function DesktopHero() {
             data-hero-title
             className="mt-6 text-[clamp(40px,7vw,72px)] font-extrabold leading-[1.04] tracking-tight text-slate-900 text-balance"
           >
-            {head}
+            <TitleWords text={head} />
             {tail && (
               <>
                 <br />
-                <span className="text-primary-600">{tail}</span>
+                <TitleWords text={tail} accent />
               </>
             )}
           </h1>

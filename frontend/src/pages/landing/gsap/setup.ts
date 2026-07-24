@@ -8,20 +8,17 @@
  * плагины подключены до первого твина.
  *
  * Плагины self-hosted через npm (`gsap` 3.15). Никаких CDN — операторы РФ
- * режут Google/сторонние хосты (см. правило 4 владельца). SplitText и
- * ScrollSmoother с GSAP 3.13+ входят в бесплатный npm-пакет.
+ * режут Google/сторонние хосты (см. правило 4 владельца).
  *
- * Разделение ответственности с framer-motion:
- *   • framer-motion остаётся для точечных micro-interactions (ховеры, layout,
- *     мелкие presence-переходы) — там, где он уже вплетён и уместен;
- *   • GSAP + ScrollTrigger — для СКРОЛЛ-моушена и «вау»-моментов (разные по
- *     секциям входы, счётчики, параллакс, переходы между страницами).
- * Секции на новый моушен переводит следующая фаза; здесь только утилиты.
+ * Держим ровно то, что реально используется лендингом: GSAP core + ScrollTrigger
+ * (скролл-входы, счётчики, параллакс, переходы страниц). ScrollToPlugin и
+ * SplitText выпилены — первый нигде не звался (якорный скролл идёт через нативный
+ * window.scrollTo / element.scrollTo), второй заменён ручным разбиением заголовка
+ * hero на слова (см. Hero.tsx), чтобы не тащить лишний вес в чанк лендинга.
+ * Весь моушен лендинга — GSAP; framer-motion из секций убран.
  */
 import { gsap } from 'gsap';
 import { ScrollTrigger } from 'gsap/ScrollTrigger';
-import { ScrollToPlugin } from 'gsap/ScrollToPlugin';
-import { SplitText } from 'gsap/SplitText';
 import { useGSAP } from '@gsap/react';
 
 /**
@@ -50,7 +47,7 @@ export const DUR = {
 } as const;
 
 // Регистрация выполняется один раз при первом импорте модуля.
-gsap.registerPlugin(ScrollTrigger, ScrollToPlugin, SplitText);
+gsap.registerPlugin(ScrollTrigger);
 
 gsap.defaults({ ease: EASE.out, duration: DUR.base });
 
@@ -69,4 +66,4 @@ export function refreshTriggers(): void {
   ScrollTrigger.refresh();
 }
 
-export { gsap, ScrollTrigger, ScrollToPlugin, SplitText, useGSAP };
+export { gsap, ScrollTrigger, useGSAP };

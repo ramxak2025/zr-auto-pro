@@ -2,12 +2,11 @@
  * Публичный barrel GSAP-инфраструктуры лендинга. Импортируйте отсюда:
  *   import { useReveal, useCountUp, useParallax, GsapReveal, PageTransition } from '../gsap';
  *
- * Разделение: framer-motion — точечные micro-interactions (там, где уже
- * вплетён и уместен); GSAP + ScrollTrigger — скролл-моушен и «вау»-моменты
- * (разные по секциям входы, счётчики, параллакс, переходы страниц). Перевод
- * секций на эти утилиты — следующая фаза.
+ * Весь моушен лендинга — GSAP + ScrollTrigger (скролл-входы, счётчики,
+ * параллакс, переходы страниц). framer-motion из секций лендинга убран, чтобы
+ * не грузить две анимационные библиотеки на первом заходе.
  */
-export { gsap, ScrollTrigger, ScrollToPlugin, SplitText, useGSAP, EASE, DUR, refreshTriggers } from './setup';
+export { gsap, ScrollTrigger, useGSAP, EASE, DUR, refreshTriggers } from './setup';
 
 export { useReveal } from './useReveal';
 export type { UseRevealOptions, RevealType } from './useReveal';

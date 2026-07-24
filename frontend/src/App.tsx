@@ -5,9 +5,12 @@ import { useAuth } from './contexts/AuthContext';
 import { subscriptionApi } from './api/services';
 import { UserRole } from './types';
 
-// Layouts — not lazy-loaded (always needed, small size)
-import Layout from './components/Layout';
-import AdminLayout from './components/AdminLayout';
+// Layout / AdminLayout — lazy-loaded (объявлены ниже через lazyWithRetry).
+// Раньше были eager-импортами и тянули framer-motion (через Modal/EmptyState
+// и т.п.) в общий index-чанк, который грузится ДАЖЕ на публичном лендинге,
+// где Layout не используется. Ленивая загрузка убирает framer из index →
+// лендинг и первый экран приложения грузятся легче. Оба живут под общим
+// <Suspense> (роуты), поэтому fallback уже покрыт.
 import LoadingSpinner from './components/LoadingSpinner';
 import ErrorBoundary from './components/ErrorBoundary';
 import FeatureGate from './components/FeatureGate';
@@ -49,6 +52,11 @@ function lazyWithRetry<T extends ComponentType<any>>(
 
 // Персистентный layout сайта: держит один <PageTransition> для кросс-фейда между
 // публичными страницами. Lazy — чтобы GSAP не попал в главный бандл приложения.
+// Оболочки приложения (за логином) — тоже lazy: держат framer-motion и прочий
+// вес авторизованного UI вне главного чанка, который грузит и публичный лендинг.
+const Layout = lazyWithRetry(() => import('./components/Layout'));
+const AdminLayout = lazyWithRetry(() => import('./components/AdminLayout'));
+
 const PublicLandingLayout = lazyWithRetry(() => import('./pages/landing/PublicLandingLayout'));
 const LandingPage = lazyWithRetry(() => import('./pages/landing/LandingPage'));
 const FeatureDetailPage = lazyWithRetry(() => import('./pages/landing/FeatureDetailPage'));
