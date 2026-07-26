@@ -181,9 +181,10 @@ function resolveCheckDateEdit(raw: unknown, priorTs: number): string | null {
  * (date DESC, id DESC) keyset. Opaque on purpose so the FE just round-trips
  * `nextCursor` without parsing it.
  */
-function encodeCheckCursor(date: unknown, id: unknown): string {
+function encodeCheckCursor(date: unknown, createdAt: unknown, id: unknown): string {
   const iso = date instanceof Date ? date.toISOString() : String(date);
-  return Buffer.from(`${iso}|${String(id)}`, 'utf8').toString('base64url');
+  const created = createdAt instanceof Date ? createdAt.toISOString() : String(createdAt);
+  return Buffer.from(`${iso}|${created}|${String(id)}`, 'utf8').toString('base64url');
 }
 
 /**
@@ -191,16 +192,19 @@ function encodeCheckCursor(date: unknown, id: unknown): string {
  * cursor (the caller then treats it as "first page" — newest rows). Never
  * throws on bad input.
  */
-function parseCheckCursor(raw: unknown): { date: string; id: string } | null {
+function parseCheckCursor(raw: unknown): { date: string; createdAt: string; id: string } | null {
   if (typeof raw !== 'string' || raw.length === 0) return null;
   try {
     const decoded = Buffer.from(raw, 'base64url').toString('utf8');
-    const sep = decoded.lastIndexOf('|');
-    if (sep <= 0) return null;
-    const date = decoded.slice(0, sep);
-    const id = decoded.slice(sep + 1);
-    if (!date || !id) return null;
-    return { date, id };
+    // Формат: date|created_at|id. Двухчастные курсоры старого формата
+    // (date|id) отвергаем как невалидные — вызывающий трактует null как
+    // «первая страница». Это безопаснее, чем угадывать: клиент просто
+    // перезагрузит ленту с начала вместо прыжка в случайное место.
+    const parts = decoded.split('|');
+    if (parts.length !== 3) return null;
+    const [date, createdAt, id] = parts;
+    if (!date || !createdAt || !id) return null;
+    return { date, createdAt, id };
   } catch {
     return null;
   }
@@ -784,9 +788,14 @@ export class ChecksService {
       // an empty cursor (first page) just takes the newest rows.
       let keysetWhere = where;
       if (cursor) {
-        keysetWhere += ` AND (ch.date, ch.id) < ($${idx}, $${idx + 1})`;
-        params.push(cursor.date, cursor.id);
-        idx += 2;
+        // Тройка, а не пара: id — случайный uuid, поэтому пара (date, id)
+        // давала внутри одного дня ПРОИЗВОЛЬНЫЙ порядок. created_at делает
+        // порядок осмысленным («сверху свежие»), id остаётся финальным
+        // разрывателем ничьих, чтобы ключ был строго уникальным и страницы
+        // не могли ни потерять, ни продублировать строку.
+        keysetWhere += ` AND (ch.date, ch.created_at, ch.id) < ($${idx}, $${idx + 1}, $${idx + 2})`;
+        params.push(cursor.date, cursor.createdAt, cursor.id);
+        idx += 3;
       }
       const meIdx = idx;
       params.push(meId);
@@ -806,7 +815,7 @@ export class ChecksService {
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
          LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
          WHERE ${keysetWhere}
-         ORDER BY ch.date DESC, ch.id DESC
+         ORDER BY ch.date DESC, ch.created_at DESC, ch.id DESC
          LIMIT $${idx}`,
         params,
       );
@@ -830,7 +839,7 @@ export class ChecksService {
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
          LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
          WHERE ${where}
-         ORDER BY ch.date DESC, ch.created_at DESC
+         ORDER BY ch.date DESC, ch.created_at DESC, ch.id DESC
          LIMIT $${idx} OFFSET $${idx + 1}`,
         params,
       );
@@ -866,7 +875,7 @@ export class ChecksService {
     // Computed from the raw rows so it's independent of any ?fields= filter.
     if (keysetMode) {
       const last = rows.length === limit ? rows[rows.length - 1] : undefined;
-      const nextCursor = last ? encodeCheckCursor(last.date, last.id) : null;
+      const nextCursor = last ? encodeCheckCursor(last.date, last.created_at, last.id) : null;
       return { data: checks, total, page, limit, nextCursor };
     }
 

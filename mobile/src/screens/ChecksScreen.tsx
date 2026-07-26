@@ -52,6 +52,7 @@ import {
   retryOfflineCheck,
   type QueuedCheck,
 } from '../utils/offlineCheckQueue';
+import { dedupeById } from '../utils/dedupeById';
 import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
 
 const paymentLabels: Record<string, string> = {
@@ -727,9 +728,16 @@ export default function ChecksScreen() {
       // индексе 1. Новые фильтры — только дописывать в хвост.
       deferredOnly ? 'deferred' : '',
     ],
-    initialPageParam: 1,
-    queryFn: async ({ pageParam = 1 }) => {
-      const params: Record<string, any> = { page: pageParam as number, limit };
+    // КУРСОР, а не номер страницы. Offset-пагинация по живой ленте — источник
+    // жалоб «при скролле чеки исчезают / появляется пустота / дубли»: пока
+    // мастера создают чеки, каждая вставка сдвигает ленту, и следующая
+    // страница по НОМЕРУ отдаёт уже не то — строки пропускаются или приходят
+    // дважды (дубль ключа в FlatList → белые ячейки). Курсор указывает на
+    // конкретную строку, поэтому вставки его не двигают. Пустая строка =
+    // первая страница (сервер трактует наличие параметра как keyset-режим).
+    initialPageParam: '',
+    queryFn: async ({ pageParam = '' }) => {
+      const params: Record<string, any> = { cursor: pageParam as string, limit };
       if (search) params.search = search;
       if (dateFrom) params.dateFrom = toISODate(dateFrom);
       if (dateTo) params.dateTo = toISODate(dateTo);
@@ -741,12 +749,10 @@ export default function ChecksScreen() {
       const res = await checksApi.getAll(params);
       return res.data;
     },
-    // Считаем по НОМЕРУ страницы (lastPageParam), а не по длине allPages —
-    // устойчиво к тому, сколько страниц реально удержано в кеше.
-    getNextPageParam: (lastPage, _allPages, lastPageParam) => {
-      const page = (lastPageParam as number) ?? 1;
-      return page * limit < (lastPage?.total ?? 0) ? page + 1 : undefined;
-    },
+    // Конец ленты определяет СЕРВЕР: nextCursor === null. Не считаем страницы
+    // по total — общий счётчик меняется прямо во время листания (создали чек),
+    // и арифметика по нему как раз и промахивалась мимо конца ленты.
+    getNextPageParam: (lastPage) => lastPage?.nextCursor ?? undefined,
     // Пагинация теперь ТОЛЬКО вниз (append) на обычном RN FlatList — как на
     // экране Клиентов. Убрали maxPages / fetchPreviousPage / getPreviousPageParam:
     // симметричная догрузка вверх работала лишь на FlashList (onStartReached +
@@ -939,7 +945,11 @@ export default function ChecksScreen() {
   // array on every render unless the underlying pages change.
   const allLoadedChecks = useMemo(
     () =>
-      (Array.isArray(checksData?.pages) ? checksData.pages : []).flatMap((p) => (Array.isArray(p?.data) ? p.data : [])),
+      dedupeById(
+        (Array.isArray(checksData?.pages) ? checksData.pages : []).flatMap((p) =>
+          Array.isArray(p?.data) ? p.data : [],
+        ),
+      ),
     [checksData?.pages],
   );
   // Returns-only фильтр работает на уже загруженных страницах. Бэк
