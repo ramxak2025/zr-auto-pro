@@ -76,6 +76,10 @@ export default function ClientsPage() {
   } | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  // Round 12 #3: клиент без телефона легален (backend коэрсит phone в ''),
+  // но пустой номер чаще случайность — перед сохранением явный confirm.
+  const [noPhoneConfirmOpen, setNoPhoneConfirmOpen] = useState(false);
+
   // Query
   const { data, isLoading, isError, refetch, isFetching } = useQuery<PaginatedResponse<Client>>({
     queryKey: ['clients', { search, page, limit }],
@@ -159,8 +163,21 @@ export default function ClientsPage() {
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     const payload = { fullName, phone, comment: comment || undefined };
+    const phoneDigits = phone.replace(/\D/g, '');
     if (editingClient) {
+      // Стирание номера у клиента, у которого он был, — тоже случайность:
+      // confirm отдельным текстом. Был без номера — сохраняем молча.
+      if (phoneDigits.length === 0 && (editingClient.phone || '').replace(/\D/g, '').length > 0) {
+        setNoPhoneConfirmOpen(true);
+        return;
+      }
       updateMutation.mutate({ id: editingClient.id, data: payload });
+      return;
+    }
+    if (phoneDigits.length === 0) {
+      // lookupByPhone('') не зовём — пустой ключ дедупа бессмыслен;
+      // подтверждение → createMutation с phone:'' (см. confirmNoPhoneSubmit).
+      setNoPhoneConfirmOpen(true);
       return;
     }
     // Pre-create duplicate check by phone — only on create.
@@ -178,6 +195,16 @@ export default function ClientsPage() {
       createMutation.mutate(payload);
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Подтверждённое сохранение без номера — существующие мутации, phone: ''.
+  const confirmNoPhoneSubmit = () => {
+    const payload = { fullName, phone, comment: comment || undefined };
+    if (editingClient) {
+      updateMutation.mutate({ id: editingClient.id, data: payload });
+    } else {
+      createMutation.mutate(payload);
     }
   };
 
@@ -366,10 +393,16 @@ export default function ClientsPage() {
                   </div>
                 </div>
                 <div className="flex items-center gap-4 text-sm text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <Phone className="w-3.5 h-3.5" />
-                    {formatPhone(client.phone)}
-                  </span>
+                  {client.phone ? (
+                    <span className="flex items-center gap-1">
+                      <Phone className="w-3.5 h-3.5" />
+                      {formatPhone(client.phone)}
+                    </span>
+                  ) : !client.isRetail ? (
+                    // Round 12 #3: бестелефонный клиент — серый плейсхолдер.
+                    // Retail-строку не подписываем: у неё своя семантика.
+                    <span className="text-gray-400">Без номера</span>
+                  ) : null}
                   <span className="badge-info text-[11px]">{client.cars?.length || 0} авто</span>
                 </div>
               </div>
@@ -410,10 +443,18 @@ export default function ClientsPage() {
                         </div>
                       </td>
                       <td>
-                        <div className="flex items-center gap-2">
-                          <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                          <span className="whitespace-nowrap text-gray-600">{formatPhone(client.phone)}</span>
-                        </div>
+                        {client.phone ? (
+                          <div className="flex items-center gap-2">
+                            <Phone className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                            <span className="whitespace-nowrap text-gray-600">{formatPhone(client.phone)}</span>
+                          </div>
+                        ) : client.isRetail ? (
+                          // Retail-строка: пустая ячейка как «нет данных», без
+                          // «Без номера» — у розничного своя семантика.
+                          <span className="text-gray-300">—</span>
+                        ) : (
+                          <span className="whitespace-nowrap text-gray-400">Без номера</span>
+                        )}
                       </td>
                       <td>
                         {cars.length === 0 ? (
@@ -501,7 +542,7 @@ export default function ClientsPage() {
 
           <div>
             <label className="label">Телефон</label>
-            <PhoneInput value={phone} onChange={setPhone} placeholder="+7 (___) ___-__-__" required />
+            <PhoneInput value={phone} onChange={setPhone} placeholder="+7 (___) ___-__-__" />
           </div>
 
           <div>
@@ -539,6 +580,17 @@ export default function ClientsPage() {
         message="Вы уверены, что хотите удалить этого клиента? Это действие нельзя отменить."
         confirmText="Удалить"
         variant="danger"
+      />
+
+      {/* No-phone confirm (Round 12 #3) — защита от случайно пропущенного
+          номера при создании и от случайного стирания при редактировании. */}
+      <ConfirmDialog
+        isOpen={noPhoneConfirmOpen}
+        onClose={() => setNoPhoneConfirmOpen(false)}
+        onConfirm={confirmNoPhoneSubmit}
+        title={editingClient ? 'Сохранить клиента без номера телефона?' : 'Создать клиента без номера телефона?'}
+        message="Его нельзя будет найти поиском по номеру."
+        confirmText="Без номера"
       />
 
       {/* Duplicate-by-phone warning */}

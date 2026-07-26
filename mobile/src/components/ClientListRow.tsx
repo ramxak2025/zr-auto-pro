@@ -213,8 +213,13 @@ function ClientListRowBase({
             {item.fullName}
           </Text>
           <View style={styles.subLine}>
-            <Text style={[styles.cardSub, { color: palette.text.secondary }]} numberOfLines={1}>
-              {formatPhone(item.phone || '') || 'Без телефона'}
+            {/* Round 12 #3: бестелефонный клиент — серый плейсхолдер (retail
+                в этот список не попадает: отфильтрован в ClientsScreen). */}
+            <Text
+              style={[styles.cardSub, { color: item.phone ? palette.text.secondary : palette.text.tertiary }]}
+              numberOfLines={1}
+            >
+              {formatPhone(item.phone || '') || 'Без номера'}
             </Text>
             {primaryPlate ? (
               <View style={[styles.platePill, { backgroundColor: surface.chipBg }]}>

@@ -243,7 +243,16 @@ export default function QuickClientCreateSheet({
       return;
     }
     if (!phone.trim()) {
-      Alert.alert('Ошибка', 'Укажите телефон клиента');
+      // Round 12 #3: клиент без телефона легален (backend коэрсит phone в ''
+      // и частичный уникальный индекс пропускает пустой ключ), но пропущенный
+      // номер чаще случайность — вместо жёсткого блока явный confirm.
+      // Дальше идёт ОБЫЧНЫЙ submitFlow: дубликат-гарды по телефону (409) и
+      // по госномеру срабатывают только при непустых значениях и не задеты.
+      haptic('warning');
+      Alert.alert('Создать клиента без номера телефона?', 'Его нельзя будет найти поиском по номеру.', [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Без номера', onPress: () => void submitFlow() },
+      ]);
       return;
     }
     void submitFlow();
@@ -285,7 +294,7 @@ export default function QuickClientCreateSheet({
         </View>
 
         <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон *</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон</Text>
           <TextInput
             value={phone}
             onChangeText={(t) => setPhone(formatPhone(t.replace(/\D/g, '')))}

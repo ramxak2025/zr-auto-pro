@@ -383,11 +383,38 @@ export default function ClientsScreen() {
   };
 
   const handleSubmit = async () => {
+    // Round 12 #3: телефон больше не обязателен, но пустой номер чаще
+    // случайность — перед сохранением без цифр всегда явный confirm.
+    const phoneDigits = phone.replace(/\D/g, '');
     if (editingClient) {
-      updateMutation.mutate({
-        id: editingClient.id,
-        data: { fullName, phone, comment: comment || undefined, source: formSource },
-      });
+      const saveUpdate = () =>
+        updateMutation.mutate({
+          id: editingClient.id,
+          data: { fullName, phone, comment: comment || undefined, source: formSource },
+        });
+      // Стирание номера у клиента, у которого он БЫЛ, — тоже случайность:
+      // спрашиваем отдельным текстом. Клиент, который и так был без номера,
+      // сохраняется молча — переспрашивать не о чем.
+      if (phoneDigits.length === 0 && (editingClient.phone || '').replace(/\D/g, '').length > 0) {
+        haptic('warning');
+        Alert.alert('Сохранить клиента без номера телефона?', 'Его нельзя будет найти поиском по номеру.', [
+          { text: 'Отмена', style: 'cancel' },
+          { text: 'Без номера', onPress: saveUpdate },
+        ]);
+        return;
+      }
+      saveUpdate();
+      return;
+    }
+    if (phoneDigits.length === 0) {
+      // lookupByPhone('') не зовём — пустой ключ дедупа бессмыслен; сразу
+      // confirm и обычный submitFlow (дубликат-гард по госномеру внутри
+      // него срабатывает как раньше).
+      haptic('warning');
+      Alert.alert('Создать клиента без номера телефона?', 'Его нельзя будет найти поиском по номеру.', [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Без номера', onPress: () => void submitFlow() },
+      ]);
       return;
     }
     setSubmitting(true);
@@ -1022,7 +1049,7 @@ export default function ClientsScreen() {
           />
         </View>
         <View style={styles.formField}>
-          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон *</Text>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон</Text>
           <TextInput
             value={phone}
             onChangeText={(t) => setPhone(formatPhone(t.replace(/\D/g, '')))}

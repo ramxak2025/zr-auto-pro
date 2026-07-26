@@ -1068,7 +1068,11 @@ export default function ClientDetailScreen() {
           <Text style={[styles.clientName, { color: palette.text.primary }]} numberOfLines={2}>
             {client.fullName}
           </Text>
-          <Text style={[styles.heroPhone, { color: palette.text.secondary }]}>{formatPhone(client.phone)}</Text>
+          {/* Round 12 #3: клиент без телефона легален — серый плейсхолдер
+              вместо пустой строки (retail сюда не попадает: ранний return). */}
+          <Text style={[styles.heroPhone, { color: client.phone ? palette.text.secondary : palette.text.tertiary }]}>
+            {formatPhone(client.phone || '') || 'Без номера'}
+          </Text>
           <View style={styles.heroBadgesRow}>
             {client.source ? (
               <TouchableOpacity
@@ -2187,7 +2191,11 @@ function ClientEditModal({ visible, client, palette, saving, onClose, onSave }: 
   }, [visible, client]);
 
   const nameValid = fullName.trim().length > 0;
-  const phoneValid = phone.replace(/\D/g, '').length >= 6;
+  // Round 12 #3: клиент без телефона легален — пустое поле проходит (с
+  // confirm при сохранении ниже), а вот ЧАСТИЧНО набранный номер (<6 цифр)
+  // по-прежнему блокирует сохранение как явная опечатка.
+  const phoneDigits = phone.replace(/\D/g, '');
+  const phoneValid = phoneDigits.length === 0 || phoneDigits.length >= 6;
   const canSave = nameValid && phoneValid && !saving;
 
   return (
@@ -2207,7 +2215,7 @@ function ClientEditModal({ visible, client, palette, saving, onClose, onSave }: 
         />
       </View>
       <View style={styles.formField}>
-        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон *</Text>
+        <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Телефон</Text>
         <TextInput
           value={phone}
           onChangeText={(t) => setPhone(formatPhone(t.replace(/\D/g, '')))}
@@ -2253,7 +2261,18 @@ function ClientEditModal({ visible, client, palette, saving, onClose, onSave }: 
           style={[styles.submitBtn, { backgroundColor: palette.accent.primary }, !canSave && { opacity: 0.5 }]}
           onPress={() => {
             if (!canSave) return;
-            onSave({ fullName: fullName.trim(), phone: phone.trim(), comment: comment.trim() });
+            const save = () => onSave({ fullName: fullName.trim(), phone: phone.trim(), comment: comment.trim() });
+            // Стирание номера у клиента, у которого он был, — вероятная
+            // случайность: явный confirm перед сохранением без номера.
+            if (phoneDigits.length === 0 && (client.phone || '').replace(/\D/g, '').length > 0) {
+              haptic('warning');
+              Alert.alert('Сохранить клиента без номера телефона?', 'Его нельзя будет найти поиском по номеру.', [
+                { text: 'Отмена', style: 'cancel' },
+                { text: 'Без номера', onPress: save },
+              ]);
+              return;
+            }
+            save();
           }}
           disabled={!canSave}
         >
