@@ -43,7 +43,7 @@ import BulkPriceAdjustSheet from '../components/BulkPriceAdjustSheet';
 import TrashScreen from './TrashScreen';
 import WarehouseSwitcher from '../components/WarehouseSwitcher';
 import FreshnessBadge from '../components/FreshnessBadge';
-import BarcodeScanner from '../components/BarcodeScanner';
+import BarcodeScanner, { isBarcodeScannerAvailable } from '../components/BarcodeScanner';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
@@ -397,6 +397,12 @@ export default function ProductsScreen() {
   const [minStock, setMinStock] = useState('');
   // 120 (дробные количества) — единица измерения товара, чипсы-пресеты.
   const [unit, setUnit] = useState<string>(DEFAULT_UNIT);
+  // Round 12 #6б — штрихкод в форме создания/редактирования. Сканер формы —
+  // ОТДЕЛЬНЫЙ state (formScannerOpen) и рендерится ВНУТРИ form-Modal:
+  // сиблинг-RNModal поверх открытой модалки iOS Fabric не презентует
+  // (та же находка, что VoiceCommentSheet в CheckDetail).
+  const [formBarcode, setFormBarcode] = useState('');
+  const [formScannerOpen, setFormScannerOpen] = useState(false);
   const [photoUri, setPhotoUri] = useState<string | null>(null); // local image URI or existing server path
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [deleteId, setDeleteId] = useState<string | null>(null);
@@ -1308,6 +1314,7 @@ export default function ProductsScreen() {
     setStock('');
     setMinStock('');
     setUnit(DEFAULT_UNIT);
+    setFormBarcode('');
     setPhotoUri(null);
     setModalOpen(true);
   };
@@ -1326,6 +1333,7 @@ export default function ProductsScreen() {
     setMinStock(String(p.minStock));
     // Legacy-код ('pcs'→'шт') нормализуем сразу — чипсы подсветят значение.
     setUnit(unitLabel(p.unit));
+    setFormBarcode(p.barcode || '');
     setPhotoUri(p.photo ? (p.photo.startsWith('http') ? p.photo : p.photo) : null);
     setModalOpen(true);
   }, []);
@@ -1358,7 +1366,18 @@ export default function ProductsScreen() {
       Alert.alert('Товар не найден', `Штрих-код ${needle} не привязан ни к одному товару этого склада.`, [
         { text: 'Отмена', style: 'cancel' },
         ...(canManageWarehouse && activeWarehouse?.kind === 'main'
-          ? [{ text: 'Создать товар', onPress: openCreate }]
+          ? [
+              {
+                text: 'Создать товар',
+                // Round 12 #6б: отсканированный код предзаполняет поле
+                // «Штрихкод» новой карточки — setFormBarcode ставится ПОСЛЕ
+                // openCreate (тот сбрасывает форму, включая barcode).
+                onPress: () => {
+                  openCreate();
+                  setFormBarcode(needle);
+                },
+              },
+            ]
           : []),
       ]);
     },
@@ -1420,6 +1439,9 @@ export default function ProductsScreen() {
       stock: parseQtyInput(stock) ?? 0,
       minStock: parseQtyInput(minStock) ?? 0,
       unit: unit || DEFAULT_UNIT,
+      // Round 12 #6б: у существующего товара '' ОЧИЩАЕТ штрихкод (PATCH сетит
+      // поле только когда оно пришло); у нового пустое поле просто не шлём.
+      barcode: editingProduct ? formBarcode.trim() : formBarcode.trim() || undefined,
       photo: uploadedPhotoPath,
       // New products inherit the currently selected warehouse. On edit
       // we don't override warehouseId — moving between warehouses is
@@ -2451,6 +2473,51 @@ export default function ProductsScreen() {
             />
           </View>
         </View>
+        {/* \u0428\u0442\u0440\u0438\u0445\u043A\u043E\u0434 + \u043A\u0430\u043C\u0435\u0440\u0430-\u0441\u043A\u0430\u043D (round 12 #6\u0431). \u041A\u043D\u043E\u043F\u043A\u0430 \u0433\u0435\u0439\u0442\u0438\u0442\u0441\u044F
+            isBarcodeScannerAvailable; \u0441\u043A\u0430\u043D\u0435\u0440 \u0436\u0438\u0432\u0451\u0442 \u0412\u041D\u0423\u0422\u0420\u0418 \u044D\u0442\u043E\u0439 \u043C\u043E\u0434\u0430\u043B\u043A\u0438 \u2014
+            \u0441\u0438\u0431\u043B\u0438\u043D\u0433-RNModal \u043F\u043E\u0432\u0435\u0440\u0445 \u043E\u0442\u043A\u0440\u044B\u0442\u043E\u0439 \u043C\u043E\u0434\u0430\u043B\u043A\u0438 iOS \u043D\u0435 \u043F\u0440\u0435\u0437\u0435\u043D\u0442\u0443\u0435\u0442. */}
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>
+            {'\u0428\u0442\u0440\u0438\u0445\u043A\u043E\u0434'}
+          </Text>
+          <View style={styles.formBarcodeRow}>
+            <TextInput
+              value={formBarcode}
+              onChangeText={setFormBarcode}
+              style={[styles.formInput, formInputThemed, { flex: 1 }]}
+              placeholder="EAN-13 / QR / \u0441\u0432\u043E\u0439 \u043A\u043E\u0434"
+              placeholderTextColor={palette.text.tertiary}
+              autoCapitalize="none"
+              autoCorrect={false}
+            />
+            {isBarcodeScannerAvailable ? (
+              <TouchableOpacity
+                style={[styles.formBarcodeScanBtn, { backgroundColor: palette.bg.muted }]}
+                onPress={() => {
+                  haptic('tap');
+                  setFormScannerOpen(true);
+                }}
+                accessibilityRole="button"
+                accessibilityLabel="\u0421\u043A\u0430\u043D\u0438\u0440\u043E\u0432\u0430\u0442\u044C \u0448\u0442\u0440\u0438\u0445-\u043A\u043E\u0434 \u043A\u0430\u043C\u0435\u0440\u043E\u0439"
+              >
+                <Ionicons name="barcode-outline" size={22} color={palette.accent.primary} />
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        </View>
+        {/* \u0412\u043B\u043E\u0436\u0435\u043D\u043D\u044B\u0439 \u0441\u043A\u0430\u043D\u0435\u0440 \u0444\u043E\u0440\u043C\u044B \u2014 \u043F\u0440\u0435\u0437\u0435\u043D\u0442\u0443\u0435\u0442\u0441\u044F \u043E\u0442 VC \u042D\u0422\u041E\u0419 \u043C\u043E\u0434\u0430\u043B\u043A\u0438 (\u043F\u0430\u0442\u0442\u0435\u0440\u043D
+            VoiceCommentSheet). \u0423\u0441\u043B\u043E\u0432\u043D\u044B\u0439 \u0440\u0435\u043D\u0434\u0435\u0440 \u043E\u0441\u0432\u043E\u0431\u043E\u0436\u0434\u0430\u0435\u0442 \u043A\u0430\u043C\u0435\u0440\u0443 \u043D\u0430 \u0437\u0430\u043A\u0440\u044B\u0442\u0438\u0438. */}
+        {formScannerOpen && (
+          <BarcodeScanner
+            visible={formScannerOpen}
+            onClose={() => setFormScannerOpen(false)}
+            onScanned={(code) => {
+              setFormBarcode(code.trim());
+              setFormScannerOpen(false);
+            }}
+            hint="\u041D\u0430\u0432\u0435\u0434\u0438\u0442\u0435 \u043A\u0430\u043C\u0435\u0440\u0443 \u043D\u0430 \u0448\u0442\u0440\u0438\u0445-\u043A\u043E\u0434 \u2014 \u043E\u043D \u043F\u043E\u0434\u0441\u0442\u0430\u0432\u0438\u0442\u0441\u044F \u0432 \u043F\u043E\u043B\u0435"
+          />
+        )}
         {editingProduct && (
           <TouchableOpacity
             style={[styles.historyLink, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}
@@ -4118,6 +4185,15 @@ const styles = StyleSheet.create({
   },
   formHint: { fontSize: 11, color: colors.gray[400], marginTop: 4 },
   formRowFields: { flexDirection: 'row', gap: spacing[3], marginBottom: spacing[4] },
+  // «Штрихкод» + кнопка камеры-скана (round 12 #6б).
+  formBarcodeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  formBarcodeScanBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   // Чипсы единиц измерения (120, дробные количества).
   unitChipsRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[2] },
   unitChip: {

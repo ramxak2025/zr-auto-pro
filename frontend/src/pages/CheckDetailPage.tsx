@@ -591,10 +591,27 @@ export default function CheckDetailPage() {
           </button>
           {productsOpen && (
             <div className="border-t border-gray-100">
-              {/* Mobile: card layout */}
+              {/* Mobile: card layout. Строка каталожного товара (есть
+                  productId) кликабельна — ведёт на склад с автооткрытием
+                  карточки (round 12 #5, паритет мобилки); free-text строка
+                  без productId остаётся статичной. */}
               <div className="sm:hidden divide-y divide-gray-50">
                 {check.products.map((prod, idx) => (
-                  <div key={prod.id ?? idx} className="px-4 py-3">
+                  <div
+                    key={prod.id ?? idx}
+                    className={`px-4 py-3 ${prod.productId ? 'cursor-pointer hover:bg-gray-50 transition-colors' : ''}`}
+                    {...(prod.productId
+                      ? {
+                          role: 'button',
+                          tabIndex: 0,
+                          title: 'Открыть карточку товара на складе',
+                          onClick: () => navigate('/products', { state: { openProductId: prod.productId } }),
+                          onKeyDown: (e: React.KeyboardEvent) => {
+                            if (e.key === 'Enter') navigate('/products', { state: { openProductId: prod.productId } });
+                          },
+                        }
+                      : {})}
+                  >
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-medium text-gray-900">{prod.name}</p>
@@ -629,8 +646,19 @@ export default function CheckDetailPage() {
                     </tr>
                   </thead>
                   <tbody>
+                    {/* Строка каталожного товара кликабельна → карточка на
+                        складе (round 12 #5); free-text без productId — нет. */}
                     {check.products.map((prod, idx) => (
-                      <tr key={prod.id ?? idx}>
+                      <tr
+                        key={prod.id ?? idx}
+                        className={prod.productId ? 'cursor-pointer hover:bg-gray-50 transition-colors' : undefined}
+                        title={prod.productId ? 'Открыть карточку товара на складе' : undefined}
+                        onClick={
+                          prod.productId
+                            ? () => navigate('/products', { state: { openProductId: prod.productId } })
+                            : undefined
+                        }
+                      >
                         <td className="text-gray-400">{idx + 1}</td>
                         <td className="font-medium">{prod.name}</td>
                         <td className="text-right text-gray-600 tabular-nums">{formatMoney(prod.sellPrice)}</td>

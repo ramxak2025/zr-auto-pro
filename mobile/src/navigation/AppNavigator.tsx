@@ -289,8 +289,10 @@ export type ProductsStackParamList = {
   // Dedicated product drill-down. Pushed on row tap; the passed `product`
   // seeds instant paint while the screen revalidates the full shape. `edit:
   // true` lands straight in the on-detail edit mode (from the row long-press
-  // action sheet «Редактировать»).
-  ProductDetail: { product: Product; edit?: boolean };
+  // action sheet «Редактировать»). Callers OUTSIDE Склада (товарная строка
+  // чека в CheckDetail) have only the id — they pass `productId` and the
+  // screen fetches the product itself (loading / «товар удалён» states).
+  ProductDetail: { product?: Product; productId?: string; edit?: boolean };
   // Инвентаризация (scan-driven recount). Pushed from the warehouse ops sheet;
   // lives in THIS stack so the floating tab bar stays visible and edge-swipe
   // pops back to the warehouse list.
@@ -361,6 +363,13 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="CarDetail" component={CarDetailScreen} />
       <MoreStack.Screen name="SupplierDetail" component={SupplierDetailScreen} />
       <MoreStack.Screen name="CheckDetail" component={CheckDetailScreen} />
+      {/* Карточка товара из товарной строки чека (round 12 #5). Registered on
+          THIS stack (like the CheckDetail copy above) so a tap inside a
+          MoreStack-hosted CheckDetail (CashFlow/Calls → CheckDetail → товар)
+          pushes in-section: floating tab bar stays visible, edge-swipe pops
+          back to the check. Params: { productId } — the screen fetches the
+          full product itself. */}
+      <MoreStack.Screen name="ProductDetail" component={ProductDetailScreen} />
       <MoreStack.Screen name="Employees" component={EmployeesScreen} />
       <MoreStack.Screen name="EmployeeDetail" component={EmployeeDetailScreen} />
       {/* «Уволенные» recycle bin — lives in MoreStack so back-nav stays in
@@ -522,6 +531,12 @@ function ChecksStackNavigator() {
     <ChecksStack.Navigator screenOptions={TRANSPARENT_STACK_OPTIONS} screenLayout={screenErrorBoundaryLayout}>
       <ChecksStack.Screen name="ChecksHome" component={ChecksScreen} />
       <ChecksStack.Screen name="CheckDetail" component={CheckDetailScreen} />
+      {/* Карточка товара из товарной строки чека (round 12 #5) — same
+          duplicate-registration pattern as CheckDetail itself: pushing onto
+          THIS stack keeps the floating tab bar visible and edge-swipe pops
+          back to the check. `navigate('ProductDetail')` from a CheckDetail
+          hosted here resolves to this copy (nearest ancestor navigator). */}
+      <ChecksStack.Screen name="ProductDetail" component={ProductDetailScreen} />
       {/* «Доска заказ-нарядов» (kanban 082) — lives INSIDE the Checks tab-stack
           so the floating tab bar stays visible (like Checks → CheckDetail) and
           a card's «Открыть заказ-наряд» pushes CheckDetail onto THIS stack.
@@ -887,13 +902,7 @@ export default function AppNavigator() {
   }
 
   if (!user && recoveringSession) {
-    return (
-      <SessionRecoveryScreen
-        pending={sessionRecoveryPending}
-        onRetry={retrySessionRecovery}
-        onLogout={logout}
-      />
-    );
+    return <SessionRecoveryScreen pending={sessionRecoveryPending} onRetry={retrySessionRecovery} onLogout={logout} />;
   }
 
   return (

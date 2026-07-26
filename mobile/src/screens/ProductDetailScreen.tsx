@@ -56,6 +56,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
+import BarcodeScanner, { isBarcodeScannerAvailable } from '../components/BarcodeScanner';
 import CachedImage from '../components/CachedImage';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
@@ -75,25 +76,9 @@ import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { colors, borderRadius, spacing } from '../theme';
 import type { Product, StockMovement, ProductPriceHistoryEntry } from '../../../shared/types';
-
-// Edit payload sent to productsApi.update. Structurally a superset of the
-// shared UpdateProductRequest (adds `barcode`, which the backend PATCH DTO
-// accepts but the shared contract type doesn't yet expose) — a value with the
-// extra prop is still assignable to the update param, so no contract change.
-interface ProductEditPayload {
-  name?: string;
-  category?: string;
-  // #63 — `null` clears the stored photo server-side; `undefined`/omitted
-  // leaves it unchanged. Mirrors the shared UpdateProductRequest.photo.
-  photo?: string | null;
-  costPrice?: number;
-  sellPrice?: number;
-  stock?: number;
-  minStock?: number;
-  unit?: string;
-  warrantyDays?: number | null;
-  barcode?: string;
-}
+// Round 12 #6/#8: `barcode` now lives on the shared contract types — the old
+// local ProductEditPayload superset-hack is gone.
+import type { UpdateProductRequest } from '../../../shared/api/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 const RECENT_COUNT = 4;
@@ -148,7 +133,11 @@ function buildSparkArea(values: number[], w: number, h: number, minV: number, ma
   return `${line} L ${w} ${h} L 0 ${h} Z`;
 }
 
-type ProductDetailParams = { product: Product; edit?: boolean };
+// Round 12 #5: callers OUTSIDE Склада (товарная строка чека в CheckDetail)
+// only know the id — `product` became optional and `productId` was added.
+// With only an id the screen fetches the product itself and owns the
+// loading / «товар удалён» terminal states below.
+type ProductDetailParams = { product?: Product; productId?: string; edit?: boolean };
 
 export default function ProductDetailScreen() {
   const route = useRoute<any>();
@@ -172,7 +161,10 @@ export default function ProductDetailScreen() {
   const canDeleteWarehouse = hasPermission('warehouse_manage') || hasPermission('warehouse_delete');
 
   const passedProduct = (route.params as ProductDetailParams).product;
-  const productId = passedProduct.id;
+  // Tolerant id resolution: full product from Склада, bare id from a check's
+  // product line. An empty id can't happen from real callers, but the query
+  // below is `enabled`-gated on it anyway (renders the not-found state).
+  const productId = passedProduct?.id ?? (route.params as ProductDetailParams).productId ?? '';
 
   const [refreshing, setRefreshing] = useState(false);
   const [fullscreenPhoto, setFullscreenPhoto] = useState<string | null>(null);
@@ -195,6 +187,11 @@ export default function ProductDetailScreen() {
   const [minStock, setMinStock] = useState('');
   const [unit, setUnit] = useState('');
   const [barcode, setBarcode] = useState('');
+  // Round 12 #6a — камера-скан прямо в поле «Штрихкод» формы редактирования.
+  // Кнопка гейтится isBarcodeScannerAvailable (старый бинарь без expo-camera
+  // просто не показывает её). Форма здесь ИНЛАЙНОВАЯ (не RNModal), поэтому
+  // сканер-модалка презентуется без сиблинг-Modal проблем iOS.
+  const [barcodeScanOpen, setBarcodeScanOpen] = useState(false);
   const [warranty, setWarranty] = useState('');
   const [photoUri, setPhotoUri] = useState<string | null>(null);
 
@@ -206,11 +203,21 @@ export default function ProductDetailScreen() {
 
   // Full product shape (supplier object, barcode, unit, warranty). The slim
   // list projection that seeded `passedProduct` omits the nested supplier, so
-  // we re-fetch — but paint instantly from initialData (zero flicker).
-  const { data: product = passedProduct } = useQuery<Product>({
+  // we re-fetch — but paint instantly from initialData (zero flicker). When
+  // the caller passed only `productId` (product line of a check) there is no
+  // initialData: the screen shows its own loading state, and a 404 (товар
+  // удалён со склада) lands in the explicit not-found terminal state below —
+  // retries are pointless for a deleted row, hence `retry: false` there.
+  const {
+    data: product,
+    isPending: productPending,
+    isError: productError,
+  } = useQuery<Product>({
     queryKey: ['product', productId],
     queryFn: async () => (await productsApi.getById(productId)).data,
     initialData: passedProduct,
+    enabled: !!productId,
+    retry: (failureCount, err: any) => (err?.response?.status === 404 ? false : failureCount < 2),
     staleTime: 60_000,
   });
 
@@ -256,8 +263,11 @@ export default function ProductDetailScreen() {
     setPhotoUri(p.photo || null);
   }, []);
 
-  // «Изменить» → enter inline edit mode (NOT the old modal).
+  // «Изменить» → enter inline edit mode (NOT the old modal). `product` can be
+  // undefined while an id-only navigation is still loading — the affordance
+  // isn't rendered then, the guard is for type-safety.
   const enterEdit = useCallback(() => {
+    if (!product) return;
     haptic('tap');
     seedFromProduct(product);
     setEditing(true);
@@ -273,17 +283,19 @@ export default function ProductDetailScreen() {
   // with `edit: true` so we land straight in edit mode. Consume the param once.
   const editParam = (route.params as ProductDetailParams).edit;
   useEffect(() => {
-    if (editParam && canManageWarehouse) {
+    if (editParam && canManageWarehouse && product) {
       seedFromProduct(product);
       setEditing(true);
       navigation.setParams({ edit: undefined });
     }
     // Only react to the param flipping on — product/seed are stable enough.
+    // (Callers who pass `edit` always pass the full product, so `product` is
+    // present on the first run; the check is a type-guard, not a race fix.)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editParam]);
 
   const saveMutation = useMutation({
-    mutationFn: (data: ProductEditPayload) => productsApi.update(productId, data),
+    mutationFn: (data: UpdateProductRequest) => productsApi.update(productId, data),
     onSuccess: (res) => {
       haptic('success');
       // Update the detail card in place + invalidate every warehouse/picker
@@ -322,6 +334,7 @@ export default function ProductDetailScreen() {
   });
 
   const confirmDelete = useCallback(() => {
+    if (!product) return; // id-only навигация ещё грузится — кнопки нет, guard для типов
     haptic('warning');
     Alert.alert('Удалить товар', `«${product.name}» переместится в Корзину склада. Оттуда его можно восстановить.`, [
       { text: 'Отмена', style: 'cancel' },
@@ -330,7 +343,7 @@ export default function ProductDetailScreen() {
     // deleteMutation identity меняется на isPending — намеренно исключаем, чтобы
     // хендлер не пересоздавался в полёте.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [product.name]);
+  }, [product?.name]);
 
   const pickImage = useCallback(async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -376,7 +389,7 @@ export default function ProductDetailScreen() {
     } else {
       uploadedPhotoPath = photoUri;
     }
-    const payload: ProductEditPayload = {
+    const payload: UpdateProductRequest = {
       name: name.trim(),
       category,
       sellPrice: Number(sellPrice) || 0,
@@ -420,10 +433,13 @@ export default function ProductDetailScreen() {
     [editing, saveMutation],
   );
 
-  const displayPhotoUri = getImageUrl(product.photo);
-  const lowStock = product.stock <= product.minStock && product.minStock > 0;
-  const margin = product.costPrice > 0 ? ((product.sellPrice - product.costPrice) / product.costPrice) * 100 : null;
-  const categoryLabel = product.category ? product.category.split('/').pop() : undefined;
+  // NULL-SAFE while an id-only navigation is loading (no initialData) — the
+  // early terminal-state return below fires before the main JSX reads these.
+  const displayPhotoUri = product ? getImageUrl(product.photo) : undefined;
+  const lowStock = !!product && product.stock <= product.minStock && product.minStock > 0;
+  const margin =
+    product && product.costPrice > 0 ? ((product.sellPrice - product.costPrice) / product.costPrice) * 100 : null;
+  const categoryLabel = product?.category ? product.category.split('/').pop() : undefined;
 
   // Build the price walk: oldest "before" point, then every "after". Reverse
   // because the backend orders newest-first.
@@ -452,6 +468,44 @@ export default function ProductDetailScreen() {
   const priceTrend = hasChart ? lastSell - firstSell : 0;
 
   const recentMovements = useMemo(() => (movements ?? []).slice(0, RECENT_COUNT), [movements]);
+
+  // ── Terminal states (id-only navigation из чека, round 12 #5) ─────────────
+  // Без initialData экран обязан пережить «product ещё не приехал»: короткий
+  // спиннер, а 404/ошибка (товар удалён со склада / вычищен из Корзины) —
+  // честное объяснение с кнопкой «Назад» вместо краша на product.id. ВАЖНО:
+  // ранний return стоит ПОСЛЕ всех хуков выше — порядок хуков стабилен.
+  if (!product) {
+    return (
+      <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
+        <IosScreenHeader title="Товар" onBack={() => navigation.goBack()} />
+        <View style={styles.terminalState}>
+          {!!productId && productPending && !productError ? (
+            <ActivityIndicator color={palette.accent.primary} />
+          ) : (
+            <>
+              <Ionicons name="cube-outline" size={48} color={palette.text.tertiary} />
+              <Text variant="title3" color={palette.text.primary} style={styles.terminalTitle}>
+                Товар удалён со склада
+              </Text>
+              <Text variant="footnote" color={palette.text.tertiary} style={styles.terminalText}>
+                Карточка недоступна: товар удалён или больше не существует. Строка в чеке при этом сохранена.
+              </Text>
+              <TouchableOpacity
+                style={[styles.terminalBackBtn, { backgroundColor: palette.accent.primary }]}
+                onPress={() => navigation.goBack()}
+                accessibilityRole="button"
+                accessibilityLabel="Назад"
+              >
+                <Text variant="bodyEmph" color={colors.white}>
+                  Назад
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      </View>
+    );
+  }
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -671,16 +725,33 @@ export default function ProductDetailScreen() {
               />
             </EditField>
 
-            {/* Barcode */}
+            {/* Barcode — с кнопкой камеры-скана (round 12 #6a). На бинаре без
+                expo-camera кнопки нет — остаётся ручной ввод. */}
             <EditField label="Штрихкод" palette={palette}>
-              <TextInput
-                value={barcode}
-                onChangeText={setBarcode}
-                style={[styles.input, inputThemed]}
-                placeholder="EAN-13 / QR / свой код"
-                placeholderTextColor={palette.text.tertiary}
-                autoCapitalize="none"
-              />
+              <View style={styles.barcodeRow}>
+                <TextInput
+                  value={barcode}
+                  onChangeText={setBarcode}
+                  style={[styles.input, inputThemed, { flex: 1 }]}
+                  placeholder="EAN-13 / QR / свой код"
+                  placeholderTextColor={palette.text.tertiary}
+                  autoCapitalize="none"
+                />
+                {isBarcodeScannerAvailable ? (
+                  <TouchableOpacity
+                    style={[styles.barcodeScanBtn, { backgroundColor: palette.bg.muted }]}
+                    onPress={() => {
+                      haptic('tap');
+                      setBarcodeScanOpen(true);
+                    }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Сканировать штрих-код камерой"
+                    hitSlop={4}
+                  >
+                    <Ionicons name="barcode-outline" size={22} color={palette.accent.primary} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
             </EditField>
 
             {/* Save / cancel */}
@@ -1062,6 +1133,19 @@ export default function ProductDetailScreen() {
           </Pressable>
         </Pressable>
       </RNModal>
+
+      {/* Камера-скан для поля «Штрихкод» (round 12 #6a). Открывается ТОЛЬКО
+          когда другие модалки экрана закрыты — сиблинг-Modal конфликтов iOS
+          нет. Одноразовый скан: код падает в поле, сканер закрывается. */}
+      <BarcodeScanner
+        visible={barcodeScanOpen}
+        onClose={() => setBarcodeScanOpen(false)}
+        onScanned={(code) => {
+          setBarcode(code.trim());
+          setBarcodeScanOpen(false);
+        }}
+        hint="Наведите камеру на штрих-код — он подставится в поле"
+      />
     </View>
   );
 }
@@ -1190,6 +1274,34 @@ function MovementLine({ movement, palette, last }: MovementLineProps) {
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
+
+  // Terminal states — id-only навигация из чека (round 12 #5): спиннер, пока
+  // товар едет, и «Товар удалён со склада» на 404/ошибке.
+  terminalState: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: spacing[8],
+    gap: spacing[3],
+  },
+  terminalTitle: { textAlign: 'center' },
+  terminalText: { textAlign: 'center', maxWidth: 300 },
+  terminalBackBtn: {
+    marginTop: spacing[2],
+    paddingHorizontal: spacing[6],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.full,
+  },
+
+  // «Штрихкод» + кнопка камеры-скана (round 12 #6a).
+  barcodeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  barcodeScanBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: borderRadius.lg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[4], gap: spacing[2] },
 

@@ -253,6 +253,8 @@ export interface CreateProductRequest {
   stock: number;
   minStock: number;
   unit?: string;
+  /** EAN-13 / QR / произвольный код. Omit or send undefined to store none. */
+  barcode?: string;
   isBundle?: boolean;
   bundleItems?: Array<{ productId: string; name: string; quantity: number }>;
   supplierId?: string;
@@ -274,6 +276,12 @@ export interface UpdateProductRequest {
   stock?: number;
   minStock?: number;
   unit?: string;
+  /**
+   * EAN-13 / QR / произвольный код. Send `''` to CLEAR the stored barcode;
+   * omitting the field leaves it unchanged (backend PATCH sets only when
+   * the field is present).
+   */
+  barcode?: string;
   isBundle?: boolean;
   bundleItems?: Array<{ productId: string; name: string; quantity: number }>;
   supplierId?: string;

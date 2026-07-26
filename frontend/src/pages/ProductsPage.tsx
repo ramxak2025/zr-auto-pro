@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback, memo, FormEvent } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Reorder, useDragControls } from 'framer-motion';
 import toast from 'react-hot-toast';
@@ -77,6 +78,8 @@ interface ProductFormData {
   stock: number;
   minStock: number;
   unit: string;
+  /** Round 12 #6: EAN-13/QR/свой код. У существующего товара '' очищает. */
+  barcode?: string;
   isBundle: boolean;
   bundleItems: BundleItem[];
   warrantyDays: number | null;
@@ -126,6 +129,9 @@ function ProductFormModal({
   const [bundleItems, setBundleItems] = useState<BundleItem[]>(product?.bundleItems || []);
   const [bundleSearch, setBundleSearch] = useState('');
   const [warrantyDays, setWarrantyDays] = useState(product?.warrantyDays != null ? String(product.warrantyDays) : '');
+  // Round 12 #6: штрихкод — обычный текстовый input. USB-сканер печатает код
+  // как клавиатура, поэтому отдельная камера-кнопка на вебе не нужна.
+  const [barcode, setBarcode] = useState(product?.barcode || '');
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const bundleSearchResults = useMemo(() => {
@@ -192,6 +198,9 @@ function ProductFormModal({
       unit,
       isBundle,
       bundleItems: isBundle ? bundleItems : [],
+      // '' у существующего товара ОЧИЩАЕТ штрихкод (PATCH сетит поле только
+      // когда оно пришло); у нового пустое поле просто не отправляем.
+      barcode: product ? barcode.trim() : barcode.trim() || undefined,
       warrantyDays: trimmedWd === '' ? null : Math.max(0, Math.floor(Number(trimmedWd))),
       // For new products, fall back to the currently selected warehouse from
       // the page. Edits keep the product's own warehouseId untouched here.
@@ -439,6 +448,23 @@ function ProductFormModal({
             )}
           </div>
         )}
+
+        {/* Barcode (round 12 #6) — plain input: a USB scanner types the code
+            like a keyboard, so no dedicated scan button is needed on web. */}
+        <div>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Штрихкод</label>
+          <input
+            type="text"
+            value={barcode}
+            onChange={(e) => setBarcode(e.target.value)}
+            placeholder="EAN-13 / QR / свой код"
+            autoComplete="off"
+            className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
+          />
+          <p className="text-xs text-gray-400 mt-1">
+            Поставьте курсор в поле и считайте код USB-сканером — он напечатает его как клавиатура.
+          </p>
+        </div>
 
         {/* Warranty days */}
         <div>
@@ -1673,6 +1699,41 @@ export default function ProductsPage() {
   });
 
   const allProducts = productsData?.data || [];
+
+  // ── Автооткрытие карточки товара по router-state (round 12 #5, web-паритет).
+  // CheckDetailPage делает navigate('/products', { state: { openProductId } })
+  // по клику на товарную строку чека. Ждём загрузку списка активного склада;
+  // товар с другого склада / не в первой 1000 дофетчиваем по id. Фильтры и
+  // папки страницы не трогаем — открывается только модалка карточки. Ref-гейт
+  // потребляет state один раз (их pushState-гвард для папок не задет: сырое
+  // history-API не меняет location.state React Router'а).
+  const location = useLocation();
+  const consumedOpenProductIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    const openProductId = (location.state as { openProductId?: string } | null)?.openProductId;
+    if (!openProductId || consumedOpenProductIdRef.current === openProductId) return;
+    if (!productsData) return; // список ещё грузится — эффект перезапустится сам
+    consumedOpenProductIdRef.current = openProductId;
+    const local = allProducts.find((p) => p.id === openProductId);
+    if (local) {
+      setDetailTarget(local);
+      return;
+    }
+    let cancelled = false;
+    productsApi
+      .getById(openProductId)
+      .then((res) => {
+        if (!cancelled) setDetailTarget(res.data);
+      })
+      .catch(() => {
+        if (!cancelled) toast.error('Товар не найден — возможно, удалён со склада');
+      });
+    return () => {
+      cancelled = true;
+    };
+    // allProducts derives from productsData — двух зависимостей достаточно.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state, productsData]);
 
   // Inventory movements feed ONLY the "recently checked" badge on folder cards
   // (see `folderCheckInfo` below). It's auxiliary decoration, not core data, so

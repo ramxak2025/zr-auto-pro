@@ -39,7 +39,6 @@ import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
 import FeatureGate from '../components/FeatureGate';
 import Modal from '../components/Modal';
-import ProductMovementHistoryModal from '../components/ProductMovementHistoryModal';
 import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
 import { useColors } from '../contexts/ThemeContext';
@@ -157,10 +156,14 @@ export default function CheckDetailScreen() {
   // Map: stable line key → { selected, qty } для partial-режима. Ключ —
   // `s-<id>` для услуг, `p-<id>` для товаров, чтобы не было коллизий.
   const [returnLines, setReturnLines] = useState<Record<string, { selected: boolean; qty: number }>>({});
-  // Тап по строке товара чека → инлайн-модалка «Движение товара» (тот же
-  // компонент, что в Складе — НЕ роут). Только для строк с productId; у
-  // произвольных (free-text) строк productId нет → строка неинтерактивна.
-  const [movementProduct, setMovementProduct] = useState<{ id: string; name: string; unit?: string } | null>(null);
+  // Тап по строке товара чека → КАРТОЧКА товара на складе (round 12 #5):
+  // navigation.navigate('ProductDetail', { productId }) — роут задублирован в
+  // ChecksStack и MoreStack рядом с CheckDetail, поэтому push остаётся
+  // in-section (floating tab bar виден, edge-swipe возвращает в чек). История
+  // движений живёт ВНУТРИ карточки («Вся история»), отдельная модалка отсюда
+  // больше не нужна. Только для строк с productId; у произвольных (free-text)
+  // строк productId нет → строка неинтерактивна. Удалённый товар карточка
+  // показывает сама («Товар удалён со склада»).
   // Floating tab bar covers the bottom edge (CheckDetail lives inside the
   // tab navigator's stack, so the bar IS visible). Reserve its height so
   // the last block can scroll fully into view + leaves a small breathing
@@ -1424,9 +1427,10 @@ export default function CheckDetailScreen() {
               </View>
             </View>
             {products.map((line, idx) => {
-              // Строка каталожного товара (есть productId) — открывает журнал
-              // движения. Free-text строка без productId остаётся статичной:
-              // движения по ней нет, тап неактивен (disabled).
+              // Строка каталожного товара (есть productId) — открывает КАРТОЧКУ
+              // товара на складе (round 12 #5; история движений — внутри неё).
+              // Free-text строка без productId остаётся статичной: карточки по
+              // ней нет, тап неактивен (disabled).
               const interactive = !!line.productId;
               return (
                 <PressableScale
@@ -1435,16 +1439,11 @@ export default function CheckDetailScreen() {
                   hapticIntent={interactive ? 'select' : null}
                   onPress={
                     interactive
-                      ? () =>
-                          setMovementProduct({
-                            id: line.productId as string,
-                            name: line.name,
-                            unit: line.unit,
-                          })
+                      ? () => navigation.navigate('ProductDetail', { productId: line.productId as string })
                       : undefined
                   }
                   accessibilityRole={interactive ? 'button' : undefined}
-                  accessibilityLabel={interactive ? `Движение товара: ${line.name}` : undefined}
+                  accessibilityLabel={interactive ? `Карточка товара: ${line.name}` : undefined}
                   style={[
                     styles.lineItem,
                     idx > 0 && [styles.lineItemBorder, { borderTopColor: palette.border.subtle }],
@@ -2283,23 +2282,6 @@ export default function CheckDetailScreen() {
           />
         )}
       </Modal>
-
-      {/* «Движение товара» — инлайн-модалка (тот же компонент, что в Складе).
-          Открывается тапом по строке каталожного товара чека. */}
-      <ProductMovementHistoryModal
-        visible={!!movementProduct}
-        onClose={() => setMovementProduct(null)}
-        productId={movementProduct?.id ?? null}
-        productName={movementProduct?.name}
-        productUnit={movementProduct?.unit}
-        onOpenCheck={(checkId) => {
-          // Закрываем модалку и пушим НОВЫЙ CheckDetail поверх текущего —
-          // именно push (мы уже в CheckDetail): navigate подменил бы params
-          // текущего экрана и сломал бы кнопку «назад».
-          setMovementProduct(null);
-          navigation.push('CheckDetail', { id: checkId });
-        }}
-      />
     </SafeAreaView>
   );
 }

@@ -262,6 +262,13 @@ export default function ProductPickerModal({
   // ── Barcode scanner (expo-camera CameraView with barcode hint) ────────────
   const [showScanner, setShowScanner] = useState(false);
   const [cameraPermission, requestCameraPermission] = useCameraPermissions();
+  // Round 12 #6в — скан = мгновенное добавление. Continuous-сессия: cooldown
+  // между принятыми кодами (CameraView шлёт onBarcodeScanned каждый кадр),
+  // счётчик добавлений на сессию сканера, пилюля «+1 Название · N».
+  const scanCooldownRef = useRef(0);
+  const scanAddCountRef = useRef(0);
+  const [scanFeedback, setScanFeedback] = useState<string | null>(null);
+  const SCAN_COOLDOWN_MS = 1400;
 
   const openScanner = useCallback(async () => {
     let perm = cameraPermission;
@@ -269,21 +276,14 @@ export default function ProductPickerModal({
       perm = await requestCameraPermission();
     }
     if (perm?.granted) {
+      scanCooldownRef.current = 0;
+      scanAddCountRef.current = 0;
+      setScanFeedback(null);
       setShowScanner(true);
     } else {
       Alert.alert('Нет доступа к камере', 'Разрешите доступ к камере в настройках устройства');
     }
   }, [cameraPermission, requestCameraPermission]);
-
-  const handleBarCodeScanned = useCallback(({ data }: { data: string }) => {
-    setShowScanner(false);
-    // A scan is a precise lookup — clear any active folder chip so the
-    // scanned item surfaces regardless of which folder it lives in.
-    setActiveCategory(null);
-    setLocalSearch(data);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => setProductSearch(data), 200);
-  }, []);
 
   const handleSearchChange = useCallback((text: string) => {
     setLocalSearch(text);
@@ -376,6 +376,42 @@ export default function ProductPickerModal({
     if (visible) refetch();
   }, [visible, refetch]);
 
+  // Round 12 #6в: exact-match по barcode загруженного списка → товар СРАЗУ
+  // уходит в чек/заказ через onSelectProduct (МИМО lastTapRef-дебаунса —
+  // cooldown continuous-сессии уже отсекает дребезг кадров), сканер остаётся
+  // открытым — «пикать подряд». Промах — прежнее поведение: код в поиск
+  // (клиентский фильтр ниже матчит и barcode), haptic warning, сканер
+  // закрывается, чтобы показать кандидатов. Session-bridge Кассы не задет —
+  // это тот же родительский колбэк, что и у тапа по строке. Определён ПОСЛЕ
+  // запроса allProducts (dep-массив читается на рендере — TDZ).
+  const handleBarCodeScanned = useCallback(
+    ({ data }: { data: string }) => {
+      const needle = (data || '').trim();
+      if (!needle) return;
+      const now = Date.now();
+      if (now - scanCooldownRef.current < SCAN_COOLDOWN_MS) return;
+      scanCooldownRef.current = now;
+      const products = Array.isArray(allProducts) ? allProducts : [];
+      const match = products.find((p) => String(p.barcode || '').trim() === needle);
+      if (match) {
+        haptic('success');
+        onSelectProduct(match);
+        scanAddCountRef.current += 1;
+        setScanFeedback(`+1 ${match.name} · ${scanAddCountRef.current}`);
+        return; // камера остаётся открытой — следующий товар
+      }
+      haptic('warning');
+      setShowScanner(false);
+      // A scan is a precise lookup — clear any active folder chip so the
+      // scanned item surfaces regardless of which folder it lives in.
+      setActiveCategory(null);
+      setLocalSearch(needle);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      debounceRef.current = setTimeout(() => setProductSearch(needle), 200);
+    },
+    [allProducts, onSelectProduct],
+  );
+
   // Switching warehouse changes the product set; a category chip from the
   // previous warehouse may not exist here, so clear the folder filter.
   useEffect(() => {
@@ -409,7 +445,11 @@ export default function ProductPickerModal({
     if (productSearch) {
       const q = productSearch.toLowerCase();
       list = list.filter(
-        (p) => p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q)),
+        (p) =>
+          p.name.toLowerCase().includes(q) ||
+          (p.category && p.category.toLowerCase().includes(q)) ||
+          // Round 12 #6в: скан-промах кладёт код в поиск — матчим и barcode.
+          (p.barcode && String(p.barcode).toLowerCase().includes(q)),
       );
     }
     return list;
@@ -747,7 +787,15 @@ export default function ProductPickerModal({
                 ) : null}
                 <View style={styles.scannerOverlay} pointerEvents="box-none">
                   <View style={styles.scannerCornerBox} />
-                  <Text style={styles.scannerHint}>Наведите камеру на штрих-код товара</Text>
+                  <Text style={styles.scannerHint}>Наведите камеру на штрих-код — товар добавится сразу</Text>
+                  {scanFeedback ? (
+                    <View style={styles.scannerFeedbackPill}>
+                      <Ionicons name="checkmark-circle" size={16} color={colors.green[400]} />
+                      <Text style={styles.scannerFeedbackText} numberOfLines={1}>
+                        {scanFeedback}
+                      </Text>
+                    </View>
+                  ) : null}
                 </View>
                 <TouchableOpacity style={styles.scannerCancelBtn} onPress={() => setShowScanner(false)}>
                   <Ionicons name="close" size={22} color={colors.white} />
@@ -1239,4 +1287,24 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.25)',
   },
   scannerCancelText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  // Round 12 #6в — пилюля «+1 Название · N» continuous-сессии сканера.
+  scannerFeedbackPill: {
+    marginTop: spacing[3],
+    maxWidth: 300,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  scannerFeedbackText: {
+    flexShrink: 1,
+    color: colors.white,
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+  },
 });

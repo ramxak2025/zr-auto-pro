@@ -55,11 +55,29 @@ export interface BarcodeScannerProps {
   visible: boolean;
   /** Dismiss (cancel / system back). */
   onClose: () => void;
-  /** Fired once per scan session with the decoded payload string. */
+  /**
+   * Decoded payload. One-shot mode (default): fired ONCE per open (internal
+   * latch) with a built-in success haptic. Continuous mode: fired on every
+   * accepted read (cooldown between reads), WITHOUT the built-in haptic —
+   * the caller decides success/warning per code.
+   */
   onScanned: (code: string) => void;
   /** Hint line under the reticle. */
   hint?: string;
+  /**
+   * Round 12 #6в — «пикать подряд»: keep the camera open after each read and
+   * accept the next code after a short cooldown. The caller closes the
+   * scanner itself (e.g. on an unknown code) and owns haptics/feedback.
+   */
+  continuous?: boolean;
+  /** Feedback pill under the hint (continuous mode: «+1 Название · …»). */
+  statusText?: string | null;
 }
+
+/** Continuous mode: minimum gap between two accepted reads. CameraView fires
+ *  onBarcodeScanned every frame while a code is in view — without a cooldown
+ *  one physical «пик» would add the product dozens of times. */
+const CONTINUOUS_SCAN_COOLDOWN_MS = 1400;
 
 /**
  * Inner scanner — only mounted when `isBarcodeScannerAvailable` is true, so the
@@ -70,17 +88,23 @@ function ScannerInner({
   onClose,
   onScanned,
   hint,
+  continuous,
+  statusText,
 }: {
   onClose: () => void;
   onScanned: (code: string) => void;
   hint: string;
+  continuous?: boolean;
+  statusText?: string | null;
 }) {
   const Camera = ExpoCamera as ExpoCameraModule;
   const { CameraView, useCameraPermissions } = Camera;
   const [permission, requestPermission] = useCameraPermissions();
   // CameraView fires onBarcodeScanned continuously while a code is in frame —
-  // latch so the parent's onScanned runs exactly once per open.
+  // one-shot mode latches so the parent's onScanned runs exactly once per
+  // open; continuous mode replaces the latch with a cooldown timestamp.
   const handledRef = useRef(false);
+  const lastAcceptRef = useRef(0);
 
   // Auto-request permission once when still undetermined, so the user lands on
   // the system prompt immediately instead of a "no access" wall.
@@ -92,12 +116,24 @@ function ScannerInner({
 
   const handleBarcodeScanned = useCallback(
     (result: BarcodeScanningResult) => {
-      if (handledRef.current || !result?.data) return;
+      if (!result?.data) return;
+      if (continuous) {
+        // Cooldown вместо одноразового latch: приняли код → пауза, чтобы один
+        // физический «пик» не сработал десятки раз, затем ждём следующий.
+        // Haptic здесь НЕ даём — вызывающий решает (success при добавлении,
+        // warning при неизвестном коде).
+        const now = Date.now();
+        if (now - lastAcceptRef.current < CONTINUOUS_SCAN_COOLDOWN_MS) return;
+        lastAcceptRef.current = now;
+        onScanned(result.data);
+        return;
+      }
+      if (handledRef.current) return;
       handledRef.current = true;
       haptic('success');
       onScanned(result.data);
     },
-    [onScanned],
+    [onScanned, continuous],
   );
 
   // Permission still loading.
@@ -153,6 +189,14 @@ function ScannerInner({
         <Text variant="footnote" color={colors.white} style={styles.hint}>
           {hint}
         </Text>
+        {statusText ? (
+          <View style={styles.statusPill}>
+            <Ionicons name="checkmark-circle" size={16} color={colors.green[400]} />
+            <Text variant="footnote" color={colors.white} style={styles.statusPillText} numberOfLines={1}>
+              {statusText}
+            </Text>
+          </View>
+        ) : null}
       </View>
       <TouchableOpacity style={styles.cancelBtn} onPress={onClose} accessibilityLabel="Отмена">
         <Ionicons name="close" size={22} color={colors.white} />
@@ -189,15 +233,24 @@ export default function BarcodeScanner({
   onClose,
   onScanned,
   hint = 'Наведите камеру на штрих-код товара',
+  continuous,
+  statusText,
 }: BarcodeScannerProps) {
   return (
     <RNModal visible={visible} animationType="slide" onRequestClose={onClose}>
       <View style={styles.container}>
         {/* Gate on `visible` so ScannerInner mounts fresh each open (resetting
-            its one-shot latch) and the camera is released on close. */}
+            its one-shot latch / continuous cooldown) and the camera is
+            released on close. */}
         {visible ? (
           isBarcodeScannerAvailable ? (
-            <ScannerInner onClose={onClose} onScanned={onScanned} hint={hint} />
+            <ScannerInner
+              onClose={onClose}
+              onScanned={onScanned}
+              hint={hint}
+              continuous={continuous}
+              statusText={statusText}
+            />
           ) : (
             <Unavailable onClose={onClose} />
           )
@@ -220,6 +273,21 @@ const styles = StyleSheet.create({
     backgroundColor: 'transparent',
   },
   hint: { marginTop: spacing[4], textAlign: 'center', opacity: 0.9, paddingHorizontal: spacing[8] },
+  // Continuous-режим: пилюля «+1 Название · в чеке N» под подсказкой.
+  statusPill: {
+    marginTop: spacing[3],
+    maxWidth: 300,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.2)',
+  },
+  statusPillText: { flexShrink: 1, fontWeight: fontWeight.semibold },
   cancelBtn: {
     position: 'absolute',
     bottom: 48,

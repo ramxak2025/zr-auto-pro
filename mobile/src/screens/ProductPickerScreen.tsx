@@ -290,6 +290,11 @@ export default function ProductPickerScreen() {
 
   const [showWarehouseDropdown, setShowWarehouseDropdown] = useState(false);
   const [showScanner, setShowScanner] = useState(false);
+  // Round 12 #6в — «пикать подряд»: сканер работает в continuous-режиме,
+  // после каждого успешного скана остаётся открытым; пилюля показывает
+  // «+1 Название · в чеке N». Счётчик — на сессию сканера (сброс на открытии).
+  const [scanFeedback, setScanFeedback] = useState<string | null>(null);
+  const scanAddCountRef = useRef(0);
   const [refreshing, setRefreshing] = useState(false);
 
   // ── Товары — ТОТ ЖЕ ключ/лимит, что модалка и прогрев Кассы. Кеш-first:
@@ -367,7 +372,13 @@ export default function ProductPickerScreen() {
     if (q) {
       const rows: PickerListRow[] = [];
       for (const p of products) {
-        if (p.name.toLowerCase().includes(q) || (p.category && p.category.toLowerCase().includes(q))) {
+        if (
+          p.name.toLowerCase().includes(q) ||
+          (p.category && p.category.toLowerCase().includes(q)) ||
+          // Round 12 #6в: скан-промах кладёт код в поиск — матчим и barcode,
+          // чтобы частичный/чужой код всё же находил кандидатов.
+          (p.barcode && String(p.barcode).toLowerCase().includes(q))
+        ) {
           rows.push({ type: 'product', key: p.id, product: p });
         }
       }
@@ -479,11 +490,43 @@ export default function ProductPickerScreen() {
     navigation.pop(depth + 1);
   }, [navigation, depth]);
 
-  const handleScanned = useCallback((code: string) => {
-    setShowScanner(false);
-    if (debounceRef.current) clearTimeout(debounceRef.current);
-    setLocalSearch(code);
-    setDebouncedSearch(code); // скан — точный запрос, без дебаунса
+  // Round 12 #6в: скан в Кассе = МГНОВЕННОЕ добавление в чек. Exact-match по
+  // загруженному списку склада (тот же источник, что и строки пикера); попал —
+  // добавляем ТЕМ ЖЕ путём, что тап по строке, но МИМО lastTapRef-дебаунса
+  // (образец handleIncrement: скан — осознанное действие, cooldown уже даёт
+  // сам continuous-сканер) и оставляем камеру открытой — складской сценарий
+  // «пикать подряд». Промах — прежнее поведение: код в поиск (клиентский
+  // фильтр ниже теперь матчит и barcode), haptic warning, сканер закрывается,
+  // чтобы показать результаты/пустое состояние.
+  const handleScanned = useCallback(
+    (code: string) => {
+      const needle = code.trim();
+      const products = Array.isArray(allProducts) ? allProducts : [];
+      const match = needle ? products.find((p) => String(p.barcode || '').trim() === needle) : undefined;
+      if (match) {
+        const s = getProductPickerSession();
+        if (s) {
+          haptic('success');
+          s.addProduct(match);
+          scanAddCountRef.current += 1;
+          setScanFeedback(`+1 ${match.name} · в чеке ${scanAddCountRef.current}`);
+          return; // сканер НЕ закрываем — ждём следующий товар
+        }
+      }
+      haptic('warning');
+      setShowScanner(false);
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+      setLocalSearch(needle);
+      setDebouncedSearch(needle); // скан — точный запрос, без дебаунса
+    },
+    [allProducts],
+  );
+
+  const openScanner = useCallback(() => {
+    haptic('tap');
+    scanAddCountRef.current = 0;
+    setScanFeedback(null);
+    setShowScanner(true);
   }, []);
 
   // Pull-to-refresh: инвалидируем ВСЕ склады пикерного кеша (main/брак/Б-У),
@@ -665,7 +708,7 @@ export default function ProductPickerScreen() {
             <Ionicons name="close-circle-outline" size={18} color={palette.text.tertiary} />
           </TouchableOpacity>
         ) : isRoot ? (
-          <TouchableOpacity onPress={() => setShowScanner(true)} hitSlop={8} accessibilityLabel="Сканировать штрих-код">
+          <TouchableOpacity onPress={openScanner} hitSlop={8} accessibilityLabel="Сканировать штрих-код">
             <Ionicons name="barcode-outline" size={20} color={colors.primary[500]} />
           </TouchableOpacity>
         ) : null}
@@ -757,8 +800,18 @@ export default function ProductPickerScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Сканер штрих-кода — общий компонент (Склад/Инвентаризация). */}
-      <BarcodeScanner visible={showScanner} onClose={() => setShowScanner(false)} onScanned={handleScanned} />
+      {/* Сканер штрих-кода — общий компонент (Склад/Инвентаризация), здесь в
+          continuous-режиме (round 12 #6в): успешный скан добавляет товар в чек
+          и оставляет камеру открытой («пикать подряд»), пилюля показывает
+          последний добавленный товар и счётчик. Haptic отдаёт handleScanned. */}
+      <BarcodeScanner
+        visible={showScanner}
+        onClose={() => setShowScanner(false)}
+        onScanned={handleScanned}
+        continuous
+        statusText={scanFeedback}
+        hint="Наведите камеру на штрих-код — товар добавится в чек"
+      />
     </View>
   );
 }
