@@ -166,7 +166,10 @@ public class AutexaKassaButtonModule: Module {
     Name("AutexaKassaButton")
 
     View(AutexaKassaButtonView.self) {
-      Events("onPress")
+      // НЕ "onPress": имя совпало бы с зарезервированным всплывающим topPress
+      // у View, и RN в дев-сборке падает invariant'ом. См. комментарий в
+      // AutexaKassaButtonView.swift.
+      Events("onKassaPress")
 
       Prop("symbolName") { (view: AutexaKassaButtonView, value: String) in
         view.setSymbolName(value)

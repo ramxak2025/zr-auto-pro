@@ -58,7 +58,12 @@ public class AutexaKassaButtonView: ExpoView {
 
   // MARK: - Events
 
-  let onPress = EventDispatcher()
+  /// Имя НЕ `onPress` намеренно: RN держит `topPress` как всплывающее событие
+  /// любого View, а Expo регистрирует события модуля как прямые — совпадение
+  /// имён даёт invariant «Event cannot be both direct and bubbling: topPress».
+  /// Проверка стоит под `__DEV__`, поэтому релиз не падал, а дев-сборка умирала
+  /// на первом рендере кнопки. Переименовывать обратно нельзя.
+  let onKassaPress = EventDispatcher()
 
   // MARK: - Init
 
@@ -157,7 +162,7 @@ public class AutexaKassaButtonView: ExpoView {
     super.touchesEnded(touches, with: event)
     animateScale(1.0)
     if let t = touches.first, bounds.contains(t.location(in: self)) {
-      onPress([:])
+      onKassaPress([:])
     }
   }
 

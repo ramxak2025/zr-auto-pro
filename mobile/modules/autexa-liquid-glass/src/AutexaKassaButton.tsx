@@ -31,10 +31,17 @@ interface AutexaKassaButtonProps {
   style?: StyleProp<ViewStyle>;
 }
 
+// ВАЖНО: событие на границе с нативом называется onKassaPress, а НЕ onPress.
+// RN резервирует `topPress` (то есть проп `onPress`) как ВСПЛЫВАЮЩЕЕ событие
+// любого View, а Expo регистрирует события модуля как ПРЯМЫЕ. Совпадение имён
+// даёт invariant «Event cannot be both direct and bubbling: topPress» и белый
+// экран на первом же рендере кнопки. Проверка живёт под `__DEV__`
+// (ReactNativeViewConfigRegistry), поэтому релизные сборки не падали, а любая
+// дев-сборка умирала сразу после логина. Не переименовывать обратно.
 let NativeKassaView: React.ComponentType<{
   symbolName?: string;
   focused?: boolean;
-  onPress?: (e: { nativeEvent: Record<string, never> }) => void;
+  onKassaPress?: (e: { nativeEvent: Record<string, never> }) => void;
   style?: StyleProp<ViewStyle>;
 }> | null = null;
 try {
@@ -50,7 +57,7 @@ export function AutexaKassaButton({
   style,
 }: AutexaKassaButtonProps) {
   if (Platform.OS === 'ios' && NativeKassaView) {
-    return <NativeKassaView symbolName={symbolName} focused={focused} onPress={() => onPress?.()} style={style} />;
+    return <NativeKassaView symbolName={symbolName} focused={focused} onKassaPress={() => onPress?.()} style={style} />;
   }
   // JS fallback — Android or missing native module. Cheap-but-not-broken.
   return (
