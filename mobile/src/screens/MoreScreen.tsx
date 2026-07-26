@@ -15,8 +15,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, so
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { UserPermissions, SubscriptionInfo, SectionVisibility } from '../../../shared/types';
-import { ALL_ITEM_KEYS } from '../../../shared/types';
+import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
@@ -52,13 +51,6 @@ interface MenuItem {
   label: string;
   description: string;
   screen: string;
-  /**
-   * 073 — granular per-employee visibility key. Matches one entry in
-   * `ITEM_KEYS` (shared/types) and the owner's per-item toggle in UsersScreen.
-   * A hidden item ({ isVisible: false }) drops THIS row from the user's menu,
-   * even when its parent group stays visible.
-   */
-  itemKey: string;
   icon: keyof typeof Ionicons.glyphMap;
   permission?: keyof UserPermissions;
   roles?: string[];
@@ -69,12 +61,6 @@ interface MenuItem {
 
 interface MenuSection {
   title: string;
-  /**
-   * 071 — logical section bucket. The owner toggles visibility per employee by
-   * this key (work|finance|warehouse|marketing|other); a hidden section drops
-   * the whole group AND its items from this user's «Ещё» menu.
-   */
-  sectionKey: SectionVisibility['sectionKey'];
   items: MenuItem[];
 }
 
@@ -108,16 +94,14 @@ interface MenuSection {
 const menuSections: MenuSection[] = [
   {
     title: 'Работа',
-    sectionKey: 'work',
     items: [
       {
         // Записи — внутренний инструмент персонала: запись клиента на дату/
         // время → «приход» открывает кассу. Гейт: право bookings_access
-        // (мастер/админ) + section/item-visibility. Сервер закрывает API.
+        // (мастер/админ). Сервер закрывает API.
         label: 'Записи',
         description: 'Запись клиентов на дату и время',
         screen: 'Bookings',
-        itemKey: 'bookings',
         permission: 'bookings_access',
         icon: 'time-outline',
         iconBg: colors.blue[50],
@@ -127,7 +111,6 @@ const menuSections: MenuSection[] = [
         label: 'Расписание',
         description: 'График работы и смены',
         screen: 'Schedule',
-        itemKey: 'schedule',
         permission: 'schedule_view',
         featureKey: 'schedule_view',
         icon: 'calendar-outline',
@@ -141,7 +124,6 @@ const menuSections: MenuSection[] = [
         // a separate "Авто" menu entry is intentionally gone.
         description: 'Клиенты, авто и история',
         screen: 'Clients',
-        itemKey: 'clients',
         permission: 'clients_view',
         featureKey: 'clients_view',
         icon: 'people-outline',
@@ -155,23 +137,24 @@ const menuSections: MenuSection[] = [
         label: 'База знаний',
         description: 'Статьи, регламенты и учебный центр',
         screen: 'KnowledgeBase',
-        itemKey: 'knowledge-base',
+        // Round 12: строка гейтится ключом матрицы knowledge_view (мигр. 137;
+        // у системных ролей seed=true — поведение «видно всем» сохранено, но
+        // владелец теперь может закрыть раздел через роль).
+        permission: 'knowledge_view',
         icon: 'book-outline',
         iconBg: colors.cyan[50],
         iconColor: colors.cyan[600],
       },
       {
         // Шаблоны чеков (round 8 #3) — личные шаблоны с папками «под себя» +
-        // общие. Доступ любому сотруднику: каждый управляет СВОИМИ шаблонами
-        // (общие правит только owner-class, это гейтится внутри экрана И на
-        // сервере). Переиспользуем item-key 'knowledge-base' — шаблоны, как и
-        // база знаний, «рабочие заготовки»; новый ключ сломал бы ITEM_KEYS
-        // drift-guard (как у «Рассрочки» с 'cashflow'). Даже если владелец
-        // скроет эту строку, шаблоны в пикере Кассы остаются доступны.
+        // общие (общие правит только owner-class, это гейтится внутри экрана И
+        // на сервере). Round 12: гейт knowledge_view — шаблоны, как и база
+        // знаний, «рабочие заготовки». Даже если роль прячет эту строку,
+        // шаблоны в пикере Кассы остаются доступны.
         label: 'Шаблоны',
         description: 'Шаблоны чеков: услуги и товары',
         screen: 'Templates',
-        itemKey: 'knowledge-base',
+        permission: 'knowledge_view',
         icon: 'copy-outline',
         iconBg: colors.violet[50],
         iconColor: colors.violet[600],
@@ -180,13 +163,11 @@ const menuSections: MenuSection[] = [
   },
   {
     title: 'Финансы',
-    sectionKey: 'finance',
     items: [
       {
         label: 'Движение денег',
         description: 'Поступления и выдачи по дням',
         screen: 'CashFlow',
-        itemKey: 'cashflow',
         permission: 'cashflow_view',
         featureKey: 'cashflow_view',
         icon: 'swap-horizontal-outline',
@@ -195,15 +176,15 @@ const menuSections: MenuSection[] = [
       },
       {
         // Рассрочка — продажи в кредит и платежи по ним (backend installments/,
-        // 093). Заменяет прежний пункт «Должники / дебиторка». Просмотр списка
-        // открыт любому сотруднику; приём платежей / погашение / напоминания —
-        // owner-class и закрыты на сервере. Переиспользуем item-key 'cashflow'
-        // — той же финансовой видимостью владелец управляет и «Движением денег»
-        // (новый ключ сломал бы ITEM_KEYS drift-guard).
+        // 093). Заменяет прежний пункт «Должники / дебиторка». Round 12: гейт
+        // cashflow_view — финансовый раздел, видимость решает та же ячейка
+        // матрицы роли, что и «Движение денег» (раньше строка была видна всем);
+        // приём платежей / погашение / напоминания — owner-class и закрыты на
+        // сервере.
         label: 'Рассрочка',
         description: 'Продажи в рассрочку и платежи',
         screen: 'Installments',
-        itemKey: 'cashflow',
+        permission: 'cashflow_view',
         icon: 'card-outline',
         iconBg: colors.amber[50],
         iconColor: colors.amber[600],
@@ -212,12 +193,9 @@ const menuSections: MenuSection[] = [
         // Кассовая смена / Z-отчёт / Инкассация. Owner-class tool (open/close/
         // collect role-gated to director/admin/superadmin AND server-enforced);
         // viewing the live Z-report is open to any tenant user who reaches it.
-        // Reuses the 'cashflow' item-key so the owner's per-employee finance
-        // visibility toggle governs it consistently with «Движение денег».
         label: 'Кассовая смена',
         description: 'Z-отчёт, инкассация, сверка кассы',
         screen: 'CashShift',
-        itemKey: 'cashflow',
         permission: 'cash_shifts_manage',
         // Z-отчёт / сверка кассы → calculator (cash-register feel). Was
         // `file-tray-full-outline`, which had no Lucide twin and rendered a
@@ -230,7 +208,6 @@ const menuSections: MenuSection[] = [
         label: 'Зарплата',
         description: 'Заработок мастеров',
         screen: 'Salary',
-        itemKey: 'salary',
         permission: 'salary_view',
         featureKey: 'salary_view',
         icon: 'wallet-outline',
@@ -241,13 +218,9 @@ const menuSections: MenuSection[] = [
         // «Мотивация сотрудников» v1 — акционные товары (backend motivation/, 095).
         // Своя отдельная точка входа (НЕ внутри «Маркетинга»). Owner-class: roles
         // ограничены владельцем/директором; setPromo/clearPromo закрыты на сервере.
-        // Переиспользуем item-key 'salary' — мотивация это компенсация, той же
-        // финансовой видимостью владелец управляет и «Зарплатой» (новый ключ
-        // сломал бы ITEM_KEYS drift-guard, как у «Рассрочки» с 'cashflow').
         label: 'Мотивация сотрудников',
         description: 'Акционные товары и бонусы за продажи',
         screen: 'Motivation',
-        itemKey: 'salary',
         permission: 'motivation_manage',
         icon: 'gift-outline',
         iconBg: colors.emerald[50],
@@ -257,7 +230,6 @@ const menuSections: MenuSection[] = [
         label: 'Расходы',
         description: 'Аренда, маркетинг и др.',
         screen: 'Expenses',
-        itemKey: 'expenses',
         permission: 'can_add_expenses',
         icon: 'trending-down-outline',
         iconBg: colors.rose[50],
@@ -268,13 +240,9 @@ const menuSections: MenuSection[] = [
         // конфиг: постоянные месячные расходы + мотивация не-сдельных
         // сотрудников. Питает НАЧИСЛЕННУЮ чистую прибыль на дашборде. Owner-only
         // (director/superadmin), API owner-class + financial_reports на сервере.
-        // Переиспользуем item-key 'expenses' — той же финансовой видимостью
-        // владелец управляет и «Расходами» (новый ключ сломал бы ITEM_KEYS
-        // drift-guard, как у «Рассрочки» с 'cashflow').
         label: 'Постоянные расходы',
         description: 'Аренда, оклады и мотивация — для прибыли',
         screen: 'Planning',
-        itemKey: 'expenses',
         permission: 'financial_reports',
         icon: 'repeat-outline',
         iconBg: colors.indigo[50],
@@ -284,7 +252,6 @@ const menuSections: MenuSection[] = [
         label: 'Финансовые отчёты',
         description: 'Прибыль, маржа, средний чек',
         screen: 'Reports',
-        itemKey: 'reports',
         permission: 'financial_reports',
         featureKey: 'reports_view',
         icon: 'bar-chart-outline',
@@ -295,7 +262,6 @@ const menuSections: MenuSection[] = [
   },
   {
     title: 'Склад',
-    sectionKey: 'warehouse',
     items: [
       {
         // Re-added after the menu regroup dropped it (#bugD). The route
@@ -306,7 +272,6 @@ const menuSections: MenuSection[] = [
         label: 'Услуги',
         description: 'Каталог услуг и цены',
         screen: 'Services',
-        itemKey: 'services',
         permission: 'services_view',
         featureKey: 'services_view',
         icon: 'pricetags-outline',
@@ -322,7 +287,6 @@ const menuSections: MenuSection[] = [
         label: 'Поставщики',
         description: 'Поставщики, закупки и расчёты',
         screen: 'Suppliers',
-        itemKey: 'suppliers',
         permission: 'suppliers_access',
         featureKey: 'suppliers_view',
         icon: 'cube-outline',
@@ -333,7 +297,6 @@ const menuSections: MenuSection[] = [
         label: 'Имущество',
         description: 'Инструменты и оборудование',
         screen: 'Equipment',
-        itemKey: 'equipment',
         permission: 'equipment_view',
         icon: 'construct-outline',
         iconBg: colors.emerald[50],
@@ -343,7 +306,6 @@ const menuSections: MenuSection[] = [
         label: 'Складская аналитика',
         description: 'Остатки, оборот, движение',
         screen: 'WarehouseAnalytics',
-        itemKey: 'warehouse-analytics',
         permission: 'warehouse_analytics_view',
         icon: 'analytics-outline',
         iconBg: colors.teal[50],
@@ -353,7 +315,6 @@ const menuSections: MenuSection[] = [
   },
   {
     title: 'Маркетинг',
-    sectionKey: 'marketing',
     items: [
       {
         // «Маркетинг» hub — one entry that opens a clean 4-direction screen
@@ -366,7 +327,6 @@ const menuSections: MenuSection[] = [
         label: 'Маркетинг',
         description: 'Отчёты, отзывы, интеграции и рассылки',
         screen: 'Marketing',
-        itemKey: 'marketing',
         permission: 'marketing_access',
         icon: 'megaphone-outline',
         iconBg: colors.violet[50],
@@ -378,7 +338,6 @@ const menuSections: MenuSection[] = [
         label: 'Звонки',
         description: 'Журнал звонков и записи',
         screen: 'Calls',
-        itemKey: 'calls',
         permission: 'calls_view',
         icon: 'call-outline',
         iconBg: colors.blue[50],
@@ -388,13 +347,11 @@ const menuSections: MenuSection[] = [
   },
   {
     title: 'Остальное',
-    sectionKey: 'other',
     items: [
       {
         label: 'Сотрудники',
         description: 'Карточки персонала, статус, рейтинги',
         screen: 'Employees',
-        itemKey: 'employees',
         permission: 'user_management',
         icon: 'people-circle-outline',
         iconBg: colors.cyan[50],
@@ -404,7 +361,6 @@ const menuSections: MenuSection[] = [
         label: 'Пользователи',
         description: 'Управление доступом',
         screen: 'Users',
-        itemKey: 'users',
         permission: 'user_management',
         featureKey: 'users_manage',
         icon: 'shield-outline',
@@ -419,7 +375,6 @@ const menuSections: MenuSection[] = [
         label: 'Настройки компании',
         description: 'Реквизиты и данные для чеков',
         screen: 'CompanySettings',
-        itemKey: 'company-settings',
         // GET/PATCH /my-company — сид «Администратора» company_manage=false
         // (сегодня admin исключён и на сервере) → пункт остаётся d/sa, пока
         // владелец не выдаст право явно.
@@ -432,7 +387,6 @@ const menuSections: MenuSection[] = [
         label: 'Подписка',
         description: 'Тариф и оплата',
         screen: 'Subscription',
-        itemKey: 'subscription',
         roles: ['director', 'superadmin'],
         icon: 'card-outline',
         iconBg: colors.primary[50],
@@ -445,21 +399,6 @@ const menuSections: MenuSection[] = [
   // car-service «Ещё» menu. Directors / masters never had the superadmin role,
   // so this entry was unreachable for them. See AppNavigator → MainShell.
 ];
-
-// Dev-time guard (#073): every menu row's `itemKey` must exist in the shared
-// `ITEM_KEYS` contract, otherwise the owner's per-item toggle in UsersScreen
-// and this row would silently drift apart (a toggle nobody reads, or a row no
-// toggle controls). Stripped in production by the __DEV__ gate.
-if (__DEV__) {
-  const known = new Set(ALL_ITEM_KEYS);
-  for (const section of menuSections) {
-    for (const item of section.items) {
-      if (!known.has(item.itemKey)) {
-        console.warn(`[MoreScreen] itemKey "${item.itemKey}" (${item.screen}) is not in shared ITEM_KEYS`);
-      }
-    }
-  }
-}
 
 interface MenuRowProps {
   item: MenuItem;
@@ -526,7 +465,7 @@ const MenuRow = React.memo(function MenuRow({
 
 export default function MoreScreen() {
   const navigation = useNavigation<any>();
-  const { user, logout, hasPermission, isSectionVisible, isItemVisible } = useAuth();
+  const { user, logout, hasPermission } = useAuth();
   const palette = useColors();
   const shadow = useShadow();
   const tabBarHeight = useTabBarHeight();
@@ -596,10 +535,6 @@ export default function MoreScreen() {
     // по ним; superadmin/director байпасятся внутри самого hasPermission.
     if (item.permission && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
-    // 073 — granular per-item visibility override (additive to the group-level
-    // isSectionVisible check the caller already applied). Owners keep their
-    // protected items via isItemVisible's own guard.
-    if (!isItemVisible(item.itemKey)) return false;
     return true;
   };
 
@@ -702,11 +637,8 @@ export default function MoreScreen() {
 
         {/* Grouped sections — iOS Settings pattern */}
         {menuSections.map((section) => {
-          // 071 — owner-controlled per-employee section visibility. A hidden
-          // section drops the entire group (and its items) for this user. Runs
-          // BEFORE the per-item role/permission filter so the cheap check
-          // short-circuits a wholly-hidden group.
-          if (!isSectionVisible(section.sectionKey)) return null;
+          // Round 12: видимость строк решает ТОЛЬКО матрица роли (hasPermission
+          // в filterItem). Пустая группа схлопывается целиком.
           const visibleItems = section.items.filter(filterItem);
           if (visibleItems.length === 0) return null;
 

@@ -46,19 +46,7 @@ import {
   type SessionEpochRuntime,
 } from './authSessionRuntime';
 import { createAuthSessionStorage } from './authSessionStorage';
-import type { User, UserPermissions, UserRole, SectionVisibility } from '../../../shared/types';
-
-/** Logical top-level section bucket used by MoreScreen + visibility overrides (#071). */
-type SectionKey = SectionVisibility['sectionKey'];
-
-/**
- * 073 — item keys that owners (superadmin/director) can NEVER hide from
- * themselves. These are the access-control / billing entry points: locking
- * them off would leave the owner unable to re-grant access or manage the
- * subscription (self-lockout). Mirrors the «work» group protection in
- * `isSectionVisible` — an override on these is ignored for owners.
- */
-const OWNER_PROTECTED_ITEM_KEYS = new Set<string>(['users', 'company-settings', 'subscription']);
+import type { User, UserPermissions, UserRole } from '../../../shared/types';
 
 interface AuthContextType {
   user: User | null;
@@ -74,23 +62,6 @@ interface AuthContextType {
   refreshUser: () => Promise<void>;
   hasPermission: (perm: keyof UserPermissions) => boolean;
   isRole: (...roles: UserRole[]) => boolean;
-  /**
-   * 071 — is a top-level navigation section visible for the current user?
-   * Default is visible: only an explicit `{ isVisible: false }` override on the
-   * user's `sectionVisibility` hides a section. Owners always retain «Работа»
-   * (superadmin/director can't lock themselves out of the daily-work group).
-   */
-  isSectionVisible: (sectionKey: SectionKey) => boolean;
-  /**
-   * 073 — is a single «Ещё» menu item visible for the current user?
-   * ADDITIVE to {@link isSectionVisible}: a group can be visible while one item
-   * inside it is hidden. Default is visible: only an explicit `{ isVisible:
-   * false }` override on the user's `itemVisibility` hides an item. Owners
-   * (superadmin/director) always keep the access-control / billing items
-   * (`users`, `company-settings`, `subscription`) so an override can't lock
-   * them out of granting access or managing the subscription.
-   */
-  isItemVisible: (itemKey: string) => boolean;
   /**
    * True while the superadmin is impersonating a tenant owner (a 30-min
    * director token is installed instead of the superadmin's own). Drives the
@@ -132,10 +103,7 @@ async function clearPreviousTenantStorage(): Promise<void> {
       return Promise.reject(error);
     }
   };
-  const results = await Promise.allSettled([
-    start(clearOfflineCheckQueue),
-    start(clearPersistentCache),
-  ]);
+  const results = await Promise.allSettled([start(clearOfflineCheckQueue), start(clearPersistentCache)]);
   const failed = results.find((result): result is PromiseRejectedResult => result.status === 'rejected');
   if (failed) throw failed.reason;
 }
@@ -673,94 +641,97 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [queryClient]);
 
-  const attemptSessionRecovery = useCallback((force = false) => {
-    if (loading || !recoveringSession || !token || user) return;
-    if (recoveryAttemptRef.current) {
-      recoveryWakeQueuedRef.current = true;
-      if (force) recoveryForceQueuedRef.current = true;
-      return;
-    }
-    const cooldownRemaining = recoveryBackoffRef.current.remainingMs();
-    if (!force && cooldownRemaining > 0) {
-      if (!recoveryCooldownTimerRef.current) {
-        recoveryCooldownTimerRef.current = setTimeout(() => {
-          recoveryCooldownTimerRef.current = null;
-          attemptSessionRecovery(false);
-        }, cooldownRemaining);
+  const attemptSessionRecovery = useCallback(
+    (force = false) => {
+      if (loading || !recoveringSession || !token || user) return;
+      if (recoveryAttemptRef.current) {
+        recoveryWakeQueuedRef.current = true;
+        if (force) recoveryForceQueuedRef.current = true;
+        return;
       }
-      return;
-    }
-    if (recoveryCooldownTimerRef.current) clearTimeout(recoveryCooldownTimerRef.current);
-    recoveryCooldownTimerRef.current = null;
-
-    const recoveryEpoch = sessionRuntime.capture();
-    const recoveryAbort = new AbortController();
-    const untrackRecoveryAbort = sessionRuntime.trackAbort(recoveryEpoch, recoveryAbort);
-    let budgetExpired = false;
-    let recovered = false;
-    recoveryWakeQueuedRef.current = false;
-    recoveryForceQueuedRef.current = false;
-    setSessionRecoveryPending(true);
-
-    const work = (async () => {
-      const deadlineTimer = setTimeout(() => {
-        budgetExpired = true;
-        recoveryAbort.abort();
-      }, SESSION_RECOVERY_BUDGET_MS);
-      try {
-        const res = await runSessionRecoveryAttempt({
-          forceFreshRoute: force,
-          reselectRoute: reselectApiHost,
-          isCurrent: () => !budgetExpired && sessionRuntime.isCurrent(recoveryEpoch),
-          loadUser: () =>
-            api.get<User>('/auth/me', {
-              signal: recoveryAbort.signal,
-              timeout: SESSION_RECOVERY_HOST_TIMEOUT_MS,
-            }),
-        });
-        if (!res) return;
-        const fresh = res.data;
-        if (budgetExpired || !sessionRuntime.isCurrent(recoveryEpoch)) return;
-
-        let applied = false;
-        await sessionRuntime.commit(recoveryEpoch, async (isCurrent) => {
-          if (!isCurrent() || budgetExpired) return;
-          setUser(fresh);
-          setRecoveringSession(false);
-          applied = true;
-          recovered = true;
-          recoveryBackoffRef.current.reset();
-          await authSessionStorage.write({ token, user: fresh, impersonating: isImpersonating });
-        });
-        if (applied && !budgetExpired && sessionRuntime.isCurrent(recoveryEpoch) && queryClient) {
-          prefetchAfterLogin(queryClient, fresh);
+      const cooldownRemaining = recoveryBackoffRef.current.remainingMs();
+      if (!force && cooldownRemaining > 0) {
+        if (!recoveryCooldownTimerRef.current) {
+          recoveryCooldownTimerRef.current = setTimeout(() => {
+            recoveryCooldownTimerRef.current = null;
+            attemptSessionRecovery(false);
+          }, cooldownRemaining);
         }
-      } catch {
-        // 401 is handled by the axios auth-expiry event. Transport/timeout/5xx
-        // deliberately leave the bearer and recovery surface intact for the
-        // next route-success, foreground or explicit user retry.
-      } finally {
-        clearTimeout(deadlineTimer);
-        untrackRecoveryAbort();
-        // A second recovery cannot start while this ref is non-null; clear it
-        // unconditionally before consuming a queued positive network signal.
-        recoveryAttemptRef.current = null;
-        const stillCurrent = sessionRuntime.isCurrent(recoveryEpoch);
-        if (stillCurrent) setSessionRecoveryPending(false);
-        if (!recovered && stillCurrent) {
-          recoveryBackoffRef.current.recordFailure();
-        }
-        const retryQueued = recoveryWakeQueuedRef.current;
-        const retryForce = recoveryForceQueuedRef.current;
-        recoveryWakeQueuedRef.current = false;
-        recoveryForceQueuedRef.current = false;
-        if (retryQueued && !recovered && stillCurrent) {
-          queueMicrotask(() => attemptSessionRecovery(retryForce));
-        }
+        return;
       }
-    })();
-    recoveryAttemptRef.current = work;
-  }, [isImpersonating, loading, queryClient, recoveringSession, sessionRuntime, token, user]);
+      if (recoveryCooldownTimerRef.current) clearTimeout(recoveryCooldownTimerRef.current);
+      recoveryCooldownTimerRef.current = null;
+
+      const recoveryEpoch = sessionRuntime.capture();
+      const recoveryAbort = new AbortController();
+      const untrackRecoveryAbort = sessionRuntime.trackAbort(recoveryEpoch, recoveryAbort);
+      let budgetExpired = false;
+      let recovered = false;
+      recoveryWakeQueuedRef.current = false;
+      recoveryForceQueuedRef.current = false;
+      setSessionRecoveryPending(true);
+
+      const work = (async () => {
+        const deadlineTimer = setTimeout(() => {
+          budgetExpired = true;
+          recoveryAbort.abort();
+        }, SESSION_RECOVERY_BUDGET_MS);
+        try {
+          const res = await runSessionRecoveryAttempt({
+            forceFreshRoute: force,
+            reselectRoute: reselectApiHost,
+            isCurrent: () => !budgetExpired && sessionRuntime.isCurrent(recoveryEpoch),
+            loadUser: () =>
+              api.get<User>('/auth/me', {
+                signal: recoveryAbort.signal,
+                timeout: SESSION_RECOVERY_HOST_TIMEOUT_MS,
+              }),
+          });
+          if (!res) return;
+          const fresh = res.data;
+          if (budgetExpired || !sessionRuntime.isCurrent(recoveryEpoch)) return;
+
+          let applied = false;
+          await sessionRuntime.commit(recoveryEpoch, async (isCurrent) => {
+            if (!isCurrent() || budgetExpired) return;
+            setUser(fresh);
+            setRecoveringSession(false);
+            applied = true;
+            recovered = true;
+            recoveryBackoffRef.current.reset();
+            await authSessionStorage.write({ token, user: fresh, impersonating: isImpersonating });
+          });
+          if (applied && !budgetExpired && sessionRuntime.isCurrent(recoveryEpoch) && queryClient) {
+            prefetchAfterLogin(queryClient, fresh);
+          }
+        } catch {
+          // 401 is handled by the axios auth-expiry event. Transport/timeout/5xx
+          // deliberately leave the bearer and recovery surface intact for the
+          // next route-success, foreground or explicit user retry.
+        } finally {
+          clearTimeout(deadlineTimer);
+          untrackRecoveryAbort();
+          // A second recovery cannot start while this ref is non-null; clear it
+          // unconditionally before consuming a queued positive network signal.
+          recoveryAttemptRef.current = null;
+          const stillCurrent = sessionRuntime.isCurrent(recoveryEpoch);
+          if (stillCurrent) setSessionRecoveryPending(false);
+          if (!recovered && stillCurrent) {
+            recoveryBackoffRef.current.recordFailure();
+          }
+          const retryQueued = recoveryWakeQueuedRef.current;
+          const retryForce = recoveryForceQueuedRef.current;
+          recoveryWakeQueuedRef.current = false;
+          recoveryForceQueuedRef.current = false;
+          if (retryQueued && !recovered && stillCurrent) {
+            queueMicrotask(() => attemptSessionRecovery(retryForce));
+          }
+        }
+      })();
+      recoveryAttemptRef.current = work;
+    },
+    [isImpersonating, loading, queryClient, recoveringSession, sessionRuntime, token, user],
+  );
 
   const retrySessionRecovery = useCallback(() => attemptSessionRecovery(true), [attemptSessionRecovery]);
 
@@ -979,37 +950,6 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     [user],
   );
 
-  const isSectionVisible = useCallback(
-    (sectionKey: SectionKey): boolean => {
-      if (!user) return false;
-      // Owners (superadmin/director) always keep «Работа» — the daily-work group
-      // is their primary surface and can't be locked off by an override.
-      if (sectionKey === 'work' && (user.role === 'superadmin' || user.role === 'director')) {
-        return true;
-      }
-      // Default visible: only an explicit `isVisible: false` override hides a
-      // section. Absent row → fall back to visible (matches the #071 contract).
-      const override = user.sectionVisibility?.find((s) => s.sectionKey === sectionKey);
-      return override ? override.isVisible : true;
-    },
-    [user],
-  );
-
-  const isItemVisible = useCallback(
-    (itemKey: string): boolean => {
-      if (!user) return false;
-      // Owners can't lock themselves out of access-control / billing items.
-      if ((user.role === 'superadmin' || user.role === 'director') && OWNER_PROTECTED_ITEM_KEYS.has(itemKey)) {
-        return true;
-      }
-      // Default visible: only an explicit `isVisible: false` override hides an
-      // item. Absent row → fall back to visible (matches the #073 contract).
-      const override = user.itemVisibility?.find((i) => i.itemKey === itemKey);
-      return override ? override.isVisible : true;
-    },
-    [user],
-  );
-
   // Memoise the context value so AuthContext.Provider doesn't broadcast a
   // fresh object reference on every AuthProvider render (e.g. when only
   // `loading` flips). With the memo, consumers see a stable value as
@@ -1027,8 +967,6 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       refreshUser,
       hasPermission,
       isRole,
-      isSectionVisible,
-      isItemVisible,
       isImpersonating,
       beginImpersonation,
       endImpersonation,
@@ -1045,8 +983,6 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       refreshUser,
       hasPermission,
       isRole,
-      isSectionVisible,
-      isItemVisible,
       isImpersonating,
       beginImpersonation,
       endImpersonation,

@@ -17,9 +17,9 @@
  * label «Интеграции» (телефония / мессенджеры / отзывы). To avoid two identical
  * menu rows, this money-focused screen uses the distinct, accurate title
  * «Приём оплат и касса». It is registered in MoreStack (tab bar stays visible)
- * and reachable from the «Остальное» group in MoreScreen, reusing the existing
- * `company-settings` item-key (it is company-level financial config, adjacent to
- * «Настройки компании»; a new shared item-key would break the ITEM_KEYS guard).
+ * and reachable from the «Остальное» group in MoreScreen (company-level
+ * financial config, adjacent to «Настройки компании»; since Round 12 the row's
+ * visibility is governed by the role matrix, not item-keys).
  *
  * INERT until configured: both modules return 422 on use until real credentials
  * are entered AND `enabled` is on — hence the hint under each section.

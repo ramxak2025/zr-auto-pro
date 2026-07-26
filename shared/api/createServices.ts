@@ -21,8 +21,6 @@ import type {
   Role,
   RoleMatrix,
   EffectivePermissionsResult,
-  SectionVisibility,
-  ItemVisibility,
   Tenant,
   Plan,
   Client,
@@ -314,17 +312,8 @@ export function createUsersApi(api: HttpClient) {
     listDismissed: () => api.get<User[]>('/users/dismissed'),
     restore: (id: string) => api.post<User>(`/users/${id}/restore`),
     purge: (id: string) => api.post(`/users/${id}/purge`),
-    // 071 — per-employee section visibility overrides. The list returns ONLY the
-    // explicit overrides; an absent section falls back to its default (visible).
-    getSectionVisibility: (userId: string) => api.get<SectionVisibility[]>(`/users/${userId}/section-visibility`),
-    updateSectionVisibility: (userId: string, sections: SectionVisibility[]) =>
-      api.patch<SectionVisibility[]>(`/users/${userId}/section-visibility`, { sections }),
-    // 073 — granular per-employee ITEM visibility overrides (additive to the
-    // group-level section-visibility above). The list returns the materialized
-    // map for every known item key (defaults merged with explicit overrides).
-    getItemVisibility: (userId: string) => api.get<ItemVisibility[]>(`/users/${userId}/item-visibility`),
-    updateItemVisibility: (userId: string, items: ItemVisibility[]) =>
-      api.patch<ItemVisibility[]>(`/users/${userId}/item-visibility`, { items }),
+    // Per-user section/item visibility (071/073) удалена в консолидации Round 12
+    // (2026-07): видимость разделов меню определяется матрицей назначенной роли.
     // ROLE-ONLY (консолидация 2026-07): per-user permission overrides удалены.
     // Права сотрудника меняются ТОЛЬКО назначением роли — usersApi.update(id,
     // { roleId }). Эффективные права для UI — rolesApi.effectivePermissions(userId).

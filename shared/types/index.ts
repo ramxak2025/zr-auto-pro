@@ -565,46 +565,9 @@ export interface RegistrationRequest {
   createdAt: string;
 }
 
-/**
- * 071 — per-employee top-level section visibility override.
- * `sectionKey` buckets navigation into five logical groups; a stored row with
- * `isVisible: false` hides that group for the user. The absence of a row means
- * "use the default" (visible) — only explicit overrides are persisted.
- */
-export interface SectionVisibility {
-  sectionKey: 'work' | 'finance' | 'warehouse' | 'marketing' | 'other';
-  isVisible: boolean;
-}
-
-/**
- * 073 — granular per-employee visibility at the ITEM (sub-section) level.
- * This is ADDITIVE to {@link SectionVisibility}: a group can be visible while a
- * single item inside it is hidden. `itemKey` matches a «Ещё» menu row; a stored
- * row with `isVisible: false` hides that one item. Absence of a row → default
- * (visible) — only explicit overrides are persisted.
- */
-export interface ItemVisibility {
-  itemKey: string;
-  isVisible: boolean;
-}
-
-/**
- * 073 — canonical item-key set, grouped by the same five buckets as
- * {@link SectionVisibility.sectionKey}. Keys mirror the «Ещё» menu rows in
- * mobile/src/screens/MoreScreen.tsx (one per row, derived from its `screen`).
- * Backend keeps NO DB CHECK on item_key (the set may grow) — this constant is
- * the single source of truth for the known set, used to materialize defaults.
- */
-export const ITEM_KEYS = {
-  work: ['bookings', 'schedule', 'clients', 'knowledge-base'],
-  finance: ['cashflow', 'salary', 'expenses', 'reports'],
-  warehouse: ['services', 'suppliers', 'equipment', 'warehouse-analytics'],
-  marketing: ['marketing', 'calls', 'mailings', 'integrations'],
-  other: ['employees', 'users', 'company-settings', 'subscription'],
-} as const satisfies Record<SectionVisibility['sectionKey'], readonly string[]>;
-
-/** Flat list of every known item key (defaults are materialized for all). */
-export const ALL_ITEM_KEYS: readonly string[] = Object.values(ITEM_KEYS).flat();
+// Per-user section/item visibility (071/073 — SectionVisibility, ItemVisibility,
+// ITEM_KEYS) удалена в консолидации Round 12 (2026-07): видимость разделов меню
+// определяется ТОЛЬКО матрицей назначенной роли (hasPermission по PermissionKey).
 
 export interface User {
   id: string;
@@ -634,18 +597,6 @@ export interface User {
   isActive: boolean;
   /** Free-text team grouping. Null/empty → "Без группы" on the FE. */
   team?: string | null;
-  /**
-   * 071 — explicit per-section visibility overrides for this employee. Absent /
-   * empty → every section uses its default (visible). Sections not listed here
-   * also fall back to the default.
-   */
-  sectionVisibility?: SectionVisibility[];
-  /**
-   * 073 — explicit per-ITEM visibility overrides for this employee (additive to
-   * {@link sectionVisibility}). Absent / empty → every item uses its default
-   * (visible). Items not listed here also fall back to the default.
-   */
-  itemVisibility?: ItemVisibility[];
   /** Per-employee permission to submit /expenses entries. Off by default. */
   canAddExpenses?: boolean;
   /** When set, non-privileged users' daily expense submissions auto-flip to 'pending' once the total crosses this number. */
@@ -861,10 +812,9 @@ export interface UserPermissions {
 //  Canonical permission vocabulary (server-enforced foundation)
 //
 //  Single source of truth for action-permission keys, shared by backend
-//  (PermissionsGuard + @RequirePermission), web and mobile. This is SEPARATE
-//  from the section/item *menu*-visibility system (SECTION_KEYS / ITEM_KEYS) —
-//  those control which menu rows render; these control which server actions an
-//  account may perform.
+//  (PermissionsGuard + @RequirePermission), web and mobile. Since the Round 12
+//  consolidation (2026-07) these keys ALSO drive menu-row visibility on the
+//  clients — the legacy per-user section/item visibility system is gone.
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**

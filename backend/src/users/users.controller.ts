@@ -6,10 +6,8 @@ import { PermissionsGuard, RequirePermission } from '../common/guards/permission
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
-import { UpdateSectionVisibilityDto } from './dto/section-visibility.dto';
-import { UpdateItemVisibilityDto } from './dto/item-visibility.dto';
 
-// Управление сотрудниками (create / update / delete / reorder / visibility /
+// Управление сотрудниками (create / update / delete / reorder /
 // per-product commissions) — под матричным ключом 'user_management' (волна
 // «права как в Битрикс24», 2026-07): owner-class (director/superadmin) обходит,
 // admin решается матрицей его роли (системный «Администратор» — true), мастер —
@@ -96,51 +94,6 @@ export class UsersController {
   async remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
     return this.usersService.remove(id, tenantID, user.userID, user.role);
-  }
-
-  // ─── Section Visibility (071) ───────────────────────────────────────
-  // Only 'user_management' holders may read or change which top-level sections
-  // an employee sees. Both routes are tenant-scoped via the JWT in the service.
-
-  @RequirePermission('user_management')
-  @Get(':id/section-visibility')
-  async getSectionVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
-    return this.usersService.getSectionVisibility(id, tenantID);
-  }
-
-  @RequirePermission('user_management')
-  @Patch(':id/section-visibility')
-  async updateSectionVisibility(
-    @Param('id') id: string,
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: UpdateSectionVisibilityDto,
-  ) {
-    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
-    return this.usersService.updateSectionVisibility(id, tenantID, dto.sections);
-  }
-
-  // ─── Item Visibility (073) ──────────────────────────────────────────
-  // Granular sub-section visibility, ADDITIVE to section-visibility above.
-  // Same 'user_management' gate; tenant-scoped via the JWT in the service (a
-  // foreign userId 404s rather than leaking another tenant's defaults).
-
-  @RequirePermission('user_management')
-  @Get(':id/item-visibility')
-  async getItemVisibility(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
-    return this.usersService.getItemVisibility(id, tenantID);
-  }
-
-  @RequirePermission('user_management')
-  @Patch(':id/item-visibility')
-  async updateItemVisibility(
-    @Param('id') id: string,
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: UpdateItemVisibilityDto,
-  ) {
-    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
-    return this.usersService.updateItemVisibility(id, tenantID, dto.items);
   }
 
   // ─── Action Permissions (server-enforced, ROLE-ONLY) ───────────────
