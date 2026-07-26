@@ -28,6 +28,17 @@ export class ReportsController {
     return this.reportsService.getFinancial(user.tenantID, query);
   }
 
+  /**
+   * Отчёт «по меткам» (Round 12 #9): выручка / прибыль / кол-во чеков на
+   * каждую метку за период, прибыль по убыванию. Гейт — классовый
+   * financial_reports (как остальные финансовые отчёты). Конвенция прибыли —
+   * per-check (см. ReportsService.getTagAnalytics).
+   */
+  @Get('tags')
+  getTagAnalytics(@CurrentUser() user: JwtPayload, @Query() query: { dateFrom?: string; dateTo?: string }) {
+    return this.reportsService.getTagAnalytics(user.tenantID, query);
+  }
+
   // «Движение денег» (ITEM 6) — доступ по ROLE-разрешению cashflow_view (НЕ по
   // плановой фиче cashflow_view из feature-catalog — это разные пространства),
   // а НЕ по financial_reports класса. Метод-@RequirePermission ПЕРЕКРЫВАЕТ

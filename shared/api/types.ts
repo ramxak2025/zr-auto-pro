@@ -424,6 +424,12 @@ export interface CreateCheckRequest {
     costPrice: number;
     quantity: number;
   }>;
+  /**
+   * Метки чека (Round 12 #9): id из справочника меток тенанта. Присутствие
+   * поля = «привязать ровно этот набор»; отсутствие = без меток (сервер
+   * связок не создаёт). Чужие/архивные id сервер молча отбрасывает.
+   */
+  tagIds?: string[];
 }
 
 export interface UpdateCheckRequest {
@@ -452,6 +458,12 @@ export interface UpdateCheckRequest {
     costPrice: number;
     quantity: number;
   }>;
+  /**
+   * Метки чека (Round 12 #9): присутствие поля = «перезаписать связки ровно
+   * этим набором» (пустой массив снимает все метки); отсутствие = «не
+   * трогать» — частичный PATCH и старые клиенты метки не стирают.
+   */
+  tagIds?: string[];
 }
 
 export interface CreateSupplierRequest {

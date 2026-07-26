@@ -16,6 +16,7 @@ import {
   PackageMinus,
   Undo2,
   Recycle,
+  Tag,
 } from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 
@@ -55,6 +56,15 @@ export default function ReportsPage() {
   const { data: defectStats } = useQuery({
     queryKey: ['defect-writeoff-report', dateFrom, dateTo],
     queryFn: () => reportsApi.defectWriteoff({ from: dateFrom, to: dateTo }),
+    select: (res) => res.data,
+    enabled: canView,
+  });
+
+  // Метки чеков (Round 12 #9): выручка/прибыль/чеки по каждой метке за период.
+  // Пустой массив (меток нет или без чеков за период) — блок скрыт целиком.
+  const { data: tagRows } = useQuery({
+    queryKey: ['tag-analytics', dateFrom, dateTo],
+    queryFn: () => reportsApi.getTagAnalytics({ dateFrom, dateTo }),
     select: (res) => res.data,
     enabled: canView,
   });
@@ -335,6 +345,59 @@ export default function ReportsPage() {
                 </div>
               )}
             </div>
+
+            {/* По меткам (Round 12 #9) — таблица скрыта, когда за период нет
+                чеков с метками (отчёт не захламляется). Прибыль — per-check
+                конвенция сервера (см. /reports/tags). */}
+            {(tagRows?.length ?? 0) > 0 && (
+              <div className="rounded-2xl bg-white border border-gray-100 shadow-sm overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-50 flex items-center gap-2">
+                  <Tag className="h-4 w-4 text-primary-600" />
+                  <p className="text-xs font-bold text-gray-500 uppercase tracking-wider">По меткам</p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="text-[11px] uppercase tracking-wider text-gray-400">
+                        <th className="px-4 py-2.5 text-left font-semibold">Метка</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Чеков</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Выручка</th>
+                        <th className="px-4 py-2.5 text-right font-semibold">Прибыль</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-gray-50">
+                      {(tagRows ?? []).map((row) => {
+                        const accent = row.color || '#64748b';
+                        return (
+                          <tr key={row.tagId}>
+                            <td className="px-4 py-3">
+                              <span className="inline-flex items-center gap-2 font-medium text-gray-900">
+                                <span
+                                  className="h-2 w-2 flex-shrink-0 rounded-full"
+                                  style={{ backgroundColor: accent }}
+                                />
+                                {row.name}
+                              </span>
+                            </td>
+                            <td className="px-4 py-3 text-right tabular-nums text-gray-600">{row.checksCount}</td>
+                            <td className="px-4 py-3 text-right tabular-nums text-gray-900">
+                              {formatMoney(row.revenue)}
+                            </td>
+                            <td
+                              className={`px-4 py-3 text-right font-bold tabular-nums ${
+                                row.profit >= 0 ? 'text-emerald-600' : 'text-red-600'
+                              }`}
+                            >
+                              {formatMoney(row.profit)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </QueryState>

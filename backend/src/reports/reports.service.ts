@@ -157,6 +157,61 @@ export class ReportsService {
   }
 
   /**
+   * Отчёт «по меткам» (Round 12 #9, миграция 140): GET /reports/tags →
+   * [{tagId, name, color, checksCount, revenue, profit}], прибыль по убыванию.
+   *
+   * КОНВЕНЦИЯ ПРИБЫЛИ — ЧЕКОВАЯ (per-check), та же, что в dashboardV2
+   * (profit_today/profit_month) и в основе getFinancial:
+   *   • только проведённые живые чеки: is_deferred=false AND deleted_at IS NULL;
+   *   • границы периода — московский полуинтервал [from, to+1) (BUSINESS_TZ),
+   *     зеркально getFinancial — «чеки за период» сходятся с журналом;
+   *   • revenue = SUM(total_revenue) БЕЗ гарантийных чеков (warranty = убыток,
+   *     не выручка — ITEM 2);
+   *   • profit: для обычного чека — сохранённый checks.profit (выручка −
+   *     себестоимость − зарплатные начисления, уже с учётом возвратов: возврат
+   *     корректирует total_revenue/profit строки чека реверсом); для
+   *     гарантийного — −(product_cost_total + service_salary_total +
+   *     product_salary_total), как в dashboardV2.
+   * Общие расходы тенанта (аренда и т.п.) на метки НЕ раскладываются — их
+   * нельзя атрибутировать конкретной метке; это прибыль ДО общих расходов.
+   * Архивные метки в отчёт ВХОДЯТ, если их чеки попали в период (архив не
+   * ломает историю). Метки без чеков за период не возвращаются вовсе.
+   */
+  async getTagAnalytics(tenantID: string, query: any) {
+    const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
+    const dateTo = this.safeDate(query?.dateTo, this.todayISO());
+
+    const { rows } = await this.pool.query(
+      `SELECT d.id AS tag_id, d.name, d.color,
+              COUNT(*) AS checks_count,
+              COALESCE(SUM(ch.total_revenue) FILTER (WHERE ch.payment_method IS DISTINCT FROM 'warranty'), 0) AS revenue,
+              COALESCE(SUM(CASE WHEN ch.payment_method = 'warranty'
+                                THEN -(ch.product_cost_total + ch.service_salary_total + COALESCE(ch.product_salary_total, 0))
+                                ELSE ch.profit END), 0) AS profit
+         FROM check_tag_links tl
+         JOIN check_tag_defs d ON d.id = tl.tag_id
+         JOIN checks ch ON ch.id = tl.check_id AND ch.tenant_id = tl.tenant_id
+        WHERE tl.tenant_id = $1
+          AND ch.is_deferred = false
+          AND ch.deleted_at IS NULL
+          AND ch.date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+          AND ch.date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+        GROUP BY d.id, d.name, d.color
+        ORDER BY profit DESC, lower(d.name)`,
+      [tenantID, dateFrom, dateTo],
+    );
+
+    return rows.map((r) => ({
+      tagId: r.tag_id,
+      name: r.name,
+      color: r.color ?? null,
+      checksCount: parseInt(r.checks_count) || 0,
+      revenue: parseFloat(r.revenue) || 0,
+      profit: parseFloat(r.profit) || 0,
+    }));
+  }
+
+  /**
    * Aggregate stock_movements rows for the period and return totals for
    * defect transfers (main → defect), writeoffs (with / without expense
    * booking), and supplier returns. Powers the report screen for owners.

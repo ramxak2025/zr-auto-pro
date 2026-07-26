@@ -52,6 +52,7 @@ import QuickClientCreateSheet from '../components/QuickClientCreateSheet';
 import ClientPhonePickerSheet from '../components/ClientPhonePickerSheet';
 import ClientCarPickerSheet from '../components/ClientCarPickerSheet';
 import ConfirmDialog from '../components/ConfirmDialog';
+import CheckTagSheet from '../components/CheckTagSheet';
 import PaymentMethodModal, { paymentMethodLabel, paymentMethodVisual } from '../components/PaymentMethodModal';
 import SbpPaymentModal from '../components/SbpPaymentModal';
 import InstallmentSaleFields from '../components/installments/InstallmentSaleFields';
@@ -80,6 +81,7 @@ import type {
   Check,
   CheckServiceLine,
   CheckProductLine,
+  CheckTag,
   PaymentMethod,
   Warehouse,
   CheckTemplate,
@@ -456,6 +458,12 @@ export default function CheckCreateScreen() {
   const [masterId, setMasterId] = useState('');
   const [mileage, setMileage] = useState('');
   const [comment, setComment] = useState('');
+  // ── Метки чека (Round 12 #9) ─────────────────────────────────────────────
+  // Ненавязчивый мультивыбор: обычный чек их не встречает вовсе — ghost-строка
+  // «Метка» рядом с комментарием просто стоит; тап открывает CheckTagSheet.
+  // Храним ОБЪЕКТЫ (не id): выбранные чипы рендерятся без запроса справочника.
+  const [selectedTags, setSelectedTags] = useState<CheckTag[]>([]);
+  const [showTagSheet, setShowTagSheet] = useState(false);
   const [discount, setDiscount] = useState('');
   // Тап в ЛЮБОЕ место поля «Скидка» (иконка/надпись/₽) фокусирует ввод —
   // владелец: «даже на саму надпись активировала ввод размера скидки».
@@ -1136,6 +1144,9 @@ export default function CheckCreateScreen() {
     setMasterId(c.master?.id || c.masterId || '');
     setMileage(c.mileage ? String(c.mileage) : '');
     setComment(c.comment || '');
+    // Метки (Round 12 #9): гидрируем существующие, чтобы правка их сохраняла
+    // (payload шлёт tagIds всегда в edit-режиме — пустой массив снял бы их).
+    setSelectedTags(c.tags || []);
     setDiscount(c.discount ? String(c.discount) : '');
     setPaymentMethod(c.paymentMethod);
     // Restore the cash portion of a SPLIT (cash_card) payment so editing
@@ -1588,6 +1599,7 @@ export default function CheckCreateScreen() {
     setCarId('');
     setMileage('');
     setComment('');
+    setSelectedTags([]);
     setDiscount('');
     setPaymentMethod('cash' as PaymentMethod);
     setCashAmount('');
@@ -1678,6 +1690,8 @@ export default function CheckCreateScreen() {
         ['salary-employee-month'],
         ['motivation'],
         ['financial-report'],
+        // Метки (Round 12 #9): чек с меткой двигает отчёт «По меткам».
+        ['tag-analytics'],
         ['employee-ranking'],
         ['client-checks'],
         ['client-checks-full'],
@@ -2173,6 +2187,15 @@ export default function CheckCreateScreen() {
         date: checkDate.toISOString(),
         mileage: mileage ? parseMoneyInput(mileage) || undefined : undefined,
         comment: comment || undefined,
+        // Метки (Round 12 #9). Create: поле уходит только при непустом выборе
+        // (без меток payload байт-в-байт прежний — офлайн-очередь и старый
+        // сервер не встречают ничего нового). Edit: ВСЕГДА — снятие последней
+        // метки должно перезаписать связки пустым набором.
+        ...(editId
+          ? { tagIds: selectedTags.map((t) => t.id) }
+          : selectedTags.length > 0
+            ? { tagIds: selectedTags.map((t) => t.id) }
+            : {}),
         // При РЕДАКТИРОВАНИИ скидка уходит явно числом — 0 тоже значение.
         // Раньше `discountNum || undefined` превращал стёртую скидку в
         // undefined, бэк трактовал это как «не менялось» (`dto.discount ??
@@ -3072,6 +3095,54 @@ export default function CheckCreateScreen() {
             placeholder="Введите сюда ваш коментарий..."
             placeholderTextColor={palette.text.tertiary}
           />
+
+          {/* ── Метки (Round 12 #9) — ghost-строка: у обычного чека ноль
+                лишних шагов, строка просто стоит и не требует внимания.
+                Тап → шторка с чипами; выбранные метки рендерятся тут же
+                компактными чипами. */}
+          <TouchableOpacity
+            onPress={() => {
+              haptic('select');
+              setShowTagSheet(true);
+            }}
+            activeOpacity={0.7}
+            style={styles.tagGhostRow}
+            accessibilityRole="button"
+            accessibilityLabel={
+              selectedTags.length > 0 ? `Метки: ${selectedTags.map((t) => t.name).join(', ')}` : 'Добавить метку'
+            }
+          >
+            <Ionicons
+              name="pricetag-outline"
+              size={15}
+              color={selectedTags.length > 0 ? colors.purple[600] : palette.text.tertiary}
+            />
+            {selectedTags.length === 0 ? (
+              <Text style={[styles.tagGhostText, { color: palette.text.tertiary }]}>Метка</Text>
+            ) : (
+              <View style={styles.tagChipWrap}>
+                {selectedTags.map((tag) => {
+                  const accent = tag.color || colors.slate[500];
+                  return (
+                    <View
+                      key={tag.id}
+                      style={[styles.tagChip, { backgroundColor: softTint(accent, palette.mode), borderColor: accent }]}
+                    >
+                      <View style={[styles.tagChipDot, { backgroundColor: accent }]} />
+                      <Text
+                        style={[styles.tagChipText, { color: isDark ? palette.text.primary : accent }]}
+                        numberOfLines={1}
+                      >
+                        {tag.name}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+            )}
+            <View style={{ flex: 1 }} />
+            <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+          </TouchableOpacity>
 
           {/* ── Photo strip (feature-gated inline) ─────────────────────── */}
           {canAttachPhotos && (
@@ -4308,6 +4379,18 @@ export default function CheckCreateScreen() {
         />
       )}
 
+      {/* Метки чека (Round 12 #9). Рендерится только когда открыта — справочник
+          меток не грузится, пока мастер сам не потянулся к строке «Метка». */}
+      {showTagSheet && (
+        <CheckTagSheet
+          visible={showTagSheet}
+          onClose={() => setShowTagSheet(false)}
+          selected={selectedTags}
+          onChange={setSelectedTags}
+          canManage={hasPermission('settings_manage')}
+        />
+      )}
+
       {/* Центральная модалка выбора способа оплаты. Закрывается сразу после
           выбора; sub-UI для cash / cash_card / рассрочки живёт в секции оплаты
           как прежде. «Рассрочка» — доп. пункт этой же модалки (при праве
@@ -4995,6 +5078,46 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.xl,
     paddingHorizontal: spacing[3.5],
     paddingVertical: spacing[2],
+  },
+  // ── Метки (Round 12 #9): ghost-строка в секции комментария ──────────────
+  // Никакого фона/рамки — строка «просто стоит»: иконка + слово «Метка»
+  // (tertiary) либо компактные чипы выбранных меток. Вся строка — тап-таргет.
+  tagGhostRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginTop: spacing[2.5],
+    paddingHorizontal: spacing[1],
+    paddingVertical: spacing[1],
+    minHeight: 32,
+  },
+  tagGhostText: {
+    fontSize: fontSize.sm,
+  },
+  tagChipWrap: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing[1.5],
+    flexShrink: 1,
+  },
+  tagChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: 180,
+  },
+  tagChipDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  tagChipText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.semibold,
   },
   commentInlineWrap: { marginTop: spacing[2] },
   commentInline: {

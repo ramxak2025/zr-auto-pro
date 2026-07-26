@@ -75,6 +75,9 @@ import type {
   WinbackSendResult,
   SegmentBroadcastRequest,
   SegmentBroadcastResult,
+  BroadcastPreviewRequest,
+  BroadcastPreview,
+  SentMessagesResponse,
   AutoMailingOverview,
   CheckReturn,
   ScheduleSettings,
@@ -166,6 +169,7 @@ import type {
   VoiceTranscribeResult,
   PlatformSettings,
   RegistrationRequest,
+  CheckTag,
 } from '../types';
 import type {
   LoginRequest,
@@ -687,6 +691,20 @@ export function createChecksApi(api: HttpClient) {
       ) => api.patch<WorkBoardColumn>(`/checks/board-columns/${id}`, data),
       remove: (id: string) => api.delete(`/checks/board-columns/${id}`),
     },
+    /**
+     * Метки чеков (Round 12 #9). `list` — живые метки тенанта (пикер Кассы),
+     * читает любой, кто видит чеки. `create` — любой, кто создаёт чеки; дубль
+     * имени → 409, в теле ошибки `tag` = существующая метка (клиент просто
+     * выбирает её). `update` — переименование/цвет/архив, settings_manage
+     * (owner-class проходит всегда); архив убирает метку из пикера, старые
+     * чеки её сохраняют. Привязка к чеку — полем `tagIds` в create/update чека.
+     */
+    tags: {
+      list: () => api.get<CheckTag[]>('/checks/tags'),
+      create: (data: { name: string; color?: string }) => api.post<CheckTag>('/checks/tags', data),
+      update: (id: string, data: { name?: string; color?: string; archived?: boolean }) =>
+        api.patch<CheckTag & { archived?: boolean }>(`/checks/tags/${id}`, data),
+    },
   };
 }
 
@@ -878,6 +896,19 @@ export function createMotivationApi(api: HttpClient) {
 export function createReportsApi(api: HttpClient) {
   return {
     getFinancial: (params: DateRangeParams) => api.get<FinancialReport>('/reports/financial', { params }),
+    /**
+     * Отчёт «по меткам» (Round 12 #9): выручка / прибыль / число чеков на
+     * каждую метку за период, прибыль по убыванию. Прибыль — per-check
+     * конвенция (как dashboardV2): возвраты уже учтены реверсом в строке
+     * чека, гарантийный чек входит убытком, общие расходы тенанта на метки
+     * не раскладываются. Пустой массив = меток с чеками за период нет —
+     * клиенты в этом случае блок не рендерят. Гейт — financial_reports.
+     */
+    getTagAnalytics: (params: DateRangeParams) =>
+      api.get<Array<{ tagId: string; name: string; color: string | null; checksCount: number; revenue: number; profit: number }>>(
+        '/reports/tags',
+        { params },
+      ),
     getCashFlow: (params: CashFlowParams) =>
       api.get<{
         // ITEM 2 — гарантия ИСКЛЮЧЕНА из оборота: total = cash + card +
@@ -1249,6 +1280,22 @@ export function createMarketingApi(api: HttpClient) {
     // и обзор авто-рассылок (обзор + deep-link на редакторы настроек).
     sendSegmentBroadcast: (data: SegmentBroadcastRequest) =>
       api.post<SegmentBroadcastResult>('/marketing/broadcast/send', data),
+    /** Dry-run ручной рассылки: кому и через какой канал уйдёт — БЕЗ отправки. */
+    previewBroadcast: (data: BroadcastPreviewRequest) =>
+      api.post<BroadcastPreview>('/marketing/broadcast/preview', data),
+    /**
+     * Журнал отправок (sent_messages): keyset-курсор как у чеков — первая
+     * страница без cursor, дальше передаём nextCursor из ответа (null = конец).
+     */
+    getSentMessages: (params?: {
+      cursor?: string;
+      limit?: number;
+      type?: string;
+      status?: 'sent' | 'failed';
+      clientId?: string;
+      dateFrom?: string;
+      dateTo?: string;
+    }) => api.get<SentMessagesResponse>('/marketing/sent-messages', { params }),
     getAutoMailings: () => api.get<AutoMailingOverview[]>('/marketing/auto-mailings'),
   };
 }

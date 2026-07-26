@@ -173,6 +173,43 @@ export class ChecksController {
     return this.checksService.listTrash(user.tenantID);
   }
 
+  // ── Метки чеков (Round 12 #9, миграция 140) ─────────────────────────────
+  // Литеральный путь `tags` объявлен ДО `:id`-роутов (как board-columns /
+  // trash), иначе param-роут проглотил бы его. Метка — учётная бирка чека,
+  // денег не двигает; охват прав — существующие ключи, новых не заводим.
+
+  /** Живые метки тенанта — читает любой, кто видит чеки (пикер в Кассе). */
+  @RequirePermission('checks_view')
+  @Get('tags')
+  listTags(@CurrentUser() user: JwtPayload) {
+    return this.checksService.listTags(user.tenantID);
+  }
+
+  /**
+   * Создать метку — любой, кто создаёт чеки (мастер вешает новую метку прямо
+   * из Кассы). Дубль по lower(name) среди живых → 409 с существующей меткой.
+   */
+  @RequirePermission('checks_create')
+  @Post('tags')
+  createTag(@CurrentUser() user: JwtPayload, @Body() dto: { name?: string; color?: string }) {
+    return this.checksService.createTag(user.tenantID, dto);
+  }
+
+  /**
+   * Переименовать / перекрасить / архивировать метку — settings_manage
+   * (owner-class обходит гейт в PermissionsGuard). Архив не трогает старые
+   * чеки — только убирает метку из пикера Кассы.
+   */
+  @RequirePermission('settings_manage')
+  @Patch('tags/:id')
+  updateTag(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { name?: string; color?: string; archived?: boolean },
+  ) {
+    return this.checksService.updateTag(user.tenantID, id, dto);
+  }
+
   @RequirePermission('checks_view')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {

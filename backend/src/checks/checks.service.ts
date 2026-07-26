@@ -3,6 +3,7 @@ import {
   Inject,
   NotFoundException,
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   InternalServerErrorException,
   Logger,
@@ -870,7 +871,12 @@ export class ChecksService {
                 (ch.master_id IS DISTINCT FROM $${meIdx} AND EXISTS (
                    SELECT 1 FROM check_service_lines sl
                     WHERE sl.check_id = ch.id AND sl.master_id = $${meIdx}
-                )) AS is_executor_for_me
+                )) AS is_executor_for_me,
+                (SELECT COALESCE(json_agg(json_build_object('id', d.id, 'name', d.name, 'color', d.color)
+                                          ORDER BY lower(d.name)), '[]'::json)
+                   FROM check_tag_links tl
+                   JOIN check_tag_defs d ON d.id = tl.tag_id
+                  WHERE tl.check_id = ch.id AND tl.tenant_id = ch.tenant_id) AS tags_json
          FROM checks ch
          LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
@@ -894,7 +900,12 @@ export class ChecksService {
                 (ch.master_id IS DISTINCT FROM $${meIdx} AND EXISTS (
                    SELECT 1 FROM check_service_lines sl
                     WHERE sl.check_id = ch.id AND sl.master_id = $${meIdx}
-                )) AS is_executor_for_me
+                )) AS is_executor_for_me,
+                (SELECT COALESCE(json_agg(json_build_object('id', d.id, 'name', d.name, 'color', d.color)
+                                          ORDER BY lower(d.name)), '[]'::json)
+                   FROM check_tag_links tl
+                   JOIN check_tag_defs d ON d.id = tl.tag_id
+                  WHERE tl.check_id = ch.id AND tl.tenant_id = ch.tenant_id) AS tags_json
          FROM checks ch
          LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
@@ -924,6 +935,9 @@ export class ChecksService {
       // check but is NOT its creator (added as executor by someone else). Drives
       // a per-check tint in the journal (mobile). Additive — false otherwise.
       (ch as any).isExecutor = row.is_executor_for_me === true;
+      // Метки (Round 12 #9): компактные {id,name,color} для карточки/детали.
+      // json_agg отдаёт готовый массив; '[]' при отсутствии связок. Additive.
+      (ch as any).tags = Array.isArray(row.tags_json) ? row.tags_json : [];
       // Slim payload: list view never carries inline service / product line
       // arrays — they belong to the detail endpoint. Caller can opt in to a
       // subset via ?fields=. Counts are intentionally not included; the FE
@@ -1039,6 +1053,18 @@ export class ChecksService {
       totalCost: parseFloat(p.total_cost) || 0,
       ...(p.product_unit ? { unit: p.product_unit } : {}),
     }));
+
+    // Метки чека (Round 12 #9). БЕЗ фильтра archived_at: архив убирает метку
+    // из пикера Кассы, но старый чек продолжает её показывать.
+    const { rows: tagRows } = await this.pool.query(
+      `SELECT d.id, d.name, d.color
+         FROM check_tag_links tl
+         JOIN check_tag_defs d ON d.id = tl.tag_id
+        WHERE tl.check_id=$1 AND tl.tenant_id=$2
+        ORDER BY lower(d.name)`,
+      [id, tenantID],
+    );
+    ch.tags = tagRows.map((t) => ({ id: t.id, name: t.name, color: t.color ?? null }));
 
     // Warranty claims tied to this check (may be empty — only filled when
     // a product/service had warranty_days set at sale time).
@@ -1488,6 +1514,166 @@ export class ChecksService {
       client.release();
     }
     return { success: true };
+  }
+
+  // ── Метки чеков (Round 12 #9, миграция 140) ──────────────────────────────
+  // Справочник меток тенанта + связки чек↔метка. Метка — чисто учётная бирка:
+  // не двигает деньги/склад/зарплату; чек без меток — байт-в-байт прежний путь.
+
+  /** Live (non-archived) tags of the tenant, alphabetical. */
+  async listTags(tenantID: string): Promise<Array<{ id: string; name: string; color: string | null }>> {
+    const { rows } = await this.pool.query(
+      `SELECT id, name, color FROM check_tag_defs
+        WHERE tenant_id=$1 AND archived_at IS NULL
+        ORDER BY lower(name)`,
+      [tenantID],
+    );
+    return rows.map((r) => ({ id: r.id, name: r.name, color: r.color ?? null }));
+  }
+
+  /**
+   * Create a tag. Доступно любому, кто создаёт чеки (гейт в контроллере) —
+   * мастер вешает новую метку прямо из Кассы. Дубль по lower(name) среди живых
+   * меток → 409 с СУЩЕСТВУЮЩЕЙ меткой в теле (`tag`), чтобы клиент мог просто
+   * выбрать её вместо создания. Гонка двух одновременных создании ловится
+   * частичным UNIQUE-индексом (23505) и разрешается тем же 409-ответом.
+   */
+  async createTag(tenantID: string, body: { name?: unknown; color?: unknown }) {
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    if (name.length === 0) throw new BadRequestException({ message: 'Введите название метки' });
+    if (name.length > 30) throw new BadRequestException({ message: 'Название метки: максимум 30 символов' });
+    const color =
+      typeof body?.color === 'string' && body.color.trim().length > 0 ? body.color.trim().slice(0, 32) : null;
+
+    const findExisting = async () => {
+      const { rows } = await this.pool.query(
+        `SELECT id, name, color FROM check_tag_defs
+          WHERE tenant_id=$1 AND lower(name)=lower($2) AND archived_at IS NULL`,
+        [tenantID, name],
+      );
+      return rows[0] ? { id: rows[0].id, name: rows[0].name, color: rows[0].color ?? null } : null;
+    };
+
+    const existing = await findExisting();
+    if (existing) {
+      throw new ConflictException({ message: 'Такая метка уже есть', tag: existing });
+    }
+    try {
+      const { rows } = await this.pool.query(
+        `INSERT INTO check_tag_defs (tenant_id, name, color) VALUES ($1, $2, $3) RETURNING id, name, color`,
+        [tenantID, name, color],
+      );
+      return { id: rows[0].id, name: rows[0].name, color: rows[0].color ?? null };
+    } catch (err) {
+      if ((err as { code?: string })?.code === '23505') {
+        const winner = await findExisting();
+        if (winner) throw new ConflictException({ message: 'Такая метка уже есть', tag: winner });
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * Rename / recolor / archive / unarchive a tag. Гейт settings_manage — в
+   * контроллере (owner-class обходит его в PermissionsGuard). Архив снимает
+   * метку из пикера Кассы, но НЕ трогает связки: старые чеки продолжают её
+   * показывать и попадать в отчёты за свои периоды.
+   */
+  async updateTag(tenantID: string, id: string, body: { name?: unknown; color?: unknown; archived?: unknown }) {
+    const sets: string[] = [];
+    const vals: unknown[] = [];
+    let idx = 1;
+    if (body?.name !== undefined) {
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (name.length === 0) throw new BadRequestException({ message: 'Введите название метки' });
+      if (name.length > 30) throw new BadRequestException({ message: 'Название метки: максимум 30 символов' });
+      // Переименование в имя другой ЖИВОЙ метки → 409 (сама себя — можно:
+      // id <> $-проверка), иначе upsert упал бы 23505→500 на частичном индексе.
+      const { rows: dupRows } = await this.pool.query(
+        `SELECT id, name, color FROM check_tag_defs
+          WHERE tenant_id=$1 AND lower(name)=lower($2) AND archived_at IS NULL AND id <> $3`,
+        [tenantID, name, id],
+      );
+      if (dupRows.length > 0) {
+        throw new ConflictException({
+          message: 'Такая метка уже есть',
+          tag: { id: dupRows[0].id, name: dupRows[0].name, color: dupRows[0].color ?? null },
+        });
+      }
+      sets.push(`name=$${idx++}`);
+      vals.push(name);
+    }
+    if (body?.color !== undefined) {
+      const color =
+        typeof body.color === 'string' && body.color.trim().length > 0 ? body.color.trim().slice(0, 32) : null;
+      sets.push(`color=$${idx++}`);
+      vals.push(color);
+    }
+    if (body?.archived !== undefined) {
+      sets.push(body.archived === true ? `archived_at=now()` : `archived_at=NULL`);
+    }
+    if (sets.length === 0) throw new BadRequestException({ message: 'Нет изменений' });
+
+    vals.push(id, tenantID);
+    const { rows } = await this.pool.query(
+      `UPDATE check_tag_defs SET ${sets.join(', ')}
+        WHERE id=$${idx++} AND tenant_id=$${idx}
+        RETURNING id, name, color, archived_at`,
+      vals,
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Метка не найдена' });
+    return {
+      id: rows[0].id,
+      name: rows[0].name,
+      color: rows[0].color ?? null,
+      archived: rows[0].archived_at !== null,
+    };
+  }
+
+  /**
+   * Rewrite the check↔tag links to exactly `tagIds` (undefined никогда сюда не
+   * попадает — вызывающие гейтят `dto.tagIds !== undefined`, чтобы правка БЕЗ
+   * поля не стирала существующие метки). Чужие/несуществующие/АРХИВНЫЕ id
+   * молча отбрасываются (INSERT…SELECT матчит только живые метки тенанта);
+   * кривые не-UUID строки отфильтровываются до SQL, чтобы ANY($::uuid[]) не
+   * упал 22P02. EXISTS-страж на checks не даёт привязать НАШИ метки к чужому
+   * чеку по угаданному UUID. Работает и в транзакции create() (client), и
+   * напрямую через pool (update-пути) — исполнитель передаётся параметром.
+   */
+  private async syncCheckTags(
+    executor: Pool | PoolClient,
+    tenantID: string,
+    checkId: string,
+    tagIds: unknown,
+  ): Promise<void> {
+    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const ids = Array.isArray(tagIds)
+      ? Array.from(
+          new Set(
+            tagIds
+              .filter((x): x is string => typeof x === 'string' && UUID_RE.test(x.trim()))
+              .map((x) => x.trim().toLowerCase()),
+          ),
+        ).slice(0, 50)
+      : [];
+    // Живой чек этого тенанта — или полный no-op: чужой/несуществующий чек
+    // нельзя обвесить нашими метками по угаданному UUID, а чек в корзине не
+    // должен терять связки от «слепого» PATCH (restore вернёт его с метками).
+    const { rows: chRows } = await executor.query(
+      `SELECT 1 FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`,
+      [checkId, tenantID],
+    );
+    if (chRows.length === 0) return;
+    await executor.query(`DELETE FROM check_tag_links WHERE check_id=$1 AND tenant_id=$2`, [checkId, tenantID]);
+    if (ids.length === 0) return;
+    await executor.query(
+      `INSERT INTO check_tag_links (check_id, tag_id, tenant_id)
+       SELECT $1, d.id, $2
+         FROM check_tag_defs d
+        WHERE d.tenant_id = $2 AND d.archived_at IS NULL AND d.id = ANY($3::uuid[])
+       ON CONFLICT DO NOTHING`,
+      [checkId, tenantID, ids],
+    );
   }
 
   /**
@@ -2036,6 +2222,13 @@ export class ChecksService {
         });
       }
 
+      // ── Метки (Round 12 #9): связки пишутся в ЭТОЙ ЖЕ транзакции ─────────
+      // Чужие/архивные id молча отбрасываются внутри. Без tagIds — no-op,
+      // путь обычного чека байт-в-байт прежний.
+      if (dto.tagIds !== undefined) {
+        await this.syncCheckTags(client, tenantID, checkId, dto.tagIds);
+      }
+
       await client.query('COMMIT');
 
       // A new sale changes revenue/profit/ranking — drop cached aggregates so
@@ -2111,9 +2304,25 @@ export class ChecksService {
     actorUserId: string | null = null,
     actor?: ChecksActor,
   ) {
+    // ── Метки (Round 12 #9): tagIds перезаписывают связки чека ────────────
+    // Только при ЯВНОМ поле (undefined = «не трогали» — старые клиенты и
+    // частичные PATCH'и не стирают метки). Синк выполняется ПОСЛЕ успеха
+    // основного пути (fullUpdate / activateDeferred уже провели свои гейты и
+    // транзакцию — метка не должна уметь их сломать), затем деталь
+    // перечитывается, чтобы ответ уже нёс свежие tags. Метки не двигают
+    // деньги — инвалидировать отчётные кеши из-за них не нужно.
+    const tagIdsPatch: unknown = dto.tagIds;
+    const applyTags = async () => {
+      if (tagIdsPatch === undefined) return false;
+      await this.syncCheckTags(this.pool, tenantID, id, tagIdsPatch);
+      return true;
+    };
+
     // If services or products are provided, do a full re-edit (only for deferred checks)
     if (dto.services !== undefined || dto.products !== undefined) {
-      return this.fullUpdate(id, tenantID, userRole, dto, actorUserId, actor);
+      const result = await this.fullUpdate(id, tenantID, userRole, dto, actorUserId, actor);
+      if (await applyTags()) return this.getById(id, tenantID, actor);
+      return result;
     }
 
     // Closing a deferred draft WITHOUT re-sending lines (bare `isDeferred:false`
@@ -2122,7 +2331,9 @@ export class ChecksService {
     // Any other isDeferred value (or no flip at all) falls through to the plain
     // field-update below unchanged.
     if (dto.isDeferred === false) {
-      return this.activateDeferred(id, tenantID, userRole, dto, actorUserId, actor);
+      const result = await this.activateDeferred(id, tenantID, userRole, dto, actorUserId, actor);
+      if (await applyTags()) return this.getById(id, tenantID, actor);
+      return result;
     }
 
     // POS shift-mode (092): a NON-cashier may not record payment on the plain
@@ -2217,6 +2428,11 @@ export class ChecksService {
         if (dto.cardAmount === undefined) dto.cardAmount = 0;
       }
     }
+
+    // Метки на плоском пути: гейты выше (own-охват / payment) уже отработали.
+    // Тег-only PATCH (sets останется пустым) тоже валиден — early return ниже
+    // отдаст getById уже со свежими метками.
+    await applyTags();
 
     const sets: string[] = [];
     const vals: any[] = [];

@@ -27,6 +27,8 @@ import {
   Warehouse as WarehouseIcon,
   LayoutTemplate,
   BookmarkPlus,
+  Tag,
+  Check as CheckIcon,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru as ruLocale } from 'date-fns/locale';
@@ -50,6 +52,7 @@ import type {
   Product,
   CheckServiceLine,
   CheckProductLine,
+  CheckTag,
   CheckTemplate,
   WarrantyClaim,
   Warehouse,
@@ -113,6 +116,8 @@ const MONEY_STOCK_QUERY_KEYS: readonly string[][] = [
   ['products-all'],
   ['low-stock'],
   ['installments'],
+  // Метки (Round 12 #9): чек с меткой двигает отчёт «По меткам».
+  ['tag-analytics'],
 ];
 
 /** SW-офлайн-очередь отвечает 202 {queued:true} — сервер запрос ещё НЕ видел. */
@@ -545,6 +550,15 @@ export default function CheckCreatePage() {
   const [discount, setDiscount] = useState(0);
   const [isDeferred, setIsDeferred] = useState(false);
 
+  // ── Метки чека (Round 12 #9) ────────────────────────────────────────────
+  // Ненавязчиво: кнопка «Метка» рядом с комментарием, поповер с чипами и
+  // инлайн-созданием. Обычный чек этот слой не встречает. Храним ОБЪЕКТЫ —
+  // выбранные чипы рендерятся без запроса справочника.
+  const [selectedTags, setSelectedTags] = useState<CheckTag[]>([]);
+  const [showTagPopover, setShowTagPopover] = useState(false);
+  const [newTagName, setNewTagName] = useState('');
+  const [creatingTag, setCreatingTag] = useState(false);
+
   // Payment calculation
   const [cashGiven, setCashGiven] = useState<number>(0);
   const [cashAmount, setCashAmount] = useState<number>(0);
@@ -732,6 +746,9 @@ export default function CheckCreatePage() {
       setCardAmount(existingCheck.cardAmount ?? 0);
     }
     setComment(existingCheck.comment || '');
+    // Метки (Round 12 #9): гидрируем существующие — payload в edit-режиме шлёт
+    // tagIds всегда, без гидрации сохранение стёрло бы метки чека.
+    setSelectedTags(existingCheck.tags || []);
     setDiscount(existingCheck.discount || 0);
     setIsDeferred(existingCheck.isDeferred || false);
 
@@ -761,6 +778,53 @@ export default function CheckCreatePage() {
       );
     }
   }, [existingCheck, editLoaded, user?.id]);
+
+  // ── Метки чека (Round 12 #9): справочник + инлайн-создание ──────────────
+  // Справочник грузится ТОЛЬКО когда открыт поповер — обычный чек лишних
+  // запросов не делает. 409 на создании (метка уже есть) — не ошибка: сервер
+  // возвращает существующую в body.tag, просто выбираем её.
+  const { data: allTags } = useQuery({
+    queryKey: ['check-tags'],
+    queryFn: async () => (await checksApi.tags.list()).data,
+    enabled: showTagPopover,
+    staleTime: 60_000,
+  });
+
+  const toggleTag = (tag: CheckTag) => {
+    setSelectedTags((prev) =>
+      prev.some((t) => t.id === tag.id) ? prev.filter((t) => t.id !== tag.id) : [...prev, tag],
+    );
+  };
+
+  const TAG_COLOR_POOL = ['#2563eb', '#16a34a', '#d97706', '#9333ea', '#0d9488', '#e11d48', '#4f46e5', '#ea580c'];
+
+  const handleCreateTag = async () => {
+    const name = newTagName.trim();
+    if (!name || creatingTag) return;
+    if (name.length > 30) {
+      toast.error('Название метки — максимум 30 символов');
+      return;
+    }
+    setCreatingTag(true);
+    try {
+      const color = TAG_COLOR_POOL[(allTags?.length ?? 0) % TAG_COLOR_POOL.length];
+      const res = await checksApi.tags.create({ name, color });
+      const created = res.data;
+      setSelectedTags((prev) => (prev.some((t) => t.id === created.id) ? prev : [...prev, created]));
+      setNewTagName('');
+      queryClient.invalidateQueries({ queryKey: ['check-tags'] });
+    } catch (err: any) {
+      const existing: CheckTag | undefined = err?.response?.status === 409 ? err?.response?.data?.tag : undefined;
+      if (existing) {
+        setSelectedTags((prev) => (prev.some((t) => t.id === existing.id) ? prev : [...prev, existing]));
+        setNewTagName('');
+      } else {
+        toast.error(err?.response?.data?.message || 'Не удалось создать метку');
+      }
+    } finally {
+      setCreatingTag(false);
+    }
+  };
 
   // Mutation
   const createMutation = useMutation({
@@ -1175,6 +1239,14 @@ export default function CheckCreatePage() {
       cashAmount: finalCash,
       cardAmount: finalCard,
       comment: comment || undefined,
+      // Метки (Round 12 #9). Create: поле уходит только при непустом выборе
+      // (обычный чек — payload байт-в-байт прежний). Edit: ВСЕГДА — снятие
+      // последней метки должно перезаписать связки пустым набором.
+      ...(isEditMode
+        ? { tagIds: selectedTags.map((t) => t.id) }
+        : selectedTags.length > 0
+          ? { tagIds: selectedTags.map((t) => t.id) }
+          : {}),
       // Рассрочка — всегда реальная продажа, отложить нельзя.
       isDeferred: isInstallment ? false : isDeferred,
       ...(isInstallment
@@ -1951,6 +2023,114 @@ export default function CheckCreatePage() {
               }
               className="input text-sm w-full"
             />
+
+            {/* \u041C\u0435\u0442\u043A\u0438 (Round 12 #9) \u2014 \u043D\u0435\u043D\u0430\u0432\u044F\u0437\u0447\u0438\u0432\u0430\u044F \u0441\u0442\u0440\u043E\u043A\u0430 \u043F\u043E\u0434 \u043A\u043E\u043C\u043C\u0435\u043D\u0442\u0430\u0440\u0438\u0435\u043C:
+                \u0447\u0438\u043F\u044B \u0432\u044B\u0431\u0440\u0430\u043D\u043D\u044B\u0445 \u043C\u0435\u0442\u043E\u043A + ghost-\u043A\u043D\u043E\u043F\u043A\u0430 \u00AB\u041C\u0435\u0442\u043A\u0430\u00BB \u2192 \u043F\u043E\u043F\u043E\u0432\u0435\u0440 \u0441 \u0447\u0438\u043F\u0430\u043C\u0438
+                \u0438 \u0438\u043D\u043B\u0430\u0439\u043D-\u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0435\u043C. \u041E\u0431\u044B\u0447\u043D\u044B\u0439 \u0447\u0435\u043A \u043D\u0435 \u0442\u0440\u0435\u0431\u0443\u0435\u0442 \u043D\u0438 \u043E\u0434\u043D\u043E\u0433\u043E \u043A\u043B\u0438\u043A\u0430. */}
+            <div className="relative mt-2.5 flex flex-wrap items-center gap-1.5">
+              {selectedTags.map((tag) => {
+                const accent = tag.color || '#64748b';
+                return (
+                  <span
+                    key={tag.id}
+                    className="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-xs font-semibold"
+                    style={{ borderColor: accent, color: accent, backgroundColor: `${accent}14` }}
+                  >
+                    <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
+                    {tag.name}
+                    <button
+                      type="button"
+                      onClick={() => toggleTag(tag)}
+                      className="-mr-0.5 opacity-60 hover:opacity-100"
+                      aria-label={`\u0423\u0431\u0440\u0430\u0442\u044C \u043C\u0435\u0442\u043A\u0443 ${tag.name}`}
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </span>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setShowTagPopover((v) => !v)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-dashed border-gray-300 px-2.5 py-0.5 text-xs font-medium text-gray-400 transition-colors hover:border-primary-300 hover:text-primary-600"
+              >
+                <Tag className="h-3 w-3" />
+                \u041C\u0435\u0442\u043A\u0430
+              </button>
+
+              {showTagPopover && (
+                <>
+                  {/* \u041A\u043B\u0438\u043A \u043C\u0438\u043C\u043E \u043F\u043E\u043F\u043E\u0432\u0435\u0440\u0430 \u2014 \u0437\u0430\u043A\u0440\u044B\u0442\u044C */}
+                  <div className="fixed inset-0 z-30" onClick={() => setShowTagPopover(false)} />
+                  <div className="absolute left-0 top-full z-40 mt-2 w-72 rounded-xl border border-gray-200 bg-white p-3 shadow-lg">
+                    {(allTags ?? []).length === 0 && (
+                      <p className="mb-2 text-xs text-gray-500">
+                        \u041C\u0435\u0442\u043E\u043A \u043F\u043E\u043A\u0430 \u043D\u0435\u0442.
+                        \u0421\u043E\u0437\u0434\u0430\u0439\u0442\u0435 \u043F\u0435\u0440\u0432\u0443\u044E \u2014
+                        \u0432 \u043E\u0442\u0447\u0451\u0442\u0430\u0445
+                        \u043F\u043E\u044F\u0432\u0438\u0442\u0441\u044F \u043F\u0440\u0438\u0431\u044B\u043B\u044C
+                        \u043F\u043E \u043D\u0435\u0439.
+                      </p>
+                    )}
+                    {(allTags ?? []).length > 0 && (
+                      <div className="mb-2 flex max-h-44 flex-wrap gap-1.5 overflow-y-auto">
+                        {(allTags ?? []).map((tag) => {
+                          const accent = tag.color || '#64748b';
+                          const active = selectedTags.some((t) => t.id === tag.id);
+                          return (
+                            <button
+                              key={tag.id}
+                              type="button"
+                              onClick={() => toggleTag(tag)}
+                              className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors ${
+                                active ? 'font-semibold' : 'border-gray-200 bg-gray-50 text-gray-600 hover:bg-gray-100'
+                              }`}
+                              style={
+                                active
+                                  ? { borderColor: accent, color: accent, backgroundColor: `${accent}14` }
+                                  : undefined
+                              }
+                            >
+                              <span
+                                className="h-1.5 w-1.5 rounded-full"
+                                style={{ backgroundColor: accent, opacity: active ? 1 : 0.55 }}
+                              />
+                              {tag.name}
+                              {active && <CheckIcon className="h-3 w-3" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
+                    <div className="flex items-center gap-1.5">
+                      <input
+                        value={newTagName}
+                        onChange={(e) => setNewTagName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            e.preventDefault();
+                            handleCreateTag();
+                          }
+                        }}
+                        maxLength={30}
+                        placeholder="\u041D\u043E\u0432\u0430\u044F \u043C\u0435\u0442\u043A\u0430"
+                        className="input flex-1 !py-1.5 text-xs"
+                      />
+                      {newTagName.trim() && (
+                        <button
+                          type="button"
+                          onClick={handleCreateTag}
+                          disabled={creatingTag}
+                          className="rounded-lg bg-primary-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+                        >
+                          {creatingTag ? '...' : '\u0421\u043E\u0437\u0434\u0430\u0442\u044C'}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
           </div>
 
           {/* Submit button */}

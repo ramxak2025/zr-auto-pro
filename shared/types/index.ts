@@ -1410,6 +1410,18 @@ export interface WorkBoardColumn {
   notifyClient: boolean;
 }
 
+/**
+ * Метка чека (Round 12 #9, миграция 140). Владелец сам заводит метки
+ * («вид работ», важный именно ему) и вешает на заказ-наряды в Кассе; отчёты
+ * дают разрез прибыли/выручки по меткам. Чисто учётная бирка — денег, склада
+ * и зарплаты не двигает. `color` — hex-акцент чипа, null/absent → нейтральный.
+ */
+export interface CheckTag {
+  id: string;
+  name: string;
+  color?: string | null;
+}
+
 export interface Check {
   id: string;
   number: number;
@@ -1485,6 +1497,13 @@ export interface Check {
    * — absent/false everywhere else; existing consumers safely ignore it.
    */
   isExecutor?: boolean;
+  /**
+   * Метки чека (Round 12 #9). Приходят и в детали (GET /checks/:id), и в
+   * журнальной выдаче (GET /checks). Пустой массив / absent (старый backend)
+   * = меток нет. Архивная метка остаётся в старых чеках — архив убирает её
+   * только из пикера Кассы. Additive — existing consumers safely ignore it.
+   */
+  tags?: CheckTag[];
   createdAt: string;
 }
 
@@ -2644,17 +2663,90 @@ export interface SegmentBroadcastResult {
   total: number;
 }
 
+/** Request body for POST /marketing/broadcast/preview — dry-run, sends NOTHING. */
+export interface BroadcastPreviewRequest {
+  segment?: SegmentBroadcastCriteria;
+  integrationId?: string;
+  providerType?: MessagingIntegration['providerType'];
+}
+
+/**
+ * Result of POST /marketing/broadcast/preview. `recipientsCount` — сколько
+ * клиентов получит рассылку (с точностью до анти-спам-гейта: часть может быть
+ * пропущена как дубль/потолок 24ч); `sample` — до 5 получателей (телефон
+ * маскирован сервером); `channelConnected: false` = канала нет, отправка
+ * упадёт — UI предупреждает до кнопки «Отправить».
+ */
+export interface BroadcastPreview {
+  recipientsCount: number;
+  sample: Array<{ name: string; phone: string }>;
+  channel: MessagingIntegration['providerType'] | null;
+  channelConnected: boolean;
+  perClient24hCap: number;
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  Журнал отправок (sent_messages, мигр. 124) — GET /marketing/sent-messages
+// ───────────────────────────────────────────────────────────────────────
+
+/** message_type журнала — все 7 путей отправки, проходящих через анти-спам-гейт. */
+export type SentMessageType = 'review' | 'reminder' | 'car_ready' | 'winback' | 'booking' | 'manual' | 'broadcast';
+
+/**
+ * Одна строка журнала отправок. Текста сообщения НЕТ намеренно — журнал
+ * хранит только content_hash (анти-дубль), не содержимое. `toOwner: true` =
+ * канал telegram: бот пишет в чат владельца/персонала, НЕ клиенту.
+ * `phone` — нормализованный национальный ключ (последние 10 цифр).
+ */
+export interface SentMessage {
+  id: string;
+  clientId: string | null;
+  clientName: string | null;
+  messageType: SentMessageType;
+  providerType: MessagingIntegration['providerType'] | null;
+  phone: string;
+  status: 'sent' | 'failed';
+  error: string | null;
+  dedupKey: string;
+  toOwner: boolean;
+  sentAt: string;
+}
+
+/** Лимиты анти-спам-гейта — UI показывает гарантии из первоисточника. */
+export interface SentMessagesMeta {
+  /** Потолок сообщений одному клиенту за скользящие 24 ч, поперёк всех типов. */
+  perClient24hCap: number;
+  /** Окно отсечки точного дубля (тот же текст на тот же телефон), часов. */
+  exactDupWindowHours: number;
+}
+
+/** Ответ GET /marketing/sent-messages — keyset-курсор, как журнал чеков. */
+export interface SentMessagesResponse {
+  data: SentMessage[];
+  /** null = конец ленты. Прозрачный токен — просто вернуть в `cursor`. */
+  nextCursor: string | null;
+  meta: SentMessagesMeta;
+}
+
 /**
  * One row of GET /marketing/auto-mailings — a read-only overview of an AUTO
  * mailing surface so the UI can list enabled-state + deep-link to its editor.
- * `type`: review | car_ready | installment_reminder | service_reminder.
- * `settingsRef`: relative API path of the settings endpoint that edits it.
+ * ЕДИНЫЙ реестр всех 6 авто-сценариев (booking confirm/reminder добавлены
+ * вместе с журналом отправок). `settingsRef`: relative API path of the
+ * settings endpoint that edits it. Новые поля optional — старый сервер их
+ * может не отдавать.
  */
 export interface AutoMailingOverview {
-  type: 'review' | 'car_ready' | 'installment_reminder' | 'service_reminder';
+  type: 'review' | 'car_ready' | 'installment_reminder' | 'service_reminder' | 'booking_confirm' | 'booking_reminder';
   enabled: boolean;
   summary: string;
   settingsRef: string;
+  /** Человеческое имя сценария («Запрос отзыва», «Машина готова»…). */
+  humanTitle?: string;
+  /** Описание триггера («после закрытия чека», «при создании записи»…). */
+  trigger?: string;
+  /** Последняя реальная отправка этого сценария (из журнала); null = ни разу. */
+  lastSentAt?: string | null;
 }
 
 // ───────────────────────────────────────────────────────────────────────

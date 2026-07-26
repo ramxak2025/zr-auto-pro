@@ -479,6 +479,18 @@ export default function ReportsScreen() {
     staleTime: 60_000,
   });
 
+  // Метки чеков (Round 12 #9): прибыль/выручка/чеки по каждой метке за
+  // выбранный период. Пустой массив (меток нет или без чеков за период) —
+  // блок «По меткам» не рендерится вовсе, отчёт не захламляется.
+  const tagAnalyticsQuery = useQuery({
+    queryKey: ['tag-analytics', range.from, range.to],
+    queryFn: async () => (await reportsApi.getTagAnalytics({ dateFrom: range.from, dateTo: range.to })).data,
+    enabled: canView,
+    placeholderData: (prev) => prev,
+    staleTime: 60_000,
+  });
+  const tagRows = Array.isArray(tagAnalyticsQuery.data) ? tagAnalyticsQuery.data : [];
+
   const report = financialQuery.data;
   const prevReport = prevFinancialQuery.data;
   const dashboard = dashboardQuery.data;
@@ -507,6 +519,7 @@ export default function ReportsScreen() {
       queryClient.invalidateQueries({ queryKey: ['financial-report'] }),
       queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] }),
       queryClient.invalidateQueries({ queryKey: ['expenses'] }),
+      queryClient.invalidateQueries({ queryKey: ['tag-analytics'] }),
     ]);
     setRefreshing(false);
   }, [queryClient]);
@@ -1117,6 +1130,44 @@ export default function ReportsScreen() {
                         </View>
                         <Text style={[styles.expRowPct, { color: palette.text.tertiary }]}>
                           {pct.toFixed(1)}% от расходов
+                        </Text>
+                      </View>
+                    );
+                  })}
+                </AnimatedCard>
+              )}
+
+              {/* 5.5. ПО МЕТКАМ (Round 12 #9) — только когда за период есть
+                    чеки с метками; без них блок скрыт целиком. Прибыль —
+                    per-check конвенция сервера (см. /reports/tags). */}
+              {tagRows.length > 0 && (
+                <AnimatedCard
+                  index={5}
+                  style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <Text style={[styles.cardTitle, { color: palette.text.tertiary }]}>ПО МЕТКАМ</Text>
+                  {tagRows.map((row) => {
+                    const accent = row.color || colors.slate[400];
+                    return (
+                      <View key={row.tagId} style={styles.tagRow}>
+                        <View style={[styles.tagRowDot, { backgroundColor: accent }]} />
+                        <View style={styles.tagRowBody}>
+                          <Text style={[styles.tagRowName, { color: palette.text.primary }]} numberOfLines={1}>
+                            {row.name}
+                          </Text>
+                          <Text style={[styles.tagRowCaption, { color: palette.text.tertiary }]} numberOfLines={1}>
+                            {row.checksCount} шт · {formatMoney(row.revenue)}
+                          </Text>
+                        </View>
+                        <Text
+                          style={[
+                            styles.tagRowProfit,
+                            { color: row.profit >= 0 ? colors.green[600] : colors.red[600] },
+                          ]}
+                          numberOfLines={1}
+                        >
+                          {row.profit >= 0 ? '+' : ''}
+                          {formatMoney(row.profit)}
                         </Text>
                       </View>
                     );
@@ -2294,6 +2345,14 @@ const styles = StyleSheet.create({
   expBarTrack: { height: 6, borderRadius: 3, overflow: 'hidden' },
   expBarFill: { height: '100%', borderRadius: 3 },
   expRowPct: { fontSize: 11, marginTop: 4 },
+
+  // По меткам (Round 12 #9)
+  tagRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], paddingVertical: spacing[2] },
+  tagRowDot: { width: 8, height: 8, borderRadius: 4 },
+  tagRowBody: { flex: 1, minWidth: 0 },
+  tagRowName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  tagRowCaption: { fontSize: 11, marginTop: 1, fontVariant: ['tabular-nums'] },
+  tagRowProfit: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, fontVariant: ['tabular-nums'] },
 
   // Record
   recordRow: {

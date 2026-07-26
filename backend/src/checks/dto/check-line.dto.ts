@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
+import { ArrayMaxSize, IsArray, IsBoolean, IsNumber, IsOptional, IsString, Max, MaxLength, Min } from 'class-validator';
 
 /**
  * Money-field validation for POST/PATCH /checks (audit round 7, item 2).
@@ -180,4 +180,18 @@ export class BaseCheckDto {
   @Min(0, min0('Сумма картой'))
   @Max(MONEY_MAX, maxM('Сумма картой'))
   cardAmount?: number;
+
+  /**
+   * Метки чека (Round 12 #9): id из check_tag_defs. Присутствие поля =
+   * «перезаписать связки ровно этим набором» (пустой массив снимает все);
+   * отсутствие = «не трогать» — частичные PATCH'и и старые клиенты не стирают
+   * метки. Чужие/архивные/кривые id сервис молча отбрасывает (не 400 — чтобы
+   * гонка «метку заархивировали, пока чек заполнялся» не блокировала продажу).
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  tagIds?: string[];
 }

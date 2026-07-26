@@ -1016,6 +1016,31 @@ export default function CheckDetailScreen() {
           <Text style={[styles.timeChip, { color: palette.text.tertiary }]}>{formatTime(check.date)}</Text>
         </View>
 
+        {/* Метки чека (Round 12 #9) — компактные чипы отдельной строкой в мете.
+            Без меток строка не рендерится вовсе; чипы read-only (правятся через
+            «Изменить» → Касса). Архивная метка остаётся видимой на старом чеке. */}
+        {(check.tags?.length ?? 0) > 0 && (
+          <View style={styles.tagMetaRow}>
+            {(check.tags ?? []).map((tag) => {
+              const accent = tag.color || colors.slate[500];
+              return (
+                <View
+                  key={tag.id}
+                  style={[styles.tagMetaChip, { backgroundColor: softTint(accent, palette.mode), borderColor: accent }]}
+                >
+                  <Ionicons name="pricetag" size={9} color={isDark ? palette.text.secondary : accent} />
+                  <Text
+                    style={[styles.tagMetaChipText, { color: isDark ? palette.text.primary : accent }]}
+                    numberOfLines={1}
+                  >
+                    {tag.name}
+                  </Text>
+                </View>
+              );
+            })}
+          </View>
+        )}
+
         {/* Work-status (доска заказ-нарядов, 082) — ОТДЕЛЬНАЯ строка, чтобы
             не смешиваться с бейджами оплаты/«Закрыт»/«Отложен». Тап по чипу
             открывает пикер; при workStatus=null показываем «Поставить на
@@ -2351,6 +2376,23 @@ const styles = StyleSheet.create({
   },
   paymentChipText: { fontSize: 12, fontWeight: fontWeight.medium },
   timeChip: { fontSize: 12, marginLeft: 'auto' },
+
+  // Метки чека (Round 12 #9) — компактные чипы отдельной строкой в мете.
+  tagMetaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing[1.5] },
+  tagMetaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: 200,
+  },
+  tagMetaChipText: {
+    fontSize: 11,
+    fontWeight: fontWeight.semibold,
+  },
 
   // Work-status (board) — отдельная строка под чипами оплаты.
   workStatusRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
