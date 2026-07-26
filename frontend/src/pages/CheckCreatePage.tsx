@@ -578,6 +578,10 @@ export default function CheckCreatePage() {
   const [reassignOpen, setReassignOpen] = useState(false);
   const [reassignTarget, setReassignTarget] = useState<Client | null>(null);
 
+  // Round 12 #7: подтверждение «забыли клиента» — новый живой чек без
+  // выбранного клиента пробивается только после явного «Пробить» в модалке.
+  const [showRetailPrompt, setShowRetailPrompt] = useState(false);
+
   // Prevent accidental page leave
   useEffect(() => {
     window.history.pushState({ checkGuard: true }, '');
@@ -1085,9 +1089,10 @@ export default function CheckCreatePage() {
   const canSaveTemplate = templateServices.length + templateProducts.length > 0;
 
   // Submit
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-
+  // doSubmit — фактическое проведение чека. handleSubmit (ниже) может
+  // перехватить сабмит наджимом «забыли клиента» (Round 12 #7); «Пробить»
+  // из модалки зовёт doSubmit напрямую.
+  const doSubmit = () => {
     // Client and car are optional (retail buyer mode)
 
     const services: CheckServiceLine[] = serviceLines.map((l) => ({
@@ -1191,6 +1196,19 @@ export default function CheckCreatePage() {
       }
       createMutation.mutate({ ...payload, clientRequestId: clientRequestIdRef.current });
     }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+
+    // Round 12 #7: новый ЖИВОЙ чек без клиента (не правка, не отложенный) —
+    // мягкое подтверждение перед пробитием, чтобы кассир не забыл привязку.
+    if (!isEditMode && !isDeferred && !selectedClient) {
+      setShowRetailPrompt(true);
+      return;
+    }
+
+    doSubmit();
   };
 
   const itemCount = serviceLines.length + productLines.length;
@@ -2062,6 +2080,32 @@ export default function CheckCreatePage() {
               className="btn-primary disabled:opacity-50"
             >
               {reassignMutation.isPending ? 'Переносим…' : 'Сменить владельца'}
+            </button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Round 12 #7: подтверждение пробития без клиента */}
+      <Modal
+        isOpen={showRetailPrompt}
+        onClose={() => setShowRetailPrompt(false)}
+        title="Возможно, вы забыли добавить клиента"
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">Чек будет проведён как розничный, без привязки к клиенту.</p>
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={() => setShowRetailPrompt(false)} className="btn-secondary">
+              Вернуться
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setShowRetailPrompt(false);
+                doSubmit();
+              }}
+              className="btn-primary"
+            >
+              Пробить
             </button>
           </div>
         </div>

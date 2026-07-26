@@ -2087,7 +2087,11 @@ export default function CheckCreateScreen() {
     );
   };
 
-  const handleSubmit = (deferred?: boolean, paymentOverride?: PaymentMethod, opts?: { preValidated?: boolean }) => {
+  const handleSubmit = (
+    deferred?: boolean,
+    paymentOverride?: PaymentMethod,
+    opts?: { preValidated?: boolean; clientPromptConfirmed?: boolean },
+  ) => {
     // Double-fire guard: bail out immediately if a submission is already
     // in-flight, regardless of whether isPending has propagated yet.
     if (submittingRef.current || createMutation.isPending) return;
@@ -2211,6 +2215,26 @@ export default function CheckCreateScreen() {
       createMutation.mutate(payload);
     };
 
+    // ── Round 12 #7: наджим «забыли клиента» ─────────────────────────
+    // Новый ЖИВОЙ чек без клиента (не правка, не отложенный, не
+    // заказ-наряд) → мягкое подтверждение перед пробитием. «Пробить»
+    // перезапускает handleSubmit с clientPromptConfirmed, чтобы
+    // овершелл-confirm ниже отработал своей очередью (прямой proceed()
+    // его бы перепрыгнул). СБП-поток (preValidated) сюда не попадает:
+    // деньги уже приняты, блокировать запись нельзя (BUG #1) — его
+    // наджим живёт в openSbpPayment ДО оплаты.
+    if (!editId && !shouldDefer && !orderMode && !opts?.preValidated && !opts?.clientPromptConfirmed && !clientId) {
+      haptic('warning');
+      Alert.alert('Возможно, вы забыли добавить клиента', 'Чек будет проведён как розничный, без привязки к клиенту.', [
+        { text: 'Вернуться', style: 'cancel' },
+        {
+          text: 'Пробить',
+          onPress: () => handleSubmit(deferred, paymentOverride, { ...opts, clientPromptConfirmed: true }),
+        },
+      ]);
+      return;
+    }
+
     // ── M4: oversell confirm ────────────────────────────────────────
     // Confirm (never hard-block — cached stock can be stale) when any
     // product line exceeds the cached stock. Deferred checks skip the
@@ -2286,28 +2310,48 @@ export default function CheckCreateScreen() {
       );
       return;
     }
-    // 4) Овершелл склада — подтверждаем ДО оплаты (а не после), потому что
-    //    после успешного СБП этот confirm уже нельзя показывать: деньги
-    //    приняты, чек обязан записаться. На «Продолжить» открываем модалку.
-    if (oversoldByProductId.size > 0) {
-      const lines = [...oversoldByProductId.values()]
-        .map((e) => `• ${e.name}: в чеке ${e.qty}, на складе ${Math.max(e.stock, 0)}`)
-        .join('\n');
-      haptic('warning');
-      Alert.alert('Не хватает на складе', `${lines}\n\nДанные склада могли устареть. Продолжить?`, [
-        { text: 'Отмена', style: 'cancel' },
-        {
-          text: 'Продолжить',
-          onPress: () => {
-            haptic('tap');
-            setShowSbp(true);
+    // Продолжение после наджима «забыли клиента» (по образцу proceed в
+    // handleSubmit): овершелл-confirm + открытие СБП-модалки. Вынесено в
+    // локальную функцию, чтобы «Пробить» из наджима шёл той же цепочкой и
+    // овершелл не перепрыгивался.
+    const proceedToSbp = () => {
+      // 5) Овершелл склада — подтверждаем ДО оплаты (а не после), потому что
+      //    после успешного СБП этот confirm уже нельзя показывать: деньги
+      //    приняты, чек обязан записаться. На «Продолжить» открываем модалку.
+      if (oversoldByProductId.size > 0) {
+        const lines = [...oversoldByProductId.values()]
+          .map((e) => `• ${e.name}: в чеке ${e.qty}, на складе ${Math.max(e.stock, 0)}`)
+          .join('\n');
+        haptic('warning');
+        Alert.alert('Не хватает на складе', `${lines}\n\nДанные склада могли устареть. Продолжить?`, [
+          { text: 'Отмена', style: 'cancel' },
+          {
+            text: 'Продолжить',
+            onPress: () => {
+              haptic('tap');
+              setShowSbp(true);
+            },
           },
-        },
+        ]);
+        return;
+      }
+      haptic('tap');
+      setShowSbp(true);
+    };
+
+    // 4) Round 12 #7: наджим «забыли клиента» — тоже ДО приёма денег (после
+    //    успешного СБП никаких блокирующих диалогов быть не может, BUG #1).
+    //    Новый чек без клиента → подтверждение; «Пробить» продолжает цепочку
+    //    (овершелл → СБП-модалка) через proceedToSbp.
+    if (!editId && !clientId) {
+      haptic('warning');
+      Alert.alert('Возможно, вы забыли добавить клиента', 'Чек будет проведён как розничный, без привязки к клиенту.', [
+        { text: 'Вернуться', style: 'cancel' },
+        { text: 'Пробить', onPress: proceedToSbp },
       ]);
       return;
     }
-    haptic('tap');
-    setShowSbp(true);
+    proceedToSbp();
   };
 
   // Date formatting
