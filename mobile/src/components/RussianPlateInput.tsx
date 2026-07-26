@@ -1,13 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import {
-  View,
-  TextInput,
-  Text,
-  StyleSheet,
-  Platform,
-  NativeSyntheticEvent,
-  TextInputSelectionChangeEventData,
-} from 'react-native';
+import { View, TextInput, Text, StyleSheet, Platform } from 'react-native';
 import { colors, spacing } from '../theme';
 import {
   processPlateMainInput,
@@ -81,10 +73,18 @@ export default function RussianPlateInput({
   // clean plate upward via onChangeText — the async round-trip window is gone.
   const [mainClean, setMainClean] = useState<string>(() => splitPlate(value).main);
   const [regionClean, setRegionClean] = useState<string>(() => splitPlate(value).region);
-  // Controlled caret (fix A). Undefined = let native decide (first mount / taps
-  // are honoured via onSelectionChange); after a transform we pin it
-  // deterministically so the cursor can never jump backwards over a fresh char.
-  const [mainSel, setMainSel] = useState<{ start: number; end: number } | undefined>(undefined);
+  // ── No controlled caret — deliberately. ──
+  // A previous fix pinned the caret via a `selection` state prop updated on
+  // every keystroke. On Fabric the React commit of that prop is ASYNC: the
+  // {3,3} pinned for keystroke «8» landed on native AFTER «0» was typed
+  // (native already at «Х 80», caret 4), rolled the caret back to 3, and the
+  // next «7» inserted at the stale position → «Х 870» instead of «Х 807».
+  // Native owns the caret now. iOS/Android both keep it correct for append
+  // and backspace, and place it at the end when we rewrite `value` (space
+  // insertion «Х8»→«Х 8», latin→cyrillic mapping) — which is exactly the
+  // desired landing spot. If a caret correction is ever needed again, do it
+  // IMPERATIVELY (ref.setSelection / dispatchCommand in the same tick),
+  // never through a state-driven `selection` prop.
   // Ring of values WE emitted whose echo through the (pass-through) parent may
   // still be in flight. The parent (`setPlateSearch`) bounces every emitted
   // value straight back into `value`; during fast typing several emits are in
@@ -117,7 +117,6 @@ export default function RussianPlateInput({
     const { main: m, region: r } = splitPlate(value);
     setMainClean(m);
     setRegionClean(r);
-    setMainSel(undefined);
     emittedRef.current = [];
   }, [value]);
 
@@ -130,7 +129,6 @@ export default function RussianPlateInput({
     const { main: m, region: r } = splitPlate(processPlateInput(value.replace(/\s/g, '')));
     setMainClean(m);
     setRegionClean(r);
-    setMainSel(undefined);
     // Intentionally keyed on the mode only — `value` sync is owned by the effect
     // above; re-deriving here on every keystroke would fight the caret logic.
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -154,13 +152,11 @@ export default function RussianPlateInput({
       const cleanMain = processPlateMainInput(raw);
       const wasComplete = mainClean.length >= 6;
       setMainClean(cleanMain);
-      // Deterministic caret at end of the freshly formatted text. The mask
-      // never reorders chars (it only uppercases, maps latin→cyrillic and
-      // inserts spaces at fixed indices), so end-of-text is the correct
-      // landing spot for append typing, for backspace, and for single-char
-      // latin→cyrillic substitution — the very cases the swap bug hit.
-      const end = formatMain(cleanMain).length;
-      setMainSel({ start: end, end });
+      // Caret is native-owned (see comment at the top of the component).
+      // When the formatted value differs from what native holds (space
+      // insertion, latin→cyrillic), iOS/Android place the caret at the end
+      // of the rewritten text — correct for append typing, backspace and
+      // single-char substitution alike.
       emit(cleanMain, regionClean);
       // Auto-advance to region once main is complete
       if (cleanMain.length === 6 && !wasComplete) {
@@ -169,11 +165,6 @@ export default function RussianPlateInput({
     },
     [mainClean.length, regionClean, emit],
   );
-
-  // Honour manual caret moves (taps / drags) so mid-field editing still works.
-  const handleMainSelectionChange = useCallback((e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => {
-    setMainSel(e.nativeEvent.selection);
-  }, []);
 
   const handleRegionChange = useCallback(
     (text: string) => {
@@ -235,9 +226,7 @@ export default function RussianPlateInput({
       <TextInput
         ref={mainRef}
         value={mainDisplay}
-        selection={mainSel}
         onChangeText={handleMainChange}
-        onSelectionChange={handleMainSelectionChange}
         style={styles.mainInput}
         placeholder="А 000 АА"
         placeholderTextColor={colors.gray[300]}

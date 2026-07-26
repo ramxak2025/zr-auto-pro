@@ -60,6 +60,7 @@ function processPlateMainInput(raw: string): string {
 ```
 
 `normalizeChar` применяет: `toUpperCase` → `LAT_TO_CYR` map → проверка по позиции:
+
 - pos 0, 4, 5: только из {А, В, Е, К, М, Н, О, Р, С, Т, У, Х}
 - pos 1, 2, 3: только цифры 0-9
 
@@ -93,17 +94,19 @@ function normalizeForeignPlate(raw: string): string {
 ## Поиск в backend
 
 В `CheckCreateScreen` используется:
+
 ```ts
 const normalizedSearch = normalizePlateForSearch(plateSearch, plateMode);
 useQuery({
   queryKey: ['clients-plate', normalizedSearch, plateMode],
   queryFn: () => clientsApi.getAll({ search: normalizedSearch, limit: 20 }),
   enabled: normalizedSearch.length >= 2,
-  placeholderData: (prev) => prev,  // keepPreviousData
+  placeholderData: (prev) => prev, // keepPreviousData
 });
 ```
 
 `normalizePlateForSearch`:
+
 - mode='ru': `processPlateInput(raw.replace(/\s/g, ''))` — латиница→кириллица, удаление пробелов
 - mode='foreign': uppercase + удаление separators (`-`, `/`, пробел) для substring match
 
@@ -124,6 +127,7 @@ useQuery({
 ## Тестируемые функции (unit-tested)
 
 В `mobile/src/utils/plateMask.ts`:
+
 - `processPlateInput(raw)` — общий, для legacy back-compat
 - `processPlateMainInput(raw)` — main block
 - `processPlateRegionInput(raw)` — region block
@@ -136,3 +140,15 @@ useQuery({
 - `normalizeForeignPlate(raw)` — INT нормализация
 - `normalizePlateForSearch(raw, mode)` — для backend
 - `detectPlateMode(value)` — initial mode для UI
+
+---
+
+## Addendum 2026-07-27 — перестановка цифр при быстром наборе (root cause: контролируемый `selection` на Fabric)
+
+**Симптом.** При быстром наборе «х807кс» на кассе получалось «Х 870 …» — цифры менялись местами. Воспроизводилось ПОСЛЕ всех предыдущих фиксов (локальный буфер `mainClean`, echo-ring `emittedRef`, анти-IME пропы) — они корректны и остаются, но корень был не в них.
+
+**Root cause.** `RussianPlateInput` после каждого кейстрока пинил caret через state-проп: `handleMainChange` → `setMainSel({start: end, end})`, эхо-хендлер `onSelectionChange` → `setMainSel(e.nativeEvent.selection)`, и `TextInput` получал `selection={mainSel}`. React-коммит пропа на Fabric **асинхронный**: selection `{3,3}` от кейстрока «8» долетал до native ПОСЛЕ того, как пользователь уже набрал «0» (native «Х 80», caret 4). Устаревший проп откатывал caret на 3, и следующий «7» вставлялся по устаревшей позиции: «Х 870». Маска (`plateMask.ts`) порядко-сохранна и невиновна — она лишь узаконивала уже испорченную строку.
+
+**Fix.** Контролируемый caret удалён полностью: state `mainSel`, проп `selection`, `onSelectionChange` и его хендлер, все `setMainSel`. Native сам держит caret: при append/backspace он и так корректен; при перезаписи `value` (вставка пробела «Х8»→«Х 8», latin→cyrillic замена) iOS и Android ставят caret в конец переписанного текста — что и есть правильная позиция для этих кейсов. Императивная коррекция не потребовалась. У регион-поля контролируемого selection не было — лечение не нужно.
+
+**Правило.** Caret руками — **только императивно** (`ref.setSelection` / `dispatchCommand` в том же тике), **никогда через state-проп `selection`**: на Fabric его коммит асинхронный и во время быстрого набора всегда проигрывает гонку следующему кейстроку.
