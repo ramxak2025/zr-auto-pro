@@ -176,10 +176,18 @@ function resolveCheckDateEdit(raw: unknown, priorTs: number): string | null {
 }
 
 /**
- * Opaque keyset cursor for the checks journal: base64url of `<date>|<id>`.
- * `date` is the row's ISO timestamp, `id` its UUID — together they form the
- * (date DESC, id DESC) keyset. Opaque on purpose so the FE just round-trips
- * `nextCursor` without parsing it.
+ * Opaque keyset cursor for the checks journal: base64url of
+ * `<date>|<created_at>|<id>` — the (date DESC, created_at DESC, id DESC)
+ * keyset. `id` is the row's UUID; the two timestamps MUST be the RAW Postgres
+ * text values (`ch.date::text`), NOT node-pg Date objects: pg parses
+ * TIMESTAMPTZ (microsecond precision) into a JS Date with only MILLISECOND
+ * precision, so a Date-built cursor is truncated DOWN and the strict `<`
+ * keyset predicate then skips every row inside the truncated window — batches
+ * of checks written in one transaction share identical date/created_at, so a
+ * WHOLE BLOCK used to vanish at a page boundary. Postgres round-trips its own
+ * text format losslessly (text → timestamptz keeps microseconds). Date inputs
+ * are still accepted (toISOString fallback) for non-hot-path callers. Opaque
+ * on purpose so the FE just round-trips `nextCursor` without parsing it.
  */
 function encodeCheckCursor(date: unknown, createdAt: unknown, id: unknown): string {
   const iso = date instanceof Date ? date.toISOString() : String(date);
@@ -685,7 +693,8 @@ export class ChecksService {
     // `?cursor=` to fetch the newest rows; then follow `nextCursor` (null =
     // end of feed). The keyset response keeps the same `{ data, total, page,
     // limit }` shape and just adds `nextCursor`, so offset clients are
-    // unaffected.
+    // unaffected. `total` считается только на ПЕРВОЙ keyset-странице (пустой
+    // cursor); на последующих он null — мобилка читает total из pages[0].
     const keysetMode = query.cursor !== undefined;
     const cursor = keysetMode ? parseCheckCursor(query.cursor) : null;
 
@@ -725,7 +734,15 @@ export class ChecksService {
     }
 
     if (query.masterId) {
-      where += ` AND ch.master_id = $${idx++}`;
+      // Round 12: симметрично правилу видимости «своих» выше — фильтр по
+      // мастеру находит и чеки, где он ИСПОЛНИТЕЛЬ строки услуг (его добавил
+      // коллега), а не только созданные им (ch.master_id). Иначе фильтр
+      // «по мастеру» показывал МЕНЬШЕ, чем этот мастер видит в своей ленте.
+      where += ` AND (ch.master_id = $${idx} OR EXISTS (
+        SELECT 1 FROM check_service_lines sl
+         WHERE sl.check_id = ch.id AND sl.master_id = $${idx}
+      ))`;
+      idx++;
       params.push(query.masterId);
     }
     if (query.clientId) {
@@ -760,26 +777,63 @@ export class ChecksService {
     } else if (query.isDeferred === 'false' || query.isDeferred === false) {
       where += ` AND ch.is_deferred = false`;
     }
+    // OPTIONAL returns filter (additive, Round 12): `?isReturned=true` → only
+    // returned checks (частичный индекс idx_checks_returned из 040 покрывает
+    // ровно эту ветку), `?isReturned=false` → only non-returned. Absent → no
+    // filter; existing callers see byte-for-byte the same response. Раньше
+    // фильтр «Возврат клиента» крутился на клиенте поверх одной страницы —
+    // теперь сервер отдаёт полную отфильтрованную ленту.
+    if (query.isReturned === 'true' || query.isReturned === true) {
+      where += ` AND ch.is_returned = true`;
+    } else if (query.isReturned === 'false' || query.isReturned === false) {
+      where += ` AND ch.is_returned = false`;
+    }
     if (query.search) {
-      where += ` AND (cl.full_name ILIKE $${idx} OR cl.phone ILIKE $${idx} OR ca.plate_number ILIKE $${idx})`;
-      params.push(`%${query.search}%`);
+      const searchStr = String(query.search).trim();
+      let searchCond = `cl.full_name ILIKE $${idx} OR cl.phone ILIKE $${idx} OR ca.plate_number ILIKE $${idx}`;
+      params.push(`%${searchStr}%`);
       idx++;
+      // Round 12: чек находится и по своему НОМЕРУ. Полностью числовая строка →
+      // точное равенство (набрал «158» — получил чек №158; substring дал бы
+      // шумную выдачу «всё, где есть 158»). Сравнение как text, НЕ как int:
+      // колонка number — int4 (SERIAL, 001), а пользователь вбивает и полный
+      // телефон (11 цифр) — каст такой строки к integer уронил бы запрос
+      // out-of-range ошибкой (22003 → 500). Матчи по клиенту/телефону/госномеру
+      // не тронуты — номерная ветка строго аддитивна (OR).
+      if (/^\d+$/.test(searchStr)) {
+        searchCond += ` OR ch.number::text = $${idx}`;
+        params.push(searchStr);
+        idx++;
+      }
+      where += ` AND (${searchCond})`;
     }
 
     // The clients+cars LEFT JOINs only exist to satisfy the `search` filter
     // (cl.full_name / cl.phone / ca.plate_number). With no search term the
     // COUNT can run on `checks` alone — dropping two joins per page load on
     // the most-hit list endpoint. The response shape is unchanged.
-    const countResult = query.search
-      ? await this.pool.query(
-          `SELECT COUNT(*) as total FROM checks ch
-           LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
-           LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
-           WHERE ${where}`,
-          params,
-        )
-      : await this.pool.query(`SELECT COUNT(*) as total FROM checks ch WHERE ${where}`, params);
-    const total = parseInt(countResult.rows[0].total);
+    //
+    // Round 12: в keyset-режиме COUNT выполняется ТОЛЬКО на первой странице
+    // (пустой `?cursor=`). Мобилка читает total исключительно из pages[0];
+    // на последующих страницах COUNT был чистым налогом — full-фильтровый
+    // пересчёт (при search — с 2 JOIN) на КАЖДУЮ страницу × poll 30s. Web
+    // ходит offset-путём (без `cursor`) и не затронут. На последующих
+    // keyset-страницах total = null (ключ в ответе остаётся — форма стабильна,
+    // существующие клиенты это поле там просто не читают).
+    const needsTotal = !keysetMode || cursor === null;
+    let total: number | null = null;
+    if (needsTotal) {
+      const countResult = query.search
+        ? await this.pool.query(
+            `SELECT COUNT(*) as total FROM checks ch
+             LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+             LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
+             WHERE ${where}`,
+            params,
+          )
+        : await this.pool.query(`SELECT COUNT(*) as total FROM checks ch WHERE ${where}`, params);
+      total = parseInt(countResult.rows[0].total);
+    }
 
     let rows: any[];
     if (keysetMode) {
@@ -801,8 +855,15 @@ export class ChecksService {
       params.push(meId);
       idx++;
       params.push(limit);
+      // _cursor_date/_cursor_created — СЫРЫЕ text-представления таймстампов
+      // для nextCursor (см. encodeCheckCursor): node-pg парсит TIMESTAMPTZ в
+      // JS Date с потерей микросекунд, «усечённый вниз» курсор + строгий `<`
+      // выкидывали целый блок чеков с одинаковыми date/created_at на границе
+      // страницы. mapCheck строит ответ по явным полям — служебные колонки в
+      // клиентский payload не протекают.
       const res = await this.pool.query(
         `SELECT ch.*,
+                ch.date::text AS _cursor_date, ch.created_at::text AS _cursor_created,
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
                 ca.plate_number, ca.make_model,
@@ -871,11 +932,14 @@ export class ChecksService {
     });
 
     // Keyset mode: emit the cursor for the NEXT page (the last row's
-    // date,id), or null when this page didn't fill `limit` (end of feed).
-    // Computed from the raw rows so it's independent of any ?fields= filter.
+    // date, created_at, id), or null when this page didn't fill `limit` (end
+    // of feed). Computed from the raw rows so it's independent of any
+    // ?fields= filter. ВАЖНО: из _cursor_date/_cursor_created (сырой pg-text,
+    // микросекунды целы), а не из node-pg Date (миллисекундное усечение →
+    // дыра на границе страницы, см. encodeCheckCursor).
     if (keysetMode) {
       const last = rows.length === limit ? rows[rows.length - 1] : undefined;
-      const nextCursor = last ? encodeCheckCursor(last.date, last.created_at, last.id) : null;
+      const nextCursor = last ? encodeCheckCursor(last._cursor_date, last._cursor_created, last.id) : null;
       return { data: checks, total, page, limit, nextCursor };
     }
 

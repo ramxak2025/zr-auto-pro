@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -237,13 +237,17 @@ const CheckRow = React.memo(function CheckRow({
   palette,
 }: CheckRowProps) {
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
-  const badge = getBadgeColors(palette.mode)[badgeKey];
+  // Один lookup палитры бейджей на строку (внутри getBadgeColors — статические
+  // module-level объекты по mode, сам вызов дёшев; но раньше он звался дважды
+  // на каждую карточку — способ оплаты + чип «Исполнитель»).
+  const rowBadges = getBadgeColors(palette.mode);
+  const badge = rowBadges[badgeKey];
   // Чек, где текущий мастер — исполнитель, но не автор. Тонируем карточку
   // и показываем чип «Исполнитель». `execBadge` берём из той же палитры
   // бейджей, что и способ оплаты рядом, — визуально согласованно и
   // корректно в обеих темах (light: пастель, dark: приглушённое стекло).
   const isExecutor = check.isExecutor === true;
-  const execBadge = getBadgeColors(palette.mode).purple;
+  const execBadge = rowBadges.purple;
   // «По гарантии» — работа в убыток (выручки нет; totalRevenue = 0). Помечаем
   // карточку красной плашкой «УБЫТОК» рядом с жёлтым бейджем оплаты «Гарантия»,
   // а в подвале (для тех, кто видит прибыль) показываем сумму убытка.
@@ -545,6 +549,51 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({
   );
 });
 
+// ── ActiveFilterChip ───────────────────────────────────────────────────
+// Чип активного фильтра над списком — виден, только когда панель фильтров
+// СВЁРНУТА. Раньше о включённом фильтре напоминала лишь точка-счётчик на
+// воронке, и «куда делись чеки?» превращалось в загадку. Тап по чипу
+// (крестик) снимает ровно свой фильтр. Palette-aware: light — пастель
+// primary[50], dark — приглушённое стекло того же акцента (softTint) —
+// та же пара, что у активной кнопки-воронки рядом.
+function ActiveFilterChip({
+  label,
+  onClear,
+  palette,
+}: {
+  label: string;
+  onClear: () => void;
+  palette: SemanticPalette;
+}) {
+  const dark = palette.mode === 'dark';
+  return (
+    <TouchableOpacity
+      onPress={() => {
+        haptic('tap');
+        onClear();
+      }}
+      activeOpacity={0.7}
+      style={[
+        styles.activeFilterChip,
+        {
+          backgroundColor: dark ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+          borderColor: dark ? 'rgba(37,99,235,0.35)' : colors.primary[200],
+        },
+      ]}
+      accessibilityRole="button"
+      accessibilityLabel={`Снять фильтр: ${label}`}
+    >
+      <Text
+        style={[styles.activeFilterChipText, { color: dark ? colors.primary[300] : colors.primary[700] }]}
+        numberOfLines={1}
+      >
+        {label}
+      </Text>
+      <Ionicons name="close-circle" size={14} color={dark ? colors.primary[300] : colors.primary[600]} />
+    </TouchableOpacity>
+  );
+}
+
 export default function ChecksScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
@@ -635,16 +684,15 @@ export default function ChecksScreen() {
   const [dateFrom, setDateFrom] = useState<Date | null>(null);
   const [dateTo, setDateTo] = useState<Date | null>(null);
   const [filterMasterId, setFilterMasterId] = useState('');
-  // «Возвраты» — chip-фильтр над списком. Когда активен, оставляем
-  // только чеки с isReturned=true. Реализован на клиенте через filter
-  // по уже загруженным страницам, чтобы не плодить новый serverside-
-  // param. Серверный фильтр потом можно добавить, когда появится
-  // отдельный endpoint /checks/returns.
+  // «Возврат клиента» — СЕРВЕРНЫЙ фильтр: бэк принимает аддитивный
+  // параметр isReturned=true (GET /checks) и отдаёт только возвраты.
+  // Раньше это был клиентский filter по уже загруженным страницам —
+  // возвраты со старых, ещё не догруженных страниц просто не попадали
+  // в выдачу. Теперь фильтрует сервер, как и isDeferred ниже.
   const [returnsOnly, setReturnsOnly] = useState(false);
   // «Отложенные» — СЕРВЕРНЫЙ фильтр: бэк принимает аддитивный параметр
-  // isDeferred=true (GET /checks) и отдаёт только отложенные черновики.
-  // В отличие от returnsOnly это не клиентский filter — отложенные могут
-  // не попасть на уже загруженные страницы, поэтому фильтруем на сервере.
+  // isDeferred=true (GET /checks) и отдаёт только отложенные черновики —
+  // тот же контракт, что у isReturned выше.
   const [deferredOnly, setDeferredOnly] = useState(false);
   const [showDateFromPicker, setShowDateFromPicker] = useState(false);
   const [showDateToPicker, setShowDateToPicker] = useState(false);
@@ -727,6 +775,9 @@ export default function ChecksScreen() {
       // (POSITIONAL_SEARCH_IDX) опирается на то, что search стоит в
       // индексе 1. Новые фильтры — только дописывать в хвост.
       deferredOnly ? 'deferred' : '',
+      // Слот 6 — фильтр «Возврат клиента» (серверный isReturned).
+      // Дописан строго в хвост по тому же правилу.
+      returnsOnly ? 'returns' : '',
     ],
     // КУРСОР, а не номер страницы. Offset-пагинация по живой ленте — источник
     // жалоб «при скролле чеки исчезают / появляется пустота / дубли»: пока
@@ -746,6 +797,9 @@ export default function ChecksScreen() {
       // отложенные. Выключенный фильтр параметр НЕ шлёт (undefined),
       // поведение и ответ сервера идентичны прежним.
       if (deferredOnly) params.isDeferred = true;
+      // isReturned — тот же аддитивный контракт: true → только возвраты
+      // клиентов. Выключен — параметр не шлём вовсе.
+      if (returnsOnly) params.isReturned = true;
       const res = await checksApi.getAll(params);
       return res.data;
     },
@@ -781,7 +835,17 @@ export default function ChecksScreen() {
     // 30s poll. Scroll position / pagination untouched — useInfiniteQuery
     // refetches the already-loaded pages in place.
     refetchOnReconnect: true,
-    refetchInterval: pollEnabled ? 30_000 : false,
+    // Poll живёт только пока загружено немного страниц (≤3). refetch у
+    // useInfiniteQuery перезапрашивает ВСЕ загруженные страницы разом:
+    // после глубокого скролла 30-секундный поллинг превращался в пачку
+    // последовательных запросов + полный пересбор ленты — то самое
+    // «лагает, мерцает блоками». Наскроллил глубоко — живость дают
+    // refetchOnMount:'always', refetchOnReconnect и pull-to-refresh.
+    refetchInterval: (query) => {
+      if (!pollEnabled) return false;
+      const pageCount = query.state.data?.pages?.length ?? 0;
+      return pageCount <= 3 ? 30_000 : false;
+    },
     placeholderData: (prev) => prev,
   });
 
@@ -801,8 +865,7 @@ export default function ChecksScreen() {
   //      future-proofs new kinds without a backend round-trip.
   //   2. Speed — the backend already caps the feed at 500 rows, so one
   //      cached fetch + an in-memory filter is instant when switching
-  //      chips (no per-chip refetch / white flash). Mirrors the existing
-  //      client-side `returnsOnly` filter on the checks tab.
+  //      chips (no per-chip refetch / white flash).
   // The cache key has no `warehouseKind`, so all chips share one entry.
   const { data: allWarehouseDocs = [], isLoading: warehouseLoading } = useQuery<JournalDoc[]>({
     queryKey: ['journal-warehouse-docs'],
@@ -951,7 +1014,9 @@ export default function ChecksScreen() {
   // Flatten all loaded pages — newest first comes from page 1, older
   // appended below from page 2+. The reduce avoids creating a fresh
   // array on every render unless the underlying pages change.
-  const allLoadedChecks = useMemo(
+  // «Возврат клиента» фильтрует СЕРВЕР (isReturned в queryFn выше) —
+  // клиентского пост-фильтра по страницам больше нет.
+  const checks = useMemo(
     () =>
       dedupeById(
         (Array.isArray(checksData?.pages) ? checksData.pages : []).flatMap((p) =>
@@ -959,14 +1024,6 @@ export default function ChecksScreen() {
         ),
       ),
     [checksData?.pages],
-  );
-  // Returns-only фильтр работает на уже загруженных страницах. Бэк
-  // не отдаёт серверный isReturned-параметр (пока), но `placeholderData`
-  // + `checks-infinite` cache держат страницы тёплыми — клиентский
-  // filter мгновенный.
-  const checks = useMemo(
-    () => (returnsOnly ? allLoadedChecks.filter((c) => !!c.isReturned) : allLoadedChecks),
-    [allLoadedChecks, returnsOnly],
   );
   const total = checksData?.pages?.[0]?.total ?? 0;
 
@@ -986,6 +1043,30 @@ export default function ChecksScreen() {
     }
     return flags;
   }, [checks]);
+
+  // Любая смена фильтра/поиска возвращает список наверх (без анимации).
+  // Без этого пользователь, наскролливший вглубь, при смене фильтра
+  // оставался на прежнем offset'е: placeholderData схлопывается до
+  // page-1 нового ключа, список резко укорачивается — и человек повисал
+  // в пустоте под концом контента. Даты сравниваем по ISO-строке, чтобы
+  // повторный выбор того же дня (новый Date-объект) не дёргал скролл.
+  const checksListRef = useRef<FlatList<Check>>(null);
+  const dateFromKey = dateFrom ? toISODate(dateFrom) : '';
+  const dateToKey = dateTo ? toISODate(dateTo) : '';
+  useEffect(() => {
+    checksListRef.current?.scrollToOffset({ offset: 0, animated: false });
+  }, [search, dateFromKey, dateToKey, filterMasterId, deferredOnly, returnsOnly]);
+
+  // Единая точка сброса фильтров вкладки «Чеки» — используется кнопкой
+  // «Сбросить фильтры» в панели, чипом «Сбросить всё» над списком и
+  // empty-state'ом «ничего не найдено». Сеттеры стабильны — deps пусты.
+  const resetChecksFilters = useCallback(() => {
+    setDateFrom(null);
+    setDateTo(null);
+    setFilterMasterId('');
+    setReturnsOnly(false);
+    setDeferredOnly(false);
+  }, []);
 
   // Stable navigation handler — `useCallback` so the prop passed to
   // CheckRow doesn't change across screen renders (would bust React.memo).
@@ -1245,6 +1326,75 @@ export default function ChecksScreen() {
         </View>
       </View>
 
+      {/* Активные фильтры при СВЁРНУТОЙ панели — строка чипов с крестиками.
+          Каждый чип снимает свой фильтр; «Сбросить всё» — разом. Когда
+          панель открыта, чипы не дублируем: состояние видно в ней самой. */}
+      {activeTab === 'checks' && !showFilters && checksFilterCount > 0 && (
+        <View style={styles.activeFiltersRow}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+            <View style={styles.activeFiltersRowInner}>
+              {dateFrom && (
+                <ActiveFilterChip
+                  label={`С ${formatFilterDate(dateFrom)}`}
+                  onClear={() => setDateFrom(null)}
+                  palette={palette}
+                />
+              )}
+              {dateTo && (
+                <ActiveFilterChip
+                  label={`По ${formatFilterDate(dateTo)}`}
+                  onClear={() => setDateTo(null)}
+                  palette={palette}
+                />
+              )}
+              {filterMasterId !== '' && (
+                <ActiveFilterChip
+                  label={activeUsers.find((u) => u.id === filterMasterId)?.fullName?.split(' ')[0] ?? 'Сотрудник'}
+                  onClear={() => setFilterMasterId('')}
+                  palette={palette}
+                />
+              )}
+              {returnsOnly && (
+                <ActiveFilterChip label="Возврат клиента" onClear={() => setReturnsOnly(false)} palette={palette} />
+              )}
+              {deferredOnly && (
+                <ActiveFilterChip label="Отложенные" onClear={() => setDeferredOnly(false)} palette={palette} />
+              )}
+              <TouchableOpacity
+                onPress={() => {
+                  haptic('tap');
+                  resetChecksFilters();
+                }}
+                activeOpacity={0.7}
+                style={[
+                  styles.activeFilterChip,
+                  {
+                    backgroundColor: palette.mode === 'dark' ? softTint(colors.red[600], 'dark') : colors.red[50],
+                    borderColor: palette.mode === 'dark' ? 'rgba(239,68,68,0.35)' : colors.red[100],
+                  },
+                ]}
+                accessibilityRole="button"
+                accessibilityLabel="Сбросить все фильтры"
+              >
+                <Ionicons
+                  name="close-circle-outline"
+                  size={14}
+                  color={palette.mode === 'dark' ? colors.red[300] : colors.red[600]}
+                />
+                <Text
+                  style={[
+                    styles.activeFilterChipText,
+                    { color: palette.mode === 'dark' ? colors.red[300] : colors.red[600] },
+                  ]}
+                >
+                  Сбросить всё
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+        </View>
+      )}
+
       {/* Filters panel (only for checks tab) */}
       {showFilters && activeTab === 'checks' && (
         <View style={styles.filtersPanel}>
@@ -1450,17 +1600,7 @@ export default function ChecksScreen() {
           </TouchableOpacity>
 
           {activeFilterCount > 0 && (
-            <TouchableOpacity
-              style={styles.clearFiltersBtn}
-              onPress={() => {
-                setDateFrom(null);
-                setDateTo(null);
-                setFilterMasterId('');
-                setReturnsOnly(false);
-                setDeferredOnly(false);
-                setPage(1);
-              }}
-            >
+            <TouchableOpacity style={styles.clearFiltersBtn} onPress={resetChecksFilters}>
               <Ionicons name="close-circle-outline" size={14} color={colors.red[500]} />
               <Text style={styles.clearFiltersBtnText}>Сбросить фильтры</Text>
             </TouchableOpacity>
@@ -1662,9 +1802,29 @@ export default function ChecksScreen() {
           ) : checksData === undefined ? (
             <ListSkeleton count={8} />
           ) : checks.length === 0 && !isLoading ? (
-            <EmptyState title="Чеков не найдено" description="Попробуйте изменить фильтры" />
+            // Filter-aware empty: «ничего не найдено с фильтрами» — не то же
+            // самое, что «чеков вообще нет». В первом случае даём кнопку,
+            // которая сбрасывает фильтры И поиск одним тапом — выход из
+            // тупика без раскапывания панели.
+            checksFilterCount > 0 || search ? (
+              <EmptyState
+                icon="search"
+                title="Ничего не найдено"
+                description="С текущими фильтрами и поиском чеков нет"
+                action={{
+                  label: 'Сбросить фильтры',
+                  onPress: () => {
+                    resetChecksFilters();
+                    setSearch('');
+                  },
+                }}
+              />
+            ) : (
+              <EmptyState title="Чеков пока нет" description="Создайте первый заказ-наряд на вкладке «Касса»" />
+            )
           ) : (
             <FlatList
+              ref={checksListRef}
               data={checks}
               keyExtractor={(item) => item.id}
               renderItem={renderCheck}
@@ -1681,10 +1841,16 @@ export default function ChecksScreen() {
               // OFF — офскрин-строку никогда не отсоединяют/присоединяют заново
               // (ещё один источник пустого кадра на Android). Список только
               // ДОПОЛНЯЕТСЯ снизу (onEndReached), верх не переанкорится.
+              // windowSize 21 (~10 экранов в обе стороны) + батчинг раз в
+              // 50мс: при быстром флике виртуализация не успевала отрисовать
+              // догоняющие строки — владелец видел «пустые блоки». Строки
+              // журнала лёгкие (мемоизированные карточки), десять экранов
+              // в памяти дешевле одного мигающего кадра.
               removeClippedSubviews={false}
               initialNumToRender={12}
-              windowSize={11}
+              windowSize={21}
               maxToRenderPerBatch={12}
+              updateCellsBatchingPeriod={50}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }
@@ -1739,11 +1905,14 @@ export default function ChecksScreen() {
               automaticallyAdjustContentInsets={false}
               // Обычный RN FlatList (НЕ FlashList) — см. пояснение у списка
               // чеков выше. removeClippedSubviews=false убирает пустые кадры
-              // от отсоединения офскрин-строк на Android.
+              // от отсоединения офскрин-строк на Android. windowSize 21 +
+              // updateCellsBatchingPeriod 50 — тот же анти-blank-cells
+              // тюнинг, что и у списка чеков выше.
               removeClippedSubviews={false}
               initialNumToRender={12}
-              windowSize={11}
+              windowSize={21}
               maxToRenderPerBatch={12}
+              updateCellsBatchingPeriod={50}
               refreshControl={
                 <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
               }
@@ -2262,6 +2431,23 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[1.5],
   },
   clearFiltersBtnText: { fontSize: fontSize.xs, color: colors.red[500], fontWeight: fontWeight.medium },
+
+  // ── Active-filter chips (collapsed panel) ───────────────────────
+  // Строка чипов активных фильтров над списком чеков — видна только при
+  // свёрнутой панели. Цвета chip'а задаются inline (palette-aware).
+  activeFiltersRow: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
+  activeFiltersRowInner: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
+  activeFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    paddingHorizontal: spacing[2.5],
+    height: 28,
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    maxWidth: 200,
+  },
+  activeFilterChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
 
   // ── List ────────────────────────────────────────────────────────
   // iOS: bottom space reserved via the list's contentInset prop so
