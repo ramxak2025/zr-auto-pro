@@ -293,28 +293,119 @@ const CheckRow = React.memo(function CheckRow({
                   : colors.purple[200]
                 : palette.border.subtle,
           },
-          check.isDeferred && styles.checkCardDeferred,
         ]}
         onPress={() => onOpen(check.id)}
         onPressIn={() => onPressIn(check.id)}
         activeOpacity={0.7}
       >
+        {/* Акцентная полоса — ТОЛЬКО флаг состояния (красный = отложен,
+            фиолетовый = исполнитель). Обычный чек полосы не имеет: постоянная
+            синяя полоса на каждой карточке была декорацией, а не информацией —
+            без неё исключительные состояния считываются мгновенно, как
+            непрочитанная точка в Mail. Полоса рендерится всегда (transparent),
+            чтобы геометрия контента не гуляла между строками. */}
         <View
           style={[
             styles.accentBar,
             {
-              backgroundColor: check.isDeferred ? colors.red[400] : isExecutor ? EXECUTOR_ACCENT : colors.primary[400],
+              backgroundColor: check.isDeferred ? colors.red[400] : isExecutor ? EXECUTOR_ACCENT : 'transparent',
             },
           ]}
         />
         <View style={styles.checkContent}>
-          <View style={styles.checkHeader}>
-            <View style={styles.checkHeaderLeft}>
-              <Text style={[styles.checkNumber, { color: palette.text.primary }]}>#{check.number}</Text>
-              {isExecutor && (
-                <View style={[styles.executorBadge, { backgroundColor: execBadge.bg }]}>
-                  <Ionicons name="construct" size={9} color={execBadge.text} />
-                  <Text style={[styles.executorBadgeText, { color: execBadge.text }]}>Исполнитель</Text>
+          {/* ── Иерархия карточки (дизайн-проход 2026-07) ────────────────
+              Первичное:  клиент (слева, 15pt semibold) + сумма (справа, 17pt bold).
+              Вторичное:  №, авто+госномер, пробег, скидка — строка меты 13pt.
+              Статусы:    бейджи отдельной строкой ТОЛЬКО у исключительных чеков.
+              Способ оплаты — бейдж ПОД суммой: семантически это свойство денег,
+              и правый столбец занимает те же две строки, что и левый, — карточка
+              не растёт. */}
+          <View style={styles.checkTopRow}>
+            <View style={styles.checkPrimaryCol}>
+              <Text style={[styles.checkTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                {check.client?.fullName || `Чек #${check.number}`}
+              </Text>
+              <View style={styles.checkMetaRow}>
+                {/* Номер дублируем в мете только когда заголовок занят клиентом. */}
+                {check.client?.fullName ? (
+                  <Text style={[styles.metaText, { color: palette.text.tertiary }]}>#{check.number}</Text>
+                ) : null}
+                {check.car && (
+                  <View style={styles.metaItem}>
+                    <Ionicons name="car-outline" size={12} color={palette.text.tertiary} />
+                    <Text style={[styles.metaText, { color: palette.text.secondary }]} numberOfLines={1}>
+                      {check.car.makeModel}
+                    </Text>
+                    {check.car.plateNumber && (
+                      <Text
+                        style={[
+                          styles.plateTag,
+                          palette.mode === 'dark' && {
+                            backgroundColor: softTint(colors.primary[600], 'dark'),
+                            color: colors.primary[300],
+                          },
+                        ]}
+                      >
+                        {check.car.plateNumber}
+                      </Text>
+                    )}
+                  </View>
+                )}
+                {/* Пробег авто — справочная мета. Показывается только когда он есть. */}
+                {mileage !== null && (
+                  <View style={styles.metaItem}>
+                    <Ionicons name="speedometer-outline" size={12} color={palette.text.tertiary} />
+                    <Text style={[styles.metaText, { color: palette.text.secondary }]} numberOfLines={1}>
+                      {formatMileage(mileage)}
+                    </Text>
+                  </View>
+                )}
+                {/* Скидка на товары — зелёная мета «Скидка N ₽» (только при > 0). */}
+                {discount !== null && (
+                  <View style={styles.metaItem}>
+                    <Ionicons name="pricetag-outline" size={12} color={colors.green[600]} />
+                    <Text style={[styles.metaText, { color: colors.green[600] }]} numberOfLines={1}>
+                      Скидка {formatMoney(discount)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+            <View style={styles.checkAmountCol}>
+              <View style={styles.checkSumRow}>
+                <Text style={[styles.checkTotal, { color: palette.text.primary }]}>
+                  {formatMoney(check.totalRevenue)}
+                </Text>
+                {canDelete && (
+                  <TouchableOpacity
+                    onPress={() => onDelete(check.id, check.number)}
+                    style={styles.deleteBtn}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  >
+                    <Ionicons name="close" size={15} color={palette.text.tertiary} />
+                  </TouchableOpacity>
+                )}
+              </View>
+              <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
+                <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
+                  {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+                </Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Статусы — отдельная строка бейджей, рендерится только когда есть
+              хоть один. Порядок по критичности: ВОЗВРАТ (терминальное) →
+              Отложен → УБЫТОК → Исполнитель. Обычный оплаченный чек этой
+              строки не имеет — карточка остаётся двухстрочной. */}
+          {(check.isReturned || check.isDeferred || isWarranty || isExecutor) && (
+            <View style={styles.statusRow}>
+              {/* Возвращённый чек — красная плашка с иконкой стрелки. Сам чек
+                  остаётся кликабельным — деталка откроется как обычно. */}
+              {check.isReturned && (
+                <View style={styles.returnedBadge}>
+                  <Ionicons name="arrow-undo" size={10} color={colors.white} />
+                  <Text style={styles.returnedBadgeText}>ВОЗВРАТ</Text>
                 </View>
               )}
               {check.isDeferred && (
@@ -329,107 +420,42 @@ const CheckRow = React.memo(function CheckRow({
                   <Text style={styles.deferredText}>Отложен</Text>
                 </View>
               )}
-              {/* Возвращённый чек — красная плашка с иконкой стрелки.
-                  Стоит рядом с «Отложен», чтобы оба статуса читались
-                  с одной точки. Сам чек остаётся кликабельным — деталка
-                  откроется как обычно (см. openCheckDetail). */}
-              {check.isReturned && (
-                <View style={styles.returnedBadge}>
-                  <Ionicons name="arrow-undo" size={9} color={colors.white} />
-                  <Text style={styles.returnedBadgeText}>ВОЗВРАТ</Text>
-                </View>
-              )}
-              <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
-                <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
-                  {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
-                </Text>
-              </View>
-              {/* «По гарантии» — красная плашка «УБЫТОК» рядом с жёлтым
-                  «Гарантия»: вместе читаются как «гарантия → в убыток».
+              {/* «По гарантии» — красная плашка «УБЫТОК»: жёлтый бейдж «Гарантия»
+                  под суммой + УБЫТОК тут читаются как «гарантия → в убыток».
                   Сплошной rose[500]/белый текст — корректно в обеих темах. */}
               {isWarranty && (
                 <View style={styles.warrantyLossBadge}>
-                  <Ionicons name="trending-down" size={9} color={colors.white} />
+                  <Ionicons name="trending-down" size={10} color={colors.white} />
                   <Text style={styles.warrantyLossBadgeText}>УБЫТОК</Text>
                 </View>
               )}
-            </View>
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
-              <Text style={[styles.checkTotal, { color: palette.text.primary }]}>
-                {formatMoney(check.totalRevenue)}
-              </Text>
-              {canDelete && (
-                <TouchableOpacity
-                  onPress={() => onDelete(check.id, check.number)}
-                  style={styles.deleteBtn}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons name="close" size={14} color={palette.text.tertiary} />
-                </TouchableOpacity>
+              {isExecutor && (
+                <View style={[styles.executorBadge, { backgroundColor: execBadge.bg }]}>
+                  <Ionicons name="construct" size={10} color={execBadge.text} />
+                  <Text style={[styles.executorBadgeText, { color: execBadge.text }]}>Исполнитель</Text>
+                </View>
               )}
             </View>
-          </View>
+          )}
 
-          <View style={styles.checkInfoRow}>
-            {check.client?.fullName ? (
-              <View style={styles.infoChip}>
-                <Ionicons name="person-outline" size={11} color={palette.text.tertiary} />
-                <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
-                  {check.client.fullName}
-                </Text>
-              </View>
-            ) : null}
-            {check.car && (
-              <View style={styles.infoChip}>
-                <Ionicons name="car-outline" size={11} color={palette.text.tertiary} />
-                <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
-                  {check.car.makeModel}
-                </Text>
-                {check.car.plateNumber && (
-                  <Text
-                    style={[
-                      styles.plateTag,
-                      palette.mode === 'dark' && {
-                        backgroundColor: softTint(colors.primary[600], 'dark'),
-                        color: colors.primary[300],
-                      },
-                    ]}
-                  >
-                    {check.car.plateNumber}
-                  </Text>
-                )}
-              </View>
-            )}
-            {/* Пробег авто — справочный чип. Показывается только когда он есть. */}
-            {mileage !== null && (
-              <View style={styles.infoChip}>
-                <Ionicons name="speedometer-outline" size={11} color={palette.text.tertiary} />
-                <Text style={[styles.infoChipText, { color: palette.text.secondary }]} numberOfLines={1}>
-                  {formatMileage(mileage)}
-                </Text>
-              </View>
-            )}
-            {/* Скидка на товары — зелёный чип «Скидка N ₽» (только при > 0). */}
-            {discount !== null && (
-              <View style={styles.infoChip}>
-                <Ionicons name="pricetag-outline" size={11} color={colors.green[600]} />
-                <Text style={[styles.infoChipText, { color: colors.green[600] }]} numberOfLines={1}>
-                  Скидка {formatMoney(discount)}
-                </Text>
-              </View>
-            )}
-          </View>
-
+          {/* Комментарий — спокойный вторичный курсив с иконкой вместо прежнего
+              янтарного: цветной текст на каждой карточке конкурировал со
+              статусами, хотя комментарий — справка, а не предупреждение. */}
           {check.comment && (
-            <Text style={styles.commentText} numberOfLines={1}>
-              {check.comment}
-            </Text>
+            <View style={styles.commentRow}>
+              <Ionicons name="chatbubble-ellipses-outline" size={11} color={palette.text.tertiary} />
+              <Text style={[styles.commentText, { color: palette.text.secondary }]} numberOfLines={1}>
+                {check.comment}
+              </Text>
+            </View>
           )}
 
           <View style={styles.checkFooter}>
             <Text style={[styles.footerTime, { color: palette.text.tertiary }]}>{timeLabel}</Text>
             {check.master && (
-              <Text style={[styles.footerMaster, { color: palette.text.tertiary }]}>{check.master.fullName}</Text>
+              <Text style={[styles.footerMaster, { color: palette.text.tertiary }]} numberOfLines={1}>
+                {check.master.fullName}
+              </Text>
             )}
             {canViewProfit &&
               (isWarranty && warrantyLoss > 0 ? (
@@ -892,6 +918,12 @@ export default function ChecksScreen() {
       `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const fromISO = warehouseDateFrom ? fmt(warehouseDateFrom) : null;
     const toISO = warehouseDateTo ? fmt(warehouseDateTo) : null;
+    // Поиск на вкладке документов — КЛИЕНТСКИЙ фильтр по уже загруженной
+    // ленте (название / поставщик / комментарий). Раньше поле поиска на этой
+    // вкладке было мёртвым контролом: текст вводился, но ни на что не влиял.
+    // Серверных параметров запроса это не меняет — лента одна, фильтрация
+    // in-memory, как и у чипов типа документа.
+    const q = search.trim().toLowerCase();
     return allWarehouseDocs.filter((d) => {
       if (warehouseKind && d.kind !== warehouseKind) return false;
       if (fromISO || toISO) {
@@ -899,9 +931,13 @@ export default function ChecksScreen() {
         if (fromISO && docISO < fromISO) return false;
         if (toISO && docISO > toISO) return false;
       }
+      if (q) {
+        const hay = `${d.title} ${d.subtitle ?? ''} ${d.payeeName ?? ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
       return true;
     });
-  }, [allWarehouseDocs, warehouseKind, warehouseDateFrom, warehouseDateTo]);
+  }, [allWarehouseDocs, warehouseKind, warehouseDateFrom, warehouseDateTo, search]);
 
   // Date-group headers for the warehouse-docs list — same precompute as
   // `dateHeaderByIndex` on the checks tab: flag the first row of each
@@ -1222,51 +1258,11 @@ export default function ChecksScreen() {
         </View>
       )}
 
-      {/* Search + Filter */}
-      <View style={styles.searchRow}>
-        <View style={styles.searchInputWrap}>
-          <SearchInput
-            value={search}
-            onChange={(v) => {
-              setSearch(v);
-              setPage(1);
-            }}
-            placeholder="Поиск по клиенту, авто, номеру..."
-          />
-        </View>
-        <TouchableOpacity
-          style={[
-            styles.filterBtn,
-            buildShadow(palette),
-            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-            activeFilterCount > 0 && styles.filterBtnActive,
-            activeFilterCount > 0 && {
-              backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
-            },
-          ]}
-          onPress={() => setShowFilters(!showFilters)}
-          activeOpacity={0.7}
-        >
-          <Ionicons
-            name={activeFilterCount > 0 ? 'funnel' : 'funnel-outline'}
-            size={18}
-            color={
-              activeFilterCount > 0
-                ? palette.mode === 'dark'
-                  ? colors.primary[300]
-                  : colors.primary[600]
-                : palette.text.secondary
-            }
-          />
-          {activeFilterCount > 0 && (
-            <View style={[styles.filterCountDot, { borderColor: palette.bg.canvas }]}>
-              <Text style={styles.filterCountDotText}>{activeFilterCount}</Text>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
-
-      {/* Segmented control: Checks | Warehouse documents */}
+      {/* Segmented control: Чеки | Складские документы. Стоит НАД поиском:
+          сначала выбираешь, НА ЧТО смотришь, потом ищешь и фильтруешь в этом
+          контексте (iOS-иерархия «scope → tools»). Внешний вид —
+          UISegmentedControl: серая подложка, активный сегмент — карточка
+          с мягкой тенью. */}
       <View style={styles.segmentedWrap}>
         <View style={[styles.segmentedControl, { backgroundColor: palette.bg.muted }]}>
           <TouchableOpacity
@@ -1278,8 +1274,15 @@ export default function ChecksScreen() {
                 { backgroundColor: palette.bg.card },
               ],
             ]}
-            onPress={() => setActiveTab('checks')}
+            onPress={() => {
+              // Хаптика только при реальном переключении (selection changed);
+              // повторный тап по активному сегменту молчит.
+              if (activeTab !== 'checks') haptic('select');
+              setActiveTab('checks');
+            }}
             activeOpacity={0.7}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: activeTab === 'checks' }}
           >
             <Ionicons
               name="receipt-outline"
@@ -1305,8 +1308,13 @@ export default function ChecksScreen() {
                 { backgroundColor: palette.bg.card },
               ],
             ]}
-            onPress={() => setActiveTab('warehouse')}
+            onPress={() => {
+              if (activeTab !== 'warehouse') haptic('select');
+              setActiveTab('warehouse');
+            }}
             activeOpacity={0.7}
+            accessibilityRole="tab"
+            accessibilityState={{ selected: activeTab === 'warehouse' }}
           >
             <Ionicons
               name="cube-outline"
@@ -1324,6 +1332,60 @@ export default function ChecksScreen() {
             </Text>
           </TouchableOpacity>
         </View>
+      </View>
+
+      {/* Search + Filter. Placeholder честный и тоже tab-aware: на чеках
+          перечисляет РЕАЛЬНЫЕ поля серверного поиска (включая свежий поиск
+          по № чека), на складских документах — клиентский фильтр по
+          названию / поставщику / комментарию загруженной ленты. */}
+      <View style={styles.searchRow}>
+        <View style={styles.searchInputWrap}>
+          <SearchInput
+            value={search}
+            onChange={(v) => {
+              setSearch(v);
+              setPage(1);
+            }}
+            placeholder={
+              activeTab === 'checks' ? 'Клиент, телефон, госномер, № чека' : 'Название, поставщик, комментарий'
+            }
+          />
+        </View>
+        <TouchableOpacity
+          style={[
+            styles.filterBtn,
+            buildShadow(palette),
+            { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+            activeFilterCount > 0 && styles.filterBtnActive,
+            activeFilterCount > 0 && {
+              backgroundColor: palette.mode === 'dark' ? softTint(colors.primary[600], 'dark') : colors.primary[50],
+            },
+          ]}
+          onPress={() => {
+            haptic('tap');
+            setShowFilters(!showFilters);
+          }}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={showFilters ? 'Скрыть фильтры' : 'Показать фильтры'}
+        >
+          <Ionicons
+            name={activeFilterCount > 0 ? 'funnel' : 'funnel-outline'}
+            size={18}
+            color={
+              activeFilterCount > 0
+                ? palette.mode === 'dark'
+                  ? colors.primary[300]
+                  : colors.primary[600]
+                : palette.text.secondary
+            }
+          />
+          {activeFilterCount > 0 && (
+            <View style={[styles.filterCountDot, { borderColor: palette.bg.canvas }]}>
+              <Text style={styles.filterCountDotText}>{activeFilterCount}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
       </View>
 
       {/* Активные фильтры при СВЁРНУТОЙ панели — строка чипов с крестиками.
@@ -1395,10 +1457,15 @@ export default function ChecksScreen() {
         </View>
       )}
 
-      {/* Filters panel (only for checks tab) */}
+      {/* Filters panel (only for checks tab) — сгруппированный «лоток»:
+          приглушённая подложка + hairline, внутри секции с 11pt-лейблами
+          (паттерн iOS grouped list). Белые контролы читаются на подложке
+          как отдельные кнопки, а сам лоток — как единый временный слой
+          настроек над списком. */}
       {showFilters && activeTab === 'checks' && (
-        <View style={styles.filtersPanel}>
+        <View style={[styles.filtersPanel, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
           {/* Date range */}
+          <Text style={[styles.filterSectionLabel, { color: palette.text.tertiary }]}>Период</Text>
           <View style={styles.filterRow}>
             <TouchableOpacity
               style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
@@ -1456,12 +1523,15 @@ export default function ChecksScreen() {
           </View>
 
           {/* Employee filter */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: spacing[2] }}>
+          <Text style={[styles.filterSectionLabel, styles.filterSectionLabelNext, { color: palette.text.tertiary }]}>
+            Сотрудник
+          </Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={{ flexDirection: 'row', gap: spacing[1.5] }}>
               <TouchableOpacity
                 style={[
                   styles.empChip,
-                  { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                  { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
                   !filterMasterId && styles.empChipActive,
                   !filterMasterId && {
                     backgroundColor:
@@ -1489,7 +1559,7 @@ export default function ChecksScreen() {
                   key={u.id}
                   style={[
                     styles.empChip,
-                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
                     filterMasterId === u.id && styles.empChipActive,
                     filterMasterId === u.id && {
                       backgroundColor:
@@ -1520,84 +1590,101 @@ export default function ChecksScreen() {
               a standalone chip above the list). Owner brief: keep the
               functionality but hide it behind the funnel button so the
               main view stays clean. */}
-          <TouchableOpacity
-            onPress={() => setReturnsOnly((v) => !v)}
-            activeOpacity={0.7}
-            style={[
-              styles.returnsToggleRow,
-              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-              returnsOnly && styles.returnsToggleRowActive,
-            ]}
-            accessibilityRole="switch"
-            accessibilityState={{ checked: returnsOnly }}
-            accessibilityLabel="Только возвраты клиентов"
-          >
-            <Ionicons
-              name="arrow-undo-outline"
-              size={14}
-              color={returnsOnly ? colors.red[600] : palette.text.secondary}
-            />
-            <Text style={[styles.returnsToggleLabel, { color: returnsOnly ? colors.red[700] : palette.text.primary }]}>
-              Возврат клиента
-            </Text>
-            <View
+          <Text style={[styles.filterSectionLabel, styles.filterSectionLabelNext, { color: palette.text.tertiary }]}>
+            Показать только
+          </Text>
+          <View style={{ gap: spacing[2] }}>
+            <TouchableOpacity
+              onPress={() => {
+                // Тумблер — значимое переключение состояния списка: та же
+                // selection-хаптика, что у сегментов (не на каждом чипе).
+                haptic('select');
+                setReturnsOnly((v) => !v);
+              }}
+              activeOpacity={0.7}
               style={[
-                styles.returnsToggleSwitch,
-                { backgroundColor: returnsOnly ? colors.red[500] : palette.border.subtle },
+                styles.returnsToggleRow,
+                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                returnsOnly && styles.returnsToggleRowActive,
               ]}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: returnsOnly }}
+              accessibilityLabel="Только возвраты клиентов"
             >
-              <View style={[styles.returnsToggleSwitchKnob, returnsOnly && styles.returnsToggleSwitchKnobOn]} />
-            </View>
-          </TouchableOpacity>
+              <Ionicons
+                name="arrow-undo-outline"
+                size={14}
+                color={returnsOnly ? colors.red[600] : palette.text.secondary}
+              />
+              <Text
+                style={[styles.returnsToggleLabel, { color: returnsOnly ? colors.red[700] : palette.text.primary }]}
+              >
+                Возврат клиента
+              </Text>
+              <View
+                style={[
+                  styles.returnsToggleSwitch,
+                  // Off-трек — border.strong: subtle в тёмной теме почти невидим,
+                  // и выключенный тумблер сливался с фоном ряда.
+                  { backgroundColor: returnsOnly ? colors.red[500] : palette.border.strong },
+                ]}
+              >
+                <View style={[styles.returnsToggleSwitchKnob, returnsOnly && styles.returnsToggleSwitchKnobOn]} />
+              </View>
+            </TouchableOpacity>
 
-          {/* «Отложенные» — серверный фильтр по isDeferred. Тот же
+            {/* «Отложенные» — серверный фильтр по isDeferred. Тот же
               toggle-row паттерн, что и «Только возвраты» выше. Красная
               палитра сознательно совпадает с плашкой «Отложен» на
               карточках чеков (red[100]/red[700]) — фильтр и статус
               читаются как одно состояние. */}
-          <TouchableOpacity
-            onPress={() => {
-              setDeferredOnly((v) => !v);
-              setPage(1);
-            }}
-            activeOpacity={0.7}
-            style={[
-              styles.returnsToggleRow,
-              { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
-              deferredOnly && styles.returnsToggleRowActive,
-            ]}
-            accessibilityRole="switch"
-            accessibilityState={{ checked: deferredOnly }}
-            accessibilityLabel="Только отложенные"
-          >
-            <Ionicons name="time-outline" size={14} color={deferredOnly ? colors.red[600] : palette.text.secondary} />
-            <Text style={[styles.returnsToggleLabel, { color: deferredOnly ? colors.red[700] : palette.text.primary }]}>
-              Отложенные
-            </Text>
-            {/* Счётчик «бесплатный»: когда фильтр активен, total первой
+            <TouchableOpacity
+              onPress={() => {
+                haptic('select');
+                setDeferredOnly((v) => !v);
+                setPage(1);
+              }}
+              activeOpacity={0.7}
+              style={[
+                styles.returnsToggleRow,
+                { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                deferredOnly && styles.returnsToggleRowActive,
+              ]}
+              accessibilityRole="switch"
+              accessibilityState={{ checked: deferredOnly }}
+              accessibilityLabel="Только отложенные"
+            >
+              <Ionicons name="time-outline" size={14} color={deferredOnly ? colors.red[600] : palette.text.secondary} />
+              <Text
+                style={[styles.returnsToggleLabel, { color: deferredOnly ? colors.red[700] : palette.text.primary }]}
+              >
+                Отложенные
+              </Text>
+              {/* Счётчик «бесплатный»: когда фильтр активен, total первой
                 страницы УЖЕ равен числу отложенных — отдельный запрос
                 ради цифры не нужен. isPlaceholderData-guard прячет цифру,
                 пока на экране данные предыдущего ключа (иначе на миг
                 мелькал бы общий total всех чеков). */}
-            {deferredOnly && !isPlaceholderData && checksData !== undefined && (
+              {deferredOnly && !isPlaceholderData && checksData !== undefined && (
+                <View
+                  style={[
+                    styles.deferredCountBadge,
+                    { backgroundColor: palette.mode === 'dark' ? 'rgba(239,68,68,0.18)' : colors.red[100] },
+                  ]}
+                >
+                  <Text style={styles.deferredCountBadgeText}>{total}</Text>
+                </View>
+              )}
               <View
                 style={[
-                  styles.deferredCountBadge,
-                  { backgroundColor: palette.mode === 'dark' ? 'rgba(239,68,68,0.18)' : colors.red[100] },
+                  styles.returnsToggleSwitch,
+                  { backgroundColor: deferredOnly ? colors.red[500] : palette.border.strong },
                 ]}
               >
-                <Text style={styles.deferredCountBadgeText}>{total}</Text>
+                <View style={[styles.returnsToggleSwitchKnob, deferredOnly && styles.returnsToggleSwitchKnobOn]} />
               </View>
-            )}
-            <View
-              style={[
-                styles.returnsToggleSwitch,
-                { backgroundColor: deferredOnly ? colors.red[500] : palette.border.subtle },
-              ]}
-            >
-              <View style={[styles.returnsToggleSwitchKnob, deferredOnly && styles.returnsToggleSwitchKnobOn]} />
-            </View>
-          </TouchableOpacity>
+            </TouchableOpacity>
+          </View>
 
           {activeFilterCount > 0 && (
             <TouchableOpacity style={styles.clearFiltersBtn} onPress={resetChecksFilters}>
@@ -1616,8 +1703,9 @@ export default function ChecksScreen() {
           dimension, and supplier debt/balance lives in the Suppliers screen
           (see journal-documents-ux). */}
       {showFilters && activeTab === 'warehouse' && (
-        <View style={styles.filtersPanel}>
+        <View style={[styles.filtersPanel, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
           {/* Period — same date-range control as the checks panel */}
+          <Text style={[styles.filterSectionLabel, { color: palette.text.tertiary }]}>Период</Text>
           <View style={styles.filterRow}>
             <TouchableOpacity
               style={[styles.filterDateBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
@@ -1673,7 +1761,10 @@ export default function ChecksScreen() {
               collapse-behind-funnel UX as the checks tab). Horizontal
               scroll keeps all chips reachable; per-kind accent + icon
               preserved from the previous strip. */}
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginTop: spacing[2] }}>
+          <Text style={[styles.filterSectionLabel, styles.filterSectionLabelNext, { color: palette.text.tertiary }]}>
+            Тип документа
+          </Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false}>
             <View style={styles.kindChipsRowInner}>
               {KIND_CHIPS.map((chip) => {
                 const active = warehouseKind === chip.key;
@@ -1686,7 +1777,9 @@ export default function ChecksScreen() {
                     style={[
                       styles.kindChip,
                       {
-                        backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.muted,
+                        // На приглушённой подложке лотка неактивный чип —
+                        // карточная поверхность (bg.muted сливался бы с ней).
+                        backgroundColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.bg.card,
                         borderColor: active ? (visual?.accentColor ?? colors.primary[600]) : palette.border.subtle,
                       },
                     ]}
@@ -1820,7 +1913,11 @@ export default function ChecksScreen() {
                 }}
               />
             ) : (
-              <EmptyState title="Чеков пока нет" description="Создайте первый заказ-наряд на вкладке «Касса»" />
+              <EmptyState
+                icon="receipt"
+                title="Чеков пока нет"
+                description="Создайте первый заказ-наряд на вкладке «Касса»"
+              />
             )
           ) : (
             <FlatList
@@ -1868,7 +1965,7 @@ export default function ChecksScreen() {
               ListFooterComponent={
                 isFetchingNextPage ? (
                   <View style={{ paddingVertical: spacing[4], alignItems: 'center' }}>
-                    <ActivityIndicator size="small" color={colors.primary[500]} />
+                    <ActivityIndicator size="small" color={colors.primary[600]} />
                   </View>
                 ) : null
               }
@@ -1886,13 +1983,30 @@ export default function ChecksScreen() {
           {isWarehouseLoading && allWarehouseDocs.length === 0 ? (
             <ListSkeleton count={8} />
           ) : warehouseDocs.length === 0 ? (
-            warehouseKind && allWarehouseDocs.length > 0 ? (
+            // Filter-aware empty — тот же паттерн, что на вкладке чеков:
+            // «ничего не найдено под фильтрами» отличается от «документов нет
+            // вообще», и из первого состояния есть выход одним тапом.
+            (warehouseKind || warehouseDateFrom || warehouseDateTo || search) && allWarehouseDocs.length > 0 ? (
               <EmptyState
-                title={`Нет документов: ${journalKindLabels[warehouseKind].toLowerCase()}`}
-                description="Измените фильтр или выберите «Все»"
+                icon="search"
+                title="Ничего не найдено"
+                description="С текущими фильтрами и поиском документов нет"
+                action={{
+                  label: 'Сбросить фильтры',
+                  onPress: () => {
+                    setWarehouseKind(null);
+                    setWarehouseDateFrom(null);
+                    setWarehouseDateTo(null);
+                    setSearch('');
+                  },
+                }}
               />
             ) : (
-              <EmptyState title="Документов не найдено" description="Складские движения и поставки появятся здесь" />
+              <EmptyState
+                icon="cube"
+                title="Документов не найдено"
+                description="Складские движения и поставки появятся здесь"
+              />
             )
           ) : (
             <FlatList
@@ -2111,46 +2225,9 @@ export default function ChecksScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
 
-  // ── Header ──────────────────────────────────────────────────────
-  header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: spacing[4],
-    paddingTop: spacing[3],
-    paddingBottom: spacing[2],
-  },
-  headerIcon: {
-    width: 36,
-    height: 36,
-    borderRadius: borderRadius.xl,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  headerLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing[2],
-  },
-  title: {
-    fontSize: fontSize.xl,
-    fontWeight: fontWeight.bold,
-    color: colors.gray[900],
-  },
-  totalBadge: {
-    backgroundColor: colors.primary[50],
-    paddingHorizontal: spacing[2],
-    paddingVertical: 2,
-    borderRadius: borderRadius.full,
-    borderWidth: 1,
-    borderColor: colors.primary[100],
-  },
-  totalBadgeText: {
-    fontSize: fontSize.xs,
-    fontWeight: fontWeight.bold,
-    color: colors.primary[600],
-  },
   // «Доска» entry (left) + FreshnessBadge (right) — single row above search.
+  // (Bespoke title-header styles removed — the header itself was removed
+  // per owner brief, tab bar already names the screen «Журнал».)
   freshnessRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -2291,7 +2368,8 @@ const styles = StyleSheet.create({
   // lives behind the funnel button as a labelled switch row, matching
   // the rest of the filter UI.
   returnsToggleRow: {
-    marginTop: spacing[2],
+    // Вертикальный ритм задаёт обёртка тумблеров (gap: spacing[2]) — свой
+    // marginTop убран, чтобы отступ после лейбла секции не удваивался.
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
@@ -2370,7 +2448,8 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     backgroundColor: colors.gray[100],
     borderRadius: borderRadius.xl,
-    padding: 3,
+    // 2pt — как у нативного UISegmentedControl (было 3).
+    padding: 2,
   },
   segmentBtn: {
     flex: 1,
@@ -2395,7 +2474,26 @@ const styles = StyleSheet.create({
   },
 
   // ── Filters panel ───────────────────────────────────────────────
-  filtersPanel: { paddingHorizontal: spacing[4], paddingBottom: spacing[2] },
+  // Сгруппированный лоток настроек: приглушённая подложка (bg.muted inline) +
+  // hairline-рамка + радиус 2xl. Отступы кратны 4: снаружи 16, внутри 12.
+  filtersPanel: {
+    marginHorizontal: spacing[4],
+    marginBottom: spacing[2],
+    padding: spacing[3],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  // 11pt uppercase section label — тот же рисунок, что iosSectionLabel
+  // (единый язык лейблов секций по всему приложению).
+  filterSectionLabel: {
+    fontSize: 11,
+    fontWeight: fontWeight.bold,
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+    marginBottom: spacing[1.5],
+  },
+  // Отбивка между секциями внутри лотка.
+  filterSectionLabelNext: { marginTop: spacing[3] },
   filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   filterDateBtn: {
     flex: 1,
@@ -2409,10 +2507,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[2.5],
   },
-  filterDateText: { flex: 1, fontSize: fontSize.xs, color: colors.gray[400] },
+  // 13pt (iOS footnote) — прежний 12pt xs был мельче, чем нужно полю с датой.
+  filterDateText: { flex: 1, fontSize: 13, color: colors.gray[400] },
   empChip: {
+    minHeight: 32,
+    justifyContent: 'center',
     paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
+    paddingVertical: spacing[1.5],
     borderRadius: borderRadius.full,
     backgroundColor: colors.gray[100],
     borderWidth: 1,
@@ -2420,17 +2521,18 @@ const styles = StyleSheet.create({
   },
   // backgroundColor moved inline at render (dark → accent glow, light → primary[50]).
   empChipActive: { borderColor: colors.primary[500] },
-  empChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, color: colors.gray[600] },
+  empChipText: { fontSize: 13, fontWeight: fontWeight.medium, color: colors.gray[600] },
   empChipTextActive: { color: colors.primary[700], fontWeight: fontWeight.semibold },
   clearFiltersBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing[1.5],
-    marginTop: spacing[2],
+    marginTop: spacing[3],
     paddingVertical: spacing[1.5],
+    minHeight: 32,
   },
-  clearFiltersBtnText: { fontSize: fontSize.xs, color: colors.red[500], fontWeight: fontWeight.medium },
+  clearFiltersBtnText: { fontSize: 13, color: colors.red[500], fontWeight: fontWeight.medium },
 
   // ── Active-filter chips (collapsed panel) ───────────────────────
   // Строка чипов активных фильтров над списком чеков — видна только при
@@ -2440,14 +2542,14 @@ const styles = StyleSheet.create({
   activeFilterChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: spacing[1],
-    paddingHorizontal: spacing[2.5],
+    gap: spacing[1.5],
+    paddingHorizontal: spacing[3],
     height: 28,
     borderRadius: borderRadius.full,
     borderWidth: 1,
     maxWidth: 200,
   },
-  activeFilterChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
+  activeFilterChipText: { fontSize: 13, fontWeight: fontWeight.medium },
 
   // ── List ────────────────────────────────────────────────────────
   // iOS: bottom space reserved via the list's contentInset prop so
@@ -2456,7 +2558,7 @@ const styles = StyleSheet.create({
   // we add an explicit paddingBottom equal to the M3 NavigationBar
   // height (added inline at the FlatList consumers below to avoid
   // hard-coding the bar height here).
-  list: { paddingHorizontal: spacing[4] },
+  list: { paddingHorizontal: spacing[4], paddingTop: spacing[1] },
 
   // Error-state контейнер (чеки не загрузились и кеша нет): растягиваем
   // ScrollView на весь экран и центрируем EmptyState, чтобы блок стоял
@@ -2472,115 +2574,136 @@ const styles = StyleSheet.create({
     marginTop: spacing[1],
   },
   dateGroupLine: { flex: 1, height: 1 },
+  // 11pt / tracking 1 — тот же рисунок, что iosSectionLabel и лейблы секций
+  // панели фильтров: один типографический голос у всех «надписей-разделителей».
   dateGroupText: {
-    fontSize: fontSize.xs,
+    fontSize: 11,
     fontWeight: fontWeight.semibold,
     textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    letterSpacing: 1,
   },
 
-  // Check card -- compact with left accent
+  // ── Check card ──────────────────────────────────────────────────
+  // Лёгкая карточка для FlatList на сотни строк: hairline-рамка + мягкая
+  // buildShadow-тень, НИКАКИХ blur/тяжёлых слоёв. Типографика по iOS-шкале:
+  // 17 сумма / 15 заголовок / 13 мета / 12 подвал / 11-10 бейджи.
   checkCard: {
     flexDirection: 'row',
     borderRadius: borderRadius.xl,
     overflow: 'hidden',
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
   },
-  checkCardDeferred: {},
   accentBar: { width: 3.5 },
-  checkContent: { flex: 1, paddingHorizontal: spacing[3], paddingVertical: spacing[2.5] },
+  checkContent: { flex: 1, paddingHorizontal: spacing[3], paddingVertical: spacing[3] },
 
-  // Header row
-  checkHeader: {
+  // Верхний блок: слева клиент + мета, справа сумма + способ оплаты.
+  checkTopRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[2] },
+  checkPrimaryCol: { flex: 1, gap: spacing[1] },
+  // 15pt semibold — subheadline emphasized: первичный текст строки списка.
+  checkTitle: { fontSize: 15, fontWeight: fontWeight.semibold, letterSpacing: -0.1 },
+  checkMetaRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
+    flexWrap: 'wrap',
     alignItems: 'center',
-    marginBottom: spacing[1.5],
+    columnGap: spacing[2],
+    rowGap: spacing[1],
   },
-  checkHeaderLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5], flex: 1 },
-  checkNumber: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
-  deferredBadge: {
-    paddingHorizontal: spacing[1.5],
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+  // 13pt footnote — вторичная строка (№, авто, пробег, скидка).
+  metaText: { fontSize: 13, maxWidth: 150 },
+  plateTag: {
+    fontSize: 10,
+    fontWeight: fontWeight.bold,
+    color: colors.primary[700],
+    backgroundColor: colors.primary[50],
+    paddingHorizontal: 4,
     paddingVertical: 1,
+    borderRadius: 4,
+    overflow: 'hidden',
+    marginLeft: 2,
+    letterSpacing: 0.3,
+  },
+  checkAmountCol: { alignItems: 'flex-end', gap: spacing[1] },
+  checkSumRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
+  // 17pt bold + tabular-nums — деньги: самый крупный текст карточки,
+  // разряды выравниваются по колонке при скролле.
+  checkTotal: { fontSize: 17, fontWeight: fontWeight.bold, letterSpacing: -0.3, fontVariant: ['tabular-nums'] },
+  deleteBtn: { padding: 2 },
+
+  // Строка статусов (только у исключительных чеков).
+  statusRow: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: spacing[1.5], marginTop: spacing[2] },
+  paymentBadge: {
+    height: 22,
+    justifyContent: 'center',
+    paddingHorizontal: spacing[2],
     borderRadius: borderRadius.full,
   },
-  deferredText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.red[700] },
-  // «Исполнитель» — компактный фиолетовый чип рядом с номером чека. Тот же
-  // pill-паттерн, что и deferredBadge; цвета приходят inline из getBadgeColors
-  // (purple), поэтому корректны в light и dark.
+  paymentBadgeText: { fontSize: 11, fontWeight: fontWeight.medium },
+  deferredBadge: {
+    height: 20,
+    justifyContent: 'center',
+    paddingHorizontal: spacing[2],
+    borderRadius: borderRadius.full,
+  },
+  deferredText: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.red[700] },
+  // «Исполнитель» — компактный фиолетовый чип; цвета приходят inline из
+  // getBadgeColors (purple), поэтому корректны в light и dark.
   executorBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
-    paddingHorizontal: spacing[1.5],
-    paddingVertical: 1,
+    gap: 3,
+    height: 20,
+    paddingHorizontal: spacing[2],
     borderRadius: borderRadius.full,
   },
-  executorBadgeText: { fontSize: 9, fontWeight: fontWeight.bold },
+  executorBadgeText: { fontSize: 10, fontWeight: fontWeight.bold },
   // Возвращённый чек — насыщенно красная плашка с иконкой стрелки.
   // Сильнее «Отложен», потому что возврат — терминальное состояние:
   // редактировать чек больше нельзя.
   returnedBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
+    gap: 3,
+    height: 20,
     backgroundColor: colors.red[500],
-    paddingHorizontal: spacing[1.5],
-    paddingVertical: 2,
+    paddingHorizontal: spacing[2],
     borderRadius: borderRadius.full,
   },
-  returnedBadgeText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 0.3 },
+  returnedBadgeText: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 0.4 },
   // «По гарантии» → убыток. Сплошной rose[500] + белый текст (как returnedBadge)
   // — читается одинаково в light и dark, не зависит от палитры бейджей.
   warrantyLossBadge: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 2,
+    gap: 3,
+    height: 20,
     backgroundColor: colors.rose[500],
-    paddingHorizontal: spacing[1.5],
-    paddingVertical: 2,
+    paddingHorizontal: spacing[2],
     borderRadius: borderRadius.full,
   },
-  warrantyLossBadgeText: { fontSize: 9, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 0.3 },
-  paymentBadge: { paddingHorizontal: spacing[1.5], paddingVertical: 1, borderRadius: borderRadius.full },
-  paymentBadgeText: { fontSize: 10, fontWeight: fontWeight.medium },
-  checkTotal: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
-  deleteBtn: { padding: 2 },
+  warrantyLossBadgeText: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 0.4 },
 
-  // Info chips row
-  checkInfoRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing[1.5], marginBottom: spacing[1] },
-  infoChip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-  infoChipText: { fontSize: 12, color: colors.gray[600], maxWidth: 120 },
-  plateTag: {
-    fontSize: 9,
-    fontWeight: fontWeight.bold,
-    color: colors.primary[700],
-    backgroundColor: colors.primary[50],
-    paddingHorizontal: 4,
-    paddingVertical: 1,
-    borderRadius: 3,
-    overflow: 'hidden',
-    marginLeft: 2,
-  },
+  // Comment — спокойный вторичный курсив (цвет inline, palette-aware).
+  commentRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1], marginTop: spacing[2] },
+  commentText: { flex: 1, fontSize: 12, fontStyle: 'italic' },
 
-  // Comment
-  commentText: { fontSize: 11, color: colors.amber[600], fontStyle: 'italic', marginBottom: spacing[1] },
-
-  // Footer
-  checkFooter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
-  footerTime: { fontSize: 11, color: colors.gray[400] },
-  footerMaster: { fontSize: 11, color: colors.gray[400], flex: 1 },
-  footerProfit: { fontSize: 11, fontWeight: fontWeight.bold },
+  // Footer — 12pt caption; прибыль 13pt semibold (денежный акцент подвала).
+  checkFooter: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], marginTop: spacing[2] },
+  footerTime: { fontSize: 12, fontVariant: ['tabular-nums'] },
+  footerMaster: { fontSize: 12, flex: 1 },
+  footerProfit: { fontSize: 13, fontWeight: fontWeight.semibold, fontVariant: ['tabular-nums'] },
   profitPositive: { color: colors.green[600] },
   profitNegative: { color: colors.red[500] },
 
   // ── Warehouse document cards ────────────────────────────────────
+  // Тот же типографический ряд, что у карточки чека: 15 заголовок/сумма,
+  // 13 подзаголовок, 12 дата — обе вкладки журнала читаются как один список.
   warehouseCard: {
     flexDirection: 'row',
     backgroundColor: colors.white,
     borderRadius: borderRadius.xl,
     overflow: 'hidden',
-    borderWidth: 1,
+    borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.gray[100],
   },
   warehouseAccent: {
@@ -2589,7 +2712,7 @@ const styles = StyleSheet.create({
   warehouseCardContent: {
     flex: 1,
     paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2.5],
+    paddingVertical: spacing[3],
   },
   warehouseCardHeader: {
     flexDirection: 'row',
@@ -2604,21 +2727,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   warehouseCardTitle: {
-    fontSize: fontSize.sm,
+    fontSize: 15,
     fontWeight: fontWeight.semibold,
+    letterSpacing: -0.1,
     color: colors.gray[900],
     marginBottom: 1,
   },
   warehouseCardSubtitle: {
-    fontSize: fontSize.xs,
+    fontSize: 13,
     color: colors.gray[400],
   },
   warehouseQty: {
-    fontSize: fontSize.sm,
+    fontSize: 15,
     fontWeight: fontWeight.bold,
+    fontVariant: ['tabular-nums'],
   },
   warehouseDate: {
-    fontSize: 11,
+    fontSize: 12,
     color: colors.gray[400],
     marginTop: 1,
   },
