@@ -105,6 +105,19 @@ const GROUPS: Group[] = [
         permission: 'marketing_access',
       },
       {
+        // Раздел доверия — сразу под «Рассылками», на виду: владелец в один
+        // тап видит, ЧТО реально ушло клиентам, и что спама нет.
+        key: 'messages-journal',
+        label: 'Журнал отправок',
+        description: 'Каждое сообщение клиентам: что, кому и когда ушло',
+        screen: 'MessagesJournal',
+        icon: 'receipt-outline',
+        iconBg: colors.teal[50],
+        iconColor: colors.teal[600],
+        // Сервер: GET /marketing/sent-messages → marketing_access.
+        permission: 'marketing_access',
+      },
+      {
         key: 'loyalty',
         label: 'Лояльность',
         description: 'Бонусы и кешбэк за визиты',

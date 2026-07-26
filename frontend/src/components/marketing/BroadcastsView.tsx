@@ -1,17 +1,32 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
-import { Bell, CalendarClock, CreditCard, Info, Loader2, Send, ShieldCheck, Star, Users, Zap } from 'lucide-react';
+import {
+  AlarmClock,
+  Bell,
+  CalendarClock,
+  Car,
+  CreditCard,
+  Info,
+  Loader2,
+  Send,
+  ShieldCheck,
+  Star,
+  Users,
+  Zap,
+} from 'lucide-react';
 import toast from 'react-hot-toast';
 
-import { marketingApi } from '../../api/services';
+import { bookingsApi, installmentsApi, marketingApi } from '../../api/services';
+import ConfirmDialog from '../ConfirmDialog';
 import type {
   AutoMailingOverview,
+  BroadcastPreview,
   MessagingIntegration,
   SegmentBroadcastCriteria,
   SegmentBroadcastResult,
 } from '../../types';
 import type { SettingsSection } from './MarketingSettingsView';
-import { EmptyState, LoadingBlock, SectionCard, lastVisitLabel, plural } from './marketingKit';
+import { EmptyState, LoadingBlock, SectionCard, Toggle, lastVisitLabel, plural } from './marketingKit';
 
 const PROVIDER_LABELS: Record<string, string> = {
   moizvonki: 'Мои Звонки',
@@ -21,51 +36,148 @@ const PROVIDER_LABELS: Record<string, string> = {
   sms: 'SMS',
   email: 'Email',
 };
-const MESSAGING_TYPES = ['whatsapp', 'smsru', 'telegram', 'sms', 'email'];
+// 'sms'/'email' исключены: адаптеры-заглушки без транспорта — сервер такие
+// каналы больше не выбирает, предлагать их в селекте = обещать фантом.
+const MESSAGING_TYPES = ['whatsapp', 'smsru', 'telegram'];
 
 const WINBACK_PRESETS = [30, 60, 90, 180];
 const DEFAULT_MESSAGE = 'Здравствуйте! Давно не виделись — будем рады видеть вас снова. Запишитесь на удобное время.';
 
 type SegmentKind = 'winback' | 'source' | 'debt';
 
-// ─── Auto-mailing overview row ──────────────────────────────────────
+// ─── Auto-mailing registry (все 6 сценариев, живые тумблеры) ────────
+// Единый реестр авто-отправок: каждый сценарий — тумблер (пишет своим
+// существующим endpoint'ом), описание триггера и «Последняя отправка» из
+// журнала sent_messages. Включение — только через подтверждение: владелец
+// видит, ЧТО уйдёт клиенту, до того как включил. Выключение — мгновенно.
 const AUTO_META: Record<
   AutoMailingOverview['type'],
-  { label: string; icon: typeof Star; iconClass: string; section: SettingsSection }
+  { label: string; icon: typeof Star; iconClass: string; section: SettingsSection | null }
 > = {
   review: { label: 'Запрос отзыва', icon: Star, iconClass: 'bg-amber-50 text-amber-600', section: 'review' },
   car_ready: {
-    label: 'Готовность авто',
-    icon: Bell,
+    label: 'Машина готова',
+    icon: Car,
     iconClass: 'bg-emerald-50 text-emerald-600',
     section: 'car-ready',
   },
-  installment_reminder: {
-    label: 'Напоминания по рассрочкам',
-    icon: CreditCard,
+  // Настройки записей (часы напоминания и т.п.) живут в мобильном разделе
+  // «Записи» — на вебе управление сводится к тумблеру здесь.
+  booking_confirm: {
+    label: 'Подтверждение записи',
+    icon: CalendarClock,
     iconClass: 'bg-indigo-50 text-indigo-600',
+    section: null,
+  },
+  booking_reminder: {
+    label: 'Напоминание о записи',
+    icon: AlarmClock,
+    iconClass: 'bg-sky-50 text-sky-600',
+    section: null,
+  },
+  installment_reminder: {
+    label: 'Оплата рассрочки',
+    icon: CreditCard,
+    iconClass: 'bg-violet-50 text-violet-600',
     section: 'installments',
   },
   service_reminder: {
-    label: 'Напоминание о визите',
-    icon: CalendarClock,
-    iconClass: 'bg-sky-50 text-sky-600',
+    label: 'Давно не обслуживались',
+    icon: Bell,
+    iconClass: 'bg-teal-50 text-teal-600',
     section: 'service',
   },
 };
 
+function lastSentLabel(iso?: string | null): string {
+  if (!iso) return 'Ещё не отправлялась';
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return 'Ещё не отправлялась';
+  const now = new Date();
+  const date = dt.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    year: dt.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+  });
+  const time = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return `Последняя отправка: ${date}, ${time}`;
+}
+
 function AutoMailings({ onGoToSettings }: { onGoToSettings: (s: SettingsSection) => void }) {
+  const qc = useQueryClient();
+  const [confirmItem, setConfirmItem] = useState<AutoMailingOverview | null>(null);
+
   const { data: mailings = [], isLoading } = useQuery({
     queryKey: ['marketing', 'auto-mailings'],
     queryFn: () => marketingApi.getAutoMailings().then((r) => r.data),
   });
+
+  // Текущий шаблон запроса отзыва — для confirm-текста при включении.
+  const { data: reviewSettings } = useQuery({
+    queryKey: ['marketing', 'settings'],
+    queryFn: () => marketingApi.getSettings().then((r) => r.data),
+  });
+
+  const toggle = useMutation({
+    mutationFn: async ({ type, next }: { type: AutoMailingOverview['type']; next: boolean }) => {
+      switch (type) {
+        case 'review':
+          await marketingApi.updateSettings({ autoSendEnabled: next });
+          break;
+        case 'car_ready':
+          await marketingApi.updateCarReadySettings({ enabled: next });
+          break;
+        case 'service_reminder':
+          await marketingApi.updateReminderSettings({ enabled: next });
+          break;
+        case 'installment_reminder':
+          await installmentsApi.updateReminderSettings({ mode: next ? 'auto' : 'off' });
+          break;
+        case 'booking_confirm':
+          await bookingsApi.updateSettings({ notifyClientOnCreate: next });
+          break;
+        case 'booking_reminder':
+          await bookingsApi.updateSettings({ reminderEnabled: next });
+          break;
+      }
+    },
+    onError: () => toast.error('Не удалось изменить настройку'),
+    onSettled: () => {
+      qc.invalidateQueries({ queryKey: ['marketing', 'auto-mailings'] });
+      qc.invalidateQueries({ queryKey: ['marketing', 'settings'] });
+    },
+  });
+
+  const requestToggle = (m: AutoMailingOverview) => {
+    if (toggle.isPending) return;
+    if (m.enabled) {
+      toggle.mutate({ type: m.type, next: false });
+      return;
+    }
+    setConfirmItem(m); // включение — через подтверждение
+  };
+
+  const confirmMessage = (m: AutoMailingOverview): string => {
+    if (m.type === 'review') {
+      const template =
+        reviewSettings?.messageTemplate ||
+        'Здравствуйте, {clientName}! Спасибо за визит в {tenantName}. Оцените качество обслуживания: {reviewLink}';
+      return (
+        `После каждого закрытого заказ-наряда клиент ОДИН раз получит сообщение: «${template}» ` +
+        '({clientName} — имя клиента, {tenantName} — название сервиса, {reviewLink} — персональная ссылка на отзыв). ' +
+        'Текст меняется в «Настройки» → «Запрос отзыва».'
+      );
+    }
+    const meta = AUTO_META[m.type];
+    return `${m.trigger ?? m.summary}. Каждая отправка проходит общий анти-спам-фильтр и видна в «Журнале» — сценарий «${m.humanTitle ?? meta.label}» не отправит клиенту ничего лишнего.`;
+  };
 
   return (
     <SectionCard
       icon={Zap}
       iconClass="bg-primary-50 text-primary-600"
       title="Автоматические рассылки"
-      subtitle="Отправляются сами по событиям — тексты в разделе «Настройки»"
+      subtitle="Все сценарии авто-отправки клиентам — других нет. Каждая отправка видна в «Журнале»"
     >
       {isLoading ? (
         <LoadingBlock className="py-6" />
@@ -77,29 +189,53 @@ function AutoMailings({ onGoToSettings }: { onGoToSettings: (s: SettingsSection)
             const meta = AUTO_META[m.type];
             const Icon = meta?.icon ?? Zap;
             return (
-              <div key={m.type} className="flex items-center gap-3 rounded-xl bg-gray-50 p-3">
-                <span
-                  className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta?.iconClass ?? 'bg-gray-100 text-gray-500'}`}
-                >
-                  <Icon className="h-4 w-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className="truncate text-sm font-medium text-gray-900">{meta?.label ?? m.type}</p>
-                    <span className={m.enabled ? 'badge-green' : 'badge-gray'}>{m.enabled ? 'вкл' : 'выкл'}</span>
+              <div key={m.type} className="rounded-xl bg-gray-50 p-3">
+                <div className="flex items-center gap-3">
+                  <span
+                    className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg ${meta?.iconClass ?? 'bg-gray-100 text-gray-500'}`}
+                  >
+                    <Icon className="h-4 w-4" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium text-gray-900">
+                      {m.humanTitle ?? meta?.label ?? m.type}
+                    </p>
+                    <p className="truncate text-xs text-gray-500">{m.trigger ?? m.summary}</p>
                   </div>
-                  <p className="truncate text-xs text-gray-500">{m.summary}</p>
+                  <Toggle
+                    checked={m.enabled}
+                    onChange={() => requestToggle(m)}
+                    label={m.humanTitle ?? meta?.label ?? m.type}
+                  />
                 </div>
-                {meta && (
-                  <button onClick={() => onGoToSettings(meta.section)} className="btn-secondary btn-sm flex-shrink-0">
-                    Изменить
-                  </button>
-                )}
+                <div className="mt-2 flex items-center justify-between gap-2 border-t border-gray-100 pt-2">
+                  <p className="truncate text-xs text-gray-400">{lastSentLabel(m.lastSentAt)}</p>
+                  {meta?.section && (
+                    <button
+                      onClick={() => onGoToSettings(meta.section as SettingsSection)}
+                      className="flex-shrink-0 text-xs font-semibold text-primary-600 hover:text-primary-700"
+                    >
+                      Настроить текст
+                    </button>
+                  )}
+                </div>
               </div>
             );
           })}
         </div>
       )}
+
+      {/* Подтверждение включения сценария — видно, что уйдёт клиенту */}
+      <ConfirmDialog
+        isOpen={confirmItem != null}
+        onClose={() => setConfirmItem(null)}
+        onConfirm={() => {
+          if (confirmItem) toggle.mutate({ type: confirmItem.type, next: true });
+        }}
+        title={`Включить «${confirmItem ? (confirmItem.humanTitle ?? AUTO_META[confirmItem.type]?.label ?? confirmItem.type) : ''}»?`}
+        message={confirmItem ? confirmMessage(confirmItem) : ''}
+        confirmText="Включить"
+      />
     </SectionCard>
   );
 }
@@ -113,6 +249,10 @@ function ManualBroadcast() {
   const [message, setMessage] = useState(DEFAULT_MESSAGE);
   const [integrationId, setIntegrationId] = useState<string>('');
   const [result, setResult] = useState<SegmentBroadcastResult | null>(null);
+  // Шаг подтверждения: dry-run preview (кому и через какой канал уйдёт) —
+  // отправка возможна только после него. НИЧЕГО не отправляет.
+  const [preview, setPreview] = useState<BroadcastPreview | null>(null);
+  const [previewing, setPreviewing] = useState(false);
   const idempotencyKey = useRef<string>(crypto.randomUUID());
 
   // Connected messaging channels (telephony excluded).
@@ -125,13 +265,13 @@ function ManualBroadcast() {
   );
 
   // Win-back is the only segment with a live preview endpoint.
-  const preview = useQuery({
+  const winbackPreview = useQuery({
     queryKey: ['marketing', 'winback', days],
     queryFn: () => marketingApi.winback(days).then((r) => r.data),
     enabled: kind === 'winback',
     placeholderData: keepPreviousData,
   });
-  const previewClients = kind === 'winback' ? (preview.data ?? []) : [];
+  const previewClients = kind === 'winback' ? (winbackPreview.data ?? []) : [];
   const previewTotal = previewClients.length;
 
   const criteria: SegmentBroadcastCriteria = useMemo(() => {
@@ -139,6 +279,12 @@ function ManualBroadcast() {
     if (kind === 'source') return source.trim() ? { source: source.trim() } : {};
     return { hasDebt: true };
   }, [kind, days, source]);
+
+  // Любое изменение состава рассылки сбрасывает подтверждение — нельзя
+  // подтвердить одно, а отправить другое.
+  useEffect(() => {
+    setPreview(null);
+  }, [kind, days, source, message, integrationId]);
 
   const send = useMutation({
     mutationFn: () =>
@@ -152,15 +298,41 @@ function ManualBroadcast() {
         .then((r) => r.data),
     onSuccess: (res) => {
       setResult(res);
+      setPreview(null);
       idempotencyKey.current = crypto.randomUUID(); // fresh key for the next distinct send
       qc.invalidateQueries({ queryKey: ['marketing', 'winback'] });
     },
     onError: () => toast.error('Не удалось отправить рассылку'),
   });
 
+  /** Шаг 1: dry-run — сколько клиентов и какой канал. Ничего не отправляет. */
+  const runPreview = async () => {
+    setPreviewing(true);
+    setResult(null);
+    try {
+      const { data: pv } = await marketingApi.previewBroadcast({
+        segment: criteria,
+        integrationId: integrationId || undefined,
+      });
+      if (!pv.channelConnected) {
+        toast.error('Нет подключённого канала рассылок — подключите его в «Интеграции»');
+        return;
+      }
+      if (pv.recipientsCount === 0) {
+        toast.error('В выбранном сегменте нет клиентов с телефоном');
+        return;
+      }
+      setPreview(pv);
+    } catch {
+      toast.error('Не удалось получить предпросмотр рассылки');
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
   const trimmed = message.trim();
   const sourceMissing = kind === 'source' && !source.trim();
-  const canSend = trimmed.length > 0 && !sourceMissing && !send.isPending;
+  const canSend = trimmed.length > 0 && !sourceMissing && !send.isPending && !previewing;
 
   const segments: { key: SegmentKind; label: string }[] = [
     { key: 'winback', label: 'Давно не приезжали' },
@@ -246,7 +418,7 @@ function ManualBroadcast() {
               </div>
               <span className="text-sm font-bold tabular-nums text-primary-600">{previewTotal}</span>
             </div>
-            {preview.isLoading ? (
+            {winbackPreview.isLoading ? (
               <LoadingBlock className="py-8" />
             ) : previewTotal === 0 ? (
               <p className="py-6 text-center text-sm text-gray-400">Нет клиентов, которые так давно не приезжали</p>
@@ -306,10 +478,40 @@ function ManualBroadcast() {
           />
         </div>
 
-        <button onClick={() => send.mutate()} disabled={!canSend} className="btn-primary w-full">
-          {send.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
-          Отправить{kind === 'winback' && previewTotal > 0 ? ` (${previewTotal})` : ''}
-        </button>
+        {/* Шаг подтверждения: сначала dry-run предпросмотр, потом отправка */}
+        {preview ? (
+          <div className="space-y-3 rounded-xl border border-primary-100 bg-primary-50/50 p-4">
+            <p className="text-sm font-semibold text-gray-900">
+              Уйдёт {preview.recipientsCount} {plural(preview.recipientsCount, ['клиенту', 'клиентам', 'клиентам'])}{' '}
+              через {preview.channel ? PROVIDER_LABELS[preview.channel] || preview.channel : 'канал по умолчанию'}
+            </p>
+            <p className="rounded-lg bg-white px-3 py-2 text-sm text-gray-700">«{trimmed}»</p>
+            {preview.sample.length > 0 && (
+              <p className="text-xs text-gray-500">
+                Среди получателей: {preview.sample.map((s) => `${s.name} (${s.phone})`).join(', ')}
+              </p>
+            )}
+            <p className="flex items-start gap-1.5 text-xs text-gray-500">
+              <ShieldCheck className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-green-600" />
+              Не больше {preview.perClient24hCap} сообщений клиенту за 24 ч — часть может быть пропущена защитой от
+              спама.
+            </p>
+            <div className="flex gap-2">
+              <button onClick={() => setPreview(null)} className="btn-secondary flex-1">
+                Отменить
+              </button>
+              <button onClick={() => send.mutate()} disabled={send.isPending} className="btn-primary flex-1">
+                {send.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                Отправить
+              </button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={runPreview} disabled={!canSend} className="btn-primary w-full">
+            {previewing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            Проверить и отправить{kind === 'winback' && previewTotal > 0 ? ` (${previewTotal})` : ''}
+          </button>
+        )}
 
         {/* Result */}
         {result && (

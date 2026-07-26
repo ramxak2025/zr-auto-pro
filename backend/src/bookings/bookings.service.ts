@@ -374,9 +374,10 @@ export class BookingsService {
     // Tenant-less caller (superadmin, nil-UUID sentinel): return the column
     // defaults WITHOUT seeding — the lazy-create below would FK-violate
     // booking_settings_tenant_id_fkey (no such tenant) → 500 on GET
-    // /bookings/settings. Shape mirrors a fresh row (076 defaults).
+    // /bookings/settings. Shape mirrors a fresh row (076 defaults; безопасные
+    // дефолты false с миграции 141 — новый тенант не шлёт SMS, пока не включил).
     if (isTenantLess(tenantId)) {
-      return { notifyClientOnCreate: true, reminderEnabled: true, reminderHours: 2, channel: 'auto' };
+      return { notifyClientOnCreate: false, reminderEnabled: false, reminderHours: 2, channel: 'auto' };
     }
     const { rows } = await this.pool.query(
       `SELECT notify_client_on_create, reminder_enabled, reminder_hours, channel
@@ -400,7 +401,7 @@ export class BookingsService {
   async updateSettings(tenantId: string, dto: UpdateBookingSettingsDto) {
     await this.pool.query(
       `INSERT INTO booking_settings (tenant_id, notify_client_on_create, reminder_enabled, reminder_hours, channel)
-       VALUES ($1, COALESCE($2, true), COALESCE($3, true), COALESCE($4, 2), COALESCE($5, 'auto'))
+       VALUES ($1, COALESCE($2, false), COALESCE($3, false), COALESCE($4, 2), COALESCE($5, 'auto'))
        ON CONFLICT (tenant_id) DO UPDATE SET
          notify_client_on_create = COALESCE($2, booking_settings.notify_client_on_create),
          reminder_enabled = COALESCE($3, booking_settings.reminder_enabled),

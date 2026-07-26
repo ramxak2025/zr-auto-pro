@@ -280,25 +280,24 @@ class MoiZvonkiAdapter implements MessagingProviderAdapter {
   }
 }
 
+// ─── Заглушки без реального транспорта ───────────────────────────────
+// У типов 'sms' (обобщённый SMS-шлюз, в т.ч. «Мегафон ВАТС») и 'email' НЕТ
+// реализации отправки. Раньше заглушки возвращали success:true, ничего не
+// отправив — «фантомное отправлено»: журнал показывал sent, владелец верил,
+// что запрос отзыва ушёл, клиент не получал ничего. Теперь: честный отказ +
+// оба типа исключены из выбора канала (NON_SENDING_PROVIDER_TYPES ниже), так
+// что до адаптера дело доходит лишь в теоретической ветке unknown-типа.
 class SmsGenericAdapter implements MessagingProviderAdapter {
-  constructor(
-    private apiKey: string,
-    private senderName: string,
-  ) {}
-  async sendMessage(phone: string, message: string) {
-    Logger.log(`[SMS → ${phone}] ${message.substring(0, 60)}...`, 'SmsGenericAdapter');
-    return { success: true };
+  async sendMessage(phone: string, _message: string) {
+    Logger.warn(`[SMS → ${phone}] канал не настроен — отправка невозможна`, 'SmsGenericAdapter');
+    return { success: false, error: 'Канал не настроен: SMS-шлюз этого типа пока не поддерживает отправку' };
   }
 }
 
 class EmailAdapter implements MessagingProviderAdapter {
-  constructor(
-    private apiKey: string,
-    private senderName: string,
-  ) {}
-  async sendMessage(phone: string, message: string) {
-    Logger.log(`[Email → ${phone}] ${message.substring(0, 60)}...`, 'EmailAdapter');
-    return { success: true };
+  async sendMessage(phone: string, _message: string) {
+    Logger.warn(`[Email → ${phone}] канал не настроен — отправка невозможна`, 'EmailAdapter');
+    return { success: false, error: 'Канал не настроен: Email-рассылки пока не поддерживаются' };
   }
 }
 
@@ -343,23 +342,35 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       case 'moizvonki':
         return new MoiZvonkiAdapter(row.api_key, row.sender_name || '', row.webhook_url || '');
       case 'sms':
-        return new SmsGenericAdapter(row.api_key, row.sender_name || '');
+        return new SmsGenericAdapter();
       case 'email':
-        return new EmailAdapter(row.api_key, row.sender_name || '');
+        return new EmailAdapter();
       default:
-        return new SmsGenericAdapter(row.api_key, row.sender_name || '');
+        return new SmsGenericAdapter();
     }
   }
+
+  /**
+   * Провайдер-типы БЕЗ реального транспорта (адаптеры-заглушки). Никогда не
+   * выбираются как канал отправки — иначе «Мегафон ВАТС» (dbType 'sms')
+   * притворялся бы рабочим SMS-каналом: заглушка раньше рапортовала success
+   * и журнал наполнялся фантомными «отправлено». Тенант, у которого подключён
+   * ТОЛЬКО такой тип, честно получает no_provider (и UI подсказывает
+   * подключить SMS.RU / WhatsApp).
+   */
+  private static readonly NON_SENDING_PROVIDER_TYPES = ['sms', 'email'];
 
   private async getAdapter(tenantId: string): Promise<MessagingProviderAdapter | null> {
     // Only integrations with the outbound-SMS switch ON (migration 127) are
     // eligible SMS channels. `is_active` (connected) is necessary but not
     // sufficient — a muted integration keeps syncing calls yet never sends SMS.
+    // Заглушечные типы ('sms'/'email') исключены — см. NON_SENDING_PROVIDER_TYPES.
     const { rows } = await this.pool.query(
       `SELECT * FROM messaging_integrations
         WHERE tenant_id=$1 AND is_active=true AND sms_notifications_enabled=true
+          AND provider_type <> ALL($2::text[])
         ORDER BY created_at LIMIT 1`,
-      [tenantId],
+      [tenantId, MarketingService.NON_SENDING_PROVIDER_TYPES],
     );
     return rows.length > 0 ? this.createAdapter(rows[0]) : null;
   }
@@ -380,11 +391,15 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     // null → the caller treats it as `no_provider` and skips the send, WITHOUT
     // touching the integration's own connected/is_active state (calls keep
     // syncing). This is the single choke point for all outbound client SMS.
+    // Все три ветки дополнительно исключают заглушечные типы (NON_SENDING_
+    // PROVIDER_TYPES): явный integrationId на 'sms'-строку резолвится в null →
+    // no_provider БЕЗ сожжённого dedup_key — честнее, чем логировать failed.
     if (opts.integrationId) {
       const { rows } = await this.pool.query(
         `SELECT * FROM messaging_integrations
-          WHERE id=$1 AND tenant_id=$2 AND is_active=true AND sms_notifications_enabled=true LIMIT 1`,
-        [opts.integrationId, tenantId],
+          WHERE id=$1 AND tenant_id=$2 AND is_active=true AND sms_notifications_enabled=true
+            AND provider_type <> ALL($3::text[]) LIMIT 1`,
+        [opts.integrationId, tenantId, MarketingService.NON_SENDING_PROVIDER_TYPES],
       );
       return rows[0] ?? null;
     }
@@ -392,16 +407,18 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       const { rows } = await this.pool.query(
         `SELECT * FROM messaging_integrations
           WHERE tenant_id=$1 AND provider_type=$2 AND is_active=true AND sms_notifications_enabled=true
+            AND provider_type <> ALL($3::text[])
           ORDER BY created_at LIMIT 1`,
-        [tenantId, opts.providerType],
+        [tenantId, opts.providerType, MarketingService.NON_SENDING_PROVIDER_TYPES],
       );
       return rows[0] ?? null;
     }
     const { rows } = await this.pool.query(
       `SELECT * FROM messaging_integrations
         WHERE tenant_id=$1 AND is_active=true AND sms_notifications_enabled=true
+          AND provider_type <> ALL($2::text[])
         ORDER BY created_at LIMIT 1`,
-      [tenantId],
+      [tenantId, MarketingService.NON_SENDING_PROVIDER_TYPES],
     );
     return rows[0] ?? null;
   }
@@ -853,12 +870,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     // Tenant-less caller (superadmin, nil-UUID sentinel): return column defaults
     // WITHOUT seeding — the upsert-on-read below would FK-violate
     // review_settings_tenant_id_fkey (no such tenant) → 500 on GET
-    // /marketing/settings. Shape mirrors a fresh row (007 defaults).
+    // /marketing/settings. Shape mirrors a fresh row (007 defaults, безопасный
+    // дефолт auto_send_enabled=false с миграции 141).
     if (isTenantLess(tenantId)) {
       return this.mapSettings({
         send_time: '20:00',
         feedback_delay_hours: 2,
-        auto_send_enabled: true,
+        auto_send_enabled: false,
         message_template:
           'Здравствуйте, {clientName}! Спасибо за визит в {tenantName}. Оцените качество обслуживания: {reviewLink}',
         motivation_message: '',
@@ -1402,15 +1420,238 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     return { sent, skippedDedup, failed, total };
   }
 
+  // ─── Журнал отправок (GET /marketing/sent-messages) ──────────────────
+  // sent_messages ПИСАЛСЯ с миграции 124, но не читался ни одним endpoint'ом —
+  // железные анти-спам-гарантии существовали, но были невидимы владельцу.
+  // Этот метод открывает журнал: курсорная лента «что реально ушло клиентам»
+  // + meta с лимитами гейта, чтобы UI показывал гарантии не хардкодом.
+
+  /** Page size ceiling for the sent-messages journal. */
+  private static readonly SENT_MESSAGES_MAX_LIMIT = 100;
+
+  /** Opaque keyset cursor: base64url of `<sent_at raw pg text>|<id>`. RAW
+   *  Postgres text (не JS Date) — тот же микросекундный урок, что у чеков
+   *  (139): Date режет точность до миллисекунд и строгий `<` перескакивает
+   *  строки, записанные в одну транзакцию. */
+  private encodeSentCursor(sentAt: unknown, id: unknown): string {
+    const iso = sentAt instanceof Date ? sentAt.toISOString() : String(sentAt);
+    return Buffer.from(`${iso}|${String(id)}`, 'utf8').toString('base64url');
+  }
+
+  private parseSentCursor(raw: unknown): { sentAt: string; id: string } | null {
+    if (typeof raw !== 'string' || raw.length === 0) return null;
+    try {
+      const parts = Buffer.from(raw, 'base64url').toString('utf8').split('|');
+      if (parts.length !== 2 || !parts[0] || !parts[1]) return null;
+      return { sentAt: parts[0], id: parts[1] };
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Курсорная выдача журнала отправок (keyset по sent_at DESC, id DESC —
+   * индекс 141). Фильтры: type (message_type), status (sent|failed), clientId,
+   * dateFrom/dateTo (московский полуинтервал, зеркально журналу чеков).
+   * В строках НЕТ текста сообщения — журнал хранит только content_hash (124);
+   * отдаём тип/канал/статус/кому/когда. Записи канала telegram помечены
+   * `toOwner: true` — Telegram-бот пишет в чат владельца, НЕ клиенту.
+   */
+  async getSentMessages(
+    tenantId: string,
+    query: {
+      cursor?: string;
+      limit?: string | number;
+      type?: string;
+      status?: string;
+      clientId?: string;
+      dateFrom?: string;
+      dateTo?: string;
+    },
+  ): Promise<{
+    data: Array<{
+      id: string;
+      clientId: string | null;
+      clientName: string | null;
+      messageType: string;
+      providerType: string | null;
+      phone: string;
+      status: string;
+      error: string | null;
+      dedupKey: string;
+      toOwner: boolean;
+      sentAt: string;
+    }>;
+    nextCursor: string | null;
+    meta: { perClient24hCap: number; exactDupWindowHours: number };
+  }> {
+    const meta = {
+      perClient24hCap: MarketingService.PER_CLIENT_24H_CAP,
+      exactDupWindowHours: MarketingService.EXACT_DUP_WINDOW_HOURS,
+    };
+    const rawLimit = Math.floor(Number(query.limit));
+    const limit =
+      Number.isFinite(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MarketingService.SENT_MESSAGES_MAX_LIMIT) : 30;
+
+    let where = 'sm.tenant_id = $1';
+    const params: unknown[] = [tenantId];
+    let idx = 2;
+
+    if (query.type && String(query.type).trim()) {
+      where += ` AND sm.message_type = $${idx++}`;
+      params.push(String(query.type).trim());
+    }
+    if (query.status === 'sent' || query.status === 'failed') {
+      where += ` AND sm.status = $${idx++}`;
+      params.push(query.status);
+    }
+    if (query.clientId) {
+      where += ` AND sm.client_id = $${idx++}`;
+      params.push(query.clientId);
+    }
+    // Московский полуинтервал [from 00:00 МСК, to+1 00:00 МСК) — зеркально
+    // журналу чеков, чтобы «за сегодня» означало один и тот же день.
+    if (query.dateFrom) {
+      where += ` AND sm.sent_at >= $${idx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`;
+      params.push(query.dateFrom);
+    }
+    if (query.dateTo) {
+      where += ` AND sm.sent_at < ($${idx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`;
+      params.push(query.dateTo);
+    }
+
+    const cursor = this.parseSentCursor(query.cursor);
+    if (cursor) {
+      where += ` AND (sm.sent_at, sm.id) < ($${idx}::timestamptz, $${idx + 1}::uuid)`;
+      params.push(cursor.sentAt, cursor.id);
+      idx += 2;
+    }
+
+    // limit+1 — лишняя строка лишь сигналит «есть ещё страница», в ответ не идёт.
+    const { rows } = await this.pool.query(
+      `SELECT sm.id, sm.client_id, sm.message_type, sm.provider_type, sm.phone,
+              sm.status, sm.error, sm.dedup_key, sm.sent_at,
+              sm.sent_at::text AS sent_at_raw,
+              cl.full_name AS client_name
+         FROM sent_messages sm
+         LEFT JOIN clients cl ON cl.id = sm.client_id AND cl.tenant_id = sm.tenant_id
+        WHERE ${where}
+        ORDER BY sm.sent_at DESC, sm.id DESC
+        LIMIT ${limit + 1}`,
+      params,
+    );
+
+    const hasMore = rows.length > limit;
+    const page = hasMore ? rows.slice(0, limit) : rows;
+    const lastRow = page[page.length - 1];
+    const nextCursor = hasMore && lastRow ? this.encodeSentCursor(lastRow.sent_at_raw, lastRow.id) : null;
+
+    return {
+      data: page.map((r) => ({
+        id: r.id,
+        clientId: r.client_id ?? null,
+        clientName: r.client_name ?? null,
+        messageType: r.message_type,
+        providerType: r.provider_type ?? null,
+        phone: r.phone,
+        status: r.status,
+        error: r.error ?? null,
+        dedupKey: r.dedup_key,
+        // Telegram-бот не может написать клиенту на номер — только в
+        // настроенный чат владельца/персонала (см. TelegramAdapter).
+        toOwner: r.provider_type === 'telegram',
+        sentAt: r.sent_at instanceof Date ? r.sent_at.toISOString() : String(r.sent_at),
+      })),
+      nextCursor,
+      meta,
+    };
+  }
+
+  // ─── Предпросмотр ручной рассылки (POST /marketing/broadcast/preview) ─
+  /** Маска телефона для предпросмотра: видны только последние 4 цифры. */
+  private maskPhone(phone: string): string {
+    const digits = String(phone ?? '').replace(/\D/g, '');
+    if (digits.length < 4) return '•••';
+    const last4 = digits.slice(-4);
+    return `+7 ••• ••• ${last4.slice(0, 2)}-${last4.slice(2)}`;
+  }
+
+  /**
+   * Dry-run сегментной рассылки: резолвит сегмент и канал ТЕМИ ЖЕ методами,
+   * что и sendSegmentBroadcast (resolveSegment / getAdapterRowFor), но НИЧЕГО
+   * не отправляет и не пишет в журнал. Возвращает: сколько клиентов получит
+   * сообщение, до 5 примеров (имя + маскированный телефон) и канал. Число
+   * честное с точностью до анти-спам-гейта: часть может быть пропущена как
+   * дубль/потолок 24ч — UI предупреждает об этом строкой из meta.
+   */
+  async previewSegmentBroadcast(
+    tenantId: string,
+    dto: {
+      segment?: { lastVisitDays?: number; source?: string; hasDebt?: boolean; clientIds?: string[] };
+      integrationId?: string | null;
+      providerType?: string | null;
+    },
+  ): Promise<{
+    recipientsCount: number;
+    sample: Array<{ name: string; phone: string }>;
+    channel: string | null;
+    channelConnected: boolean;
+    perClient24hCap: number;
+  }> {
+    // Канал: null = не подключён (не throw — предпросмотр должен показать
+    // проблему, а не упасть; отправку всё равно отобьёт sendSegmentBroadcast).
+    const adapterRow = await this.getAdapterRowFor(tenantId, {
+      integrationId: dto.integrationId ?? null,
+      providerType: dto.providerType ?? null,
+    });
+
+    const recipients = await this.resolveSegment(tenantId, dto.segment || {});
+
+    // Имена для первых 5 — образец «кому именно уйдёт».
+    const sampleIds = recipients.slice(0, 5).map((r) => r.clientId);
+    let sample: Array<{ name: string; phone: string }> = [];
+    if (sampleIds.length > 0) {
+      const { rows } = await this.pool.query(
+        `SELECT id, full_name, phone FROM clients WHERE tenant_id=$1 AND id = ANY($2::uuid[])`,
+        [tenantId, sampleIds],
+      );
+      const byId = new Map(rows.map((r) => [r.id, r]));
+      sample = sampleIds
+        .map((id) => byId.get(id))
+        .filter(Boolean)
+        .map((r: any) => ({ name: r.full_name || 'Без имени', phone: this.maskPhone(r.phone) }));
+    }
+
+    return {
+      recipientsCount: recipients.length,
+      sample,
+      channel: adapterRow?.provider_type ?? null,
+      channelConnected: !!adapterRow,
+      perClient24hCap: MarketingService.PER_CLIENT_24H_CAP,
+    };
+  }
+
   // ─── Auto-mailings overview (read-only surface for the «Рассылки» UI) ─
   /**
-   * Aggregate the AUTO mailing settings so the UI can list them + deep-link to
-   * the existing per-type settings editors. Read-only: editing stays on the
+   * ЕДИНЫЙ реестр ВСЕХ авто-сценариев отправки клиентам — все 6 путей, что
+   * реально существуют в коде (раньше в списке было 4: подтверждение записи и
+   * напоминание о записи оставались невидимыми, хотя ОБА рождались включёнными
+   * до миграции 141). Каждая строка: enabled + человеческое имя + описание
+   * триггера + `lastSentAt` (последняя реальная отправка из журнала
+   * sent_messages) + deep-link на редактор. Read-only: editing stays on the
    * dedicated endpoints referenced by `settingsRef`.
    */
-  async getAutoMailings(
-    tenantId: string,
-  ): Promise<Array<{ type: string; enabled: boolean; summary: string; settingsRef: string }>> {
+  async getAutoMailings(tenantId: string): Promise<
+    Array<{
+      type: string;
+      enabled: boolean;
+      humanTitle: string;
+      trigger: string;
+      summary: string;
+      settingsRef: string;
+      lastSentAt: string | null;
+    }>
+  > {
     const review = await this.getSettings(tenantId);
     const carReady = await this.getCarReadySettings(tenantId);
 
@@ -1426,24 +1667,80 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     );
     const inst = instRows[0] ?? { mode: 'off', days_before: null, on_due: false, on_overdue: false };
 
+    // Настройки записей (bookings, мигр. 076): подтверждение при создании и
+    // напоминание за N часов. Прямой SELECT (не BookingsService — без цикла
+    // модулей): нет строки → колонки-дефолты, c 141 оба false.
+    const { rows: bookRows } = await this.pool.query(
+      `SELECT notify_client_on_create, reminder_enabled, reminder_hours FROM booking_settings WHERE tenant_id=$1`,
+      [tenantId],
+    );
+    const book = bookRows[0] ?? { notify_client_on_create: false, reminder_enabled: false, reminder_hours: 2 };
+
+    // Последняя РЕАЛЬНАЯ отправка каждого сценария — один проход по журналу.
+    // installment/service делят message_type='reminder', booking confirm/
+    // reminder делят 'booking' — различаем по префиксу dedup_key (см. 124).
+    const { rows: lastRows } = await this.pool.query(
+      `SELECT
+         max(sent_at) FILTER (WHERE message_type='review')    AS review,
+         max(sent_at) FILTER (WHERE message_type='car_ready') AS car_ready,
+         max(sent_at) FILTER (WHERE message_type='reminder' AND dedup_key LIKE 'installment_reminder:%') AS installment_reminder,
+         max(sent_at) FILTER (WHERE message_type='reminder' AND dedup_key LIKE 'service_reminder:%')     AS service_reminder,
+         max(sent_at) FILTER (WHERE message_type='booking'  AND dedup_key LIKE 'booking_confirm:%')      AS booking_confirm,
+         max(sent_at) FILTER (WHERE message_type='booking'  AND dedup_key LIKE 'booking_reminder:%')     AS booking_reminder
+       FROM sent_messages WHERE tenant_id=$1 AND status='sent'`,
+      [tenantId],
+    );
+    const last = lastRows[0] ?? {};
+    const iso = (v: unknown): string | null => (v instanceof Date ? v.toISOString() : v ? String(v) : null);
+
     return [
       {
         type: 'review',
         enabled: !!review.autoSendEnabled,
+        humanTitle: 'Запрос отзыва',
+        trigger: 'После закрытия заказ-наряда — один раз на чек',
         summary: review.autoSendEnabled
           ? `Запрос отзыва авто-отправкой в ${review.sendTime ?? ''}`.trim()
           : 'Запрос отзыва выключен',
         settingsRef: 'marketing/settings',
+        lastSentAt: iso(last.review),
       },
       {
         type: 'car_ready',
         enabled: !!carReady.enabled,
+        humanTitle: 'Машина готова',
+        trigger: 'При переводе заказ-наряда в статус «Готов» — один раз на чек',
         summary: carReady.enabled ? '«Машина готова» при переводе в статус «готов»' : '«Машина готова» выключена',
         settingsRef: 'marketing/car-ready',
+        lastSentAt: iso(last.car_ready),
+      },
+      {
+        type: 'booking_confirm',
+        enabled: !!book.notify_client_on_create,
+        humanTitle: 'Подтверждение записи',
+        trigger: 'При создании записи клиенту — один раз на запись',
+        summary: book.notify_client_on_create
+          ? 'Подтверждение уходит при создании записи'
+          : 'Подтверждение записи выключено',
+        settingsRef: 'bookings/settings',
+        lastSentAt: iso(last.booking_confirm),
+      },
+      {
+        type: 'booking_reminder',
+        enabled: !!book.reminder_enabled,
+        humanTitle: 'Напоминание о записи',
+        trigger: `За ${book.reminder_hours ?? 2} ч до времени записи — один раз на запись`,
+        summary: book.reminder_enabled
+          ? `Напоминание за ${book.reminder_hours ?? 2} ч до записи`
+          : 'Напоминание о записи выключено',
+        settingsRef: 'bookings/settings',
+        lastSentAt: iso(last.booking_reminder),
       },
       {
         type: 'installment_reminder',
         enabled: inst.mode === 'auto',
+        humanTitle: 'Оплата рассрочки',
+        trigger: 'По графику платежей рассрочки — не чаще раза в день на платёж',
         summary:
           inst.mode === 'auto'
             ? `Напоминания рассрочки: за ${inst.days_before ?? 0} дн.${inst.on_due ? ', в день' : ''}${inst.on_overdue ? ', просрочка' : ''}`
@@ -1451,14 +1748,18 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
               ? 'Напоминания рассрочки: только вручную'
               : 'Напоминания рассрочки выключены',
         settingsRef: 'installments/reminder-settings',
+        lastSentAt: iso(last.installment_reminder),
       },
       {
         type: 'service_reminder',
         enabled: !!svc.enabled,
+        humanTitle: 'Давно не обслуживались',
+        trigger: `Раз в сутки по базе: последний визит старше ${svc.months_interval ?? 6} мес. — не чаще раза в месяц на клиента`,
         summary: svc.enabled
           ? `Напоминание «давно не обслуживались»: каждые ${svc.months_interval ?? 0} мес.`
           : 'Напоминание «давно не обслуживались» выключено',
         settingsRef: 'marketing/reminders',
+        lastSentAt: iso(last.service_reminder),
       },
     ];
   }

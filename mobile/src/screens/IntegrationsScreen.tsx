@@ -143,12 +143,16 @@ const PHONE_PROVIDERS: ProviderDef[] = [
     dbType: 'sms',
     kind: 'phone',
     name: 'Мегафон ВАТС',
-    description: 'Звонки и SMS через Мегафон',
+    description: 'Звонки через Мегафон',
     iconName: 'cellular',
     brand: '#00B956', // фирменный зелёный Мегафона
     apiKeyLabel: 'Токен ВАТС',
     needsPhone: true,
-    sendsClientSms: true,
+    // ЧЕСТНОСТЬ: SMS-транспорта у типа 'sms' на сервере НЕТ (заглушка), и с
+    // раунда 12 сервер не выбирает его каналом. Не обещаем «SMS», иначе
+    // владелец подключит и будет ждать фантомные отправки.
+    sendsClientSms: false,
+    hint: 'SMS-отправка через Мегафон пока не подключена — для SMS клиентам используйте SMS.RU или WhatsApp',
   },
 ];
 

@@ -11,6 +11,7 @@ import { UpdateReminderSettingsDto } from './dto/update-reminder-settings.dto';
 import { UpdateCarReadySettingsDto } from './dto/update-car-ready-settings.dto';
 import { WinbackSendDto } from './dto/winback-send.dto';
 import { SegmentBroadcastDto } from './dto/segment-broadcast.dto';
+import { BroadcastPreviewDto } from './dto/broadcast-preview.dto';
 import { ReminderService } from './reminder.service';
 
 @Controller('marketing')
@@ -204,10 +205,38 @@ export class MarketingController {
     );
   }
 
+  // ─── Broadcast preview (dry-run, marketing_manage) ───────────────
+  // Предпросмотр ДО отправки: резолвит сегмент + канал и возвращает
+  // {recipientsCount, sample, channel} — НИЧЕГО не отправляет и не пишет в
+  // журнал. Гейт как у broadcast/send: смотреть «кому уйдёт» может только
+  // тот, кто вправе отправить.
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_manage')
+  @Post('broadcast/preview')
+  previewSegmentBroadcast(@CurrentUser() user: JwtPayload, @Body() dto: BroadcastPreviewDto) {
+    return this.marketingService.previewSegmentBroadcast(user.tenantID, {
+      segment: dto.segment,
+      integrationId: dto.integrationId ?? null,
+      providerType: dto.providerType ?? null,
+    });
+  }
+
+  // ─── Журнал отправок (marketing_access) ──────────────────────────
+  // Курсорная лента sent_messages (мигр. 124): каждое сообщение, которое
+  // реально ушло (или не ушло) клиентам — тип, канал, кому, когда, статус.
+  // meta несёт лимиты анти-спам-гейта (потолок 3/24ч, окно дубля 1ч), чтобы
+  // UI показывал гарантии из первоисточника, а не хардкодом.
+  @UseGuards(JwtAuthGuard, PermissionsGuard)
+  @RequirePermission('marketing_access')
+  @Get('sent-messages')
+  getSentMessages(@CurrentUser() user: JwtPayload, @Query() query: any) {
+    return this.marketingService.getSentMessages(user.tenantID, query);
+  }
+
   // ─── Auto-mailings overview (read-only, marketing_access) ────────
-  // Lists the AUTO mailing surfaces (review / car-ready / installment &
-  // service reminders) so the UI can show enabled-state + deep-link to each
-  // existing settings editor.
+  // ЕДИНЫЙ реестр всех 6 авто-сценариев (review / car-ready / booking
+  // confirm+reminder / installment & service reminders): enabled + описание
+  // триггера + lastSentAt из журнала + deep-link на редактор настроек.
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission('marketing_access')
   @Get('auto-mailings')

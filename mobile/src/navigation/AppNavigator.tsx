@@ -73,6 +73,7 @@ import EmployeeDetailScreen from '../screens/EmployeeDetailScreen';
 import DismissedEmployeesScreen from '../screens/DismissedEmployeesScreen';
 import TrashScreen from '../screens/TrashScreen';
 import MailingsScreen from '../screens/MailingsScreen';
+import MessagesJournalScreen from '../screens/MessagesJournalScreen';
 import IntegrationsScreen from '../screens/IntegrationsScreen';
 import PaymentIntegrationsScreen from '../screens/PaymentIntegrationsScreen';
 import WarehouseAnalyticsScreen from '../screens/WarehouseAnalyticsScreen';
@@ -495,6 +496,12 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Winback" component={WinbackScreen} />
       <MoreStack.Screen name="Calls" component={CallsScreen} />
       <MoreStack.Screen name="Mailings" component={MailingsScreen} />
+      {/* «Журнал отправок» — лента sent_messages (мигр. 124): каждое сообщение
+          клиентам (тип, канал, кому, когда, статус) + видимые анти-спам-
+          гарантии. Раздел доверия: владелец видит, что «лишних смс» нет.
+          Living in MoreStack рядом с marketing-экранами — back идёт
+          Журнал → Маркетинг/Рассылки → Ещё, floating tab bar остаётся виден. */}
+      <MoreStack.Screen name="MessagesJournal" component={MessagesJournalScreen} />
       <MoreStack.Screen name="Integrations" component={IntegrationsScreen} />
       <MoreStack.Screen name="WarehouseAnalytics" component={WarehouseAnalyticsScreen} />
       <MoreStack.Screen name="Equipment" component={EquipmentStackNavigator} />

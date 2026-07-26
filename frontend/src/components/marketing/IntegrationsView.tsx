@@ -43,6 +43,12 @@ const PROVIDER_LABELS: Record<string, string> = {
 
 const TELEPHONY_TYPES: ProviderType[] = ['moizvonki'];
 const MESSAGING_TYPES: ProviderType[] = ['whatsapp', 'smsru', 'telegram', 'sms', 'email'];
+// Каналы, которые можно СОЗДАТЬ. 'sms' (обобщённый шлюз) и 'email' исключены:
+// у них нет реального транспорта на сервере (адаптеры-заглушки) и с раунда 12
+// сервер не выбирает их каналом — предлагать их как рабочие = фантомные
+// «отправлено». Существующие legacy-строки этих типов остаются видимыми и
+// удаляемыми (MESSAGING_TYPES выше фильтрует список), но новые не создаются.
+const CREATABLE_MESSAGING_TYPES: ProviderType[] = ['whatsapp', 'smsru', 'telegram'];
 
 const emptyForm = {
   providerType: 'whatsapp' as ProviderType,
@@ -86,9 +92,14 @@ function IntegrationForm({
 
   const set = (patch: Partial<FormState>) => setForm((prev) => ({ ...prev, ...patch }));
 
+  // Legacy-строка типа вне creatable-списка ('sms'/'email'): при редактировании
+  // добавляем её тип в options, иначе disabled-select показал бы пустоту.
+  const typeOptions =
+    editing && !allowedTypes.includes(editing.providerType) ? [...allowedTypes, editing.providerType] : allowedTypes;
+
   return (
     <div className="mb-4 space-y-3 rounded-xl bg-gray-50 p-3">
-      {allowedTypes.length > 1 && (
+      {typeOptions.length > 1 && (
         <div>
           <label className="label">Тип</label>
           <select
@@ -97,7 +108,7 @@ function IntegrationForm({
             disabled={!!editing}
             className="input disabled:bg-gray-100 disabled:text-gray-500"
           >
-            {allowedTypes.map((t) => (
+            {typeOptions.map((t) => (
               <option key={t} value={t}>
                 {t === 'sms' ? 'SMS (другой провайдер)' : PROVIDER_LABELS[t]}
               </option>
@@ -352,6 +363,7 @@ function ConfigurableGroup({
   title,
   subtitle,
   allowedTypes,
+  creatableTypes,
   integrations,
   emptyLabel,
 }: {
@@ -359,7 +371,10 @@ function ConfigurableGroup({
   iconClass: string;
   title: string;
   subtitle: string;
+  /** Типы, чьи СУЩЕСТВУЮЩИЕ строки показываются в этой группе. */
   allowedTypes: ProviderType[];
+  /** Типы, доступные для создания (по умолчанию = allowedTypes). */
+  creatableTypes?: ProviderType[];
   integrations: MessagingIntegration[];
   emptyLabel: string;
 }) {
@@ -440,7 +455,7 @@ function ConfigurableGroup({
     >
       {open && (
         <IntegrationForm
-          allowedTypes={allowedTypes}
+          allowedTypes={creatableTypes ?? allowedTypes}
           editing={editing}
           saving={upsert.isPending}
           onSave={(d) => upsert.mutate(d)}
@@ -527,6 +542,7 @@ export default function IntegrationsView() {
         title="Каналы рассылок"
         subtitle="Через что уходят сообщения клиентам — WhatsApp, SMS.RU, Telegram"
         allowedTypes={MESSAGING_TYPES}
+        creatableTypes={CREATABLE_MESSAGING_TYPES}
         integrations={integrations}
         emptyLabel="Каналы рассылок не подключены"
       />

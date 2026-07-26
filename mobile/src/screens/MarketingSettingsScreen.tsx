@@ -410,15 +410,40 @@ function ReviewTextSection() {
     },
   });
 
+  /**
+   * Включение — только через подтверждение с РЕАЛЬНЫМ шаблоном сообщения:
+   * владелец видит, что именно уйдёт клиенту, до того как включил (страх
+   * «пойдут какие-то смс» снимается на месте). Выключение — мгновенно.
+   */
+  const requestToggleAutoSend = () => {
+    if (autoSend) {
+      setAutoSend(false);
+      return;
+    }
+    const preview =
+      template.trim() ||
+      'Здравствуйте, {clientName}! Спасибо за визит в {tenantName}. Оцените качество обслуживания: {reviewLink}';
+    Alert.alert(
+      'Включить запрос отзыва?',
+      `После каждого закрытого заказ-наряда клиент ОДИН раз получит сообщение:\n\n«${preview}»\n\n` +
+        '{clientName} — имя клиента, {tenantName} — название сервиса, {reviewLink} — персональная ссылка на форму отзыва. ' +
+        'Повторные отправки по тому же заказ-наряду исключены. Не забудьте нажать «Сохранить».',
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Включить', onPress: () => setAutoSend(true) },
+      ],
+    );
+  };
+
   return (
     <View>
       <SectionHeader title="Запрос отзыва" count={null} />
       <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
         <ToggleRow
           title="Отправлять автоматически"
-          subtitle="После закрытия заказ-наряда клиент получит ссылку на отзыв"
+          subtitle="После закрытия заказ-наряда клиент один раз получит ссылку на отзыв"
           value={autoSend}
-          onToggle={() => setAutoSend((v) => !v)}
+          onToggle={requestToggleAutoSend}
         />
         <TemplateInput
           value={template}

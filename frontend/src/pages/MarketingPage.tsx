@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BarChart3, Gift, Megaphone, Plug, Send, Settings, Star, type LucideIcon } from 'lucide-react';
+import { BarChart3, Gift, History, Megaphone, Plug, Send, Settings, Star, type LucideIcon } from 'lucide-react';
 
 import { useAuth } from '../contexts/AuthContext';
 import PageHeader from '../components/PageHeader';
@@ -10,16 +10,20 @@ import ReputationView from '../components/marketing/ReputationView';
 import IntegrationsView from '../components/marketing/IntegrationsView';
 import MarketingSettingsView, { type SettingsSection } from '../components/marketing/MarketingSettingsView';
 import BroadcastsView from '../components/marketing/BroadcastsView';
+import JournalView from '../components/marketing/JournalView';
 import LoyaltyView from '../components/marketing/LoyaltyView';
 
-type Tab = 'reports' | 'reputation' | 'integrations' | 'settings' | 'broadcasts' | 'loyalty';
+type Tab = 'reports' | 'reputation' | 'integrations' | 'settings' | 'broadcasts' | 'journal' | 'loyalty';
 
 const TABS: { key: Tab; label: string; icon: LucideIcon }[] = [
   { key: 'reports', label: 'Отчёты', icon: BarChart3 },
   { key: 'reputation', label: 'Отзывы', icon: Star },
+  { key: 'broadcasts', label: 'Рассылки', icon: Send },
+  // «Журнал» — раздел доверия: лента каждого сообщения клиентам (sent_messages)
+  // с видимыми анти-спам-гарантиями. Сразу после «Рассылок» — на виду.
+  { key: 'journal', label: 'Журнал', icon: History },
   { key: 'integrations', label: 'Интеграции', icon: Plug },
   { key: 'settings', label: 'Настройки', icon: Settings },
-  { key: 'broadcasts', label: 'Рассылки', icon: Send },
   { key: 'loyalty', label: 'Лояльность', icon: Gift },
 ];
 
@@ -84,6 +88,7 @@ export default function MarketingPage() {
       {activeTab === 'integrations' && <IntegrationsView />}
       {activeTab === 'settings' && <MarketingSettingsView focus={settingsFocus} />}
       {activeTab === 'broadcasts' && <BroadcastsView onGoToSettings={goToSettings} />}
+      {activeTab === 'journal' && <JournalView />}
       {activeTab === 'loyalty' && <LoyaltyView />}
     </div>
   );

@@ -32,7 +32,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { useColors } from '../contexts/ThemeContext';
-import { marketingApi, clientsApi, clientSourcesApi } from '../api/services';
+import { marketingApi, clientsApi, clientSourcesApi, bookingsApi, installmentsApi } from '../api/services';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import IosScreenHeader from '../components/IosScreenHeader';
@@ -116,6 +116,13 @@ function pluralDays(n: number): string {
   return 'дней';
 }
 
+function pluralClients(n: number): string {
+  const m10 = n % 10;
+  const m100 = n % 100;
+  if (m10 === 1 && m100 !== 11) return 'клиенту';
+  return 'клиентам';
+}
+
 // ─────────────────────────────────────────────────────────────────────
 //  Ручная — segment broadcast
 // ─────────────────────────────────────────────────────────────────────
@@ -132,6 +139,8 @@ function ManualTab() {
   const [channelId, setChannelId] = useState<string | null>(null); // null = «Авто» (default channel)
   const [message, setMessage] = useState('');
   const [result, setResult] = useState<SegmentBroadcastResult | null>(null);
+  // Идёт dry-run предпросмотр (POST broadcast/preview) перед подтверждением.
+  const [previewing, setPreviewing] = useState(false);
   const idempotencyKey = useRef(makeIdempotencyKey());
 
   // A distinct composition = a fresh idempotency key. Retries of the SAME
@@ -146,8 +155,10 @@ function ManualTab() {
     queryFn: async () => (await marketingApi.getIntegrations()).data,
     staleTime: 60_000,
   });
+  // 'sms'/'email' исключены: адаптеры-заглушки без транспорта — сервер такие
+  // каналы не выбирает, предлагать их чипом = обещать фантомную отправку.
   const channels: MessagingIntegration[] = (Array.isArray(integrationsQuery.data) ? integrationsQuery.data : []).filter(
-    (i) => i.isActive,
+    (i) => i.isActive && i.providerType !== 'sms' && i.providerType !== 'email',
   );
 
   const sourcesQuery = useQuery({
@@ -224,13 +235,57 @@ function ManualTab() {
     });
   };
 
-  const confirmSend = () => {
-    if (!canSend) return;
+  /**
+   * Шаг подтверждения на данных dry-run предпросмотра: ДО отправки владелец
+   * видит «уйдёт N клиентам через <канал>», текст сообщения, примеры
+   * получателей и анти-спам-гарантию (потолок из meta сервера, не хардкод).
+   * Preview НИЧЕГО не отправляет; если он недоступен (сеть/старый сервер) —
+   * падаем в прежнее общее подтверждение, отправку не блокируем.
+   */
+  const confirmSend = async () => {
+    if (!canSend || previewing) return;
     haptic('tap');
-    Alert.alert('Отправить рассылку?', 'Сообщение уйдёт выбранному сегменту. Дубли отсеются автоматически.', [
-      { text: 'Отмена', style: 'cancel' },
-      { text: 'Отправить', onPress: () => send.mutate() },
-    ]);
+    setPreviewing(true);
+    try {
+      const { data: pv } = await marketingApi.previewBroadcast({
+        segment: buildSegment(),
+        integrationId: channelId ?? undefined,
+      });
+      if (!pv.channelConnected) {
+        haptic('warning');
+        Alert.alert(
+          'Канал не подключён',
+          'Нет подключённого канала рассылок — сообщения не уйдут. Подключите SMS.RU или WhatsApp в разделе «Интеграции».',
+        );
+        return;
+      }
+      if (pv.recipientsCount === 0) {
+        Alert.alert('Некому отправлять', 'В выбранном сегменте нет клиентов с телефоном.');
+        return;
+      }
+      const channelLabel = pv.channel ? (CHANNEL_META[pv.channel]?.label ?? pv.channel) : 'канал по умолчанию';
+      const names = pv.sample
+        .slice(0, 3)
+        .map((s) => s.name)
+        .join(', ');
+      Alert.alert(
+        `Уйдёт ${pv.recipientsCount} ${pluralClients(pv.recipientsCount)} через ${channelLabel}`,
+        `«${message.trim()}»` +
+          (names ? `\n\nСреди получателей: ${names}` : '') +
+          `\n\nНе больше ${pv.perClient24hCap} сообщений клиенту за 24 ч — часть может быть пропущена защитой от спама.`,
+        [
+          { text: 'Отменить', style: 'cancel' },
+          { text: 'Отправить', onPress: () => send.mutate() },
+        ],
+      );
+    } catch {
+      Alert.alert('Отправить рассылку?', 'Сообщение уйдёт выбранному сегменту. Дубли отсеются автоматически.', [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Отправить', onPress: () => send.mutate() },
+      ]);
+    } finally {
+      setPreviewing(false);
+    }
   };
 
   return (
@@ -542,22 +597,22 @@ function ManualTab() {
         </View>
       ) : null}
 
-      {/* Send */}
+      {/* Send — сначала dry-run предпросмотр, отправка только после «Отправить» */}
       <TouchableOpacity
         style={[
           styles.sendBtn,
           { backgroundColor: palette.accent.primary },
-          (!canSend || send.isPending) && { opacity: 0.5 },
+          (!canSend || send.isPending || previewing) && { opacity: 0.5 },
         ]}
-        disabled={!canSend || send.isPending}
+        disabled={!canSend || send.isPending || previewing}
         onPress={confirmSend}
       >
-        {send.isPending ? (
+        {send.isPending || previewing ? (
           <ActivityIndicator size="small" color={colors.white} />
         ) : (
           <>
             <Ionicons name="paper-plane" size={18} color={colors.white} />
-            <Text style={styles.sendBtnText}>Отправить рассылку</Text>
+            <Text style={styles.sendBtnText}>Проверить и отправить</Text>
           </>
         )}
       </TouchableOpacity>
@@ -647,13 +702,60 @@ const AUTO_META: Record<
 > = {
   review: { title: 'Запрос отзыва', icon: 'star-outline', tint: colors.amber[600] },
   car_ready: { title: 'Машина готова', icon: 'car-sport-outline', tint: colors.blue[600] },
-  service_reminder: { title: 'Напоминание о визите', icon: 'notifications-outline', tint: colors.violet[600] },
+  booking_confirm: { title: 'Подтверждение записи', icon: 'calendar-outline', tint: colors.indigo[600] },
+  booking_reminder: { title: 'Напоминание о записи', icon: 'alarm-outline', tint: colors.cyan[600] },
+  service_reminder: { title: 'Давно не обслуживались', icon: 'notifications-outline', tint: colors.violet[600] },
   installment_reminder: { title: 'Оплата рассрочки', icon: 'card-outline', tint: colors.emerald[700] },
 };
+
+/** Экран настроек, где живёт текст/условия каждого сценария. */
+const AUTO_SETTINGS_SCREEN: Record<AutoMailingOverview['type'], string> = {
+  review: 'MarketingSettings',
+  car_ready: 'MarketingSettings',
+  service_reminder: 'MarketingSettings',
+  installment_reminder: 'MarketingSettings',
+  booking_confirm: 'BookingSettings',
+  booking_reminder: 'BookingSettings',
+};
+
+function formatLastSent(iso?: string | null): string {
+  if (!iso) return 'Ещё не отправлялась';
+  const dt = new Date(iso);
+  if (Number.isNaN(dt.getTime())) return 'Ещё не отправлялась';
+  const now = new Date();
+  const date = dt.toLocaleDateString('ru-RU', {
+    day: 'numeric',
+    month: 'short',
+    year: dt.getFullYear() === now.getFullYear() ? undefined : 'numeric',
+  });
+  const time = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return `Последняя отправка: ${date}, ${time}`;
+}
+
+/** iOS-переключатель (как в MarketingSettingsScreen — единый визуальный язык). */
+function AutoSwitch({ value, onToggle }: { value: boolean; onToggle: () => void }) {
+  const palette = useColors();
+  return (
+    <TouchableOpacity
+      onPress={onToggle}
+      activeOpacity={0.8}
+      hitSlop={8}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
+    >
+      <View style={[styles.switchTrack, { backgroundColor: value ? palette.accent.primary : palette.border.strong }]}>
+        <View style={[styles.switchThumb, { transform: [{ translateX: value ? 20 : 2 }] }]} />
+      </View>
+    </TouchableOpacity>
+  );
+}
 
 function AutoTab() {
   const palette = useColors();
   const navigation = useNavigation<any>();
+  const queryClient = useQueryClient();
+  // Какой сценарий сейчас переключается (спиннер на его тумблере).
+  const [pendingType, setPendingType] = useState<AutoMailingOverview['type'] | null>(null);
 
   const query = useQuery({
     queryKey: ['marketing-auto-mailings'],
@@ -661,6 +763,98 @@ function AutoTab() {
     staleTime: 30_000,
   });
   const items: AutoMailingOverview[] = Array.isArray(query.data) ? query.data : [];
+
+  // Текущий шаблон запроса отзыва — для confirm-диалога при включении:
+  // владелец видит, ЧТО именно уйдёт клиенту, до того как включил.
+  const settingsQuery = useQuery({
+    queryKey: ['marketing-settings'],
+    queryFn: async () => (await marketingApi.getSettings()).data,
+    staleTime: 60_000,
+  });
+
+  // Один тумблер — одна точка настроек на сервере. Каждый сценарий пишется
+  // своим существующим endpoint'ом (см. settingsRef реестра).
+  const toggle = useMutation({
+    mutationFn: async ({ type, next }: { type: AutoMailingOverview['type']; next: boolean }) => {
+      switch (type) {
+        case 'review':
+          await marketingApi.updateSettings({ autoSendEnabled: next });
+          break;
+        case 'car_ready':
+          await marketingApi.updateCarReadySettings({ enabled: next });
+          break;
+        case 'service_reminder':
+          await marketingApi.updateReminderSettings({ enabled: next });
+          break;
+        case 'installment_reminder':
+          await installmentsApi.updateReminderSettings({ mode: next ? 'auto' : 'off' });
+          break;
+        case 'booking_confirm':
+          await bookingsApi.updateSettings({ notifyClientOnCreate: next });
+          break;
+        case 'booking_reminder':
+          await bookingsApi.updateSettings({ reminderEnabled: next });
+          break;
+      }
+    },
+    onMutate: ({ type }) => setPendingType(type),
+    onSuccess: () => haptic('success'),
+    onError: (e: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', e?.response?.data?.message || 'Не удалось изменить настройку');
+    },
+    onSettled: () => {
+      setPendingType(null);
+      // Реестр + все экраны-редакторы, которые читают эти же настройки.
+      queryClient.invalidateQueries({ queryKey: ['marketing-auto-mailings'] });
+      queryClient.invalidateQueries({ queryKey: ['marketing-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['marketing-car-ready'] });
+      queryClient.invalidateQueries({ queryKey: ['reminder-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['installment-reminder-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['booking-settings'] });
+    },
+  });
+
+  /**
+   * Включение любого сценария — только через явное подтверждение: видно,
+   * ЧТО и КОГДА уйдёт клиенту (страх «пойдут ещё какие-то смс» снимается до
+   * включения, а не после). Для «Запроса отзыва» показываем реальный шаблон
+   * сообщения. Выключение — мгновенно, без церемоний.
+   */
+  const requestToggle = (item: AutoMailingOverview) => {
+    if (pendingType) return;
+    haptic('select');
+    const next = !item.enabled;
+    if (!next) {
+      toggle.mutate({ type: item.type, next });
+      return;
+    }
+    const meta = AUTO_META[item.type];
+    if (item.type === 'review') {
+      const template =
+        settingsQuery.data?.messageTemplate ||
+        'Здравствуйте, {clientName}! Спасибо за визит в {tenantName}. Оцените качество обслуживания: {reviewLink}';
+      Alert.alert(
+        'Включить запрос отзыва?',
+        `После каждого закрытого заказ-наряда клиент ОДИН раз получит сообщение:\n\n«${template}»\n\n` +
+          '{clientName} — имя клиента, {tenantName} — название сервиса, {reviewLink} — персональная ссылка на отзыв. ' +
+          'Текст меняется в «Настройки» → «Запрос отзыва».',
+        [
+          { text: 'Отмена', style: 'cancel' },
+          { text: 'Включить', onPress: () => toggle.mutate({ type: item.type, next }) },
+        ],
+      );
+      return;
+    }
+    Alert.alert(
+      `Включить «${item.humanTitle ?? meta.title}»?`,
+      `${item.trigger ?? item.summary}. Каждая отправка проходит общий анти-спам-фильтр — дубли и лишние сообщения отсекаются.`,
+      [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Включить', onPress: () => toggle.mutate({ type: item.type, next }) },
+      ],
+    );
+  };
 
   return (
     <View style={{ gap: spacing[3] }}>
@@ -670,8 +864,8 @@ function AutoTab() {
       >
         <Ionicons name="shield-checkmark-outline" size={18} color={palette.accent.primary} />
         <Text style={[styles.antiSpamText, { color: palette.text.secondary }]}>
-          Клиенту не приходит два сообщения подряд — авто- и ручные рассылки проходят общий анти-спам-фильтр (не чаще
-          одного в сутки).
+          Здесь ВСЕ автоматические сообщения клиентам — других нет. Всё проходит общий анти-спам-фильтр: не больше 3
+          сообщений клиенту за 24 часа, повторы отсекаются. Каждая отправка видна в «Журнале отправок».
         </Text>
       </View>
 
@@ -689,15 +883,15 @@ function AutoTab() {
         </View>
       ) : (
         items.map((it, idx) => {
-          const meta = AUTO_META[it.type];
+          const meta = AUTO_META[it.type] ?? {
+            title: it.humanTitle ?? it.type,
+            icon: 'notifications-outline' as const,
+            tint: colors.slate[600],
+          };
           return (
             <AnimatedCard
               key={it.type}
               index={idx}
-              onPress={() => {
-                haptic('tap');
-                navigation.navigate('MarketingSettings');
-              }}
               style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
             >
               <View style={styles.autoRow}>
@@ -711,36 +905,35 @@ function AutoTab() {
                 </View>
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={[styles.autoTitle, { color: palette.text.primary }]} numberOfLines={1}>
-                    {meta.title}
+                    {it.humanTitle ?? meta.title}
                   </Text>
                   <Text style={[styles.autoSummary, { color: palette.text.tertiary }]} numberOfLines={2}>
-                    {it.summary}
+                    {it.trigger ?? it.summary}
                   </Text>
                 </View>
-                <View style={{ alignItems: 'flex-end', gap: 6 }}>
-                  <View
-                    style={[
-                      styles.statePill,
-                      it.enabled
-                        ? {
-                            backgroundColor:
-                              palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
-                          }
-                        : { backgroundColor: palette.bg.muted },
-                    ]}
-                  >
-                    <Text
-                      style={{
-                        fontSize: 10,
-                        fontWeight: fontWeight.bold,
-                        color: it.enabled ? colors.green[700] : palette.text.tertiary,
-                      }}
-                    >
-                      {it.enabled ? 'Вкл' : 'Выкл'}
-                    </Text>
-                  </View>
+                {pendingType === it.type ? (
+                  <ActivityIndicator size="small" color={palette.accent.primary} />
+                ) : (
+                  <AutoSwitch value={it.enabled} onToggle={() => requestToggle(it)} />
+                )}
+              </View>
+
+              {/* Последняя реальная отправка (из журнала) + переход к настройке */}
+              <View style={[styles.autoFooter, { borderTopColor: palette.border.subtle }]}>
+                <Text style={[styles.autoLastSent, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  {formatLastSent(it.lastSentAt)}
+                </Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    haptic('tap');
+                    navigation.navigate(AUTO_SETTINGS_SCREEN[it.type] ?? 'MarketingSettings');
+                  }}
+                  hitSlop={8}
+                  style={styles.autoConfigureBtn}
+                >
                   <Text style={[styles.autoConfigure, { color: palette.accent.primary }]}>Настроить</Text>
-                </View>
+                  <Ionicons name="chevron-forward" size={13} color={palette.accent.primary} />
+                </TouchableOpacity>
               </View>
             </AnimatedCard>
           );
@@ -1019,6 +1212,31 @@ const styles = StyleSheet.create({
   autoSummary: { fontSize: fontSize.xs, marginTop: 2, lineHeight: 16 },
   statePill: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
   autoConfigure: { fontSize: 12, fontWeight: '600' },
+  autoFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+    borderTopWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing[3],
+    paddingTop: spacing[2.5],
+  },
+  autoLastSent: { flex: 1, fontSize: 11 },
+  autoConfigureBtn: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+
+  // iOS-переключатель (общий язык с MarketingSettingsScreen)
+  switchTrack: { width: 46, height: 26, borderRadius: 13, justifyContent: 'center' },
+  switchThumb: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: colors.white,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 2,
+    elevation: 2,
+  },
 
   // Empty
   emptyBlock: { alignItems: 'center', paddingVertical: spacing[10], gap: spacing[3] },
