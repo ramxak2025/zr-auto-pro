@@ -22,6 +22,14 @@ import { useAuth } from '../contexts/AuthContext';
 import { getPalette } from '../theme/palette';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { formatPhone } from '../../../shared/validation/phone';
+import { diagnoseConnectivity } from '../utils/networkDiagnosis';
+
+/**
+ * Бюджет на ступень диагноза после сетевого отказа входа. Мёртвый DNS отвечает
+ * почти мгновенно, так что обычно тратится доля секунды; 3 с — только потолок
+ * на случай молчащей сети.
+ */
+const LOGIN_DIAGNOSIS_TIMEOUT_MS = 3_000;
 
 export default function LoginScreen() {
   const { login } = useAuth();
@@ -101,7 +109,20 @@ export default function LoginScreen() {
       await login(phone, password);
     } catch (error: any) {
       if (error.code === 'ERR_NETWORK' || !error.response) {
-        Alert.alert('Сервер недоступен', error.message || 'Проверьте подключение.');
+        // Не обвиняем сервер, пока не выяснили, кто виноват: при мёртвом DNS
+        // разом умирают ВСЕ хосты кольца, и «сервер недоступен» — ложь, из-за
+        // которой владелец месяцами искал поломку не там.
+        const verdict = await diagnoseConnectivity(LOGIN_DIAGNOSIS_TIMEOUT_MS);
+        if (verdict === 'dns-blocked') {
+          Alert.alert(
+            'Мешает VPN или DNS',
+            'Сеть работает, но адрес сервера не удаётся разрешить. Выключите VPN (или смените DNS в настройках сети) и войдите снова.',
+          );
+        } else if (verdict === 'no-internet') {
+          Alert.alert('Нет интернета', 'Проверьте подключение и попробуйте снова.');
+        } else {
+          Alert.alert('Сервер недоступен', error.message || 'Проверьте подключение.');
+        }
       } else if (error.response?.status === 401) {
         Alert.alert('Ошибка', error.response?.data?.message || 'Неверный телефон или пароль');
       } else {

@@ -5,16 +5,23 @@
  * ЗАЧЕМ: в сети автосервиса владельца оператор фильтрует домен API — интернет
  * на телефоне ЕСТЬ (NetInfo молчит), но сервер недостижим. Старый баннер в
  * этом случае не показывался вовсе, и отказы выглядели как «приложение
- * сломалось». Новый различает две ситуации дуальной пробой:
+ * сломалось». Новый различает три ситуации ступенчатой пробой:
  *
  *   1. Общий host-selector гоняет /health по ВСЕМ хостам
  *      failover-кольца и принимает первый здоровый — API доступен?
- *   2. Нейтральная достижимость (ya.ru / captive.apple.com / gstatic
- *      generate_204, 6 с) — интернет вообще есть?
+ *   2. Нейтральная достижимость по ИМЕНАМ (ya.ru / captive.apple.com /
+ *      gstatic generate_204, 6 с) — интернет вообще есть?
+ *   3. Если по именам не прошло ничего — достижимость по IP-литералу
+ *      (DoH 1.1.1.1 / 8.8.8.8, сертификат валиден на сам адрес, DNS не
+ *      нужен) — сеть жива, но имена не разрешаются?
  *
  * Исходы:
  *   • API ok → баннер скрыт (это был кратковременный сбой);
- *   • оба недоступны → «Нет подключения к интернету» (красный);
+ *   • не прошло вообще ничего → «Нет подключения к интернету» (красный);
+ *   • имена мертвы, а по IP дошли → «Не разрешаются адреса — мешает VPN или
+ *     DNS» (оранжевый). Раньше этот случай врал красным «нет интернета», и
+ *     владелец искал поломку в приложении или на сервере — см.
+ *     utils/networkDiagnosis.ts, механизм пойман 26.07.2026;
  *   • интернет есть, API нет → «Сервер недоступен в вашей сети — попробуйте
  *     Wi-Fi или VPN» (оранжевый) — случай операторской фильтрации, без
  *     тех-жаргона.
@@ -41,10 +48,10 @@ import { onlineManager } from '@tanstack/react-query';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
 import { onNetworkClassFailure, onRequestSucceeded, reselectApiHost } from '../api/axios';
-import { isHtmlApiPayload } from '../api/apiHosts';
 import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
+import { diagnoseConnectivity } from '../utils/networkDiagnosis';
 
-type BannerStatus = 'hidden' | 'no-internet' | 'server-unreachable';
+type BannerStatus = 'hidden' | 'no-internet' | 'dns-blocked' | 'server-unreachable';
 
 /** Нейтральная проба достижимости интернета. 6 с — тот же VPN-запас. */
 const NEUTRAL_PROBE_TIMEOUT_MS = 6_000;
@@ -52,112 +59,6 @@ const NEUTRAL_PROBE_TIMEOUT_MS = 6_000;
 const PROBE_DEBOUNCE_MS = 8_000;
 /** Автоперепроверка, пока баннер виден. */
 const RECHECK_INTERVAL_MS = 20_000;
-
-/** Проверка ответа пробы: сам решает, что считать успехом. Может читать тело. */
-type ProbeValidate = (res: Response) => Promise<boolean> | boolean;
-
-/**
- * Находка ревью 05.07: HTML-заглушка со статусом 200 (captive-portal, чужой
- * апстрим) «оздоравливала» пробу /health и прятала баннер. Валидируем тело
- * тем же стражем, что и axios.
- */
-const notHtmlOk: ProbeValidate = async (res) => {
-  if (!res.ok) return false;
-  const body = await res.text().catch(() => '');
-  return !isHtmlApiPayload(body, res.headers.get('content-type'));
-};
-
-/**
- * Нейтральные пробы «интернет вообще есть?». Достаточно ЛЮБОГО успеха.
- * Первым — Яндекс: в регионах с «белыми списками» (Дагестан и т. п.)
- * операторы в жёсткие окна режут ВСЁ иностранное — Apple/Google молчат, и
- * баннер врал «нет соединения», хотя российский интернет работал. Российская
- * проба обязана стоять в списке, иначе диагноз в этих окнах всегда ложный.
- * Apple captive probe и gstatic — резервы (вне РФ и на «чистых» сетях).
- *
- * У каждой пробы СВОЙ критерий успеха: captive-Wi-Fi подсовывает свою
- * HTML-страницу со статусом 200 на любой URL — голый `res.ok` считал такую
- * сеть «интернетом», и баннер вместо честного красного «нет интернета»
- * показывал оранжевый «сервер недоступен». robots.txt Яндекса — не HTML;
- * настоящий ответ Apple-пробы содержит слово Success; generate_204 обязан
- * ответить именно 204.
- */
-const NEUTRAL_PROBES: ReadonlyArray<{ url: string; validate: ProbeValidate }> = [
-  { url: 'https://ya.ru/robots.txt', validate: notHtmlOk },
-  {
-    url: 'https://captive.apple.com/hotspot-detect.html',
-    validate: async (res) => res.ok && (await res.text().catch(() => '')).includes('Success'),
-  },
-  { url: 'https://www.gstatic.com/generate_204', validate: (res) => res.status === 204 },
-];
-
-/** GET с таймаутом; никогда не бросает — только true/false. */
-function probeUrl(
-  url: string,
-  timeoutMs: number,
-  validate: ProbeValidate = (res) => res.ok,
-  parentSignal?: AbortSignal,
-): Promise<boolean> {
-  const abort = new AbortController();
-  return new Promise<boolean>((resolve) => {
-    let settled = false;
-    const finish = (result: boolean) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      parentSignal?.removeEventListener('abort', forwardAbort);
-      resolve(result);
-    };
-    function forwardAbort() {
-      abort.abort();
-      finish(false);
-    }
-
-    // Resolve the wrapper itself on the deadline. Some native fetch adapters
-    // only treat AbortController as a hint and may otherwise hang forever.
-    const timer = setTimeout(forwardAbort, timeoutMs);
-    if (parentSignal?.aborted) {
-      forwardAbort();
-      return;
-    }
-    parentSignal?.addEventListener('abort', forwardAbort, { once: true });
-    void (async () => {
-      try {
-        const res = await fetch(url, { method: 'GET', signal: abort.signal });
-        finish(await validate(res));
-      } catch {
-        finish(false);
-      }
-    })();
-  });
-}
-
-/** true — первая же проба прошла свой критерий; false — все нет. Не бросает. */
-function anyReachable(
-  probes: ReadonlyArray<{ url: string; validate: ProbeValidate }>,
-  timeoutMs: number,
-  signal?: AbortSignal,
-): Promise<boolean> {
-  return new Promise((resolve) => {
-    let remaining = probes.length;
-    let settled = false;
-    for (const probe of probes) {
-      void probeUrl(probe.url, timeoutMs, probe.validate, signal).then((ok) => {
-        if (settled) return;
-        if (ok) {
-          settled = true;
-          resolve(true);
-          return;
-        }
-        remaining -= 1;
-        if (remaining === 0) {
-          settled = true;
-          resolve(false);
-        }
-      });
-    }
-  });
-}
 
 export default function OfflineBanner() {
   const insets = useSafeAreaInsets();
@@ -199,44 +100,50 @@ export default function OfflineBanner() {
    * Дуальная проба. `manual` обходит дебаунс (кнопка «Проверить» и
    * 20-секундная автоперепроверка должны срабатывать всегда).
    */
-  const runProbe = useCallback(async (manual: boolean, restartForNewRoute = false) => {
-    const now = Date.now();
-    if (probingRef.current && !restartForNewRoute) return;
-    if (!manual && now - lastProbeAt.current < PROBE_DEBOUNCE_MS) return;
-    // Offline→online (or another explicit route transition) must not be lost
-    // behind a stale probe. Invalidate/cancel it and launch the new run now;
-    // otherwise reconnect could remain untested until the 20s interval.
-    if (probingRef.current) cancelCurrentProbe();
-    probingRef.current = true;
-    lastProbeAt.current = now;
-    const seq = ++probeSeq.current;
-    const abort = new AbortController();
-    probeAbortRef.current = abort;
-    if (manual) setChecking(true);
-    try {
-      // 1) API доступен? Перевыбираем по ВСЕМУ кольцу, а не
-      // проверяем только старую active/static base. Селектор сам владеет
-      // таймаутом, точным `{status:"ok"}`, debounce/dedupe и принимает
-      // первый здоровый хост для всех следующих axios-запросов.
-      const selectedHost = await reselectApiHost(restartForNewRoute).catch(() => null);
-      if (!mountedRef.current || abort.signal.aborted || seq !== probeSeq.current) return;
-      if (selectedHost) {
-        setBannerStatus('hidden');
-        return;
+  const runProbe = useCallback(
+    async (manual: boolean, restartForNewRoute = false) => {
+      const now = Date.now();
+      if (probingRef.current && !restartForNewRoute) return;
+      if (!manual && now - lastProbeAt.current < PROBE_DEBOUNCE_MS) return;
+      // Offline→online (or another explicit route transition) must not be lost
+      // behind a stale probe. Invalidate/cancel it and launch the new run now;
+      // otherwise reconnect could remain untested until the 20s interval.
+      if (probingRef.current) cancelCurrentProbe();
+      probingRef.current = true;
+      lastProbeAt.current = now;
+      const seq = ++probeSeq.current;
+      const abort = new AbortController();
+      probeAbortRef.current = abort;
+      if (manual) setChecking(true);
+      try {
+        // 1) API доступен? Перевыбираем по ВСЕМУ кольцу, а не
+        // проверяем только старую active/static base. Селектор сам владеет
+        // таймаутом, точным `{status:"ok"}`, debounce/dedupe и принимает
+        // первый здоровый хост для всех следующих axios-запросов.
+        const selectedHost = await reselectApiHost(restartForNewRoute).catch(() => null);
+        if (!mountedRef.current || abort.signal.aborted || seq !== probeSeq.current) return;
+        if (selectedHost) {
+          setBannerStatus('hidden');
+          return;
+        }
+        // 2-3) Сервер нет — а интернет вообще есть, и если нет, то по-настоящему
+        // или только по именам? Вторую ступень платим лишь при провале первой.
+        const verdict = await diagnoseConnectivity(NEUTRAL_PROBE_TIMEOUT_MS, abort.signal);
+        if (!mountedRef.current || abort.signal.aborted || seq !== probeSeq.current) return;
+        setBannerStatus(
+          verdict === 'internet-ok' ? 'server-unreachable' : verdict === 'dns-blocked' ? 'dns-blocked' : 'no-internet',
+        );
+      } finally {
+        // An invalidated older run must never clear the state of its replacement.
+        if (seq === probeSeq.current) {
+          probingRef.current = false;
+          if (probeAbortRef.current === abort) probeAbortRef.current = null;
+          if (mountedRef.current) setChecking(false);
+        }
       }
-      // 2) Сервер нет — а интернет вообще есть?
-      const internetOk = await anyReachable(NEUTRAL_PROBES, NEUTRAL_PROBE_TIMEOUT_MS, abort.signal);
-      if (!mountedRef.current || abort.signal.aborted || seq !== probeSeq.current) return;
-      setBannerStatus(internetOk ? 'server-unreachable' : 'no-internet');
-    } finally {
-      // An invalidated older run must never clear the state of its replacement.
-      if (seq === probeSeq.current) {
-        probingRef.current = false;
-        if (probeAbortRef.current === abort) probeAbortRef.current = null;
-        if (mountedRef.current) setChecking(false);
-      }
-    }
-  }, [cancelCurrentProbe, setBannerStatus]);
+    },
+    [cancelCurrentProbe, setBannerStatus],
+  );
 
   useEffect(() => {
     mountedRef.current = true;
@@ -291,9 +198,14 @@ export default function OfflineBanner() {
   if (status === 'hidden') return null;
 
   const isNoInternet = status === 'no-internet';
+  const isDnsBlocked = status === 'dns-blocked';
+  // «Не разрешаются адреса» — сознательно без слова DNS в первой половине
+  // фразы: владельцу нужно действие (выключить VPN), а не термин.
   const message = isNoInternet
     ? 'Нет подключения к интернету'
-    : 'Сервер недоступен в вашей сети — попробуйте Wi-Fi или VPN';
+    : isDnsBlocked
+      ? 'Не разрешаются адреса — мешает VPN или DNS. Выключите VPN'
+      : 'Сервер недоступен в вашей сети — попробуйте Wi-Fi или VPN';
   const queueSuffix = queuedChecks.length > 0 ? ' · чеки сохранены и отправятся сами' : '';
 
   return (
@@ -310,7 +222,7 @@ export default function OfflineBanner() {
     >
       <View style={styles.row} pointerEvents="box-none">
         <Ionicons
-          name={isNoInternet ? 'cloud-offline-outline' : 'server-outline'}
+          name={isNoInternet ? 'cloud-offline-outline' : isDnsBlocked ? 'globe-outline' : 'server-outline'}
           size={14}
           color={colors.white}
           style={styles.icon}

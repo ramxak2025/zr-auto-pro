@@ -83,7 +83,8 @@
       "apiUrl": "https://autexa.pw/api",
       "apiFallbackUrls": [
         "https://autexa-cloud.ru/api",
-        "https://d5dpq4hcfoor5l4q1a97.wnq2w1o5.apigw.yandexcloud.net/api"
+        "https://d5dpq4hcfoor5l4q1a97.wnq2w1o5.apigw.yandexcloud.net/api",
+        "https://212.8.229.254/api"
       ],
       "sentryDsn": "https://d248fd476c55b8b4854145c66cd9c115@o4511507149291520.ingest.us.sentry.io/4511507152502784",
       "eas": {
