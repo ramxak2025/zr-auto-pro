@@ -278,7 +278,7 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
 export default function CashFlowScreen() {
   const navigation = useNavigation<any>();
   const queryClient = useQueryClient();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   const palette = useColors();
   // «Движение денег» — теперь НЕ только owner-class. Волна 3 (миграция 121):
   // сервер гейтит `/reports/cashflow` через @RequirePermission('cashflow_view')
@@ -352,6 +352,14 @@ export default function CashFlowScreen() {
 
   const effectiveEmployeeId = mode === 'employee' ? employeeId : '';
 
+  // Охват 'own' (нет cashflow_view_all): раскрытие дня обязано слать
+  // masterId=self — сервер (checks.getAll) отфильтрует строгим ch.master_id,
+  // ровно тем же предикатом, каким /reports/cashflow посчитал суммы дня
+  // (решение владельца 2026-07-28: деньги мастера = только чеки, где он
+  // ГЛАВНЫЙ мастер). Без этого список дня шёл бы по журнальной видимости
+  // («свои ИЛИ исполнитель строки» — она шире) и не сходился бы с суммой.
+  const drillDownMasterId = canViewAllCashFlow ? effectiveEmployeeId : (user?.id ?? '');
+
   // Near-live cash flow: poll every 30s but only while the screen is focused
   // (no background battery drain / JS tick when the user is elsewhere). (The
   // client-side If-None-Match/304 layer was removed — see api/axios.ts — so
@@ -389,7 +397,7 @@ export default function CashFlowScreen() {
 
   // Lazy per-day check list — fires only when a card is expanded.
   const { data: expandedChecks, isLoading: isLoadingChecks } = useQuery<any>({
-    queryKey: ['cashflow-day-checks', expandedDay, effectiveEmployeeId],
+    queryKey: ['cashflow-day-checks', expandedDay, drillDownMasterId],
     queryFn: async () => {
       if (!expandedDay) return { data: [] };
       // Окно дня — ровно одни московские сутки [D 00:00 МСК, D+1 00:00 МСК).
@@ -409,7 +417,7 @@ export default function CashFlowScreen() {
         isDeferred: false,
         limit: 200,
       };
-      if (effectiveEmployeeId) params.masterId = effectiveEmployeeId;
+      if (drillDownMasterId) params.masterId = drillDownMasterId;
       const res = await checksApi.getAll(params);
       return res.data;
     },

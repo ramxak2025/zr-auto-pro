@@ -390,25 +390,19 @@ export class ReportsService {
     if (masterId) {
       params.push(masterId);
       const mIdx = params.length;
-      if (canViewAll) {
-        // Явный фильтр владельца «по сотруднику» — по главному мастеру чека,
-        // тем же предикатом, что journal-фильтр ?masterId (checks.getAll).
-        masterFilter = ` AND master_id = $${mIdx}`;
-        refundMasterFilter = ` AND ch.master_id = $${mIdx}`;
-      } else {
-        // Охват 'own' (мастер видит только свою кассу): предикат тот же, что у
-        // ЕГО журнала (checks.getAll для restricted-мастера) — главный мастер
-        // ИЛИ исполнитель строки. Иначе раскрытый список дня (журнальное
-        // правило) был шире суммы дня и цифры не сходились (cashflow M3).
-        masterFilter = ` AND (master_id = $${mIdx} OR EXISTS (
-          SELECT 1 FROM check_service_lines sl
-           WHERE sl.check_id = checks.id AND sl.master_id = $${mIdx}
-        ))`;
-        refundMasterFilter = ` AND (ch.master_id = $${mIdx} OR EXISTS (
-          SELECT 1 FROM check_service_lines sl
-           WHERE sl.check_id = ch.id AND sl.master_id = $${mIdx}
-        ))`;
-      }
+      // Решение владельца 2026-07-28: деньги мастера = ТОЛЬКО чеки, где он
+      // ГЛАВНЫЙ мастер (checks.master_id). Исполнительство строк услуг
+      // (sl.master_id) на кассу НЕ влияет — это механизм ВИДИМОСТИ журнала
+      // (checks.getAll, visibility-предикат «свои ИЛИ исполнитель»), а не
+      // принадлежности денег. Оба охвата — 'own' и явный фильтр владельца
+      // «по сотруднику» — считают ОДНИМ строгим предикатом. Раньше 'own'
+      // расширялся executor-OR'ом (волна cashflow M3, 6534cc8) и мастер видел
+      // в «Движении денег» чужие чеки, где он лишь исполнитель строки.
+      // Раскрытие дня обязано использовать тот же строгий предикат: клиент
+      // шлёт ?masterId в checks.getAll, который фильтрует тем же строгим
+      // ch.master_id — поэтому список дня сходится с суммой дня.
+      masterFilter = ` AND master_id = $${mIdx}`;
+      refundMasterFilter = ` AND ch.master_id = $${mIdx}`;
     }
 
     // ITEM 2 — гарантия ИСКЛЮЧЕНА из оборота (total): работа по гарантии денег
