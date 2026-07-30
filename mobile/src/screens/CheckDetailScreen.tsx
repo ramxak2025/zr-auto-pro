@@ -58,6 +58,9 @@ import { columnVisual, workStatusVisual } from '../constants/workStatus';
 import VoiceCommentSheet from '../components/VoiceCommentSheet';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
 import type { Check, Tenant, FiscalReceipt, VoiceUsage } from '../../../shared/types';
+// Канонический словарь оплат (включая installment: «Рассрочка») — единый
+// для web и mobile; локальные копии словаря запрещены.
+import { paymentMethodLabels } from '../../../shared/utils/formatters';
 
 type ReturnDestination = 'warehouse' | 'defect';
 type ReturnScope = 'full' | 'partial';
@@ -107,17 +110,12 @@ export const CHECK_MONEY_DEPENDENT_KEYS: string[][] = [
   ['retail-checks-full'],
 ];
 
-const paymentLabels: Record<string, string> = {
-  cash: 'Наличные',
-  card: 'Карта',
-  warranty: 'Гарантия',
-  cash_card: 'Нал/Карта',
-};
 const paymentIcons: Record<string, keyof typeof Ionicons.glyphMap> = {
   cash: 'cash-outline',
   card: 'card-outline',
   warranty: 'shield-checkmark-outline',
   cash_card: 'swap-horizontal-outline',
+  installment: 'calendar-outline',
 };
 
 export default function CheckDetailScreen() {
@@ -997,7 +995,7 @@ export default function CheckDetailScreen() {
           <View style={[styles.paymentChip, { backgroundColor: badge.bg, borderColor: badge.bg }]}>
             <Ionicons name={paymentIcons[check.paymentMethod] || 'cash-outline'} size={13} color={badge.text} />
             <Text style={[styles.paymentChipText, { color: badge.text }]}>
-              {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+              {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
             </Text>
           </View>
           {check.paymentMethod === 'cash_card' && (check.cashAmount || check.cardAmount) && (

@@ -53,16 +53,12 @@ import type {
   WalletSettings,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
+// Канонический словарь оплат (включая installment: «Рассрочка») — единый
+// для web и mobile; локальные копии словаря запрещены.
+import { paymentMethodLabels } from '../../../shared/utils/formatters';
 import { haptic } from '../platform/haptics';
 import { detectPlateMode } from '../utils/plateMask';
 import { pkpassBlobToBase64, presentPkpass } from '../utils/walletPass';
-
-const paymentLabels: Record<string, string> = {
-  cash: 'Наличные',
-  card: 'Карта',
-  warranty: 'Гарантия',
-  cash_card: 'Нал/Карта',
-};
 
 // Incremental history rendering (RNPERF-6): the ScrollView is not
 // virtualized, so building 200 CheckRow trees on mount is pure waste —
@@ -1920,7 +1916,7 @@ const CheckRow = React.memo(function CheckRow({ check, palette, canViewProfit, o
             )}
             <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
               <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
-                {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+                {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
               </Text>
             </View>
           </View>

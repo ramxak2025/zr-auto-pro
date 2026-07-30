@@ -54,13 +54,10 @@ import {
 } from '../utils/offlineCheckQueue';
 import { dedupeById } from '../utils/dedupeById';
 import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared/types';
-
-const paymentLabels: Record<string, string> = {
-  cash: 'Наличные',
-  card: 'Карта',
-  warranty: 'Гарантия',
-  cash_card: 'Нал/Карта',
-};
+// Канонический словарь оплат (включая installment: «Рассрочка») — единый
+// для web и mobile. Локальные копии словаря запрещены: они отстают от
+// новых способов оплаты и журнал показывает сырой англ. ключ.
+import { paymentMethodLabels } from '../../../shared/utils/formatters';
 function formatMoney(v: number) {
   return (
     Math.round(v)
@@ -388,7 +385,7 @@ const CheckRow = React.memo(function CheckRow({
               </View>
               <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
                 <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
-                  {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+                  {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
                 </Text>
               </View>
             </View>

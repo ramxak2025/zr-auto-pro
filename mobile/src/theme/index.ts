@@ -244,6 +244,7 @@ export const paymentMethodBadgeColor: Record<string, keyof typeof badgeColors> =
   card: 'blue',
   warranty: 'yellow',
   cash_card: 'gray',
+  installment: 'blue',
 };
 
 // ─────────────────────────────────────────────────────────────────────────────

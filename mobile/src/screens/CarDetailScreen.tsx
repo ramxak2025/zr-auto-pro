@@ -36,13 +36,9 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, pa
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import type { Check } from '../../../shared/types';
-
-const paymentLabels: Record<string, string> = {
-  cash: 'Наличные',
-  card: 'Карта',
-  warranty: 'Гарантия',
-  cash_card: 'Нал/Карта',
-};
+// Канонический словарь оплат (включая installment: «Рассрочка») — единый
+// для web и mobile; локальные копии словаря запрещены.
+import { paymentMethodLabels } from '../../../shared/utils/formatters';
 
 function formatMoney(v: number): string {
   return (
@@ -372,7 +368,7 @@ const CarCheckRow = React.memo(function CarCheckRow({ check, palette, canViewPro
             ) : null}
             <View style={[styles.paymentBadge, { backgroundColor: badge.bg }]}>
               <Text style={[styles.paymentBadgeText, { color: badge.text }]}>
-                {paymentLabels[check.paymentMethod] ?? check.paymentMethod}
+                {paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod}
               </Text>
             </View>
           </View>
