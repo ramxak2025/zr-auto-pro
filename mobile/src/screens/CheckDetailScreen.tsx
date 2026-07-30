@@ -795,17 +795,15 @@ export default function CheckDetailScreen() {
   // (PATCH /checks/:id вернёт 409 на returned-чек).
   const isReturned = !!check.isReturned;
   const isDeferred = !!check.isDeferred;
-  // Рассрочка (093): у чека есть долговой план (installment_plans). Бэкенд
-  // отказывает в его правке (рассрочку меняют отдельно) — кнопку прячем.
-  const isInstallment = check.paymentMethod === 'installment';
   // «Права как в Битрикс24» (2026-07): admin снят из owner-class на сервере,
   // /auth/me отдаёт эффективные права матрицы — ручной admin-байпас больше не
   // нужен, hasPermission сам байпасит только superadmin/director.
   // «Редактирование проведённого чека» (#61): закрытый чек — финансово
   // ответственная правка. Бэкенд проводит её через editClosedCheck (каскадный
   // пересчёт склада/зарплаты/кассы/прибыли) и гейтит правом edit_closed_check.
-  // Возврат и рассрочку бэкенд редактировать отказывается (403/400) → для них
-  // кнопку прячем, чтобы не завести в ошибку.
+  // Рассрочка (Round 13 #9) правится тем же путём — сервер пересчитает и план
+  // (новый долг = новый итог − внесённые платежи), кнопка больше не прячется.
+  // Возврат бэкенд редактировать отказывается (400) → кнопку прячем.
   const canEditClosedCheck = hasPermission('edit_closed_check');
   // «Чужой чек» (round 7, item 12): мастер видит чужой чек в журнале
   // (isExecutor-оттенок) и может открыть-посмотреть, но «Изменить» не получает —
@@ -813,15 +811,11 @@ export default function CheckDetailScreen() {
   // (master_id = actor для роли master); owner-class выше правит любые.
   const isOwnCheck = !!user?.id && check.masterId === user.id;
   const foreignForMaster = user?.role === 'master' && !isOwnCheck;
-  // Отложенный черновик правится по-старому (checks_edit). Закрытый — только с
-  // edit_closed_check/owner-class. Возврат заморожен, рассрочка — отдельно;
-  // мастер — только свои (foreignForMaster глушит обе ветки).
+  // Отложенный черновик правится по-старому (checks_edit). Закрытый (включая
+  // рассрочку — Round 13 #9) — только с edit_closed_check/owner-class. Возврат
+  // заморожен; мастер — только свои (foreignForMaster глушит обе ветки).
   const canEdit =
-    isReturned || foreignForMaster
-      ? false
-      : isDeferred
-        ? hasPermission('checks_edit')
-        : !isInstallment && canEditClosedCheck;
+    isReturned || foreignForMaster ? false : isDeferred ? hasPermission('checks_edit') : canEditClosedCheck;
   const canDelete = hasPermission('checks_delete') && !isReturned;
   const canViewProfit = hasPermission('profit_view');
   // «Комментарий своего чека — день в день» (round 7, item 10): БЕЗ проверки

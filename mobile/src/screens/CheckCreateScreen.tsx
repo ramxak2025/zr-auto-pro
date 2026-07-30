@@ -1158,6 +1158,13 @@ export default function CheckCreateScreen() {
     if (c.paymentMethod === ('cash_card' as PaymentMethod) && c.cashAmount != null) {
       setCashAmount(String(c.cashAmount));
     }
+    // Рассрочка (Round 13 #9): первый взнос = нал + карта из строки чека —
+    // read-only блок и payload показывают/шлют ПРАВДУ, а не пустой 0. Сервер
+    // при правке клиентские ноги всё равно игнорирует (берёт прежние из чека),
+    // так что это чисто честность UI.
+    if (c.paymentMethod === ('installment' as PaymentMethod)) {
+      setInstallmentFirst(String((c.cashAmount || 0) + (c.cardAmount || 0)));
+    }
     setIsDeferred(c.isDeferred || false);
     setServiceLines(c.services || []);
     setProductLines(c.products || []);
@@ -3508,6 +3515,24 @@ export default function CheckCreateScreen() {
           </TouchableOpacity>
           {/* MOB-02: та же семантика, что на сервере и в вебе. */}
           <Text style={[styles.discountHint, { color: palette.text.tertiary }]}>Скидка применяется к товарам</Text>
+          {/* Round 13 #1: скидка больше суммы товаров молча резалась расчётом
+                (семантика «только на товары» — решение владельца, НЕ меняем) —
+                теперь кассир ВИДИТ, что применится не вся. */}
+          {discountNum > 0 && effectiveDiscount < discountNum && (
+            <View style={[styles.discountWarnRow, { backgroundColor: softTint(colors.amber[600], palette.mode) }]}>
+              <Ionicons
+                name="alert-circle-outline"
+                size={15}
+                color={isDark ? colors.amber[200] : colors.amber[700]}
+                style={{ marginTop: 1 }}
+              />
+              <Text style={[styles.discountWarnText, { color: isDark ? colors.amber[200] : colors.amber[700] }]}>
+                {productTotal <= 0
+                  ? 'Скидка не применена: в чеке нет товаров (скидка действует только на товары)'
+                  : `Скидка применена частично: ${formatMoney(effectiveDiscount)} из ${formatMoney(discountNum)} (товаров на ${formatMoney(productTotal)})`}
+              </Text>
+            </View>
+          )}
         </View>
 
         {/* ═══ SECTION 3 (was COMMENT — moved into client section above) ═══ */}
@@ -3561,6 +3586,15 @@ export default function CheckCreateScreen() {
                   -{formatMoney(effectiveDiscount)}
                 </Text>
               </View>
+            )}
+            {/* Round 13 #1: в итоге тоже проговариваем, что скидка применилась
+                  не целиком (семантика «только на товары» неизменна). */}
+            {discountNum > 0 && effectiveDiscount < discountNum && (
+              <Text style={[styles.summaryDiscountWarn, { color: isDark ? colors.amber[200] : colors.amber[700] }]}>
+                {productTotal <= 0
+                  ? 'Скидка не применена — в чеке нет товаров'
+                  : `Скидка применена частично: ${formatMoney(effectiveDiscount)} из ${formatMoney(discountNum)}`}
+              </Text>
             )}
             <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
             <View style={styles.summaryRow}>
@@ -5057,6 +5091,22 @@ const styles = StyleSheet.create({
     color: colors.gray[400],
     paddingHorizontal: spacing[1],
     marginTop: -spacing[1.5],
+  },
+  // Round 13 #1: янтарное предупреждение «скидка применилась не целиком».
+  discountWarnRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+  },
+  discountWarnText: { flex: 1, fontSize: 12.5, fontWeight: fontWeight.medium, lineHeight: 17 },
+  summaryDiscountWarn: {
+    fontSize: 12,
+    fontWeight: fontWeight.medium,
+    lineHeight: 16,
+    marginTop: -spacing[1],
   },
   // Comment
   voiceMicBtn: {

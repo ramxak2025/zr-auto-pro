@@ -3495,9 +3495,18 @@ export class ChecksService {
    *                  preserved (see recomputeWarrantyForClosedEdit).
    *   • REPORTS    — tenant report caches invalidated after commit.
    *
+   *   • INSTALLMENT (Round 13 #9) — a check sold in рассрочку IS editable like
+   *                  any closed check: the client-sent legs are IGNORED (ноги =
+   *                  прежний первый взнос КАК ЕСТЬ — итог ниже взноса → 400,
+   *                  реально полученные деньги не переписываются) and the plan
+   *                  is re-derived in the SAME transaction
+   *                  (installments.recomputePlanForCheckTx: новый долг = новый
+   *                  итог − (взнос + уже внесённые платежи); ledger платежей не
+   *                  трогается; должник плана следует за клиентом чека). Смена
+   *                  способа оплаты в обе стороны (installment ↔ другой)
+   *                  остаётся запрещённой.
    * REFUSED (can't be cleanly reversed → STOP, no corruption):
-   *   • a RETURNED check (money already reversed by the returns flow);
-   *   • a check sold in РАССРОЧКУ (installment debt ledger + payments).
+   *   • a RETURNED check (money already reversed by the returns flow).
    * LEFT UNTOUCHED BY DESIGN:
    *   • LOYALTY (client_bonuses) — a decoupled, immutable single-sided ledger
    *     with a hard no-negative-balance rule; auto-clawback of already-spent
@@ -3572,10 +3581,13 @@ export class ChecksService {
       if (prior.is_returned === true) {
         throw new BadRequestException({ message: 'Возвращённый заказ-наряд редактировать нельзя' });
       }
-      // A check sold in installment carries a debt ledger (installment_plans +
-      // payments) that can't be cleanly re-derived from new totals. STOP — the
-      // owner edits the рассрочка separately. Prefer the owning service; fall
-      // back to a direct existence check so the guard is never silently skipped.
+      // Рассрочка (Round 13 #9): чек с планом РЕДАКТИРУЕТСЯ как обычный
+      // закрытый — план пересчитывается в этой же транзакции ниже (новый долг =
+      // новый итог − уже внесённое, ledger платежей не трогается). Запрещённой
+      // остаётся только смена СПОСОБА оплаты в обе стороны: план нельзя ни
+      // осиротить (долг исчез бы из cashflow, а погашения продолжали капать),
+      // ни создать задним числом. Prefer the owning service; fall back to a
+      // direct existence check so the guard is never silently skipped.
       const hasInstallment = this.installments
         ? await this.installments.hasPlanForCheckTx(client, tenantID, id)
         : (
@@ -3585,16 +3597,26 @@ export class ChecksService {
             ])
           ).rows.length > 0;
       if (hasInstallment) {
-        throw new BadRequestException({
-          message: 'Заказ-наряд продан в рассрочку — измените рассрочку отдельно, затем заказ-наряд',
-        });
-      }
-      // Перевод существующего чека В рассрочку тоже запрещён (сюда доходят
-      // только чеки БЕЗ плана — гард выше): план создаётся только в create()
-      // (createPlanForCheckTx) — installment-чек без плана навсегда повис бы в
-      // корзине «Рассрочка (долг)» без возможности погашения. Владелец хочет
-      // «клиент не доплатил» → новый чек с рассрочкой, не правка старого.
-      if (dto.paymentMethod === 'installment') {
+        // Конверсия ИЗ рассрочки запрещена (эхо paymentMethod:'installment' от
+        // клиентских форм — не смена, проходит).
+        if (dto.paymentMethod !== undefined && dto.paymentMethod !== 'installment') {
+          throw new BadRequestException({
+            message: 'Заказ-наряд продан в рассрочку — способ оплаты изменить нельзя',
+          });
+        }
+        // Без InstallmentsService пересчитать план невозможно — прежний отказ,
+        // чтобы чек и план не разъехались (гард никогда молча не пропускает).
+        if (!this.installments) {
+          throw new BadRequestException({
+            message: 'Заказ-наряд продан в рассрочку — измените рассрочку отдельно, затем заказ-наряд',
+          });
+        }
+      } else if (dto.paymentMethod === 'installment') {
+        // Перевод существующего чека В рассрочку запрещён (сюда доходят только
+        // чеки БЕЗ плана — ветка выше): план создаётся только в create()
+        // (createPlanForCheckTx) — installment-чек без плана навсегда повис бы в
+        // корзине «Рассрочка (долг)» без возможности погашения. Владелец хочет
+        // «клиент не доплатил» → новый чек с рассрочкой, не правка старого.
         throw new BadRequestException({
           message: 'Перевести существующий заказ-наряд в рассрочку нельзя — рассрочка оформляется при создании чека',
         });
@@ -3711,9 +3733,31 @@ export class ChecksService {
       //     cash + card == total точно. Крупный дрейф (>5₽) логируем. Пришла
       //     одна нога (raw API) — вторая однозначна; ни одной — переиспользуем
       //     прежние ноги и так же реконсилируем к новому total.
-      //   • 'installment' сюда не доходит (гарды выше).
+      //   • рассрочка (hasInstallment, Round 13 #9): КЛИЕНТСКИЕ ноги
+      //     игнорируются — форма правки первый взнос не редактирует. Ноги =
+      //     ПРЕЖНИЙ первый взнос из строки чека КАК ЕСТЬ: это реально
+      //     полученные деньги, их нельзя переписывать задним числом. Итог ниже
+      //     взноса → ОТКАЗ 400 (не молчаливый кап: кап стирал полученный
+      //     нал/карту из «Движения денег» за день продажи, а повторная правка
+      //     наследовала уже урезанные ноги — потеря необратима). Отказ
+      //     гарантирует взнос ≤ новому итогу, поэтому ноги переносятся без
+      //     капа. Ровно эти же значения уходят в down_payment плана ниже — чек
+      //     и план совпадают копейка в копейку, и корзина cashflow
+      //     installment_debt = GREATEST(total − cash − card, 0) остаётся
+      //     согласована с plan.remaining (минус ledger погашений).
       const effectiveMethod = dto.paymentMethod !== undefined ? dto.paymentMethod : prior.payment_method;
-      if (effectiveMethod === 'cash') {
+      if (hasInstallment) {
+        const priorCashLeg = Math.max(parseFloat(prior.cash_amount) || 0, 0);
+        const priorCardLeg = Math.max(parseFloat(prior.card_amount) || 0, 0);
+        const priorDown = round2(priorCashLeg + priorCardLeg);
+        if (c.totalRevenue < priorDown) {
+          throw new BadRequestException({
+            message: `Новый итог (${c.totalRevenue} ₽) меньше уже внесённого первого взноса (${priorDown} ₽). Уменьшите взнос через возврат или не снижайте итог ниже взноса.`,
+          });
+        }
+        dto.cashAmount = round2(priorCashLeg);
+        dto.cardAmount = round2(priorCardLeg);
+      } else if (effectiveMethod === 'cash') {
         dto.cashAmount = c.totalRevenue;
         dto.cardAmount = 0;
       } else if (effectiveMethod === 'card') {
@@ -3886,6 +3930,25 @@ export class ChecksService {
         c.serviceLines,
         c.productLines,
       );
+
+      // ── 6.5) Рассрочка (Round 13 #9): пересчёт плана в ЭТОЙ ЖЕ транзакции ──
+      // Новый долг = новый итог − (первый взнос + уже внесённые платежи);
+      // ledger погашений не трогается. remaining=0 → план закрывается,
+      // remaining>0 у ранее закрытого → реоткрывается (next_payment_date =
+      // сегодня + 30 дней, как дефолт при создании). Атомарно с чеком: упал
+      // пересчёт плана — откатывается ВЕСЬ edit (строки/сток/деньги), чек и
+      // план не могут разъехаться. downPayment = те же прежние ноги, что
+      // записаны в строку чека выше (инвариант cashflow; отказ выше гарантирует
+      // взнос ≤ новому итогу). effectiveClientId — фактический клиент чека
+      // ПОСЛЕ применения dto: должник плана следует за клиентом чека; чек
+      // остался без клиента (null) — должник плана не трогается.
+      if (hasInstallment && this.installments) {
+        await this.installments.recomputePlanForCheckTx(client, tenantID, id, {
+          newTotal: c.totalRevenue,
+          downPayment: round2((dto.cashAmount || 0) + (dto.cardAmount || 0)),
+          effectiveClientId,
+        });
+      }
 
       // ── 7) Audit (transactional — money data) ───────────────────────────────
       const before = {

@@ -276,11 +276,10 @@ export class InstallmentsService {
   /**
    * Does an installment plan already exist for this check? Runs on the caller's
    * transaction connection (PoolClient) so the check sits INSIDE the same
-   * BEGIN/row-lock as the caller's decision. Reused by ChecksService when it
-   * edits a CLOSED check (#61): a check sold in rassrochka carries a debt ledger
-   * (installment_plans + installment_payments) that can't be cleanly re-derived
-   * from the edited totals, so the edit is refused when this returns true — the
-   * owner manages the rassrochka separately. Tenant-scoped; uses
+   * BEGIN/row-lock as the caller's decision. Used by ChecksService as a guard:
+   * softDelete and the flat money-PATCH refuse when this returns true (the debt
+   * ledger can't be cleanly unwound), while editClosedCheck (Round 13 #9)
+   * branches into {@link recomputePlanForCheckTx} instead. Tenant-scoped; uses
    * idx_installment_plans_check.
    */
   async hasPlanForCheckTx(client: PoolClient, tenantID: string, checkId: string): Promise<boolean> {
@@ -289,6 +288,112 @@ export class InstallmentsService {
       [tenantID, checkId],
     );
     return rows.length > 0;
+  }
+
+  /**
+   * Re-derive the plan after its check was EDITED (Round 13 #9) — inside the
+   * CALLER's already-open transaction (ChecksService.editClosedCheck), so the
+   * check row rewrite and the plan rewrite commit or roll back together.
+   *
+   * Formula (mirrors createPlanForCheckTx, but with a live payments ledger):
+   *   total      = new check total (totalRevenue после пересчёта строк)
+   *   downPayment= первый взнос из СТРОКИ ЧЕКА (cash+card КАК ЕСТЬ — вызывающий
+   *                ОТКАЗЫВАЕТ 400, когда новый итог ниже взноса, так что
+   *                downPayment ≤ total; здесь только защитный кламп)
+   *   paid       = downPayment + Σ installment_payments (ledger НЕ трогается —
+   *                история погашений неприкосновенна)
+   *   remaining  = max(0, total − paid)
+   *   status     = remaining <= 0 → 'closed' (closed_at сохраняется, если уже
+   *                был); remaining > 0 → 'open' + closed_at = NULL (ранее
+   *                закрытый план честно реоткрывается — итог вырос). При
+   *                реоткрытии next_payment_date = сегодня + 30 дней (тот же
+   *                интервал, что дефолт формы при создании плана): старая дата
+   *                давала бы мгновенную «просрочку» и авто-SMS с протухшей
+   *                датой, NULL — невидимый для напоминаний долг.
+   *   client_id  = effectiveClientId, когда он non-null и отличается: должник
+   *                следует за клиентом чека (edit перевесил чек на другого
+   *                клиента → долг/напоминания/ledger переезжают с ним). Чек
+   *                остался без клиента (null) — должник плана НЕ трогается:
+   *                он известен.
+   *
+   * SELECT ... FOR UPDATE по (tenant_id, check_id): конкурентный pay()/payoff()
+   * по этому плану сериализуется с пересчётом — paid/remaining не разъедутся.
+   * Плана нет (чек не в рассрочку / аномалия) — тихий no-op, edit не падает.
+   * Переплата теперь возможна только ИЗ LEDGER (итог ≥ взноса, но ниже взнос +
+   * погашения — урезание ниже взноса вызывающий отбивает 400): remaining=0,
+   * план закрыт, предупреждение в лог с честным излишком; излишек владелец
+   * возвращает клиенту вне системы (ledger не переписываем).
+   */
+  async recomputePlanForCheckTx(
+    client: PoolClient,
+    tenantID: string,
+    checkId: string,
+    params: { newTotal: number; downPayment: number; effectiveClientId: string | null },
+  ): Promise<void> {
+    const { rows } = await client.query(
+      `SELECT id, status, client_id FROM installment_plans WHERE tenant_id = $1 AND check_id = $2 LIMIT 1 FOR UPDATE`,
+      [tenantID, checkId],
+    );
+    if (rows.length === 0) return; // нет плана — нечего пересчитывать
+    const planId: string = rows[0].id;
+    const wasClosed: boolean = rows[0].status === 'closed';
+    const priorClientId: string | null = rows[0].client_id ?? null;
+
+    const newTotal = round2(Math.max(0, num(params.newTotal)));
+    // Защитный кламп (зеркало createPlanForCheckTx) — чистая подстраховка:
+    // вызывающий отказывает 400 при итоге ниже взноса, так что штатно
+    // downPayment ≤ newTotal и кламп ничего не режет.
+    const downPayment = round2(Math.min(Math.max(0, num(params.downPayment)), newTotal));
+
+    const { rows: sumRows } = await client.query(
+      `SELECT COALESCE(SUM(amount), 0) AS ledger FROM installment_payments WHERE tenant_id = $1 AND plan_id = $2`,
+      [tenantID, planId],
+    );
+    const ledger = round2(num(sumRows[0]?.ledger));
+
+    const paid = round2(downPayment + ledger);
+    const remaining = round2(Math.max(0, newTotal - paid));
+    const closes = remaining <= 0;
+    // closed→open: итог вырос выше уже оплаченного — долг воскрес.
+    const reopens = wasClosed && !closes;
+    // Должник следует за клиентом чека; null (чек остался без клиента) —
+    // прежний должник сохраняется (COALESCE ниже).
+    const nextClientId =
+      params.effectiveClientId !== null && params.effectiveClientId !== priorClientId ? params.effectiveClientId : null;
+
+    if (closes && paid > newTotal) {
+      this.logger.warn(
+        `Installment plan ${planId} (tenant=${tenantID}): check edit lowered total to ${newTotal} below already-paid ${paid} — plan closed, surplus ${round2(paid - newTotal)} must be refunded manually`,
+      );
+    }
+    if (nextClientId !== null) {
+      this.logger.log(
+        `Installment plan ${planId} (tenant=${tenantID}): debtor follows the edited check — client_id ${priorClientId ?? 'NULL'} → ${nextClientId}`,
+      );
+    }
+
+    const { rows: updRows } = await client.query(
+      `UPDATE installment_plans
+          SET total = $1,
+              down_payment = $2,
+              paid = $3,
+              remaining = $4,
+              status = CASE WHEN $5 THEN 'closed' ELSE 'open' END,
+              closed_at = CASE WHEN $5 THEN COALESCE(closed_at, now()) ELSE NULL END,
+              client_id = COALESCE($6, client_id),
+              next_payment_date = CASE WHEN $7
+                THEN (CURRENT_DATE + INTERVAL '30 days')::date
+                ELSE next_payment_date END
+        WHERE id = $8 AND tenant_id = $9
+        RETURNING to_char(next_payment_date, 'YYYY-MM-DD') AS npd`,
+      [newTotal, downPayment, paid, remaining, closes, nextClientId, reopens, planId, tenantID],
+    );
+
+    if (reopens) {
+      this.logger.log(
+        `Installment plan ${planId} (tenant=${tenantID}): reopened by check edit (remaining ${remaining}) — next_payment_date reset to ${updRows[0]?.npd ?? 'NULL'}`,
+      );
+    }
   }
 
   // ─── Operations ─────────────────────────────────────────────────────────

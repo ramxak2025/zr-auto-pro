@@ -522,6 +522,8 @@ export default function CheckCreatePage() {
   // План создаётся сервером в create(); правка чека план создать не умеет,
   // бэк смену способа на 'installment' отклоняет — иначе остаток чека навсегда
   // повис бы в корзине «Рассрочка (долг)» без возможности погашения.
+  // Правка СУЩЕСТВУЮЩЕГО чека-рассрочки (Round 13 #9) при этом разрешена:
+  // строки/скидка меняются, сервер пересчитает план сам; взнос — read-only.
   const canOfferInstallment = canSellInstallment && !isEditMode;
 
   // Plate number search state
@@ -745,6 +747,13 @@ export default function CheckCreatePage() {
       setCashAmount(existingCheck.cashAmount ?? 0);
       setCardAmount(existingCheck.cardAmount ?? 0);
     }
+    // Рассрочка (Round 13 #9): гидрируем реальный первый взнос из строки чека —
+    // read-only плашка показывает правду, а payload шлёт ПРЕЖНИЕ ноги (сервер
+    // при правке клиентские ноги всё равно игнорирует и берёт свои из чека).
+    if (existingCheck.paymentMethod === 'installment') {
+      setInstallmentCash(existingCheck.cashAmount ?? 0);
+      setInstallmentCard(existingCheck.cardAmount ?? 0);
+    }
     setComment(existingCheck.comment || '');
     // Метки (Round 12 #9): гидрируем существующие — payload в edit-режиме шлёт
     // tagIds всегда, без гидрации сохранение стёрло бы метки чека.
@@ -950,6 +959,12 @@ export default function CheckCreatePage() {
     const discountedProducts = Math.max(productTotal - discount, 0);
     return serviceTotal + discountedProducts;
   }, [serviceTotal, productTotal, discount]);
+
+  // Round 13 #1: применённая часть скидки (семантика «только на товары» —
+  // решение владельца, НЕ меняем). Ввод клампится к сумме товаров, но discount
+  // может превысить её после гидрации в edit-режиме или удаления товара —
+  // тогда показываем предупреждение и честную цифру в итоге.
+  const appliedDiscount = Math.min(discount, productTotal);
 
   // Change calculation for cash payment
   const changeAmount = useMemo(() => {
@@ -1745,7 +1760,9 @@ export default function CheckCreatePage() {
                   <span>
                     {'\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B'}
                   </span>
-                  <span>-{formatCurrency(discount)}</span>
+                  {/* Round 13 #1: \u043F\u043E\u043A\u0430\u0437\u044B\u0432\u0430\u0435\u043C \u041F\u0420\u0418\u041C\u0415\u041D\u0401\u041D\u041D\u0423\u042E \u0441\u043A\u0438\u0434\u043A\u0443 (\u2264 \u0441\u0443\u043C\u043C\u044B
+                      \u0442\u043E\u0432\u0430\u0440\u043E\u0432), \u0447\u0442\u043E\u0431\u044B \u0441\u0442\u0440\u043E\u043A\u0438 \u0441\u0445\u043E\u0434\u0438\u043B\u0438\u0441\u044C \u0441 \u0418\u0422\u041E\u0413\u041E \u2014 parity mobile. */}
+                  <span>-{formatCurrency(appliedDiscount)}</span>
                 </div>
               )}
               <div className="border-t border-gray-300 pt-1.5 mt-1.5">
@@ -1776,6 +1793,15 @@ export default function CheckCreatePage() {
               />
               <span className="text-xs text-gray-400">{'\u20BD'}</span>
             </div>
+            {/* Round 13 #1: \u0441\u043A\u0438\u0434\u043A\u0430 \u0431\u043E\u043B\u044C\u0448\u0435 \u0441\u0443\u043C\u043C\u044B \u0442\u043E\u0432\u0430\u0440\u043E\u0432 \u043C\u043E\u043B\u0447\u0430 \u0440\u0435\u0437\u0430\u043B\u0430\u0441\u044C \u0440\u0430\u0441\u0447\u0451\u0442\u043E\u043C
+                (\u0441\u0435\u043C\u0430\u043D\u0442\u0438\u043A\u0430 \u00AB\u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B\u00BB \u043D\u0435\u0438\u0437\u043C\u0435\u043D\u043D\u0430) \u2014 \u043F\u0440\u0435\u0434\u0443\u043F\u0440\u0435\u0436\u0434\u0430\u0435\u043C \u044F\u0432\u043D\u043E. */}
+            {discount > 0 && appliedDiscount < discount && (
+              <p className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700">
+                {productTotal <= 0
+                  ? '\u0421\u043A\u0438\u0434\u043A\u0430 \u043D\u0435 \u043F\u0440\u0438\u043C\u0435\u043D\u0435\u043D\u0430: \u0432 \u0447\u0435\u043A\u0435 \u043D\u0435\u0442 \u0442\u043E\u0432\u0430\u0440\u043E\u0432 (\u0441\u043A\u0438\u0434\u043A\u0430 \u0434\u0435\u0439\u0441\u0442\u0432\u0443\u0435\u0442 \u0442\u043E\u043B\u044C\u043A\u043E \u043D\u0430 \u0442\u043E\u0432\u0430\u0440\u044B)'
+                  : `\u0421\u043A\u0438\u0434\u043A\u0430 \u043F\u0440\u0438\u043C\u0435\u043D\u0435\u043D\u0430 \u0447\u0430\u0441\u0442\u0438\u0447\u043D\u043E: ${formatCurrency(appliedDiscount)} \u0438\u0437 ${formatCurrency(discount)} (\u0442\u043E\u0432\u0430\u0440\u043E\u0432 \u043D\u0430 ${formatCurrency(productTotal)})`}
+              </p>
+            )}
           </div>
 
           {/* ===== PAYMENT SECTION ===== */}
@@ -1806,72 +1832,77 @@ export default function CheckCreatePage() {
                 {'\u041E\u043F\u043B\u0430\u0442\u0430'}
               </h3>
 
-              <div className={`grid ${canOfferInstallment ? 'grid-cols-5' : 'grid-cols-4'} gap-2 mb-4`}>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('cash')}
-                  className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                    paymentMethod === 'cash'
-                      ? 'border-green-500 bg-green-50 text-green-700'
-                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                  }`}
-                >
-                  <Banknote className="w-5 h-5" />
-                  <span className="text-[10px] font-semibold">{'\u041D\u0430\u043B'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('card')}
-                  className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                    paymentMethod === 'card'
-                      ? 'border-blue-500 bg-blue-50 text-blue-700'
-                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                  }`}
-                >
-                  <CreditCard className="w-5 h-5" />
-                  <span className="text-[10px] font-semibold">{'\u041A\u0430\u0440\u0442\u0430'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('cash_card')}
-                  className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                    paymentMethod === 'cash_card'
-                      ? 'border-purple-500 bg-purple-50 text-purple-700'
-                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                  }`}
-                >
-                  <Calculator className="w-5 h-5" />
-                  <span className="text-[10px] font-semibold">{'\u0421\u043F\u043B\u0438\u0442'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setPaymentMethod('warranty')}
-                  className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                    paymentMethod === 'warranty'
-                      ? 'border-yellow-500 bg-yellow-50 text-yellow-700'
-                      : 'border-gray-200 text-gray-500 hover:border-gray-300'
-                  }`}
-                >
-                  <Receipt className="w-5 h-5" />
-                  <span className="text-[10px] font-semibold">{'\u0413\u0430\u0440.'}</span>
-                </button>
-                {canOfferInstallment && (
+              {/* Правка чека-рассрочки (Round 13 #9): способ оплаты менять
+                  нельзя в обе стороны (сервер вернёт 400) — селектор прячем,
+                  ниже read-only плашка. Parity mobile. */}
+              {!(isEditMode && paymentMethod === 'installment') && (
+                <div className={`grid ${canOfferInstallment ? 'grid-cols-5' : 'grid-cols-4'} gap-2 mb-4`}>
                   <button
                     type="button"
-                    onClick={() => setPaymentMethod('installment')}
+                    onClick={() => setPaymentMethod('cash')}
                     className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
-                      paymentMethod === 'installment'
-                        ? 'border-violet-500 bg-violet-50 text-violet-700'
+                      paymentMethod === 'cash'
+                        ? 'border-green-500 bg-green-50 text-green-700'
                         : 'border-gray-200 text-gray-500 hover:border-gray-300'
                     }`}
                   >
-                    <CalendarDays className="w-5 h-5" />
-                    <span className="text-[10px] font-semibold">
-                      {'\u0420\u0430\u0441\u0441\u0440\u043e\u0447\u043a\u0430'}
-                    </span>
+                    <Banknote className="w-5 h-5" />
+                    <span className="text-[10px] font-semibold">{'\u041D\u0430\u043B'}</span>
                   </button>
-                )}
-              </div>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('card')}
+                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                      paymentMethod === 'card'
+                        ? 'border-blue-500 bg-blue-50 text-blue-700'
+                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                    }`}
+                  >
+                    <CreditCard className="w-5 h-5" />
+                    <span className="text-[10px] font-semibold">{'\u041A\u0430\u0440\u0442\u0430'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('cash_card')}
+                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                      paymentMethod === 'cash_card'
+                        ? 'border-purple-500 bg-purple-50 text-purple-700'
+                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                    }`}
+                  >
+                    <Calculator className="w-5 h-5" />
+                    <span className="text-[10px] font-semibold">{'\u0421\u043F\u043B\u0438\u0442'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setPaymentMethod('warranty')}
+                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                      paymentMethod === 'warranty'
+                        ? 'border-yellow-500 bg-yellow-50 text-yellow-700'
+                        : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                    }`}
+                  >
+                    <Receipt className="w-5 h-5" />
+                    <span className="text-[10px] font-semibold">{'\u0413\u0430\u0440.'}</span>
+                  </button>
+                  {canOfferInstallment && (
+                    <button
+                      type="button"
+                      onClick={() => setPaymentMethod('installment')}
+                      className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                        paymentMethod === 'installment'
+                          ? 'border-violet-500 bg-violet-50 text-violet-700'
+                          : 'border-gray-200 text-gray-500 hover:border-gray-300'
+                      }`}
+                    >
+                      <CalendarDays className="w-5 h-5" />
+                      <span className="text-[10px] font-semibold">
+                        {'\u0420\u0430\u0441\u0441\u0440\u043e\u0447\u043a\u0430'}
+                      </span>
+                    </button>
+                  )}
+                </div>
+              )}
 
               {paymentMethod === 'cash' && (
                 <div className="bg-green-50 rounded-xl p-4 space-y-3">
@@ -1928,7 +1959,29 @@ export default function CheckCreatePage() {
                 </div>
               )}
 
-              {paymentMethod === 'installment' && (
+              {/* Правка чека-рассрочки (Round 13 #9): первый взнос и график НЕ
+                  редактируются здесь (сервер клиентские ноги игнорирует, берёт
+                  прежние из чека) — read-only плашка с честным взносом и
+                  формулой пересчёта. Платежи — в разделе «Рассрочка». */}
+              {paymentMethod === 'installment' && isEditMode && (
+                <div className="bg-violet-50 rounded-xl p-4 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <CalendarDays className="w-4 h-4 flex-shrink-0 mt-0.5 text-violet-600" />
+                    <p className="text-sm font-medium text-violet-800">
+                      {'Заказ-наряд оформлен в рассрочку. Платежи и график — в разделе «Рассрочка».'}
+                    </p>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-600">{'Первый взнос:'}</span>
+                    <span className="font-bold text-gray-900">{formatCurrency(installmentCash + installmentCard)}</span>
+                  </div>
+                  <p className="text-xs text-violet-700">
+                    {'Долг пересчитается автоматически: новый итог − уже внесённые платежи.'}
+                  </p>
+                </div>
+              )}
+
+              {paymentMethod === 'installment' && !isEditMode && (
                 <div className="bg-violet-50 rounded-xl p-4 space-y-3">
                   <p className="text-xs font-semibold uppercase tracking-wider text-violet-700">{'Первый взнос'}</p>
                   <div className="flex items-center justify-between">
