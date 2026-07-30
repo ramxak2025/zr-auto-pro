@@ -1772,6 +1772,13 @@ export interface InstallmentPlan {
   /** Denormalised from the clients join. */
   clientName?: string | null;
   clientPhone?: string | null;
+  /**
+   * Авто из исходного заказ-наряда (Round 13 #5) — cars join через checks
+   * (ch.car_id). Null/undefined — чек удалён, продан без авто или старый бэкенд.
+   */
+  carId?: string | null;
+  carPlate?: string | null;
+  carMakeModel?: string | null;
   /** Full sale amount (= the check's totalRevenue at sale time). */
   total: number;
   /** Первый взнос (cash + card paid at sale time). */
@@ -1793,6 +1800,43 @@ export interface InstallmentPlan {
   createdByName?: string | null;
   createdAt: string;
   closedAt?: string | null;
+  /**
+   * Поручители (Round 13 #6). Приходят только в ДЕТАЛЬНЫХ ответах
+   * (clientLedger / любая мутация плана); плоский list() их не несёт.
+   */
+  guarantors?: InstallmentGuarantor[];
+  /**
+   * История ЯВНЫХ переносов даты платежа (Round 13 #7), новые сверху. Только
+   * детальные ответы; сдвиги даты, пришедшие вместе с pay(), сюда не пишутся.
+   */
+  reschedules?: InstallmentReschedule[];
+}
+
+/** Поручитель по рассрочке (Round 13 #6, миграция 142). */
+export interface InstallmentGuarantor {
+  id: string;
+  planId: string;
+  fullName: string;
+  /** «Кем приходится» должнику: брат / сосед / коллега… */
+  relation?: string | null;
+  phone?: string | null;
+  createdBy?: string | null;
+  createdAt: string;
+}
+
+/** Один явный перенос даты платежа (Round 13 #7, миграция 143). */
+export interface InstallmentReschedule {
+  id: string;
+  planId: string;
+  /** 'YYYY-MM-DD'. Null — платёж был «без даты». */
+  oldDate?: string | null;
+  /** 'YYYY-MM-DD'. Null — дату сняли. */
+  newDate?: string | null;
+  reason?: string | null;
+  createdBy?: string | null;
+  /** Denormalised from the users join. */
+  createdByName?: string | null;
+  createdAt: string;
 }
 
 /** One movement in a plan's payment ledger. */

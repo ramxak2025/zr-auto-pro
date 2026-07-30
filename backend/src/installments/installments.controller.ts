@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { InstallmentsService } from './installments.service';
+import { CreateGuarantorDto } from './dto/create-guarantor.dto';
 import { PayInstallmentDto } from './dto/pay-installment.dto';
 import { PayoffInstallmentDto } from './dto/payoff-installment.dto';
 import { UpdateInstallmentDto } from './dto/update-installment.dto';
@@ -85,10 +86,29 @@ export class InstallmentsController {
     return this.installments.payoff(user, planId, dto?.method);
   }
 
-  /** Reschedule the next payment date and/or edit the comment. */
+  /**
+   * Reschedule the next payment date and/or edit the comment. Явный перенос
+   * даты пишет историю в installment_reschedules (rescheduleReason — причина,
+   * опциональна); старый контракт (nextPaymentDate/comment) работает как раньше.
+   */
   @RequirePermission('debts_manage')
   @Patch(':planId')
   update(@CurrentUser() user: JwtPayload, @Param('planId') planId: string, @Body() dto: UpdateInstallmentDto) {
     return this.installments.update(user, planId, dto);
+  }
+
+  // ─── Guarantors (Round 13 #6, 'debts_manage') ────────────────────────────
+  /** Добавить поручителя к плану. Возвращает обновлённый план. */
+  @RequirePermission('debts_manage')
+  @Post(':planId/guarantors')
+  addGuarantor(@CurrentUser() user: JwtPayload, @Param('planId') planId: string, @Body() dto: CreateGuarantorDto) {
+    return this.installments.addGuarantor(user, planId, dto);
+  }
+
+  /** Удалить поручителя. Возвращает обновлённый план. */
+  @RequirePermission('debts_manage')
+  @Delete(':planId/guarantors/:id')
+  removeGuarantor(@CurrentUser() user: JwtPayload, @Param('planId') planId: string, @Param('id') id: string) {
+    return this.installments.removeGuarantor(user, planId, id);
   }
 }

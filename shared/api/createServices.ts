@@ -1798,9 +1798,19 @@ export function createInstallmentsApi(api: HttpClient) {
     /** Pay off the whole remaining at once (close the plan). Returns the updated plan. Body опционален — {method?} (119). */
     payoff: (planId: string, data?: { method?: 'cash' | 'card' }) =>
       api.post<InstallmentPlan>(`/installments/${planId}/payoff`, data),
-    /** Reschedule the next payment date and/or edit the comment. Returns the updated plan. */
-    update: (planId: string, data: { nextPaymentDate?: string; comment?: string }) =>
+    /**
+     * Reschedule the next payment date and/or edit the comment. Returns the updated plan.
+     * rescheduleReason (Round 13 #7) — причина ЯВНОГО переноса, пишется в историю
+     * installment_reschedules; опциональна, старый контракт работает без неё.
+     */
+    update: (planId: string, data: { nextPaymentDate?: string; comment?: string; rescheduleReason?: string }) =>
       api.patch<InstallmentPlan>(`/installments/${planId}`, data),
+    /** Добавить поручителя (Round 13 #6, debts_manage). Returns the updated plan. */
+    addGuarantor: (planId: string, data: { fullName: string; relation?: string; phone?: string }) =>
+      api.post<InstallmentPlan>(`/installments/${planId}/guarantors`, data),
+    /** Удалить поручителя (debts_manage). Returns the updated plan. */
+    removeGuarantor: (planId: string, guarantorId: string) =>
+      api.delete<InstallmentPlan>(`/installments/${planId}/guarantors/${guarantorId}`),
     /** Per-tenant reminder settings (default row auto-created on first read). Owner-class. */
     getReminderSettings: () => api.get<InstallmentReminderSettings>('/installments/reminder-settings'),
     /** Owner-class partial update of the reminder settings. */

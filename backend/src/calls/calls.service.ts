@@ -546,7 +546,16 @@ export class CallsService {
       throw new BadRequestException({ message: 'Клиент не найден' });
     }
 
-    const clientPhone = clientRows[0].phone.replace(/[\s\-\+\(\)]/g, '');
+    // Guard (Round 13): у клиента может НЕ быть телефона (NULL, или пусто после
+    // очистки — R12 сделал пустой телефон легальным). Раньше NULL ронял 500 на
+    // .replace, а '' превращал endsWith('') в «всегда true» — карточка
+    // бестелефонного клиента показала бы ВСЕ звонки тенанта. Без телефона
+    // сопоставить звонки не с чем — честный пустой список.
+    const rawPhone = clientRows[0].phone;
+    const clientPhone = typeof rawPhone === 'string' ? rawPhone.replace(/[\s\-\+\(\)]/g, '') : '';
+    if (!clientPhone) {
+      return { calls: [], total: 0 };
+    }
     const clientPhoneShort = clientPhone.length >= 10 ? clientPhone.slice(-10) : clientPhone;
 
     const allCalls = await this.getCalls(tenantId, query);

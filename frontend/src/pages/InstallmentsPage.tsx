@@ -12,9 +12,14 @@ import {
   CheckCircle2,
   FileText,
   Send,
+  Car,
+  Plus,
+  Trash2,
+  ShieldCheck,
+  MessageCircle,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { installmentsApi } from '../api/services';
+import { installmentsApi, checkPhotosApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import PageHeader from '../components/PageHeader';
 import QueryState from '../components/QueryState';
@@ -23,7 +28,15 @@ import ConfirmDialog from '../components/ConfirmDialog';
 import { useClickableRow } from '../hooks/useClickableRow';
 import { dueLabel } from '../components/InstallmentsWidget';
 
-import type { InstallmentPlan, InstallmentClientLedger, InstallmentReminderSettings } from '../types';
+import type {
+  InstallmentPlan,
+  InstallmentClientLedger,
+  InstallmentGuarantor,
+  InstallmentPayment,
+  InstallmentReschedule,
+  InstallmentReminderSettings,
+  CheckPhoto,
+} from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -52,6 +65,30 @@ function fmtDateTime(d?: string | null): string {
   const mi = String(date.getMinutes()).padStart(2, '0');
   return `${dd}.${mm}.${yy} ${hh}:${mi}`;
 }
+
+/** Цифры телефона — для tel:/wa.me ссылок. Пустой телефон → null (R12). */
+function phoneDigits(phone?: string | null): string | null {
+  const digits = (phone || '').replace(/[^\d]/g, '');
+  return digits.length > 0 ? digits : null;
+}
+
+function telLink(phone?: string | null): string | null {
+  const digits = phoneDigits(phone);
+  return digits ? `tel:+${digits}` : null;
+}
+
+/** Веб-версия WhatsApp-ссылки (wa.me, в отличие от whatsapp:// в приложении). */
+function waLink(phone?: string | null): string | null {
+  const digits = phoneDigits(phone);
+  return digits ? `https://wa.me/${digits}` : null;
+}
+
+// Единый таймлайн «Истории»: первый взнос + платежи + переносы, новые сверху
+// (зеркало мобильной деталки, Round 13 #7).
+type HistoryEvent =
+  | { kind: 'down'; ts: number; date: string; amount: number }
+  | { kind: 'payment'; ts: number; payment: InstallmentPayment }
+  | { kind: 'reschedule'; ts: number; reschedule: InstallmentReschedule };
 
 // `useClickableRow` returns a static prop bag (no React state) — aliasing lets
 // us spread it inside a `.map()` without tripping react-hooks/rules-of-hooks.
@@ -336,13 +373,23 @@ function InstallmentDetailModal({
   const [method, setMethod] = useState<'cash' | 'card'>('cash');
   const [nextDate, setNextDate] = useState('');
   const [payoffOpen, setPayoffOpen] = useState(false);
+  // Перенос даты (Round 13 #7): подтверждение с полем причины — PATCH уходит
+  // только из мини-модалки (закрыл без подтверждения — переноса нет).
+  const [rescheduleOpen, setRescheduleOpen] = useState(false);
+  const [rescheduleReason, setRescheduleReason] = useState('');
+  // Поручители (Round 13 #6).
+  const [guarantorFormOpen, setGuarantorFormOpen] = useState(false);
+  const [gName, setGName] = useState('');
+  const [gRelation, setGRelation] = useState('');
+  const [gPhone, setGPhone] = useState('');
+  const [guarantorToDelete, setGuarantorToDelete] = useState<InstallmentGuarantor | null>(null);
 
   const isOpen = !!plan;
   const planId = plan?.id ?? '';
   const clientId = plan?.clientId ?? '';
-  const open = plan?.status === 'open';
 
-  // Client ledger gives this plan's payment history (filtered by planId).
+  // Client ledger gives the fresh plan (guarantors / reschedules / car — the
+  // flat list() doesn't carry them) + this plan's payment history.
   const { data: ledger } = useQuery<InstallmentClientLedger>({
     queryKey: ['installments', 'client', clientId],
     queryFn: async () => {
@@ -352,7 +399,43 @@ function InstallmentDetailModal({
     enabled: isOpen && !!clientId,
   });
 
+  // Свежий план из ledger (поручители/переносы/авто); до его прихода — плоский
+  // план из списка (мгновенный рендер, как в мобильной деталке).
+  const view = useMemo(() => ledger?.plans?.find((p) => p.id === planId) ?? plan, [ledger, planId, plan]);
+  const open = view?.status === 'open';
+
   const payments = useMemo(() => (ledger?.payments ?? []).filter((p) => p.planId === planId), [ledger, planId]);
+  const guarantors = view?.guarantors ?? [];
+  const reschedules = view?.reschedules ?? [];
+
+  // Единый таймлайн: первый взнос + платежи + переносы, новые сверху.
+  const history = useMemo<HistoryEvent[]>(() => {
+    const events: HistoryEvent[] = [];
+    if (view && view.downPayment > 0 && view.createdAt) {
+      events.push({
+        kind: 'down',
+        ts: new Date(view.createdAt).getTime() || 0,
+        date: view.createdAt,
+        amount: view.downPayment,
+      });
+    }
+    for (const p of payments) events.push({ kind: 'payment', ts: new Date(p.paidAt).getTime() || 0, payment: p });
+    for (const r of reschedules)
+      events.push({ kind: 'reschedule', ts: new Date(r.createdAt).getTime() || 0, reschedule: r });
+    events.sort((a, b) => b.ts - a.ts);
+    return events;
+  }, [view, payments, reschedules]);
+
+  // Фото заказ-наряда — read-only стрип (носитель фото — чек; свой стор у
+  // плана не заводим). Ошибка/пусто → секция просто не показывается.
+  const checkIdForPhotos = view?.checkId ?? null;
+  const { data: photos = [] } = useQuery<CheckPhoto[]>({
+    queryKey: ['check-photos', checkIdForPhotos],
+    queryFn: async () => (await checkPhotosApi.getByCheck(checkIdForPhotos as string)).data,
+    enabled: isOpen && !!checkIdForPhotos,
+    staleTime: 30_000,
+    retry: false,
+  });
 
   const invalidate = () => {
     MONEY_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
@@ -380,8 +463,11 @@ function InstallmentDetailModal({
   });
 
   const rescheduleMutation = useMutation({
-    mutationFn: (data: { nextPaymentDate?: string; comment?: string }) => installmentsApi.update(planId, data),
+    // rescheduleReason (Round 13 #7) уходит в историю переносов на сервере.
+    mutationFn: (data: { nextPaymentDate?: string; rescheduleReason?: string }) => installmentsApi.update(planId, data),
     onSuccess: (res) => {
+      setRescheduleOpen(false);
+      setRescheduleReason('');
       if (isQueuedOffline(res)) {
         toast('Нет сети — перенос даты поставлен в очередь и отправится автоматически', { icon: '📡', duration: 5000 });
         onClose();
@@ -392,6 +478,33 @@ function InstallmentDetailModal({
       onClose();
     },
     onError: () => toast.error('Не удалось перенести дату'),
+  });
+
+  const addGuarantorMutation = useMutation({
+    mutationFn: (data: { fullName: string; relation?: string; phone?: string }) =>
+      installmentsApi.addGuarantor(planId, data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['installments'] });
+      toast.success('Поручитель добавлен');
+      setGuarantorFormOpen(false);
+      setGName('');
+      setGRelation('');
+      setGPhone('');
+    },
+    onError: () => toast.error('Не удалось добавить поручителя'),
+  });
+
+  const removeGuarantorMutation = useMutation({
+    mutationFn: (guarantorId: string) => installmentsApi.removeGuarantor(planId, guarantorId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['installments'] });
+      toast.success('Поручитель удалён');
+      setGuarantorToDelete(null);
+    },
+    onError: () => {
+      toast.error('Не удалось удалить поручителя');
+      setGuarantorToDelete(null);
+    },
   });
 
   const payoffMutation = useMutation({
@@ -417,13 +530,13 @@ function InstallmentDetailModal({
 
   const handlePay = (e: FormEvent) => {
     e.preventDefault();
-    if (!plan) return;
+    if (!plan || !view) return;
     const value = Number(amount.replace(',', '.'));
     if (!Number.isFinite(value) || value <= 0) {
       toast.error('Введите сумму больше нуля');
       return;
     }
-    if (value > plan.remaining) {
+    if (value > view.remaining) {
       toast.error('Сумма больше остатка. Используйте «Погасить полностью»');
       return;
     }
@@ -435,73 +548,128 @@ function InstallmentDetailModal({
     });
   };
 
+  // Открывает подтверждение с полем причины; сам PATCH — в submitReschedule.
   const handleReschedule = () => {
     if (!nextDate) {
       toast.error('Выберите новую дату платежа');
       return;
     }
-    rescheduleMutation.mutate({ nextPaymentDate: nextDate, comment: comment.trim() || undefined });
+    setRescheduleReason('');
+    setRescheduleOpen(true);
   };
 
-  if (!plan) return null;
+  const submitReschedule = () => {
+    if (!nextDate || rescheduleMutation.isPending) return;
+    rescheduleMutation.mutate({ nextPaymentDate: nextDate, rescheduleReason: rescheduleReason.trim() || undefined });
+  };
+
+  const handleAddGuarantor = (e: FormEvent) => {
+    e.preventDefault();
+    const fullName = gName.trim();
+    if (!fullName) {
+      toast.error('Укажите имя поручителя');
+      return;
+    }
+    addGuarantorMutation.mutate({
+      fullName,
+      relation: gRelation.trim() || undefined,
+      phone: gPhone.trim() || undefined,
+    });
+  };
+
+  if (!plan || !view) return null;
+
+  const clientTel = telLink(view.clientPhone);
+  const clientWa = waLink(view.clientPhone);
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Рассрочка · ${plan.clientName || 'Клиент'}`} size="lg">
+    <Modal isOpen={isOpen} onClose={onClose} title={`Рассрочка · ${view.clientName || 'Клиент'}`} size="lg">
       <div className="space-y-5">
         {/* Summary grid */}
         <div className="grid grid-cols-3 gap-3">
           <div className="rounded-xl bg-gray-50 p-3 text-center">
             <p className="text-[11px] text-gray-500">Сумма</p>
-            <p className="mt-0.5 text-sm font-bold text-gray-900 tabular-nums">{formatMoney(plan.total)}</p>
+            <p className="mt-0.5 text-sm font-bold text-gray-900 tabular-nums">{formatMoney(view.total)}</p>
           </div>
           <div className="rounded-xl bg-green-50 p-3 text-center">
             <p className="text-[11px] text-gray-500">Внесено</p>
-            <p className="mt-0.5 text-sm font-bold text-green-700 tabular-nums">{formatMoney(plan.paid)}</p>
+            <p className="mt-0.5 text-sm font-bold text-green-700 tabular-nums">{formatMoney(view.paid)}</p>
           </div>
           <div className="rounded-xl bg-rose-50 p-3 text-center">
             <p className="text-[11px] text-gray-500">Остаток</p>
-            <p className="mt-0.5 text-sm font-bold text-rose-700 tabular-nums">{formatMoney(plan.remaining)}</p>
+            <p className="mt-0.5 text-sm font-bold text-rose-700 tabular-nums">{formatMoney(view.remaining)}</p>
           </div>
         </div>
 
-        {/* Meta */}
+        {/* Meta — клиент, телефон (tel:/wa.me), авто из заказ-наряда */}
         <div className="space-y-1.5 text-sm">
           <div className="flex items-center justify-between">
             <span className="text-gray-500">Статус</span>
-            <StatusBadge plan={plan} />
+            <StatusBadge plan={view} />
           </div>
-          {plan.status === 'open' && (
+          {view.status === 'open' && (
             <div className="flex items-center justify-between">
               <span className="text-gray-500">Следующий платёж</span>
-              <span className="font-medium text-gray-900">{fmtDate(plan.nextPaymentDate)}</span>
+              <span className="font-medium text-gray-900">{fmtDate(view.nextPaymentDate)}</span>
             </div>
           )}
-          {plan.clientPhone && (
+          {view.clientPhone && clientTel && (
             <div className="flex items-center justify-between">
               <span className="text-gray-500">Телефон</span>
-              <span className="inline-flex items-center gap-1 font-medium text-gray-900">
-                <Phone className="h-3.5 w-3.5 text-gray-400" />
-                {formatPhone(plan.clientPhone)}
+              <span className="inline-flex items-center gap-2">
+                <a
+                  href={clientTel}
+                  className="inline-flex items-center gap-1 font-medium text-primary-600 hover:text-primary-700"
+                >
+                  <Phone className="h-3.5 w-3.5" />
+                  {formatPhone(view.clientPhone)}
+                </a>
+                {clientWa && (
+                  <a
+                    href={clientWa}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 font-medium text-green-600 hover:text-green-700"
+                    title="Написать в WhatsApp"
+                  >
+                    <MessageCircle className="h-3.5 w-3.5" />
+                    WhatsApp
+                  </a>
+                )}
               </span>
             </div>
           )}
-          {plan.checkId && (
+          {view.carId && (
+            <div className="flex items-center justify-between">
+              <span className="text-gray-500">Автомобиль</span>
+              <span className="inline-flex items-center gap-1.5 font-medium text-gray-900">
+                <Car className="h-3.5 w-3.5 text-gray-400" />
+                {view.carMakeModel || 'Авто'}
+                {view.carPlate && (
+                  <span className="rounded border border-gray-300 bg-gray-50 px-1.5 py-0.5 text-xs font-bold uppercase tracking-wider text-gray-700">
+                    {view.carPlate}
+                  </span>
+                )}
+              </span>
+            </div>
+          )}
+          {view.checkId && (
             <div className="flex items-center justify-between">
               <span className="text-gray-500">Заказ-наряд</span>
               <button
                 type="button"
-                onClick={() => onNavigateCheck(plan.checkId as string)}
+                onClick={() => onNavigateCheck(view.checkId as string)}
                 className="inline-flex items-center gap-1 font-medium text-primary-600 hover:text-primary-700"
               >
                 <FileText className="h-3.5 w-3.5" />
-                {plan.checkNumber ? `#${plan.checkNumber}` : 'Открыть'}
+                {view.checkNumber ? `#${view.checkNumber}` : 'Открыть'}
               </button>
             </div>
           )}
-          {plan.comment && (
+          {view.comment && (
             <div className="flex items-start justify-between gap-4">
               <span className="text-gray-500">Комментарий</span>
-              <span className="text-right text-gray-700">{plan.comment}</span>
+              <span className="text-right text-gray-700">{view.comment}</span>
             </div>
           )}
         </div>
@@ -595,28 +763,201 @@ function InstallmentDetailModal({
           </form>
         )}
 
-        {/* Payment history */}
+        {/* Поручители (Round 13 #6) */}
+        {(guarantors.length > 0 || canManage) && (
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">Поручители</p>
+              {canManage && (
+                <button
+                  type="button"
+                  onClick={() => setGuarantorFormOpen((v) => !v)}
+                  className="inline-flex items-center gap-1 text-xs font-semibold text-primary-600 hover:text-primary-700"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                  Добавить
+                </button>
+              )}
+            </div>
+            {guarantors.length === 0 && !guarantorFormOpen && (
+              <p className="py-1 text-sm text-gray-400">
+                Поручителей нет. Добавьте человека, который ручается за должника.
+              </p>
+            )}
+            {guarantors.length > 0 && (
+              <ul className="divide-y divide-gray-100">
+                {guarantors.map((g) => {
+                  const gTel = telLink(g.phone);
+                  const gWa = waLink(g.phone);
+                  return (
+                    <li key={g.id} className="flex items-center gap-3 py-2.5">
+                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-amber-50">
+                        <ShieldCheck className="h-4 w-4 text-amber-600" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-gray-900">{g.fullName}</p>
+                        <p className="truncate text-xs text-gray-500">
+                          {[g.relation, g.phone ? formatPhone(g.phone) : null].filter(Boolean).join(' · ') || '—'}
+                        </p>
+                      </div>
+                      {gTel && (
+                        <a
+                          href={gTel}
+                          className="rounded-lg p-1.5 text-green-600 hover:bg-green-50"
+                          title={`Позвонить: ${g.fullName}`}
+                        >
+                          <Phone className="h-4 w-4" />
+                        </a>
+                      )}
+                      {gWa && (
+                        <a
+                          href={gWa}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="rounded-lg p-1.5 text-green-600 hover:bg-green-50"
+                          title={`WhatsApp: ${g.fullName}`}
+                        >
+                          <MessageCircle className="h-4 w-4" />
+                        </a>
+                      )}
+                      {canManage && (
+                        <button
+                          type="button"
+                          onClick={() => setGuarantorToDelete(g)}
+                          className="rounded-lg p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-600"
+                          title="Удалить поручителя"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            {canManage && guarantorFormOpen && (
+              <form onSubmit={handleAddGuarantor} className="mt-2 space-y-2 rounded-xl border border-gray-200 p-3">
+                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                  <input
+                    type="text"
+                    value={gName}
+                    onChange={(e) => setGName(e.target.value)}
+                    className="input"
+                    placeholder="Имя *"
+                    maxLength={200}
+                  />
+                  <input
+                    type="text"
+                    value={gRelation}
+                    onChange={(e) => setGRelation(e.target.value)}
+                    className="input"
+                    placeholder="Кем приходится"
+                    maxLength={200}
+                  />
+                  <input
+                    type="tel"
+                    value={gPhone}
+                    onChange={(e) => setGPhone(e.target.value)}
+                    className="input"
+                    placeholder="Телефон"
+                    maxLength={32}
+                  />
+                </div>
+                <div className="flex justify-end gap-2">
+                  <button type="button" onClick={() => setGuarantorFormOpen(false)} className="btn-secondary btn-sm">
+                    Отмена
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={!gName.trim() || addGuarantorMutation.isPending}
+                    className="btn-primary btn-sm"
+                  >
+                    {addGuarantorMutation.isPending ? 'Сохраняем…' : 'Добавить'}
+                  </button>
+                </div>
+              </form>
+            )}
+          </div>
+        )}
+
+        {/* Фото заказ-наряда — read-only стрип (носитель — чек) */}
+        {photos.length > 0 && (
+          <div>
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">Фото заказ-наряда</p>
+            <div className="flex gap-2 overflow-x-auto pb-1">
+              {photos.map((photo) => (
+                <a key={photo.id} href={photo.photoUrl} target="_blank" rel="noreferrer" className="flex-shrink-0">
+                  <img
+                    src={photo.photoUrl}
+                    alt="Фото заказ-наряда"
+                    loading="lazy"
+                    className="h-20 w-20 rounded-lg border border-gray-200 object-cover"
+                  />
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Единая история: первый взнос + платежи + переносы даты */}
         <div>
-          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">История платежей</p>
-          {payments.length === 0 ? (
+          <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-gray-500">История</p>
+          {history.length === 0 ? (
             <p className="py-2 text-sm text-gray-400">Платежей пока нет</p>
           ) : (
             <ul className="divide-y divide-gray-100">
-              {payments.map((pm) => (
-                <li key={pm.id} className="flex items-center gap-3 py-2.5">
-                  <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-green-50">
-                    <CheckCircle2 className="h-4 w-4 text-green-600" />
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium text-gray-900 tabular-nums">{formatMoney(pm.amount)}</p>
-                    <p className="text-xs text-gray-500">
-                      {fmtDateTime(pm.paidAt)}
-                      {pm.createdByName ? ` · ${pm.createdByName}` : ''}
-                      {pm.comment ? ` · ${pm.comment}` : ''}
-                    </p>
-                  </div>
-                </li>
-              ))}
+              {history.map((ev) => {
+                if (ev.kind === 'reschedule') {
+                  const r = ev.reschedule;
+                  return (
+                    <li key={`r-${r.id}`} className="flex items-center gap-3 py-2.5">
+                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-amber-50">
+                        <CalendarClock className="h-4 w-4 text-amber-600" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-900">
+                          {r.oldDate ? fmtDate(r.oldDate) : 'без даты'} → {r.newDate ? fmtDate(r.newDate) : 'без даты'}
+                        </p>
+                        <p className="text-xs text-gray-500">
+                          {fmtDateTime(r.createdAt)}
+                          {r.createdByName ? ` · ${r.createdByName}` : ''}
+                        </p>
+                        {r.reason && <p className="text-xs italic text-gray-400">{r.reason}</p>}
+                      </div>
+                      <span className="text-xs text-gray-400">перенос</span>
+                    </li>
+                  );
+                }
+                if (ev.kind === 'down') {
+                  return (
+                    <li key="down" className="flex items-center gap-3 py-2.5">
+                      <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-blue-50">
+                        <Banknote className="h-4 w-4 text-blue-600" />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-medium text-gray-900 tabular-nums">{formatMoney(ev.amount)}</p>
+                        <p className="text-xs text-gray-500">{fmtDateTime(ev.date)} · Первый взнос</p>
+                      </div>
+                    </li>
+                  );
+                }
+                const pm = ev.payment;
+                return (
+                  <li key={pm.id} className="flex items-center gap-3 py-2.5">
+                    <div className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-green-50">
+                      <CheckCircle2 className="h-4 w-4 text-green-600" />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <p className="text-sm font-medium text-gray-900 tabular-nums">{formatMoney(pm.amount)}</p>
+                      <p className="text-xs text-gray-500">
+                        {fmtDateTime(pm.paidAt)}
+                        {pm.createdByName ? ` · ${pm.createdByName}` : ''}
+                        {pm.comment ? ` · ${pm.comment}` : ''}
+                      </p>
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </div>
@@ -627,11 +968,56 @@ function InstallmentDetailModal({
         onClose={() => setPayoffOpen(false)}
         onConfirm={() => payoffMutation.mutate()}
         title="Погасить полностью"
-        message={`Остаток ${formatMoney(plan.remaining)} будет внесён (${
+        message={`Остаток ${formatMoney(view.remaining)} будет внесён (${
           method === 'card' ? 'картой' : 'наличными'
         }), рассрочка закроется. Продолжить?`}
         confirmText="Погасить"
       />
+
+      <ConfirmDialog
+        isOpen={!!guarantorToDelete}
+        onClose={() => setGuarantorToDelete(null)}
+        onConfirm={() => guarantorToDelete && removeGuarantorMutation.mutate(guarantorToDelete.id)}
+        title="Удалить поручителя"
+        message={`Поручитель «${guarantorToDelete?.fullName ?? ''}» будет удалён из рассрочки. Продолжить?`}
+        confirmText="Удалить"
+      />
+
+      {/* Причина переноса (Round 13 #7) — PATCH уходит только отсюда. */}
+      <Modal isOpen={rescheduleOpen} onClose={() => setRescheduleOpen(false)} title="Перенос платежа" size="sm">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-700">
+            {view.nextPaymentDate ? `${fmtDate(view.nextPaymentDate)} → ` : 'Новая дата: '}
+            <span className="font-semibold">{fmtDate(nextDate)}</span>
+          </p>
+          <div>
+            <label className="label">Причина переноса (необязательно)</label>
+            <input
+              type="text"
+              value={rescheduleReason}
+              onChange={(e) => setRescheduleReason(e.target.value)}
+              className="input"
+              placeholder="Например: клиент попросил до зарплаты"
+              maxLength={500}
+              autoFocus
+            />
+          </div>
+          <div className="flex justify-end gap-2 pt-1">
+            <button type="button" onClick={() => setRescheduleOpen(false)} className="btn-secondary btn-sm">
+              Отмена
+            </button>
+            <button
+              type="button"
+              onClick={submitReschedule}
+              disabled={rescheduleMutation.isPending}
+              className="btn-primary btn-sm"
+            >
+              <CalendarClock className="h-4 w-4" />
+              {rescheduleMutation.isPending ? 'Сохраняем…' : 'Перенести'}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </Modal>
   );
 }

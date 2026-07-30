@@ -12,6 +12,7 @@ import {
   createProductsApi,
   createServicesApi,
   createChecksApi,
+  createCheckPhotosApi,
   createCheckTemplatesApi,
   createSuppliersApi,
   createSalaryApi,
@@ -100,6 +101,8 @@ export const carsApi = createCarsApi(api);
 export const productsApi = createProductsApi(api);
 export const servicesApi = createServicesApi(api);
 export const checksApi = createChecksApi(api);
+// Фото заказ-наряда (Round 13): read-only стрип в деталке рассрочки.
+export const checkPhotosApi = createCheckPhotosApi(api);
 export const checkTemplatesApi = createCheckTemplatesApi(api);
 export const suppliersApi = createSuppliersApi(api);
 export const salaryApi = createSalaryApi(api);

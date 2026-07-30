@@ -254,5 +254,7 @@ const styles = StyleSheet.create({
   summaryItem: { flex: 1, alignItems: 'center', gap: 4, paddingHorizontal: spacing[1] },
   summaryDivider: { width: StyleSheet.hairlineWidth, height: 36 },
   summaryLabel: { fontSize: 12, fontWeight: fontWeight.medium },
-  summaryValue: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, letterSpacing: -0.4 },
+  // Явный lineHeight (Round 13 #3): 20pt-глиф в наследуемом body-боксе 22
+  // подрезал верх «К получению» — тот же класс бага, что и hero деталки.
+  summaryValue: { fontSize: fontSize.xl, lineHeight: 26, fontWeight: fontWeight.bold, letterSpacing: -0.4 },
 });

@@ -70,6 +70,11 @@ export class InstallmentsService {
       clientId: r.client_id as string,
       clientName: r.client_name ?? null,
       clientPhone: r.client_phone ?? null,
+      // Авто из исходного заказ-наряда (Round 13 #5): cars джойнится через
+      // checks (ch.car_id). NULL — чек удалён или продан без авто.
+      carId: r.car_id ?? null,
+      carPlate: r.car_plate ?? null,
+      carMakeModel: r.car_make_model ?? null,
       total: num(r.total),
       downPayment: num(r.down_payment),
       paid: num(r.paid),
@@ -102,12 +107,13 @@ export class InstallmentsService {
     };
   }
 
-  // Shared SELECT projection: plan + denormalised client / check / author +
-  // computed overdue / due_in_days (Moscow date, consistent with shift cron).
+  // Shared SELECT projection: plan + denormalised client / check / car / author
+  // + computed overdue / due_in_days (Moscow date, consistent with shift cron).
   private static readonly PLAN_SELECT = `
     SELECT p.*,
            cl.full_name AS client_name, cl.phone AS client_phone,
            ch.number AS check_number,
+           car.id AS car_id, car.plate_number AS car_plate, car.make_model AS car_make_model,
            u.full_name AS created_by_name,
            (p.status = 'open' AND p.next_payment_date IS NOT NULL
               AND p.next_payment_date < (now() AT TIME ZONE 'Europe/Moscow')::date) AS overdue,
@@ -115,16 +121,97 @@ export class InstallmentsService {
       FROM installment_plans p
       LEFT JOIN clients cl ON cl.id = p.client_id AND cl.tenant_id = p.tenant_id
       LEFT JOIN checks ch ON ch.id = p.check_id AND ch.tenant_id = p.tenant_id
+      LEFT JOIN cars car ON car.id = ch.car_id AND car.tenant_id = ch.tenant_id
       LEFT JOIN users u ON u.id = p.created_by AND u.tenant_id = p.tenant_id`;
 
-  /** Re-read a single plan (full projection), tenant-scoped. 404 when missing. */
+  private mapGuarantor(r: any) {
+    return {
+      id: r.id as string,
+      planId: r.plan_id as string,
+      fullName: r.full_name as string,
+      relation: r.relation ?? null,
+      phone: r.phone ?? null,
+      createdBy: r.created_by ?? null,
+      createdAt: r.created_at as string,
+    };
+  }
+
+  private mapReschedule(r: any) {
+    return {
+      id: r.id as string,
+      planId: r.plan_id as string,
+      // to_char в SELECT'е — даты приходят готовыми 'YYYY-MM-DD' строками
+      // (node-postgres иначе парсит DATE в полночный Date с TZ-рисками).
+      oldDate: r.old_date ?? null,
+      newDate: r.new_date ?? null,
+      reason: r.reason ?? null,
+      createdBy: r.created_by ?? null,
+      createdByName: r.created_by_name ?? null,
+      createdAt: r.created_at as string,
+    };
+  }
+
+  /**
+   * Attach guarantors + reschedule history to already-mapped plans (Round 13
+   * #6/#7). Two batched SELECTs by plan ids — called from the DETAIL paths only
+   * (getPlanOrThrow / clientLedger); the flat list() stays lean (the fields are
+   * optional in the contract). Mutates the passed plan objects in place.
+   */
+  private async attachPlanExtras(tenantID: string, plans: Array<ReturnType<InstallmentsService['mapPlan']>>) {
+    if (plans.length === 0) return plans;
+    const ids = plans.map((p) => p.id);
+
+    const { rows: gRows } = await this.pool.query(
+      `SELECT * FROM installment_guarantors
+        WHERE tenant_id = $1 AND plan_id = ANY($2::uuid[])
+        ORDER BY created_at ASC`,
+      [tenantID, ids],
+    );
+    const { rows: rRows } = await this.pool.query(
+      `SELECT ir.id, ir.plan_id, ir.reason, ir.created_by, ir.created_at,
+              to_char(ir.old_date, 'YYYY-MM-DD') AS old_date,
+              to_char(ir.new_date, 'YYYY-MM-DD') AS new_date,
+              u.full_name AS created_by_name
+         FROM installment_reschedules ir
+         LEFT JOIN users u ON u.id = ir.created_by AND u.tenant_id = ir.tenant_id
+        WHERE ir.tenant_id = $1 AND ir.plan_id = ANY($2::uuid[])
+        ORDER BY ir.created_at DESC`,
+      [tenantID, ids],
+    );
+
+    const byPlanG = new Map<string, any[]>();
+    for (const r of gRows) {
+      const list = byPlanG.get(r.plan_id) ?? [];
+      list.push(this.mapGuarantor(r));
+      byPlanG.set(r.plan_id, list);
+    }
+    const byPlanR = new Map<string, any[]>();
+    for (const r of rRows) {
+      const list = byPlanR.get(r.plan_id) ?? [];
+      list.push(this.mapReschedule(r));
+      byPlanR.set(r.plan_id, list);
+    }
+    for (const p of plans as any[]) {
+      p.guarantors = byPlanG.get(p.id) ?? [];
+      p.reschedules = byPlanR.get(p.id) ?? [];
+    }
+    return plans;
+  }
+
+  /**
+   * Re-read a single plan (full projection + guarantors + reschedules),
+   * tenant-scoped. 404 when missing. Every mutation returns through here, so
+   * the client always gets the fresh detail shape.
+   */
   private async getPlanOrThrow(tenantID: string, planId: string) {
     const { rows } = await this.pool.query(`${InstallmentsService.PLAN_SELECT} WHERE p.id = $1 AND p.tenant_id = $2`, [
       planId,
       tenantID,
     ]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Рассрочка не найдена' });
-    return this.mapPlan(rows[0]);
+    const plan = this.mapPlan(rows[0]);
+    await this.attachPlanExtras(tenantID, [plan]);
+    return plan;
   }
 
   // ─── Create (called from ChecksService.create, inside its transaction) ──
@@ -324,15 +411,25 @@ export class InstallmentsService {
     return this.pay(user, planId, { amount: remaining, comment: 'Погашение остатка', method });
   }
 
-  /** Reschedule the next payment date and/or edit the comment. */
+  /**
+   * Reschedule the next payment date and/or edit the comment.
+   *
+   * Явный перенос даты (Round 13 #7) пишет строку в installment_reschedules:
+   * транзакция + SELECT ... FOR UPDATE, чтобы old_date читался под тем же
+   * локом, что и UPDATE (два конкурентных переноса не потеряют историю).
+   * Причина — dto.rescheduleReason (опциональна). Сдвиги даты из pay() сюда
+   * НЕ попадают — только этот PATCH.
+   */
   async update(user: JwtPayload, planId: string, dto: UpdateInstallmentDto) {
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
+    const reschedule = dto.nextPaymentDate !== undefined;
+    const newDate = reschedule ? toDateOrNull(dto.nextPaymentDate) : null;
 
-    if (dto.nextPaymentDate !== undefined) {
+    if (reschedule) {
       sets.push(`next_payment_date = $${idx++}`);
-      vals.push(toDateOrNull(dto.nextPaymentDate));
+      vals.push(newDate);
     }
     if (dto.comment !== undefined) {
       sets.push(`comment = $${idx++}`);
@@ -342,11 +439,79 @@ export class InstallmentsService {
     if (sets.length === 0) return this.getPlanOrThrow(user.tenantID, planId);
 
     vals.push(planId, user.tenantID);
-    const { rows } = await this.pool.query(
-      `UPDATE installment_plans SET ${sets.join(', ')} WHERE id = $${idx++} AND tenant_id = $${idx} RETURNING id`,
-      vals,
-    );
+    const updateSql = `UPDATE installment_plans SET ${sets.join(', ')} WHERE id = $${idx++} AND tenant_id = $${idx} RETURNING id`;
+
+    const dbClient = await this.pool.connect();
+    try {
+      await dbClient.query('BEGIN');
+      // Старая дата — под FOR UPDATE, чтобы история «old → new» не разъехалась
+      // с конкурентным PATCH/pay по тому же плану.
+      const { rows: cur } = await dbClient.query(
+        `SELECT to_char(next_payment_date, 'YYYY-MM-DD') AS old_date
+           FROM installment_plans WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
+        [planId, user.tenantID],
+      );
+      if (cur.length === 0) {
+        await dbClient.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Рассрочка не найдена' });
+      }
+      const oldDate: string | null = cur[0].old_date ?? null;
+
+      await dbClient.query(updateSql, vals);
+
+      // Пишем историю только при РЕАЛЬНОЙ смене даты (перенос на ту же дату —
+      // не событие; PATCH только с comment сюда не доходит).
+      if (reschedule && oldDate !== newDate) {
+        await dbClient.query(
+          `INSERT INTO installment_reschedules (tenant_id, plan_id, old_date, new_date, reason, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [user.tenantID, planId, oldDate, newDate, dto.rescheduleReason?.trim() || null, user.userID],
+        );
+      }
+      await dbClient.query('COMMIT');
+    } catch (err) {
+      try {
+        await dbClient.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      dbClient.release();
+    }
+
+    return this.getPlanOrThrow(user.tenantID, planId);
+  }
+
+  // ─── Guarantors (Round 13 #6) ─────────────────────────────────────────────
+
+  /** Добавить поручителя к плану. Возвращает обновлённый план (с guarantors). */
+  async addGuarantor(user: JwtPayload, planId: string, dto: { fullName: string; relation?: string; phone?: string }) {
+    // План должен существовать в этом тенанте — иначе 404 (и FK не стреляет).
+    const { rows } = await this.pool.query(`SELECT 1 FROM installment_plans WHERE id = $1 AND tenant_id = $2`, [
+      planId,
+      user.tenantID,
+    ]);
     if (rows.length === 0) throw new NotFoundException({ message: 'Рассрочка не найдена' });
+
+    const fullName = dto.fullName?.trim();
+    if (!fullName) throw new BadRequestException({ message: 'Укажите имя поручителя' });
+
+    await this.pool.query(
+      `INSERT INTO installment_guarantors (tenant_id, plan_id, full_name, relation, phone, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [user.tenantID, planId, fullName, dto.relation?.trim() || null, dto.phone?.trim() || null, user.userID],
+    );
+    return this.getPlanOrThrow(user.tenantID, planId);
+  }
+
+  /** Удалить поручителя. 404 если он не принадлежит плану/тенанту. */
+  async removeGuarantor(user: JwtPayload, planId: string, guarantorId: string) {
+    const { rowCount } = await this.pool.query(
+      `DELETE FROM installment_guarantors WHERE id = $1 AND plan_id = $2 AND tenant_id = $3`,
+      [guarantorId, planId, user.tenantID],
+    );
+    if (!rowCount) throw new NotFoundException({ message: 'Поручитель не найден' });
     return this.getPlanOrThrow(user.tenantID, planId);
   }
 
@@ -411,6 +576,9 @@ export class InstallmentsService {
     );
 
     const plans = planRows.map((r) => this.mapPlan(r));
+    // Деталка рассрочки читает план отсюда — поручители и история переносов
+    // едут вместе с планами (Round 13 #6/#7).
+    await this.attachPlanExtras(tenantID, plans);
     const totalRemaining = round2(plans.reduce((acc, p) => acc + (p.status === 'open' ? p.remaining : 0), 0));
 
     return {
