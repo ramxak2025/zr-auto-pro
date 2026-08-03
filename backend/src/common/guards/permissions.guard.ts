@@ -64,6 +64,11 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   // the owner grants it explicitly. Gates the closed-check cascade-recompute edit
   // path in ChecksService. Mirrors shared UserPermissions.edit_closed_check.
   edit_closed_check: false,
+  // «Изменяет назначенный заказ» (Round 14, миграция 148) — TRUE по умолчанию:
+  // сегодня мастер может править строки своего конвейерного драфта, и легаси-
+  // мастер без матрицы обязан сохранить это поведение (презервация 1:1).
+  // Владелец выключает ячейку явно в редакторе ролей.
+  checks_edit_assigned_order: true,
   // Услуги — мастер СМОТРИТ услуги и добавляет их в чек (view), но не редактирует
   // каталог/проценты/гарантию (manage off).
   services_view: true,
@@ -88,9 +93,12 @@ const MASTER_PERMISSION_DEFAULTS: Record<string, boolean> = {
   // Удаление товаров/папок (#60) — off by default; owner grants explicitly. Gates
   // DELETE /products/:id (soft) and DELETE /warehouse/categories/:id (soft, cascades).
   warehouse_delete: false,
-  // Поставщики — none by default (view + manage off).
+  // Поставщики — none by default (view + manage off). Корректировка платежей
+  // (сторно/возврат, миграция 145) — тем более off: owner-only по решению
+  // владельца, выдаётся явной галкой в матрице роли.
   suppliers_access: false,
   suppliers_manage: false,
+  suppliers_payments_correct: false,
   // Имущество — none by default (view + manage off).
   equipment_view: false,
   equipment_manage: false,
@@ -156,6 +164,9 @@ const ADMIN_PERMISSION_DEFAULTS: Record<string, boolean> = {
   sell_installment: true,
   cash_shifts_manage: true,
   checks_board_manage: true,
+  // «Изменяет назначенный заказ» (Round 14, миграция 148) — true: зеркало сида
+  // (админ и сегодня правит любые драфты; владелец урезает сам).
+  checks_edit_assigned_order: true,
   // Услуги / Склад / Поставщики / Имущество.
   services_view: true,
   services_manage: true,
@@ -165,6 +176,8 @@ const ADMIN_PERMISSION_DEFAULTS: Record<string, boolean> = {
   warehouse_analytics_view: true,
   suppliers_access: true,
   suppliers_manage: true,
+  // Owner-only (сид 145: Админ=false) — сторно платежа / возврат от поставщика.
+  suppliers_payments_correct: false,
   equipment_view: true,
   equipment_manage: true,
   equipment_permanent_delete: false, // owner-only: DELETE /equipment/:id — @Roles(d,sa) без admin

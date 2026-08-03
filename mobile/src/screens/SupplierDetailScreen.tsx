@@ -86,6 +86,12 @@ export default function SupplierDetailScreen() {
   // hasPermission. Computed identically to SuppliersScreen. The server
   // re-checks `suppliers_manage` on every mutation regardless.
   const canManageSuppliers = hasPermission('suppliers_manage');
+  // Round 14: корректировка платежей (сторно + возврат от поставщика) — своя
+  // ЯВНАЯ галка. suppliers_manage её НЕ влечёт: обычный менеджер создаёт
+  // платежи, но не правит деньги задним числом. Сид — только owner-класс
+  // (director/superadmin байпасят внутри hasPermission). Сервер дублирует
+  // проверку на POST payments/:id/reverse и payments/refund.
+  const canCorrectPayments = hasPermission('suppliers_payments_correct');
   // Theme-aware fragments spread over the static (light-default) modal-form
   // styles so the sheets read correctly in dark mode. Values match the
   // already-converted form inputs across the app (UsersScreen/Suppliers).
@@ -123,6 +129,16 @@ export default function SupplierDetailScreen() {
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentComment, setPaymentComment] = useState('');
+
+  // Возврат от поставщика (Round 14) — модал по образцу «Новый платёж».
+  const [refundModalOpen, setRefundModalOpen] = useState(false);
+  const [refundAmount, setRefundAmount] = useState('');
+  const [refundComment, setRefundComment] = useState('');
+
+  // Сторно платежа (Round 14) — confirm-модал с полем причины. Alert.prompt
+  // iOS-only, поэтому кросс-платформенный <Modal> с TextInput.
+  const [reverseTarget, setReverseTarget] = useState<SupplierPayment | null>(null);
+  const [reverseReason, setReverseReason] = useState('');
 
   // Return-defect form. Modal is rendered as a wide RN sheet (uses the
   // shared <Modal>), product picker reused for selection but scoped to
@@ -349,6 +365,9 @@ export default function SupplierDetailScreen() {
       queryClient.invalidateQueries({ queryKey: ['supplier-payments', id] }),
       queryClient.invalidateQueries({ queryKey: ['supplier-defect-returns', id] }),
       queryClient.invalidateQueries({ queryKey: ['suppliers'] }),
+      // «Закупка товара» в Расходах (getPaymentsReport) — сторно исключает
+      // строку из отчёта, возврат добавляет минус; кэш обязан догнать.
+      queryClient.invalidateQueries({ queryKey: ['supplier-payments-report'] }),
       // Defect stock + general products list both shift when stock is
       // moved out → refresh both. Predicate match catches any
       // ['products', { … }] variant since we keyed by an object.
@@ -377,6 +396,60 @@ export default function SupplierDetailScreen() {
     },
     onError: () => Alert.alert('Ошибка', 'Ошибка при создании платежа'),
   });
+
+  // «Возврат от поставщика»: сервер пишет строку kind='refund' с отрицательной
+  // суммой, долг поставщику растёт. Гейт — canCorrectPayments.
+  const createRefundMutation = useMutation({
+    mutationFn: (d: { supplierId: string; amount: number; comment?: string }) => suppliersApi.createRefund(d),
+    onSuccess: (_data, vars) => {
+      invalidateAll();
+      setRefundModalOpen(false);
+      setRefundAmount('');
+      setRefundComment('');
+      Alert.alert('Возврат записан', `Долг поставщику вырос на ${formatMoney(vars.amount)}`);
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || 'Не удалось записать возврат';
+      Alert.alert('Ошибка', String(msg));
+    },
+  });
+
+  // Сторно: строка платежа НЕ удаляется — помечается «Сторнировано», долг
+  // возвращается. Возврат брака сервер сторнировать откажется (400).
+  const reversePaymentMutation = useMutation({
+    mutationFn: (vars: { paymentId: string; reason?: string }) =>
+      suppliersApi.reversePayment(vars.paymentId, { reason: vars.reason }),
+    onSuccess: (res) => {
+      invalidateAll();
+      setReverseTarget(null);
+      setReverseReason('');
+      const amt = res.data?.amount;
+      Alert.alert(
+        'Платёж сторнирован',
+        typeof amt === 'number' && amt > 0
+          ? `Долг поставщику вернулся на ${formatMoney(amt)}`
+          : 'Баланс поставщика пересчитан',
+      );
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || 'Не удалось сторнировать платёж';
+      Alert.alert('Ошибка', String(msg));
+    },
+  });
+
+  const handleCreateRefund = () => {
+    const amt = parseFloat(refundAmount);
+    if (!amt || amt <= 0) {
+      Alert.alert('Ошибка', 'Укажите сумму возврата');
+      return;
+    }
+    createRefundMutation.mutate({ supplierId: id, amount: amt, comment: refundComment.trim() || undefined });
+  };
+
+  const handleConfirmReverse = () => {
+    if (!reverseTarget) return;
+    reversePaymentMutation.mutate({ paymentId: reverseTarget.id, reason: reverseReason.trim() || undefined });
+  };
 
   // Backend (POST /suppliers/:id/return-defect) does three things atomically:
   //  1) decrement defect-warehouse stock by qty,
@@ -1098,6 +1171,23 @@ export default function SupplierDetailScreen() {
               </TouchableOpacity>
             )}
 
+            {/* «Возврат от поставщика» — только с галкой корректировки платежей.
+                Для системного «Покупка б/у» канал не показываем: возвращать
+                деньги там некому. */}
+            {canCorrectPayments && !isUsedPurchaseSupplier && (
+              <TouchableOpacity
+                style={[styles.actionBtn, actionBtnDark]}
+                onPress={() => {
+                  setRefundAmount('');
+                  setRefundComment('');
+                  setRefundModalOpen(true);
+                }}
+              >
+                <Ionicons name="arrow-down-circle-outline" size={18} color={colors.teal[600]} />
+                <Text style={[styles.actionBtnText, actionTextDark]}>Возврат от поставщика</Text>
+              </TouchableOpacity>
+            )}
+
             {(payments || []).length === 0 && (
               <View style={styles.emptyState}>
                 <Ionicons name="cash-outline" size={36} color={palette.text.tertiary} />
@@ -1110,27 +1200,100 @@ export default function SupplierDetailScreen() {
               </View>
             )}
 
-            {(payments || []).map((p) => (
-              <View
-                key={p.id}
-                style={[styles.paymentCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-              >
-                <View style={[styles.deliveryAccent, { backgroundColor: colors.green[500] }]} />
-                <View style={styles.paymentContent}>
-                  <View style={styles.paymentTop}>
-                    <View>
-                      <Text style={[styles.paymentDate, { color: palette.text.primary }]}>{formatDate(p.date)}</Text>
-                      {p.comment && (
-                        <Text style={[styles.commentText, { color: palette.text.tertiary }]}>{p.comment}</Text>
-                      )}
+            {(payments || []).map((p) => {
+              const isReversed = !!p.reversedAt;
+              const isRefund = p.kind === 'refund';
+              const isDefectReturn = p.kind === 'defect_return';
+              // Сторнировать можно только действующий обычный платёж или
+              // возврат; возврат брака связан со складом — сервер откажет,
+              // кнопку не показываем вовсе.
+              const canReverseThis = canCorrectPayments && !isReversed && !isDefectReturn;
+              const accent = isReversed ? palette.text.tertiary : isRefund ? colors.teal[600] : colors.green[500];
+              return (
+                <View
+                  key={p.id}
+                  style={[styles.paymentCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <View style={[styles.deliveryAccent, { backgroundColor: accent }]} />
+                  <View style={styles.paymentContent}>
+                    <View style={styles.paymentTop}>
+                      <View style={{ flex: 1, minWidth: 0 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                          <Text style={[styles.paymentDate, { color: palette.text.primary }]}>
+                            {formatDate(p.date)}
+                          </Text>
+                          {isRefund && (
+                            // teal отсутствует в badgeColorsDark — тёмный фон
+                            // считаем softTint'ом, текст — tailwind teal-300
+                            // (в шкале colors.teal только 50/600, как у indigo).
+                            <View
+                              style={[
+                                styles.statusBadge,
+                                { backgroundColor: dark ? softTint(colors.teal[600], 'dark') : colors.teal[50] },
+                              ]}
+                            >
+                              <Text style={[styles.statusBadgeText, { color: dark ? '#5eead4' : colors.teal[600] }]}>
+                                Возврат от поставщика
+                              </Text>
+                            </View>
+                          )}
+                          {isReversed && (
+                            <View style={[styles.statusBadge, { backgroundColor: dark ? db.red.bg : colors.red[50] }]}>
+                              <Text style={[styles.statusBadgeText, { color: dark ? db.red.text : colors.red[600] }]}>
+                                Сторнировано
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                        {p.comment && (
+                          <Text style={[styles.commentText, { color: palette.text.tertiary }]}>{p.comment}</Text>
+                        )}
+                        {isReversed && p.reversalReason ? (
+                          <Text style={[styles.commentText, { color: dark ? colors.red[400] : colors.red[600] }]}>
+                            Причина: {p.reversalReason}
+                          </Text>
+                        ) : null}
+                      </View>
+                      <View style={{ alignItems: 'flex-end' }}>
+                        <Text
+                          style={[
+                            styles.paymentAmount,
+                            dark && { color: colors.green[400] },
+                            isRefund && { color: dark ? '#5eead4' : colors.teal[600] },
+                            isReversed && {
+                              color: palette.text.tertiary,
+                              textDecorationLine: 'line-through',
+                            },
+                          ]}
+                        >
+                          {formatMoney(p.amount)}
+                        </Text>
+                        {canReverseThis && (
+                          <TouchableOpacity
+                            style={styles.reverseBtn}
+                            onPress={() => {
+                              haptic('tap');
+                              setReverseReason('');
+                              setReverseTarget(p);
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons
+                              name="arrow-undo-outline"
+                              size={13}
+                              color={dark ? colors.red[400] : colors.red[600]}
+                            />
+                            <Text style={[styles.reverseBtnText, { color: dark ? colors.red[400] : colors.red[600] }]}>
+                              Сторнировать
+                            </Text>
+                          </TouchableOpacity>
+                        )}
+                      </View>
                     </View>
-                    <Text style={[styles.paymentAmount, dark && { color: colors.green[400] }]}>
-                      {formatMoney(p.amount)}
-                    </Text>
                   </View>
                 </View>
-              </View>
-            ))}
+              );
+            })}
           </>
         )}
 
@@ -1280,6 +1443,112 @@ export default function SupplierDetailScreen() {
             )}
           </TouchableOpacity>
         </View>
+      </Modal>
+
+      {/* Возврат от поставщика (Round 14) — по образцу «Новый платёж». */}
+      <Modal visible={refundModalOpen} onClose={() => setRefundModalOpen(false)} title="Возврат от поставщика">
+        <View style={[styles.expenseNotice, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Ionicons name="information-circle-outline" size={16} color={colors.teal[600]} />
+          <Text style={[styles.expenseNoticeText, { color: palette.text.secondary }]}>
+            Поставщик вернул вам деньги (переплата, возврат аванса). Долг поставщику вырастет на сумму возврата, в
+            журнале появится строка «Возврат от поставщика».
+          </Text>
+        </View>
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, f.label]}>Сумма *</Text>
+          <TextInput
+            value={refundAmount}
+            onChangeText={setRefundAmount}
+            style={[styles.formInput, f.input]}
+            keyboardType="numeric"
+            placeholder="0"
+            placeholderTextColor={palette.text.tertiary}
+          />
+        </View>
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, f.label]}>Комментарий</Text>
+          <TextInput
+            value={refundComment}
+            onChangeText={setRefundComment}
+            style={[styles.formInput, f.input, { height: 50, textAlignVertical: 'top' }]}
+            multiline
+            placeholder="Например: возврат переплаты"
+            placeholderTextColor={palette.text.tertiary}
+          />
+        </View>
+        <View style={[styles.formActions, f.actions]}>
+          <TouchableOpacity style={[styles.cancelBtn, f.cancel]} onPress={() => setRefundModalOpen(false)}>
+            <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.submitBtn, { backgroundColor: colors.teal[600] }]}
+            onPress={handleCreateRefund}
+          >
+            {createRefundMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.submitBtnText}>Записать возврат</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
+      {/* Сторно платежа (Round 14) — confirm с полем причины. Alert.prompt
+          iOS-only, поэтому кросс-платформенный Modal. */}
+      <Modal
+        visible={!!reverseTarget}
+        onClose={() => {
+          setReverseTarget(null);
+          setReverseReason('');
+        }}
+        title="Сторнировать платёж?"
+      >
+        {reverseTarget && (
+          <>
+            <View
+              style={[styles.expenseNotice, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            >
+              <Ionicons name="alert-circle-outline" size={16} color={dark ? colors.red[400] : colors.red[600]} />
+              <Text style={[styles.expenseNoticeText, { color: palette.text.secondary }]}>
+                Платёж от {formatDate(reverseTarget.date)} на {formatMoney(reverseTarget.amount)} останется в истории
+                зачёркнутым, а долг поставщику вернётся. Отменить сторно нельзя.
+                {reverseTarget.deliveryId ? ' Связанная поставка снова станет «В долг».' : ''}
+              </Text>
+            </View>
+            <View style={styles.formField}>
+              <Text style={[styles.formLabel, f.label]}>Причина сторно</Text>
+              <TextInput
+                value={reverseReason}
+                onChangeText={setReverseReason}
+                style={[styles.formInput, f.input, { height: 50, textAlignVertical: 'top' }]}
+                multiline
+                placeholder="Например: ошиблись суммой"
+                placeholderTextColor={palette.text.tertiary}
+              />
+            </View>
+            <View style={[styles.formActions, f.actions]}>
+              <TouchableOpacity
+                style={[styles.cancelBtn, f.cancel]}
+                onPress={() => {
+                  setReverseTarget(null);
+                  setReverseReason('');
+                }}
+              >
+                <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitBtn, { backgroundColor: colors.red[600] }]}
+                onPress={handleConfirmReverse}
+              >
+                {reversePaymentMutation.isPending ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text style={styles.submitBtnText}>Сторнировать</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
       </Modal>
 
       {/* Used-purchase modal — owner types a free-form product name +
@@ -1921,6 +2190,16 @@ const styles = StyleSheet.create({
   paymentTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   paymentDate: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[700] },
   paymentAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.green[600] },
+  // «Сторнировать» — компактная строчная кнопка под суммой платежа (Round 14).
+  reverseBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: spacing[1],
+    paddingVertical: 2,
+    paddingHorizontal: 4,
+  },
+  reverseBtnText: { fontSize: 11, fontWeight: fontWeight.semibold },
   // «Добавить товар» pill — reused by the defect-return modal's picker trigger.
   addItemBtn: {
     flexDirection: 'row',

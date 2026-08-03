@@ -166,6 +166,25 @@ export interface PosSettings {
   isCashier: boolean;
 }
 
+/**
+ * Round 14 (режим «Кассир»): тело 409-ответа PATCH /checks/pos-settings при
+ * попытке переключить режим с НЕЗАКРЫТЫМ конвейером — у тенанта есть
+ * отложенные заказы, стоящие на доске (is_deferred=true И work_status NOT
+ * NULL). `count` — полное число таких заказов, `checks` — первые 10 (номер,
+ * клиент, сумма): владелец видит списком, что закрыть, прежде чем менять
+ * режим. Повторная установка того же значения — no-op без гарда.
+ */
+export interface PosSettingsConflict {
+  message: string;
+  count: number;
+  checks: Array<{
+    id: string;
+    number: number;
+    clientName: string | null;
+    totalRevenue: number;
+  }>;
+}
+
 export interface SubscriptionInfo {
   tenantName: string;
   /**
@@ -658,6 +677,16 @@ export interface UserPermissions {
   warehouse_manage?: boolean;
   /** Поставщики: создавать/редактировать/удалять + поставки/оплаты (manage ⇒ view). */
   suppliers_manage?: boolean;
+  /**
+   * Поставщики: КОРРЕКТИРОВКА платежей (Round 14, миграция 145) — сторно
+   * ошибочного платежа + «Возврат от поставщика». Отдельная явная галка:
+   * suppliers_manage её НЕ влечёт. Сид системных ролей: только «Директор»
+   * (owner-class и так байпасит); «Администратор» — false (owner-only, как
+   * salary_payouts_manage). Server-enforced:
+   * @RequirePermission('suppliers_payments_correct') на POST
+   * /suppliers/payments/:id/reverse и /suppliers/payments/refund.
+   */
+  suppliers_payments_correct?: boolean;
   /** Имущество: смотреть справочник (manage ⇒ view). */
   equipment_view?: boolean;
   /** Имущество: create/update/delete/issue/replace/trash/restore. */
@@ -737,6 +766,20 @@ export interface UserPermissions {
    * all three typechecks green without touching mobile/web).
    */
   edit_closed_check?: boolean;
+  /**
+   * «Изменяет назначенный заказ» (Round 14, миграция 148, режим «Кассир») —
+   * может менять СОСТАВ (строки услуг/товаров) заказ-наряда, находящегося в
+   * конвейере режима заказов (is_deferred=true И work_status NOT NULL —
+   * карточка стоит на доске). Выключено — сотрудник только ВЫПОЛНЯЕТ
+   * назначенное: двигает карточку по доске и правит комментарий, но строки не
+   * трогает (400 «Изменение назначенного заказа запрещено ролью»). Сид
+   * миграции 148 — TRUE ВСЕМ существующим ролям (презервация 1:1: сегодня
+   * строки конвейерного драфта правит любой, кто проходит edit-гейты);
+   * владелец выключает явно. Кассира, закрывающего заказ оплатой
+   * (accept_payment + isDeferred:false), гейт не трогает. Owner-class всегда
+   * true. Выводится из ячейки RoleMatrix checks.editAssignedOrder.
+   */
+  checks_edit_assigned_order?: boolean;
   /**
    * «Движение денег: свои» (ITEM 6) — may open «Движение денег» / cash-flow and
    * see ITS OWN money operations (own checks + installment repayments the user
@@ -835,6 +878,8 @@ export type PermissionKey =
   | 'accept_payment'
   | 'sell_installment'
   | 'edit_closed_check'
+  // Round 14 (миграция 148) — режим «Кассир»: менять состав назначенного заказа.
+  | 'checks_edit_assigned_order'
   | 'services_view'
   | 'services_manage'
   | 'profit_view'
@@ -850,6 +895,7 @@ export type PermissionKey =
   | 'warehouse_delete'
   | 'suppliers_access'
   | 'suppliers_manage'
+  | 'suppliers_payments_correct'
   | 'equipment_view'
   | 'equipment_manage'
   | 'clients_view'
@@ -897,6 +943,7 @@ export const PERMISSION_GROUPS = {
     'accept_payment',
     'sell_installment',
     'edit_closed_check',
+    'checks_edit_assigned_order',
     'cash_shifts_manage',
     'checks_board_manage',
   ],
@@ -915,7 +962,7 @@ export const PERMISSION_GROUPS = {
     'motivation_manage',
   ],
   Склад: ['warehouse_access', 'warehouse_manage', 'warehouse_delete', 'warehouse_analytics_view'],
-  Поставщики: ['suppliers_access', 'suppliers_manage'],
+  Поставщики: ['suppliers_access', 'suppliers_manage', 'suppliers_payments_correct'],
   Имущество: ['equipment_view', 'equipment_manage', 'equipment_permanent_delete'],
   CRM: [
     'clients_view',
@@ -969,6 +1016,7 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     accept_payment: false, // not a cashier by default — owner grants it explicitly
     sell_installment: false, // продажа в рассрочку — owner grants it explicitly
     edit_closed_check: false, // #61 — редактирование проведённого чека выключено по умолчанию; владелец выдаёт явно
+    checks_edit_assigned_order: true, // Round 14 — TRUE: мастер и сегодня правит строки своего конвейерного драфта (презервация 1:1); владелец выключает явно
     // Услуги — мастер СМОТРИТ услуги и добавляет их в чек; каталог не редактирует.
     services_view: true,
     services_manage: false,
@@ -986,9 +1034,11 @@ export const ROLE_PERMISSION_DEFAULTS: Record<UserRole, Partial<Record<Permissio
     warehouse_access: true,
     warehouse_manage: false,
     warehouse_delete: false, // #60 — удаление товаров/папок выключено по умолчанию; владелец выдаёт явно
-    // Поставщики / Имущество — none by default.
+    // Поставщики / Имущество — none by default. Корректировка платежей
+    // (сторно/возврат) — owner-only, мастеру всегда off.
     suppliers_access: false,
     suppliers_manage: false,
+    suppliers_payments_correct: false,
     equipment_view: false,
     equipment_manage: false,
 
@@ -1057,6 +1107,7 @@ export type RoleScope = 'none' | 'own' | 'all';
  *   warehouse.view→warehouse_access (manage⇒view), warehouse.manage→warehouse_manage,
  *   warehouse.delete→warehouse_delete (manage⇒delete),
  *   suppliers.view→suppliers_access (manage⇒view), suppliers.manage→suppliers_manage,
+ *   suppliers.paymentsCorrect→suppliers_payments_correct (145; manage НЕ влечёт),
  *   equipment.view→equipment_view (manage⇒view), equipment.manage→equipment_manage,
  *   clients.view→clients_view, clients.edit→clients_edit, schedule.view→schedule_view,
  *   bookings.view→bookings_access, salary.view→salary_view(+salary_view_all при 'all'),
@@ -1095,6 +1146,12 @@ export interface RoleMatrix {
     cashShifts?: boolean;
     /** CRUD колонок доски заказ-нарядов (→ checks_board_manage). */
     board?: boolean;
+    /**
+     * «Изменяет назначенный заказ» (Round 14, миграция 148, режим «Кассир»):
+     * менять состав (строки) заказа в конвейере (→ checks_edit_assigned_order).
+     * Сид 148 — true всем существующим ролям; выключается владельцем.
+     */
+    editAssignedOrder?: boolean;
   };
   /** Услуги: view (смотреть + в чек) / manage (CRUD + %/гарантия). manage ⇒ view. */
   services?: { view?: boolean; manage?: boolean };
@@ -1104,8 +1161,12 @@ export interface RoleMatrix {
    * (/warehouse-analytics/* — маржа/себестоимость). manage ⇒ view И delete.
    */
   warehouse?: { view?: boolean; manage?: boolean; delete?: boolean; analytics?: boolean };
-  /** Поставщики: view / manage. manage ⇒ view. */
-  suppliers?: { view?: boolean; manage?: boolean };
+  /**
+   * Поставщики: view / manage (manage ⇒ view) / paymentsCorrect (сторно
+   * платежа + возврат от поставщика, миграция 145 — ЯВНАЯ галка, manage её
+   * НЕ влечёт; сид: только «Директор»).
+   */
+  suppliers?: { view?: boolean; manage?: boolean; paymentsCorrect?: boolean };
   /**
    * Имущество: view (справочник) / manage (выдача/CRUD) / permanentDelete
    * (безвозвратное удаление — owner-only, сид Админ=false). manage ⇒ view.
@@ -1192,6 +1253,54 @@ export interface Role {
   createdAt?: string;
   updatedAt?: string;
 }
+
+/**
+ * Роль-пресет «Кассир» (Round 14, CASHIER_MODE_SPEC): строгая роль приёма
+ * оплаты для режима кассовых смен. НЕ новый system_key — обычная тенантная
+ * роль из шаблона: клиент создаёт её в один тап через rolesApi.create({ name,
+ * matrix }). Матрица полностью материализована (каждая ячейка явно):
+ *   • видит ВСЕ заказ-наряды (очередь «Готовых» + поиск по госномеру);
+ *   • принимает оплату (acceptPayment) и ведёт кассовые смены (cashShifts);
+ *   • видит клиентов (карточка на заказе);
+ *   • НЕ создаёт и НЕ редактирует заказы (совмещение с исполнительскими
+ *     правами запрещено продуктом — предупреждение в редакторе ролей),
+ *     editAssignedOrder=false; всё остальное закрыто (fail-closed).
+ */
+export const CASHIER_ROLE_PRESET: { name: string; description: string; matrix: RoleMatrix } = {
+  name: 'Кассир',
+  description: 'Принимает оплату и выдаёт заказы в режиме кассовых смен',
+  matrix: {
+    checks: {
+      view: 'all',
+      create: false,
+      edit: 'none',
+      delete: false,
+      changeDatetime: false,
+      editClosed: false,
+      editPayment: false,
+      acceptPayment: true,
+      sellInstallment: false,
+      cashShifts: true,
+      board: false,
+      editAssignedOrder: false,
+    },
+    services: { view: false, manage: false },
+    warehouse: { view: false, manage: false, delete: false, analytics: false },
+    suppliers: { view: false, manage: false, paymentsCorrect: false },
+    equipment: { view: false, manage: false, permanentDelete: false },
+    clients: { view: true, edit: false, delete: false, debts: false },
+    schedule: { view: false, manage: false },
+    bookings: { view: false },
+    salary: { view: 'none', payouts: false, premiums: false, motivation: false },
+    reports: { view: false, profit: false, export: false, cashflow: 'none' },
+    expenses: { add: false },
+    marketing: { view: false, manage: false },
+    calls: { view: false, listen: false },
+    employees: { manage: false, approveProfile: false },
+    settings: { manage: false, company: false },
+    knowledge: { view: false, manage: false },
+  },
+};
 
 /**
  * Ответ GET /users/:id/effective-permissions — плоские ЭФФЕКТИВНЫЕ права
@@ -1422,6 +1531,34 @@ export interface CheckTag {
   color?: string | null;
 }
 
+/**
+ * Место автосервиса (Round 14, режим «Кассир», миграция 146 tenant_locations):
+ * «возле задних ворот», «Бокс 2». Владелец заводит места в настройках
+ * (POST/PATCH/DELETE /checks/locations, settings_manage); админ вешает место на
+ * заказ при приёмке (CreateCheckRequest.locationId), мастер видит его на
+ * карточке доски. DELETE = архив (isActive=false): старые чеки место
+ * сохраняют, пикер его больше не предлагает. Чисто карточное поле — денег,
+ * склада и зарплаты не двигает.
+ */
+export interface TenantLocation {
+  id: string;
+  name: string;
+  sortOrder: number;
+  isActive: boolean;
+  createdAt?: string;
+}
+
+/**
+ * Исполнитель заказ-наряда (Round 14, миграция 147 check_assignees): админ при
+ * приёмке назначает одного или нескольких мастеров — заказ падает на доску
+ * каждого. Зарплатная атрибуция НЕ меняется (по строкам услуг, как раньше) —
+ * исполнители про видимость на доске и уведомления.
+ */
+export interface CheckAssignee {
+  id: string;
+  fullName: string | null;
+}
+
 export interface Check {
   id: string;
   number: number;
@@ -1504,6 +1641,28 @@ export interface Check {
    * только из пикера Кассы. Additive — existing consumers safely ignore it.
    */
   tags?: CheckTag[];
+  /**
+   * Исполнители заказа (Round 14, check_assignees). Приходят в детали
+   * (GET /checks/:id) и на карточках доски (GET /checks/board). Пустой массив /
+   * absent (журнальная выдача, старый backend) = набор не загружен/пуст.
+   * Additive — existing consumers safely ignore it.
+   */
+  assignees?: CheckAssignee[];
+  /**
+   * Место заказа (Round 14, tenant_locations) — компактно {id, name} в детали
+   * и на карточке доски; absent/undefined = места нет. `locationId` — сырое
+   * поле строки (приходит и в журнальной выдаче через общий маппер).
+   */
+  location?: { id: string; name: string | null } | null;
+  locationId?: string | null;
+  /**
+   * Веха «Выдана» (Round 14, миграция 146): проставляется сервером при
+   * setWorkStatus в колонку key='delivered' (гард: только оплаченный,
+   * is_deferred=false — иначе 400 «Заказ не оплачен») и снимается при возврате
+   * карточки в другую колонку. Закрытый конвейер = !isDeferred И
+   * (deliveredAt != null ИЛИ workStatus == null).
+   */
+  deliveredAt?: string | null;
   createdAt: string;
 }
 
@@ -2030,6 +2189,7 @@ export interface DeliveryItem {
 export interface SupplierPayment {
   id: string;
   supplierId: string;
+  /** For `kind: 'refund'` the amount is NEGATIVE (sum-consumers stay correct). */
   amount: number;
   date: string;
   comment?: string;
@@ -2039,6 +2199,17 @@ export interface SupplierPayment {
    * payments made from the supplier Payments flow.
    */
   deliveryId?: string | null;
+  /**
+   * 144: 'payment' — обычный платёж; 'refund' — «Возврат от поставщика»
+   * (amount < 0); 'defect_return' — виртуальный платёж возврата брака
+   * (несторнируемый: связан со складской операцией). Absent on legacy
+   * caches → treat as 'payment'.
+   */
+  kind?: 'payment' | 'refund' | 'defect_return';
+  /** 144: момент сторно. NOT NULL = строка зачёркнута, в балансе не участвует. */
+  reversedAt?: string | null;
+  /** 144: причина сторно (заполняется в confirm-диалоге). */
+  reversalReason?: string | null;
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -3596,6 +3767,13 @@ export interface JournalDoc {
     | 'defect_transfer'
     | 'writeoff'
     | 'supplier_payment'
+    /**
+     * 144: возврат денег ОТ поставщика. Отдельный kind (не supplier_payment),
+     * потому что клиентские NEGATIVE_KINDS рисуют supplier_payment с минусом —
+     * возврат получил бы двойной минус. amount приходит уже ABS, знак «+» даёт
+     * клиент.
+     */
+    | 'supplier_refund'
     | 'used_purchase';
   occurredAt: string;
   title: string;

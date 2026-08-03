@@ -30,8 +30,10 @@ describe('MATRIX_GROUPS — покрытие словаря редактора',
     expect([...groupKeys].sort()).toEqual([...EDITOR_PERMISSION_KEYS].sort()); // полное покрытие
   });
 
-  it('52 канонических ключа − 4 свёрнутых (checks_view_all + checks_edit_all + cashflow_view_all + salary_view_all) = 48 строк редактора', () => {
-    expect(ALL_MATRIX_ROWS).toHaveLength(48);
+  it('54 канонических ключа − 4 свёрнутых (checks_view_all + checks_edit_all + cashflow_view_all + salary_view_all) = 50 строк редактора', () => {
+    // 145: +suppliers_payments_correct («Корректирует платежи поставщикам»).
+    // 148: +checks_edit_assigned_order («Изменяет назначенный заказ»).
+    expect(ALL_MATRIX_ROWS).toHaveLength(50);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'checks_view_all')).toBe(false);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'checks_edit_all')).toBe(false);
     expect(ALL_MATRIX_ROWS.some((r) => (r.key as string) === 'cashflow_view_all')).toBe(false);
@@ -123,6 +125,8 @@ describe('matrixFromDraft — полная материализация и round
     // Уровень «смотрит vs редактирует» (миграция 137) — тоже без потерь.
     draft.bools.marketing_manage = true;
     draft.bools.knowledge_view = true;
+    // Round 14 (миграция 148) — «Изменяет назначенный заказ» без потерь.
+    draft.bools.checks_edit_assigned_order = true;
     expect(draftFromMatrix(matrixFromDraft(draft))).toEqual(draft);
   });
 

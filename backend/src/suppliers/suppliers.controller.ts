@@ -84,7 +84,32 @@ export class SuppliersController {
   @RequirePermission('suppliers_manage')
   @Post('payments')
   createPayment(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.suppliersService.createPayment(user.tenantID, dto);
+    return this.suppliersService.createPayment(user.tenantID, dto, user.userID);
+  }
+
+  // ── Корректировка платежей (Round 14, миграция 144/145) ────────────────────
+  // Отдельная галка suppliers_payments_correct (сид: только Директор; admin по
+  // матрице, manage НЕ влечёт). Литеральный сегмент 'payments/refund' объявлен
+  // ДО ':id'-роутов ниже — та же грабля маршрутизации, что у 'payments-report'.
+
+  // «Возврат от поставщика»: новая строка kind='refund' с отрицательной суммой;
+  // total_paid -= x, current_debt += x.
+  @RequirePermission('suppliers_payments_correct')
+  @Post('payments/refund')
+  createRefund(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { supplierId: string; amount: number; date?: string; comment?: string },
+  ) {
+    return this.suppliersService.createRefund(user.tenantID, user.userID, dto);
+  }
+
+  // Сторно платежа: строка не удаляется — помечается reversed_at/by/reason,
+  // баланс поставщика компенсируется, авто-оплаченная поставка снова 'unpaid'.
+  // Возврат брака (kind='defect_return') сторнировать нельзя — 400.
+  @RequirePermission('suppliers_payments_correct')
+  @Post('payments/:id/reverse')
+  reversePayment(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { reason?: string }) {
+    return this.suppliersService.reversePayment(user.tenantID, user.userID, id, dto?.reason);
   }
 
   // Defect return-to-supplier. Decrements defect-warehouse stock, lowers the

@@ -614,11 +614,20 @@ export class StockMovementsService {
     );
 
     // Also record a virtual payment row so the supplier ledger has a
-    // matching entry (cash-flow style audit).
+    // matching entry (cash-flow style audit). kind='defect_return' (144):
+    // явный маркер вместо эвристики по comment — reversePayment по нему
+    // ОТКАЗЫВАЕТ в сторно (денежная нога связана со складской операцией
+    // выше; сторно только денег рассинхронизировало бы склад).
     await client.query(
-      `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id)
-       VALUES ($1, $2, now(), $3, $4)`,
-      [dto.supplierId, amount, dto.reason ? `Возврат брака: ${dto.reason}` : 'Возврат брака поставщику', tenantID],
+      `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, kind, created_by)
+       VALUES ($1, $2, now(), $3, $4, 'defect_return', $5)`,
+      [
+        dto.supplierId,
+        amount,
+        dto.reason ? `Возврат брака: ${dto.reason}` : 'Возврат брака поставщику',
+        tenantID,
+        userID,
+      ],
     );
 
     const { rows: mvRows } = await client.query(

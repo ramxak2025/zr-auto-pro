@@ -69,6 +69,8 @@ const MATRIX_CELLS: Partial<Record<PermissionKey, CellDef>> = {
   payment_edit: { section: 'checks', action: 'editPayment', kind: 'bool' },
   accept_payment: { section: 'checks', action: 'acceptPayment', kind: 'bool' },
   sell_installment: { section: 'checks', action: 'sellInstallment', kind: 'bool' },
+  // Round 14 (миграция 148, режим «Кассир») — состав назначенного заказа.
+  checks_edit_assigned_order: { section: 'checks', action: 'editAssignedOrder', kind: 'bool' },
   // Словарь v3 (миграция 136) — кассовые смены и колонки доски.
   cash_shifts_manage: { section: 'checks', action: 'cashShifts', kind: 'bool' },
   checks_board_manage: { section: 'checks', action: 'board', kind: 'bool' },
@@ -81,9 +83,11 @@ const MATRIX_CELLS: Partial<Record<PermissionKey, CellDef>> = {
   warehouse_manage: { section: 'warehouse', action: 'manage', kind: 'bool' },
   warehouse_delete: { section: 'warehouse', action: 'delete', kind: 'bool' },
   warehouse_analytics_view: { section: 'warehouse', action: 'analytics', kind: 'bool' },
-  // Поставщики: view / manage. manage ⇒ view.
+  // Поставщики: view / manage (manage ⇒ view) / paymentsCorrect (сторно +
+  // возврат от поставщика, миграция 145 — manage НЕ влечёт).
   suppliers_access: { section: 'suppliers', action: 'view', kind: 'bool' },
   suppliers_manage: { section: 'suppliers', action: 'manage', kind: 'bool' },
+  suppliers_payments_correct: { section: 'suppliers', action: 'paymentsCorrect', kind: 'bool' },
   // Имущество: view (справочник) / manage (выдача/CRUD) / permanentDelete. manage ⇒ view.
   equipment_view: { section: 'equipment', action: 'view', kind: 'bool' },
   equipment_manage: { section: 'equipment', action: 'manage', kind: 'bool' },
@@ -139,6 +143,7 @@ const MATRIX_LABELS: Record<PermissionKey, string> = {
   accept_payment: 'Кассир смены (принимает оплату)',
   sell_installment: 'Продаёт в рассрочку',
   edit_closed_check: 'Редактирует проведённый заказ-наряд',
+  checks_edit_assigned_order: 'Изменяет назначенный заказ',
   services_view: 'Видит услуги (добавляет в чек)',
   services_manage: 'Управляет каталогом услуг',
   profit_view: 'Видит прибыль',
@@ -154,6 +159,7 @@ const MATRIX_LABELS: Record<PermissionKey, string> = {
   warehouse_delete: 'Удаление на складе',
   suppliers_access: 'Доступ к поставщикам',
   suppliers_manage: 'Управляет поставщиками',
+  suppliers_payments_correct: 'Корректирует платежи поставщикам',
   equipment_view: 'Видит имущество',
   equipment_manage: 'Управляет имуществом',
   clients_view: 'Видит клиентов',
@@ -190,9 +196,13 @@ const MATRIX_HINTS: Partial<Record<PermissionKey, string>> = {
   cashflow_view: '«Свои» — только собственные операции, «Все» — по всему автосервису.',
   salary_view: '«Свои» — только своя зарплата, «Все» — по всей команде.',
   accept_payment: 'Действует, когда включён режим кассовых смен.',
+  checks_edit_assigned_order:
+    'Может менять состав (работы и товары) заказ-наряда, назначенного через доску. Выключено — сотрудник только выполняет назначенное и двигает карточку по статусам.',
   services_manage: 'Управление включает просмотр: редактирование каталога, % мастера и гарантию.',
   warehouse_manage: 'Управление включает просмотр и удаление: себестоимость, цены, остатки, инвентаризация.',
   suppliers_manage: 'Управление включает просмотр: создание, редактирование и удаление поставщиков.',
+  suppliers_payments_correct:
+    'Сторно ошибочного платежа и «Возврат от поставщика». Не входит в «Управляет поставщиками» — выдаётся отдельно.',
   equipment_manage: 'Управление включает просмотр: выдача, возврат и редактирование имущества.',
   calls_listen: 'Прослушивание записей разговоров.',
   marketing_manage: 'Управление включает просмотр: интеграции, площадки, настройки и отправку рассылок.',
@@ -290,7 +300,11 @@ function buildMatrix(m: EditableMatrix): RoleMatrix {
       delete: bool('warehouse', 'delete'),
       analytics: bool('warehouse', 'analytics'),
     },
-    suppliers: { view: bool('suppliers', 'view'), manage: bool('suppliers', 'manage') },
+    suppliers: {
+      view: bool('suppliers', 'view'),
+      manage: bool('suppliers', 'manage'),
+      paymentsCorrect: bool('suppliers', 'paymentsCorrect'),
+    },
     equipment: {
       view: bool('equipment', 'view'),
       manage: bool('equipment', 'manage'),

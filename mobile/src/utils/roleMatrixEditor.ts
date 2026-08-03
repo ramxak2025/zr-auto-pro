@@ -91,6 +91,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   accept_payment: 'Кассир смены (принимает оплату)',
   sell_installment: 'Продаёт в рассрочку',
   edit_closed_check: 'Редактирование проведённого чека',
+  checks_edit_assigned_order: 'Изменяет назначенный заказ',
   cash_shifts_manage: 'Открывает и закрывает кассовые смены',
   checks_board_manage: 'Настраивает колонки доски',
   // Услуги
@@ -116,6 +117,7 @@ export const PERMISSION_LABELS: Record<PermissionKey, string> = {
   // Поставщики
   suppliers_access: 'Смотрит поставщиков',
   suppliers_manage: 'Управляет поставщиками и поставками',
+  suppliers_payments_correct: 'Корректирует платежи поставщикам',
   // Имущество
   equipment_view: 'Смотрит имущество',
   equipment_manage: 'Управляет имуществом',
@@ -159,6 +161,7 @@ const CELL_KIND: Record<EditorPermissionKey, 'scope' | 'bool'> = {
   accept_payment: 'bool',
   sell_installment: 'bool',
   edit_closed_check: 'bool',
+  checks_edit_assigned_order: 'bool',
   cash_shifts_manage: 'bool',
   checks_board_manage: 'bool',
   // Услуги
@@ -182,6 +185,7 @@ const CELL_KIND: Record<EditorPermissionKey, 'scope' | 'bool'> = {
   // Поставщики
   suppliers_access: 'bool',
   suppliers_manage: 'bool',
+  suppliers_payments_correct: 'bool',
   // Имущество
   equipment_view: 'bool',
   equipment_manage: 'bool',
@@ -254,6 +258,7 @@ const GROUP_SPECS: readonly [
       'accept_payment',
       'sell_installment',
       'edit_closed_check',
+      'checks_edit_assigned_order',
       'cash_shifts_manage',
       'checks_board_manage',
     ],
@@ -274,7 +279,7 @@ const GROUP_SPECS: readonly [
     ],
   },
   { title: 'Склад', keys: ['warehouse_access', 'warehouse_manage', 'warehouse_delete', 'warehouse_analytics_view'] },
-  { title: 'Поставщики', keys: ['suppliers_access', 'suppliers_manage'] },
+  { title: 'Поставщики', keys: ['suppliers_access', 'suppliers_manage', 'suppliers_payments_correct'] },
   { title: 'Имущество', keys: ['equipment_view', 'equipment_manage', 'equipment_permanent_delete'] },
   {
     title: 'CRM',
@@ -352,6 +357,7 @@ export function draftFromMatrix(matrix: RoleMatrix | null | undefined): RoleMatr
       payment_edit: readBool(m.checks?.editPayment),
       accept_payment: readBool(m.checks?.acceptPayment),
       sell_installment: readBool(m.checks?.sellInstallment),
+      checks_edit_assigned_order: readBool(m.checks?.editAssignedOrder),
       cash_shifts_manage: readBool(m.checks?.cashShifts),
       checks_board_manage: readBool(m.checks?.board),
       services_view: readBool(m.services?.view),
@@ -362,6 +368,7 @@ export function draftFromMatrix(matrix: RoleMatrix | null | undefined): RoleMatr
       warehouse_analytics_view: readBool(m.warehouse?.analytics),
       suppliers_access: readBool(m.suppliers?.view),
       suppliers_manage: readBool(m.suppliers?.manage),
+      suppliers_payments_correct: readBool(m.suppliers?.paymentsCorrect),
       equipment_view: readBool(m.equipment?.view),
       equipment_manage: readBool(m.equipment?.manage),
       equipment_permanent_delete: readBool(m.equipment?.permanentDelete),
@@ -411,6 +418,7 @@ export function matrixFromDraft(draft: RoleMatrixDraft): RoleMatrix {
       editPayment: b.payment_edit,
       acceptPayment: b.accept_payment,
       sellInstallment: b.sell_installment,
+      editAssignedOrder: b.checks_edit_assigned_order,
       cashShifts: b.cash_shifts_manage,
       board: b.checks_board_manage,
     },
@@ -421,7 +429,7 @@ export function matrixFromDraft(draft: RoleMatrixDraft): RoleMatrix {
       delete: b.warehouse_delete,
       analytics: b.warehouse_analytics_view,
     },
-    suppliers: { view: b.suppliers_access, manage: b.suppliers_manage },
+    suppliers: { view: b.suppliers_access, manage: b.suppliers_manage, paymentsCorrect: b.suppliers_payments_correct },
     equipment: { view: b.equipment_view, manage: b.equipment_manage, permanentDelete: b.equipment_permanent_delete },
     clients: { view: b.clients_view, edit: b.clients_edit, delete: b.clients_delete, debts: b.debts_manage },
     schedule: { view: b.schedule_view, manage: b.schedule_manage },

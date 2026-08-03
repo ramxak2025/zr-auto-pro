@@ -251,11 +251,21 @@ export default function SupplierDetailPage() {
   // только с suppliers_manage (байпас superadmin/director — внутри
   // hasPermission; admin — по матрице роли). Просмотр — suppliers_access.
   const canManage = hasPermission('suppliers_manage');
+  // Round 14: сторно платежа + «Возврат от поставщика» — ОТДЕЛЬНАЯ галка
+  // suppliers_payments_correct (manage её НЕ влечёт; сид — только Директор).
+  // Сервер дублирует проверку на POST payments/:id/reverse и payments/refund.
+  const canCorrectPayments = hasPermission('suppliers_payments_correct');
 
   const [activeTab, setActiveTab] = useState<TabType>('deliveries');
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [isDeliveryModalOpen, setIsDeliveryModalOpen] = useState(false);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
+  // Возврат от поставщика (Round 14) — модал по образцу «Новая оплата».
+  const [isRefundModalOpen, setIsRefundModalOpen] = useState(false);
+  const [refundForm, setRefundForm] = useState({ amount: 0, comment: '' });
+  // Сторно платежа (Round 14) — confirm-модал с полем причины.
+  const [reverseTarget, setReverseTarget] = useState<SupplierPayment | null>(null);
+  const [reverseReason, setReverseReason] = useState('');
   const [showDeliveryPicker, setShowDeliveryPicker] = useState(false);
   const [isReturnModalOpen, setIsReturnModalOpen] = useState(false);
   const [showReturnPicker, setShowReturnPicker] = useState(false);
@@ -540,6 +550,62 @@ export default function SupplierDetailPage() {
       comment: paymentForm.comment,
     });
   };
+
+  // ── Корректировка платежей (Round 14) ───────────────────────────────────────
+  const invalidatePayments = () => {
+    queryClient.invalidateQueries({ queryKey: ['supplier-payments', id] });
+    queryClient.invalidateQueries({ queryKey: ['supplier', id] });
+    queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+    queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', id] });
+    // «Закупка товара» в Расходах — сторно исключает строку, возврат даёт минус.
+    queryClient.invalidateQueries({ queryKey: ['supplier-payments-report'] });
+  };
+
+  // «Возврат от поставщика»: сервер пишет строку kind='refund' с отрицательной
+  // суммой — долг поставщику растёт.
+  const createRefundMutation = useMutation({
+    mutationFn: (data: { supplierId: string; amount: number; comment?: string }) => suppliersApi.createRefund(data),
+    onSuccess: () => {
+      toast.success('Возврат от поставщика записан — долг вырос');
+      invalidatePayments();
+      setIsRefundModalOpen(false);
+      setRefundForm({ amount: 0, comment: '' });
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      toast.error(typeof msg === 'string' ? msg : 'Не удалось записать возврат');
+    },
+  });
+
+  const handleRefundSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!refundForm.amount || refundForm.amount <= 0) {
+      toast.error('Введите сумму возврата');
+      return;
+    }
+    createRefundMutation.mutate({
+      supplierId: id!,
+      amount: refundForm.amount,
+      comment: refundForm.comment || undefined,
+    });
+  };
+
+  // Сторно: строка платежа не удаляется — помечается «Сторнировано», долг
+  // возвращается, авто-оплаченная поставка (098) снова становится «unpaid».
+  const reversePaymentMutation = useMutation({
+    mutationFn: (vars: { paymentId: string; reason?: string }) =>
+      suppliersApi.reversePayment(vars.paymentId, { reason: vars.reason }),
+    onSuccess: () => {
+      toast.success('Платёж сторнирован — долг поставщику вернулся');
+      invalidatePayments();
+      setReverseTarget(null);
+      setReverseReason('');
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      toast.error(typeof msg === 'string' ? msg : 'Не удалось сторнировать платёж');
+    },
+  });
 
   // ─── Return defect form ─────────────────────────────────────────────────────
   const [returnForm, setReturnForm] = useState<{
@@ -858,12 +924,28 @@ export default function SupplierDetailPage() {
       {/* Payments Tab */}
       {activeTab === 'payments' && (
         <div className="space-y-4">
-          {canManage && (
-            <div className="flex justify-end">
-              <button onClick={openPaymentModal} className="btn-primary">
-                <Plus className="w-4 h-4" />
-                Новая оплата
-              </button>
+          {(canManage || (canCorrectPayments && !isUsedPurchaseSupplier)) && (
+            <div className="flex justify-end gap-2">
+              {/* «Возврат от поставщика» — только с галкой корректировки платежей.
+                  Для системного «Покупка б/у» канала не показываем. */}
+              {canCorrectPayments && !isUsedPurchaseSupplier && (
+                <button
+                  onClick={() => {
+                    setRefundForm({ amount: 0, comment: '' });
+                    setIsRefundModalOpen(true);
+                  }}
+                  className="btn-secondary"
+                >
+                  <Undo2 className="w-4 h-4" />
+                  Возврат от поставщика
+                </button>
+              )}
+              {canManage && (
+                <button onClick={openPaymentModal} className="btn-primary">
+                  <Plus className="w-4 h-4" />
+                  Новая оплата
+                </button>
+              )}
             </div>
           )}
 
@@ -876,24 +958,59 @@ export default function SupplierDetailPage() {
             />
           ) : (
             <div className="space-y-2">
-              {payments.map((payment) => (
-                <div key={payment.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-3.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <Calendar className="h-3.5 w-3.5 text-gray-400" />
-                        <p className="text-sm font-semibold text-gray-900">
-                          {format(new Date(payment.date), 'dd MMM yyyy', { locale: ru })}
-                        </p>
+              {payments.map((payment) => {
+                const isReversed = !!payment.reversedAt;
+                const isRefund = payment.kind === 'refund';
+                const isDefectReturn = payment.kind === 'defect_return';
+                // Возврат брака связан со складской операцией — сервер откажет
+                // в сторно, кнопку не показываем.
+                const canReverseThis = canCorrectPayments && !isReversed && !isDefectReturn;
+                return (
+                  <div
+                    key={payment.id}
+                    className={`bg-white rounded-xl border border-gray-100 shadow-sm p-3.5 ${isReversed ? 'opacity-70' : ''}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Calendar className="h-3.5 w-3.5 text-gray-400" />
+                          <p className="text-sm font-semibold text-gray-900">
+                            {format(new Date(payment.date), 'dd MMM yyyy', { locale: ru })}
+                          </p>
+                          {isRefund && <span className="badge-info flex-shrink-0">Возврат от поставщика</span>}
+                          {isReversed && <span className="badge-danger flex-shrink-0">Сторнировано</span>}
+                        </div>
+                        {payment.comment && <p className="text-xs text-gray-500 mt-1.5 truncate">{payment.comment}</p>}
+                        {isReversed && payment.reversalReason && (
+                          <p className="text-xs text-red-600 mt-1">Причина: {payment.reversalReason}</p>
+                        )}
                       </div>
-                      {payment.comment && <p className="text-xs text-gray-500 mt-1.5 truncate">{payment.comment}</p>}
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-base font-bold text-green-600 tabular-nums">{formatMoney(payment.amount)}</p>
+                      <div className="text-right flex-shrink-0">
+                        <p
+                          className={`text-base font-bold tabular-nums ${
+                            isReversed ? 'text-gray-400 line-through' : isRefund ? 'text-teal-600' : 'text-green-600'
+                          }`}
+                        >
+                          {formatMoney(payment.amount)}
+                        </p>
+                        {canReverseThis && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setReverseReason('');
+                              setReverseTarget(payment);
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] font-medium text-red-600 hover:text-red-700 mt-1"
+                          >
+                            <Undo2 className="w-3 h-3" />
+                            Сторнировать
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
@@ -1181,6 +1298,101 @@ export default function SupplierDetailPage() {
             </button>
           </div>
         </form>
+      </Modal>
+
+      {/* Refund Modal — «Возврат от поставщика» (Round 14) */}
+      <Modal isOpen={isRefundModalOpen} onClose={() => setIsRefundModalOpen(false)} title="Возврат от поставщика">
+        <form onSubmit={handleRefundSubmit} className="space-y-4">
+          <p className="text-xs text-gray-500">
+            Поставщик вернул вам деньги (переплата, возврат аванса). Долг поставщику вырастет на сумму возврата, в
+            журнале появится строка «Возврат от поставщика».
+          </p>
+          <div>
+            <label className="label">Сумма *</label>
+            <input
+              type="number"
+              className="input"
+              min={0}
+              value={refundForm.amount || ''}
+              onChange={(e) => setRefundForm({ ...refundForm, amount: parseFloat(e.target.value) || 0 })}
+              placeholder="0"
+            />
+          </div>
+          <div>
+            <label className="label">Комментарий</label>
+            <textarea
+              className="input"
+              rows={2}
+              value={refundForm.comment}
+              onChange={(e) => setRefundForm({ ...refundForm, comment: e.target.value })}
+              placeholder="Например: возврат переплаты"
+            />
+          </div>
+          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+            <button type="button" onClick={() => setIsRefundModalOpen(false)} className="btn-secondary">
+              Отмена
+            </button>
+            <button type="submit" disabled={createRefundMutation.isPending} className="btn-primary">
+              {createRefundMutation.isPending ? 'Сохранение...' : 'Записать возврат'}
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Reverse Payment Modal — сторно с полем причины (Round 14) */}
+      <Modal
+        isOpen={!!reverseTarget}
+        onClose={() => {
+          setReverseTarget(null);
+          setReverseReason('');
+        }}
+        title="Сторнировать платёж?"
+      >
+        {reverseTarget && (
+          <div className="space-y-4">
+            <p className="text-sm text-gray-600">
+              Платёж от {format(new Date(reverseTarget.date), 'dd MMM yyyy', { locale: ru })} на{' '}
+              <span className="font-semibold">{formatMoney(reverseTarget.amount)}</span> останется в истории
+              зачёркнутым, а долг поставщику вернётся. Отменить сторно нельзя.
+              {reverseTarget.deliveryId ? ' Связанная поставка снова станет неоплаченной.' : ''}
+            </p>
+            <div>
+              <label className="label">Причина сторно</label>
+              <textarea
+                className="input"
+                rows={2}
+                value={reverseReason}
+                onChange={(e) => setReverseReason(e.target.value)}
+                placeholder="Например: ошиблись суммой"
+              />
+            </div>
+            <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
+              <button
+                type="button"
+                onClick={() => {
+                  setReverseTarget(null);
+                  setReverseReason('');
+                }}
+                className="btn-secondary"
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                disabled={reversePaymentMutation.isPending}
+                onClick={() =>
+                  reversePaymentMutation.mutate({
+                    paymentId: reverseTarget.id,
+                    reason: reverseReason.trim() || undefined,
+                  })
+                }
+                className="btn-danger"
+              >
+                {reversePaymentMutation.isPending ? 'Сторнирование...' : 'Сторнировать'}
+              </button>
+            </div>
+          </div>
+        )}
       </Modal>
 
       {/* Return Defect Modal */}

@@ -584,6 +584,8 @@ export class SuppliersService {
       params,
     );
 
+    // Reversed-строки НЕ прячем (решение Round 14): владелец должен видеть
+    // историю «платёж был и был сторнирован», клиент рисует их зачёркнутыми.
     return rows.map((r) => ({
       id: r.id,
       supplierId: r.supplier_id,
@@ -592,6 +594,11 @@ export class SuppliersService {
       comment: r.comment,
       // Set when this payment was auto-created by «Оплатить сразу» at receiving (098).
       deliveryId: r.delivery_id ?? null,
+      // 144: 'payment' | 'refund' (amount < 0) | 'defect_return' (виртуальный
+      // платёж возврата брака — несторнируемый).
+      kind: (r.kind as string | null) ?? 'payment',
+      reversedAt: r.reversed_at ?? null,
+      reversalReason: r.reversal_reason ?? null,
     }));
   }
 
@@ -604,6 +611,11 @@ export class SuppliersService {
    *
    * Период — московский полуинтервал [dateFrom 00:00 МСК, dateTo+1 00:00 МСК),
    * как в reports.getCashFlow. Тенант-скоуп обязателен.
+   *
+   * Round 14 (144): сторнированные платежи (reversed_at NOT NULL) исключены —
+   * денег по ним не было. Строки kind='refund' идут с ОТРИЦАТЕЛЬНОЙ суммой и
+   * остаются в выборке: возврат от поставщика честно уменьшает «Закупку
+   * товара» за период.
    */
   async getPaymentsReport(
     tenantID: string,
@@ -630,6 +642,7 @@ export class SuppliersService {
          FROM supplier_payments sp
          LEFT JOIN suppliers s ON s.id = sp.supplier_id AND s.tenant_id = sp.tenant_id
         WHERE sp.tenant_id = $1
+          AND sp.reversed_at IS NULL
           AND sp.date >= $2::date::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}'
           AND sp.date < ($3::date + 1)::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}'
         ORDER BY sp.date DESC
@@ -648,7 +661,7 @@ export class SuppliersService {
     return { total, items };
   }
 
-  async createPayment(tenantID: string, dto: any) {
+  async createPayment(tenantID: string, dto: any, userID: string | null = null) {
     if (!dto.supplierId || !dto.amount) {
       throw new BadRequestException({ message: 'Поставщик и сумма обязательны' });
     }
@@ -668,9 +681,9 @@ export class SuppliersService {
       }
 
       const { rows } = await client.query(
-        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id)
-         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [dto.supplierId, dto.amount, dto.date || new Date().toISOString(), dto.comment, tenantID],
+        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, created_by)
+         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [dto.supplierId, dto.amount, dto.date || new Date().toISOString(), dto.comment, tenantID, userID],
       );
 
       await client.query(
@@ -685,6 +698,154 @@ export class SuppliersService {
       await client.query('ROLLBACK');
       if (err instanceof BadRequestException) throw err;
       this.logger.error(`Payment create error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * СТОРНО платежа поставщику (Round 14, миграция 144). НЕ физическое
+   * удаление: строка остаётся в supplier_payments (append-only), помечается
+   * reversed_at / reversed_by / reversal_reason, а денормализованный баланс
+   * поставщика компенсируется ЗЕРКАЛЬНО тому, как платёж его двигал:
+   * createPayment делал total_paid += amount / current_debt -= amount →
+   * сторно делает total_paid -= amount / current_debt += amount. Для
+   * kind='refund' (amount < 0) та же формула симметрично откатывает возврат.
+   *
+   * Гарантия целостности: SELECT ... FOR UPDATE на строке платежа держит лок
+   * до COMMIT — два параллельных сторно одного платежа невозможны (второй
+   * дождётся лока и увидит reversed_at NOT NULL → 400). Всё в одной
+   * транзакции: пометка строки и компенсация баланса либо происходят вместе,
+   * либо не происходят вовсе.
+   *
+   * Запреты:
+   *   • повторное сторно (reversed_at NOT NULL) — 400;
+   *   • kind='defect_return' — 400: «виртуальный платёж» возврата брака
+   *     связан со складской операцией (stock_movements уже уменьшил остаток
+   *     брака); сторно только денежной ноги рассинхронизировало бы склад.
+   *
+   * Если платёж был авто-платежом «Оплатить сразу» при приёмке (delivery_id
+   * NOT NULL) — поставка возвращается в payment_status='unpaid': долг по ней
+   * снова открыт, владелец погасит его обычным платежом (решение по
+   * умолчанию, задокументировано).
+   */
+  async reversePayment(tenantID: string, userID: string | null, paymentId: string, reason?: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Tenant-scoped FOR UPDATE — чужой тенант получает 404, параллельное
+      // сторно сериализуется на локе строки.
+      const { rows } = await client.query(
+        `SELECT id, supplier_id, amount, kind, reversed_at, delivery_id
+           FROM supplier_payments
+          WHERE id = $1 AND tenant_id = $2
+          FOR UPDATE`,
+        [paymentId, tenantID],
+      );
+      if (rows.length === 0) {
+        throw new NotFoundException({ message: 'Платёж не найден' });
+      }
+      const payment = rows[0];
+      if (payment.reversed_at) {
+        throw new BadRequestException({ message: 'Платёж уже сторнирован' });
+      }
+      if (payment.kind === 'defect_return') {
+        throw new BadRequestException({
+          message:
+            'Возврат брака нельзя сторнировать: он связан со складской операцией. ' +
+            'Оформите обратную поставку или корректировку склада.',
+        });
+      }
+
+      const amount = parseFloat(payment.amount) || 0;
+
+      await client.query(
+        `UPDATE supplier_payments
+            SET reversed_at = now(), reversed_by = $1, reversal_reason = $2
+          WHERE id = $3 AND tenant_id = $4`,
+        [userID, reason?.trim() || null, paymentId, tenantID],
+      );
+
+      // Компенсация денорм-баланса — зеркало createPayment.
+      await client.query(
+        `UPDATE suppliers SET total_paid = total_paid - $1, current_debt = current_debt + $1
+          WHERE id = $2 AND tenant_id = $3`,
+        [amount, payment.supplier_id, tenantID],
+      );
+
+      // Авто-платёж «Оплатить сразу» (098): поставка снова не оплачена.
+      if (payment.delivery_id) {
+        await client.query(`UPDATE deliveries SET payment_status = 'unpaid' WHERE id = $1 AND tenant_id = $2`, [
+          payment.delivery_id,
+          tenantID,
+        ]);
+      }
+
+      await client.query('COMMIT');
+      return { id: paymentId, supplierId: payment.supplier_id, amount };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      this.logger.error(`Payment reverse error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * «Возврат от поставщика» (Round 14, миграция 144): поставщик вернул нам
+   * деньги (переплата, возврат аванса и т.п.). Пишется НОВОЙ строкой
+   * kind='refund' с ОТРИЦАТЕЛЬНЫМ amount — все SUM-потребители
+   * (getPaymentsReport, суммы по платежам) остаются корректны без правок
+   * формул. Баланс — зеркально платежу: total_paid -= x, current_debt += x
+   * (нам вернули деньги → оплачено меньше → долг перед поставщиком снова
+   * больше). В журнале строка рендерится как «Возврат от поставщика» с
+   * ПОЛОЖИТЕЛЬНЫМ знаком (kind 'supplier_refund' в journal.service).
+   */
+  async createRefund(
+    tenantID: string,
+    userID: string | null,
+    dto: { supplierId?: string; amount?: number; date?: string; comment?: string },
+  ) {
+    const amount = parseFloat(String(dto?.amount ?? ''));
+    if (!dto?.supplierId || !isFinite(amount) || amount <= 0) {
+      throw new BadRequestException({ message: 'Поставщик и положительная сумма обязательны' });
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // Cross-tenant guard — как в createPayment.
+      const { rows: supRows } = await client.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
+        dto.supplierId,
+        tenantID,
+      ]);
+      if (supRows.length === 0) {
+        throw new BadRequestException({ message: 'Поставщик не найден' });
+      }
+
+      const { rows } = await client.query(
+        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, kind, created_by)
+         VALUES ($1, $2, $3, $4, $5, 'refund', $6) RETURNING id`,
+        [dto.supplierId, -amount, dto.date || new Date().toISOString(), dto.comment?.trim() || null, tenantID, userID],
+      );
+
+      await client.query(
+        `UPDATE suppliers SET total_paid = total_paid - $1, current_debt = current_debt + $1
+          WHERE id = $2 AND tenant_id = $3`,
+        [amount, dto.supplierId, tenantID],
+      );
+
+      await client.query('COMMIT');
+      return { id: rows[0].id };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof BadRequestException) throw err;
+      this.logger.error(`Refund create error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
       client.release();
@@ -784,9 +945,9 @@ export class SuppliersService {
     let paymentId: string | null = null;
     if (paid && invoiceTotal > 0) {
       const { rows: payRows } = await client.query(
-        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, delivery_id)
-         VALUES ($1, $2, now(), $3, $4, $5) RETURNING id`,
-        [params.supplierId, invoiceTotal, 'Оплата при приёмке заказа', tenantID, deliveryId],
+        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, delivery_id, created_by)
+         VALUES ($1, $2, now(), $3, $4, $5, $6) RETURNING id`,
+        [params.supplierId, invoiceTotal, 'Оплата при приёмке заказа', tenantID, deliveryId, userID],
       );
       paymentId = payRows[0].id;
       await client.query(

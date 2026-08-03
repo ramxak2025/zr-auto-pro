@@ -11,6 +11,7 @@ export interface JournalDoc {
     | 'defect_transfer'
     | 'writeoff'
     | 'supplier_payment'
+    | 'supplier_refund'
     | 'used_purchase';
   occurredAt: string;
   title: string;
@@ -29,6 +30,11 @@ const KIND_META: Record<JournalDoc['kind'], { badge: string; badgeColor: string;
   defect_transfer: { badge: 'В брак', badgeColor: 'red', title: 'Перемещение в брак' },
   writeoff: { badge: 'Списание', badgeColor: 'red', title: 'Списание со склада' },
   supplier_payment: { badge: 'Оплата', badgeColor: 'blue', title: 'Оплата поставщику' },
+  // 144: возврат денег ОТ поставщика (kind='refund', amount < 0 в БД). В
+  // журнале — ОТДЕЛЬНЫЙ kind с ABS(amount): клиентские NEGATIVE_KINDS считают
+  // supplier_payment оттоком, и без отдельного kind возврат получил бы
+  // двойной минус. Teal — деньги пришли, но это не продажа.
+  supplier_refund: { badge: 'Возврат от поставщика', badgeColor: 'teal', title: 'Возврат от поставщика' },
   used_purchase: { badge: 'Б/У', badgeColor: 'purple', title: 'Покупка Б/У товара' },
 };
 
@@ -117,8 +123,9 @@ export class JournalService {
       }
     }
 
-    if (!type || type === 'supplier_payment') {
-      const spConds: string[] = ['sp.tenant_id = $1'];
+    if (!type || type === 'supplier_payment' || type === 'supplier_refund') {
+      // 144: сторнированные строки исключены — денег по ним не было.
+      const spConds: string[] = ['sp.tenant_id = $1', 'sp.reversed_at IS NULL'];
       const spParams: any[] = [tenantID];
       let spIdx = 2;
       if (params.from) {
@@ -130,7 +137,7 @@ export class JournalService {
         spParams.push(params.to);
       }
       const { rows: payRows } = await this.pool.query(
-        `SELECT sp.id, sp.amount, sp.date, sp.comment, sp.created_at, s.name as supplier_name
+        `SELECT sp.id, sp.amount, sp.date, sp.comment, sp.created_at, sp.kind, s.name as supplier_name
          FROM supplier_payments sp
          LEFT JOIN suppliers s ON s.id = sp.supplier_id
          WHERE ${spConds.join(' AND ')}
@@ -139,14 +146,27 @@ export class JournalService {
         spParams,
       );
       for (const r of payRows) {
-        const meta = KIND_META.supplier_payment;
+        // 'payment' и 'defect_return' остаются supplier_payment (как до 144);
+        // 'refund' — отдельный kind: заголовок «Возврат от поставщика» и
+        // ABS(amount), знак строке даёт клиент по kind (refund — приток).
+        const kind: JournalDoc['kind'] = r.kind === 'refund' ? 'supplier_refund' : 'supplier_payment';
+        if (type && kind !== type) continue;
+        const meta = KIND_META[kind];
+        const rawAmount = parseFloat(r.amount) || 0;
         out.push({
           id: r.id,
-          kind: 'supplier_payment',
+          kind,
           occurredAt: r.date || r.created_at,
-          title: r.supplier_name ? `Оплата: ${r.supplier_name}` : 'Оплата поставщику',
+          title:
+            kind === 'supplier_refund'
+              ? r.supplier_name
+                ? `Возврат от поставщика: ${r.supplier_name}`
+                : 'Возврат от поставщика'
+              : r.supplier_name
+                ? `Оплата: ${r.supplier_name}`
+                : 'Оплата поставщику',
           subtitle: r.comment || undefined,
-          amount: parseFloat(r.amount) || 0,
+          amount: Math.abs(rawAmount),
           badge: meta.badge,
           badgeColor: meta.badgeColor,
           payeeName: r.supplier_name || undefined,

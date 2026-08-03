@@ -430,6 +430,19 @@ export interface CreateCheckRequest {
    * связок не создаёт). Чужие/архивные id сервер молча отбрасывает.
    */
   tagIds?: string[];
+  /**
+   * Место заказа (Round 14, tenant_locations): id из справочника мест.
+   * ''/null/absent → без места. Чужой/несуществующий id → 400 «Место не
+   * найдено».
+   */
+  locationId?: string | null;
+  /**
+   * Исполнители заказа (Round 14, check_assignees): id сотрудников тенанта.
+   * Absent → сервер выводит дефолт (distinct исполнители строк услуг +
+   * главный мастер), поэтому доски работают и для старых клиентов. Чужие/
+   * кривые id сервер молча отбрасывает. Зарплату не двигает.
+   */
+  assigneeIds?: string[];
 }
 
 export interface UpdateCheckRequest {
@@ -464,6 +477,17 @@ export interface UpdateCheckRequest {
    * трогать» — частичный PATCH и старые клиенты метки не стирают.
    */
   tagIds?: string[];
+  /**
+   * Место заказа (Round 14): присутствие поля = установить (''/null снимает
+   * место); отсутствие = «не трогать». Чужой id → 400.
+   */
+  locationId?: string | null;
+  /**
+   * Исполнители (Round 14): присутствие поля = «перезаписать набор ровно
+   * этими сотрудниками» (пустой массив снимает всех); отсутствие = «не
+   * трогать» — частичный PATCH и старые клиенты набор не стирают.
+   */
+  assigneeIds?: string[];
 }
 
 export interface CreateSupplierRequest {
@@ -492,6 +516,19 @@ export interface CreateDeliveryRequest {
 }
 
 export interface CreatePaymentRequest {
+  supplierId: string;
+  amount: number;
+  date?: string;
+  comment?: string;
+}
+
+/**
+ * «Возврат от поставщика» (Round 14). `amount` — ПОЛОЖИТЕЛЬНАЯ сумма возврата;
+ * сервер сам сохраняет строку kind='refund' с отрицательным amount и двигает
+ * баланс (total_paid -= amount, current_debt += amount). Гейт —
+ * suppliers_payments_correct.
+ */
+export interface SupplierRefundRequest {
   supplierId: string;
   amount: number;
   date?: string;

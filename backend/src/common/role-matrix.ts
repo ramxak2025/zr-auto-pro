@@ -27,7 +27,12 @@
  *     • manage — себестоимость + add/edit/цены/сток/инвентаризация (→ warehouse_manage);
  *     • delete — удаление товаров/папок (→ warehouse_delete, legacy back-compat);
  *     • analytics — /warehouse-analytics/* (маржа/себестоимость) (→ warehouse_analytics_view).
- *   suppliers: view, manage   (→ suppliers_access / suppliers_manage)
+ *   suppliers: view, manage, paymentsCorrect
+ *     • view   — смотреть поставщиков/поставки/оплаты (→ suppliers_access);
+ *     • manage — CRUD + поставки/оплаты/возвраты/б-у (→ suppliers_manage);
+ *     • paymentsCorrect — сторно платежа + возврат от поставщика
+ *       (→ suppliers_payments_correct, миграция 145). manage НЕ влечёт
+ *       paymentsCorrect — право корректировать деньги выдаётся явно.
  *   equipment: view, manage, permanentDelete (безвозвратное удаление — owner-only)
  *   clients:   view, edit, delete, debts (долги + рассрочка)
  *   schedule:  view, manage (мутации расписания / work-modes)
@@ -101,6 +106,12 @@
  *   company_manage             ← settings.company          (сид Админ=false)
  *   knowledge_view             ← knowledge.view            (manage ⇒ view)
  *   knowledge_manage           ← knowledge.manage
+ *   ── Round 14 (миграция 148) — режим «Кассир» ──
+ *   checks_edit_assigned_order ← checks.editAssignedOrder (сид ВСЕМ ролям true —
+ *                                презервация 1:1, владелец выключает сам)
+ *   ── Round 14 (миграция 145) — корректировка платежей поставщикам ──
+ *   suppliers_payments_correct ← suppliers.paymentsCorrect (сид Админ=false —
+ *                                owner-only; manage НЕ влечёт)
  *
  * ВАЖНО: словарь обязан оставаться зеркалом PermissionKey из
  * shared/types/index.ts (backend не может импортировать shared — вне rootDir).
@@ -139,10 +150,11 @@ const BOOL_ACTIONS: Record<string, readonly string[]> = {
     'sellInstallment',
     'cashShifts',
     'board',
+    'editAssignedOrder',
   ],
   services: ['view', 'manage'],
   warehouse: ['view', 'manage', 'delete', 'analytics'],
-  suppliers: ['view', 'manage'],
+  suppliers: ['view', 'manage', 'paymentsCorrect'],
   equipment: ['view', 'manage', 'permanentDelete'],
   clients: ['view', 'edit', 'delete', 'debts'],
   schedule: ['view', 'manage'],
@@ -231,6 +243,11 @@ export function flattenRoleMatrix(rawMatrix: unknown): Record<string, boolean> {
     payment_edit: readBool(matrix, 'checks', 'editPayment'),
     accept_payment: readBool(matrix, 'checks', 'acceptPayment'),
     sell_installment: readBool(matrix, 'checks', 'sellInstallment'),
+    // Round 14 (миграция 148, режим «Кассир»): менять СОСТАВ назначенного
+    // заказа в конвейере (is_deferred + work_status). Миграция засеяла true
+    // всем существующим ролям (презервация 1:1); отсутствие в новой роли —
+    // fail-closed false, как у всех ячеек.
+    checks_edit_assigned_order: readBool(matrix, 'checks', 'editAssignedOrder'),
     // Услуги — view (смотреть + в чек) / manage (CRUD + %/гарантия). manage ⇒ view.
     services_view: readBool(matrix, 'services', 'view') || servicesManage,
     services_manage: servicesManage,
@@ -242,6 +259,10 @@ export function flattenRoleMatrix(rawMatrix: unknown): Record<string, boolean> {
     // Поставщики — view / manage. manage ⇒ view.
     suppliers_access: readBool(matrix, 'suppliers', 'view') || suppliersManage,
     suppliers_manage: suppliersManage,
+    // Корректировка платежей поставщикам (миграция 145): сторно + возврат от
+    // поставщика. ЯВНАЯ галка — manage НЕ влечёт (деньги правит только тот,
+    // кому владелец включил ячейку; у системных ролей сид только у Директора).
+    suppliers_payments_correct: readBool(matrix, 'suppliers', 'paymentsCorrect'),
     // Имущество — view / manage. manage ⇒ view.
     equipment_view: readBool(matrix, 'equipment', 'view') || equipmentManage,
     equipment_manage: equipmentManage,

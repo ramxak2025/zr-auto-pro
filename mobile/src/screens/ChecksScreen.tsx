@@ -112,6 +112,10 @@ const journalKindLabels: Record<JournalKind, string> = {
   defect_transfer: 'Брак',
   writeoff: 'Списания',
   supplier_payment: 'Платежи',
+  // 144: возврат денег ОТ поставщика — отдельный kind (не supplier_payment),
+  // потому что supplier_payment сидит в NEGATIVE_KINDS: возврат с минусом
+  // читался бы как отток, хотя деньги ПРИШЛИ.
+  supplier_refund: 'Возврат от поставщика',
   used_purchase: 'Б/У',
 };
 
@@ -144,6 +148,10 @@ const journalKindVisual: Record<
   defect_transfer: { icon: 'warning-outline', accentColor: colors.red[500], iconColor: colors.red[600] },
   writeoff: { icon: 'trash-outline', accentColor: colors.gray[400], iconColor: colors.gray[600] },
   supplier_payment: { icon: 'cash-outline', accentColor: colors.blue[500], iconColor: colors.blue[600] },
+  // Возврат от поставщика — деньги пришли (приток, знак «+», НЕ в
+  // NEGATIVE_KINDS). Teal перекликается с customer_return («вернулось»), но
+  // иконка кошелька отличает денежный возврат от складского.
+  supplier_refund: { icon: 'wallet-outline', accentColor: colors.teal[600], iconColor: colors.teal[600] },
   // Used-purchase rows get a stronger visual treatment per owner brief —
   // soft purple background so they stand out from the generic green
   // purchase rows even on a busy day.
@@ -174,6 +182,7 @@ const KIND_CHIPS: Array<{ key: JournalKind | null; label: string }> = [
   { key: 'defect_transfer', label: journalKindLabels.defect_transfer },
   { key: 'writeoff', label: journalKindLabels.writeoff },
   { key: 'supplier_payment', label: journalKindLabels.supplier_payment },
+  { key: 'supplier_refund', label: journalKindLabels.supplier_refund },
   { key: 'used_purchase', label: journalKindLabels.used_purchase },
 ];
 
