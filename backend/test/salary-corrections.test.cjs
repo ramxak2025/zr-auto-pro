@@ -62,6 +62,37 @@ test('confirmPayment отклоняет сторнированную выпла�
   assert.match(service, /Выплата отменена владельцем/);
 });
 
+test('confirmPayment: INSERT подтверждения условный (guard от гонки со сторно)', () => {
+  // Review п.6 — read-then-act по reversed_at без лока: между пре-чеком и
+  // INSERT владелец мог сторнировать выплату. Авторитетный guard обязан жить
+  // в самом INSERT (INSERT … SELECT … WHERE reversed_at IS NULL), а не только
+  // в пре-чеке.
+  assert.match(
+    service,
+    /INSERT INTO salary_payment_confirmations \(payment_id, user_id\)\s+SELECT sp\.id, \$2\s+FROM salary_payments sp\s+WHERE sp\.id = \$1 AND sp\.tenant_id = \$3 AND sp\.user_id = \$2\s+AND sp\.reversed_at IS NULL/,
+    'подтверждение вставляется ТОЛЬКО при живой (не сторнированной) выплате',
+  );
+});
+
+test('getAll.payments: reversed исключены + confirmed_at замаплен (compat старых сборок)', () => {
+  // Review п.3 — старые сборки без reversedAt-guard зациклили бы confirm-модал
+  // на сторнированной строке; серверный compat — не отдавать reversed в
+  // getAll.payments (карточка месяца — getEmployeeMonth, web-история —
+  // getPayments: там reversed остаются и рисуются зачёркнутыми).
+  assert.match(
+    service,
+    /sp\.month_year IN \(\$\{placeholders\}\)\s+AND sp\.reversed_at IS NULL/,
+    'сторнированные legacy-выплаты не должны попадать в getAll.payments',
+  );
+  // Pre-existing gap: без confirmed_at клиентский фильтр `!confirmedAt` был
+  // истинным всегда — подтверждённая выплата всплывала модалом до конца месяца.
+  assert.match(
+    service,
+    /confirmedAt: p\.confirmed_at \?\? null/,
+    'getAll обязан отдавать confirmedAt по строкам payments',
+  );
+});
+
 // ── 2. Транзакционность и идемпотентность денежных путей ─────────────────────
 
 test('cancelPayout: адресный лок, guard статуса, транзакционный аудит', () => {
@@ -78,6 +109,54 @@ test('reversePayment: адресный лок, guard reversed_at, отказ п�
   assert.match(body, /reversed_at IS NULL\s+RETURNING/, 'UPDATE перепроверяет, что ещё не сторнирована');
   assert.match(body, /candidates\.length > 1/, 'больше одного кандидата-расхода → честный отказ, не угадываем');
   assert.match(body, /logTx\(/);
+});
+
+test('reversePayment: best-effort-матч расхода сужен по ИМЕНИ сотрудника', () => {
+  // Review п.1 [деньги] — матч только по сумма+категория+±1с+'Зарплата:%' при
+  // «ровно одном НЕВЕРНОМ кандидате» удалял расход ДРУГОГО сотрудника (свой
+  // удалён руками раньше, а рядом зарплата соседа той же суммы). Описания
+  // создаются как «Зарплата: <имя> …» (createPayment) — матч обязан включать
+  // имя из уже прочитанной строки выплаты, с экранированием LIKE-спецсимволов.
+  const body = service.slice(service.indexOf('async reversePayment'), service.indexOf('async updatePenalty'));
+  assert.match(
+    body,
+    /e\.description LIKE 'Зарплата: ' \|\| \$4 \|\| '%'/,
+    'префикс-матч описания обязан содержать имя сотрудника',
+  );
+  assert.match(
+    body,
+    /escapeLike\(payment\.user_name\)/,
+    'имя в LIKE-шаблоне экранируется (иначе %/_ в имени — wildcard)',
+  );
+  assert.match(
+    body,
+    /else if \(payment\.user_name\)/,
+    'без имени (сотрудник удалён) матч не выполняется → expenseCompensated=false',
+  );
+});
+
+test('cancelPayout/reversePayment: один авторетрай FK-дедлока 40P01', () => {
+  // Review п.5 — cancel/reverse vs ручное удаление того же расхода: DELETE
+  // expenses в чужой транзакции ждёт наш лок (FK … ON DELETE SET NULL), мы —
+  // его лок. Жертва 40P01 обязана ретраить всю транзакцию ровно один раз:
+  // после отката FK уже обнулил expense_id → ретрай проходит с
+  // expenseCompensated=false.
+  const cancel = service.slice(service.indexOf('async cancelPayout'), service.indexOf('async updatePendingPayout'));
+  assert.match(cancel, /'40P01'/, 'cancelPayout: ретрай дедлока');
+  const reverse = service.slice(service.indexOf('async reversePayment'), service.indexOf('async updatePenalty'));
+  assert.match(reverse, /'40P01'/, 'reversePayment: ретрай дедлока');
+});
+
+test('cancelPayout возвращает expenseCompensated (клиент показывает «проверьте Расходы»)', () => {
+  const cancel = service.slice(service.indexOf('async cancelPayout'), service.indexOf('async updatePendingPayout'));
+  assert.match(cancel, /return \{ \.\.\.this\.mapPayout\(result\), expenseCompensated \}/);
+});
+
+test('пуши отмены/сторно несут data.type для листенера мобильного контекста', () => {
+  // Review п.2в — SalaryNotificationContext матчит push по data.type;
+  // без него модал сотрудника не узнаёт об отмене, пока открыт.
+  assert.match(service, /type: 'payout-cancelled'/);
+  assert.match(service, /type: 'payment-reversed'/);
 });
 
 test('createPayment связывает выплату с расходом (expense_id) в одной транзакции', () => {

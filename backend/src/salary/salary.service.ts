@@ -42,6 +42,15 @@ export class SalaryService {
   }
 
   /**
+   * 153 review-fix (п.1) — экранирует спецсимволы шаблона LIKE (\, %, _):
+   * имя сотрудника участвует в префикс-матче описания расхода
+   * (reversePayment) как ЛИТЕРАЛ, а не как шаблон.
+   */
+  private static escapeLike(value: string): string {
+    return value.replace(/([\\%_])/g, '\\$1');
+  }
+
+  /**
    * v3.0.1 ФИЧА 4 — сколько ОТРАБОТАННЫХ смен у каждого сотрудника в диапазоне
    * [dateFrom, dateTo] (YYYY-MM-DD, включительно). «Смена» определяется НАСТРОЙКАМИ
    * расписания тенанта (schedule_settings.shift_statuses → ScheduleService.
@@ -167,16 +176,29 @@ export class SalaryService {
     // Build month_year values for the date range to query payments
     const monthYears = this.getMonthYearsForRange(dateFrom, dateTo);
 
-    // Query payments for all masters in the period
+    // Query payments for all masters in the period.
+    // 153 review-fix — контракт совместимости со СТАРЫМИ сборками: их
+    // SalaryNotificationContext ищет «неподтверждённую» выплату именно в этом
+    // payments[] и НЕ знает про reversed_at — сторнированная строка зациклила
+    // бы confirm-модал навсегда (сервер отвечает 400 на каждый confirm).
+    // Reversed-строки отсюда исключаем: массив потребляет ТОЛЬКО контекст
+    // подтверждения (проверено: карточка месяца — getEmployeeMonth, web-история
+    // — getPayments; обе продолжают отдавать reversed зачёркнутыми).
+    // + confirmed_at: раньше поля в getAll не было вовсе — клиентский фильтр
+    // `!p.confirmedAt` был истинным ВСЕГДА, и уже подтверждённая выплата
+    // всплывала модалом до конца месяца (pre-existing gap, review п.3).
     let paymentRows: any[] = [];
     if (monthYears.length > 0) {
       const placeholders = monthYears.map((_, i) => `$${i + 2}`).join(', ');
       const { rows: pRows } = await this.pool.query(
-        `SELECT sp.*, u.full_name as user_name, c.full_name as creator_name
+        `SELECT sp.*, u.full_name as user_name, c.full_name as creator_name,
+                spc.confirmed_at
          FROM salary_payments sp
          LEFT JOIN users u ON u.id = sp.user_id
          LEFT JOIN users c ON c.id = sp.created_by
+         LEFT JOIN salary_payment_confirmations spc ON spc.payment_id = sp.id AND spc.user_id = sp.user_id
          WHERE sp.tenant_id = $1 AND sp.month_year IN (${placeholders})
+           AND sp.reversed_at IS NULL
          ORDER BY sp.date DESC LIMIT 500`,
         [tenantID, ...monthYears],
       );
@@ -198,9 +220,13 @@ export class SalaryService {
         createdBy: p.created_by,
         creatorName: p.creator_name,
         date: p.date,
+        // 153 review-fix — без confirmed_at фильтр «не подтверждена»
+        // (`!confirmedAt`) на клиенте был истинным всегда.
+        confirmedAt: p.confirmed_at ?? null,
         createdAt: p.created_at,
-        // 153 — сторно: строка остаётся в истории (UI зачёркивает), но из
-        // «выплачено» исключается (см. paidAmount ниже).
+        // 153 — сторно: reversed-строки отфильтрованы в SQL выше (compat со
+        // старыми сборками); поле остаётся в контракте (здесь всегда null),
+        // paidAmount ниже страхуется по нему же (belt-and-braces).
         reversedAt: p.reversed_at ?? null,
         reversalReason: p.reversal_reason ?? null,
       });
@@ -792,22 +818,35 @@ export class SalaryService {
       throw new BadRequestException({ message: 'Подтвердить может только получатель выплаты' });
     }
 
+    // 153 review-fix (п.6) — read-then-act выше гоняется со сторно владельца:
+    // между пре-чеком и INSERT выплату могли reversed, и подтверждение легло
+    // бы на «отменённые» деньги. INSERT сделан УСЛОВНЫМ (INSERT … SELECT …
+    // WHERE строка платежа жива AND reversed_at IS NULL) — авторитетный guard
+    // в самом INSERT; пре-чеки выше остаются ради дружелюбных ошибок
+    // (NotFound / «только получатель»).
     const { rows } = await this.pool.query(
       `INSERT INTO salary_payment_confirmations (payment_id, user_id)
-       VALUES ($1, $2)
+       SELECT sp.id, $2
+         FROM salary_payments sp
+        WHERE sp.id = $1 AND sp.tenant_id = $3 AND sp.user_id = $2
+          AND sp.reversed_at IS NULL
        ON CONFLICT (payment_id, user_id) DO NOTHING
        RETURNING confirmed_at`,
-      [paymentId, userID],
+      [paymentId, userID, tenantID],
     );
     if (rows.length > 0) {
       return { paymentId, userId: userID, confirmedAt: rows[0].confirmed_at };
     }
-    // Already confirmed — fetch existing timestamp.
+    // rowCount=0 — либо уже подтверждена (конфликт: отдаём ПЕРВЫЙ момент,
+    // канонический «да, получил»), либо строку сторнировали в гонке.
     const { rows: existing } = await this.pool.query(
       'SELECT confirmed_at FROM salary_payment_confirmations WHERE payment_id=$1 AND user_id=$2',
       [paymentId, userID],
     );
-    return { paymentId, userId: userID, confirmedAt: existing[0]?.confirmed_at ?? null };
+    if (existing.length > 0) {
+      return { paymentId, userId: userID, confirmedAt: existing[0].confirmed_at };
+    }
+    throw new BadRequestException({ message: 'Выплата отменена владельцем' });
   }
 
   async getMy(tenantID: string, userID: string) {
@@ -1246,12 +1285,34 @@ export class SalaryService {
    * порядок (сначала DELETE расхода, потом UPDATE статуса) безопасен.
    */
   async cancelPayout(payoutId: string, tenantID: string, actorId: string, reason?: string) {
+    try {
+      return await this.cancelPayoutAttempt(payoutId, tenantID, actorId, reason);
+    } catch (err: any) {
+      // 153 review-fix (п.5) — FK-дедлок (40P01) с ручным удалением того же
+      // расхода из «Расходов»: их DELETE держит лок на expenses и ждёт наш лок
+      // salary_payouts (FK expense_id ON DELETE SET NULL обновляет нашу
+      // строку), мы — наоборот. Жертва получает 40P01 с откатом ВСЕЙ
+      // транзакции; после коммита соперника expense_id уже NULL — один
+      // авторетрай проходит чисто (с честным expenseCompensated=false).
+      if (err?.code === '40P01') {
+        return await this.cancelPayoutAttempt(payoutId, tenantID, actorId, reason);
+      }
+      throw err;
+    }
+  }
+
+  private async cancelPayoutAttempt(payoutId: string, tenantID: string, actorId: string, reason?: string) {
     const reasonClean = reason ? String(reason).trim().slice(0, 500) || null : null;
     const client = await this.pool.connect();
     let result: any;
     let employeeName = 'Сотрудник';
     let employeeId: string | null = null;
     let wasAccepted = false;
+    // 153 review-fix (п.4) — честный флаг для клиента (как у reversePayment):
+    // false ТОЛЬКО когда у ПРИНЯТОЙ выплаты зеркальный расход не нашёлся
+    // (удалили руками раньше / FK обнулил) — владелец проверяет «Расходы»
+    // сам. У pending расхода не было — компенсировать нечего, флаг true.
+    let expenseCompensated = true;
     let amountLabel = '';
     let typeLabel = 'Зарплата';
     try {
@@ -1306,6 +1367,7 @@ export class SalaryService {
           };
         }
       }
+      expenseCompensated = !wasAccepted || expenseSnapshot !== null;
 
       const { rows: upd } = await client.query(
         `UPDATE salary_payouts
@@ -1340,7 +1402,7 @@ export class SalaryService {
               expenseId: payout.expense_id ?? null,
             },
             expense: expenseSnapshot,
-            expenseCompensated: expenseSnapshot !== null,
+            expenseCompensated,
             reason: reasonClean,
           },
         },
@@ -1370,6 +1432,9 @@ export class SalaryService {
       });
     }
     // Сотруднику — честное уведомление (он видел выплату / принимал её).
+    // 153 review-fix (п.2в) — data.type: листенер SalaryNotificationContext
+    // матчит по нему (как data.type='cash-changed' в App.tsx) и
+    // пересинхронизирует confirm-модал, пока тот открыт на устройстве.
     if (employeeId) {
       const note = reasonClean ? ` — ${reasonClean}` : '';
       this.push.sendToUserInTenant(
@@ -1378,11 +1443,13 @@ export class SalaryService {
         'salary',
         'Выплата отменена',
         `${typeLabel} ${amountLabel} ₽ отменена владельцем${note}`,
-        { kind: 'payout', payoutId, status: 'cancelled' },
+        { type: 'payout-cancelled', kind: 'payout', payoutId, status: 'cancelled' },
       );
     }
 
-    return this.mapPayout(result);
+    // 153 review-fix (п.4) — клиент показывает «проверьте Расходы», когда
+    // расход принятой выплаты не нашёлся (симметрично reversePayment).
+    return { ...this.mapPayout(result), expenseCompensated };
   }
 
   /**
@@ -1521,17 +1588,35 @@ export class SalaryService {
    * Компенсация зеркального расхода:
    *   1) У НОВЫХ выплат есть прямая связь expense_id (153) — удаляем по ней.
    *   2) У исторических строк связи не было — best-effort-матч: расход
-   *      категории «Зарплата» с ТОЙ ЖЕ суммой и датой в окне ±1 сек от даты
+   *      категории «Зарплата» с ТОЙ ЖЕ суммой, датой в окне ±1 сек от даты
    *      выплаты (createPayment писал расход датой выплаты; окно покрывает
-   *      µs→ms-огрубление timestamptz при проходе через node-postgres).
-   *      РОВНО ОДИН кандидат → удаляем; НОЛЬ (расход уже удалили вручную) →
-   *      сторно продолжается с флагом expenseCompensated=false; БОЛЬШЕ ОДНОГО
-   *      → честный отказ (не угадываем деньги): владелец удаляет нужный расход
-   *      вручную и повторяет отмену.
+   *      µs→ms-огрубление timestamptz при проходе через node-postgres) И
+   *      описанием «Зарплата: <имя сотрудника>…» (review-fix: без имени один
+   *      «подходящий» расход мог оказаться зарплатой ДРУГОГО сотрудника).
+   *      РОВНО ОДИН кандидат → удаляем; НОЛЬ (расход уже удалили вручную /
+   *      сотрудника переименовали) → сторно продолжается с флагом
+   *      expenseCompensated=false; БОЛЬШЕ ОДНОГО → честный отказ (не
+   *      угадываем деньги): владелец удаляет нужный расход вручную и
+   *      повторяет отмену.
    * Прибыль не меняется (категория «Зарплата» вне P&L) — меняются касса и
    * лента расходов.
    */
   async reversePayment(paymentId: string, tenantID: string, actorId: string, reason?: string) {
+    try {
+      return await this.reversePaymentAttempt(paymentId, tenantID, actorId, reason);
+    } catch (err: any) {
+      // 153 review-fix (п.5) — FK-дедлок (40P01) с ручным удалением расхода:
+      // симметрично cancelPayout (см. комментарий там). После отката соперник
+      // закоммитил DELETE, FK обнулил expense_id — авторетрай проходит с
+      // expenseCompensated=false.
+      if (err?.code === '40P01') {
+        return await this.reversePaymentAttempt(paymentId, tenantID, actorId, reason);
+      }
+      throw err;
+    }
+  }
+
+  private async reversePaymentAttempt(paymentId: string, tenantID: string, actorId: string, reason?: string) {
     const reasonClean = reason ? String(reason).trim().slice(0, 500) || null : null;
     const client = await this.pool.connect();
     let result: any;
@@ -1580,8 +1665,17 @@ export class SalaryService {
           };
           expenseCompensated = true;
         }
-      } else {
-        // Историческая строка без expense_id — детерминированный матч.
+      } else if (payment.user_name) {
+        // Историческая строка без expense_id — детерминированный матч,
+        // СУЖЕННЫЙ ПО ИМЕНИ (153 review-fix, п.1). Раньше матч по
+        // сумма+категория+±1с+LIKE 'Зарплата:%' при «ровно одном НЕВЕРНОМ
+        // кандидате» удалял расход ДРУГОГО сотрудника: свой расход удалили
+        // руками раньше, а в окне ±1с висит зарплата соседа той же суммы.
+        // createPayment всегда пишет описание «Зарплата: <имя> за <месяц>
+        // <год>» (см. description выше) — матчим по префиксу с именем
+        // (LIKE-спецсимволы имени экранированы). Переименованный/удалённый
+        // сотрудник → 0 кандидатов → честный expenseCompensated=false
+        // (безопаснее, чем угадывать чужие деньги).
         const { rows: candidates } = await client.query(
           `SELECT e.id FROM expenses e
              JOIN expense_categories c ON c.id = e.category_id
@@ -1589,9 +1683,9 @@ export class SalaryService {
               AND e.amount = $2
               AND e.date >= $3::timestamptz - interval '1 second'
               AND e.date <= $3::timestamptz + interval '1 second'
-              AND e.description LIKE 'Зарплата:%'
+              AND e.description LIKE 'Зарплата: ' || $4 || '%'
             FOR UPDATE OF e`,
-          [tenantID, payment.amount, payment.date],
+          [tenantID, payment.amount, payment.date, SalaryService.escapeLike(payment.user_name)],
         );
         if (candidates.length > 1) {
           await client.query('ROLLBACK');
@@ -1672,6 +1766,8 @@ export class SalaryService {
     this.push.sendDataToTenant(tenantID, actorId, { type: 'cash-changed', tenantId: tenantID }).catch(() => {
       /* best-effort */
     });
+    // 153 review-fix (п.2в) — data.type: листенер SalaryNotificationContext
+    // матчит по нему и пересинхронизирует confirm-модал (см. cancelPayout).
     if (employeeId) {
       const note = reasonClean ? ` — ${reasonClean}` : '';
       this.push.sendToUserInTenant(
@@ -1680,7 +1776,7 @@ export class SalaryService {
         'salary',
         'Выплата отменена',
         `Выплата ${amountLabel} ₽ отменена владельцем${note}`,
-        { kind: 'payment', paymentId, reversed: true },
+        { type: 'payment-reversed', kind: 'payment', paymentId, reversed: true },
       );
     }
 

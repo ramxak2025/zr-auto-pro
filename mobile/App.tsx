@@ -558,6 +558,14 @@ export default function App() {
       queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow'], refetchType: 'none' });
       queryClient.invalidateQueries({ queryKey: ['expenses'], refetchType: 'none' });
+      // Round 15 review-fix (п.8): setRate / отмена выплаты / сторно шлют
+      // cash-changed именно ради живого обновления зарплатных экранов.
+      // Дефолтный refetchType 'active' — рефетчится только реально открытый
+      // экран (напр. владелец смотрит карточку сотрудника), фоновые запросы
+      // просто устаревают: буря скрытых рефетчей невозможна (audit #2).
+      queryClient.invalidateQueries({ queryKey: ['salary'] });
+      queryClient.invalidateQueries({ queryKey: ['salary-my'] });
+      queryClient.invalidateQueries({ queryKey: ['salary-employee-month'] });
     });
     return () => sub.remove();
   }, []);

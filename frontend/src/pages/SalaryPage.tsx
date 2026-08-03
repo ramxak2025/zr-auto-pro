@@ -304,8 +304,12 @@ function FinesHistorySection({
     );
   }
   // Период списка = период страницы (штрафы вне периода не путают итоги).
+  // Round 15 review-fix (п.7): f.date — timestamptz; slice(0,10) брал UTC-день,
+  // и штраф, выписанный 00:00–03:00 МСК первого числа, выпадал из периода
+  // (сервер режет границы МОСКОВСКИМИ днями). Сравниваем локальный календарный
+  // день (пользователи продукта — RU/МСК), как границы dateFrom/dateTo.
   const list = (fines || []).filter((f) => {
-    const d = String(f.date).slice(0, 10);
+    const d = format(new Date(f.date), 'yyyy-MM-dd');
     return d >= dateFrom && d <= dateTo;
   });
   if (list.length === 0) {
@@ -637,8 +641,17 @@ function AdminSalaryView() {
 
   const cancelPayoutMutation = useMutation({
     mutationFn: (vars: { id: string; reason?: string }) => salaryApi.cancelPayout(vars.id, vars.reason),
-    onSuccess: () => {
-      toast.success('Выплата отменена');
+    onSuccess: (res) => {
+      // Round 15 review-fix (п.4) — как у сторно legacy-выплаты ниже: расход
+      // принятой выплаты могли удалить руками раньше — честно предупреждаем.
+      if (res?.data?.expenseCompensated === false) {
+        toast('Выплата отменена. Связанный расход не найден — проверьте «Расходы» вручную', {
+          icon: '⚠️',
+          duration: 6000,
+        });
+      } else {
+        toast.success('Выплата отменена');
+      }
       setCorrection(null);
       invalidateMoney();
     },

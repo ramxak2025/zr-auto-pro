@@ -25,7 +25,7 @@
  * Owners (superadmin / director) never see the modal — they're the SENDERS.
  */
 import React from 'react';
-import { AppState, type AppStateStatus } from 'react-native';
+import { Alert, AppState, type AppStateStatus } from 'react-native';
 import * as Notifications from 'expo-notifications';
 import { useQueryClient } from '@tanstack/react-query';
 import { salaryApi } from '../api/services';
@@ -77,6 +77,23 @@ function findPendingPayout(rows: SalaryPayout[] | undefined, userId: string): Sa
   return null;
 }
 
+/**
+ * Round 15 review-fix (п.2а) — текст ошибки сервера для алерта. Nest отдаёт
+ * message строкой или массивом (ValidationPipe); падение сети текста не имеет.
+ */
+function serverMessage(err: unknown): string {
+  const msg = (err as { response?: { data?: { message?: unknown } } })?.response?.data?.message;
+  if (Array.isArray(msg)) return msg.join('\n');
+  if (typeof msg === 'string' && msg.trim()) return msg;
+  return 'Выплата больше не актуальна';
+}
+
+/** 4xx = состояние выплаты изменилось (отменена/сторнирована/уже обработана) — повтор не поможет. */
+function isClientError(err: unknown): boolean {
+  const status = (err as { response?: { status?: unknown } })?.response?.status;
+  return typeof status === 'number' && status >= 400 && status < 500;
+}
+
 interface ProviderProps {
   children: React.ReactNode;
 }
@@ -99,6 +116,13 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
 
   const checkOnce = React.useCallback(async () => {
     if (!user || !isRecipientRole) return;
+    // Round 15 review-fix (п.2б): раньше ветки очистки не было вовсе — модал,
+    // однажды показанный, жил до перезапуска, даже когда владелец уже отменил
+    // выплату (сервер её больше не отдаёт). «Ничего pending не найдено» — это
+    // тоже данные: они сбрасывают pendingPayout/pendingPayment/modalVisible.
+    // Чистим только то, что ПОДТВЕРЖДЕНО успешным ответом сервера: упавшая
+    // сеть не закрывает валидный модал вслепую.
+    let payoutsKnownEmpty = false;
     // 1) NEW payouts first — these need an accept/reject decision.
     try {
       const res = await salaryApi.listPayouts({ status: 'pending' });
@@ -109,6 +133,8 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
         setModalVisible(true);
         return;
       }
+      payoutsKnownEmpty = true;
+      setPendingPayout(null);
     } catch {
       // Endpoint unavailable / transient — fall through to legacy detection.
     }
@@ -121,7 +147,13 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
         setPendingPayment(found);
         setPendingPayout(null);
         setModalVisible(true);
+        return;
       }
+      setPendingPayment(null);
+      // Оба источника ответили «пусто» — закрываем модал. Если payouts-чек
+      // упал, а показан payout, модал не трогаем (не по чему судить); модал
+      // с обнулённым item и так ничего не рендерит.
+      if (payoutsKnownEmpty) setModalVisible(false);
     } catch {
       // Silent — push will re-trigger us, or AppState change on next foreground.
     }
@@ -155,7 +187,10 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
     const sub = Notifications.addNotificationReceivedListener((notification) => {
       const data = notification.request.content.data as Record<string, unknown> | undefined;
       const t = typeof data?.type === 'string' ? data.type : '';
-      if (t.includes('salary') || t.includes('payout')) {
+      // Round 15 (п.2в): backend шлёт type 'payout-cancelled' / 'payment-reversed'
+      // при отмене/сторно владельцем — пересинхронизируем открытый модал
+      // (checkOnce теперь умеет и ЗАКРЫВАТЬ его, ветка очистки выше).
+      if (t.includes('salary') || t.includes('payout') || t.includes('payment')) {
         checkOnce();
       }
     });
@@ -173,8 +208,18 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
       queryClient.invalidateQueries({ queryKey: ['salary'] });
       // Surface the next pending item (payout or payment), if any.
       setTimeout(() => checkOnce(), 500);
-    } catch {
-      // Stay on the modal so the employee can retry.
+    } catch (err) {
+      // Round 15 review-fix (п.2а): 4xx = выплату сторнировали, пока модал был
+      // открыт — держать его «до победного» нельзя (сервер будет отвечать 400
+      // вечно). Закрываем, честно показываем причину сервера и
+      // пересинхронизируемся. Сеть/5xx — остаёмся: повтор может пройти.
+      if (isClientError(err)) {
+        setModalVisible(false);
+        setTimeout(() => setPendingPayment(null), 220);
+        Alert.alert('Выплата недоступна', serverMessage(err));
+        setTimeout(() => checkOnce(), 500);
+      }
+      // Otherwise stay on the modal so the employee can retry.
     } finally {
       setBusy(false);
     }
@@ -200,9 +245,21 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
       queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
       setTimeout(() => checkOnce(), 500);
-    } catch {
-      // Stay on the modal so the employee can retry.
-      setDecision(null);
+    } catch (err) {
+      // Round 15 review-fix (п.2а): 4xx — выплата отменена владельцем /
+      // уже обработана: закрыть модал, показать причину, пересинхронизироваться.
+      if (isClientError(err)) {
+        setModalVisible(false);
+        setTimeout(() => {
+          setPendingPayout(null);
+          setDecision(null);
+        }, 240);
+        Alert.alert('Выплата недоступна', serverMessage(err));
+        setTimeout(() => checkOnce(), 500);
+      } else {
+        // Stay on the modal so the employee can retry.
+        setDecision(null);
+      }
     } finally {
       setBusy(false);
     }
@@ -226,8 +283,19 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
       queryClient.invalidateQueries({ queryKey: ['salary'] });
       queryClient.invalidateQueries({ queryKey: ['salary-employee-month'] });
       setTimeout(() => checkOnce(), 500);
-    } catch {
-      setDecision(null);
+    } catch (err) {
+      // Round 15 review-fix (п.2а) — симметрично onAccept.
+      if (isClientError(err)) {
+        setModalVisible(false);
+        setTimeout(() => {
+          setPendingPayout(null);
+          setDecision(null);
+        }, 240);
+        Alert.alert('Выплата недоступна', serverMessage(err));
+        setTimeout(() => checkOnce(), 500);
+      } else {
+        setDecision(null);
+      }
     } finally {
       setBusy(false);
     }

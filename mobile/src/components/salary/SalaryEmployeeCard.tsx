@@ -347,10 +347,16 @@ export default function SalaryEmployeeCard({
   // ── Round 15 (153) — корректировки владельцем ──────────────────────────────
   const cancelPayoutMutation = useMutation({
     mutationFn: (vars: { id: string; reason?: string }) => salaryApi.cancelPayout(vars.id, vars.reason),
-    onSuccess: () => {
+    onSuccess: (res) => {
       setPayoutToCancel(null);
       haptic('success');
       invalidateMoney();
+      // Round 15 review-fix (п.4) — честный сигнал, как у сторно legacy-выплаты
+      // ниже: расход принятой выплаты могли удалить руками раньше — тогда
+      // сторнировать нечего, владелец проверяет «Расходы» сам.
+      if (res?.data && res.data.expenseCompensated === false) {
+        Alert.alert('Выплата отменена', 'Связанный расход не найден — проверьте раздел «Расходы» вручную');
+      }
     },
     onError: errorAlert('Не удалось отменить выплату'),
   });

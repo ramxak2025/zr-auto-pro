@@ -956,9 +956,11 @@ export function createSalaryApi(api: HttpClient) {
      * Отмена выплаты (pending И accepted). У принятой — сторно зеркального
      * расхода («Зарплата» вне P&L: прибыль не меняется, касса/лента расходов —
      * да). Строка остаётся со status='cancelled' + причиной (UI зачёркивает).
+     * `expenseCompensated=false` — расход ПРИНЯТОЙ выплаты не найден (удалён
+     * вручную раньше): клиент показывает «проверьте „Расходы" вручную».
      */
     cancelPayout: (id: string, reason?: string) =>
-      api.post<SalaryPayout>(`/salary/payouts/${id}/cancel`, { reason }),
+      api.post<SalaryPayout & { expenseCompensated?: boolean }>(`/salary/payouts/${id}/cancel`, { reason }),
     /**
      * Правка PENDING-выплаты (сумма/комментарий). Принятую сервер отклоняет —
      * её отменяют (cancelPayout) и создают заново.
