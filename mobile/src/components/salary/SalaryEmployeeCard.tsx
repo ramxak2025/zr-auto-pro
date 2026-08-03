@@ -47,6 +47,7 @@ import IosScreenHeader from '../IosScreenHeader';
 import LoadingSpinner from '../LoadingSpinner';
 import QueryErrorState from '../QueryErrorState';
 import Modal from '../Modal';
+import RateByMonthSheet from '../employee/RateByMonthSheet';
 import { salaryApi } from '../../api/services';
 import { useColors } from '../../contexts/ThemeContext';
 import { useTabBarHeight } from '../../hooks/useTabBarHeight';
@@ -88,6 +89,12 @@ export interface SalaryEmployeeCardProps {
   /** Держатель salary_premiums_manage — премии (у системного «Администратора»
    *  true при payouts=false — ключи независимы). */
   canManagePremiums: boolean;
+  /**
+   * Round 15 п.1 — держатель user_management (owner-class байпасится внутри
+   * hasPermission): кнопка «Изменить процент за <месяц>» — пересчёт начислений
+   * И прибыли ровно открытого в пейджере месяца (PATCH /users/:id/rate).
+   */
+  canManageRates?: boolean;
   /** 'YYYY-MM' to open on. Defaults to the current month. */
   initialMonth?: string;
 }
@@ -135,6 +142,9 @@ function payoutStatusMeta(status: SalaryPayoutStatus): {
       return { label: 'Принято', tone: 'green', icon: 'checkmark-circle' };
     case 'rejected':
       return { label: 'Отклонено', tone: 'red', icon: 'close-circle' };
+    // Round 15 (153) — отменена владельцем: строка остаётся зачёркнутой.
+    case 'cancelled':
+      return { label: 'Отменена', tone: 'red', icon: 'ban-outline' };
     case 'pending':
     default:
       return { label: 'Ожидает', tone: 'amber', icon: 'time-outline' };
@@ -150,6 +160,7 @@ export default function SalaryEmployeeCard({
   onBack,
   canManagePayouts,
   canManagePremiums,
+  canManageRates = false,
   initialMonth,
 }: SalaryEmployeeCardProps) {
   const palette = useColors();
@@ -165,6 +176,14 @@ export default function SalaryEmployeeCard({
   // initial type is stashed when the button opens it.
   const [activeForm, setActiveForm] = useState<null | 'payout' | 'fine' | 'premium'>(null);
   const [payoutInitialType, setPayoutInitialType] = useState<'salary' | 'advance'>('salary');
+
+  // Round 15 — корректировки владельцем (153): цель действия сташится в state,
+  // соответствующий Modal-форм рендерится внизу (те же правила: один за раз).
+  const [rateSheetOpen, setRateSheetOpen] = useState(false);
+  const [payoutToCancel, setPayoutToCancel] = useState<SalaryPayout | null>(null);
+  const [payoutToEdit, setPayoutToEdit] = useState<SalaryPayout | null>(null);
+  const [paymentToReverse, setPaymentToReverse] = useState<SalaryPayment | null>(null);
+  const [fineToEdit, setFineToEdit] = useState<SalaryFine | null>(null);
 
   // ── Data ────────────────────────────────────────────────────────────────────
   const { data, isError, isFetching, refetch } = useQuery<SalaryMonthDetail>({
@@ -217,6 +236,23 @@ export default function SalaryEmployeeCard({
     queryClient.invalidateQueries({ queryKey: ['salary-employee-month', employeeId] });
     queryClient.invalidateQueries({ queryKey: ['salary'] });
   }, [queryClient, employeeId]);
+
+  // Round 15 — корректировка двигает деньги (сторно расхода): устаревают
+  // расходы и все денежные отчёты, не только зарплата.
+  const invalidateMoney = useCallback(() => {
+    invalidate();
+    for (const key of [
+      'expenses',
+      'cashflow',
+      'dashboard-v2',
+      'dashboard-chart',
+      'financial-report',
+      'tag-analytics',
+      'reports',
+    ]) {
+      queryClient.invalidateQueries({ queryKey: [key] });
+    }
+  }, [invalidate, queryClient]);
 
   const errorAlert = useCallback(
     (fallback: string) => (err: any) => {
@@ -308,6 +344,75 @@ export default function SalaryEmployeeCard({
     setActiveForm('payout');
   }, []);
 
+  // ── Round 15 (153) — корректировки владельцем ──────────────────────────────
+  const cancelPayoutMutation = useMutation({
+    mutationFn: (vars: { id: string; reason?: string }) => salaryApi.cancelPayout(vars.id, vars.reason),
+    onSuccess: () => {
+      setPayoutToCancel(null);
+      haptic('success');
+      invalidateMoney();
+    },
+    onError: errorAlert('Не удалось отменить выплату'),
+  });
+
+  const updatePayoutMutation = useMutation({
+    mutationFn: (vars: { id: string; amount: number }) => salaryApi.updatePayout(vars.id, { amount: vars.amount }),
+    onSuccess: () => {
+      setPayoutToEdit(null);
+      haptic('success');
+      invalidate();
+    },
+    onError: errorAlert('Не удалось изменить выплату'),
+  });
+
+  const reversePaymentMutation = useMutation({
+    mutationFn: (vars: { id: string; reason?: string }) => salaryApi.deletePayment(vars.id, vars.reason),
+    onSuccess: (res) => {
+      setPaymentToReverse(null);
+      haptic('success');
+      invalidateMoney();
+      // Честный сигнал: у исторической выплаты расход мог быть удалён вручную —
+      // тогда сторнировать нечего, владелец проверяет «Расходы» сам.
+      if (res?.data && res.data.expenseCompensated === false) {
+        Alert.alert('Выплата отменена', 'Связанный расход не найден — проверьте раздел «Расходы» вручную');
+      }
+    },
+    onError: errorAlert('Не удалось отменить выплату'),
+  });
+
+  const updateFineMutation = useMutation({
+    mutationFn: (vars: { id: string; amount: number; comment: string }) =>
+      salaryApi.updatePenalty(vars.id, { amount: vars.amount, comment: vars.comment }),
+    onSuccess: () => {
+      setFineToEdit(null);
+      haptic('success');
+      invalidate();
+    },
+    onError: errorAlert('Не удалось изменить штраф'),
+  });
+
+  // Меню строки выплаты (кнопка ⋯): pending — изменить/отменить; accepted —
+  // только отменить (правка принятой запрещена сервером: отменить и выдать
+  // заново). Alert как action-sheet — работает на iOS и Android одинаково.
+  const openPayoutMenu = useCallback((p: SalaryPayout) => {
+    haptic('tap');
+    const buttons: Array<{ text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }> = [];
+    if (p.status === 'pending') {
+      buttons.push({ text: 'Изменить сумму', onPress: () => setPayoutToEdit(p) });
+    }
+    buttons.push({ text: 'Отменить выплату', style: 'destructive', onPress: () => setPayoutToCancel(p) });
+    buttons.push({ text: 'Закрыть', style: 'cancel' });
+    Alert.alert(p.type === 'advance' ? 'Аванс' : 'Зарплата', formatMoney(p.amount), buttons);
+  }, []);
+
+  const openPaymentMenu = useCallback((p: SalaryPayment) => {
+    haptic('tap');
+    Alert.alert(p.type === 'advance' ? 'Аванс' : p.type === 'premium' ? 'Премия' : 'Зарплата', formatMoney(p.amount), [
+      { text: 'Отменить выплату', style: 'destructive', onPress: () => setPaymentToReverse(p) },
+      { text: 'Закрыть', style: 'cancel' },
+    ]);
+  }, []);
+
   // ── Header ──────────────────────────────────────────────────────────────────────
   const monthChip = (
     <View style={[styles.monthChip, { backgroundColor: palette.bg.muted }]}>
@@ -350,16 +455,45 @@ export default function SalaryEmployeeCard({
             <Hero data={data} month={month} palette={palette} loading={isFetching && !refreshing} />
             <TotalsGrid data={data} palette={palette} />
             <Breakdown data={data} palette={palette} />
-            <PayoutsSection payouts={data.payouts} palette={palette} />
+            {canManageRates ? (
+              <TouchableOpacity
+                style={[styles.rateButton, { borderColor: palette.border.strong, backgroundColor: palette.bg.card }]}
+                activeOpacity={0.8}
+                onPress={() => {
+                  haptic('tap');
+                  setRateSheetOpen(true);
+                }}
+              >
+                <Ionicons name="create-outline" size={18} color={colors.primary[600]} />
+                <Text style={[styles.actionOutlineText, { color: palette.text.primary }]}>
+                  Изменить процент за {monthLabelFull(month)}
+                </Text>
+              </TouchableOpacity>
+            ) : null}
+            <PayoutsSection
+              payouts={data.payouts}
+              palette={palette}
+              canManage={canManagePayouts}
+              onMenu={openPayoutMenu}
+            />
             <FinesSection
               fines={data.fines}
               palette={palette}
               canManage={canManagePayouts}
               onRemove={confirmRemoveFine}
+              onEdit={(f) => {
+                haptic('tap');
+                setFineToEdit(f);
+              }}
               removingId={removeFineMutation.isPending ? removeFineMutation.variables : undefined}
             />
             <PremiumsSection premiums={data.premiums} palette={palette} />
-            <PaymentsSection payments={data.payments} palette={palette} />
+            <PaymentsSection
+              payments={data.payments}
+              palette={palette}
+              canManage={canManagePayouts}
+              onMenu={openPaymentMenu}
+            />
 
             {canManagePayouts || canManagePremiums ? (
               <View style={styles.actions}>
@@ -481,6 +615,81 @@ export default function SalaryEmployeeCard({
           onSubmit={(vars) => premiumMutation.mutate(vars)}
           onCancel={() => setActiveForm(null)}
         />
+      </Modal>
+
+      {/* Round 15 п.1 — процент за открытый месяц (fixedMonth = пейджер). */}
+      {canManageRates ? (
+        <RateByMonthSheet
+          visible={rateSheetOpen}
+          onClose={() => setRateSheetOpen(false)}
+          userId={employeeId}
+          userName={employeeName}
+          currentSalaryPercent={data?.salaryPercent ?? 0}
+          currentProductPercent={data?.productSalaryPercent ?? 0}
+          fixedMonth={monthKey}
+        />
+      ) : null}
+
+      {/* Round 15 (153) — отмена выплаты (payout, pending/accepted) */}
+      <Modal visible={payoutToCancel !== null} onClose={() => setPayoutToCancel(null)} title="Отменить выплату?">
+        {payoutToCancel ? (
+          <CancelReasonForm
+            palette={palette}
+            description={
+              `${payoutToCancel.type === 'advance' ? 'Аванс' : 'Зарплата'} ${formatMoney(payoutToCancel.amount)}. ` +
+              (payoutToCancel.status === 'accepted'
+                ? 'Связанный расход будет сторнирован: сумма вернётся в «К выплате», касса и лента расходов обновятся. Прибыль не изменится.'
+                : 'Сотрудник больше не увидит её в подтверждении.')
+            }
+            pending={cancelPayoutMutation.isPending}
+            onSubmit={(reason) => cancelPayoutMutation.mutate({ id: payoutToCancel.id, reason })}
+            onCancel={() => setPayoutToCancel(null)}
+          />
+        ) : null}
+      </Modal>
+
+      {/* Round 15 (153) — правка суммы pending-выплаты */}
+      <Modal visible={payoutToEdit !== null} onClose={() => setPayoutToEdit(null)} title="Изменить сумму выплаты">
+        {payoutToEdit ? (
+          <EditAmountForm
+            palette={palette}
+            initialAmount={payoutToEdit.amount}
+            pending={updatePayoutMutation.isPending}
+            onSubmit={(amount) => updatePayoutMutation.mutate({ id: payoutToEdit.id, amount })}
+            onCancel={() => setPayoutToEdit(null)}
+          />
+        ) : null}
+      </Modal>
+
+      {/* Round 15 (153) — сторно legacy-выплаты (salary_payments) */}
+      <Modal visible={paymentToReverse !== null} onClose={() => setPaymentToReverse(null)} title="Отменить выплату?">
+        {paymentToReverse ? (
+          <CancelReasonForm
+            palette={palette}
+            description={
+              `Выплата ${formatMoney(paymentToReverse.amount)} будет отменена (сторно): ` +
+              '«выплачено» месяца уменьшится, связанный расход будет сторнирован. Прибыль не изменится.'
+            }
+            pending={reversePaymentMutation.isPending}
+            onSubmit={(reason) => reversePaymentMutation.mutate({ id: paymentToReverse.id, reason })}
+            onCancel={() => setPaymentToReverse(null)}
+          />
+        ) : null}
+      </Modal>
+
+      {/* Round 15 (153) — правка штрафа */}
+      <Modal visible={fineToEdit !== null} onClose={() => setFineToEdit(null)} title="Изменить штраф">
+        {fineToEdit ? (
+          <FineForm
+            palette={palette}
+            pending={updateFineMutation.isPending}
+            initialAmount={String(fineToEdit.amount)}
+            initialComment={fineToEdit.comment}
+            submitLabel="Сохранить"
+            onSubmit={(vars) => updateFineMutation.mutate({ id: fineToEdit.id, ...vars })}
+            onCancel={() => setFineToEdit(null)}
+          />
+        ) : null}
       </Modal>
     </View>
   );
@@ -666,23 +875,47 @@ function BreakdownRow({
 
 // ── Payouts ──────────────────────────────────────────────────────────────────────
 
-function PayoutsSection({ payouts, palette }: { payouts: SalaryPayout[]; palette: SemanticPalette }) {
+function PayoutsSection({
+  payouts,
+  palette,
+  canManage,
+  onMenu,
+}: {
+  payouts: SalaryPayout[];
+  palette: SemanticPalette;
+  canManage: boolean;
+  onMenu: (p: SalaryPayout) => void;
+}) {
   const list = Array.isArray(payouts) ? payouts : [];
   return (
     <Section title="Выплаты" icon="wallet-outline" palette={palette} count={list.length}>
       {list.length === 0 ? (
         <Text style={[styles.emptyInline, { color: palette.text.tertiary }]}>Выплат пока нет</Text>
       ) : (
-        list.map((p) => <PayoutRow key={p.id} payout={p} palette={palette} />)
+        list.map((p) => <PayoutRow key={p.id} payout={p} palette={palette} canManage={canManage} onMenu={onMenu} />)
       )}
     </Section>
   );
 }
 
-function PayoutRow({ payout, palette }: { payout: SalaryPayout; palette: SemanticPalette }) {
+function PayoutRow({
+  payout,
+  palette,
+  canManage,
+  onMenu,
+}: {
+  payout: SalaryPayout;
+  palette: SemanticPalette;
+  canManage: boolean;
+  onMenu: (p: SalaryPayout) => void;
+}) {
   const meta = payoutStatusMeta(payout.status);
   const tone = toneColors(meta.tone, palette);
   const typeLabel = payout.type === 'advance' ? 'Аванс' : 'Зарплата';
+  const isCancelled = payout.status === 'cancelled';
+  // Round 15 (153): корректируется только живая выплата — pending (изменить/
+  // отменить) и accepted (отменить). rejected/cancelled — только история.
+  const showMenu = canManage && (payout.status === 'pending' || payout.status === 'accepted');
   return (
     <View style={[styles.listRow, { borderBottomColor: palette.border.subtle }]}>
       <View style={styles.flex}>
@@ -702,15 +935,28 @@ function PayoutRow({ payout, palette }: { payout: SalaryPayout; palette: Semanti
             «{payout.comment}»
           </Text>
         ) : null}
+        {isCancelled && payout.cancelReason ? (
+          <Text style={[styles.listRowComment, { color: colors.red[600] }]} numberOfLines={2}>
+            Причина отмены: {payout.cancelReason}
+          </Text>
+        ) : null}
       </View>
       <Text
         style={[
           styles.listRowAmount,
-          { color: payout.status === 'rejected' ? palette.text.tertiary : palette.text.primary },
+          {
+            color: payout.status === 'rejected' || isCancelled ? palette.text.tertiary : palette.text.primary,
+          },
+          isCancelled ? styles.struckAmount : null,
         ]}
       >
         {formatMoney(payout.amount)}
       </Text>
+      {showMenu ? (
+        <TouchableOpacity onPress={() => onMenu(payout)} hitSlop={8} style={styles.removeBtn}>
+          <Ionicons name="ellipsis-horizontal" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -722,12 +968,15 @@ function FinesSection({
   palette,
   canManage,
   onRemove,
+  onEdit,
   removingId,
 }: {
   fines: SalaryFine[];
   palette: SemanticPalette;
   canManage: boolean;
   onRemove: (fine: SalaryFine) => void;
+  /** Round 15 (153) — правка суммы/причины штрафа (PATCH, с аудитом). */
+  onEdit: (fine: SalaryFine) => void;
   removingId?: string;
 }) {
   const list = Array.isArray(fines) ? fines : [];
@@ -750,18 +999,23 @@ function FinesSection({
             </View>
             <Text style={[styles.listRowAmount, { color: colors.red[600] }]}>− {formatMoney(f.amount)}</Text>
             {canManage ? (
-              <TouchableOpacity
-                onPress={() => onRemove(f)}
-                hitSlop={8}
-                disabled={removingId === f.id}
-                style={styles.removeBtn}
-              >
-                {removingId === f.id ? (
-                  <ActivityIndicator size="small" color={palette.text.tertiary} />
-                ) : (
-                  <Ionicons name="trash-outline" size={16} color={palette.text.tertiary} />
-                )}
-              </TouchableOpacity>
+              <>
+                <TouchableOpacity onPress={() => onEdit(f)} hitSlop={8} style={styles.removeBtn}>
+                  <Ionicons name="create-outline" size={16} color={palette.text.tertiary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={() => onRemove(f)}
+                  hitSlop={8}
+                  disabled={removingId === f.id}
+                  style={styles.removeBtn}
+                >
+                  {removingId === f.id ? (
+                    <ActivityIndicator size="small" color={palette.text.tertiary} />
+                  ) : (
+                    <Ionicons name="trash-outline" size={16} color={palette.text.tertiary} />
+                  )}
+                </TouchableOpacity>
+              </>
             ) : null}
           </View>
         ))
@@ -804,32 +1058,72 @@ function PremiumsSection({ premiums, palette }: { premiums: SalaryPremium[]; pal
 
 // ── Legacy payments ────────────────────────────────────────────────────────────
 
-function PaymentsSection({ payments, palette }: { payments: SalaryPayment[]; palette: SemanticPalette }) {
+function PaymentsSection({
+  payments,
+  palette,
+  canManage,
+  onMenu,
+}: {
+  payments: SalaryPayment[];
+  palette: SemanticPalette;
+  canManage: boolean;
+  onMenu: (p: SalaryPayment) => void;
+}) {
   const list = Array.isArray(payments) ? payments : [];
   if (list.length === 0) return null;
   return (
     <Section title="Прошлые выплаты" icon="time-outline" palette={palette} count={list.length}>
       {list.map((p) => {
         const label = p.type === 'advance' ? 'Аванс' : p.type === 'premium' ? 'Премия' : 'Зарплата';
+        const isReversed = !!p.reversedAt;
         return (
           <View key={p.id} style={[styles.listRow, { borderBottomColor: palette.border.subtle }]}>
             <View style={styles.flex}>
-              <Text style={[styles.listRowTitle, { color: palette.text.primary }]}>{label}</Text>
-              <View style={styles.listRowConfirm}>
-                <Ionicons
-                  name={p.confirmedAt ? 'checkmark-circle' : 'time-outline'}
-                  size={12}
-                  color={p.confirmedAt ? colors.green[600] : colors.amber[600]}
-                />
-                <Text
-                  style={[styles.listRowMeta, { color: p.confirmedAt ? colors.green[600] : colors.amber[600] }]}
-                  numberOfLines={1}
-                >
-                  {p.confirmedAt ? `Получено ${formatDayMonthTime(p.confirmedAt)}` : 'Ждём подтверждения'}
-                </Text>
+              <View style={styles.listRowHead}>
+                <Text style={[styles.listRowTitle, { color: palette.text.primary }]}>{label}</Text>
+                {isReversed ? (
+                  <View style={[styles.statusPill, { backgroundColor: toneColors('red', palette).bg }]}>
+                    <Ionicons name="ban-outline" size={11} color={toneColors('red', palette).text} />
+                    <Text style={[styles.statusPillText, { color: toneColors('red', palette).text }]}>Отменена</Text>
+                  </View>
+                ) : null}
               </View>
+              {isReversed ? (
+                p.reversalReason ? (
+                  <Text style={[styles.listRowComment, { color: colors.red[600] }]} numberOfLines={2}>
+                    Причина отмены: {p.reversalReason}
+                  </Text>
+                ) : null
+              ) : (
+                <View style={styles.listRowConfirm}>
+                  <Ionicons
+                    name={p.confirmedAt ? 'checkmark-circle' : 'time-outline'}
+                    size={12}
+                    color={p.confirmedAt ? colors.green[600] : colors.amber[600]}
+                  />
+                  <Text
+                    style={[styles.listRowMeta, { color: p.confirmedAt ? colors.green[600] : colors.amber[600] }]}
+                    numberOfLines={1}
+                  >
+                    {p.confirmedAt ? `Получено ${formatDayMonthTime(p.confirmedAt)}` : 'Ждём подтверждения'}
+                  </Text>
+                </View>
+              )}
             </View>
-            <Text style={[styles.listRowAmount, { color: palette.text.primary }]}>{formatMoney(p.amount)}</Text>
+            <Text
+              style={[
+                styles.listRowAmount,
+                { color: isReversed ? palette.text.tertiary : palette.text.primary },
+                isReversed ? styles.struckAmount : null,
+              ]}
+            >
+              {formatMoney(p.amount)}
+            </Text>
+            {canManage && !isReversed ? (
+              <TouchableOpacity onPress={() => onMenu(p)} hitSlop={8} style={styles.removeBtn}>
+                <Ionicons name="ellipsis-horizontal" size={16} color={palette.text.tertiary} />
+              </TouchableOpacity>
+            ) : null}
           </View>
         );
       })}
@@ -975,14 +1269,21 @@ function FineForm({
   pending,
   onSubmit,
   onCancel,
+  initialAmount = '',
+  initialComment = '',
+  submitLabel = 'Оштрафовать',
 }: {
   palette: SemanticPalette;
   pending: boolean;
   onSubmit: (vars: { amount: number; comment: string }) => void;
   onCancel: () => void;
+  /** Round 15 (153) — режим правки существующего штрафа (префилл + «Сохранить»). */
+  initialAmount?: string;
+  initialComment?: string;
+  submitLabel?: string;
 }) {
-  const [amount, setAmount] = useState('');
-  const [comment, setComment] = useState('');
+  const [amount, setAmount] = useState(initialAmount);
+  const [comment, setComment] = useState(initialComment);
 
   const amt = parseAmount(amount);
   const amountValid = Number.isFinite(amt) && amt > 0;
@@ -1041,8 +1342,115 @@ function FineForm({
         palette={palette}
         pending={pending}
         disabled={!valid}
-        submitLabel="Оштрафовать"
+        submitLabel={submitLabel}
         submitColors={[colors.red[500], colors.red[600]]}
+        onSubmit={submit}
+        onCancel={onCancel}
+      />
+    </>
+  );
+}
+
+// ── Round 15 (153) — корректировочные формы ────────────────────────────────────
+
+/**
+ * Подтверждение отмены выплаты (payout ИЛИ legacy payment) с необязательной
+ * причиной. Причина уходит в аудит, пуш сотруднику и зачёркнутую строку.
+ */
+function CancelReasonForm({
+  palette,
+  description,
+  pending,
+  onSubmit,
+  onCancel,
+}: {
+  palette: SemanticPalette;
+  description: string;
+  pending: boolean;
+  onSubmit: (reason?: string) => void;
+  onCancel: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  return (
+    <>
+      <View style={[styles.warnBox, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+        <Ionicons name="alert-circle-outline" size={16} color={colors.red[600]} />
+        <Text style={[styles.warnText, { color: palette.text.secondary }]}>{description}</Text>
+      </View>
+      <FormField label="Причина (необязательно)" palette={palette}>
+        <View style={[styles.inputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Ionicons name="document-text-outline" size={14} color={palette.text.tertiary} />
+          <TextInput
+            style={[styles.input, { color: palette.text.primary }]}
+            value={reason}
+            onChangeText={setReason}
+            placeholder="Например: выдана ошибочно"
+            placeholderTextColor={palette.text.tertiary}
+            multiline
+          />
+        </View>
+      </FormField>
+      <FormActions
+        palette={palette}
+        pending={pending}
+        disabled={false}
+        submitLabel="Отменить выплату"
+        submitColors={[colors.red[500], colors.red[600]]}
+        onSubmit={() => onSubmit(reason.trim() || undefined)}
+        onCancel={onCancel}
+      />
+    </>
+  );
+}
+
+/** Правка суммы PENDING-выплаты (принятую сервер не даёт менять — отмена+новая). */
+function EditAmountForm({
+  palette,
+  initialAmount,
+  pending,
+  onSubmit,
+  onCancel,
+}: {
+  palette: SemanticPalette;
+  initialAmount: number;
+  pending: boolean;
+  onSubmit: (amount: number) => void;
+  onCancel: () => void;
+}) {
+  const [amount, setAmount] = useState(String(initialAmount));
+  const submit = () => {
+    const amt = parseAmount(amount);
+    if (!Number.isFinite(amt) || amt <= 0) {
+      Alert.alert('Ошибка', 'Укажите корректную сумму');
+      return;
+    }
+    onSubmit(amt);
+  };
+  return (
+    <>
+      <FormField label="Новая сумма" palette={palette}>
+        <View style={[styles.inputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Ionicons name="cash-outline" size={16} color={palette.text.tertiary} />
+          <TextInput
+            style={[styles.input, { color: palette.text.primary }]}
+            value={amount}
+            onChangeText={setAmount}
+            keyboardType="numeric"
+            placeholder="0"
+            placeholderTextColor={palette.text.tertiary}
+          />
+          <Text style={[styles.currency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
+        </View>
+        <Text style={[styles.helper, { color: palette.text.tertiary }]}>
+          Сотруднику придёт пуш с новой суммой — подтверждение остаётся за ним
+        </Text>
+      </FormField>
+      <FormActions
+        palette={palette}
+        pending={pending}
+        disabled={false}
+        submitLabel="Сохранить"
+        submitColors={[colors.primary[500], colors.primary[600]]}
         onSubmit={submit}
         onCancel={onCancel}
       />
@@ -1429,7 +1837,36 @@ const styles = StyleSheet.create({
   listRowComment: { fontSize: 11, fontStyle: 'italic', marginTop: 2 },
   listRowConfirm: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 },
   listRowAmount: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  // Round 15 (153) — отменённая/сторнированная строка: решение владельца —
+  // показывать зачёркнутой, не прятать.
+  struckAmount: { textDecorationLine: 'line-through' },
   removeBtn: { width: 30, height: 30, alignItems: 'center', justifyContent: 'center', marginLeft: spacing[1] },
+
+  // Round 15 п.1 — вход в пересчёт процента открытого месяца.
+  rateButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3],
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: borderRadius['2xl'],
+    marginBottom: spacing[3],
+    ...CARD_SHADOW,
+  },
+
+  // Round 15 (153) — предупреждение в корректировочных формах.
+  warnBox: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginBottom: spacing[4],
+  },
+  warnText: { flex: 1, fontSize: fontSize.xs, lineHeight: 16 },
 
   // Status pill
   statusPill: {

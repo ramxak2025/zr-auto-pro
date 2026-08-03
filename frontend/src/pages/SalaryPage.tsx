@@ -11,6 +11,10 @@ import {
   ChevronUp,
   Loader2,
   History,
+  Percent,
+  Ban,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import { format, startOfMonth, endOfMonth, subMonths } from 'date-fns';
 import { ru } from 'date-fns/locale';
@@ -23,7 +27,8 @@ import DatePeriodPicker from '../components/DatePeriodPicker';
 import QueryState from '../components/QueryState';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
-import { UserRole, MasterSalary, SalarySummary, SalaryPayment } from '../types';
+import RateByMonthModal from '../components/RateByMonthModal';
+import { UserRole, MasterSalary, SalarySummary, SalaryPayment, SalaryPayout, SalaryFine } from '../types';
 
 /** Current month in 'yyyy-MM' format */
 function getCurrentMonthYear(): string {
@@ -73,7 +78,16 @@ const emptyPaymentForm: PaymentFormState = {
 
 // ─── Payment history per row (expandable) ───────────────────────────────────
 
-function PaymentHistorySection({ userId }: { userId: string }) {
+function PaymentHistorySection({
+  userId,
+  canManage,
+  onReverse,
+}: {
+  userId: string;
+  /** Round 15 (153) — salary_payouts_manage: сторно ошибочной legacy-выплаты. */
+  canManage?: boolean;
+  onReverse?: (p: SalaryPayment) => void;
+}) {
   const { data: payments, isLoading } = useQuery({
     queryKey: ['salary-payments', userId],
     queryFn: async () => {
@@ -96,27 +110,239 @@ function PaymentHistorySection({ userId }: { userId: string }) {
 
   return (
     <div className="divide-y divide-gray-100">
-      {payments.map((p) => (
-        <div key={p.id} className="flex items-center justify-between py-2 px-1">
+      {payments.map((p) => {
+        const isReversed = !!p.reversedAt;
+        return (
+          <div key={p.id} className="flex items-center justify-between py-2 px-1">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`text-xs font-semibold ${isReversed ? 'text-gray-400 line-through' : 'text-gray-800'}`}
+                >
+                  {formatMoney(p.amount)}
+                </span>
+                <span
+                  className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                    p.type === 'advance' ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-600'
+                  }`}
+                >
+                  {p.type === 'advance' ? 'Аванс' : 'Зарплата'}
+                </span>
+                {isReversed && (
+                  <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded-full bg-red-50 text-red-600">
+                    Отменена
+                  </span>
+                )}
+                {p.monthYear && <span className="text-[10px] text-gray-400">{formatMonthYear(p.monthYear)}</span>}
+              </div>
+              {p.comment && <p className="text-[10px] text-gray-400 truncate mt-0.5">{p.comment}</p>}
+              {isReversed && p.reversalReason && (
+                <p className="text-[10px] text-red-500 truncate mt-0.5">Причина отмены: {p.reversalReason}</p>
+              )}
+            </div>
+            <div className="text-right flex-shrink-0 ml-3">
+              <p className="text-[10px] text-gray-400">
+                {format(new Date(p.createdAt || p.date), 'dd.MM.yyyy', { locale: ru })}
+              </p>
+              {p.creatorName && <p className="text-[10px] text-gray-300">{p.creatorName}</p>}
+            </div>
+            {canManage && !isReversed && onReverse && (
+              <button
+                type="button"
+                onClick={() => onReverse(p)}
+                className="ml-2 p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors flex-shrink-0"
+                title="Отменить выплату (сторно)"
+              >
+                <Ban className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Round 15 (153) — выплаты-с-подтверждением выбранного месяца ─────────────
+
+function PayoutsHistorySection({
+  userId,
+  monthYear,
+  canManage,
+  onCancel,
+  onEdit,
+}: {
+  userId: string;
+  monthYear: string;
+  canManage: boolean;
+  onCancel: (p: SalaryPayout) => void;
+  onEdit: (p: SalaryPayout) => void;
+}) {
+  const { data: payouts, isLoading } = useQuery({
+    queryKey: ['salary-payouts', userId, monthYear],
+    queryFn: async () => {
+      const res = await salaryApi.listPayouts({ employeeId: userId, monthYear });
+      return res.data as SalaryPayout[];
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="py-3 flex justify-center">
+        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+  const list = payouts || [];
+  if (list.length === 0) {
+    return <p className="py-3 text-xs text-gray-500 text-center">Нет выплат с подтверждением</p>;
+  }
+
+  const statusMeta = (s: SalaryPayout['status']) =>
+    s === 'accepted'
+      ? { label: 'Принято', cls: 'bg-green-50 text-green-600' }
+      : s === 'rejected'
+        ? { label: 'Отклонено', cls: 'bg-red-50 text-red-600' }
+        : s === 'cancelled'
+          ? { label: 'Отменена', cls: 'bg-red-50 text-red-600' }
+          : { label: 'Ожидает', cls: 'bg-amber-50 text-amber-600' };
+
+  return (
+    <div className="divide-y divide-gray-100">
+      {list.map((p) => {
+        const meta = statusMeta(p.status);
+        const isCancelled = p.status === 'cancelled';
+        const showActions = canManage && (p.status === 'pending' || p.status === 'accepted');
+        return (
+          <div key={p.id} className="flex items-center justify-between py-2 px-1">
+            <div className="min-w-0 flex-1">
+              <div className="flex items-center gap-2">
+                <span
+                  className={`text-xs font-semibold ${isCancelled ? 'text-gray-400 line-through' : 'text-gray-800'}`}
+                >
+                  {formatMoney(p.amount)}
+                </span>
+                <span
+                  className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                    p.type === 'advance' ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-600'
+                  }`}
+                >
+                  {p.type === 'advance' ? 'Аванс' : 'Зарплата'}
+                </span>
+                <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${meta.cls}`}>{meta.label}</span>
+              </div>
+              {p.comment && <p className="text-[10px] text-gray-400 truncate mt-0.5">{p.comment}</p>}
+              {isCancelled && p.cancelReason && (
+                <p className="text-[10px] text-red-500 truncate mt-0.5">Причина отмены: {p.cancelReason}</p>
+              )}
+            </div>
+            <div className="text-right flex-shrink-0 ml-3">
+              <p className="text-[10px] text-gray-400">{format(new Date(p.createdAt), 'dd.MM.yyyy', { locale: ru })}</p>
+              {p.creatorName && <p className="text-[10px] text-gray-300">{p.creatorName}</p>}
+            </div>
+            {showActions && (
+              <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                {p.status === 'pending' && (
+                  <button
+                    type="button"
+                    onClick={() => onEdit(p)}
+                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                    title="Изменить сумму"
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => onCancel(p)}
+                  className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+                  title="Отменить выплату"
+                >
+                  <Ban className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ─── Round 15 (153) — штрафы сотрудника за выбранный период ──────────────────
+
+function FinesHistorySection({
+  userId,
+  dateFrom,
+  dateTo,
+  canManage,
+  onEdit,
+  onDelete,
+}: {
+  userId: string;
+  dateFrom: string;
+  dateTo: string;
+  canManage: boolean;
+  onEdit: (f: SalaryFine) => void;
+  onDelete: (f: SalaryFine) => void;
+}) {
+  const { data: fines, isLoading } = useQuery({
+    queryKey: ['salary-fines', userId],
+    queryFn: async () => {
+      const res = await salaryApi.listFines({ userId });
+      return res.data as SalaryFine[];
+    },
+    enabled: canManage, // GET /salary/penalties — гейт salary_payouts_manage
+  });
+
+  if (!canManage) return null;
+  if (isLoading) {
+    return (
+      <div className="py-3 flex justify-center">
+        <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+      </div>
+    );
+  }
+  // Период списка = период страницы (штрафы вне периода не путают итоги).
+  const list = (fines || []).filter((f) => {
+    const d = String(f.date).slice(0, 10);
+    return d >= dateFrom && d <= dateTo;
+  });
+  if (list.length === 0) {
+    return <p className="py-3 text-xs text-gray-500 text-center">Нет штрафов за период</p>;
+  }
+
+  return (
+    <div className="divide-y divide-gray-100">
+      {list.map((f) => (
+        <div key={f.id} className="flex items-center justify-between py-2 px-1">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
-              <span className="text-xs font-semibold text-gray-800">{formatMoney(p.amount)}</span>
-              <span
-                className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
-                  p.type === 'advance' ? 'bg-orange-50 text-orange-600' : 'bg-green-50 text-green-600'
-                }`}
-              >
-                {p.type === 'advance' ? 'Аванс' : 'Зарплата'}
-              </span>
-              {p.monthYear && <span className="text-[10px] text-gray-400">{formatMonthYear(p.monthYear)}</span>}
+              <span className="text-xs font-semibold text-red-600">− {formatMoney(f.amount)}</span>
+              <span className="text-[10px] text-gray-500 truncate">{f.comment}</span>
             </div>
-            {p.comment && <p className="text-[10px] text-gray-400 truncate mt-0.5">{p.comment}</p>}
           </div>
           <div className="text-right flex-shrink-0 ml-3">
-            <p className="text-[10px] text-gray-400">
-              {format(new Date(p.createdAt || p.date), 'dd.MM.yyyy', { locale: ru })}
-            </p>
-            {p.creatorName && <p className="text-[10px] text-gray-300">{p.creatorName}</p>}
+            <p className="text-[10px] text-gray-400">{format(new Date(f.date), 'dd.MM.yyyy', { locale: ru })}</p>
+            {f.creatorName && <p className="text-[10px] text-gray-300">{f.creatorName}</p>}
+          </div>
+          <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+            <button
+              type="button"
+              onClick={() => onEdit(f)}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              title="Изменить штраф"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+            <button
+              type="button"
+              onClick={() => onDelete(f)}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-red-600 hover:bg-red-50 transition-colors"
+              title="Удалить штраф"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+            </button>
           </div>
         </div>
       ))}
@@ -239,6 +465,13 @@ function MasterSalaryView() {
 
 // ─── Admin salary view with payments ────────────────────────────────────────
 
+// Round 15 (153) — какая корректировка открыта (одна за раз).
+type Correction =
+  | { kind: 'cancel-payout'; payout: SalaryPayout }
+  | { kind: 'edit-payout'; payout: SalaryPayout }
+  | { kind: 'reverse-payment'; payment: SalaryPayment }
+  | { kind: 'edit-fine'; fine: SalaryFine };
+
 function AdminSalaryView() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
@@ -246,6 +479,9 @@ function AdminSalaryView() {
   // POST /salary/payments; у системного «Администратора» сид false — прежний
   // @Roles director/superadmin БЕЗ admin). Кнопки «Выплатить» прячем без права.
   const canPayout = hasPermission('salary_payouts_manage');
+  // Round 15 п.1 — «Изменить процент за <месяц>» из зарплаты: тот же гейт, что
+  // у PATCH /users/:id/rate (owner-class байпасится внутри hasPermission).
+  const canRates = hasPermission('user_management');
 
   // Полный календарный месяц — как mobile OwnerSalaryList (monthBounds).
   // Раньше web слал dateTo = сегодня, mobile — конец месяца, и один сотрудник
@@ -273,6 +509,30 @@ function AdminSalaryView() {
 
   // Expanded payment history rows
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+
+  // Round 15 п.1 — сотрудник, для которого открыт модал «Процент за месяц».
+  const [rateTarget, setRateTarget] = useState<MasterSalary | null>(null);
+
+  // Round 15 (153) — активная корректировка + поля её формы.
+  const [correction, setCorrection] = useState<Correction | null>(null);
+  const [correctionReason, setCorrectionReason] = useState('');
+  const [correctionAmount, setCorrectionAmount] = useState('');
+  const [correctionComment, setCorrectionComment] = useState('');
+
+  function openCorrection(c: Correction) {
+    setCorrectionReason('');
+    if (c.kind === 'edit-payout') {
+      setCorrectionAmount(String(c.payout.amount));
+      setCorrectionComment('');
+    } else if (c.kind === 'edit-fine') {
+      setCorrectionAmount(String(c.fine.amount));
+      setCorrectionComment(c.fine.comment);
+    } else {
+      setCorrectionAmount('');
+      setCorrectionComment('');
+    }
+    setCorrection(c);
+  }
 
   const {
     data: salaries,
@@ -349,6 +609,129 @@ function AdminSalaryView() {
       toast.error(typeof msg === 'string' ? msg : 'Не удалось записать выплату');
     },
   });
+
+  // Round 15 (153) — корректировка двигает деньги (сторно расхода): устаревают
+  // зарплата, расходы и все денежные отчёты.
+  function invalidateMoney() {
+    for (const key of [
+      'salary-all',
+      'salary-payments',
+      'salary-payouts',
+      'salary-fines',
+      'salary-my',
+      'expenses',
+      'cashflow',
+      'cash-shift',
+      'dashboard-v2',
+      'financial-report',
+      'tag-analytics',
+    ]) {
+      queryClient.invalidateQueries({ queryKey: [key] });
+    }
+  }
+
+  const correctionError = (fallback: string) => (err: any) => {
+    const msg = err?.response?.data?.message;
+    toast.error(typeof msg === 'string' ? msg : fallback);
+  };
+
+  const cancelPayoutMutation = useMutation({
+    mutationFn: (vars: { id: string; reason?: string }) => salaryApi.cancelPayout(vars.id, vars.reason),
+    onSuccess: () => {
+      toast.success('Выплата отменена');
+      setCorrection(null);
+      invalidateMoney();
+    },
+    onError: correctionError('Не удалось отменить выплату'),
+  });
+
+  const updatePayoutMutation = useMutation({
+    mutationFn: (vars: { id: string; amount: number }) => salaryApi.updatePayout(vars.id, { amount: vars.amount }),
+    onSuccess: () => {
+      toast.success('Сумма выплаты изменена');
+      setCorrection(null);
+      invalidateMoney();
+    },
+    onError: correctionError('Не удалось изменить выплату'),
+  });
+
+  const reversePaymentMutation = useMutation({
+    mutationFn: (vars: { id: string; reason?: string }) => salaryApi.deletePayment(vars.id, vars.reason),
+    onSuccess: (res) => {
+      if (res?.data?.expenseCompensated === false) {
+        toast('Выплата отменена. Связанный расход не найден — проверьте «Расходы» вручную', {
+          icon: '⚠️',
+          duration: 6000,
+        });
+      } else {
+        toast.success('Выплата отменена, связанный расход сторнирован');
+      }
+      setCorrection(null);
+      invalidateMoney();
+    },
+    onError: correctionError('Не удалось отменить выплату'),
+  });
+
+  const updateFineMutation = useMutation({
+    mutationFn: (vars: { id: string; amount: number; comment: string }) =>
+      salaryApi.updatePenalty(vars.id, { amount: vars.amount, comment: vars.comment }),
+    onSuccess: () => {
+      toast.success('Штраф изменён');
+      setCorrection(null);
+      invalidateMoney();
+    },
+    onError: correctionError('Не удалось изменить штраф'),
+  });
+
+  const deleteFineMutation = useMutation({
+    mutationFn: (id: string) => salaryApi.removeFine(id),
+    onSuccess: () => {
+      toast.success('Штраф удалён');
+      invalidateMoney();
+    },
+    onError: correctionError('Не удалось удалить штраф'),
+  });
+
+  function handleDeleteFine(f: SalaryFine) {
+    if (window.confirm(`Удалить штраф «${f.comment}» — ${formatMoney(f.amount)}?`)) {
+      deleteFineMutation.mutate(f.id);
+    }
+  }
+
+  const correctionPending =
+    cancelPayoutMutation.isPending ||
+    updatePayoutMutation.isPending ||
+    reversePaymentMutation.isPending ||
+    updateFineMutation.isPending;
+
+  function handleCorrectionSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!correction) return;
+    const reason = correctionReason.trim() || undefined;
+    if (correction.kind === 'cancel-payout') {
+      cancelPayoutMutation.mutate({ id: correction.payout.id, reason });
+      return;
+    }
+    if (correction.kind === 'reverse-payment') {
+      reversePaymentMutation.mutate({ id: correction.payment.id, reason });
+      return;
+    }
+    const amount = parseFloat(correctionAmount.replace(',', '.'));
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error('Укажите корректную сумму');
+      return;
+    }
+    if (correction.kind === 'edit-payout') {
+      updatePayoutMutation.mutate({ id: correction.payout.id, amount });
+      return;
+    }
+    const comment = correctionComment.trim();
+    if (!comment) {
+      toast.error('Укажите причину штрафа');
+      return;
+    }
+    updateFineMutation.mutate({ id: correction.fine.id, amount, comment });
+  }
 
   function handleOutsideSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -558,6 +941,15 @@ function AdminSalaryView() {
                           Выплатить
                         </button>
                       )}
+                      {canRates && (
+                        <button
+                          onClick={() => setRateTarget(master)}
+                          className="btn-secondary flex-shrink-0 text-xs py-2 px-3"
+                          title={`Изменить процент за ${formatMonthYear(periodMonthYear)}`}
+                        >
+                          <Percent className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       <button
                         onClick={() => toggleHistory(master.masterId)}
                         className="btn-secondary flex-shrink-0 text-xs py-2 px-3"
@@ -568,11 +960,42 @@ function AdminSalaryView() {
                     </div>
                   </div>
 
-                  {/* Expandable payment history */}
+                  {/* Expandable payment history + Round 15 corrections */}
                   {isExpanded && (
-                    <div className="border-t border-gray-100 bg-gray-50 px-4 py-2">
-                      <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">История выплат</p>
-                      <PaymentHistorySection userId={master.masterId} />
+                    <div className="border-t border-gray-100 bg-gray-50 px-4 py-2 space-y-2">
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">
+                          Выплаты за {formatMonthYear(periodMonthYear)}
+                        </p>
+                        <PayoutsHistorySection
+                          userId={master.masterId}
+                          monthYear={periodMonthYear}
+                          canManage={canPayout}
+                          onCancel={(p) => openCorrection({ kind: 'cancel-payout', payout: p })}
+                          onEdit={(p) => openCorrection({ kind: 'edit-payout', payout: p })}
+                        />
+                      </div>
+                      <div>
+                        <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">История выплат</p>
+                        <PaymentHistorySection
+                          userId={master.masterId}
+                          canManage={canPayout}
+                          onReverse={(p) => openCorrection({ kind: 'reverse-payment', payment: p })}
+                        />
+                      </div>
+                      {canPayout && (
+                        <div>
+                          <p className="text-[10px] text-gray-500 uppercase font-bold mb-1">Штрафы за период</p>
+                          <FinesHistorySection
+                            userId={master.masterId}
+                            dateFrom={dateFrom}
+                            dateTo={dateTo}
+                            canManage={canPayout}
+                            onEdit={(f) => openCorrection({ kind: 'edit-fine', fine: f })}
+                            onDelete={handleDeleteFine}
+                          />
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -646,6 +1069,15 @@ function AdminSalaryView() {
                                 Выплатить
                               </button>
                             )}
+                            {canRates && (
+                              <button
+                                onClick={() => setRateTarget(master)}
+                                className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                                title={`Изменить процент за ${formatMonthYear(periodMonthYear)}`}
+                              >
+                                <Percent className="w-4 h-4" />
+                              </button>
+                            )}
                             <button
                               onClick={() => toggleHistory(master.masterId)}
                               className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
@@ -658,11 +1090,42 @@ function AdminSalaryView() {
                       </tr>
                       {isExpanded && (
                         <tr>
-                          <td colSpan={9} className="bg-gray-50 px-6 py-3">
-                            <p className="text-xs text-gray-500 font-semibold mb-2">
-                              История выплат: {master.masterName}
-                            </p>
-                            <PaymentHistorySection userId={master.masterId} />
+                          <td colSpan={9} className="bg-gray-50 px-6 py-3 space-y-3">
+                            <div>
+                              <p className="text-xs text-gray-500 font-semibold mb-2">
+                                Выплаты за {formatMonthYear(periodMonthYear)}: {master.masterName}
+                              </p>
+                              <PayoutsHistorySection
+                                userId={master.masterId}
+                                monthYear={periodMonthYear}
+                                canManage={canPayout}
+                                onCancel={(p) => openCorrection({ kind: 'cancel-payout', payout: p })}
+                                onEdit={(p) => openCorrection({ kind: 'edit-payout', payout: p })}
+                              />
+                            </div>
+                            <div>
+                              <p className="text-xs text-gray-500 font-semibold mb-2">
+                                История выплат: {master.masterName}
+                              </p>
+                              <PaymentHistorySection
+                                userId={master.masterId}
+                                canManage={canPayout}
+                                onReverse={(p) => openCorrection({ kind: 'reverse-payment', payment: p })}
+                              />
+                            </div>
+                            {canPayout && (
+                              <div>
+                                <p className="text-xs text-gray-500 font-semibold mb-2">Штрафы за период</p>
+                                <FinesHistorySection
+                                  userId={master.masterId}
+                                  dateFrom={dateFrom}
+                                  dateTo={dateTo}
+                                  canManage={canPayout}
+                                  onEdit={(f) => openCorrection({ kind: 'edit-fine', fine: f })}
+                                  onDelete={handleDeleteFine}
+                                />
+                              </div>
+                            )}
                           </td>
                         </tr>
                       )}
@@ -848,6 +1311,116 @@ function AdminSalaryView() {
                 <Banknote className="w-4 h-4" />
               )}
               Записать
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* Round 15 п.1 — «Процент за месяц» из зарплаты: месяц зафиксирован
+          выбранным периодом, сервер пересчитает начисления И прибыль. */}
+      {rateTarget && (
+        <RateByMonthModal
+          isOpen={rateTarget !== null}
+          onClose={() => setRateTarget(null)}
+          userId={rateTarget.masterId}
+          userName={rateTarget.masterName}
+          currentSalaryPercent={rateTarget.salaryPercent}
+          currentProductPercent={rateTarget.productSalaryPercent ?? 0}
+          fixedMonth={periodMonthYear}
+        />
+      )}
+
+      {/* Round 15 (153) — корректировки: отмена/правка выплат, правка штрафа. */}
+      <Modal
+        isOpen={correction !== null}
+        onClose={() => setCorrection(null)}
+        title={
+          correction?.kind === 'edit-payout'
+            ? 'Изменить сумму выплаты'
+            : correction?.kind === 'edit-fine'
+              ? 'Изменить штраф'
+              : 'Отменить выплату?'
+        }
+        size="md"
+      >
+        <form onSubmit={handleCorrectionSubmit} className="space-y-4">
+          {correction?.kind === 'cancel-payout' && (
+            <p className="text-xs text-gray-500">
+              {correction.payout.type === 'advance' ? 'Аванс' : 'Зарплата'} {formatMoney(correction.payout.amount)}.{' '}
+              {correction.payout.status === 'accepted'
+                ? 'Связанный расход будет сторнирован: сумма вернётся в «Остаток», касса и лента расходов обновятся. Прибыль не изменится.'
+                : 'Сотрудник больше не увидит её в подтверждении.'}
+            </p>
+          )}
+          {correction?.kind === 'reverse-payment' && (
+            <p className="text-xs text-gray-500">
+              Выплата {formatMoney(correction.payment.amount)} будет отменена (сторно): «выплачено» уменьшится,
+              связанный расход будет сторнирован. Прибыль не изменится.
+            </p>
+          )}
+
+          {(correction?.kind === 'edit-payout' || correction?.kind === 'edit-fine') && (
+            <div>
+              <label className="label">Сумма</label>
+              <input
+                type="number"
+                className="input"
+                value={correctionAmount}
+                onChange={(e) => setCorrectionAmount(e.target.value)}
+                min="0"
+                step="1"
+                required
+              />
+              {correction?.kind === 'edit-payout' && (
+                <p className="text-xs text-gray-400 mt-1">
+                  Сотруднику придёт пуш с новой суммой — подтверждение остаётся за ним
+                </p>
+              )}
+            </div>
+          )}
+          {correction?.kind === 'edit-fine' && (
+            <div>
+              <label className="label">Причина *</label>
+              <input
+                type="text"
+                className="input"
+                value={correctionComment}
+                onChange={(e) => setCorrectionComment(e.target.value)}
+                placeholder="За что начислен штраф"
+                required
+              />
+            </div>
+          )}
+          {(correction?.kind === 'cancel-payout' || correction?.kind === 'reverse-payment') && (
+            <div>
+              <label className="label">Причина отмены</label>
+              <input
+                type="text"
+                className="input"
+                value={correctionReason}
+                onChange={(e) => setCorrectionReason(e.target.value)}
+                placeholder="Например: выдана ошибочно"
+              />
+            </div>
+          )}
+
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={() => setCorrection(null)} className="btn-secondary">
+              Закрыть
+            </button>
+            <button
+              type="submit"
+              disabled={correctionPending}
+              className={
+                correction?.kind === 'cancel-payout' || correction?.kind === 'reverse-payment'
+                  ? 'btn-primary !bg-red-600 hover:!bg-red-700'
+                  : 'btn-primary'
+              }
+            >
+              {correctionPending && <Loader2 className="w-4 h-4 animate-spin" />}
+              {correction?.kind === 'cancel-payout' || correction?.kind === 'reverse-payment'
+                ? 'Отменить выплату'
+                : 'Сохранить'}
             </button>
           </div>
         </form>

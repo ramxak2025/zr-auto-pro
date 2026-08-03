@@ -11,6 +11,7 @@ import {
 import { Pool, PoolClient } from 'pg';
 import * as bcrypt from 'bcryptjs';
 import { PG_POOL } from '../database.module';
+import { PushService } from '../push/push.service';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthUser, NO_TENANT_ID } from '../common/auth-cache';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
@@ -38,7 +39,26 @@ const DIRECTOR_GRANTING_ROLES = new Set(['director', 'superadmin']);
 export class UsersService {
   private readonly logger = new Logger('UsersService');
 
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    // Round 15 — разрыв инвалидации: смена ставки перепекает salary/profit
+    // чеков месяца и сбрасывает СЕРВЕРНЫЕ кэши (invalidateReportsForTenant),
+    // но ДРУГИЕ устройства о money-change не узнавали (в отличие от
+    // decidePayout / expenses, которые шлют data-push 'cash-changed').
+    // PushService — из глобального PushModule.
+    private push: PushService,
+  ) {}
+
+  /**
+   * Round 15 — после пересчёта денег месяца (смена ставки / комиссий) будим
+   * остальные устройства тенанта обновить денежные экраны. Fire-and-forget:
+   * пуш никогда не источник истины и не валит основную операцию.
+   */
+  private notifyMoneyChanged(tenantID: string, excludeUserId: string | null): void {
+    this.push.sendDataToTenant(tenantID, excludeUserId, { type: 'cash-changed', tenantId: tenantID }).catch(() => {
+      /* best-effort */
+    });
+  }
 
   /**
    * Reject any role-assignment that the actor is not allowed to perform.
@@ -578,8 +598,10 @@ export class UsersService {
         throw this.mapDuplicatePhone(err);
       }
       client.release();
-      // Current-month check salary / profit moved — drop cached report aggregates.
+      // Current-month check salary / profit moved — drop cached report aggregates
+      // + wake other devices (Round 15: тот же контракт, что decidePayout).
       invalidateReportsForTenant(tenantID);
+      this.notifyMoneyChanged(tenantID, actorID ?? null);
     } else {
       let rows: any[];
       try {
@@ -937,8 +959,10 @@ export class UsersService {
       client.release();
     }
 
-    // Начисления/profit месяца X сдвинулись — сброс кэшей отчётов.
+    // Начисления/profit месяца X сдвинулись — сброс кэшей отчётов + пуш другим
+    // устройствам обновить денежные экраны (Round 15 — контракт decidePayout).
     invalidateReportsForTenant(tenantID);
+    this.notifyMoneyChanged(tenantID, actorID ?? null);
     return { userId: id, month, ...result };
   }
 
@@ -1358,8 +1382,10 @@ export class UsersService {
       await this.recomputeMonthSalary(client, tenantID, userId, currentMonth, { productPct: newProductPct });
 
       await client.query('COMMIT');
-      // Current-month product salary / profit moved — drop cached aggregates.
+      // Current-month product salary / profit moved — drop cached aggregates
+      // + wake other devices (Round 15). Актор здесь неизвестен — без exclude.
       invalidateReportsForTenant(tenantID);
+      this.notifyMoneyChanged(tenantID, null);
       return this.getProductCommissions(userId, tenantID);
     } catch (err) {
       await client.query('ROLLBACK');

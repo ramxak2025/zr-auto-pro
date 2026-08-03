@@ -951,6 +951,31 @@ export function createSalaryApi(api: HttpClient) {
     listPayouts: (params?: { employeeId?: string; status?: SalaryPayoutStatus; monthYear?: string }) =>
       api.get<SalaryPayout[]>('/salary/payouts', { params }),
 
+    // ── Round 15 (153) — корректировки владельцем (salary_payouts_manage) ──
+    /**
+     * Отмена выплаты (pending И accepted). У принятой — сторно зеркального
+     * расхода («Зарплата» вне P&L: прибыль не меняется, касса/лента расходов —
+     * да). Строка остаётся со status='cancelled' + причиной (UI зачёркивает).
+     */
+    cancelPayout: (id: string, reason?: string) =>
+      api.post<SalaryPayout>(`/salary/payouts/${id}/cancel`, { reason }),
+    /**
+     * Правка PENDING-выплаты (сумма/комментарий). Принятую сервер отклоняет —
+     * её отменяют (cancelPayout) и создают заново.
+     */
+    updatePayout: (id: string, data: { amount?: number; comment?: string }) =>
+      api.patch<SalaryPayout>(`/salary/payouts/${id}`, data),
+    /**
+     * Сторно LEGACY-выплаты (salary_payments): строка остаётся с reversedAt,
+     * «выплачено» её исключает, связанный расход компенсируется (по expense_id
+     * либо детерминированным матчем; `expenseCompensated` — честный флаг).
+     */
+    deletePayment: (id: string, reason?: string) =>
+      api.delete<{ id: string; reversedAt: string; expenseCompensated: boolean; message: string }>(
+        `/salary/payments/${id}`,
+        { params: reason ? { reason } : undefined },
+      ),
+
     // ── Fines (штрафы) — mandatory comment «за что» ────────────────────────
     // Owner-facing surface over salary_penalties (056). `comment` is required
     // and enforced at the DTO + DB (NOT NULL / non-blank CHECK).
@@ -964,6 +989,12 @@ export function createSalaryApi(api: HttpClient) {
       }),
     listFines: (params?: { userId?: string }) => api.get<SalaryFine[]>('/salary/penalties', { params }),
     removeFine: (id: string) => api.delete(`/salary/penalties/${id}`),
+    /**
+     * Round 15 (153) — правка штрафа (сумма/причина). Пересчёта не требует:
+     * штраф суммируется на лету. `comment` мапится в backend-поле reason.
+     */
+    updatePenalty: (id: string, data: { amount?: number; comment?: string }) =>
+      api.patch<SalaryFine>(`/salary/penalties/${id}`, { amount: data.amount, reason: data.comment }),
 
     // ── Per-employee monthly salary detail (full-screen card, pages months) ──
     /** Breakdown for one employee + one month ('YYYY-MM'). Owner: any; employee: self. */

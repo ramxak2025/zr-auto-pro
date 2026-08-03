@@ -32,6 +32,12 @@ interface Props {
   userName: string;
   currentSalaryPercent: number;
   currentProductPercent: number;
+  /**
+   * Round 15 п.1 — вход из «Зарплаты»: месяц зафиксирован выбранным периодом
+   * ('YYYY-MM'), поле месяца скрыто. Без пропа — прежнее поведение
+   * (вход из Пользователей, свободный выбор).
+   */
+  fixedMonth?: string;
 }
 
 export default function RateByMonthModal({
@@ -41,22 +47,23 @@ export default function RateByMonthModal({
   userName,
   currentSalaryPercent,
   currentProductPercent,
+  fixedMonth,
 }: Props) {
   const queryClient = useQueryClient();
   const currentKey = format(new Date(), 'yyyy-MM');
 
-  const [month, setMonth] = useState(currentKey);
+  const [month, setMonth] = useState(fixedMonth ?? currentKey);
   const [svc, setSvc] = useState(String(currentSalaryPercent));
   const [prod, setProd] = useState(String(currentProductPercent));
 
   useEffect(() => {
     if (isOpen) {
-      setMonth(currentKey);
+      setMonth(fixedMonth ?? currentKey);
       setSvc(String(currentSalaryPercent));
       setProd(String(currentProductPercent));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen, currentSalaryPercent, currentProductPercent]);
+  }, [isOpen, currentSalaryPercent, currentProductPercent, fixedMonth]);
 
   const { data: history } = useQuery({
     queryKey: ['user-rate-history', userId],
@@ -70,11 +77,20 @@ export default function RateByMonthModal({
     onSuccess: (_res, vars) => {
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['user-rate-history', userId] });
-      // Начисления месяца пересчитаны — зарплатные экраны и отчёты устарели.
+      // Сервер перепёк salary_amount И checks.profit месяца — устарели не
+      // только зарплатные экраны, но и ВСЕ денежные отчёты (Round 15 п.1).
       queryClient.invalidateQueries({ queryKey: ['salary-all'] });
+      queryClient.invalidateQueries({ queryKey: ['salary-my'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
       queryClient.invalidateQueries({ queryKey: ['financial-report'] });
-      toast.success(`Ставка за ${labelMonth(vars.month)} сохранена`);
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      queryClient.invalidateQueries({ queryKey: ['tag-analytics'] });
+      const future = vars.month > currentKey;
+      toast.success(
+        future
+          ? `Ставка за ${labelMonth(vars.month)} сохранена — применится, когда месяц наступит`
+          : `Начисления и прибыль за ${labelMonth(vars.month)} пересчитаны`,
+      );
       onClose();
     },
     onError: (err: any) => {
@@ -100,19 +116,27 @@ export default function RateByMonthModal({
 
   const isPast = month < currentKey;
   const isFuture = month > currentKey;
+  // Round 15 п.1 — предупреждение владельцу дословно про деньги.
   const warning = isPast
-    ? `Пересчитает начисления ТОЛЬКО за ${labelMonth(month)}. Остальные месяцы не изменятся.`
+    ? `Пересчитает начисления И ПРИБЫЛЬ только за ${labelMonth(month)}. Другие месяцы не изменятся.`
     : isFuture
       ? `Ставка применится, когда наступит ${labelMonth(month)}. До этого действует текущая.`
-      : `Изменит текущую ставку и пересчитает начисления за ${labelMonth(month)}.`;
+      : `Изменит текущую ставку и пересчитает начисления и прибыль за ${labelMonth(month)}. Другие месяцы не изменятся.`;
 
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Ставка по месяцам — ${userName}`} size="md">
+    <Modal
+      isOpen={isOpen}
+      onClose={onClose}
+      title={fixedMonth ? `Процент за ${labelMonth(month)} — ${userName}` : `Ставка по месяцам — ${userName}`}
+      size="md"
+    >
       <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label className="label">Месяц</label>
-          <input type="month" className="input" value={month} onChange={(e) => setMonth(e.target.value)} required />
-        </div>
+        {fixedMonth ? null : (
+          <div>
+            <label className="label">Месяц</label>
+            <input type="month" className="input" value={month} onChange={(e) => setMonth(e.target.value)} required />
+          </div>
+        )}
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="label">% от услуг</label>

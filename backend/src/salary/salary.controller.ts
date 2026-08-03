@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Delete, Body, Query, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Body, Query, Param, UseGuards } from '@nestjs/common';
 import { SalaryService } from './salary.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission, userHasPermission } from '../common/guards/permissions.guard';
@@ -9,6 +9,9 @@ import { CreatePenaltyDto } from './dto/create-penalty.dto';
 import { CreatePayoutDto } from './dto/create-payout.dto';
 import { CreateOutsidePayoutDto } from './dto/create-outside-payout.dto';
 import { DecidePayoutDto } from './dto/decide-payout.dto';
+import { CancelPayoutDto } from './dto/cancel-payout.dto';
+import { UpdatePayoutDto } from './dto/update-payout.dto';
+import { UpdatePenaltyDto } from './dto/update-penalty.dto';
 
 // Матрица ролей АВТОРИТЕТНА (волна «права как в Битрикс24», 2026-07):
 //   • 'salary_payouts_manage' (salary.payouts) — выплаты / авансы / штрафы.
@@ -86,6 +89,34 @@ export class SalaryController {
   @Post('outside-payouts')
   createOutsidePayout(@CurrentUser() user: JwtPayload, @Body() dto: CreateOutsidePayoutDto) {
     return this.salaryService.createOutsidePayout(user.tenantID, user.userID, dto);
+  }
+
+  // ── Round 15 (153) — корректировки владельцем ────────────────────────────
+
+  // Отмена выплаты (pending И accepted). У принятой — сторно зеркального
+  // расхода (снапшот в аудит); строка остаётся зачёркнутой с причиной.
+  @RequirePermission('salary_payouts_manage')
+  @Post('payouts/:id/cancel')
+  cancelPayout(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: CancelPayoutDto) {
+    return this.salaryService.cancelPayout(id, user.tenantID, user.userID, dto?.reason);
+  }
+
+  // Правка PENDING-выплаты (сумма/комментарий). Принятую — отменить и создать
+  // заново (сервис вернёт 400 с этой подсказкой).
+  @RequirePermission('salary_payouts_manage')
+  @Patch('payouts/:id')
+  updatePayout(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdatePayoutDto) {
+    return this.salaryService.updatePendingPayout(id, user.tenantID, user.userID, dto || {});
+  }
+
+  // Сторно LEGACY-выплаты (salary_payments): строка остаётся с reversed_at,
+  // связанный расход компенсируется (по expense_id, иначе детерминированный
+  // матч). Причина — query-параметр (DELETE без тела дружит с оффлайн-очередью
+  // и прокси). Сервис триммит/ограничивает длину сам.
+  @RequirePermission('salary_payouts_manage')
+  @Delete('payments/:id')
+  reversePayment(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Query('reason') reason?: string) {
+    return this.salaryService.reversePayment(id, user.tenantID, user.userID, reason);
   }
 
   // Employee's decision on a pending payout. Role gate is intentionally open —
@@ -180,9 +211,17 @@ export class SalaryController {
     return this.salaryService.listPenalties(user.tenantID, query || {});
   }
 
+  // Round 15 (153) — правка штрафа (сумма/причина) с аудитом before/after.
+  // Пересчёт не нужен: штраф суммируется на лету, ничего не запечено.
+  @RequirePermission('salary_payouts_manage')
+  @Patch('penalties/:id')
+  updatePenalty(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdatePenaltyDto) {
+    return this.salaryService.updatePenalty(id, user.tenantID, user.userID, dto || {});
+  }
+
   @RequirePermission('salary_payouts_manage')
   @Delete('penalties/:id')
   deletePenalty(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.salaryService.deletePenalty(id, user.tenantID);
+    return this.salaryService.deletePenalty(id, user.tenantID, user.userID);
   }
 }

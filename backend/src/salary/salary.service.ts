@@ -1,9 +1,10 @@
 import { Injectable, Inject, BadRequestException, NotFoundException, ForbiddenException, Logger } from '@nestjs/common';
-import { Pool } from 'pg';
+import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { PushService } from '../push/push.service';
 import { ExpensesService } from '../expenses/expenses.service';
 import { ScheduleService } from '../schedule/schedule.service';
+import { AuditService } from '../tenants/audit.service';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 
 interface PremiumDto {
@@ -24,7 +25,21 @@ export class SalaryService {
     private push: PushService,
     private expenses: ExpensesService,
     private schedule: ScheduleService,
+    // 153 — аудит денежных корректировок (отмена выплаты / сторно / правка
+    // штрафа). Пишется ТРАНЗАКЦИОННО (logTx) — паттерн editClosedCheck (#61):
+    // закоммиченная денежная правка не может остаться без аудит-строки.
+    private audit: AuditService,
   ) {}
+
+  /**
+   * 153 — имя актора для денормализованной колонки admin_audit_log.actor_name.
+   * Читается ВНУТРИ транзакции корректировки (тот же client), лучшая попытка:
+   * пропавший пользователь просто даёт NULL, аудит-строка не срывается.
+   */
+  private async actorNameTx(client: PoolClient, actorId: string): Promise<string | null> {
+    const { rows } = await client.query('SELECT full_name FROM users WHERE id = $1 LIMIT 1', [actorId]);
+    return rows[0]?.full_name ?? null;
+  }
 
   /**
    * v3.0.1 ФИЧА 4 — сколько ОТРАБОТАННЫХ смен у каждого сотрудника в диапазоне
@@ -184,6 +199,10 @@ export class SalaryService {
         creatorName: p.creator_name,
         date: p.date,
         createdAt: p.created_at,
+        // 153 — сторно: строка остаётся в истории (UI зачёркивает), но из
+        // «выплачено» исключается (см. paidAmount ниже).
+        reversedAt: p.reversed_at ?? null,
+        reversalReason: p.reversal_reason ?? null,
       });
     }
 
@@ -264,7 +283,9 @@ export class SalaryService {
       const masterPayments = paymentsByUser[masterId] || [];
       const masterPremiums = premiumsByUser[masterId] || [];
       const masterPenalties = penaltiesByUser[masterId] || [];
-      const paidAmount = masterPayments.reduce((sum: number, p: any) => sum + p.amount, 0);
+      // 153 — сторнированные выплаты НЕ считаются выплаченными: долг перед
+      // сотрудником восстанавливается, а история остаётся видимой.
+      const paidAmount = masterPayments.reduce((sum: number, p: any) => sum + (p.reversedAt ? 0 : p.amount), 0);
       const baseEarnings = parseFloat(r.total_earnings) || 0;
       const premiumsAmount = masterPremiums.reduce(
         (sum: number, p: any) => sum + (p.type === 'cash' ? p.amount || 0 : 0),
@@ -360,6 +381,9 @@ export class SalaryService {
       date: r.date,
       confirmedAt: r.confirmed_at ?? null,
       createdAt: r.created_at,
+      // 153 — сторно (история остаётся, суммы исключают).
+      reversedAt: r.reversed_at ?? null,
+      reversalReason: r.reversal_reason ?? null,
     }));
   }
 
@@ -416,12 +440,16 @@ export class SalaryService {
       const monthName = SalaryService.MONTH_NAMES[parseInt(month, 10) - 1] || dto.monthYear;
       const description = `Зарплата: ${userName} за ${monthName} ${year}`;
 
-      // 4. Create expense record
-      await client.query(
+      // 4. Create expense record + прямая связь выплата → расход (153):
+      //    сторно (reversePayment) компенсирует расход по expense_id, а не
+      //    best-effort-матчем. Обе строки — в одной транзакции.
+      const { rows: expRows } = await client.query(
         `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id)
-         VALUES ($1, $2, $3, $4, $5, $6)`,
+         VALUES ($1, $2, $3, $4, $5, $6)
+         RETURNING id`,
         [categoryId, dto.amount, description, payment.date, createdBy, tenantID],
       );
+      await client.query(`UPDATE salary_payments SET expense_id = $1 WHERE id = $2`, [expRows[0].id, payment.id]);
 
       await client.query('COMMIT');
     } catch (err) {
@@ -649,12 +677,78 @@ export class SalaryService {
     return rows.map((r) => this.mapPenalty(r));
   }
 
-  async deletePenalty(id: string, tenantID: string) {
-    const { rowCount } = await this.pool.query('DELETE FROM salary_penalties WHERE id=$1 AND tenant_id=$2', [
-      id,
-      tenantID,
-    ]);
-    if (!rowCount) throw new NotFoundException({ message: 'Штраф не найден' });
+  /**
+   * Удаление штрафа. Пересчёт автоматический: штраф нигде не запечён, суммы
+   * finesAmount/penaltiesAmount считаются на лету — удалённая строка просто
+   * исчезает из следующей выборки. Round 15 (153): + транзакционный аудит со
+   * снапшотом (кто/когда/что было) — паттерн editClosedCheck.
+   */
+  async deletePenalty(id: string, tenantID: string, actorId: string | null = null) {
+    const client = await this.pool.connect();
+    let employeeId: string | null = null;
+    let amountLabel = '';
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `SELECT pen.*, u.full_name AS user_name
+           FROM salary_penalties pen
+           LEFT JOIN users u ON u.id = pen.user_id
+          WHERE pen.id = $1 AND pen.tenant_id = $2
+          FOR UPDATE OF pen`,
+        [id, tenantID],
+      );
+      if (rows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Штраф не найден' });
+      }
+      const penalty = rows[0];
+      employeeId = penalty.user_id ?? null;
+      amountLabel = (parseFloat(penalty.amount) || 0).toLocaleString('ru-RU');
+
+      await client.query('DELETE FROM salary_penalties WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+
+      if (actorId) {
+        await this.audit.logTx(
+          client,
+          { userId: actorId, name: await this.actorNameTx(client, actorId) },
+          'salary_penalty_delete',
+          {
+            targetType: 'salary_penalty',
+            targetId: id,
+            targetName: penalty.user_name ?? null,
+            detail: {
+              tenantId: tenantID,
+              before: {
+                amount: parseFloat(penalty.amount) || 0,
+                description: penalty.description,
+                date: penalty.date,
+                userId: penalty.user_id,
+              },
+            },
+          },
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Симметрия с «Штраф наложен»: отмена штрафа не должна быть молчаливой.
+    if (employeeId) {
+      this.push.sendToUserInTenant(employeeId, tenantID, 'penalty', 'Штраф отменён', `${amountLabel} ₽ — штраф снят`, {
+        kind: 'penalty',
+        penaltyId: id,
+      });
+    }
+
     return { message: 'Удалено' };
   }
 
@@ -685,10 +779,14 @@ export class SalaryService {
    */
   async confirmPayment(paymentId: string, tenantID: string, userID: string) {
     const { rows: paymentRows } = await this.pool.query(
-      'SELECT sp.user_id FROM salary_payments sp WHERE sp.id=$1 AND sp.tenant_id=$2 LIMIT 1',
+      'SELECT sp.user_id, sp.reversed_at FROM salary_payments sp WHERE sp.id=$1 AND sp.tenant_id=$2 LIMIT 1',
       [paymentId, tenantID],
     );
     if (paymentRows.length === 0) throw new NotFoundException({ message: 'Выплата не найдена' });
+    // 153 — сторнированную выплату подтверждать нечего (денег больше «не было»).
+    if (paymentRows[0].reversed_at) {
+      throw new BadRequestException({ message: 'Выплата отменена владельцем' });
+    }
     const ownerId = paymentRows[0].user_id as string;
     if (ownerId !== userID) {
       throw new BadRequestException({ message: 'Подтвердить может только получатель выплаты' });
@@ -1127,6 +1225,588 @@ export class SalaryService {
     return rows.map((r) => this.mapPayout(r));
   }
 
+  // ── Round 15 (153) — корректировки владельцем ошибочных выплат/штрафов ─────
+  //
+  // Все методы: гейт 'salary_payouts_manage' (контроллер), транзакция с
+  // адресным локом FOR UPDATE OF <alias> (урок decidePayout / 1fc3e2b),
+  // ТРАНЗАКЦИОННЫЙ аудит admin_audit_log (паттерн editClosedCheck — денежная
+  // правка не может закоммититься без аудит-строки).
+
+  /**
+   * Отмена выплаты владельцем — pending И accepted (решение: строка не
+   * удаляется, а помечается cancelled; UI показывает зачёркнутой с причиной).
+   *
+   * Деньги: у accepted-выплаты есть зеркальный расход (категория «Зарплата»,
+   * expense_id). Expenses без soft-delete (ExpensesService.remove — hard
+   * DELETE), поэтому сторно = УДАЛЕНИЕ строки расхода с ПОЛНЫМ снапшотом в
+   * аудит (кто/когда/что было — восстановимо из detail). Прибыль НЕ меняется
+   * (категория «Зарплата» исключена из P&L по имени) — меняются касса и лента
+   * расходов. «Выплачено/остаток» пересчитываются сами: суммы считают только
+   * status='accepted'. FK salary_payouts.expense_id ON DELETE SET NULL —
+   * порядок (сначала DELETE расхода, потом UPDATE статуса) безопасен.
+   */
+  async cancelPayout(payoutId: string, tenantID: string, actorId: string, reason?: string) {
+    const reasonClean = reason ? String(reason).trim().slice(0, 500) || null : null;
+    const client = await this.pool.connect();
+    let result: any;
+    let employeeName = 'Сотрудник';
+    let employeeId: string | null = null;
+    let wasAccepted = false;
+    let amountLabel = '';
+    let typeLabel = 'Зарплата';
+    try {
+      await client.query('BEGIN');
+      const { rows: lockRows } = await client.query(
+        `SELECT p.*, u.full_name AS employee_name
+           FROM salary_payouts p
+           LEFT JOIN users u ON u.id = p.employee_id
+          WHERE p.id = $1 AND p.tenant_id = $2
+          FOR UPDATE OF p`,
+        [payoutId, tenantID],
+      );
+      if (lockRows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Выплата не найдена' });
+      }
+      const payout = lockRows[0];
+      employeeName = payout.employee_name || employeeName;
+      employeeId = payout.employee_id ?? null;
+      wasAccepted = payout.status === 'accepted';
+      typeLabel = payout.type === 'advance' ? 'Аванс' : 'Зарплата';
+      amountLabel = (parseFloat(payout.amount) || 0).toLocaleString('ru-RU');
+
+      if (payout.status === 'cancelled') {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({ message: 'Выплата уже отменена' });
+      }
+      if (payout.status === 'rejected') {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({ message: 'Выплата отклонена сотрудником — отменять нечего' });
+      }
+
+      // Сторно расхода принятой выплаты. Снапшот удаляемой строки уходит в
+      // аудит; если расход уже удалили вручную в «Расходах» (FK SET NULL или
+      // отсутствующая строка) — отмена продолжается, факт фиксируется.
+      let expenseSnapshot: Record<string, unknown> | null = null;
+      if (wasAccepted && payout.expense_id) {
+        const { rows: expRows } = await client.query(
+          `DELETE FROM expenses WHERE id = $1 AND tenant_id = $2
+           RETURNING id, category_id, amount, description, date, period_month`,
+          [payout.expense_id, tenantID],
+        );
+        if (expRows.length > 0) {
+          const e = expRows[0];
+          expenseSnapshot = {
+            id: e.id,
+            categoryId: e.category_id,
+            amount: parseFloat(e.amount) || 0,
+            description: e.description,
+            date: e.date,
+            periodMonth: e.period_month ?? null,
+          };
+        }
+      }
+
+      const { rows: upd } = await client.query(
+        `UPDATE salary_payouts
+            SET status = 'cancelled', cancelled_at = now(), cancelled_by = $3, cancel_reason = $4
+          WHERE id = $1 AND tenant_id = $2 AND status IN ('pending', 'accepted')
+          RETURNING *`,
+        [payoutId, tenantID, actorId, reasonClean],
+      );
+      if (upd.length === 0) {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({ message: 'Выплата уже обработана' });
+      }
+      result = upd[0];
+
+      await this.audit.logTx(
+        client,
+        { userId: actorId, name: await this.actorNameTx(client, actorId) },
+        'salary_payout_cancel',
+        {
+          targetType: 'salary_payout',
+          targetId: payoutId,
+          targetName: employeeName,
+          detail: {
+            tenantId: tenantID,
+            before: {
+              status: payout.status,
+              type: payout.type,
+              amount: parseFloat(payout.amount) || 0,
+              comment: payout.comment ?? null,
+              periodMonth: payout.period_month ?? null,
+              decidedAt: payout.decided_at ?? null,
+              expenseId: payout.expense_id ?? null,
+            },
+            expense: expenseSnapshot,
+            expenseCompensated: expenseSnapshot !== null,
+            reason: reasonClean,
+          },
+        },
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    result.user_name = employeeName;
+
+    // Post-commit side-effects. Удалённый расход двигает кассу/ленту расходов
+    // (прибыль — нет: «Зарплата» вне P&L) — сброс серверных кэшей отчётов +
+    // пуш другим устройствам обновить денежные экраны.
+    if (wasAccepted) {
+      invalidateReportsForTenant(tenantID);
+      this.push.sendDataToTenant(tenantID, actorId, { type: 'cash-changed', tenantId: tenantID }).catch(() => {
+        /* best-effort */
+      });
+    }
+    // Сотруднику — честное уведомление (он видел выплату / принимал её).
+    if (employeeId) {
+      const note = reasonClean ? ` — ${reasonClean}` : '';
+      this.push.sendToUserInTenant(
+        employeeId,
+        tenantID,
+        'salary',
+        'Выплата отменена',
+        `${typeLabel} ${amountLabel} ₽ отменена владельцем${note}`,
+        { kind: 'payout', payoutId, status: 'cancelled' },
+      );
+    }
+
+    return this.mapPayout(result);
+  }
+
+  /**
+   * Правка PENDING-выплаты (сумма/комментарий). ПРИНЯТУЮ выплату править
+   * НЕЛЬЗЯ — только отменить и создать заново: у неё уже есть зеркальный
+   * расход и подтверждение сотрудника; «тихая» правка суммы сделала бы расход
+   * и подтверждение ложью. Отмена+новая выплата проще и честнее — оба шага
+   * оставляют аудит-след и новое подтверждение сотрудника.
+   */
+  async updatePendingPayout(
+    payoutId: string,
+    tenantID: string,
+    actorId: string,
+    dto: { amount?: number; comment?: string },
+  ) {
+    const hasAmount = dto.amount !== undefined;
+    const hasComment = dto.comment !== undefined;
+    if (!hasAmount && !hasComment) {
+      throw new BadRequestException({ message: 'Укажите сумму или комментарий' });
+    }
+    let amount: number | undefined;
+    if (hasAmount) {
+      amount = Number(dto.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new BadRequestException({ message: 'Сумма выплаты должна быть положительной' });
+      }
+      if (amount > 100_000_000) throw new BadRequestException({ message: 'Сумма слишком велика' });
+    }
+    const comment = hasComment ? String(dto.comment).trim().slice(0, 500) || null : undefined;
+
+    const client = await this.pool.connect();
+    let result: any;
+    let employeeName = 'Сотрудник';
+    let employeeId: string | null = null;
+    let amountChanged = false;
+    try {
+      await client.query('BEGIN');
+      const { rows: lockRows } = await client.query(
+        `SELECT p.*, u.full_name AS employee_name
+           FROM salary_payouts p
+           LEFT JOIN users u ON u.id = p.employee_id
+          WHERE p.id = $1 AND p.tenant_id = $2
+          FOR UPDATE OF p`,
+        [payoutId, tenantID],
+      );
+      if (lockRows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Выплата не найдена' });
+      }
+      const payout = lockRows[0];
+      employeeName = payout.employee_name || employeeName;
+      employeeId = payout.employee_id ?? null;
+      if (payout.status !== 'pending') {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({
+          message: 'Изменить можно только выплату со статусом «Ожидает». Принятую — отмените и создайте заново.',
+        });
+      }
+
+      const sets: string[] = [];
+      const vals: any[] = [];
+      let i = 1;
+      if (hasAmount) {
+        sets.push(`amount = $${i++}`);
+        vals.push(amount);
+        amountChanged = (parseFloat(payout.amount) || 0) !== amount;
+      }
+      if (comment !== undefined) {
+        sets.push(`comment = $${i++}`);
+        vals.push(comment);
+      }
+      vals.push(payoutId, tenantID);
+      const { rows: upd } = await client.query(
+        `UPDATE salary_payouts SET ${sets.join(', ')}
+          WHERE id = $${i++} AND tenant_id = $${i} AND status = 'pending'
+          RETURNING *`,
+        vals,
+      );
+      if (upd.length === 0) {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({ message: 'Выплата уже обработана' });
+      }
+      result = upd[0];
+
+      await this.audit.logTx(
+        client,
+        { userId: actorId, name: await this.actorNameTx(client, actorId) },
+        'salary_payout_update',
+        {
+          targetType: 'salary_payout',
+          targetId: payoutId,
+          targetName: employeeName,
+          detail: {
+            tenantId: tenantID,
+            before: { amount: parseFloat(payout.amount) || 0, comment: payout.comment ?? null },
+            after: { amount: parseFloat(result.amount) || 0, comment: result.comment ?? null },
+          },
+        },
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    result.user_name = employeeName;
+
+    // Сотрудник видел старую сумму в пуше «подтвердите» — сообщаем новую.
+    if (employeeId && amountChanged) {
+      const formatted = (parseFloat(result.amount) || 0).toLocaleString('ru-RU');
+      this.push.sendToUserInTenant(
+        employeeId,
+        tenantID,
+        'salary',
+        'Сумма выплаты изменена',
+        `Новая сумма: ${formatted} ₽ — подтвердите получение`,
+        { kind: 'payout', payoutId, payoutType: result.type, action: 'decide' },
+      );
+    }
+
+    return this.mapPayout(result);
+  }
+
+  /**
+   * Сторно LEGACY-выплаты (salary_payments, 012 — расход писался сразу при
+   * создании). Строка НЕ удаляется: reversed_at/reversed_by/reversal_reason,
+   * суммы «выплачено» её исключают (getAll / getEmployeeMonth), UI зачёркивает.
+   *
+   * Компенсация зеркального расхода:
+   *   1) У НОВЫХ выплат есть прямая связь expense_id (153) — удаляем по ней.
+   *   2) У исторических строк связи не было — best-effort-матч: расход
+   *      категории «Зарплата» с ТОЙ ЖЕ суммой и датой в окне ±1 сек от даты
+   *      выплаты (createPayment писал расход датой выплаты; окно покрывает
+   *      µs→ms-огрубление timestamptz при проходе через node-postgres).
+   *      РОВНО ОДИН кандидат → удаляем; НОЛЬ (расход уже удалили вручную) →
+   *      сторно продолжается с флагом expenseCompensated=false; БОЛЬШЕ ОДНОГО
+   *      → честный отказ (не угадываем деньги): владелец удаляет нужный расход
+   *      вручную и повторяет отмену.
+   * Прибыль не меняется (категория «Зарплата» вне P&L) — меняются касса и
+   * лента расходов.
+   */
+  async reversePayment(paymentId: string, tenantID: string, actorId: string, reason?: string) {
+    const reasonClean = reason ? String(reason).trim().slice(0, 500) || null : null;
+    const client = await this.pool.connect();
+    let result: any;
+    let expenseCompensated = false;
+    let employeeName = 'Сотрудник';
+    let employeeId: string | null = null;
+    let amountLabel = '';
+    try {
+      await client.query('BEGIN');
+      const { rows: lockRows } = await client.query(
+        `SELECT sp.*, u.full_name AS user_name
+           FROM salary_payments sp
+           LEFT JOIN users u ON u.id = sp.user_id
+          WHERE sp.id = $1 AND sp.tenant_id = $2
+          FOR UPDATE OF sp`,
+        [paymentId, tenantID],
+      );
+      if (lockRows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Выплата не найдена' });
+      }
+      const payment = lockRows[0];
+      employeeName = payment.user_name || employeeName;
+      employeeId = payment.user_id ?? null;
+      amountLabel = (parseFloat(payment.amount) || 0).toLocaleString('ru-RU');
+      if (payment.reversed_at) {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({ message: 'Выплата уже отменена' });
+      }
+
+      let expenseSnapshot: Record<string, unknown> | null = null;
+      if (payment.expense_id) {
+        const { rows: expRows } = await client.query(
+          `DELETE FROM expenses WHERE id = $1 AND tenant_id = $2
+           RETURNING id, category_id, amount, description, date`,
+          [payment.expense_id, tenantID],
+        );
+        if (expRows.length > 0) {
+          const e = expRows[0];
+          expenseSnapshot = {
+            id: e.id,
+            categoryId: e.category_id,
+            amount: parseFloat(e.amount) || 0,
+            description: e.description,
+            date: e.date,
+          };
+          expenseCompensated = true;
+        }
+      } else {
+        // Историческая строка без expense_id — детерминированный матч.
+        const { rows: candidates } = await client.query(
+          `SELECT e.id FROM expenses e
+             JOIN expense_categories c ON c.id = e.category_id
+            WHERE e.tenant_id = $1 AND c.tenant_id = $1 AND c.name = 'Зарплата'
+              AND e.amount = $2
+              AND e.date >= $3::timestamptz - interval '1 second'
+              AND e.date <= $3::timestamptz + interval '1 second'
+              AND e.description LIKE 'Зарплата:%'
+            FOR UPDATE OF e`,
+          [tenantID, payment.amount, payment.date],
+        );
+        if (candidates.length > 1) {
+          await client.query('ROLLBACK');
+          throw new BadRequestException({
+            message:
+              'Найдено несколько подходящих расходов «Зарплата» — удалите нужный расход вручную в разделе «Расходы» и повторите отмену',
+          });
+        }
+        if (candidates.length === 1) {
+          const { rows: expRows } = await client.query(
+            `DELETE FROM expenses WHERE id = $1 AND tenant_id = $2
+             RETURNING id, category_id, amount, description, date`,
+            [candidates[0].id, tenantID],
+          );
+          const e = expRows[0];
+          expenseSnapshot = {
+            id: e.id,
+            categoryId: e.category_id,
+            amount: parseFloat(e.amount) || 0,
+            description: e.description,
+            date: e.date,
+          };
+          expenseCompensated = true;
+        }
+      }
+
+      const { rows: upd } = await client.query(
+        `UPDATE salary_payments
+            SET reversed_at = now(), reversed_by = $3, reversal_reason = $4
+          WHERE id = $1 AND tenant_id = $2 AND reversed_at IS NULL
+          RETURNING *`,
+        [paymentId, tenantID, actorId, reasonClean],
+      );
+      if (upd.length === 0) {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({ message: 'Выплата уже отменена' });
+      }
+      result = upd[0];
+
+      await this.audit.logTx(
+        client,
+        { userId: actorId, name: await this.actorNameTx(client, actorId) },
+        'salary_payment_reverse',
+        {
+          targetType: 'salary_payment',
+          targetId: paymentId,
+          targetName: employeeName,
+          detail: {
+            tenantId: tenantID,
+            before: {
+              amount: parseFloat(payment.amount) || 0,
+              monthYear: payment.month_year,
+              type: payment.type,
+              comment: payment.comment ?? null,
+              date: payment.date,
+            },
+            expense: expenseSnapshot,
+            expenseCompensated,
+            reason: reasonClean,
+          },
+        },
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Расход исчез из кассы/ленты — сброс кэшей + пуш другим устройствам.
+    invalidateReportsForTenant(tenantID);
+    this.push.sendDataToTenant(tenantID, actorId, { type: 'cash-changed', tenantId: tenantID }).catch(() => {
+      /* best-effort */
+    });
+    if (employeeId) {
+      const note = reasonClean ? ` — ${reasonClean}` : '';
+      this.push.sendToUserInTenant(
+        employeeId,
+        tenantID,
+        'salary',
+        'Выплата отменена',
+        `Выплата ${amountLabel} ₽ отменена владельцем${note}`,
+        { kind: 'payment', paymentId, reversed: true },
+      );
+    }
+
+    return {
+      id: result.id,
+      reversedAt: result.reversed_at,
+      reversalReason: result.reversal_reason ?? null,
+      expenseCompensated,
+      message: expenseCompensated
+        ? 'Выплата отменена, связанный расход сторнирован'
+        : 'Выплата отменена. Связанный расход не найден — проверьте раздел «Расходы» вручную',
+    };
+  }
+
+  /**
+   * Правка штрафа (сумма/причина). Штраф — standalone-вычет: он НЕ запечён ни
+   * в чеках, ни в расходах — penaltiesAmount/finesAmount суммируются на лету
+   * (getAll / getEmployeeMonth), поэтому правка не требует никакого пересчёта:
+   * следующая выборка отдаёт новые суммы. Семантика вычета сохранена 1:1.
+   */
+  async updatePenalty(id: string, tenantID: string, actorId: string, dto: { amount?: number; reason?: string }) {
+    const hasAmount = dto.amount !== undefined;
+    const hasReason = dto.reason !== undefined;
+    if (!hasAmount && !hasReason) {
+      throw new BadRequestException({ message: 'Укажите сумму или причину' });
+    }
+    let amount: number | undefined;
+    if (hasAmount) {
+      amount = Number(dto.amount);
+      if (!Number.isFinite(amount) || amount <= 0) {
+        throw new BadRequestException({ message: 'Сумма штрафа должна быть положительной' });
+      }
+      if (amount > 100_000_000) throw new BadRequestException({ message: 'Сумма слишком велика' });
+    }
+    let reason: string | undefined;
+    if (hasReason) {
+      reason = String(dto.reason).trim().slice(0, 500);
+      // Причина обязательна (NOT NULL + non-blank CHECK, 100) — пустую не даём.
+      if (!reason) throw new BadRequestException({ message: 'Укажите причину штрафа' });
+    }
+
+    const client = await this.pool.connect();
+    let result: any;
+    let employeeName = 'Сотрудник';
+    let employeeId: string | null = null;
+    try {
+      await client.query('BEGIN');
+      const { rows: lockRows } = await client.query(
+        `SELECT pen.*, u.full_name AS user_name
+           FROM salary_penalties pen
+           LEFT JOIN users u ON u.id = pen.user_id
+          WHERE pen.id = $1 AND pen.tenant_id = $2
+          FOR UPDATE OF pen`,
+        [id, tenantID],
+      );
+      if (lockRows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Штраф не найден' });
+      }
+      const penalty = lockRows[0];
+      employeeName = penalty.user_name || employeeName;
+      employeeId = penalty.user_id ?? null;
+
+      const sets: string[] = [];
+      const vals: any[] = [];
+      let i = 1;
+      if (hasAmount) {
+        sets.push(`amount = $${i++}`);
+        vals.push(amount);
+      }
+      if (reason !== undefined) {
+        sets.push(`description = $${i++}`);
+        vals.push(reason);
+      }
+      vals.push(id, tenantID);
+      const { rows: upd } = await client.query(
+        `UPDATE salary_penalties SET ${sets.join(', ')} WHERE id = $${i++} AND tenant_id = $${i} RETURNING *`,
+        vals,
+      );
+      result = upd[0];
+      result.user_name = employeeName;
+
+      await this.audit.logTx(
+        client,
+        { userId: actorId, name: await this.actorNameTx(client, actorId) },
+        'salary_penalty_update',
+        {
+          targetType: 'salary_penalty',
+          targetId: id,
+          targetName: employeeName,
+          detail: {
+            tenantId: tenantID,
+            before: { amount: parseFloat(penalty.amount) || 0, description: penalty.description },
+            after: { amount: parseFloat(result.amount) || 0, description: result.description },
+          },
+        },
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Сотрудник получал пуш «Штраф наложен» со старыми данными — сообщаем правку.
+    if (employeeId) {
+      const formatted = (parseFloat(result.amount) || 0).toLocaleString('ru-RU');
+      this.push.sendToUserInTenant(
+        employeeId,
+        tenantID,
+        'penalty',
+        'Штраф изменён',
+        `${formatted} ₽ — ${result.description}`,
+        { kind: 'penalty', penaltyId: id },
+      );
+    }
+
+    return this.mapPenalty(result);
+  }
+
   private mapPayout(r: any) {
     return {
       id: r.id,
@@ -1143,6 +1823,11 @@ export class SalaryService {
       expenseId: r.expense_id ?? null,
       // 149 — «за какой месяц» ('YYYY-MM'); null = месяц выписки (МСК).
       periodMonth: (r.period_month as string | null) ?? null,
+      // 153 — отмена владельцем: строка остаётся (UI зачёркивает с причиной),
+      // из «выплачено» исключена (суммируется только status='accepted').
+      cancelledAt: r.cancelled_at ?? null,
+      cancelledBy: r.cancelled_by ?? undefined,
+      cancelReason: r.cancel_reason ?? null,
     };
   }
 
@@ -1339,8 +2024,12 @@ export class SalaryService {
       creatorName: p.creator_name,
       date: p.date,
       createdAt: p.created_at,
+      // 153 — сторно: строка видна (зачёркнутой), из сумм исключена.
+      reversedAt: p.reversed_at ?? null,
+      reversalReason: p.reversal_reason ?? null,
     }));
-    const legacyPaidAmount = payments.reduce((sum, p) => sum + (p.amount || 0), 0);
+    // 153 — сторнированные выплаты не уменьшают долг месяца.
+    const legacyPaidAmount = payments.reduce((sum, p) => sum + (p.reversedAt ? 0 : p.amount || 0), 0);
 
     const totalEarnings = serviceEarnings + productEarnings + premiumsAmount + motivationAmount;
     const paidAmount = acceptedPayoutsAmount + legacyPaidAmount;

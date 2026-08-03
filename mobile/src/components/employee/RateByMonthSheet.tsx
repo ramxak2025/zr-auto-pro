@@ -29,9 +29,16 @@ interface Props {
   onClose: () => void;
   userId: string;
   userName: string;
-  /** Текущие проценты из users — префилл полей. */
+  /** Текущие проценты из users — префилл полей. Из зарплатной карточки сюда
+   *  приходят EFFECTIVE-проценты открытого месяца (getEmployeeMonth). */
   currentSalaryPercent: number;
   currentProductPercent: number;
+  /**
+   * Round 15 п.1 — вход из экрана «Зарплата»: месяц ЗАФИКСИРОВАН открытым в
+   * пейджере карточки ('YYYY-MM'), переключатель месяца скрыт. Без пропа —
+   * прежнее поведение (вход из Пользователей, свободный выбор месяца).
+   */
+  fixedMonth?: string;
 }
 
 export default function RateByMonthSheet({
@@ -41,22 +48,24 @@ export default function RateByMonthSheet({
   userName,
   currentSalaryPercent,
   currentProductPercent,
+  fixedMonth,
 }: Props) {
   const palette = useColors();
   const queryClient = useQueryClient();
 
-  const [month, setMonth] = useState<Date>(() => parseMonthKey());
+  const [month, setMonth] = useState<Date>(() => parseMonthKey(fixedMonth));
   const [svcText, setSvcText] = useState(String(currentSalaryPercent));
   const [prodText, setProdText] = useState(String(currentProductPercent));
 
-  // Каждое открытие — свежий старт от текущих значений и текущего месяца.
+  // Каждое открытие — свежий старт от текущих значений; месяц — фиксированный
+  // (вход из Зарплаты) либо текущий (вход из Пользователей).
   useEffect(() => {
     if (visible) {
-      setMonth(parseMonthKey());
+      setMonth(parseMonthKey(fixedMonth));
       setSvcText(String(currentSalaryPercent));
       setProdText(String(currentProductPercent));
     }
-  }, [visible, currentSalaryPercent, currentProductPercent]);
+  }, [visible, currentSalaryPercent, currentProductPercent, fixedMonth]);
 
   const monthKey = formatMonthKey(month);
   const currentKey = formatMonthKey(new Date());
@@ -77,11 +86,23 @@ export default function RateByMonthSheet({
       queryClient.invalidateQueries({ queryKey: ['users'] });
       queryClient.invalidateQueries({ queryKey: ['user', userId] });
       queryClient.invalidateQueries({ queryKey: ['user-rate-history', userId] });
-      // Начисления месяца пересчитаны — зарплатные экраны и отчёты устарели.
+      // Сервер перепёк salary_amount И checks.profit месяца — устарели не
+      // только зарплатные экраны, но и ВСЕ денежные отчёты (Round 15 п.1).
       queryClient.invalidateQueries({ queryKey: ['salary'] });
+      queryClient.invalidateQueries({ queryKey: ['salary-my'] });
       queryClient.invalidateQueries({ queryKey: ['salary-employee-month'] });
       queryClient.invalidateQueries({ queryKey: ['reports'] });
-      Alert.alert('Готово', `Ставка за ${monthLabelFull(month)} сохранена`);
+      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-chart'] });
+      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
+      queryClient.invalidateQueries({ queryKey: ['tag-analytics'] });
+      Alert.alert(
+        'Готово',
+        isFuture
+          ? `Ставка за ${monthLabelFull(month)} сохранена — применится, когда месяц наступит`
+          : `Начисления и прибыль за ${monthLabelFull(month)} пересчитаны`,
+      );
       onClose();
     },
     onError: (err: any) => {
@@ -101,40 +122,48 @@ export default function RateByMonthSheet({
     mutation.mutate({ month: monthKey, salaryPercent: svc, productSalaryPercent: prod });
   };
 
+  // Round 15 п.1 — предупреждение владельцу дословно про деньги: пересчёт
+  // трогает начисления И ПРИБЫЛЬ ровно одного месяца.
   const warning = isPast
-    ? `Пересчитает начисления ТОЛЬКО за ${monthLabelFull(month)}. Остальные месяцы не изменятся.`
+    ? `Пересчитает начисления И ПРИБЫЛЬ только за ${monthLabelFull(month)}. Другие месяцы не изменятся.`
     : isFuture
       ? `Ставка применится, когда наступит ${monthLabelFull(month)}. До этого действует текущая.`
-      : `Изменит текущую ставку и пересчитает начисления ${monthLabelFull(month)}.`;
+      : `Изменит текущую ставку и пересчитает начисления и прибыль за ${monthLabelFull(month)}. Другие месяцы не изменятся.`;
 
   return (
-    <Modal visible={visible} onClose={onClose} title={`Ставка по месяцам — ${userName}`}>
-      <View style={styles.field}>
-        <Text style={[styles.label, { color: palette.text.secondary }]}>Месяц</Text>
-        <View style={[styles.monthRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          <TouchableOpacity
-            style={styles.monthBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            onPress={() => {
-              haptic('select');
-              setMonth((m) => addMonths(m, -1));
-            }}
-          >
-            <Ionicons name="chevron-back" size={18} color={palette.text.secondary} />
-          </TouchableOpacity>
-          <Text style={[styles.monthLabel, { color: palette.text.primary }]}>{monthLabelFull(month)}</Text>
-          <TouchableOpacity
-            style={styles.monthBtn}
-            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-            onPress={() => {
-              haptic('select');
-              setMonth((m) => addMonths(m, 1));
-            }}
-          >
-            <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
-          </TouchableOpacity>
+    <Modal
+      visible={visible}
+      onClose={onClose}
+      title={fixedMonth ? `Процент за ${monthLabelFull(month)} — ${userName}` : `Ставка по месяцам — ${userName}`}
+    >
+      {fixedMonth ? null : (
+        <View style={styles.field}>
+          <Text style={[styles.label, { color: palette.text.secondary }]}>Месяц</Text>
+          <View style={[styles.monthRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <TouchableOpacity
+              style={styles.monthBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={() => {
+                haptic('select');
+                setMonth((m) => addMonths(m, -1));
+              }}
+            >
+              <Ionicons name="chevron-back" size={18} color={palette.text.secondary} />
+            </TouchableOpacity>
+            <Text style={[styles.monthLabel, { color: palette.text.primary }]}>{monthLabelFull(month)}</Text>
+            <TouchableOpacity
+              style={styles.monthBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={() => {
+                haptic('select');
+                setMonth((m) => addMonths(m, 1));
+              }}
+            >
+              <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
+            </TouchableOpacity>
+          </View>
         </View>
-      </View>
+      )}
 
       <View style={{ flexDirection: 'row', gap: spacing[3] }}>
         <View style={[styles.field, { flex: 1 }]}>

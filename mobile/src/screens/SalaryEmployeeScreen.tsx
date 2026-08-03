@@ -48,6 +48,10 @@ export default function SalaryEmployeeScreen() {
   // Держатель salary_view_all без обоих прав видит карту read-only.
   const canManagePayouts = hasPermission('salary_payouts_manage');
   const canManagePremiums = hasPermission('salary_premiums_manage');
+  // Round 15 п.1 — «Изменить процент за <месяц>» прямо из зарплатной карточки:
+  // тот же серверный гейт, что и у PATCH /users/:id/rate (owner-class
+  // байпасится внутри hasPermission).
+  const canManageRates = hasPermission('user_management');
 
   if (!employeeId) {
     // Defensive — a malformed deep-link without an id just bounces back.
@@ -61,6 +65,7 @@ export default function SalaryEmployeeScreen() {
       title={employeeName}
       canManagePayouts={canManagePayouts}
       canManagePremiums={canManagePremiums}
+      canManageRates={canManageRates}
       initialMonth={params.month}
       onBack={() => navigation.goBack()}
     />

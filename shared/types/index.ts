@@ -2465,6 +2465,13 @@ export interface SalaryPayment {
   /** When the employee confirmed receipt (049_salary_payment_confirmations). Null until confirmed. */
   confirmedAt?: string | null;
   createdAt: string;
+  /**
+   * Round 15 (153) — сторно владельцем: строка остаётся в истории (UI
+   * зачёркивает с бейджем «Отменена»), суммы «выплачено» её исключают,
+   * связанный расход компенсирован. Null/absent = действующая выплата.
+   */
+  reversedAt?: string | null;
+  reversalReason?: string | null;
 }
 
 export interface MasterSalary {
@@ -3781,7 +3788,7 @@ export interface SalaryPenalty {
 // ───────────────────────────────────────────────────────────────────────
 
 export type SalaryPayoutType = 'salary' | 'advance';
-export type SalaryPayoutStatus = 'pending' | 'accepted' | 'rejected';
+export type SalaryPayoutStatus = 'pending' | 'accepted' | 'rejected' | 'cancelled';
 
 export interface SalaryPayout {
   id: string;
@@ -3807,6 +3814,14 @@ export interface SalaryPayout {
    * живёт в июле); null/absent = месяц выписки (МСК).
    */
   periodMonth?: string | null;
+  /**
+   * Round 15 (153) — отмена владельцем (status='cancelled'): строка остаётся
+   * зачёркнутой с причиной; у бывшей accepted-выплаты зеркальный расход
+   * сторнирован. Суммы «выплачено» считают только status='accepted'.
+   */
+  cancelledAt?: string | null;
+  cancelledBy?: string;
+  cancelReason?: string | null;
 }
 
 /** A штраф with a MANDATORY reason. Backed by salary_penalties (056). */

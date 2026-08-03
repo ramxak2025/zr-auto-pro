@@ -58,7 +58,9 @@ function findPendingPayment(rows: MasterSalary[] | undefined, userId: string): S
   for (const row of rows) {
     if (row.masterId !== userId) continue;
     for (const p of row.payments || []) {
-      if (!p.confirmedAt && p.userId === userId) {
+      // 153 — сторнированная владельцем выплата подтверждения не требует
+      // (сервер и так вернёт 400 на confirm; не дёргаем сотрудника модалом).
+      if (!p.confirmedAt && !p.reversedAt && p.userId === userId) {
         return p;
       }
     }
