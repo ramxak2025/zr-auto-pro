@@ -27,6 +27,16 @@ export class AuthController {
     return this.authService.me(user.userID);
   }
 
+  // Тихое продление сессии: клиент со СТАРЫМ, но ещё валидным токеном получает
+  // свежий (полный TTL из JwtModule). Guard уже отверг ревокированные /
+  // деактивированные токены; RateLimitGuard глобальный — отдельный не нужен.
+  // Старый jti не ревокируется — см. AuthService.refresh.
+  @UseGuards(JwtAuthGuard)
+  @Post('refresh')
+  refresh(@CurrentUser() user: JwtPayload) {
+    return this.authService.refresh(user);
+  }
+
   @UseGuards(JwtAuthGuard)
   @Post('logout')
   async logout(@CurrentUser() user: JwtPayload) {

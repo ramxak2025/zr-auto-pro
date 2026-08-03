@@ -13,7 +13,7 @@ import * as bcrypt from 'bcryptjs';
 import { randomUUID } from 'crypto';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
-import { invalidateAuthToken } from '../common/auth-cache';
+import { invalidateAuthToken, NO_TENANT_ID } from '../common/auth-cache';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
 import { userHasPermission } from '../common/guards/permissions.guard';
@@ -125,14 +125,55 @@ export class AuthService {
       unknown
     > | null;
     const exp = decoded?.exp ? new Date((decoded.exp as number) * 1000) : new Date(Date.now() + 30 * 86400000);
-    await this.pool.query(
-      `INSERT INTO revoked_tokens (jti, user_id, tenant_id, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-      [jti, userId, tenantId, exp],
-    );
+    // Tenant-less superadmin: JwtStrategy substitutes the NO_TENANT_ID
+    // sentinel for users.tenant_id IS NULL. No `tenants` row ever owns the
+    // nil-UUID, so inserting it here FK-violates revoked_tokens_tenant_id_fkey
+    // (23503) → logout 500s and the token is NEVER revoked (confirmed Sentry
+    // issue). The column is nullable (021) — store NULL for "no tenant".
+    const tenantForRow = tenantId && tenantId !== NO_TENANT_ID ? tenantId : null;
+    try {
+      await this.pool.query(
+        `INSERT INTO revoked_tokens (jti, user_id, tenant_id, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+        [jti, userId, tenantForRow, exp],
+      );
+    } catch (err) {
+      // Second belt: ANY other FK violation on tenant_id (e.g. a token minted
+      // for a since-deleted tenant) must still revoke the token — tenant_id on
+      // this row is bookkeeping, revocation is the invariant. Retry with NULL.
+      // Every non-23503 error RETHROWS: a silently swallowed failure here
+      // would return 200 while the token stays valid — forbidden.
+      if ((err as { code?: string } | null)?.code === '23503') {
+        await this.pool.query(
+          `INSERT INTO revoked_tokens (jti, user_id, tenant_id, expires_at) VALUES ($1, $2, NULL, $3) ON CONFLICT DO NOTHING`,
+          [jti, userId, exp],
+        );
+      } else {
+        throw err;
+      }
+    }
     // Drop the cached JWT validation immediately so the next request with this
     // token re-checks revoked_tokens (and is rejected) instead of being served
-    // a stale "valid" result for up to the cache TTL.
+    // a stale "valid" result for up to the cache TTL. Reached on BOTH
+    // successful insert paths (normal and the 23503 NULL retry).
     invalidateAuthToken(userId, jti);
+  }
+
+  /**
+   * Тихое продление сессии (mobile): выдать СВЕЖИЙ токен по живому bearer'у.
+   *
+   * • Вызывается только под JwtAuthGuard — токен уже прошёл проверку подписи,
+   *   ревокации и is_active; никакой дополнительной валидации здесь не нужно.
+   * • Старый jti сознательно НЕ ревокируется: немедленная ревокация убивала бы
+   *   in-flight запросы, идущие со старым токеном. Безопасность не хуже
+   *   текущей — оба токена и так живут до своего exp, а logout ревокирует тот
+   *   jti, который клиент держит в руках на момент выхода.
+   * • Sentinel-тенант (NO_TENANT_ID — tenant-less superadmin) НЕ зашивается в
+   *   новый токен: generateToken получает undefined, ровно как при login, и
+   *   JwtStrategy снова подставит sentinel при валидации.
+   */
+  refresh(user: { userID: string; tenantID: string }): { token: string } {
+    const tenantID = user.tenantID && user.tenantID !== NO_TENANT_ID ? user.tenantID : undefined;
+    return { token: this.generateToken(user.userID, tenantID) };
   }
 
   async isTokenRevoked(jti: string): Promise<boolean> {

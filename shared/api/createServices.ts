@@ -33,6 +33,7 @@ import type {
   ChecksBoard,
   WorkBoardColumn,
   PosSettings,
+  TenantLocation,
   Supplier,
   Delivery,
   SupplierPayment,
@@ -204,6 +205,7 @@ import type {
   UpdateSupplierRequest,
   CreateDeliveryRequest,
   CreatePaymentRequest,
+  SupplierRefundRequest,
   CreateScheduleRequest,
   UpdateScheduleRequest,
   CreateWorkModeRequest,
@@ -248,6 +250,10 @@ export function createAuthApi(api: HttpClient) {
     login: (data: LoginRequest) => api.post<LoginResponse>('/auth/login', data),
     register: (data: RegisterRequest) => api.post<LoginResponse>('/auth/register', data),
     me: () => api.get<User>('/auth/me'),
+    // Тихое продление сессии: свежий токен (полный TTL) по ещё валидному
+    // bearer'у. Старый jti сервер НЕ ревокирует (in-flight запросы). Mobile
+    // bootstrap зовёт это, когда токену > 7 дней; web осознанно не использует.
+    refresh: () => api.post<{ token: string }>('/auth/refresh'),
     logout: () => api.post('/auth/logout'),
     updateAvatar: (avatar: string) => api.patch<{ avatar: string }>('/auth/avatar', { avatar }),
     // In-app account deletion (Apple Guideline 5.1.1(v) + Google Play). Director
@@ -628,6 +634,13 @@ export function createChecksApi(api: HttpClient) {
      * superadmin); body carries only `shiftModeEnabled`.
      */
     getPosSettings: () => api.get<PosSettings>('/checks/pos-settings'),
+    /**
+     * Round 14: ГАРД смены режима — реальный флип при незакрытом конвейере
+     * (отложенные заказы на доске: is_deferred=true И work_status NOT NULL)
+     * отвечает 409 с телом {@link PosSettingsConflict}: count + первые 10
+     * заказов (номер, клиент, сумма) — «сначала закройте заказы». Повторная
+     * установка того же значения — no-op без гарда.
+     */
     updatePosSettings: (data: { shiftModeEnabled: boolean }) =>
       api.patch<{ shiftModeEnabled: boolean }>('/checks/pos-settings', data),
     getById: (id: string) => api.get<Check>(`/checks/${id}`),
@@ -666,8 +679,15 @@ export function createChecksApi(api: HttpClient) {
      * key, tenant-scoped, newest-first per column. Shape is now
      * { columns, groups } (see ChecksBoard) — a breaking change vs the old fixed
      * {accepted,in_progress,ready,delivered} object.
+     *
+     * `assigneeId` (Round 14, check_assignees) — фильтр «мои машины» мастера /
+     * фильтр владельца по мастеру: заказ матчится, если пользователь
+     * исполнитель (check_assignees) ИЛИ главный мастер чека ИЛИ исполнитель
+     * строки услуг. Скоуп checks_view (own/all) сервер уважает независимо.
+     * Карточки доски дополнительно несут assignees [{id, fullName}] и
+     * location {id, name}.
      */
-    board: () => api.get<ChecksBoard>('/checks/board'),
+    board: (params?: { assigneeId?: string }) => api.get<ChecksBoard>('/checks/board', { params }),
     /**
      * Move a check along the kanban board (082 + 091). `workStatus` is a column
      * KEY — must be the key of one of the tenant's active board columns (server
@@ -705,6 +725,26 @@ export function createChecksApi(api: HttpClient) {
       update: (id: string, data: { name?: string; color?: string; archived?: boolean }) =>
         api.patch<CheckTag & { archived?: boolean }>(`/checks/tags/${id}`, data),
     },
+    /**
+     * Места автосервиса (Round 14, tenant_locations, миграция 146) — «возле
+     * задних ворот», «Бокс 2». `list` — ВСЕ места (живые + архив), читает
+     * любой авторизованный: пикер приёмки и карточка доски фильтруют isActive
+     * на клиенте, настройки показывают полный список. Мутации —
+     * settings_manage (owner-class проходит всегда): `create` (дубль имени
+     * среди живых → 409, в теле `location` — существующее место), `update`
+     * (имя / порядок / архив-разархив через isActive), `remove` = АРХИВ
+     * (is_active=false; старые чеки место сохраняют, имя освобождается).
+     * Привязка к заказу — полем `locationId` в create/update чека; в ответах
+     * чек несёт location {id, name}.
+     */
+    locations: {
+      list: () => api.get<TenantLocation[]>('/checks/locations'),
+      create: (data: { name: string; sortOrder?: number }) =>
+        api.post<TenantLocation>('/checks/locations', data),
+      update: (id: string, data: { name?: string; sortOrder?: number; isActive?: boolean }) =>
+        api.patch<TenantLocation>(`/checks/locations/${id}`, data),
+      remove: (id: string) => api.delete(`/checks/locations/${id}`),
+    },
   };
 }
 
@@ -738,6 +778,23 @@ export function createSuppliersApi(api: HttpClient) {
         }>;
       }>('/suppliers/payments-report', { params }),
     createPayment: (data: CreatePaymentRequest) => api.post<{ id: string }>('/suppliers/payments', data),
+    /**
+     * СТОРНО платежа (Round 14). Строка НЕ удаляется — помечается
+     * reversedAt/reversalReason, баланс поставщика компенсируется
+     * (total_paid -= amount, current_debt += amount), авто-оплаченная
+     * поставка (098) снова становится 'unpaid'. Возврат брака
+     * (kind='defect_return') сторнировать нельзя — сервер вернёт 400.
+     * Гейт — suppliers_payments_correct (manage НЕ влечёт).
+     */
+    reversePayment: (id: string, body?: { reason?: string }) =>
+      api.post<{ id: string; supplierId: string; amount: number }>(`/suppliers/payments/${id}/reverse`, body ?? {}),
+    /**
+     * «Возврат от поставщика» (Round 14): поставщик вернул деньги. Сервер
+     * пишет строку kind='refund' с отрицательным amount; долг поставщику
+     * растёт. В журнале — kind 'supplier_refund' с плюсом. Гейт —
+     * suppliers_payments_correct.
+     */
+    createRefund: (data: SupplierRefundRequest) => api.post<{ id: string }>('/suppliers/payments/refund', data),
     /**
      * Return defective stock to the supplier. Server decrements defect
      * warehouse stock, lowers supplier debt by qty*purchasePrice, and

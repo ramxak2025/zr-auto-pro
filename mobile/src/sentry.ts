@@ -42,15 +42,42 @@ let enabled = false;
 // attached to any genuine event that follows. A 500 is deliberately KEPT — a
 // spike of application errors on the server is a signal worth seeing.
 const TRANSIENT_HTTP_STATUSES = new Set([408, 429, 502, 503, 504]);
-const TRANSIENT_ERROR_CODES = new Set([
+// expo-notifications' CodedError codes for a FAILED network hop to Expo's push
+// service while fetching the Expo push token (getExpoPushTokenAsync). Pure
+// connectivity/server-availability noise — NOT a client bug (the real bugs in
+// that path are a missing APNs entitlement / projectId mismatch, which raise
+// DIFFERENT codes and must keep reaching Sentry). Shared with AuthContext's
+// silent push-registration retry via isTransientPushError below.
+const TRANSIENT_PUSH_ERROR_CODES = ['ERR_NOTIFICATIONS_NETWORK_ERROR', 'ERR_NOTIFICATIONS_SERVER_ERROR'] as const;
+const TRANSIENT_ERROR_CODES = new Set<string>([
   'ECONNABORTED',
   'ETIMEDOUT',
   'ERR_NETWORK',
   'ERR_CANCELED',
   'ENOTFOUND',
   'ECONNRESET',
+  ...TRANSIENT_PUSH_ERROR_CODES,
 ]);
 const CONNECTIVITY_MESSAGE_PREFIX = 'Нет соединения с сервером';
+// Страховка на случай, если у события НЕТ .code (например, оно пересобрано из
+// native-слоя): expo-notifications формулирует сетевые падения получения
+// Expo-токена как «... error occurred while fetching Expo token ...».
+const PUSH_TOKEN_FETCH_MESSAGE = /fetching Expo token/i;
+
+/**
+ * Transient expo-notifications failure while fetching the Expo push token
+ * (device offline / Expo push service 5xx). One predicate shared by the
+ * beforeSend filter here and AuthContext's silent registration retry, so both
+ * layers agree on what "transient" means. Non-transient push errors (missing
+ * APNs entitlement, projectId mismatch) return false and stay reportable.
+ */
+export function isTransientPushError(err: unknown): boolean {
+  const e = err as { code?: unknown; message?: unknown } | null;
+  if (!e || typeof e !== 'object') return false;
+  if (typeof e.code === 'string' && (TRANSIENT_PUSH_ERROR_CODES as readonly string[]).includes(e.code)) return true;
+  if (typeof e.message === 'string' && PUSH_TOKEN_FETCH_MESSAGE.test(e.message)) return true;
+  return false;
+}
 
 function isTransientNetworkError(
   originalException: unknown,
@@ -72,6 +99,7 @@ function isTransientNetworkError(
     }
     if (typeof err.code === 'string' && TRANSIENT_ERROR_CODES.has(err.code)) return true;
     if (typeof err.message === 'string' && err.message.startsWith(CONNECTIVITY_MESSAGE_PREFIX)) return true;
+    if (isTransientPushError(err)) return true;
   }
   // Fallback: the original exception isn't always attached (e.g. events rebuilt
   // from the native layer) — match the serialized exception value too.
@@ -79,6 +107,7 @@ function isTransientNetworkError(
     const value = typeof firstException.value === 'string' ? firstException.value : '';
     if (firstException.type === 'AxiosError' && /status code (408|429|502|503|504)\b/.test(value)) return true;
     if (value.startsWith(CONNECTIVITY_MESSAGE_PREFIX)) return true;
+    if (PUSH_TOKEN_FETCH_MESSAGE.test(value)) return true;
   }
   return false;
 }
@@ -117,6 +146,21 @@ export function initSentry(): void {
 export function captureException(err: unknown, extra?: Record<string, unknown>): void {
   if (!enabled) return;
   Sentry.captureException(err, extra ? { extra } : undefined);
+}
+
+/**
+ * Attach a breadcrumb to whatever REAL event comes next — the guarded way to
+ * record "this happened, but it's not an event by itself" (e.g. a transient
+ * push-token fetch failure). Same DSN/release guard as every export here.
+ */
+export function addSentryBreadcrumb(breadcrumb: {
+  category?: string;
+  message: string;
+  level?: Sentry.SeverityLevel;
+  data?: Record<string, unknown>;
+}): void {
+  if (!enabled) return;
+  Sentry.addBreadcrumb(breadcrumb);
 }
 
 /**

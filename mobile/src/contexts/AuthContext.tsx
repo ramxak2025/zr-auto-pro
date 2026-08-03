@@ -32,7 +32,7 @@ import api, {
   reselectApiHost,
   setAuthToken,
 } from '../api/axios';
-import { captureException } from '../sentry';
+import { addSentryBreadcrumb, captureException, isTransientPushError } from '../sentry';
 import { clearWidgetData } from '../utils/widgetBridge';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { clearOfflineCheckQueue } from '../utils/offlineCheckQueue';
@@ -111,6 +111,34 @@ async function clearPreviousTenantStorage(): Promise<void> {
 /** True when an axios error is a genuine 401 (session expired / revoked). */
 function isAuthExpiry(err: unknown): boolean {
   return (err as { response?: { status?: number } })?.response?.status === 401;
+}
+
+// ── Тихое продление сессии ──────────────────────────────────────────────────
+// Токен живёт фиксированный TTL и раньше НИКОГДА не продлевался: пользователь,
+// открывающий приложение каждый день, всё равно упирался в принудительный
+// logout по exp (Sentry-метрика auth_expired_forced_logout). После успешного
+// /auth/me на bootstrap'е токен старше этого порога молча меняется на свежий
+// через POST /auth/refresh. Порог 7 дней: продление редкое (не на каждый
+// старт), но с огромным запасом до 30-дневного exp.
+const SESSION_REFRESH_AGE_MS = 7 * 86_400_000;
+
+/**
+ * iat-клейм JWT в миллисекундах. Payload декодируется БЕЗ верификации подписи
+ * — подпись проверяет сервер на каждом запросе; здесь только локальное
+ * решение «пора ли просить свежий токен». null — токен не парсится / нет iat /
+ * нет atob: тогда просто не продлеваем (и ничего не ломаем).
+ */
+function jwtIssuedAtMs(token: string): number | null {
+  try {
+    const part = token.split('.')[1];
+    if (!part || typeof atob !== 'function') return null;
+    const base64 = part.replace(/-/g, '+').replace(/_/g, '/');
+    const json = atob(base64 + '='.repeat((4 - (base64.length % 4)) % 4));
+    const iat = (JSON.parse(json) as { iat?: unknown }).iat;
+    return typeof iat === 'number' && Number.isFinite(iat) ? iat * 1000 : null;
+  } catch {
+    return null;
+  }
 }
 
 // One cold-start deadline for storage restore + the complete API-ring attempt.
@@ -411,6 +439,14 @@ function prefetchAfterLogin(qc: QueryClient, user: User): void {
  */
 let registeredPushToken: string | null = null;
 
+// Тихий ретрай получения Expo push-токена: ТОЛЬКО для transient-кодов
+// expo-notifications (сеть/5xx до Expo push service — isTransientPushError).
+// 3 физические попытки: сразу → ~5с → ~30с. Вызов fire-and-forget из
+// prefetchAfterLogin, так что хвост бэкоффа ничего не блокирует.
+const PUSH_TOKEN_RETRY_DELAYS_MS: readonly number[] = [5_000, 30_000];
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
  * Request push permission and register the Expo push token with the server.
  * Silently swallows all errors — push is non-critical.
@@ -449,11 +485,36 @@ async function registerPushToken(): Promise<void> {
       console.warn('[push] EAS projectId missing from expo config — skipping push registration');
       return;
     }
-    const tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+    // Transient-ретрай вокруг ОДНОГО шага — похода к Expo push service за
+    // токеном. Не-transient ошибки (APNs entitlement, projectId mismatch)
+    // пробрасываются с первой попытки и уходят в catch как раньше.
+    let tokenData: Notifications.ExpoPushToken | undefined;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        tokenData = await Notifications.getExpoPushTokenAsync({ projectId });
+        break;
+      } catch (err) {
+        if (!isTransientPushError(err) || attempt >= PUSH_TOKEN_RETRY_DELAYS_MS.length) throw err;
+        await sleep(PUSH_TOKEN_RETRY_DELAYS_MS[attempt]);
+      }
+    }
     const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
     await pushApi.register(tokenData.data, platform);
     registeredPushToken = tokenData.data;
   } catch (err) {
+    if (isTransientPushError(err)) {
+      // Сеть/Expo-5xx после всех ретраев — это НЕ клиентский баг и не событие
+      // для Sentry (шумело issue'ом на каждом офлайн-логине). Крошка остаётся:
+      // прилипнет к следующему реальному событию для контекста.
+      console.warn('[push] token fetch failed after retries (transient)', err);
+      addSentryBreadcrumb({
+        category: 'push',
+        message: 'push token fetch failed after retries (transient)',
+        level: 'warning',
+        data: { code: (err as { code?: string } | null)?.code },
+      });
+      return;
+    }
     // Push registration is best-effort and must never block login, but a
     // SILENT failure (missing APNs entitlement, denied permission, projectId
     // mismatch) leaves NO push_tokens row and makes "push never arrived"
@@ -603,6 +664,41 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
         // Token still valid — kick off prefetch for a warm session.
         if (applied && !budgetExpired && sessionRuntime.isCurrent(bootstrapEpoch) && queryClient) {
           prefetchAfterLogin(queryClient, fresh);
+        }
+        // Тихое продление сессии: /auth/me подтвердил, что bearer жив; если
+        // ему больше SESSION_REFRESH_AGE_MS — fire-and-forget обмен на свежий
+        // токен. ГЕЙТ: impersonation-сессию (30-мин директорский токен)
+        // продлевать нельзя. Результат применяется СТРОГО через
+        // sessionRuntime.commit с ЭТИМ же bootstrapEpoch — тот же серийный
+        // путь, что и запись /auth/me выше: любой более новый login/logout
+        // продвигает эпоху, isCurrent() становится false и поздний refresh
+        // токена A не может перезаписать токен B (класс багов, от которого
+        // построен epoch-механизм). axios.ts не трогаем: refresh — обычный
+        // авторизованный POST на текущем bearer'е.
+        if (applied && !budgetExpired && sessionRuntime.isCurrent(bootstrapEpoch) && !storedSession.impersonating) {
+          const issuedAt = jwtIssuedAtMs(stored);
+          if (issuedAt !== null && Date.now() - issuedAt > SESSION_REFRESH_AGE_MS) {
+            void (async () => {
+              try {
+                const refreshRes = await authApi.refresh();
+                const newToken = refreshRes.data?.token;
+                if (typeof newToken !== 'string' || !newToken) return;
+                await sessionRuntime.commit(bootstrapEpoch, async (isCurrent) => {
+                  if (!isCurrent()) return;
+                  setAuthToken(newToken);
+                  setToken(newToken);
+                  await authSessionStorage.write({
+                    token: newToken,
+                    user: fresh,
+                    impersonating: storedSession.impersonating,
+                  });
+                });
+              } catch {
+                // Тихо: не удалось продлить — текущий токен остаётся валидным
+                // до своего exp, следующий bootstrap попробует снова.
+              }
+            })();
+          }
         }
       } catch (err) {
         if (cancelled || budgetExpired || !sessionRuntime.isCurrent(bootstrapEpoch)) return;
