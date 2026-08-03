@@ -298,11 +298,90 @@ export interface PlatformSettings {
  * Silent cache-invalidation pushes and superadmin broadcasts are intentionally
  * excluded — they are not user-mutable.
  */
-export type NotificationCategory = 'salary' | 'penalty' | 'check_assigned' | 'check_closed' | 'knowledge';
+export type NotificationCategory =
+  | 'salary'
+  | 'penalty'
+  | 'check_assigned'
+  | 'check_closed'
+  | 'knowledge'
+  // Round 14 — these six shipped as UNGATED pushes with no toggle anywhere.
+  | 'order_ready'
+  | 'order_paid'
+  | 'booking_reminder'
+  | 'call_incoming'
+  | 'profile_request'
+  | 'account';
 
 /** GET /notifications/preferences — `muted` is the set the user opted OUT of. */
 export interface NotificationPreferences {
   muted: NotificationCategory[];
+}
+
+/**
+ * GET/PUT /notifications/settings (migration 151) — the GLOBAL switches, above
+ * the per-category mute list:
+ *   * masterEnabled  — «Все уведомления». false ⇒ no category push at all.
+ *   * sound          — false ⇒ banners arrive silently.
+ *   * quietFrom/To   — 'HH:MM' LOCAL wall-clock. Both must be set to arm the
+ *                      window; from > to means it crosses midnight. Inside the
+ *                      window category pushes are not sent at all.
+ *   * tzOffsetMinutes — device UTC offset at save time (МСК = 180) so the
+ *                      server can evaluate the window in the user's own time.
+ * Broadcasts from support ignore all of this by design.
+ */
+export interface NotificationSettings {
+  masterEnabled: boolean;
+  sound: boolean;
+  quietFrom: string | null;
+  quietTo: string | null;
+  tzOffsetMinutes: number | null;
+}
+
+/** One device registered for push (GET /push/tokens) — token is masked. */
+export interface PushTokenInfo {
+  platform: string;
+  masked: string;
+  createdAt: string | null;
+}
+
+/** POST /push/token — `registered:false` means the row was NOT written. */
+export interface PushRegisterResult {
+  token: string;
+  platform: 'ios' | 'android';
+  registered: boolean;
+  reason?: 'token_owned_by_another_user';
+}
+
+/**
+ * POST /push/test — the RAW Expo verdict for a self-targeted test push.
+ * `delivered` folds tickets + receipts into one boolean; `hint` is a ready
+ * Russian sentence for the diagnostics UI. `gate` explains why REAL pushes
+ * might still be silent even when the test one arrives.
+ */
+export interface PushDiagnostics {
+  tokenCount: number;
+  tokens: PushTokenInfo[];
+  sent: number;
+  status: number | null;
+  ok: boolean;
+  tickets: { status?: string; id?: string; message?: string; details?: { error?: string } }[];
+  errors: unknown[];
+  transportError: string | null;
+  receipts: { id: string; status: string; message?: string; error?: string }[];
+  gate: {
+    masterEnabled: boolean;
+    soundEnabled: boolean;
+    quietHoursActive: boolean;
+    quietFrom: string | null;
+    quietTo: string | null;
+    tzOffsetMinutes: number | null;
+    mutedCategories: string[];
+  };
+  hint: string;
+  /** Positive evidence only: tickets ok AND at least one receipt came back ok. */
+  delivered: boolean;
+  /** Accepted by Expo, delivery receipt not available yet. Not a success. */
+  pending: boolean;
 }
 
 export interface BroadcastButton {

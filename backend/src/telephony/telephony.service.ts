@@ -283,8 +283,10 @@ export class TelephonyService {
 
   /**
    * Fan a VISIBLE push out to the tenant's front-desk staff (director / admin /
-   * master who are active). Reuses PushService.sendToUser (always-deliver) — an
-   * incoming call is time-sensitive. Best-effort: push failure never propagates.
+   * master who are active). Gated on the 'call_incoming' category (Round 14) so
+   * a user who turned «Входящие звонки» off in «Уведомления» actually stops
+   * getting them — it used to be an ungated sendToUser with no toggle anywhere.
+   * Best-effort: push failure never propagates.
    */
   private async notifyStaff(
     tenantId: string,
@@ -300,7 +302,9 @@ export class TelephonyService {
           AND dismissed_at IS NULL`,
       [tenantId],
     );
-    await Promise.all(rows.map((r: { id: string }) => this.push.sendToUser(r.id, title, bodyText, data)));
+    await Promise.all(
+      rows.map((r: { id: string }) => this.push.sendToUserCategory(r.id, 'call_incoming', title, bodyText, data)),
+    );
   }
 
   /** Format a digit string as a readable +7 phone for the push body. */

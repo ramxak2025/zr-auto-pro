@@ -448,10 +448,33 @@ const PUSH_TOKEN_RETRY_DELAYS_MS: readonly number[] = [5_000, 30_000];
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
+ * Is this build configured for Android push at all?
+ *
+ * Without a Firebase project (`android.googleServicesFile` in the app config →
+ * google-services.json in the build) `getExpoPushTokenAsync` throws «Default
+ * FirebaseApp is not initialized» on every login and floods Sentry.
+ *
+ * Round 14 changed the SHAPE of that guard: it used to be an unconditional
+ * `return` for Android, so the day Firebase gets configured Android push would
+ * still have been dead with nothing pointing at this line. Now the gate is the
+ * ACTUAL config value — add googleServicesFile and Android starts registering
+ * with no code change.
+ */
+export function isAndroidPushConfigured(): boolean {
+  const androidConfig = Constants.expoConfig?.android as { googleServicesFile?: string } | undefined;
+  return typeof androidConfig?.googleServicesFile === 'string' && androidConfig.googleServicesFile.length > 0;
+}
+
+/**
  * Request push permission and register the Expo push token with the server.
  * Silently swallows all errors — push is non-critical.
+ *
+ * Exported (Round 14) so the «Уведомления» diagnostics block can re-run the
+ * whole flow on demand: it is the one button that actually FIXES a device whose
+ * registration failed at login (permission granted later, network was down,
+ * token rotated after a restore).
  */
-async function registerPushToken(): Promise<void> {
+export async function registerPushToken(): Promise<void> {
   try {
     if (Platform.OS === 'android') {
       // The local notification channel is FCM-independent and cheap — keep it
@@ -461,13 +484,17 @@ async function registerPushToken(): Promise<void> {
         importance: Notifications.AndroidImportance.MAX,
         vibrationPattern: [0, 250, 250, 250],
       });
-      // Android FCM не настроен (нет google-services.json), поэтому
-      // getExpoPushTokenAsync падает «Default FirebaseApp is not initialized»
-      // на каждом логине и заспамливает Sentry (issue REACT-NATIVE-7, 26
-      // событий). Пропускаем и запрос permission'а (бессмысленный без FCM),
-      // и регистрацию токена. Включить обратно после добавления
-      // Firebase-проекта. iOS-путь ниже не тронут.
-      return;
+      if (!isAndroidPushConfigured()) {
+        // Breadcrumb, not an early-return with no trace: this is a CONFIG gap
+        // (no Firebase project yet), not a runtime error. It sticks to the next
+        // real event so "Android никогда не получал пуш" is explainable.
+        addSentryBreadcrumb({
+          category: 'push',
+          message: 'android push skipped — googleServicesFile not configured',
+          level: 'info',
+        });
+        return;
+      }
     }
     const { status: existingStatus } = await Notifications.getPermissionsAsync();
     let finalStatus = existingStatus;
@@ -499,7 +526,23 @@ async function registerPushToken(): Promise<void> {
       }
     }
     const platform: 'ios' | 'android' = Platform.OS === 'ios' ? 'ios' : 'android';
-    await pushApi.register(tokenData.data, platform);
+    const response = await pushApi.register(tokenData.data, platform);
+    // A 200 is NOT proof of registration: the server's token-hijack guard can
+    // refuse the row (token still owned by an ACTIVE user of another tenant)
+    // and used to answer 200 anyway — the device then never received a push and
+    // nothing anywhere said why. `registered:false` is now explicit; older
+    // servers omit the field, and `!== false` keeps them working unchanged.
+    if (response?.data?.registered === false) {
+      registeredPushToken = null;
+      console.warn('[push] server refused token registration', response.data.reason);
+      addSentryBreadcrumb({
+        category: 'push',
+        message: 'push token registration refused by server',
+        level: 'warning',
+        data: { reason: response.data.reason ?? 'unknown' },
+      });
+      return;
+    }
     registeredPushToken = tokenData.data;
   } catch (err) {
     if (isTransientPushError(err)) {

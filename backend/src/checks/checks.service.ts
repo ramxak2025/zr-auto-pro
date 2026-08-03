@@ -1444,9 +1444,11 @@ export class ChecksService {
       const cashierIds = await this.getCashierUserIds(tenantID);
       for (const uid of cashierIds) {
         if (actorUserId && uid === String(actorUserId)) continue;
-        this.pushService.sendToUser(uid, 'Машина готова к выдаче', body, { type: 'order-ready', checkId }).catch(() => {
-          /* non-fatal */
-        });
+        this.pushService
+          .sendToUserCategory(uid, 'order_ready', 'Машина готова к выдаче', body, { type: 'order-ready', checkId })
+          .catch(() => {
+            /* non-fatal */
+          });
       }
     } catch (err) {
       this.logger.warn(`order-ready push failed for check ${checkId}: ${(err as Error)?.message ?? err}`);
@@ -1482,7 +1484,7 @@ export class ChecksService {
       for (const uid of recipients) {
         if (actorUserId && uid === String(actorUserId)) continue;
         this.pushService
-          .sendToUser(uid, 'Оплачено — можно выдавать', body, { type: 'order-paid', checkId })
+          .sendToUserCategory(uid, 'order_paid', 'Оплачено — можно выдавать', body, { type: 'order-paid', checkId })
           .catch(() => {
             /* non-fatal */
           });

@@ -135,6 +135,10 @@ import type {
   KnowledgeForCar,
   NotificationPreferences,
   NotificationCategory,
+  NotificationSettings,
+  PushTokenInfo,
+  PushRegisterResult,
+  PushDiagnostics,
   Broadcast,
   BroadcastHistoryItem,
   TenantMetrics,
@@ -1524,8 +1528,32 @@ export function createCheckTemplatesApi(api: HttpClient) {
 
 export function createPushApi(api: HttpClient) {
   return {
-    register: (token: string, platform: 'ios' | 'android') => api.post('/push/token', { token, platform }),
+    // `registered:false` in the response means the server REFUSED the row (the
+    // token belongs to an active user of another tenant). A 200 alone is NOT
+    // proof of registration — check the flag.
+    register: (token: string, platform: 'ios' | 'android') =>
+      api.post<PushRegisterResult>('/push/token', { token, platform }),
     unregister: (token: string) => api.delete('/push/token', { data: { token } } as unknown),
+
+    // Diagnostics (Round 14). `tokens` answers "этот телефон вообще
+    // зарегистрирован?"; `test` sends a push to YOURSELF and returns the raw
+    // Expo tickets + delivery receipts, i.e. the actual reason for silence.
+    // `test` deliberately takes a few seconds — it waits for the receipt.
+    tokens: () => api.get<PushTokenInfo[]>('/push/tokens'),
+    // The server deliberately holds this request open while it waits for the
+    // Expo delivery receipt (worst case ≈ 20s). Two overrides are therefore
+    // MANDATORY, not cosmetic:
+    //   • timeout — the mobile default is 15s (8s for a "suspect" route), so
+    //     the default would abort a perfectly healthy diagnosis;
+    //   • _disableHostFailover — a timeout on a non-idempotent POST is
+    //     classified as a transport failure and would mark the ACTIVE API host
+    //     as bad, opening the failover circuit and forcing host re-election for
+    //     the entire app. A diagnostics button must never move the API ring.
+    test: () =>
+      api.post<PushDiagnostics>('/push/test', undefined, {
+        timeout: 45_000,
+        _disableHostFailover: true,
+      }),
   };
 }
 
@@ -1762,6 +1790,12 @@ export function createNotificationsApi(api: HttpClient) {
     getPreferences: () => api.get<NotificationPreferences>('/notifications/preferences'),
     updatePreferences: (muted: NotificationCategory[]) =>
       api.put<NotificationPreferences>('/notifications/preferences', { muted }),
+
+    // Global switches (151): master toggle, quiet hours, sound. Sent WHOLE —
+    // replace-semantics, same as preferences.
+    getSettings: () => api.get<NotificationSettings>('/notifications/settings'),
+    updateSettings: (settings: NotificationSettings) =>
+      api.put<NotificationSettings>('/notifications/settings', settings),
 
     // Persisted broadcasts — re-fetchable on app open if the push was missed.
     listUnseenBroadcasts: () => api.get<Broadcast[]>('/notifications/broadcasts/unseen'),

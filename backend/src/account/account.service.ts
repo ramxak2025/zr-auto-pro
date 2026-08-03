@@ -278,8 +278,9 @@ export class AccountService {
       };
       await Promise.all(
         rows.map((r: { id: string }) =>
-          this.push.sendToUser(
+          this.push.sendToUserCategory(
             r.id,
+            'account',
             'Запрос на удаление аккаунта',
             `Автосервис «${tenantName}» запросил удаление аккаунта`,
             data,

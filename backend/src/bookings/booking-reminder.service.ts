@@ -158,7 +158,7 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
       const body = `SMS-напоминание не отправлено (SMS отключены): ${clientName}, запись на ${this.formatWhen(row.scheduled_at)}`;
       await Promise.all(
         staff.map((s: { id: string }) =>
-          this.pushService.sendToUser(s.id, 'Напоминание о записи', body, {
+          this.pushService.sendToUserCategory(s.id, 'booking_reminder', 'Напоминание о записи', body, {
             type: 'booking_reminder_sms_muted',
             bookingId: row.id,
           }),

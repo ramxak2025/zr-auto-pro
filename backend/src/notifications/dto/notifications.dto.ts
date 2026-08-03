@@ -13,6 +13,7 @@ import {
   ValidateNested,
   MaxLength,
   ArrayMaxSize,
+  Matches,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 
@@ -20,8 +21,26 @@ import { Type } from 'class-transformer';
 // shared `NotificationCategory` union (shared/types/index.ts). Silent
 // cache-invalidation pushes (sendDataToTenant) and superadmin broadcasts are
 // intentionally NOT in this set — they're never user-mutable.
-export const NOTIFICATION_CATEGORIES = ['salary', 'penalty', 'check_assigned', 'check_closed', 'knowledge'] as const;
+//
+// Round 14 added the six that were shipping as UNGATED sendToUser calls: the
+// user saw no toggle for them and had no way to turn them off.
+export const NOTIFICATION_CATEGORIES = [
+  'salary',
+  'penalty',
+  'check_assigned',
+  'check_closed',
+  'knowledge',
+  'order_ready',
+  'order_paid',
+  'booking_reminder',
+  'call_incoming',
+  'profile_request',
+  'account',
+] as const;
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
+
+/** 'HH:MM', 24h. Quiet hours are stored as local wall-clock time. */
+const HH_MM = /^([01]\d|2[0-3]):[0-5]\d$/;
 
 // ─── Preferences ─────────────────────────────────────────────────────────────
 
@@ -36,6 +55,40 @@ export class UpdatePreferencesDto {
   @ArrayMaxSize(NOTIFICATION_CATEGORIES.length)
   @IsIn(NOTIFICATION_CATEGORIES as unknown as string[], { each: true })
   muted!: NotificationCategory[];
+}
+
+/**
+ * PUT /notifications/settings body — the GLOBAL switches (151), sent WHOLE
+ * (replace-semantics, same contract style as preferences above; no PATCH
+ * ambiguity about "absent vs null").
+ *
+ *   * masterEnabled — «Все уведомления». false ⇒ no category push at all.
+ *   * sound         — false ⇒ banners arrive silently.
+ *   * quietFrom/To  — 'HH:MM' local wall-clock, BOTH required to arm the window;
+ *                     either null ⇒ quiet hours off. from > to crosses midnight.
+ *   * tzOffsetMinutes — the device's UTC offset when it saved (MSK = 180), so
+ *                     the server evaluates the window in the user's own time.
+ */
+export class UpdateNotificationSettingsDto {
+  @IsBoolean()
+  masterEnabled!: boolean;
+
+  @IsBoolean()
+  sound!: boolean;
+
+  @IsOptional()
+  @Matches(HH_MM, { message: 'quietFrom должен быть в формате ЧЧ:ММ' })
+  quietFrom?: string | null;
+
+  @IsOptional()
+  @Matches(HH_MM, { message: 'quietTo должен быть в формате ЧЧ:ММ' })
+  quietTo?: string | null;
+
+  @IsOptional()
+  @IsInt()
+  @Min(-720)
+  @Max(840)
+  tzOffsetMinutes?: number | null;
 }
 
 // ─── Broadcasts ──────────────────────────────────────────────────────────────

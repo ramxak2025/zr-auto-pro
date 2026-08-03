@@ -567,7 +567,13 @@ export class ProfileService {
       const data = { type: 'profile_change_requested' as const, requestId, tenantId };
       await Promise.all(
         rows.map((r: { id: string }) =>
-          this.push.sendToUser(r.id, 'Запрос на изменение профиля', `${name} просит изменить профиль`, data),
+          this.push.sendToUserCategory(
+            r.id,
+            'profile_request',
+            'Запрос на изменение профиля',
+            `${name} просит изменить профиль`,
+            data,
+          ),
         ),
       );
     } catch (err) {
@@ -588,7 +594,7 @@ export class ProfileService {
         decision === 'approved'
           ? 'Владелец одобрил изменения вашего профиля'
           : 'Владелец отклонил изменения вашего профиля';
-      await this.push.sendToUser(requesterId, title, body, {
+      await this.push.sendToUserCategory(requesterId, 'profile_request', title, body, {
         type: `profile_change_${decision}` as const,
         requestId,
         tenantId,

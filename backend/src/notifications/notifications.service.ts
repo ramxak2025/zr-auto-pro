@@ -3,7 +3,27 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { PushService } from '../push/push.service';
 import { AuditService, AuditActor } from '../tenants/audit.service';
-import { CreateBroadcastDto, BroadcastSegmentDto, BroadcastSubscriptionStatus } from './dto/notifications.dto';
+import {
+  CreateBroadcastDto,
+  BroadcastSegmentDto,
+  BroadcastSubscriptionStatus,
+  UpdateNotificationSettingsDto,
+} from './dto/notifications.dto';
+
+/**
+ * GET/PUT /notifications/settings payload — the global switches from migration
+ * 151. Mirrors the shared `NotificationSettings` type. Exported so the
+ * controller's inferred return type can be named (TS4053).
+ */
+export interface NotificationSettingsPayload {
+  masterEnabled: boolean;
+  sound: boolean;
+  /** 'HH:MM' local wall-clock, or null when quiet hours are off. */
+  quietFrom: string | null;
+  quietTo: string | null;
+  /** Device UTC offset in minutes at save time (MSK = 180). */
+  tzOffsetMinutes: number | null;
+}
 
 // Shape returned to clients — matches the shared `Broadcast` type
 // (shared/types/index.ts). Exported so the controller's inferred return types
@@ -115,6 +135,80 @@ export class NotificationsService {
       client.release();
     }
     return { muted: unique };
+  }
+
+  // ─── Global settings (151) ─────────────────────────────────────────────────
+
+  /**
+   * The user's GLOBAL notification switches. No row ⇒ defaults (everything on,
+   * no quiet hours) — that's why 151 needs no backfill and nobody silently
+   * loses notifications when the feature ships.
+   */
+  async getSettings(userId: string): Promise<NotificationSettingsPayload> {
+    const { rows } = await this.pool.query(
+      `SELECT master_enabled,
+              sound,
+              to_char(quiet_from, 'HH24:MI') AS quiet_from,
+              to_char(quiet_to,   'HH24:MI') AS quiet_to,
+              tz_offset_minutes
+         FROM notification_settings
+        WHERE user_id = $1`,
+      [userId],
+    );
+    const row = rows[0] as
+      | {
+          master_enabled: boolean;
+          sound: boolean;
+          quiet_from: string | null;
+          quiet_to: string | null;
+          tz_offset_minutes: number | null;
+        }
+      | undefined;
+    return {
+      masterEnabled: row?.master_enabled ?? true,
+      sound: row?.sound ?? true,
+      quietFrom: row?.quiet_from ?? null,
+      quietTo: row?.quiet_to ?? null,
+      tzOffsetMinutes: row?.tz_offset_minutes ?? null,
+    };
+  }
+
+  /**
+   * Replace the user's global switches wholesale (the DTO validated shape and
+   * ranges). Quiet hours arm only when BOTH ends are present — a half-set
+   * window is stored as "off" rather than silently muting from 22:00 to
+   * whenever.
+   */
+  async updateSettings(userId: string, dto: UpdateNotificationSettingsDto): Promise<NotificationSettingsPayload> {
+    // An empty window (from == to) is stored as OFF, matching how the push gate
+    // evaluates it (PushService.isWithinQuietHours treats from == to as
+    // disabled). Persisting it verbatim would let the UI claim «с 09:00 до
+    // 09:00 уведомления не приходят» while the server happily delivers them.
+    const bothEnds = !!dto.quietFrom && !!dto.quietTo && dto.quietFrom !== dto.quietTo;
+    const quietFrom = bothEnds ? dto.quietFrom! : null;
+    const quietTo = bothEnds ? dto.quietTo! : null;
+    const tzOffset = typeof dto.tzOffsetMinutes === 'number' ? dto.tzOffsetMinutes : null;
+
+    await this.pool.query(
+      `INSERT INTO notification_settings (user_id, master_enabled, sound, quiet_from, quiet_to, tz_offset_minutes, updated_at)
+       VALUES ($1, $2, $3, $4::time, $5::time, $6, now())
+       ON CONFLICT (user_id) DO UPDATE
+          SET master_enabled    = EXCLUDED.master_enabled,
+              sound             = EXCLUDED.sound,
+              quiet_from        = EXCLUDED.quiet_from,
+              quiet_to          = EXCLUDED.quiet_to,
+              tz_offset_minutes = EXCLUDED.tz_offset_minutes,
+              updated_at        = now()`,
+      [userId, dto.masterEnabled, dto.sound, quietFrom, quietTo, tzOffset],
+    );
+
+    return {
+      masterEnabled: dto.masterEnabled,
+      sound: dto.sound,
+      quietFrom,
+      quietTo,
+      tzOffsetMinutes: tzOffset,
+    };
   }
 
   // ─── Broadcasts (read side) ──────────────────────────────────────────────────
