@@ -103,6 +103,11 @@ export interface PushRegisterResult {
    * false ⇒ the row was NOT written (the token belongs to an active user of a
    * DIFFERENT tenant). The client used to get a 200 here and believe it was
    * subscribed forever — see the hijack guard in upsertToken.
+   *
+   * The row is not merely left alone in that case: it is DELETED, so the old
+   * tenant immediately stops pushing to a device that is demonstrably in
+   * someone else's hands. Nobody owns the token afterwards, so the next
+   * registration by the phone's current user succeeds normally.
    */
   registered: boolean;
   reason?: 'token_owned_by_another_user';
@@ -199,17 +204,25 @@ export class PushService {
     // Token-hijack guard: ON CONFLICT used to blindly reassign the token to
     // whoever posted it, letting any authenticated user capture another
     // user's device token (their pushes then route to the victim's device).
-    // Reassignment is now allowed only when:
+    // Reassignment is allowed only when:
     //   - the token already belongs to the caller (normal re-registration);
     //   - the current owner is in the SAME tenant (shared workshop device,
     //     another employee logs in on it);
     //   - the current owner row is stale (deactivated or dismissed user).
     // Tokens of devices that were wiped/reinstalled are pruned independently
     // by the DeviceNotRegistered cleanup in handleExpoResponse.
+    //
+    // last_seen_at (152) is stamped on BOTH paths — a fresh INSERT and a
+    // re-confirmation of an existing row — so "this device is still alive and
+    // still belongs to this user" is a fact in the table, not an inference
+    // from created_at.
     const result = await this.pool.query(
-      `INSERT INTO push_tokens (user_id, token, platform)
-       VALUES ($1, $2, $3)
-       ON CONFLICT (token) DO UPDATE SET user_id = EXCLUDED.user_id, platform = EXCLUDED.platform
+      `INSERT INTO push_tokens (user_id, token, platform, last_seen_at)
+       VALUES ($1, $2, $3, now())
+       ON CONFLICT (token) DO UPDATE
+          SET user_id = EXCLUDED.user_id,
+              platform = EXCLUDED.platform,
+              last_seen_at = now()
        WHERE push_tokens.user_id = EXCLUDED.user_id
           OR EXISTS (
                SELECT 1 FROM users owner
@@ -219,11 +232,42 @@ export class PushService {
       [userId, token, platform, tenantId],
     );
     if (result.rowCount === 0) {
+      // FAIL-CLOSED (multi-tenancy audit, hole #1). Refusing to write the row
+      // used to LEAVE THE OLD ROW ALIVE: employee A of tenant «Альфа» never
+      // logs out (offline / app killed / phone handed over), B of tenant
+      // «Бета» signs in on the same device — and «Альфа» keeps banner-pushing
+      // order numbers, plates, client names and sums onto a phone that is now
+      // in B's hands, while B silently gets nothing.
+      //
+      // Presenting a LIVE Expo push token is proof of physical possession of
+      // the device, so the previous tenant's claim on it is void: delete the
+      // row. We deliberately do NOT reassign it to the caller — that is the
+      // very hijack the guard above exists to prevent (an attacker who learned
+      // a token could otherwise redirect a victim's pushes to themselves).
+      // Nobody owns the token afterwards, so the phone's current user is
+      // registered normally on the next attempt.
+      //
+      // Residual risk: someone who knows a foreign token can UNSUBSCRIBE that
+      // device (a nuisance that self-heals on the next registration) — orders
+      // of magnitude milder than leaking another tenant's operational data,
+      // and hard to reach: tokens leave the server only masked (maskToken) and
+      // are redacted out of logs/Sentry (redactTokens).
+      try {
+        // `user_id <> $2` is a race guard only: if the rightful owner
+        // re-registered between the two statements, we must not delete THEIR
+        // fresh row.
+        await this.pool.query(`DELETE FROM push_tokens WHERE token = $1 AND user_id <> $2`, [token, userId]);
+      } catch (err) {
+        // The refusal is still truthful, but the leak stayed open — this must
+        // be loud rather than swallowed.
+        this.logger.error(`Failed to evict foreign push token after a rejected registration: ${String(err)}`);
+        this.captureIssue('push_token_eviction_failed', { userId, tenantId, platform });
+      }
       // Round 14: the client used to receive a plain 200 here and cache
       // "registration succeeded", so a device in this state NEVER got a push
       // and nobody could tell why. Say it out loud instead.
       this.logger.warn(
-        `Push token re-registration rejected for user=${userId}: token owned by another tenant's active user`,
+        `Push token re-registration rejected for user=${userId}: token owned by another tenant's active user (row evicted)`,
       );
       this.captureIssue('push_token_registration_rejected', {
         userId,
@@ -320,17 +364,62 @@ export class PushService {
     data?: Record<string, unknown>,
     opts: PushOptions = {},
   ): Promise<void> {
+    return this.deliverCategory(userId, null, category, title, body, data, opts);
+  }
+
+  /**
+   * TENANT-SAFE variant of {@link sendToUserCategory} — identical gating and
+   * delivery, but a recipient outside `tenantId` receives NOTHING.
+   *
+   * Why it exists (multi-tenancy audit, hole #4): every "notify this user"
+   * call whose recipient id arrives in a DTO (`dto.masterId`, `dto.userId`,
+   * `dto.employeeId`) used to be protected only by an ownership assertion
+   * executed EARLIER in the same method. That is correct today and one careless
+   * refactor away from being a cross-tenant notification leak — the safety
+   * lived in the ORDER of the code, not in the send itself.
+   *
+   * Here the tenant boundary is part of the query that picks the devices
+   * (`JOIN users u ON u.id = pt.user_id AND u.tenant_id = $2`), so a recipient
+   * from another tenant simply resolves to zero tokens. Structurally
+   * impossible instead of conventionally avoided.
+   *
+   * Use this for EVERY addressed push whose recipient came from client input.
+   * `sendToUserCategory` stays for recipients that are legitimately outside a
+   * tenant (platform superadmins) or already read from a tenant-scoped row.
+   */
+  async sendToUserInTenant(
+    userId: string,
+    tenantId: string,
+    category: string,
+    title: string,
+    body: string,
+    data?: Record<string, unknown>,
+    opts: PushOptions = {},
+  ): Promise<void> {
+    return this.deliverCategory(userId, tenantId, category, title, body, data, opts);
+  }
+
+  /** Shared body of the two category-gated senders. Never throws. */
+  private async deliverCategory(
+    userId: string,
+    tenantId: string | null,
+    category: string,
+    title: string,
+    body: string,
+    data: Record<string, unknown> | undefined,
+    opts: PushOptions,
+  ): Promise<void> {
     try {
       const gate = await this.loadGateState(userId);
       if (!this.isCategoryAllowed(gate, category)) return;
 
-      const { rows } = await this.pool.query(`SELECT token FROM push_tokens WHERE user_id=$1`, [userId]);
-      if (rows.length === 0) return;
+      const tokens = await this.loadUserTokens(userId, tenantId);
+      if (tokens.length === 0) return;
 
       // categoryId is always the gating category; thread by category (so all
       // "salary" / "check_closed" notifications stack on iOS) unless overridden.
-      const messages = rows.map((r: { token: string }) =>
-        this.buildExpoMessage(r.token, title, body, data, {
+      const messages = tokens.map((token) =>
+        this.buildExpoMessage(token, title, body, data, {
           categoryId: category,
           threadId: opts.threadId ?? category,
           badge: opts.badge,
@@ -340,8 +429,28 @@ export class PushService {
 
       await this.postToExpo(messages);
     } catch (err) {
-      this.logger.error(`sendToUserCategory failed for userId=${userId} category=${category}: ${err}`);
+      const scope = tenantId ? `tenant=${tenantId}` : 'no tenant scope';
+      this.logger.error(`category push failed for userId=${userId} category=${category} (${scope}): ${err}`);
     }
+  }
+
+  /**
+   * The devices of ONE user. With `tenantId` the row must also survive a join
+   * to a `users` row IN THAT TENANT — the structural half of the guarantee
+   * described on {@link sendToUserInTenant}. Without it, behaviour is the
+   * historical "every token of this user id".
+   */
+  private async loadUserTokens(userId: string, tenantId: string | null): Promise<string[]> {
+    const { rows } = tenantId
+      ? await this.pool.query(
+          `SELECT pt.token
+             FROM push_tokens pt
+             JOIN users u ON u.id = pt.user_id AND u.tenant_id = $2
+            WHERE pt.user_id = $1`,
+          [userId, tenantId],
+        )
+      : await this.pool.query(`SELECT token FROM push_tokens WHERE user_id=$1`, [userId]);
+    return rows.map((r: { token: string }) => r.token);
   }
 
   /** Read every per-user gate input in ONE round-trip. */

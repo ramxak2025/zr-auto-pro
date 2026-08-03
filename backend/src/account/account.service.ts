@@ -269,7 +269,13 @@ export class AccountService {
     requestedBy: string,
   ): Promise<void> {
     try {
-      const { rows } = await this.pool.query(`SELECT id FROM users WHERE role = 'superadmin' AND is_active = true`);
+      // `tenant_id IS NULL` = the PLATFORM operator, and that is the only
+      // audience for this message. Without it the query also matched
+      // superadmin-role users that belong to a tenant, i.e. one tenant's staff
+      // would be told, by name, that ANOTHER tenant asked to close its account.
+      const { rows } = await this.pool.query(
+        `SELECT id FROM users WHERE role = 'superadmin' AND is_active = true AND tenant_id IS NULL`,
+      );
       const data = {
         type: 'tenant_deletion_requested' as const,
         tenantId,

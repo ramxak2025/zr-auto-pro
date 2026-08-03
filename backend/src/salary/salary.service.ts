@@ -445,7 +445,10 @@ export class SalaryService {
     };
     const title = titleByType[String(payment.type)] || 'Зарплата';
     const formatted = (parseFloat(payment.amount) || 0).toLocaleString('ru-RU');
-    this.push.sendToUserCategory(payment.user_id, 'salary', `${title} начислена`, `Сумма: ${formatted} ₽`, {
+    // Tenant-scoped sender: the recipient traces back to `dto.userId` (client
+    // input). The tenant check above stays, but the boundary is now also part
+    // of the device lookup — a foreign recipient resolves to zero tokens.
+    this.push.sendToUserInTenant(payment.user_id, tenantID, 'salary', `${title} начислена`, `Сумма: ${formatted} ₽`, {
       kind: 'salary',
       paymentId: payment.id,
       paymentType: payment.type,
@@ -513,7 +516,10 @@ export class SalaryService {
       dto.type === 'cash'
         ? `Сумма: ${(parseFloat(p.amount) || 0).toLocaleString('ru-RU')} ₽ — ${dto.reason}`
         : `Бонус к ставке: +${parseFloat(p.bonus_percent) || 0}% — ${dto.reason}`;
-    this.push.sendToUserCategory(dto.userId, 'salary', 'Премия начислена', body, { kind: 'premium', premiumId: p.id });
+    this.push.sendToUserInTenant(dto.userId, tenantID, 'salary', 'Премия начислена', body, {
+      kind: 'premium',
+      premiumId: p.id,
+    });
 
     return this.mapPremium(p);
   }
@@ -615,7 +621,7 @@ export class SalaryService {
 
     // Notify the employee so a penalty is never silent.
     const formatted = amount.toLocaleString('ru-RU');
-    this.push.sendToUserCategory(dto.userId, 'penalty', 'Штраф наложен', `${formatted} ₽ — ${comment}`, {
+    this.push.sendToUserInTenant(dto.userId, tenantID, 'penalty', 'Штраф наложен', `${formatted} ₽ — ${comment}`, {
       kind: 'penalty',
       penaltyId: p.id,
     });
@@ -915,12 +921,19 @@ export class SalaryService {
     // of truth).
     const title = type === 'advance' ? 'Аванс к выплате' : 'Зарплата к выплате';
     const formatted = amount.toLocaleString('ru-RU');
-    this.push.sendToUserCategory(dto.employeeId, 'salary', title, `Сумма: ${formatted} ₽ — подтвердите получение`, {
-      kind: 'payout',
-      payoutId: p.id,
-      payoutType: type,
-      action: 'decide',
-    });
+    this.push.sendToUserInTenant(
+      dto.employeeId,
+      tenantID,
+      'salary',
+      title,
+      `Сумма: ${formatted} ₽ — подтвердите получение`,
+      {
+        kind: 'payout',
+        payoutId: p.id,
+        payoutType: type,
+        action: 'decide',
+      },
+    );
 
     return this.mapPayout(p);
   }
@@ -1046,6 +1059,12 @@ export class SalaryService {
       });
     }
     // Notify the владелец who issued the payout of the employee's decision.
+    // DELIBERATELY sendToUserCategory, not sendToUserInTenant: the recipient is
+    // `payout.created_by`, read from a row already locked under
+    // `tenant_id = $2` (never client input), and it may legitimately be a
+    // TENANT-LESS platform superadmin — whom a `users.tenant_id = $tenant`
+    // join would silently drop, turning a security nicety into a lost
+    // notification.
     if (ownerToNotify) {
       const title = decision === 'accept' ? 'Выплата подтверждена' : 'Выплата отклонена';
       const verb = decision === 'accept' ? 'подтвердил(а) получение' : 'отклонил(а) выплату';

@@ -1403,7 +1403,10 @@ export class ChecksService {
         if (excludeUserId && uid === String(excludeUserId)) continue;
         if (alreadyNotifiedUserId && uid === String(alreadyNotifiedUserId)) continue;
         this.pushService
-          .sendToUserCategory(uid, 'check_assigned', 'Новая машина', body, { type: 'order-assigned', checkId })
+          .sendToUserInTenant(uid, tenantID, 'check_assigned', 'Новая машина', body, {
+            type: 'order-assigned',
+            checkId,
+          })
           .catch(() => {
             /* non-fatal */
           });
@@ -1445,7 +1448,10 @@ export class ChecksService {
       for (const uid of cashierIds) {
         if (actorUserId && uid === String(actorUserId)) continue;
         this.pushService
-          .sendToUserCategory(uid, 'order_ready', 'Машина готова к выдаче', body, { type: 'order-ready', checkId })
+          .sendToUserInTenant(uid, tenantID, 'order_ready', 'Машина готова к выдаче', body, {
+            type: 'order-ready',
+            checkId,
+          })
           .catch(() => {
             /* non-fatal */
           });
@@ -1484,7 +1490,10 @@ export class ChecksService {
       for (const uid of recipients) {
         if (actorUserId && uid === String(actorUserId)) continue;
         this.pushService
-          .sendToUserCategory(uid, 'order_paid', 'Оплачено — можно выдавать', body, { type: 'order-paid', checkId })
+          .sendToUserInTenant(uid, tenantID, 'order_paid', 'Оплачено — можно выдавать', body, {
+            type: 'order-paid',
+            checkId,
+          })
           .catch(() => {
             /* non-fatal */
           });
@@ -2827,12 +2836,19 @@ export class ChecksService {
 
       const savedCheck = await this.getById(checkId, tenantID, actor);
 
-      // Push notification to master when assigned by someone else
+      // Push notification to master when assigned by someone else.
+      // sendToUserInTenant, not sendToUserCategory: `dto.masterId` is RAW
+      // CLIENT INPUT. It is validated earlier by assertOwnsByTenant, but that
+      // makes the tenant boundary a property of the code ORDER — one refactor
+      // that moves or drops the assertion and this line starts banner-pushing
+      // an order number into another tenant. The tenant-scoped sender resolves
+      // a foreign recipient to zero devices, so the leak cannot come back.
       if (this.pushService && dto.masterId && dto.masterId !== userID) {
         const checkNumber = (savedCheck as any).number;
         this.pushService
-          .sendToUserCategory(
+          .sendToUserInTenant(
             dto.masterId,
+            tenantID,
             'check_assigned',
             'Новый заказ-наряд',
             `Назначен заказ-наряд #${checkNumber}`,
@@ -3154,7 +3170,13 @@ export class ChecksService {
       );
       for (const mgr of managers) {
         this.pushService
-          .sendToUserCategory(mgr.id, 'check_closed', 'Чек закрыт', `Чек #${checkNumber} закрыт — ${formatted}`)
+          .sendToUserInTenant(
+            mgr.id,
+            tenantID,
+            'check_closed',
+            'Чек закрыт',
+            `Чек #${checkNumber} закрыт — ${formatted}`,
+          )
           .catch(() => {
             /* non-fatal */
           });
@@ -4068,9 +4090,13 @@ export class ChecksService {
         String(newMasterId) !== String(actorUserId ?? '')
       ) {
         const checkNumber = checkRows[0].number;
+        // Tenant-scoped sender — same reasoning as the create() push above:
+        // `dto.masterId` is client input, so the boundary belongs in the query
+        // that picks the devices, not in an assertion further up the method.
         this.pushService
-          .sendToUserCategory(
+          .sendToUserInTenant(
             newMasterId,
+            tenantID,
             'check_assigned',
             'Новый заказ-наряд',
             `Назначен заказ-наряд #${checkNumber}`,

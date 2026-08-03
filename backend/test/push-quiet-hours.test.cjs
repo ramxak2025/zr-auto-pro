@@ -62,6 +62,11 @@ test('unparseable times disable the window instead of muting the user', () => {
 // ── Regression guard: the six pushes that used to ship UNGATED ──────────────
 // They had no toggle anywhere, so a user could not turn them off. If someone
 // reverts one to sendToUser it silently becomes unmutable again — catch it here.
+//
+// Two gated senders are accepted: sendToUserCategory and its tenant-scoped
+// twin sendToUserInTenant (same gates, plus a users.tenant_id join on the
+// device lookup — see push-token-tenant-isolation.test.cjs). Only the raw,
+// ungated sendToUser is a regression.
 
 test('user-facing pushes are category-gated, not raw sendToUser', () => {
   const cases = [
@@ -76,7 +81,7 @@ test('user-facing pushes are category-gated, not raw sendToUser', () => {
     const source = readSource(file);
     assert.match(
       source,
-      new RegExp(`sendToUserCategory\\([\\s\\S]{0,80}'${category}'`),
+      new RegExp(`sendToUser(?:Category|InTenant)\\([\\s\\S]{0,120}'${category}'`),
       `${file} must gate its push on '${category}'`,
     );
   }
