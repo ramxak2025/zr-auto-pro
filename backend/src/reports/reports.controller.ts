@@ -23,9 +23,27 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 export class ReportsController {
   constructor(private reportsService: ReportsService) {}
 
+  /**
+   * Финотчёт за период. Канон — `dateFrom`/`dateTo`; `from`/`to` принимаются
+   * как АЛИАСЫ.
+   *
+   * Зачем алиасы: соседние ручки этого же контроллера (`defect-writeoff`,
+   * `/returns`) принимают `from`/`to`, поэтому сюда они прилетают «по
+   * аналогии» — а getFinancial их не знал и МОЛЧА отдавал текущий месяц
+   * (safeDate → firstOfMonth/today). Молча неверный финотчёт хуже явной
+   * ошибки: владелец видит цифры не за тот период и не догадывается об этом.
+   *
+   * Почему алиас, а не 400 на неизвестный параметр: 400 ретроспективно ломает
+   * уже выпущенные сборки клиентов (App Store / APK обновляются не мгновенно),
+   * а алиас строго аддитивен. Явные dateFrom/dateTo всегда приоритетнее.
+   */
   @Get('financial')
   getFinancial(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.reportsService.getFinancial(user.tenantID, query);
+    return this.reportsService.getFinancial(user.tenantID, {
+      ...query,
+      dateFrom: query?.dateFrom ?? query?.from,
+      dateTo: query?.dateTo ?? query?.to,
+    });
   }
 
   /**

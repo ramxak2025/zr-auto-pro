@@ -959,11 +959,19 @@ export class SalaryService {
       await client.query('BEGIN');
 
       const { rows: lockRows } = await client.query(
+        // FOR UPDATE **OF p** — обязательно адресный лок. Голый `FOR UPDATE`
+        // здесь пытается залочить и nullable-сторону LEFT JOIN (users), а
+        // Postgres это запрещает в рантайме: «FOR UPDATE cannot be applied to
+        // the nullable side of an outer join» → 500 на КАЖДОМ решении по
+        // выплате (Sentry AUTEXA-BACKEND-Q). По смыслу лочить нужно ровно
+        // строку выплаты — её мы и меняем; имя сотрудника читается только для
+        // текста расхода и пуша. Страж от рецидива —
+        // test/sql-for-update-outer-join.test.cjs.
         `SELECT p.*, u.full_name AS employee_name
            FROM salary_payouts p
            LEFT JOIN users u ON u.id = p.employee_id
           WHERE p.id = $1 AND p.tenant_id = $2
-          FOR UPDATE`,
+          FOR UPDATE OF p`,
         [payoutId, tenantID],
       );
       if (lockRows.length === 0) {
