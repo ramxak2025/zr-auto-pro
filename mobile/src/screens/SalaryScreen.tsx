@@ -14,14 +14,25 @@
  * moved from a bottom-sheet to a pushed screen.
  */
 import React, { useState, useMemo, useCallback } from 'react';
-import { View, StyleSheet, TouchableOpacity, ScrollView, RefreshControl, Platform } from 'react-native';
+import {
+  View,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  RefreshControl,
+  Platform,
+  TextInput,
+  Alert,
+  ActivityIndicator,
+} from 'react-native';
 import { FlashList } from '@shopify/flash-list';
 import { Ionicons } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
+import Modal from '../components/Modal';
 import QueryErrorState from '../components/QueryErrorState';
 import SalaryEmployeeCard from '../components/salary/SalaryEmployeeCard';
 import { salaryApi } from '../api/services';
@@ -39,6 +50,7 @@ import {
   getInitials,
   getAvatarColors,
   monthLabelShort,
+  monthLabelFull,
   formatMonthKey,
   monthBounds,
   addMonths,
@@ -268,7 +280,15 @@ export default function SalaryScreen() {
   }
 
   return (
-    <OwnerSalaryList navigation={navigation} queryClient={queryClient} palette={palette} tabBarHeight={tabBarHeight} />
+    <OwnerSalaryList
+      navigation={navigation}
+      queryClient={queryClient}
+      palette={palette}
+      tabBarHeight={tabBarHeight}
+      // 149 — «Выплата вне программы» (внепрограммный получатель) — тот же
+      // гейт, что и выплаты сотрудникам.
+      canManageOutside={hasPermission('salary_payouts_manage')}
+    />
   );
 }
 
@@ -280,9 +300,10 @@ interface OwnerSalaryListProps {
   queryClient: ReturnType<typeof useQueryClient>;
   palette: SemanticPalette;
   tabBarHeight: number;
+  canManageOutside: boolean;
 }
 
-function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight }: OwnerSalaryListProps) {
+function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canManageOutside }: OwnerSalaryListProps) {
   const [selectedMonth, setSelectedMonth] = useState<Date>(
     () => new Date(new Date().getFullYear(), new Date().getMonth(), 1),
   );
@@ -290,6 +311,60 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight }: Own
   const monthYear = formatMonthKey(selectedMonth);
 
   const [refreshing, setRefreshing] = useState(false);
+
+  // ── 149 — «Выплата вне программы» (маркетолог, уборщица — не в users) ──────
+  const [outsideOpen, setOutsideOpen] = useState(false);
+  const [outsideName, setOutsideName] = useState('');
+  const [outsideAmount, setOutsideAmount] = useState('');
+  const [outsideComment, setOutsideComment] = useState('');
+  const [outsideMonth, setOutsideMonth] = useState<Date>(() => new Date());
+
+  const outsideMutation = useMutation({
+    mutationFn: (vars: { recipientName: string; amount: number; periodMonth: string; comment?: string }) =>
+      salaryApi.createOutsidePayout(vars),
+    onSuccess: () => {
+      haptic('success');
+      setOutsideOpen(false);
+      setOutsideName('');
+      setOutsideAmount('');
+      setOutsideComment('');
+      // Расход появился в «Расходах» и двинул прибыль назначенного месяца.
+      queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['reports'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      Alert.alert('Записано', 'Выплата записана в «Расходы» и отнесена к выбранному месяцу');
+    },
+    onError: (err: any) => {
+      haptic('error');
+      const msg = err?.response?.data?.message || 'Не удалось записать выплату';
+      Alert.alert('Ошибка', String(Array.isArray(msg) ? msg.join('\n') : msg));
+    },
+  });
+
+  const openOutside = useCallback(() => {
+    haptic('tap');
+    // Дефолт месяца — открытый в списке месяц (владелец обычно закрывает его).
+    setOutsideMonth(new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), 1));
+    setOutsideOpen(true);
+  }, [selectedMonth]);
+
+  const submitOutside = useCallback(() => {
+    const amt = parseFloat(outsideAmount.replace(',', '.'));
+    if (!outsideName.trim()) {
+      Alert.alert('Ошибка', 'Укажите получателя');
+      return;
+    }
+    if (!amt || amt <= 0) {
+      Alert.alert('Ошибка', 'Укажите сумму');
+      return;
+    }
+    outsideMutation.mutate({
+      recipientName: outsideName.trim(),
+      amount: amt,
+      periodMonth: formatMonthKey(outsideMonth),
+      comment: outsideComment.trim() || undefined,
+    });
+  }, [outsideAmount, outsideName, outsideComment, outsideMonth, outsideMutation]);
 
   const {
     data: salaries,
@@ -369,47 +444,70 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight }: Own
   const keyExtractor = useCallback((item: MasterSalary) => item.masterId, []);
 
   const summaryHeader = (
-    <View style={[styles.summaryCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-      <View style={styles.summaryRow}>
-        <View style={styles.summaryCell}>
-          <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>ФОТ месяца</Text>
-          <Text
-            style={[styles.summaryCellValue, { color: palette.text.primary }]}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.75}
-          >
-            {formatMoney(totals.earnings)}
-          </Text>
-        </View>
-        <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
-        <View style={styles.summaryCell}>
-          <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>Выплачено</Text>
-          <Text
-            style={[styles.summaryCellValue, { color: colors.green[600] }]}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.75}
-          >
-            {formatMoney(totals.paid)}
-          </Text>
-        </View>
-        <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
-        <View style={styles.summaryCell}>
-          <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>К выплате</Text>
-          <Text
-            style={[
-              styles.summaryCellValue,
-              { color: totals.remaining > 0.5 ? colors.amber[700] : palette.text.secondary },
-            ]}
-            numberOfLines={1}
-            adjustsFontSizeToFit
-            minimumFontScale={0.75}
-          >
-            {formatMoney(totals.remaining)}
-          </Text>
+    <View>
+      <View style={[styles.summaryCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+        <View style={styles.summaryRow}>
+          <View style={styles.summaryCell}>
+            <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>ФОТ месяца</Text>
+            <Text
+              style={[styles.summaryCellValue, { color: palette.text.primary }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+            >
+              {formatMoney(totals.earnings)}
+            </Text>
+          </View>
+          <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
+          <View style={styles.summaryCell}>
+            <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>Выплачено</Text>
+            <Text
+              style={[styles.summaryCellValue, { color: colors.green[600] }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+            >
+              {formatMoney(totals.paid)}
+            </Text>
+          </View>
+          <View style={[styles.summaryDivider, { backgroundColor: palette.border.subtle }]} />
+          <View style={styles.summaryCell}>
+            <Text style={[styles.summaryCellLabel, { color: palette.text.tertiary }]}>К выплате</Text>
+            <Text
+              style={[
+                styles.summaryCellValue,
+                { color: totals.remaining > 0.5 ? colors.amber[700] : palette.text.secondary },
+              ]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.75}
+            >
+              {formatMoney(totals.remaining)}
+            </Text>
+          </View>
         </View>
       </View>
+
+      {/* 149 — «Выплата вне программы»: получатель без аккаунта (маркетолог,
+          уборщица) — расход выбранного месяца. Гейт salary_payouts_manage. */}
+      {canManageOutside ? (
+        <TouchableOpacity
+          style={[styles.outsideBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          activeOpacity={0.72}
+          onPress={openOutside}
+        >
+          <View style={[styles.outsideBtnIcon, { backgroundColor: palette.bg.muted }]}>
+            <Ionicons name="person-add-outline" size={16} color={palette.text.secondary} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.outsideBtnTitle, { color: palette.text.primary }]}>Выплата вне программы</Text>
+            <Text style={[styles.outsideBtnSubtitle, { color: palette.text.tertiary }]}>
+              Маркетолог, уборщица — получатель без аккаунта
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 
@@ -458,6 +556,99 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight }: Own
           contentInset={Platform.OS === 'ios' ? { bottom: tabBarHeight } : undefined}
         />
       )}
+
+      {/* 149 — шит «Выплата вне программы»: получатель, сумма, месяц, комментарий. */}
+      <Modal visible={outsideOpen} onClose={() => setOutsideOpen(false)} title="Выплата вне программы">
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Получатель *</Text>
+          <TextInput
+            value={outsideName}
+            onChangeText={setOutsideName}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
+            placeholder="Например: Маркетолог Ирина"
+            placeholderTextColor={palette.text.tertiary}
+          />
+        </View>
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Сумма *</Text>
+          <TextInput
+            value={outsideAmount}
+            onChangeText={setOutsideAmount}
+            style={[
+              styles.formInput,
+              { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+            ]}
+            keyboardType="numeric"
+            placeholder="0"
+            placeholderTextColor={palette.text.tertiary}
+          />
+        </View>
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>За месяц</Text>
+          <View
+            style={[styles.formMonthRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+          >
+            <TouchableOpacity
+              style={styles.formMonthBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={() => {
+                haptic('select');
+                setOutsideMonth((m) => addMonths(m, -1));
+              }}
+            >
+              <Ionicons name="chevron-back" size={18} color={palette.text.secondary} />
+            </TouchableOpacity>
+            <Text style={[styles.formMonthLabel, { color: palette.text.primary }]}>{monthLabelFull(outsideMonth)}</Text>
+            <TouchableOpacity
+              style={styles.formMonthBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={() => {
+                haptic('select');
+                setOutsideMonth((m) => addMonths(m, 1));
+              }}
+            >
+              <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
+            </TouchableOpacity>
+          </View>
+          <Text style={[styles.formHint, { color: palette.text.tertiary }]}>
+            Сумма уменьшит прибыль выбранного месяца; в кассе — сегодняшней датой
+          </Text>
+        </View>
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Комментарий</Text>
+          <TextInput
+            value={outsideComment}
+            onChangeText={setOutsideComment}
+            style={[
+              styles.formInput,
+              {
+                backgroundColor: palette.bg.muted,
+                borderColor: palette.border.subtle,
+                color: palette.text.primary,
+                height: 50,
+                textAlignVertical: 'top',
+              },
+            ]}
+            multiline
+            placeholder="Необязательно"
+            placeholderTextColor={palette.text.tertiary}
+          />
+        </View>
+        <TouchableOpacity
+          style={[styles.formSubmit, { backgroundColor: palette.accent.primary }]}
+          onPress={submitOutside}
+          disabled={outsideMutation.isPending}
+        >
+          {outsideMutation.isPending ? (
+            <ActivityIndicator color={colors.white} size="small" />
+          ) : (
+            <Text style={styles.formSubmitText}>Записать выплату</Text>
+          )}
+        </TouchableOpacity>
+      </Modal>
     </View>
   );
 }
@@ -528,6 +719,57 @@ const styles = StyleSheet.create({
   },
   emptyTitle: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
   emptySubtitle: { fontSize: fontSize.xs, textAlign: 'center' },
+
+  // 149 — «Выплата вне программы» (кнопка под сводкой + форма в шите).
+  outsideBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    marginHorizontal: spacing[4],
+    marginBottom: spacing[2],
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  outsideBtnIcon: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  outsideBtnTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
+  outsideBtnSubtitle: { fontSize: 11, fontWeight: fontWeight.medium, marginTop: 1 },
+  formField: { marginBottom: spacing[4] },
+  formLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, marginBottom: spacing[1.5] },
+  formInput: {
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.sm,
+  },
+  formMonthRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[2],
+    paddingVertical: spacing[1.5],
+  },
+  formMonthBtn: { padding: spacing[1.5] },
+  formMonthLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, textTransform: 'capitalize' },
+  formHint: { fontSize: 11, marginTop: spacing[1.5] },
+  formSubmit: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: borderRadius.lg,
+    paddingVertical: spacing[3],
+    marginTop: spacing[1],
+  },
+  formSubmitText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.white },
 
   row: {
     borderRadius: borderRadius['2xl'],

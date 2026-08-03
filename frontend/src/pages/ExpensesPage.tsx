@@ -268,6 +268,10 @@ export default function ExpensesPage() {
                         )
                       )}
                     </div>
+                    {/* 149 — получатель «выплаты вне программы» (свободное имя). */}
+                    {exp.recipientName && (
+                      <p className="text-xs font-semibold text-gray-700 truncate">→ {exp.recipientName}</p>
+                    )}
                     {exp.description && <p className="text-xs text-gray-500 truncate">{exp.description}</p>}
                     <p className="text-[10px] text-gray-500 mt-0.5">
                       {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}
@@ -328,7 +332,15 @@ export default function ExpensesPage() {
                         )}
                       </td>
                       <td className="max-w-[320px] truncate text-gray-600" title={exp.description || undefined}>
-                        {exp.description || <span className="text-gray-300">—</span>}
+                        {/* 149 — получатель «выплаты вне программы» перед описанием. */}
+                        {exp.recipientName ? (
+                          <>
+                            <span className="font-semibold text-gray-700">→ {exp.recipientName}</span>
+                            {exp.description ? ` · ${exp.description}` : ''}
+                          </>
+                        ) : (
+                          exp.description || <span className="text-gray-300">—</span>
+                        )}
                       </td>
                       <td className="whitespace-nowrap text-gray-500">
                         {format(new Date(exp.date), 'dd.MM.yyyy', { locale: ru })}

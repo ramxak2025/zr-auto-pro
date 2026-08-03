@@ -229,7 +229,16 @@ export default function SalaryEmployeeCard({
 
   const payoutMutation = useMutation({
     mutationFn: (vars: { type: 'salary' | 'advance'; amount: number; comment?: string }) =>
-      salaryApi.createPayout({ employeeId, type: vars.type, amount: vars.amount, comment: vars.comment }),
+      // 149 — карточка помесячная: выплата, выписанная с экрана июля (даже в
+      // августе), относится к июлю (periodMonth = открытый месяц) — симметрично
+      // премии (periodMonthYear ниже).
+      salaryApi.createPayout({
+        employeeId,
+        type: vars.type,
+        amount: vars.amount,
+        comment: vars.comment,
+        periodMonth: monthKey,
+      }),
     onSuccess: () => {
       setActiveForm(null);
       haptic('success');

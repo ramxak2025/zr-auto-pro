@@ -7,6 +7,7 @@ import { CreateSalaryPaymentDto } from './dto/create-payment.dto';
 import { CreatePremiumDto } from './dto/create-premium.dto';
 import { CreatePenaltyDto } from './dto/create-penalty.dto';
 import { CreatePayoutDto } from './dto/create-payout.dto';
+import { CreateOutsidePayoutDto } from './dto/create-outside-payout.dto';
 import { DecidePayoutDto } from './dto/decide-payout.dto';
 
 // Матрица ролей АВТОРИТЕТНА (волна «права как в Битрикс24», 2026-07):
@@ -75,6 +76,16 @@ export class SalaryController {
   @Post('payouts')
   createPayout(@CurrentUser() user: JwtPayload, @Body() dto: CreatePayoutDto) {
     return this.salaryService.createPayout(user.tenantID, user.userID, dto);
+  }
+
+  // Round 14 (149) — «Выплата вне программы»: получатель БЕЗ аккаунта
+  // (маркетолог, уборщица) — свободное имя + сумма + месяц отнесения. Сразу
+  // approved-расход категории «Выплаты вне программы» с period_month; прибыль
+  // назначенного месяца ↓, касса — датой факта. Тот же гейт, что и выплаты.
+  @RequirePermission('salary_payouts_manage')
+  @Post('outside-payouts')
+  createOutsidePayout(@CurrentUser() user: JwtPayload, @Body() dto: CreateOutsidePayoutDto) {
+    return this.salaryService.createOutsidePayout(user.tenantID, user.userID, dto);
   }
 
   // Employee's decision on a pending payout. Role gate is intentionally open —

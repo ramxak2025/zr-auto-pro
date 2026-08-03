@@ -98,7 +98,8 @@ export class SuppliersController {
   @Post('payments/refund')
   createRefund(
     @CurrentUser() user: JwtPayload,
-    @Body() dto: { supplierId: string; amount: number; date?: string; comment?: string },
+    // 149 — periodMonth ('YYYY-MM'): «за какой месяц» возврат, симметрично платежу.
+    @Body() dto: { supplierId: string; amount: number; date?: string; comment?: string; periodMonth?: string },
   ) {
     return this.suppliersService.createRefund(user.tenantID, user.userID, dto);
   }

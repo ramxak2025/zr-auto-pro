@@ -879,7 +879,7 @@ export class SalaryService {
   async createPayout(
     tenantID: string,
     createdBy: string,
-    dto: { employeeId: string; type: 'salary' | 'advance'; amount: number; comment?: string },
+    dto: { employeeId: string; type: 'salary' | 'advance'; amount: number; comment?: string; periodMonth?: string },
   ) {
     if (!dto || !dto.employeeId) {
       throw new BadRequestException({ message: 'employeeId обязателен' });
@@ -889,6 +889,9 @@ export class SalaryService {
     if (!Number.isFinite(amount) || amount <= 0) {
       throw new BadRequestException({ message: 'Сумма выплаты должна быть положительной' });
     }
+    // 149 — «за какой месяц» выплата ('YYYY-MM'). NULL = месяц выписки (МСК) —
+    // прежнее поведение. DTO уже отвалидировал формат; belt-and-braces здесь.
+    const periodMonth = dto.periodMonth && /^\d{4}-\d{2}$/.test(dto.periodMonth) ? dto.periodMonth : null;
 
     // Tenant-isolation: the recipient must belong to the caller's tenant.
     const { rows: userRows } = await this.pool.query('SELECT full_name FROM users WHERE id=$1 AND tenant_id=$2', [
@@ -899,10 +902,10 @@ export class SalaryService {
 
     const comment = dto.comment ? String(dto.comment).trim() || null : null;
     const { rows } = await this.pool.query(
-      `INSERT INTO salary_payouts (tenant_id, employee_id, type, amount, status, comment, created_by)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6)
+      `INSERT INTO salary_payouts (tenant_id, employee_id, type, amount, status, comment, created_by, period_month)
+       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
        RETURNING *`,
-      [tenantID, dto.employeeId, type, amount, comment, createdBy],
+      [tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth],
     );
     const p = rows[0];
     p.user_name = userRows[0].full_name;
@@ -975,6 +978,7 @@ export class SalaryService {
         const description = `${typeLabel}: ${employeeName}${note}`;
         // Expense via ExpensesService, inside this transaction, dated now()
         // (the accept day). user_id / created_by → the владелец who issued.
+        // 149 — период выплаты («за какой месяц») пробрасывается в расход.
         const expense = await this.expenses.recordSalaryExpense(
           tenantID,
           {
@@ -982,6 +986,7 @@ export class SalaryService {
             description,
             date: new Date().toISOString(),
             createdBy: payout.created_by ?? null,
+            periodMonth: (payout.period_month as string | null) ?? null,
           },
           client,
         );
@@ -1058,7 +1063,9 @@ export class SalaryService {
   /**
    * List payouts. Owner (director/superadmin) sees the whole tenant (optionally
    * filtered by employee / status / month); an employee is scoped to their own
-   * by the controller. `monthYear` filters by the issue month (created_at).
+   * by the controller. `monthYear` filters by the ASSIGNED month (149):
+   * COALESCE(period_month, месяц created_at МСК) — выплата «за июль»,
+   * выписанная в августе, попадает в июльский фильтр.
    */
   async listPayouts(
     tenantID: string,
@@ -1076,7 +1083,9 @@ export class SalaryService {
       params.push(query.status);
     }
     if (query.monthYear) {
-      conds.push(`to_char(p.created_at, 'YYYY-MM') = $${idx++}`);
+      conds.push(
+        `COALESCE(p.period_month, to_char(p.created_at AT TIME ZONE '${SalaryService.BUSINESS_TZ}', 'YYYY-MM')) = $${idx++}`,
+      );
       params.push(query.monthYear);
     }
     const { rows } = await this.pool.query(
@@ -1105,7 +1114,42 @@ export class SalaryService {
       createdAt: r.created_at,
       decidedAt: r.decided_at ?? null,
       expenseId: r.expense_id ?? null,
+      // 149 — «за какой месяц» ('YYYY-MM'); null = месяц выписки (МСК).
+      periodMonth: (r.period_month as string | null) ?? null,
     };
+  }
+
+  /**
+   * Round 14 (149) — «Выплата вне программы»: владелец фиксирует выплату
+   * получателю БЕЗ аккаунта в системе (маркетолог, уборщица) — свободное имя,
+   * сумма, месяц отнесения. Пишется сразу approved-расходом под категорией
+   * «Выплаты вне программы» (НЕ «Зарплата» — та исключена из P&L по имени), с
+   * period_month → прибыль назначенного месяца уменьшается, касса — по дате
+   * факта. Подтверждения получателя нет — он не пользователь системы.
+   */
+  async createOutsidePayout(
+    tenantID: string,
+    createdBy: string,
+    dto: { recipientName: string; amount: number; periodMonth: string; comment?: string; date?: string },
+  ) {
+    const recipientName = (dto.recipientName ?? '').trim();
+    if (!recipientName) throw new BadRequestException({ message: 'Имя получателя обязательно' });
+    const amount = Number(dto.amount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      throw new BadRequestException({ message: 'Сумма выплаты должна быть положительной' });
+    }
+    if (amount > 100_000_000) throw new BadRequestException({ message: 'Сумма слишком велика' });
+    if (!/^\d{4}-\d{2}$/.test(dto.periodMonth ?? '')) {
+      throw new BadRequestException({ message: 'Месяц отнесения обязателен (формат YYYY-MM)' });
+    }
+    return this.expenses.recordOutsideProgramPayout(tenantID, {
+      recipientName,
+      amount,
+      periodMonth: dto.periodMonth,
+      comment: dto.comment ?? null,
+      date: dto.date ?? null,
+      createdBy,
+    });
   }
 
   // ─── Per-employee monthly salary detail ──────────────────────────────────
@@ -1140,6 +1184,28 @@ export class SalaryService {
     );
     if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
     const user = userRows[0];
+
+    // 150 — effective-проценты ЗАПРОШЕННОГО месяца: последняя строка истории
+    // ставок с month <= запрошенного ('YYYY-MM' сравнивается лексикографически
+    // корректно); NULL-колонка строки или отсутствие строк → текущие users.*.
+    // Прошлый месяц с исторической ставкой 40% показывает 40%, даже если сейчас
+    // ставка 50%.
+    const { rows: rateRows } = await this.pool.query(
+      `SELECT salary_percent, product_salary_percent
+         FROM master_rate_history
+        WHERE tenant_id = $1 AND user_id = $2 AND month <= $3
+        ORDER BY month DESC
+        LIMIT 1`,
+      [tenantID, employeeId, monthYear],
+    );
+    const effSalaryPercent =
+      rateRows.length > 0 && rateRows[0].salary_percent !== null
+        ? parseFloat(rateRows[0].salary_percent) || 0
+        : parseFloat(user.salary_percent) || 0;
+    const effProductSalaryPercent =
+      rateRows.length > 0 && rateRows[0].product_salary_percent !== null
+        ? parseFloat(rateRows[0].product_salary_percent) || 0
+        : parseFloat(user.product_salary_percent) || 0;
 
     // Product salary, revenue and check-count from this master's own (created)
     // non-deferred checks in the month — attribution unchanged.
@@ -1206,16 +1272,19 @@ export class SalaryService {
     const fines = fineRows.map((r) => this.mapPenalty(r));
     const finesAmount = fines.reduce((sum, f) => sum + (f.amount || 0), 0);
 
-    // Payouts issued in the month (any status). Accepted ones count as paid.
+    // Payouts ASSIGNED to the month (any status). Accepted ones count as paid.
+    // 149 — отнесение по COALESCE(period_month, месяц created_at МСК): выплата
+    // «за июль», выписанная 5 августа, живёт в июльской карточке (и вычитается
+    // из июльского «к выплате»), а не в августовской.
     const { rows: payoutRows } = await this.pool.query(
       `SELECT p.*, u.full_name AS user_name, c.full_name AS creator_name
          FROM salary_payouts p
          LEFT JOIN users u ON u.id = p.employee_id
          LEFT JOIN users c ON c.id = p.created_by
         WHERE p.tenant_id = $1 AND p.employee_id = $2
-          AND p.created_at >= $3 AND p.created_at < $4
+          AND COALESCE(p.period_month, to_char(p.created_at AT TIME ZONE '${SalaryService.BUSINESS_TZ}', 'YYYY-MM')) = $3
         ORDER BY p.created_at DESC`,
-      [tenantID, employeeId, monthStart, nextMonthStart],
+      [tenantID, employeeId, monthYear],
     );
     const payouts = payoutRows.map((r) => this.mapPayout(r));
     const acceptedPayoutsAmount = payouts.reduce((sum, p) => sum + (p.status === 'accepted' ? p.amount || 0 : 0), 0);
@@ -1253,8 +1322,10 @@ export class SalaryService {
       userId: employeeId,
       userName: user.full_name,
       month: monthYear,
-      salaryPercent: parseFloat(user.salary_percent) || 0,
-      productSalaryPercent: parseFloat(user.product_salary_percent) || 0,
+      // 150 — проценты, ДЕЙСТВОВАВШИЕ в запрошенном месяце (история ставок,
+      // fallback текущие users.*), а не всегда-текущие.
+      salaryPercent: effSalaryPercent,
+      productSalaryPercent: effProductSalaryPercent,
       serviceEarnings,
       productEarnings,
       premiumsAmount,

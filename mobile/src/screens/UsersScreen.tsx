@@ -22,6 +22,7 @@ import { getImageUrl } from '../api/axios';
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
+import RateByMonthSheet from '../components/employee/RateByMonthSheet';
 import LoadingSpinner from '../components/LoadingSpinner';
 import AnimatedCard from '../components/AnimatedCard';
 import EmptyState from '../components/EmptyState';
@@ -225,6 +226,8 @@ export default function UsersScreen() {
 
   const [modalOpen, setModalOpen] = useState(false);
   const [editingUser, setEditingUser] = useState<User | null>(null);
+  // 150 — шит «Ставка по месяцам» (смена ставки за прошлый/будущий месяц + история).
+  const [rateSheetUser, setRateSheetUser] = useState<User | null>(null);
   const [form, setForm] = useState<UserForm>({ ...emptyForm });
   const [deleteId, setDeleteId] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -741,6 +744,29 @@ export default function UsersScreen() {
             </View>
           </View>
 
+          {/* 150 — смена ставки задним числом / на будущее + история. Поля выше
+              меняют ставку С ТЕКУЩЕГО месяца (как раньше). */}
+          {editingUser ? (
+            <TouchableOpacity
+              style={[
+                styles.rateByMonthLink,
+                { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted },
+              ]}
+              onPress={() => {
+                haptic('tap');
+                setRateSheetUser(editingUser);
+              }}
+              activeOpacity={0.72}
+            >
+              <Ionicons name="calendar-outline" size={15} color={palette.text.secondary} />
+              <Text style={[styles.rateByMonthLinkText, { color: palette.text.primary }]}>Ставка по месяцам</Text>
+              <Text style={[styles.rateByMonthLinkHint, { color: palette.text.tertiary }]}>
+                прошлый / будущий месяц
+              </Text>
+              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          ) : null}
+
           <View style={styles.switchRow}>
             <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Активен</Text>
             <Switch
@@ -1196,12 +1222,37 @@ export default function UsersScreen() {
         confirmText="Уволить"
         variant="danger"
       />
+
+      {/* 150 — «Ставка по месяцам»: пересчёт выбранного месяца + история. */}
+      {rateSheetUser ? (
+        <RateByMonthSheet
+          visible={!!rateSheetUser}
+          onClose={() => setRateSheetUser(null)}
+          userId={rateSheetUser.id}
+          userName={rateSheetUser.fullName}
+          currentSalaryPercent={rateSheetUser.salaryPercent || 0}
+          currentProductPercent={rateSheetUser.productSalaryPercent || 0}
+        />
+      ) : null}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.gray[50] },
+  // 150 — ссылка «Ставка по месяцам» под полями процентов.
+  rateByMonthLink: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginBottom: spacing[4],
+  },
+  rateByMonthLinkText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  rateByMonthLinkHint: { flex: 1, fontSize: 11, textAlign: 'right' },
   headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   rolesBtn: {
     width: 36,

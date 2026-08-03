@@ -6,6 +6,7 @@ import { PermissionsGuard, RequirePermission } from '../common/guards/permission
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
+import { SetRateDto } from './dto/set-rate.dto';
 
 // Управление сотрудниками (create / update / delete / reorder /
 // per-product commissions) — под матричным ключом 'user_management' (волна
@@ -94,6 +95,25 @@ export class UsersController {
   async remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     const tenantID = await this.usersService.resolveTenantForTarget(user, id);
     return this.usersService.remove(id, tenantID, user.userID, user.role);
+  }
+
+  // ─── Ставка по месяцам (Round 14, миграция 150) ─────────────────────
+  // Смена процента мастера «за месяц X»: прошлый месяц — пересчёт ТОЛЬКО его
+  // начислений новой ставкой; текущий — плюс UPDATE users.* (запекание новых
+  // чеков); будущий — история + cron-перенос при наступлении месяца.
+
+  @RequirePermission('user_management')
+  @Patch(':id/rate')
+  async setRate(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: SetRateDto) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.setRate(id, tenantID, user.userID, dto);
+  }
+
+  @RequirePermission('user_management')
+  @Get(':id/rate-history')
+  async getRateHistory(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    const tenantID = await this.usersService.resolveTenantForTarget(user, id);
+    return this.usersService.listRateHistory(id, tenantID);
   }
 
   // ─── Action Permissions (server-enforced, ROLE-ONLY) ───────────────

@@ -43,6 +43,7 @@ import {
   type PurchaseOrderSuggestionGroup,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { addMonths, formatMonthKey, monthLabelFull } from '../components/salary/salaryFormat';
 
 function formatMoney(v: number) {
   return (
@@ -129,6 +130,9 @@ export default function SupplierDetailScreen() {
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [paymentAmount, setPaymentAmount] = useState('');
   const [paymentComment, setPaymentComment] = useState('');
+  // 149 — «за какой месяц» платёж (стрелки ‹ › вокруг названия месяца).
+  // Дефолт — текущий месяц = прежнее поведение (период не влияет).
+  const [paymentMonth, setPaymentMonth] = useState<Date>(() => new Date());
 
   // Возврат от поставщика (Round 14) — модал по образцу «Новый платёж».
   const [refundModalOpen, setRefundModalOpen] = useState(false);
@@ -597,6 +601,9 @@ export default function SupplierDetailScreen() {
       supplierId: id,
       amount: amt,
       comment: paymentComment || undefined,
+      // 149 — «за какой месяц»: отчёт по оплатам отнесёт платёж к выбранному
+      // месяцу (платёж в августе «за июль» уедет в июль).
+      periodMonth: formatMonthKey(paymentMonth),
     });
   };
 
@@ -604,6 +611,7 @@ export default function SupplierDetailScreen() {
     if (!supplier || supplier.currentDebt <= 0) return;
     setPaymentAmount(String(supplier.currentDebt));
     setPaymentComment('');
+    setPaymentMonth(new Date());
     setPaymentModalOpen(true);
   };
 
@@ -1163,6 +1171,7 @@ export default function SupplierDetailScreen() {
                 onPress={() => {
                   setPaymentAmount('');
                   setPaymentComment('');
+                  setPaymentMonth(new Date());
                   setPaymentModalOpen(true);
                 }}
               >
@@ -1419,6 +1428,37 @@ export default function SupplierDetailScreen() {
             placeholder="0"
             placeholderTextColor={palette.text.tertiary}
           />
+        </View>
+        {/* 149 — «за какой месяц» платёж: стрелки вокруг месяца, дефолт текущий. */}
+        <View style={styles.formField}>
+          <Text style={[styles.formLabel, f.label]}>За месяц</Text>
+          <View
+            style={[styles.monthStepperRow, { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted }]}
+          >
+            <TouchableOpacity
+              style={styles.monthStepBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={() => {
+                haptic('select');
+                setPaymentMonth((m) => addMonths(m, -1));
+              }}
+            >
+              <Ionicons name="chevron-back" size={18} color={palette.text.secondary} />
+            </TouchableOpacity>
+            <Text style={[styles.monthStepperLabel, { color: palette.text.primary }]}>
+              {monthLabelFull(paymentMonth)}
+            </Text>
+            <TouchableOpacity
+              style={styles.monthStepBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              onPress={() => {
+                haptic('select');
+                setPaymentMonth((m) => addMonths(m, 1));
+              }}
+            >
+              <Ionicons name="chevron-forward" size={18} color={palette.text.secondary} />
+            </TouchableOpacity>
+          </View>
         </View>
         <View style={styles.formField}>
           <Text style={[styles.formLabel, f.label]}>Комментарий</Text>
@@ -2251,6 +2291,24 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
     fontSize: fontSize.sm,
     color: colors.gray[900],
+  },
+  // 149 — селектор «за месяц» в форме платежа.
+  monthStepperRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[2],
+    paddingVertical: spacing[1.5],
+  },
+  monthStepBtn: {
+    padding: spacing[1.5],
+  },
+  monthStepperLabel: {
+    fontSize: fontSize.sm,
+    fontWeight: fontWeight.semibold,
+    textTransform: 'capitalize',
   },
   formActions: {
     flexDirection: 'row',

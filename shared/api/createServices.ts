@@ -114,6 +114,11 @@ import type {
   SalaryPayoutStatus,
   SalaryFine,
   SalaryMonthDetail,
+  UserRateHistoryEntry,
+  SetUserRateRequest,
+  SetUserRateResponse,
+  CreateOutsidePayoutRequest,
+  Expense,
   ExpenseCategory,
   JournalDoc,
   KnowledgeCategory,
@@ -328,6 +333,15 @@ export function createUsersApi(api: HttpClient) {
     // Права сотрудника меняются ТОЛЬКО назначением роли — usersApi.update(id,
     // { roleId }). Эффективные права для UI — rolesApi.effectivePermissions(userId).
     // (Сняты: GET/PATCH /users/:id/permissions.)
+    /**
+     * Round 14 (150) — смена ставки «за месяц» (PATCH /users/:id/rate).
+     * Прошлый месяц: пересчёт ТОЛЬКО его начислений новой ставкой; текущий:
+     * плюс users.* (запекание новых чеков); будущий: история + авто-применение
+     * при наступлении месяца. Гейт — user_management.
+     */
+    setRate: (id: string, data: SetUserRateRequest) => api.patch<SetUserRateResponse>(`/users/${id}/rate`, data),
+    /** 150 — история ставок по месяцам (новые первыми). Гейт — user_management. */
+    getRateHistory: (id: string) => api.get<UserRateHistoryEntry[]>(`/users/${id}/rate-history`),
     getProductCommissions: (id: string) => api.get(`/users/${id}/product-commissions`),
     setProductCommissions: (
       id: string,
@@ -775,6 +789,8 @@ export function createSuppliersApi(api: HttpClient) {
           amount: number;
           date: string;
           comment: string | null;
+          /** 149 — «за какой месяц» ('YYYY-MM'); null = месяц даты факта. */
+          periodMonth: string | null;
         }>;
       }>('/suppliers/payments-report', { params }),
     createPayment: (data: CreatePaymentRequest) => api.post<{ id: string }>('/suppliers/payments', data),
@@ -881,9 +897,26 @@ export function createSalaryApi(api: HttpClient) {
     // ── Payouts with confirmation (100_salary_payouts_and_fines) ───────────
     // Владелец (director/superadmin) issues a ЗП / АВАНС → employee accepts or
     // rejects → on accept it's recorded to expenses; on reject it's voided.
-    /** Owner issues a payout (starts `pending`, pushes the employee to decide). */
-    createPayout: (data: { employeeId: string; type: SalaryPayoutType; amount: number; comment?: string }) =>
-      api.post<SalaryPayout>('/salary/payouts', data),
+    /**
+     * Owner issues a payout (starts `pending`, pushes the employee to decide).
+     * `periodMonth` (149) — «за какой месяц» ('YYYY-MM'): помесячная карточка и
+     * P&L отнесут выплату к нему; absent = месяц выписки.
+     */
+    createPayout: (data: {
+      employeeId: string;
+      type: SalaryPayoutType;
+      amount: number;
+      comment?: string;
+      periodMonth?: string;
+    }) => api.post<SalaryPayout>('/salary/payouts', data),
+    /**
+     * 149 — «Выплата вне программы»: получатель БЕЗ аккаунта (маркетолог,
+     * уборщица) — свободное имя + сумма + ОБЯЗАТЕЛЬНЫЙ месяц отнесения.
+     * Сразу approved-расход категории «Выплаты вне программы»: прибыль
+     * назначенного месяца ↓, касса — по дате факта. Гейт —
+     * salary_payouts_manage.
+     */
+    createOutsidePayout: (data: CreateOutsidePayoutRequest) => api.post<Expense>('/salary/outside-payouts', data),
     /** The recipient employee accepts or rejects a pending payout. */
     decidePayout: (id: string, decision: 'accept' | 'reject') =>
       api.post<SalaryPayout>(`/salary/payouts/${id}/decide`, { decision }),
@@ -1249,6 +1282,10 @@ export function createExpensesApi(api: HttpClient) {
           // (synthetic id `warranty-loss:<checkId>`, not a persisted expense).
           source?: 'owner' | 'employee' | 'warranty';
           approvalStatus?: 'approved' | 'pending' | 'rejected';
+          /** 149 — «за какой месяц» относится в прибыль; null = месяц даты факта. */
+          periodMonth?: string | null;
+          /** 149 — получатель «выплаты вне программы» (свободное имя). */
+          recipientName?: string | null;
           createdAt: string;
         }>
       >('/expenses', { params }),

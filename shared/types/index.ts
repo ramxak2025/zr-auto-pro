@@ -2210,6 +2210,12 @@ export interface SupplierPayment {
   reversedAt?: string | null;
   /** 144: причина сторно (заполняется в confirm-диалоге). */
   reversalReason?: string | null;
+  /**
+   * 149 — «за какой месяц» платёж ('YYYY-MM'). Справочный отчёт по оплатам
+   * (payments-report) относит строку к этому месяцу; null/absent = месяц даты
+   * факта (прежнее поведение).
+   */
+  periodMonth?: string | null;
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -2626,6 +2632,18 @@ export interface Expense {
   source?: 'owner' | 'employee' | 'warranty';
   /** 'approved' (default), 'pending' (over limit), 'rejected'. */
   approvalStatus?: 'approved' | 'pending' | 'rejected';
+  /**
+   * 149 — «за какой месяц» расход относится в ПРИБЫЛЬ ('YYYY-MM'). Список
+   * расходов и касса по-прежнему живут по дате факта (`date`); P&L
+   * (getFinancial / dashboardV2) относит строку к этому месяцу. null/absent =
+   * месяц даты факта.
+   */
+  periodMonth?: string | null;
+  /**
+   * 149 — получатель «выплаты вне программы» (маркетолог, уборщица — не
+   * заведён в users), свободное имя. Показывается строкой расхода.
+   */
+  recipientName?: string | null;
   createdAt: string;
 }
 
@@ -3704,6 +3722,12 @@ export interface SalaryPayout {
   decidedAt?: string | null;
   /** Expense row written on accept (category «Зарплата»). Null until accepted. */
   expenseId?: string | null;
+  /**
+   * 149 — «за какой месяц» выплата ('YYYY-MM'). Помесячная карточка и фильтр
+   * listPayouts относят выплату к этому месяцу (выплата 5 августа «за июль»
+   * живёт в июле); null/absent = месяц выписки (МСК).
+   */
+  periodMonth?: string | null;
 }
 
 /** A штраф with a MANDATORY reason. Backed by salary_penalties (056). */
@@ -3733,6 +3757,7 @@ export interface SalaryMonthDetail {
   userName: string;
   /** 'YYYY-MM'. */
   month: string;
+  /** 150 — процент, ДЕЙСТВОВАВШИЙ в запрошенном месяце (история ставок, fallback текущий). */
   salaryPercent: number;
   productSalaryPercent?: number;
   serviceEarnings: number;
@@ -3752,6 +3777,56 @@ export interface SalaryMonthDetail {
   premiums: SalaryPremium[];
   /** Legacy salary_payments for the month (old immediate-expense flow). */
   payments: SalaryPayment[];
+}
+
+// ───────────────────────────────────────────────────────────────────────
+//  История ставок мастера по месяцам (Round 14, миграция 150).
+//  Строка = ставка, действующая С месяца `month` ('YYYY-MM'); effective-процент
+//  месяца M = строка с max(month <= M), fallback текущие проценты users.
+// ───────────────────────────────────────────────────────────────────────
+
+export interface UserRateHistoryEntry {
+  id: string;
+  /** 'YYYY-MM' — месяц, с которого действует ставка. */
+  month: string;
+  /** Процент за работы; null = колонка не задана (fallback users). */
+  salaryPercent: number | null;
+  /** Процент с маржи товаров; null = fallback users. */
+  productSalaryPercent: number | null;
+  createdBy?: string | null;
+  creatorName?: string | null;
+  createdAt: string;
+}
+
+/** PATCH /users/:id/rate — смена ставки «за месяц» (хотя бы один процент). */
+export interface SetUserRateRequest {
+  /** 'YYYY-MM' — прошлый (пересчёт только его), текущий (+users.*) или будущий. */
+  month: string;
+  salaryPercent?: number;
+  productSalaryPercent?: number;
+}
+
+export interface SetUserRateResponse {
+  userId: string;
+  month: string;
+  salaryPercent: number;
+  productSalaryPercent: number;
+}
+
+/**
+ * POST /salary/outside-payouts (149) — «Выплата вне программы»: получатель БЕЗ
+ * аккаунта (маркетолог, уборщица). Пишется approved-расходом категории
+ * «Выплаты вне программы» с period_month → прибыль назначенного месяца ↓,
+ * касса — по дате факта.
+ */
+export interface CreateOutsidePayoutRequest {
+  recipientName: string;
+  amount: number;
+  /** 'YYYY-MM' — месяц отнесения (обязателен). */
+  periodMonth: string;
+  comment?: string;
+  /** Дата кассового факта (ISO); отсутствует → сейчас. */
+  date?: string;
 }
 
 // ───────────────────────────────────────────────────────────────────────

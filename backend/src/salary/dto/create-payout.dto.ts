@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsIn, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsPositive, IsOptional, IsIn, MaxLength, Matches } from 'class-validator';
 
 /**
  * Payout-with-confirmation (100_salary_payouts_and_fines). The owner
@@ -24,4 +24,13 @@ export class CreatePayoutDto {
   @IsString()
   @MaxLength(500)
   comment?: string;
+
+  /**
+   * 149 — «за какой месяц» выплата ('YYYY-MM'). Помесячная карточка и P&L
+   * относят выплату к этому месяцу; отсутствует → месяц выписки (МСК),
+   * прежнее поведение.
+   */
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}$/)
+  periodMonth?: string;
 }

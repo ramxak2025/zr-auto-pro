@@ -121,13 +121,28 @@ export class ReportsService {
     // salary.createPayment, so we exclude that category here; (2) only
     // APPROVED expenses count — pending / rejected must never reduce profit.
     // Legacy rows have NULL approval_status → treated as approved.
+    //
+    // Round 14 (149) — «за какой месяц»: расход с period_month относится к
+    // НАЗНАЧЕННОМУ месяцу, а не к дате факта. Effective-месяц =
+    // COALESCE(period_month, месяц e.date МСК). Строка с периодом попадает в
+    // отчёт, когда её месяц пересекается с месяцами диапазона (месячная
+    // грануляция — выплата «за июль» видна в любом июльском диапазоне);
+    // строки без периода — прежний точный дата-диапазон, байт-в-байт.
+    // Пример: выплата 5 августа «за июль» режет прибыль ИЮЛЯ, а в августовском
+    // P&L не участвует; касса (getCashFlow) видит её 5 августа.
     const { rows: expRows } = await this.pool.query(
       `SELECT COALESCE(SUM(e.amount), 0) as total
          FROM expenses e
          LEFT JOIN expense_categories ec ON ec.id = e.category_id
         WHERE e.tenant_id = $1
-          AND e.date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-          AND e.date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+          AND (
+            (e.period_month IS NULL
+              AND e.date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+              AND e.date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}')
+            OR (e.period_month IS NOT NULL
+              AND e.period_month >= to_char($2::date, 'YYYY-MM')
+              AND e.period_month <= to_char($3::date, 'YYYY-MM'))
+          )
           AND COALESCE(e.approval_status, 'approved') = 'approved'
           AND COALESCE(ec.name, '') <> 'Зарплата'`,
       [tenantID, dateFrom, dateTo],
@@ -679,19 +694,33 @@ export class ReportsService {
     // exp_month = exp_month_oneoff + exp_month_recurring, so no paid expense can
     // silently vanish from the accrual when a category is flagged recurring but
     // never budgeted in fixed_costs (see reconciliation below).
+    //
+    // Round 14 (149) — «за какой месяц»: месячные агрегаты относят расход по
+    // effective-месяцу COALESCE(e.period_month, месяц e.date МСК), а не по
+    // дате факта. Выплата 5 августа «за июль» больше НЕ режет августовский
+    // netProfitMonth (она уехала в июль — getFinancial за июль её видит);
+    // exp_today дополнительно требует «сегодняшний» расход быть ЗА текущий
+    // месяц — выплата задним числом не искажает «прибыль сегодня». Побочная
+    // доводка: равенство месяца (вместо date >= monthStart без верхней
+    // границы) перестало затягивать расходы, датированные БУДУЩИМИ месяцами,
+    // в текущий месяц — согласовано с period-семантикой.
+    const mskCurYm = `${mskY}-${String(mskM + 1).padStart(2, '0')}`;
+    const mskPrevDate = new Date(Date.UTC(mskY, mskM - 1, 1));
+    const mskPrevYm = `${mskPrevDate.getUTCFullYear()}-${String(mskPrevDate.getUTCMonth() + 1).padStart(2, '0')}`;
+    const effMonth = `COALESCE(e.period_month, to_char(e.date AT TIME ZONE '${BUSINESS_TZ}', 'YYYY-MM'))`;
     const { rows: expenseRows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN e.date >= $2 THEN e.amount END), 0) AS exp_today,
-         COALESCE(SUM(CASE WHEN e.date >= $3 THEN e.amount END), 0) AS exp_month,
-         COALESCE(SUM(CASE WHEN e.date >= $4 AND e.date < $3 THEN e.amount END), 0) AS exp_prev_month,
-         COALESCE(SUM(CASE WHEN e.date >= $3 AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS exp_month_oneoff,
-         COALESCE(SUM(CASE WHEN e.date >= $3 AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS exp_month_recurring
+         COALESCE(SUM(CASE WHEN e.date >= $2 AND ${effMonth} = $3 THEN e.amount END), 0) AS exp_today,
+         COALESCE(SUM(CASE WHEN ${effMonth} = $3 THEN e.amount END), 0) AS exp_month,
+         COALESCE(SUM(CASE WHEN ${effMonth} = $4 THEN e.amount END), 0) AS exp_prev_month,
+         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS exp_month_oneoff,
+         COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS exp_month_recurring
        FROM expenses e
        LEFT JOIN expense_categories ec ON ec.id = e.category_id
        WHERE e.tenant_id=$1
          AND COALESCE(e.approval_status, 'approved') = 'approved'
          AND COALESCE(ec.name, '') <> 'Зарплата'`,
-      [tenantID, todayStart, monthStart, prevMonthStart],
+      [tenantID, todayStart, mskCurYm, mskPrevYm],
     );
     const expToday = parseFloat(expenseRows[0]?.exp_today) || 0;
     const expMonth = parseFloat(expenseRows[0]?.exp_month) || 0;
@@ -732,7 +761,9 @@ export class ReportsService {
     const prevMarginPct = prevRevenue > 0 ? (prevNet / prevRevenue) * 100 : 0;
     const marginPctChange = marginPct - prevMarginPct;
 
-    // Spark line: 30-day net profit per day.
+    // Spark line: 30-day net profit per day. СОЗНАТЕЛЬНО по дате факта (149):
+    // period_month — месячная грануляция, дневному тренду отнесение «за месяц»
+    // неприменимо; спарк остаётся кассовой дневной картинкой.
     const { rows: sparkRows } = await this.pool.query(
       `SELECT day, COALESCE(profit, 0) AS profit, COALESCE(exp, 0) AS expense
          FROM (

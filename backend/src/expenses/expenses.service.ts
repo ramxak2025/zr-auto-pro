@@ -179,6 +179,8 @@ export class ExpensesService {
       creatorName: string | null;
       source: string;
       approvalStatus: string;
+      periodMonth: string | null;
+      recipientName: string | null;
       createdAt: unknown;
     }> = rows.map((r) => ({
       id: r.id,
@@ -193,6 +195,11 @@ export class ExpensesService {
       creatorName: r.creator_name,
       source: r.source ?? 'owner',
       approvalStatus: r.approval_status ?? 'approved',
+      // 149 — «за какой месяц» (P&L-отнесение). Список расходов сам по-прежнему
+      // фильтруется ПО ДАТЕ ФАКТА (касса); period_month здесь — только бейдж.
+      periodMonth: r.period_month ?? null,
+      // 149 — внепрограммный получатель (маркетолог, уборщица) свободным именем.
+      recipientName: r.recipient_name ?? null,
       createdAt: r.created_at,
     }));
 
@@ -250,6 +257,8 @@ export class ExpensesService {
           creatorName: null,
           source: 'warranty',
           approvalStatus: 'approved',
+          periodMonth: null,
+          recipientName: null,
           createdAt: w.created_at,
         });
         // Держим тот же порядок, что и основной список — по дате убывания —
@@ -433,33 +442,119 @@ export class ExpensesService {
    */
   async recordSalaryExpense(
     tenantID: string,
-    data: { amount: number; description: string; date: string | Date; createdBy: string | null },
+    data: {
+      amount: number;
+      description: string;
+      date: string | Date;
+      createdBy: string | null;
+      /**
+       * 149 — «за какой месяц» ('YYYY-MM'). Проброс периода выплаты
+       * (salary_payouts.period_month) в расход, чтобы P&L отнёс его к нужному
+       * месяцу. NULL = месяц даты факта (прежнее поведение). Для категории
+       * «Зарплата» на прибыль не влияет (она исключена из P&L по имени), но
+       * период сохраняем для консистентности и бейджа в списке расходов.
+       */
+      periodMonth?: string | null;
+    },
     executor: Pool | PoolClient = this.pool,
   ): Promise<{ id: string; amount: number; date: string }> {
     // Find-or-create the tenant's «Зарплата» category (same convention as the
     // legacy salary-payment path).
-    let categoryId: string;
-    const { rows: catRows } = await executor.query(
-      `SELECT id FROM expense_categories WHERE tenant_id = $1 AND name = 'Зарплата' LIMIT 1`,
-      [tenantID],
-    );
-    if (catRows.length > 0) {
-      categoryId = catRows[0].id;
-    } else {
-      const { rows: newCat } = await executor.query(
-        `INSERT INTO expense_categories (name, tenant_id) VALUES ('Зарплата', $1) RETURNING id`,
-        [tenantID],
-      );
-      categoryId = newCat[0].id;
-    }
+    const categoryId = await this.findOrCreateCategory(tenantID, 'Зарплата', executor);
 
     const { rows } = await executor.query(
-      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $5, 'owner', 'approved', $6)
+      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, period_month, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $5, 'owner', 'approved', $6, $7)
        RETURNING id, amount, date`,
-      [categoryId, data.amount, data.description, data.date, data.createdBy, tenantID],
+      [categoryId, data.amount, data.description, data.date, data.createdBy, data.periodMonth ?? null, tenantID],
     );
     return { id: rows[0].id, amount: parseFloat(rows[0].amount) || 0, date: rows[0].date };
+  }
+
+  /** Find-or-create a system expense category by exact name (tenant-scoped). */
+  private async findOrCreateCategory(
+    tenantID: string,
+    name: string,
+    executor: Pool | PoolClient = this.pool,
+  ): Promise<string> {
+    const { rows: catRows } = await executor.query(
+      `SELECT id FROM expense_categories WHERE tenant_id = $1 AND name = $2 LIMIT 1`,
+      [tenantID, name],
+    );
+    if (catRows.length > 0) return catRows[0].id;
+    const { rows: newCat } = await executor.query(
+      `INSERT INTO expense_categories (name, tenant_id) VALUES ($1, $2) RETURNING id`,
+      [name, tenantID],
+    );
+    return newCat[0].id;
+  }
+
+  /**
+   * Round 14 (149) — «Выплата вне программы»: выплата задним числом получателю,
+   * НЕ заведённому в users (маркетолог, уборщица, разовый подрядчик). Свободное
+   * имя + сумма + месяц отнесения → обычный approved-расход под системной
+   * категорией «Выплаты вне программы».
+   *
+   * КРИТИЧНО: категория НЕ «Зарплата» — 'Зарплата' исключается из прибыли ПО
+   * ИМЕНИ (reports.service), а внепрограммная выплата обязана РЕЗАТЬ прибыль
+   * своего месяца (иначе она исчезла бы из P&L). Категория создаётся с
+   * is_recurring=false (дефолт) → в accrual-модели считается разовым расходом.
+   *
+   * `periodMonth` обязателен — вся суть фичи в отнесении к месяцу; дата факта
+   * (`date`, дефолт «сейчас») остаётся датой кассового движения.
+   */
+  async recordOutsideProgramPayout(
+    tenantID: string,
+    data: {
+      recipientName: string;
+      amount: number;
+      periodMonth: string;
+      comment?: string | null;
+      date?: string | Date | null;
+      createdBy: string | null;
+    },
+  ) {
+    const categoryId = await this.findOrCreateCategory(tenantID, 'Выплаты вне программы');
+
+    const { rows } = await this.pool.query(
+      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, period_month, recipient_name, tenant_id)
+       VALUES ($1, $2, $3, $4, $5, $5, 'owner', 'approved', $6, $7, $8)
+       RETURNING *`,
+      [
+        categoryId,
+        data.amount,
+        data.comment?.trim() || null,
+        data.date || new Date().toISOString(),
+        data.createdBy,
+        data.periodMonth,
+        data.recipientName.trim(),
+        tenantID,
+      ],
+    );
+    const r = rows[0];
+    // Расход двигает прибыль назначенного месяца — сброс кэшей отчётов + пуш
+    // другим устройствам, как в create().
+    invalidateReportsForTenant(tenantID);
+    if (this.pushService && data.createdBy) {
+      this.pushService
+        .sendDataToTenant(tenantID, data.createdBy, { type: 'cash-changed', tenantId: tenantID })
+        .catch(() => {
+          /* best-effort */
+        });
+    }
+    return {
+      id: r.id,
+      categoryId: r.category_id,
+      amount: parseFloat(r.amount) || 0,
+      description: r.description,
+      date: r.date,
+      periodMonth: r.period_month,
+      recipientName: r.recipient_name,
+      createdBy: r.created_by,
+      source: r.source,
+      approvalStatus: r.approval_status,
+      createdAt: r.created_at,
+    };
   }
 
   async getTotalForPeriod(tenantID: string, dateFrom: string, dateTo: string) {

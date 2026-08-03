@@ -554,9 +554,18 @@ export class UsersService {
           throw new NotFoundException({ message: 'Пользователь не найден' });
         }
         updatedRow = rows[0];
-        await this.recomputeCurrentMonthSalary(client, tenantID, id, {
-          service: servicePctChanged,
-          product: productPctChanged,
+        // Round 14 (150): обычная смена ставки в карточке = ставка «с текущего
+        // месяца» — автоматически фиксируем полный снапшот в истории ставок
+        // (история копится сама, без отдельного действия владельца).
+        const currentMonth = this.mskCurrentMonth();
+        const newServicePct = servicePctChanged ? Number(dto.salaryPercent) || 0 : oldSalaryPercent;
+        const newProductPct = productPctChanged ? Number(dto.productSalaryPercent) || 0 : oldProductSalaryPercent;
+        await this.upsertRateHistory(client, tenantID, id, currentMonth, newServicePct, newProductPct, actorID);
+        // Пересчёт ТЕКУЩЕГО месяца новой ставкой — прежнее поведение #62,
+        // теперь через обобщённый recomputeMonthSalary (МСК-границы месяца).
+        await this.recomputeMonthSalary(client, tenantID, id, currentMonth, {
+          servicePct: servicePctChanged ? newServicePct : undefined,
+          productPct: productPctChanged ? newProductPct : undefined,
         });
         await client.query('COMMIT');
       } catch (err) {
@@ -615,44 +624,135 @@ export class UsersService {
     return this.mapUser(updatedRow);
   }
 
+  /** Бизнес-таймзона продукта (UTC+3, без летнего времени) — как BUSINESS_TZ
+   *  в reports/salary. */
+  private static readonly MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+  private static readonly MONTH_RE = /^\d{4}-\d{2}$/;
+
+  /** Текущий календарный месяц МОСКВЫ ('YYYY-MM'). */
+  private mskCurrentMonth(): string {
+    const msk = new Date(Date.now() + UsersService.MSK_OFFSET_MS);
+    return `${msk.getUTCFullYear()}-${String(msk.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
   /**
-   * #62 — re-bake the CURRENT calendar month's non-deferred checks for `userId`
-   * after their salary percent changed, so the current month reflects the new
-   * percent while PAST months keep their historical (already-baked) percent.
-   * Runs INSIDE the caller's transaction (same one that persisted the percent),
-   * so the change is atomic. Current-month + tenant + user scoped; a no-op when
-   * neither flag is set. Mirrors the baking formulas in ChecksService.
-   *
-   *  - service: re-bake this user's own service lines (skipping lines whose
-   *    service carries its own `master_percent` override — that percent is
-   *    independent of the user percent), then refresh each affected check's
-   *    service_salary_total + total_cost + profit.
-   *  - product: re-bake product_salary_total for checks this user CREATED,
-   *    honouring per-product commission overrides (else the user's global
-   *    product %), then refresh total_cost + profit.
+   * Полуинтервал [monthStart, nextMonthStart) месяца 'YYYY-MM' в МОСКОВСКОЙ
+   * бизнес-таймзоне, ISO-инстантами. СОЗНАТЕЛЬНАЯ смена конвенции (Round 14):
+   * раньше пересчёт #62 строил границы в чистом UTC, тогда как зарплатные
+   * экраны (SalaryService.getEmployeeMonth / periodPredicate) — в МСК: чеки
+   * 00:00–03:00 МСК первого числа пересчитывались в «чужой» месяц относительно
+   * карточки. Теперь границы совпадают с getEmployeeMonth 1:1.
    */
-  private async recomputeCurrentMonthSalary(
+  private static monthBoundsMsk(month: string): { monthStart: string; nextMonthStart: string } {
+    const [y, m] = month.split('-').map((v) => parseInt(v, 10));
+    return {
+      monthStart: new Date(Date.UTC(y, m - 1, 1) - UsersService.MSK_OFFSET_MS).toISOString(),
+      nextMonthStart: new Date(Date.UTC(y, m, 1) - UsersService.MSK_OFFSET_MS).toISOString(),
+    };
+  }
+
+  /**
+   * 150 — effective-проценты месяца `month`: последняя строка master_rate_history
+   * с month <= запрошенного (лексикографика 'YYYY-MM' корректна); NULL-колонка /
+   * отсутствие строк → fallback текущие users.*.
+   */
+  async effectiveRateForMonth(
+    tenantID: string,
+    userId: string,
+    month: string,
+    executor: Pool | PoolClient = this.pool,
+  ): Promise<{ salaryPercent: number; productSalaryPercent: number }> {
+    const { rows: userRows } = await executor.query(
+      `SELECT COALESCE(salary_percent, 0) AS salary_percent,
+              COALESCE(product_salary_percent, 0) AS product_salary_percent
+         FROM users WHERE id = $1 AND tenant_id = $2`,
+      [userId, tenantID],
+    );
+    if (userRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+    const { rows: histRows } = await executor.query(
+      `SELECT salary_percent, product_salary_percent
+         FROM master_rate_history
+        WHERE tenant_id = $1 AND user_id = $2 AND month <= $3
+        ORDER BY month DESC
+        LIMIT 1`,
+      [tenantID, userId, month],
+    );
+    const h = histRows[0];
+    return {
+      salaryPercent:
+        h && h.salary_percent !== null
+          ? parseFloat(h.salary_percent) || 0
+          : parseFloat(userRows[0].salary_percent) || 0,
+      productSalaryPercent:
+        h && h.product_salary_percent !== null
+          ? parseFloat(h.product_salary_percent) || 0
+          : parseFloat(userRows[0].product_salary_percent) || 0,
+    };
+  }
+
+  /**
+   * 150 — upsert строки истории ставок за месяц. Пишем ПОЛНЫЙ снапшот (обе
+   * колонки), чтобы резолв effective-процента был одной строкой.
+   */
+  private async upsertRateHistory(
+    executor: Pool | PoolClient,
+    tenantID: string,
+    userId: string,
+    month: string,
+    salaryPercent: number,
+    productSalaryPercent: number,
+    createdBy: string | null,
+  ): Promise<void> {
+    await executor.query(
+      `INSERT INTO master_rate_history (tenant_id, user_id, month, salary_percent, product_salary_percent, created_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (tenant_id, user_id, month)
+       DO UPDATE SET salary_percent = EXCLUDED.salary_percent,
+                     product_salary_percent = EXCLUDED.product_salary_percent,
+                     created_by = EXCLUDED.created_by,
+                     created_at = now()`,
+      [tenantID, userId, month, salaryPercent, productSalaryPercent, createdBy],
+    );
+  }
+
+  /**
+   * #62, обобщённый Round 14 (150) — re-bake ОДНОГО календарного месяца
+   * (`month`, 'YYYY-MM', МОСКОВСКИЕ границы — см. monthBoundsMsk) для `userId`
+   * с ЯВНО переданными процентами, so the chosen month reflects the new percent
+   * while OTHER months keep their historical (already-baked) percent.
+   * Runs INSIDE the caller's transaction (same one that persisted the percent),
+   * so the change is atomic. Month + tenant + user scoped; a no-op when neither
+   * percent is passed. Mirrors the baking formulas in ChecksService.
+   *
+   *  - servicePct: re-bake this user's own service lines. ПРИОРИТЕТЫ СОХРАНЕНЫ:
+   *    lines whose service carries its own `master_percent` override (мигр. 019)
+   *    are SKIPPED — that percent is independent of the personal rate. Then
+   *    refresh each affected check's service_salary_total + total_cost + profit.
+   *  - productPct: re-bake product_salary_total for checks this user CREATED.
+   *    ПРИОРИТЕТЫ СОХРАНЕНЫ: per-product commission overrides (product_commissions,
+   *    мигр. 009) win via COALESCE(pc.percent, <productPct>); only lines without
+   *    an override take the passed percent. Then refresh total_cost + profit.
+   */
+  private async recomputeMonthSalary(
     client: PoolClient,
     tenantID: string,
     userId: string,
-    opts: { service: boolean; product: boolean },
+    month: string,
+    pct: { servicePct?: number; productPct?: number },
   ): Promise<void> {
-    if (!opts.service && !opts.product) return;
+    if (pct.servicePct === undefined && pct.productPct === undefined) return;
 
-    // Half-open [monthStart, nextMonthStart) in UTC — same convention as the
-    // per-employee monthly salary card (SalaryService.getEmployeeMonth).
-    const now = new Date();
-    const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1)).toISOString();
-    const nextMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)).toISOString();
+    const { monthStart, nextMonthStart } = UsersService.monthBoundsMsk(month);
 
-    if (opts.service) {
+    if (pct.servicePct !== undefined) {
       // 1) Re-bake per-line salary for the lines THIS user executes (no override).
+      //    Процент — литеральный параметр $5 (НЕ users.salary_percent): для
+      //    прошлого месяца это его историческая/новая ставка, не текущая.
       await client.query(
         `UPDATE check_service_lines sl
-            SET salary_amount = ROUND(COALESCE(sl.total, 0)::numeric * COALESCE(u.salary_percent, 0) / 100.0, 2)
-           FROM checks c, users u
+            SET salary_amount = ROUND(COALESCE(sl.total, 0)::numeric * $5::numeric / 100.0, 2)
+           FROM checks c
           WHERE sl.check_id = c.id
-            AND u.id = $2 AND u.tenant_id = $1
             AND c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
             AND c.date >= $3 AND c.date < $4
             AND COALESCE(sl.master_id, c.master_id) = $2
@@ -660,7 +760,7 @@ export class UsersService {
               SELECT 1 FROM services s
                WHERE s.id = sl.service_id AND s.tenant_id = $1 AND s.master_percent IS NOT NULL
             )`,
-        [tenantID, userId, monthStart, nextMonthStart],
+        [tenantID, userId, monthStart, nextMonthStart, pct.servicePct],
       );
       // 2) Refresh service_salary_total (+ cost / profit) for the affected checks
       //    from the sum of ALL their (now-updated) service lines.
@@ -689,10 +789,10 @@ export class UsersService {
       );
     }
 
-    if (opts.product) {
+    if (pct.productPct !== undefined) {
       // Re-bake product_salary_total for checks this user created, honouring
-      // per-product commission overrides (else the user's global product %),
-      // then refresh total_cost + profit. Same profit>0 gate as ChecksService.
+      // per-product commission overrides (else the PASSED product %), then
+      // refresh total_cost + profit. Same profit>0 gate as ChecksService.
       await client.query(
         `UPDATE checks c
             SET product_salary_total = agg.pst,
@@ -704,7 +804,7 @@ export class UsersService {
                     COALESCE(SUM(
                       CASE WHEN (COALESCE(pl.total_sell, 0) - COALESCE(pl.total_cost, 0)) > 0
                            THEN (COALESCE(pl.total_sell, 0) - COALESCE(pl.total_cost, 0))
-                                * COALESCE(pc.percent, u.product_salary_percent, 0) / 100.0
+                                * COALESCE(pc.percent, $5::numeric, 0) / 100.0
                            ELSE 0 END
                     ), 0)::numeric AS pst
                FROM check_product_lines pl
@@ -712,7 +812,6 @@ export class UsersService {
                     AND cc.master_id = $2 AND cc.tenant_id = $1 AND cc.is_deferred = false
                     AND cc.deleted_at IS NULL
                     AND cc.date >= $3 AND cc.date < $4
-               JOIN users u ON u.id = cc.master_id AND u.tenant_id = cc.tenant_id
                LEFT JOIN product_commissions pc
                     ON pc.product_id = pl.product_id AND pc.user_id = cc.master_id AND pc.tenant_id = cc.tenant_id
               GROUP BY pl.check_id
@@ -720,9 +819,206 @@ export class UsersService {
           WHERE c.id = agg.check_id
             AND c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
             AND c.date >= $3 AND c.date < $4`,
-        [tenantID, userId, monthStart, nextMonthStart],
+        [tenantID, userId, monthStart, nextMonthStart, pct.productPct],
       );
     }
+  }
+
+  /**
+   * Round 14 (150) — смена ставки «за месяц»: PATCH /users/:id/rate.
+   * Транзакция: (1) upsert master_rate_history за месяц X полным снапшотом
+   * (недостающая колонка добирается из effective-процента X до правки);
+   * (2) если X — ТЕКУЩИЙ московский месяц, также UPDATE users.* (источник
+   * запекания НОВЫХ чеков — ChecksService читает users при проведении);
+   * (3) recomputeMonthSalary ТОЛЬКО для X — прошлый месяц пересчитывается
+   * новой ставкой, остальные месяцы не трогаются. Будущий месяц X: истории
+   * достаточно (чеков в X ещё нет, пересчёт — no-op); в users.* ставку
+   * перенесёт RateRollforwardService, когда X наступит.
+   */
+  async setRate(
+    id: string,
+    tenantID: string,
+    actorID: string,
+    dto: { month: string; salaryPercent?: number; productSalaryPercent?: number },
+  ) {
+    if (!UsersService.MONTH_RE.test(dto?.month ?? '')) {
+      throw new BadRequestException({ message: 'Месяц — формат YYYY-MM' });
+    }
+    if (dto.salaryPercent === undefined && dto.productSalaryPercent === undefined) {
+      throw new BadRequestException({ message: 'Укажите хотя бы один процент' });
+    }
+    const month = dto.month;
+    const currentMonth = this.mskCurrentMonth();
+
+    const client = await this.pool.connect();
+    let result: { salaryPercent: number; productSalaryPercent: number };
+    try {
+      await client.query('BEGIN');
+
+      // Тенант-скоуп + недостающая сторона снапшота из effective-процента X.
+      const eff = await this.effectiveRateForMonth(tenantID, id, month, client);
+      const newService = dto.salaryPercent !== undefined ? Number(dto.salaryPercent) || 0 : eff.salaryPercent;
+      const newProduct =
+        dto.productSalaryPercent !== undefined ? Number(dto.productSalaryPercent) || 0 : eff.productSalaryPercent;
+
+      await this.upsertRateHistory(client, tenantID, id, month, newService, newProduct, actorID);
+
+      if (month === currentMonth) {
+        const sets: string[] = [];
+        const vals: any[] = [];
+        let i = 1;
+        if (dto.salaryPercent !== undefined) {
+          sets.push(`salary_percent=$${i++}`);
+          vals.push(newService);
+        }
+        if (dto.productSalaryPercent !== undefined) {
+          sets.push(`product_salary_percent=$${i++}`);
+          vals.push(newProduct);
+        }
+        vals.push(id, tenantID);
+        await client.query(
+          `UPDATE users SET ${sets.join(', ')}, updated_at=now() WHERE id=$${i++} AND tenant_id=$${i}`,
+          vals,
+        );
+      }
+
+      // Пересчитываем ТОЛЬКО затронутые компоненты месяца X (приоритеты
+      // services.master_percent / product_commissions сохраняются внутри).
+      await this.recomputeMonthSalary(client, tenantID, id, month, {
+        servicePct: dto.salaryPercent !== undefined ? newService : undefined,
+        productPct: dto.productSalaryPercent !== undefined ? newProduct : undefined,
+      });
+
+      await client.query('COMMIT');
+      result = { salaryPercent: newService, productSalaryPercent: newProduct };
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    // Начисления/profit месяца X сдвинулись — сброс кэшей отчётов.
+    invalidateReportsForTenant(tenantID);
+    return { userId: id, month, ...result };
+  }
+
+  /**
+   * Round 14 (150) — ROLL-FORWARD ставок «с будущего месяца». Владелец мог
+   * назначить ставку «с сентября»; запекание НОВЫХ чеков читает users.*
+   * (ChecksService — вне зоны правки), поэтому когда назначенный месяц
+   * НАСТУПАЕТ, users.* надо синхронизировать с effective-процентом истории.
+   * Вызывается ежедневным cron-ом (RateRollforwardService) и идемпотентен:
+   * находит пользователей, у которых effective-процент ТЕКУЩЕГО месяца
+   * расходится с users.*, переносит значение и пересчитывает ТОЛЬКО текущий
+   * месяц (чеки первых часов месяца, запечённые старой ставкой, доводятся).
+   * Ручные правки ставки сами пишут строку истории за текущий месяц
+   * (update/setRate), так что история всегда ≥ users.* по свежести — цикл
+   * «cron против ручной правки» невозможен.
+   */
+  async rollForwardDueRates(): Promise<number> {
+    const currentMonth = this.mskCurrentMonth();
+    const { rows } = await this.pool.query(
+      `SELECT h.tenant_id, h.user_id,
+              h.salary_percent AS eff_service, h.product_salary_percent AS eff_product,
+              COALESCE(u.salary_percent, 0) AS cur_service,
+              COALESCE(u.product_salary_percent, 0) AS cur_product
+         FROM (
+           SELECT DISTINCT ON (tenant_id, user_id)
+                  tenant_id, user_id, salary_percent, product_salary_percent
+             FROM master_rate_history
+            WHERE month <= $1
+            ORDER BY tenant_id, user_id, month DESC
+         ) h
+         JOIN users u ON u.id = h.user_id AND u.tenant_id = h.tenant_id
+        WHERE (h.salary_percent IS NOT NULL
+               AND h.salary_percent IS DISTINCT FROM COALESCE(u.salary_percent, 0))
+           OR (h.product_salary_percent IS NOT NULL
+               AND h.product_salary_percent IS DISTINCT FROM COALESCE(u.product_salary_percent, 0))`,
+      [currentMonth],
+    );
+
+    let applied = 0;
+    for (const r of rows) {
+      const effService = r.eff_service === null ? null : parseFloat(r.eff_service) || 0;
+      const effProduct = r.eff_product === null ? null : parseFloat(r.eff_product) || 0;
+      const serviceDiffers = effService !== null && effService !== (parseFloat(r.cur_service) || 0);
+      const productDiffers = effProduct !== null && effProduct !== (parseFloat(r.cur_product) || 0);
+      if (!serviceDiffers && !productDiffers) continue;
+
+      const client = await this.pool.connect();
+      try {
+        await client.query('BEGIN');
+        const sets: string[] = [];
+        const vals: any[] = [];
+        let i = 1;
+        if (serviceDiffers) {
+          sets.push(`salary_percent=$${i++}`);
+          vals.push(effService);
+        }
+        if (productDiffers) {
+          sets.push(`product_salary_percent=$${i++}`);
+          vals.push(effProduct);
+        }
+        vals.push(r.user_id, r.tenant_id);
+        await client.query(
+          `UPDATE users SET ${sets.join(', ')}, updated_at=now() WHERE id=$${i++} AND tenant_id=$${i}`,
+          vals,
+        );
+        await this.recomputeMonthSalary(client, r.tenant_id, r.user_id, currentMonth, {
+          servicePct: serviceDiffers ? (effService as number) : undefined,
+          productPct: productDiffers ? (effProduct as number) : undefined,
+        });
+        await client.query('COMMIT');
+        applied += 1;
+        invalidateReportsForTenant(r.tenant_id);
+      } catch (err) {
+        try {
+          await client.query('ROLLBACK');
+        } catch {
+          /* already rolled back */
+        }
+        this.logger.error(`Rate roll-forward failed for user ${r.user_id}: ${err}`);
+      } finally {
+        client.release();
+      }
+    }
+    return applied;
+  }
+
+  /**
+   * 150 — история ставок сотрудника (новые месяцы первыми). Для UI карточки
+   * «ставка по месяцам». Тенант-скоуп; отсутствие строк = ставка никогда не
+   * менялась через новый поток (действует users.*).
+   */
+  async listRateHistory(id: string, tenantID: string) {
+    const { rows: userRows } = await this.pool.query('SELECT 1 FROM users WHERE id=$1 AND tenant_id=$2', [
+      id,
+      tenantID,
+    ]);
+    if (userRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
+    const { rows } = await this.pool.query(
+      `SELECT h.id, h.month, h.salary_percent, h.product_salary_percent, h.created_by, h.created_at,
+              c.full_name AS creator_name
+         FROM master_rate_history h
+         LEFT JOIN users c ON c.id = h.created_by
+        WHERE h.tenant_id = $1 AND h.user_id = $2
+        ORDER BY h.month DESC`,
+      [tenantID, id],
+    );
+    return rows.map((r) => ({
+      id: r.id,
+      month: r.month,
+      salaryPercent: r.salary_percent === null ? null : parseFloat(r.salary_percent) || 0,
+      productSalaryPercent: r.product_salary_percent === null ? null : parseFloat(r.product_salary_percent) || 0,
+      createdBy: r.created_by ?? null,
+      creatorName: r.creator_name ?? null,
+      createdAt: r.created_at,
+    }));
   }
 
   /**
@@ -948,11 +1244,11 @@ export class UsersService {
     tenantID: string,
     dto: { productSalaryPercent: number; items: Array<{ productId: string; percent: number }> },
   ) {
-    // Verify user exists
-    const { rows: userRows } = await this.pool.query('SELECT id FROM users WHERE id=$1 AND tenant_id=$2', [
-      userId,
-      tenantID,
-    ]);
+    // Verify user exists (+ текущий сервисный процент для снапшота истории 150).
+    const { rows: userRows } = await this.pool.query(
+      'SELECT id, COALESCE(salary_percent, 0) AS salary_percent FROM users WHERE id=$1 AND tenant_id=$2',
+      [userId, tenantID],
+    );
     if (userRows.length === 0) throw new NotFoundException({ message: 'Пользователь не найден' });
 
     // Verify every referenced product belongs to the caller's tenant before
@@ -1002,7 +1298,22 @@ export class UsersService {
       // recompute the CURRENT month's product salary for checks this user
       // created (past months keep their historical baked values). Runs in this
       // same transaction so config + recompute commit atomically.
-      await this.recomputeCurrentMonthSalary(client, tenantID, userId, { service: false, product: true });
+      // Round 14 (150): снапшот в историю ставок за текущий месяц (товарный
+      // процент сменился этим экраном; сервисный — текущий users.*), затем
+      // обобщённый пересчёт МСК-месяца новым процентом. Per-product overrides
+      // (product_commissions) по-прежнему в приоритете внутри пересчёта.
+      const currentMonth = this.mskCurrentMonth();
+      const newProductPct = dto.productSalaryPercent || 0;
+      await this.upsertRateHistory(
+        client,
+        tenantID,
+        userId,
+        currentMonth,
+        parseFloat(userRows[0].salary_percent) || 0,
+        newProductPct,
+        null,
+      );
+      await this.recomputeMonthSalary(client, tenantID, userId, currentMonth, { productPct: newProductPct });
 
       await client.query('COMMIT');
       // Current-month product salary / profit moved — drop cached aggregates.

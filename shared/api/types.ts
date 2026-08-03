@@ -520,6 +520,8 @@ export interface CreatePaymentRequest {
   amount: number;
   date?: string;
   comment?: string;
+  /** 149 — «за какой месяц» платёж ('YYYY-MM'); absent = месяц даты факта. */
+  periodMonth?: string;
 }
 
 /**
@@ -533,6 +535,8 @@ export interface SupplierRefundRequest {
   amount: number;
   date?: string;
   comment?: string;
+  /** 149 — «за какой месяц» возврат ('YYYY-MM'); симметрично платежу. */
+  periodMonth?: string;
 }
 
 export interface CreateScheduleRequest {

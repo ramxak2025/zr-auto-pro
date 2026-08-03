@@ -30,6 +30,7 @@ import QueryState from '../components/QueryState';
 import IconButton from '../components/IconButton';
 import PhoneInput from '../components/PhoneInput';
 import RolesManagement from '../components/RolesManagement';
+import RateByMonthModal from '../components/RateByMonthModal';
 import { roleLabels } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
@@ -117,6 +118,8 @@ export default function UsersPage() {
   const [commissionModalOpen, setCommissionModalOpen] = useState(false);
   const [commissionUserId, setCommissionUserId] = useState<string | null>(null);
   const [dismissedOpen, setDismissedOpen] = useState(false);
+  // 150 — «Ставка по месяцам»: смена ставки за прошлый/будущий месяц + история.
+  const [rateUser, setRateUser] = useState<User | null>(null);
 
   const { data, isLoading, isError, refetch, isFetching } = useQuery({
     queryKey: ['users'],
@@ -531,6 +534,19 @@ export default function UsersPage() {
               max={100}
               step={1}
             />
+            {editingUser && (
+              <p className="text-xs text-gray-400 mt-1">
+                Меняет ставку с текущего месяца. Задним числом или на будущее —{' '}
+                <button
+                  type="button"
+                  onClick={() => setRateUser(editingUser)}
+                  className="font-medium text-primary-600 hover:text-primary-700 underline underline-offset-2"
+                >
+                  ставка по месяцам
+                </button>
+                .
+              </p>
+            )}
           </div>
 
           {/* Product Commission — only for existing users */}
@@ -642,6 +658,18 @@ export default function UsersPage() {
           }}
           userId={commissionUserId}
           userName={users.find((u) => u.id === commissionUserId)?.fullName || ''}
+        />
+      )}
+
+      {/* 150 — «Ставка по месяцам»: пересчёт выбранного месяца + история. */}
+      {rateUser && (
+        <RateByMonthModal
+          isOpen={!!rateUser}
+          onClose={() => setRateUser(null)}
+          userId={rateUser.id}
+          userName={rateUser.fullName}
+          currentSalaryPercent={rateUser.salaryPercent || 0}
+          currentProductPercent={rateUser.productSalaryPercent || 0}
         />
       )}
 

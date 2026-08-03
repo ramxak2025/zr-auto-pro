@@ -99,6 +99,10 @@ interface ExpenseItem {
   // (`warranty-loss:<checkId>`) — редактировать / удалять / одобрять нельзя.
   source?: 'owner' | 'employee' | 'warranty';
   approvalStatus?: 'approved' | 'pending' | 'rejected';
+  // 149 — «за какой месяц» относится в прибыль (null = месяц даты факта).
+  periodMonth?: string | null;
+  // 149 — получатель «выплаты вне программы» (свободное имя, не из users).
+  recipientName?: string | null;
   createdAt: string;
 }
 
@@ -392,6 +396,16 @@ const ExpenseRow = React.memo(function ExpenseRow({
               )}
             </View>
           </View>
+
+          {/* 149 — получатель «выплаты вне программы» (свободное имя). */}
+          {item.recipientName && (
+            <Text
+              style={[styles.cardDesc, { color: palette.text.primary, fontWeight: fontWeight.semibold }]}
+              numberOfLines={1}
+            >
+              → {item.recipientName}
+            </Text>
+          )}
 
           {/* Description */}
           {item.description && (

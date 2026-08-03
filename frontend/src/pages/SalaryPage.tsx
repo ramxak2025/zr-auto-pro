@@ -261,6 +261,16 @@ function AdminSalaryView() {
   const [payModalOpen, setPayModalOpen] = useState(false);
   const [payForm, setPayForm] = useState<PaymentFormState>(emptyPaymentForm);
 
+  // 149 — «Выплата вне программы»: получатель без аккаунта (маркетолог,
+  // уборщица) — свободное имя + сумма + месяц отнесения.
+  const [outsideModalOpen, setOutsideModalOpen] = useState(false);
+  const [outsideForm, setOutsideForm] = useState({
+    recipientName: '',
+    amount: '',
+    periodMonth: getCurrentMonthYear(),
+    comment: '',
+  });
+
   // Expanded payment history rows
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
@@ -320,6 +330,48 @@ function AdminSalaryView() {
     },
     onError: () => toast.error('Ошибка при проведении выплаты'),
   });
+
+  // 149 — «Выплата вне программы» → approved-расход категории «Выплаты вне
+  // программы» с period_month: прибыль назначенного месяца ↓, касса — датой факта.
+  const outsideMutation = useMutation({
+    mutationFn: (data: { recipientName: string; amount: number; periodMonth: string; comment?: string }) =>
+      salaryApi.createOutsidePayout(data),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['expenses'] });
+      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
+      queryClient.invalidateQueries({ queryKey: ['financial-report'] });
+      toast.success('Выплата записана в «Расходы» и отнесена к выбранному месяцу');
+      setOutsideModalOpen(false);
+      setOutsideForm({ recipientName: '', amount: '', periodMonth: getCurrentMonthYear(), comment: '' });
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      toast.error(typeof msg === 'string' ? msg : 'Не удалось записать выплату');
+    },
+  });
+
+  function handleOutsideSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const amount = parseFloat(outsideForm.amount);
+    if (!outsideForm.recipientName.trim()) {
+      toast.error('Укажите получателя');
+      return;
+    }
+    if (!amount || amount <= 0) {
+      toast.error('Укажите сумму');
+      return;
+    }
+    if (!/^\d{4}-\d{2}$/.test(outsideForm.periodMonth)) {
+      toast.error('Выберите месяц');
+      return;
+    }
+    outsideMutation.mutate({
+      recipientName: outsideForm.recipientName.trim(),
+      amount,
+      periodMonth: outsideForm.periodMonth,
+      comment: outsideForm.comment.trim() || undefined,
+    });
+  }
 
   // ── Handlers ───────────────────────────────────────────────────────────
 
@@ -381,6 +433,16 @@ function AdminSalaryView() {
     <div className="space-y-6">
       {/* Header */}
       <PageHeader title="Зарплаты мастеров" icon={DollarSign} />
+
+      {/* 149 — «Выплата вне программы»: получатель без аккаунта в системе. */}
+      {canPayout && (
+        <div className="flex justify-end">
+          <button type="button" className="btn-secondary" onClick={() => setOutsideModalOpen(true)}>
+            <Banknote className="w-4 h-4" />
+            Выплата вне программы
+          </button>
+        </div>
+      )}
 
       {/* Date filter */}
       <DatePeriodPicker
@@ -714,6 +776,78 @@ function AdminSalaryView() {
                 <Banknote className="w-4 h-4" />
               )}
               Выплатить
+            </button>
+          </div>
+        </form>
+      </Modal>
+
+      {/* 149 — «Выплата вне программы»: имя, сумма, месяц отнесения, комментарий. */}
+      <Modal
+        isOpen={outsideModalOpen}
+        onClose={() => setOutsideModalOpen(false)}
+        title="Выплата вне программы"
+        size="md"
+      >
+        <form onSubmit={handleOutsideSubmit} className="space-y-4">
+          <p className="text-xs text-gray-500">
+            Для получателей без аккаунта в системе (маркетолог, уборщица). Сумма запишется в «Расходы» и уменьшит
+            прибыль выбранного месяца; в кассе — сегодняшней датой.
+          </p>
+          <div>
+            <label className="label">Получатель *</label>
+            <input
+              type="text"
+              className="input"
+              value={outsideForm.recipientName}
+              onChange={(e) => setOutsideForm({ ...outsideForm, recipientName: e.target.value })}
+              placeholder="Например: Маркетолог Ирина"
+              required
+            />
+          </div>
+          <div>
+            <label className="label">Сумма *</label>
+            <input
+              type="number"
+              className="input"
+              value={outsideForm.amount}
+              onChange={(e) => setOutsideForm({ ...outsideForm, amount: e.target.value })}
+              placeholder="0"
+              min="0"
+              step="1"
+              required
+            />
+          </div>
+          <div>
+            <label className="label">За месяц *</label>
+            <input
+              type="month"
+              className="input"
+              value={outsideForm.periodMonth}
+              onChange={(e) => setOutsideForm({ ...outsideForm, periodMonth: e.target.value })}
+              required
+            />
+          </div>
+          <div>
+            <label className="label">Комментарий</label>
+            <input
+              type="text"
+              className="input"
+              value={outsideForm.comment}
+              onChange={(e) => setOutsideForm({ ...outsideForm, comment: e.target.value })}
+              placeholder="Необязательно"
+            />
+          </div>
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={() => setOutsideModalOpen(false)} className="btn-secondary">
+              Отмена
+            </button>
+            <button type="submit" disabled={outsideMutation.isPending} className="btn-primary">
+              {outsideMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Banknote className="w-4 h-4" />
+              )}
+              Записать
             </button>
           </div>
         </form>

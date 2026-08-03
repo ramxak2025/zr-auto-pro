@@ -599,7 +599,20 @@ export class SuppliersService {
       kind: (r.kind as string | null) ?? 'payment',
       reversedAt: r.reversed_at ?? null,
       reversalReason: r.reversal_reason ?? null,
+      // 149 — «за какой месяц» платёж ('YYYY-MM'); null = месяц даты факта.
+      periodMonth: (r.period_month as string | null) ?? null,
     }));
+  }
+
+  /**
+   * 149 — нормализация «за какой месяц» из клиентского DTO: строгий 'YYYY-MM'
+   * или null (= месяц даты факта, прежнее поведение). Кривой формат не роняем
+   * 500-кой из CHECK-констрейнта, а отбиваем понятным 400.
+   */
+  private static normalizePeriodMonth(raw: unknown): string | null {
+    if (raw === undefined || raw === null || raw === '') return null;
+    if (typeof raw === 'string' && /^\d{4}-\d{2}$/.test(raw)) return raw;
+    throw new BadRequestException({ message: 'Месяц отнесения — формат YYYY-MM' });
   }
 
   /**
@@ -616,13 +629,27 @@ export class SuppliersService {
    * денег по ним не было. Строки kind='refund' идут с ОТРИЦАТЕЛЬНОЙ суммой и
    * остаются в выборке: возврат от поставщика честно уменьшает «Закупку
    * товара» за период.
+   *
+   * Round 14 (149): платёж с period_month («за какой месяц») относится к
+   * НАЗНАЧЕННОМУ месяцу, а не к дате факта: строка попадает в отчёт, если её
+   * effective-месяц COALESCE(period_month, месяц date МСК) пересекается с
+   * месяцами диапазона. Платёж 5 августа «за июль» виден в июльском отчёте и
+   * НЕ виден в августовском. Строки без периода — прежний точный
+   * дата-диапазон, байт-в-байт.
    */
   async getPaymentsReport(
     tenantID: string,
     query: any,
   ): Promise<{
     total: number;
-    items: Array<{ id: string; supplierName: string | null; amount: number; date: any; comment: string | null }>;
+    items: Array<{
+      id: string;
+      supplierName: string | null;
+      amount: number;
+      date: any;
+      comment: string | null;
+      periodMonth: string | null;
+    }>;
   }> {
     const safeDate = (value: unknown, fallback: string): string => {
       if (typeof value !== 'string' || !SUPPLIERS_ISO_DATE_RE.test(value)) return fallback;
@@ -638,13 +665,19 @@ export class SuppliersService {
     const dateTo = safeDate(query?.dateTo, todayISO);
 
     const { rows } = await this.pool.query(
-      `SELECT sp.id, sp.amount, sp.date, sp.comment, s.name AS supplier_name
+      `SELECT sp.id, sp.amount, sp.date, sp.comment, sp.period_month, s.name AS supplier_name
          FROM supplier_payments sp
          LEFT JOIN suppliers s ON s.id = sp.supplier_id AND s.tenant_id = sp.tenant_id
         WHERE sp.tenant_id = $1
           AND sp.reversed_at IS NULL
-          AND sp.date >= $2::date::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}'
-          AND sp.date < ($3::date + 1)::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}'
+          AND (
+            (sp.period_month IS NULL
+              AND sp.date >= $2::date::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}'
+              AND sp.date < ($3::date + 1)::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}')
+            OR (sp.period_month IS NOT NULL
+              AND sp.period_month >= to_char($2::date, 'YYYY-MM')
+              AND sp.period_month <= to_char($3::date, 'YYYY-MM'))
+          )
         ORDER BY sp.date DESC
         LIMIT 500`,
       [tenantID, dateFrom, dateTo],
@@ -656,6 +689,7 @@ export class SuppliersService {
       amount: parseFloat(r.amount) || 0,
       date: r.date,
       comment: r.comment ?? null,
+      periodMonth: (r.period_month as string | null) ?? null,
     }));
     const total = items.reduce((acc, it) => acc + it.amount, 0);
     return { total, items };
@@ -665,6 +699,8 @@ export class SuppliersService {
     if (!dto.supplierId || !dto.amount) {
       throw new BadRequestException({ message: 'Поставщик и сумма обязательны' });
     }
+    // 149 — «за какой месяц» платёж (аддитивно; null = месяц даты факта).
+    const periodMonth = SuppliersService.normalizePeriodMonth(dto.periodMonth);
 
     const client = await this.pool.connect();
     try {
@@ -681,9 +717,9 @@ export class SuppliersService {
       }
 
       const { rows } = await client.query(
-        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, created_by)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
-        [dto.supplierId, dto.amount, dto.date || new Date().toISOString(), dto.comment, tenantID, userID],
+        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, created_by, period_month)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
+        [dto.supplierId, dto.amount, dto.date || new Date().toISOString(), dto.comment, tenantID, userID, periodMonth],
       );
 
       await client.query(
@@ -808,12 +844,14 @@ export class SuppliersService {
   async createRefund(
     tenantID: string,
     userID: string | null,
-    dto: { supplierId?: string; amount?: number; date?: string; comment?: string },
+    dto: { supplierId?: string; amount?: number; date?: string; comment?: string; periodMonth?: string },
   ) {
     const amount = parseFloat(String(dto?.amount ?? ''));
     if (!dto?.supplierId || !isFinite(amount) || amount <= 0) {
       throw new BadRequestException({ message: 'Поставщик и положительная сумма обязательны' });
     }
+    // 149 — возврат тоже может относиться к месяцу (симметрично платежу).
+    const periodMonth = SuppliersService.normalizePeriodMonth(dto.periodMonth);
 
     const client = await this.pool.connect();
     try {
@@ -829,9 +867,17 @@ export class SuppliersService {
       }
 
       const { rows } = await client.query(
-        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, kind, created_by)
-         VALUES ($1, $2, $3, $4, $5, 'refund', $6) RETURNING id`,
-        [dto.supplierId, -amount, dto.date || new Date().toISOString(), dto.comment?.trim() || null, tenantID, userID],
+        `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, kind, created_by, period_month)
+         VALUES ($1, $2, $3, $4, $5, 'refund', $6, $7) RETURNING id`,
+        [
+          dto.supplierId,
+          -amount,
+          dto.date || new Date().toISOString(),
+          dto.comment?.trim() || null,
+          tenantID,
+          userID,
+          periodMonth,
+        ],
       );
 
       await client.query(

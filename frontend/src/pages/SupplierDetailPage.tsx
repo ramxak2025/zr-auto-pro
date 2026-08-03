@@ -59,6 +59,8 @@ interface PaymentFormData {
   amount: number;
   date: string;
   comment: string;
+  /** 149 — «за какой месяц» платёж ('YYYY-MM'). Дефолт — текущий месяц. */
+  periodMonth: string;
 }
 
 function statusBadge(status: string) {
@@ -517,6 +519,8 @@ export default function SupplierDetailPage() {
     amount: 0,
     date: format(new Date(), 'yyyy-MM-dd'),
     comment: '',
+    // 149 — дефолт «за текущий месяц» (= прежнее поведение отчётов).
+    periodMonth: format(new Date(), 'yyyy-MM'),
   };
   const [paymentForm, setPaymentForm] = useState<PaymentFormData>(emptyPaymentForm);
 
@@ -548,6 +552,8 @@ export default function SupplierDetailPage() {
       amount: paymentForm.amount,
       date: paymentForm.date,
       comment: paymentForm.comment,
+      // 149 — «за какой месяц»: отчёт по оплатам отнесёт платёж к этому месяцу.
+      periodMonth: paymentForm.periodMonth || undefined,
     });
   };
 
@@ -1271,6 +1277,18 @@ export default function SupplierDetailPage() {
               value={paymentForm.date}
               onChange={(e) => setPaymentForm({ ...paymentForm, date: e.target.value })}
             />
+          </div>
+          <div>
+            <label className="label">За месяц</label>
+            <input
+              type="month"
+              className="input"
+              value={paymentForm.periodMonth}
+              onChange={(e) => setPaymentForm({ ...paymentForm, periodMonth: e.target.value })}
+            />
+            <p className="text-xs text-gray-400 mt-1">
+              Платёж в августе «за июль» попадёт в июльский отчёт по закупкам; касса — по дате факта
+            </p>
           </div>
           <div>
             <label className="label">Комментарий</label>
