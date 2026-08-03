@@ -226,6 +226,47 @@ function getPreviousRange(range: DateRange): DateRange {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+//  Month pager (Round 15 #3) — «Месяц» больше не прибит к текущему месяцу:
+//  стрелки листают любой прошлый месяц (глубина MONTH_PAGER_DEPTH), вперёд —
+//  не дальше текущего. Границы месяца — календарные 1-е…последнее число как
+//  локальные 'YYYY-MM-DD' строки (паттерн monthBounds из зарплаты): бэкенд сам
+//  трактует их в бизнес-зоне (МСК). ВАЖНО: диапазон = ПОЛНЫЙ месяц, а не
+//  «1-е…сегодня» — reports/financial включает расход с period_month («выплата
+//  за месяц») только когда диапазон покрывает назначенный месяц целиком, т.е.
+//  именно полный месяц показывает честную прибыль месяца.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Насколько месяцев назад можно листать. 2 года — разумный горизонт отчётов. */
+const MONTH_PAGER_DEPTH = 24;
+
+/** Первое число месяца данной даты (локальная зона). */
+function startOfMonth(d: Date): Date {
+  return new Date(d.getFullYear(), d.getMonth(), 1);
+}
+
+/** Первое число месяца, сдвинутого на `delta` месяцев. */
+function shiftMonth(d: Date, delta: number): Date {
+  return new Date(d.getFullYear(), d.getMonth() + delta, 1);
+}
+
+/** Сквозной индекс месяца — безопасное сравнение месяцев без Date-компараций. */
+function monthIndex(d: Date): number {
+  return d.getFullYear() * 12 + d.getMonth();
+}
+
+/** Календарный месяц целиком: 1-е…последнее число как date-only строки. */
+function monthRange(d: Date): DateRange {
+  const first = new Date(d.getFullYear(), d.getMonth(), 1);
+  const last = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  return { from: toDateStr(first), to: toDateStr(last) };
+}
+
+/** «Июль 2026» — заголовок пейджера. */
+function monthTitle(d: Date): string {
+  return `${RU_MONTHS_NOM[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 //  Sparkline helpers — те же кривые Безье что в DashboardScreen, но
 //  выделены сюда чтобы Reports не зависел от Dashboard.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -395,6 +436,8 @@ export default function ReportsScreen() {
 
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<PeriodKey>('month');
+  // Курсор месячного пейджера — всегда 1-е число выбранного месяца.
+  const [monthCursor, setMonthCursor] = useState<Date>(() => startOfMonth(new Date()));
   const [customRange, setCustomRange] = useState<DateRange>(() => getDateRange('month'));
   const [showCustomPicker, setShowCustomPicker] = useState<null | 'from' | 'to'>(null);
   const [compareEnabled, setCompareEnabled] = useState(false);
@@ -411,11 +454,19 @@ export default function ReportsScreen() {
   // this true just before capture and back to false right after.
   const [showStoriesCard, setShowStoriesCard] = useState(false);
 
-  const range = useMemo<DateRange>(
-    () => (period === 'custom' ? customRange : getDateRange(period)),
-    [period, customRange],
+  const range = useMemo<DateRange>(() => {
+    if (period === 'custom') return customRange;
+    // «Месяц» = полный календарный месяц из пейджера (см. комментарий у
+    // monthRange: только полный месяц включает period_month-расходы в прибыль).
+    if (period === 'month') return monthRange(monthCursor);
+    return getDateRange(period);
+  }, [period, customRange, monthCursor]);
+  // «Сравнить с прошлым» для месяца — календарный предыдущий месяц, а не
+  // «столько же дней назад» (31 день назад от 1 июля уплывал в май).
+  const prevRange = useMemo<DateRange>(
+    () => (period === 'month' ? monthRange(shiftMonth(monthCursor, -1)) : getPreviousRange(range)),
+    [period, monthCursor, range],
   );
-  const prevRange = useMemo<DateRange>(() => getPreviousRange(range), [range]);
 
   const { targets, save: saveTargets } = useKpiTargets(user?.id);
 
@@ -510,7 +561,37 @@ export default function ReportsScreen() {
 
   const handlePeriodChange = useCallback((p: PeriodKey) => {
     haptic('select');
+    // Пресет «Месяц» всегда стартует с текущего месяца (прежнее поведение
+    // пресета сохранено) — стрелки пейджера дальше листают назад.
+    if (p === 'month') setMonthCursor(startOfMonth(new Date()));
     setPeriod(p);
+  }, []);
+
+  // ── MONTH PAGER (Round 15 #3) ────────────────────────────────────────────
+  const isAtCurrentMonth = monthIndex(monthCursor) >= monthIndex(new Date());
+  const isAtOldestMonth = monthIndex(monthCursor) <= monthIndex(new Date()) - MONTH_PAGER_DEPTH;
+
+  const goPrevMonth = useCallback(() => {
+    haptic('select');
+    setMonthCursor((c) => {
+      const next = shiftMonth(c, -1);
+      // Клампим внутри апдейтера — быстрый двойной тап не пролистает за предел.
+      return monthIndex(next) < monthIndex(new Date()) - MONTH_PAGER_DEPTH ? c : next;
+    });
+  }, []);
+
+  const goNextMonth = useCallback(() => {
+    haptic('select');
+    setMonthCursor((c) => {
+      const next = shiftMonth(c, 1);
+      return monthIndex(next) > monthIndex(new Date()) ? c : next;
+    });
+  }, []);
+
+  // Тап по заголовку месяца — вернуться к текущему (паттерн зарплаты).
+  const resetMonthCursor = useCallback(() => {
+    haptic('tap');
+    setMonthCursor(startOfMonth(new Date()));
   }, []);
 
   const onRefresh = useCallback(async () => {
@@ -838,6 +919,68 @@ export default function ReportsScreen() {
               ))}
             </ScrollView>
 
+            {/* MONTH PAGER — «← Июль 2026 →», любой месяц за MONTH_PAGER_DEPTH.
+                Паттерн месячного чипа зарплаты: стрелки листают, тап по
+                заголовку возвращает к текущему месяцу. */}
+            {period === 'month' && (
+              <View style={[styles.monthPagerRow, { backgroundColor: palette.bg.muted }]}>
+                <TouchableOpacity
+                  onPress={goPrevMonth}
+                  disabled={isAtOldestMonth}
+                  hitSlop={8}
+                  style={styles.monthPagerBtn}
+                  activeOpacity={0.6}
+                  accessibilityRole="button"
+                  accessibilityLabel="Предыдущий месяц"
+                  accessibilityState={{ disabled: isAtOldestMonth }}
+                >
+                  <Ionicons
+                    name="chevron-back"
+                    size={18}
+                    color={palette.text.secondary}
+                    style={isAtOldestMonth && styles.monthPagerArrowDisabled}
+                  />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={resetMonthCursor}
+                  disabled={isAtCurrentMonth}
+                  activeOpacity={0.7}
+                  style={styles.monthPagerLabelBtn}
+                  accessibilityRole="button"
+                  accessibilityState={{ disabled: isAtCurrentMonth }}
+                  accessibilityLabel={
+                    isAtCurrentMonth
+                      ? `Выбран ${monthTitle(monthCursor)} — текущий месяц`
+                      : `Выбран ${monthTitle(monthCursor)}. Нажмите, чтобы вернуться к текущему месяцу`
+                  }
+                >
+                  <Text style={[styles.monthPagerLabel, { color: palette.text.primary }]}>
+                    {monthTitle(monthCursor)}
+                  </Text>
+                  {!isAtCurrentMonth && (
+                    <Text style={[styles.monthPagerHint, { color: palette.text.tertiary }]}>к текущему</Text>
+                  )}
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={goNextMonth}
+                  disabled={isAtCurrentMonth}
+                  hitSlop={8}
+                  style={styles.monthPagerBtn}
+                  activeOpacity={0.6}
+                  accessibilityRole="button"
+                  accessibilityLabel="Следующий месяц"
+                  accessibilityState={{ disabled: isAtCurrentMonth }}
+                >
+                  <Ionicons
+                    name="chevron-forward"
+                    size={18}
+                    color={palette.text.secondary}
+                    style={isAtCurrentMonth && styles.monthPagerArrowDisabled}
+                  />
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Compare toggle */}
             <View style={styles.compareRow}>
               <Text style={[styles.compareLabel, { color: palette.text.secondary }]}>Сравнить с прошлым</Text>
@@ -914,7 +1057,9 @@ export default function ReportsScreen() {
                   {compareEnabled && prevReport && (
                     <View style={styles.heroDeltaWrap}>
                       <DeltaChip value={netProfitDelta} dark />
-                      <Text style={styles.heroDeltaSub}>vs предыдущий период</Text>
+                      <Text style={styles.heroDeltaSub}>
+                        {period === 'month' ? `vs ${monthTitle(shiftMonth(monthCursor, -1))}` : 'vs предыдущий период'}
+                      </Text>
                     </View>
                   )}
                 </LinearGradient>
@@ -1103,7 +1248,18 @@ export default function ReportsScreen() {
                   index={4}
                   style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
                 >
-                  <Text style={[styles.cardTitle, { color: palette.text.tertiary }]}>РАСХОДЫ ПО КАТЕГОРИЯМ</Text>
+                  <Text style={[styles.cardTitle, { color: palette.text.tertiary, paddingBottom: spacing[1] }]}>
+                    РАСХОДЫ ПО КАТЕГОРИЯМ
+                  </Text>
+                  {/* Round 15 #3 — честная сноска: эта секция — лента expenses
+                      ПО ДАТЕ ОПЛАТЫ (контракт expenses.getAll фильтрует только
+                      по дате факта). Прибыль месяца выше считает иначе: выплата
+                      «за месяц» (period_month) отнесена к назначенному месяцу,
+                      зарплатная категория и неодобренные расходы исключены —
+                      поэтому суммы могут законно расходиться с финотчётом. */}
+                  <Text style={[styles.expSectionNote, { color: palette.text.tertiary }]}>
+                    По дате оплаты. В прибыли месяца выплаты «за месяц» учтены по назначенному месяцу.
+                  </Text>
                   {expensesByCategory.slice(0, 5).map((row, idx) => {
                     const total = expensesByCategory.reduce((s, r) => s + r.amount, 0);
                     const pct = total > 0 ? (row.amount / total) * 100 : 0;
@@ -2132,7 +2288,7 @@ function buildReportHtml({
 
   ${
     expenses.length > 0
-      ? `<div class="section-title">Расходы по категориям</div>
+      ? `<div class="section-title">Расходы по категориям (по дате оплаты)</div>
   <table>
     <thead><tr><th>Категория</th><th class="num">Доля</th><th class="num">Сумма</th></tr></thead>
     <tbody>
@@ -2190,7 +2346,7 @@ function buildTableHtml({
   </table>
   ${
     expenses.length > 0
-      ? `<div class="section-title">Расходы по категориям</div>
+      ? `<div class="section-title">Расходы по категориям (по дате оплаты)</div>
   <table>
     <thead><tr><th>Категория</th><th class="num">Сумма</th></tr></thead>
     <tbody>
@@ -2247,6 +2403,27 @@ const styles = StyleSheet.create({
     ...Platform.select({ android: { elevation: 1 } }),
   },
   toggleThumbOn: { transform: [{ translateX: 18 }] },
+  // Month pager (Round 15 #3) — стиль месячного чипа зарплаты, растянутый в
+  // самостоятельную строку под сегментами периодов.
+  monthPagerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[1],
+    paddingVertical: spacing[1],
+  },
+  monthPagerBtn: { width: 40, height: 36, alignItems: 'center', justifyContent: 'center' },
+  monthPagerArrowDisabled: { opacity: 0.3 },
+  monthPagerLabelBtn: { flex: 1, alignItems: 'center', justifyContent: 'center', minHeight: 36 },
+  monthPagerLabel: {
+    fontSize: fontSize.base,
+    fontWeight: fontWeight.semibold,
+    letterSpacing: -0.2,
+    textAlign: 'center',
+  },
+  monthPagerHint: { fontSize: 10, marginTop: 1 },
+
   customRangeRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
   customDateBtn: {
     flex: 1,
@@ -2338,6 +2515,7 @@ const styles = StyleSheet.create({
   compareLine: { marginTop: spacing[2] },
 
   // Expenses
+  expSectionNote: { fontSize: 11, lineHeight: 15, paddingBottom: spacing[3] },
   expRow: { marginBottom: spacing[3] },
   expRowHead: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 4 },
   expRowName: { flex: 1, fontSize: fontSize.sm, fontWeight: fontWeight.medium, paddingRight: spacing[2] },

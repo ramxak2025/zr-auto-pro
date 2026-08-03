@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   TrendingUp,
@@ -17,8 +17,10 @@ import {
   Undo2,
   Recycle,
   Tag,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
-import { format, startOfMonth } from 'date-fns';
+import { format, startOfMonth, endOfMonth, addMonths } from 'date-fns';
 
 import { reportsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -28,14 +30,75 @@ import PageHeader from '../components/PageHeader';
 import QueryState from '../components/QueryState';
 import { FinancialReport } from '../types';
 
+// ── Month pager (Round 15 #3) ───────────────────────────────────────────────
+// Финотчёт за ЛЮБОЙ месяц: «← Июль 2026 →» листает календарные месяцы (вперёд
+// не дальше текущего, назад — MONTH_PAGER_DEPTH). Диапазон месяца — ПОЛНЫЙ
+// (1-е…последнее число): backend /reports/financial включает расход с
+// period_month («зарплата/маркетинг за месяц», внесённые позже) только когда
+// запрошенный диапазон покрывает назначенный месяц целиком.
+
+const MONTH_PAGER_DEPTH = 24;
+
+const RU_MONTHS_NOM = [
+  'Январь',
+  'Февраль',
+  'Март',
+  'Апрель',
+  'Май',
+  'Июнь',
+  'Июль',
+  'Август',
+  'Сентябрь',
+  'Октябрь',
+  'Ноябрь',
+  'Декабрь',
+];
+
+/** «Июль 2026» — заголовок пейджера. */
+function monthTitle(d: Date): string {
+  return `${RU_MONTHS_NOM[d.getMonth()]} ${d.getFullYear()}`;
+}
+
+/** Сквозной индекс месяца — сравнение месяцев без Date-компараций. */
+function monthIndex(d: Date): number {
+  return d.getFullYear() * 12 + d.getMonth();
+}
+
+/** Календарный месяц целиком: 1-е…последнее число как 'yyyy-MM-dd'. */
+function monthRange(d: Date): { from: string; to: string } {
+  return { from: format(startOfMonth(d), 'yyyy-MM-dd'), to: format(endOfMonth(d), 'yyyy-MM-dd') };
+}
+
 export default function ReportsPage() {
   const { hasPermission } = useAuth();
 
-  const today = format(new Date(), 'yyyy-MM-dd');
-  const monthStart = format(startOfMonth(new Date()), 'yyyy-MM-dd');
+  // Дефолт — ПОЛНЫЙ текущий месяц (не «1-е…сегодня»), чтобы уже назначенные
+  // на этот месяц period_month-расходы сразу были в прибыли (см. коммент выше).
+  const [dateFrom, setDateFrom] = useState(() => monthRange(new Date()).from);
+  const [dateTo, setDateTo] = useState(() => monthRange(new Date()).to);
 
-  const [dateFrom, setDateFrom] = useState(monthStart);
-  const [dateTo, setDateTo] = useState(today);
+  // Пейджер «активен», только когда dateFrom/dateTo — ровно календарный месяц;
+  // любой ручной диапазон из пикера честно гасит подсветку месяца.
+  const activeMonth = useMemo<Date | null>(() => {
+    const m = /^(\d{4})-(\d{2})-\d{2}$/.exec(dateFrom);
+    if (!m) return null;
+    const candidate = new Date(Number(m[1]), Number(m[2]) - 1, 1);
+    const r = monthRange(candidate);
+    return r.from === dateFrom && r.to === dateTo ? candidate : null;
+  }, [dateFrom, dateTo]);
+
+  const nowIdx = monthIndex(new Date());
+  const baseMonth = activeMonth ?? startOfMonth(new Date());
+  const canPrevMonth = monthIndex(baseMonth) > nowIdx - MONTH_PAGER_DEPTH;
+  const canNextMonth = activeMonth !== null && monthIndex(activeMonth) < nowIdx;
+
+  const applyMonth = (target: Date) => {
+    const idx = monthIndex(target);
+    if (idx > nowIdx || idx < nowIdx - MONTH_PAGER_DEPTH) return;
+    const r = monthRange(target);
+    setDateFrom(r.from);
+    setDateTo(r.to);
+  };
 
   const canView = hasPermission('financial_reports');
 
@@ -91,15 +154,49 @@ export default function ReportsPage() {
       {/* Header */}
       <PageHeader title="Финансовые отчёты" icon={BarChart3} subtitle="Анализ прибыли и расходов" />
 
-      {/* Date picker */}
-      <DatePeriodPicker
-        dateFrom={dateFrom}
-        dateTo={dateTo}
-        onChange={(from, to) => {
-          setDateFrom(from);
-          setDateTo(to);
-        }}
-      />
+      {/* Period controls: месячный пейджер (основной сценарий владельца —
+          «отчёт за любой месяц») + прежний пикер произвольного диапазона. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="inline-flex items-center h-8 rounded-lg border border-gray-200 bg-white shadow-sm">
+          <button
+            type="button"
+            onClick={() => applyMonth(addMonths(baseMonth, -1))}
+            disabled={!canPrevMonth}
+            aria-label="Предыдущий месяц"
+            className="flex h-8 w-8 items-center justify-center rounded-l-lg text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-800 disabled:pointer-events-none disabled:opacity-30"
+          >
+            <ChevronLeft className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => applyMonth(startOfMonth(new Date()))}
+            title={activeMonth ? 'К текущему месяцу' : 'Показать месяц целиком'}
+            className={`h-8 min-w-[6.5rem] px-1 text-center text-xs font-semibold tabular-nums transition-colors ${
+              activeMonth ? 'text-gray-900' : 'text-gray-400 hover:text-gray-600'
+            }`}
+          >
+            {monthTitle(baseMonth)}
+          </button>
+          <button
+            type="button"
+            onClick={() => activeMonth && applyMonth(addMonths(activeMonth, 1))}
+            disabled={!canNextMonth}
+            aria-label="Следующий месяц"
+            className="flex h-8 w-8 items-center justify-center rounded-r-lg text-gray-500 transition-colors hover:bg-gray-50 hover:text-gray-800 disabled:pointer-events-none disabled:opacity-30"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+        </div>
+
+        <DatePeriodPicker
+          dateFrom={dateFrom}
+          dateTo={dateTo}
+          onChange={(from, to) => {
+            setDateFrom(from);
+            setDateTo(to);
+          }}
+        />
+      </div>
 
       <QueryState
         isLoading={isLoading}
