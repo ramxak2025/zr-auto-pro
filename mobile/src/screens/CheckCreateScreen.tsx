@@ -1759,13 +1759,13 @@ export default function CheckCreateScreen() {
       const savedCheckId: string | undefined = editId || res?.data?.id;
 
       // ── Order-mode: припарковать новый заказ-наряд на доску ───────────────
-      // Только когда tenant в shift-mode И мастер без права оплаты (orderMode),
-      // и только для НОВОГО чека. Бэк уже коэрсит его в отложенный заказ-наряд;
-      // мы выставляем work_status = ключ ПЕРВОЙ колонки, иначе чек с
-      // work_status=NULL не появится на доске. Best-effort / fire-and-forget:
-      // заказ уже сохранён — если колонок нет или сеть упала, он просто
-      // останется отложенным в Журнале. Затем обновляем доску, на которую
-      // мастер вернётся по goBack().
+      // С Round 14 ПАРКОВКУ ГАРАНТИРУЕТ СЕРВЕР: create() при включённом режиме
+      // смен сам проставляет отложенному заказу work_status первой активной
+      // колонки (в т.ч. при приёмке админом/кассиром, где orderMode=false).
+      // Этот клиентский setWorkStatus остаётся безобидным дублем-страховкой
+      // для orderMode (та же первая колонка; сервер идемпотентен) — плюс он
+      // же инвалидирует кеш доски, на которую мастер вернётся по goBack().
+      // Best-effort / fire-and-forget: заказ уже сохранён и уже на доске.
       if (orderMode && !editId && savedCheckId && firstBoardColumnKey) {
         checksApi
           .setWorkStatus(savedCheckId, firstBoardColumnKey)

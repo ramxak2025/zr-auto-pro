@@ -9,7 +9,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import PageHeader from '../components/PageHeader';
 import { WorkStatusPicker, columnBadgeStyle, columnDotStyle } from '../components/WorkStatusPicker';
 import WorkBoardColumnsModal from '../components/WorkBoardColumnsModal';
-import type { Check, ChecksBoard, User, WorkBoardColumn } from '../types';
+import type { Check, ChecksBoard, PosSettings, User, WorkBoardColumn } from '../types';
 
 import { formatMoney } from '../../../shared/utils/formatters';
 
@@ -31,12 +31,17 @@ function CheckCard({
   canEdit,
   pending,
   onMove,
+  shiftModeEnabled,
 }: {
   check: Check;
   columns: WorkBoardColumn[];
   canEdit: boolean;
   pending: boolean;
   onMove: (id: string, key: string) => void;
+  /** Бейдж «Оплачено — выдать» показываем ТОЛЬКО при включённом режиме
+   *  кассовой смены: «Выдана» — кассирская веха; на легаси-доске delivered_at
+   *  пуст у всех оплаченных чеков и бейдж висел бы вечно. */
+  shiftModeEnabled: boolean;
 }) {
   const carLabel = check.car?.makeModel;
   const plate = check.car?.plateNumber;
@@ -94,8 +99,9 @@ function CheckCard({
       )}
 
       {/* «Оплачено — выдать» (Round 14): заказ оплачен (не отложен), стоит на
-          доске и ещё не выдан — мастеру пора отдавать машину клиенту. */}
-      {!check.isDeferred && check.workStatus != null && !check.deliveredAt && (
+          доске и ещё не выдан — мастеру пора отдавать машину клиенту.
+          Только при включённом режиме кассовой смены (см. shiftModeEnabled). */}
+      {shiftModeEnabled && !check.isDeferred && check.workStatus != null && !check.deliveredAt && (
         <div className="flex items-center gap-1.5 rounded-lg bg-green-50 border border-green-200 px-2 py-1">
           <BadgeCheck className="h-3.5 w-3.5 text-green-600 flex-shrink-0" />
           <span className="text-[11px] font-bold uppercase tracking-wide text-green-700">Оплачено — выдать</span>
@@ -139,6 +145,15 @@ export default function WorkBoardPage() {
     queryFn: async () => (await checksApi.board(assigneeFilter ? { assigneeId: assigneeFilter } : undefined)).data,
     staleTime: 30_000,
   });
+
+  // Режим кассовой смены (092/Round 14) — гейтит бейдж «Оплачено — выдать»
+  // на карточках: вне режима выдача — не веха, бейдж не имеет смысла.
+  const { data: posSettings } = useQuery<PosSettings>({
+    queryKey: ['checks', 'pos-settings'],
+    queryFn: async () => (await checksApi.getPosSettings()).data,
+    staleTime: 60_000,
+  });
+  const shiftModeEnabled = !!posSettings?.shiftModeEnabled;
 
   const columns = useMemo(() => (data?.columns ?? []).slice().sort((a, b) => a.sortOrder - b.sortOrder), [data]);
 
@@ -324,6 +339,7 @@ export default function WorkBoardPage() {
                           canEdit={canEdit}
                           pending={moveMutation.isPending && moveMutation.variables?.id === check.id}
                           onMove={handleMove}
+                          shiftModeEnabled={shiftModeEnabled}
                         />
                       ))
                     )}

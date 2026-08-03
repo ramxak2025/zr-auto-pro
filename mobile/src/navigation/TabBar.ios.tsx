@@ -71,14 +71,30 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // при режиме ВКЛ получают свои составы из getTabDefinitions; OFF/loading →
   // легаси-пятёрка байт-в-байт.
   const { orderMode, isCashier, shiftModeEnabled } = usePosSettings();
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  // canCreateChecks отличает чистого кассира (пресет: create=false → кассирский
+  // набор) от мастера с правом оплаты (092: create=true → легаси-пятёрка).
+  const canCreateChecks = hasPermission('checks_create');
   const tabs = React.useMemo(
-    () => getTabDefinitions({ role: user?.role, orderMode, isCashier, shiftModeEnabled }),
-    [user?.role, orderMode, isCashier, shiftModeEnabled],
+    () => getTabDefinitions({ role: user?.role, orderMode, isCashier, shiftModeEnabled, canCreateChecks }),
+    [user?.role, orderMode, isCashier, shiftModeEnabled, canCreateChecks],
   );
 
   const focusedIndex = tabs.findIndex((t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index);
   const safeIndex = focusedIndex < 0 ? 0 : focusedIndex;
+
+  // Роут вне активного набора (focusedIndex −1): случается, когда состав табов
+  // сменился ПОД пользователем — pos-settings догрузились после холодного
+  // старта (легаси-бар успел показать «Склад», кассир его открыл), либо
+  // владелец переключил режим удалённо. Ложно подсвечивать «Главную» (слот 0),
+  // пока на экране другой раздел, нельзя — мягко переводим на первый таб
+  // нового набора, чтобы подсветка и контент сошлись. Эффект самозатухающий:
+  // после navigate focusedIndex ≥ 0.
+  React.useEffect(() => {
+    if (focusedIndex >= 0) return;
+    const first = tabs[0];
+    if (first) navigation.navigate(first.routeName as never);
+  }, [focusedIndex, tabs, navigation]);
 
   // Index of the Касса slot (the one declared with isKassa: true). The
   // Касса button is rendered as a separate sibling on top of the bar,

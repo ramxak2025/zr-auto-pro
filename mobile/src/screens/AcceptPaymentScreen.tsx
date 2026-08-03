@@ -127,8 +127,12 @@ export default function AcceptPaymentScreen() {
         finalCash = cashNum;
         finalCard = cardCalc;
       }
-      return checksApi.update(id, {
-        isDeferred: false,
+      // Выделенный роут PATCH /checks/:id/accept-payment (Round 14): гейт —
+      // accept_payment, НЕ checks_edit. Пресет «Кассир» (edit='none') иначе
+      // получал бы 403 на PATCH /checks/:id; заодно кассир закрывает ЧУЖИЕ
+      // драфты (own-гейт на этом пути снят). Экран гейтится canAccept ниже,
+      // так что право у вызывающего гарантированно есть.
+      return checksApi.acceptPayment(id, {
         paymentMethod: method,
         cashAmount: finalCash,
         cardAmount: finalCard,

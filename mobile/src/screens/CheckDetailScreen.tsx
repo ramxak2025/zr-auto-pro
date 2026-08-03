@@ -332,10 +332,14 @@ export default function CheckDetailScreen() {
   // ── «Принять оплату» по отложенному чеку ─────────────────────────
   // Web-parity: frontend CheckDetailPage делает PATCH { isDeferred: false }
   // — чек закрывается и попадает в выручку. paymentStatus НЕ шлём:
-  // бэкенд сам выводит статус из isDeferred. Доступно только с
-  // permission checks_edit (та же гейтовка, что и у кнопки «Изменить»).
+  // бэкенд сам выводит статус из isDeferred.
+  // Выбор пути по праву (Round 14): держатель accept_payment идёт через
+  // выделенный PATCH /checks/:id/accept-payment (работает у пресета «Кассир»
+  // с edit='none' и закрывает чужие драфты); остальные (легаси-мастер со
+  // своим драфтом) — прежний PATCH {isDeferred:false} под checks_edit.
   const acceptPaymentMutation = useMutation({
-    mutationFn: () => checksApi.update(id, { isDeferred: false }),
+    mutationFn: () =>
+      hasPermission('accept_payment') ? checksApi.acceptPayment(id, {}) : checksApi.update(id, { isDeferred: false }),
     onSuccess: async () => {
       haptic('success');
       // The ON-SCREEN check is refetched (awaited) rather than a bare

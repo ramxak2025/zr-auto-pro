@@ -20,6 +20,9 @@ class WarehouseDocsQueryDto {
   // chips in 479ff21 but NOT here — so ?type=customer_return failed @IsIn → 400 and
   // broke the «Возврат клиента» filter. Keep this whitelist in sync with the kinds
   // JournalService.getWarehouseDocs can return.
+  // 'supplier_refund' — ЛОГИЧЕСКИЙ фильтр (Round 14): сервер отдаёт только
+  // строки-возвраты, но в проводе их kind = 'supplier_payment' + isRefund=true
+  // (совместимость со старыми бандлами — см. JournalDoc.isRefund).
   @IsIn([
     'purchase',
     'return_to_supplier',
@@ -27,6 +30,7 @@ class WarehouseDocsQueryDto {
     'defect_transfer',
     'writeoff',
     'supplier_payment',
+    'supplier_refund',
     'used_purchase',
   ])
   type?:
@@ -36,6 +40,7 @@ class WarehouseDocsQueryDto {
     | 'defect_transfer'
     | 'writeoff'
     | 'supplier_payment'
+    | 'supplier_refund'
     | 'used_purchase';
 }
 

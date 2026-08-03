@@ -55,9 +55,20 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   }
 
   private async loadValidatedUser(userID: string, jti: string | undefined): Promise<ValidatedUser> {
-    // Check if token has been revoked (via POST /auth/logout)
+    // Check if token has been revoked (via POST /auth/logout or exchanged via
+    // POST /auth/refresh). `revoked_at` — момент, С КОТОРОГО ревокация
+    // действует: logout пишет now() (немедленно), refresh-claim — now()+2мин
+    // (grace-окно доживания старого токена для in-flight запросов, см.
+    // AuthService.REFRESH_ROTATE_GRACE_MS). Строка с будущим revoked_at токен
+    // ещё НЕ блокирует; NULL (легаси-строки без default) трактуем как
+    // «ревокирован сразу» — fail-closed. Запрос всегда идёт admin-пулом
+    // (guards выполняются до TenantContextInterceptor — CLS-контекста ещё
+    // нет), поэтому видит и NULL-tenant строки, записанные admin-ремнём.
     if (jti) {
-      const { rows: revoked } = await this.pool.query(`SELECT 1 FROM revoked_tokens WHERE jti=$1 LIMIT 1`, [jti]);
+      const { rows: revoked } = await this.pool.query(
+        `SELECT 1 FROM revoked_tokens WHERE jti=$1 AND (revoked_at IS NULL OR revoked_at <= now()) LIMIT 1`,
+        [jti],
+      );
       if (revoked.length > 0) {
         throw new UnauthorizedException({ message: 'Токен отозван' });
       }

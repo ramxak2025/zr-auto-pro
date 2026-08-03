@@ -661,6 +661,26 @@ export function createChecksApi(api: HttpClient) {
     create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),
     update: (id: string, data: UpdateCheckRequest) => api.patch<Check>(`/checks/${id}`, data),
     /**
+     * Приём оплаты по отложенному заказ-наряду (Round 14, роль-пресет
+     * «Кассир»). Гейт на сервере — `accept_payment` (НЕ `checks_edit`):
+     * пресет «Кассир» (checks.edit='none') иначе не мог бы закрыть заказ.
+     * Кассир закрывает и ЧУЖИЕ драфты (own-гейт checks_edit_all на этом пути
+     * снят). Тело узкое — только способ / ноги / скидка; сервер сам ставит
+     * isDeferred:false и гонит тот же транзакционный путь активации, что и
+     * update({isDeferred:false}): нормализация ног к серверному итогу, скидка
+     * «только на товары», склад/гарантии/пуши. Ответ — полный Check.
+     * Держатели checks_edit продолжают работать через update() как раньше.
+     */
+    acceptPayment: (
+      id: string,
+      data: {
+        paymentMethod?: 'cash' | 'card' | 'cash_card';
+        cashAmount?: number;
+        cardAmount?: number;
+        discount?: number;
+      },
+    ) => api.patch<Check>(`/checks/${id}/accept-payment`, data),
+    /**
      * «Комментарий своего чека — день в день»: правит ТОЛЬКО комментарий и
      * доступен ЛЮБОМУ сотруднику БЕЗ edit-permissions, но сервер жёстко
      * принуждает «свой чек (master_id = вызывающий) + сегодняшняя бизнес-дата

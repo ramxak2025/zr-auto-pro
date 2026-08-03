@@ -2,6 +2,7 @@ import {
   Injectable,
   Inject,
   UnauthorizedException,
+  ForbiddenException,
   BadRequestException,
   InternalServerErrorException,
   Logger,
@@ -14,6 +15,7 @@ import { randomUUID } from 'crypto';
 import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthToken, NO_TENANT_ID } from '../common/auth-cache';
+import { runWithTenant } from '../common/tenant-context';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
 import { userHasPermission } from '../common/guards/permissions.guard';
@@ -98,6 +100,21 @@ function mapUserRow(row: any) {
   return user;
 }
 
+/**
+ * Grace-окно доживания старого токена после успешного /auth/refresh.
+ *
+ * Немедленная ревокация рвала бы in-flight запросы клиента, ушедшие со старым
+ * bearer'ом до того, как AuthContext атомарно применил новый токен через
+ * sessionRuntime.commit. Схема 021 уже хранит `revoked_at` — используем его как
+ * «момент, С КОТОРОГО ревокация действует» (отложенная ревокация): строка в
+ * blacklist создаётся сразу (это атомарный claim обмена), но проверка в
+ * JwtStrategy отбивает токен только когда revoked_at <= now(). 2 минут хватает
+ * любому параллельному запросу с запасом; альтернатива «expires_at = now()+2м»
+ * не годится — присутствие строки блокирует токен сразу, а её очистка (раз в
+ * сутки кроном) наоборот РАЗблокировала бы его.
+ */
+const REFRESH_ROTATE_GRACE_MS = 120_000;
+
 @Injectable()
 export class AuthService {
   private readonly logger = new Logger('AuthService');
@@ -110,6 +127,67 @@ export class AuthService {
   private generateToken(userID: string, tenantID?: string): string {
     const jti = randomUUID();
     return this.jwtService.sign({ sub: userID, tenantId: tenantID, jti });
+  }
+
+  /**
+   * ЕДИНСТВЕННАЯ точка записи в blacklist (logout И refresh-claim).
+   *
+   * mode 'force' (logout) — ревокация НЕМЕДЛЕННО (graceMs=0). Upsert: если по
+   *   jti уже лежит строка ОТЛОЖЕННОЙ ревокации (refresh-claim с grace-окном),
+   *   LEAST() подтягивает момент ревокации к now() — выход всегда побеждает
+   *   grace и никогда его не продлевает. Возвращает true.
+   *
+   * mode 'claim' (refresh) — атомарный «обмен» токена. ON CONFLICT DO NOTHING
+   *   + rowCount: строка вставилась → линия наша, можно чеканить новый токен;
+   *   конфликт (строка уже есть: токен ревокирован logout'ом ИЛИ уже обменян
+   *   ранее) → false, refresh отвечает 401. Один INSERT одновременно является
+   *   и живой проверкой blacklist МИМО auth-кэша, и арбитром гонки двух
+   *   параллельных refresh одним токеном — claim выигрывает ровно один.
+   *
+   * RLS-ремень: ревокация — инвариант, запись обязана попасть в blacklist из
+   * ЛЮБОГО контекста. Обычный путь идёт текущим пулом (тенантный запрос →
+   * app-пул; WITH CHECK политики 112 проходит для строки со своим tenant_id).
+   * ЛЮБОЙ сбой — 23503 (FK на умерший тенант), 42501 (WITH CHECK отбивает
+   * NULL-tenant строку tenant-scoped сессии — прежний 23503-ремень этого не
+   * ловил и logout 500-ил), либо иной — повторяет тот же statement через
+   * admin-пул с tenant_id NULL: runWithTenant('') кладёт пустой tenantId в
+   * CLS, TenantAwarePool на falsy-контекст маршрутизирует в admin-пул
+   * (superuser, RLS обходится). tenant_id в этой таблице — бухгалтерия,
+   * NULL допустим. Ошибка admin-повтора ПРОБРАСЫВАЕТСЯ: молча съесть сбой =
+   * вернуть 200 при живом токене — запрещено.
+   */
+  private async blacklistToken(opts: {
+    jti: string;
+    userId: string;
+    tenantId: string | null;
+    graceMs: number;
+    expiresAt: Date;
+    mode: 'force' | 'claim';
+  }): Promise<boolean> {
+    const conflictClause =
+      opts.mode === 'force'
+        ? `ON CONFLICT (jti) DO UPDATE SET
+             revoked_at = LEAST(revoked_tokens.revoked_at, EXCLUDED.revoked_at),
+             expires_at = GREATEST(revoked_tokens.expires_at, EXCLUDED.expires_at)`
+        : `ON CONFLICT (jti) DO NOTHING`;
+    // revoked_at считается ЧАСАМИ БАЗЫ (now() + grace) — сравнение в
+    // JwtStrategy тоже идёт по now() базы, расхождение часов Node/PG не влияет.
+    const sql = `INSERT INTO revoked_tokens (jti, user_id, tenant_id, revoked_at, expires_at)
+                 VALUES ($1, $2, $3, now() + ($4::int * interval '1 millisecond'), $5)
+                 ${conflictClause}`;
+    try {
+      const res = await this.pool.query(sql, [opts.jti, opts.userId, opts.tenantId, opts.graceMs, opts.expiresAt]);
+      return opts.mode === 'force' ? true : (res.rowCount ?? 0) > 0;
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code ?? 'unknown';
+      this.logger.warn(
+        `revoked_tokens write failed (code=${code}) — retrying via admin pool: ${err instanceof Error ? err.message : err}`,
+      );
+      const res = await runWithTenant('', () =>
+        this.pool.query(sql, [opts.jti, opts.userId, null, opts.graceMs, opts.expiresAt]),
+      );
+      return opts.mode === 'force' ? true : (res.rowCount ?? 0) > 0;
+    }
   }
 
   async logout(jti: string, userId: string, tenantId: string): Promise<void> {
@@ -130,54 +208,111 @@ export class AuthService {
     // nil-UUID, so inserting it here FK-violates revoked_tokens_tenant_id_fkey
     // (23503) → logout 500s and the token is NEVER revoked (confirmed Sentry
     // issue). The column is nullable (021) — store NULL for "no tenant".
+    // Сбои политики RLS / FK ловит admin-ремень внутри blacklistToken.
     const tenantForRow = tenantId && tenantId !== NO_TENANT_ID ? tenantId : null;
-    try {
-      await this.pool.query(
-        `INSERT INTO revoked_tokens (jti, user_id, tenant_id, expires_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
-        [jti, userId, tenantForRow, exp],
-      );
-    } catch (err) {
-      // Second belt: ANY other FK violation on tenant_id (e.g. a token minted
-      // for a since-deleted tenant) must still revoke the token — tenant_id on
-      // this row is bookkeeping, revocation is the invariant. Retry with NULL.
-      // Every non-23503 error RETHROWS: a silently swallowed failure here
-      // would return 200 while the token stays valid — forbidden.
-      if ((err as { code?: string } | null)?.code === '23503') {
-        await this.pool.query(
-          `INSERT INTO revoked_tokens (jti, user_id, tenant_id, expires_at) VALUES ($1, $2, NULL, $3) ON CONFLICT DO NOTHING`,
-          [jti, userId, exp],
-        );
-      } else {
-        throw err;
-      }
-    }
+    await this.blacklistToken({ jti, userId, tenantId: tenantForRow, graceMs: 0, expiresAt: exp, mode: 'force' });
     // Drop the cached JWT validation immediately so the next request with this
     // token re-checks revoked_tokens (and is rejected) instead of being served
     // a stale "valid" result for up to the cache TTL. Reached on BOTH
-    // successful insert paths (normal and the 23503 NULL retry).
+    // successful insert paths (normal and the admin-pool retry).
     invalidateAuthToken(userId, jti);
   }
 
   /**
-   * Тихое продление сессии (mobile): выдать СВЕЖИЙ токен по живому bearer'у.
+   * Тихое продление сессии (mobile): обменять живой bearer на СВЕЖИЙ токен.
    *
-   * • Вызывается только под JwtAuthGuard — токен уже прошёл проверку подписи,
-   *   ревокации и is_active; никакой дополнительной валидации здесь не нужно.
-   * • Старый jti сознательно НЕ ревокируется: немедленная ревокация убивала бы
-   *   in-flight запросы, идущие со старым токеном. Безопасность не хуже
-   *   текущей — оба токена и так живут до своего exp, а logout ревокирует тот
-   *   jti, который клиент держит в руках на момент выхода.
+   * Линия токенов после этой правки — ЦЕПЬ, а не дерево (Round 14
+   * adversarial-ревью, линза auth — 3 находки закрыты здесь):
+   *
+   * • Атомарный claim: старый jti пишется в revoked_tokens (ON CONFLICT DO
+   *   NOTHING) С ОТЛОЖЕННЫМ revoked_at = now()+2мин ДО чеканки нового токена.
+   *   Строка уже существует (logout ИЛИ более ранний обмен) → 401, нового
+   *   токена нет. Тем самым: (а) отозванный токен НЕ может продлиться даже в
+   *   30-секундном окне позитивного auth-кэша JwtStrategy — INSERT бьёт в базу
+   *   напрямую, мимо кэша и на любой реплике; (б) каждый токен обменивается
+   *   РОВНО один раз — «бесконечный форк» скомпрометированного bearer'а
+   *   невозможен, у активной сессии всегда ровно один живой токен (плюс
+   *   предыдущий, доживающий ≤2 минут); (в) logout типа продолжает быть kill
+   *   switch: он ревокирует jti в руках клиента немедленно, а вся его линия
+   *   либо уже мертва, либо умирает по своему grace.
+   * • Grace 2 минуты (см. REFRESH_ROTATE_GRACE_MS): in-flight запросы со
+   *   старым токеном доживают, клиент применяет новый токен атомарно через
+   *   sessionRuntime.commit. Потолок доживания = grace + TTL auth-кэша (30с).
+   * • Impersonation НЕ продлевается — СЕРВЕРНЫЙ гейт: 30-минутный токен
+   *   «войти как владелец» (tenants.service.impersonate, claim impersonatedBy)
+   *   получает 403, а не полноценный 30-дневный директорский токен без следа
+   *   impersonation. Клиентский гейт в AuthContext остаётся, но больше не
+   *   является единственной защитой.
+   * • Живая перепроверка users.is_active/dismissed/purged мимо auth-кэша —
+   *   деактивированный аккаунт не чеканит новый токен даже в 30с окне.
+   * • Rate-limit: /auth/refresh метится обычным write-бакетом глобального
+   *   RateLimitGuard (150/мин на ip+токен); claim-семантика дополнительно
+   *   ограничивает обмен одним разом на токен.
    * • Sentinel-тенант (NO_TENANT_ID — tenant-less superadmin) НЕ зашивается в
    *   новый токен: generateToken получает undefined, ровно как при login, и
    *   JwtStrategy снова подставит sentinel при валидации.
    */
-  refresh(user: { userID: string; tenantID: string }): { token: string } {
+  async refresh(
+    user: { userID: string; tenantID: string; jti?: string },
+    rawToken: string,
+  ): Promise<{ token: string }> {
+    const oldJti = user.jti;
+    if (!oldJti) {
+      // Токен без jti нельзя ревокировать → его линию нельзя оборвать. Такие
+      // токены не выпускаются с 021 и давно истекли — fail-closed.
+      throw new UnauthorizedException({ message: 'Сессия устарела — войдите заново' });
+    }
+
+    // rawToken — тот же bearer, что прошёл JwtAuthGuard (подпись уже проверена
+    // стратегией); decode без verify достаточен, чтобы прочитать claims,
+    // которые guard не прокидывает в ValidatedUser: impersonatedBy и exp.
+    const decoded = rawToken ? (this.jwtService.decode(rawToken) as Record<string, unknown> | null) : null;
+    if (!decoded || decoded.jti !== oldJti) {
+      throw new UnauthorizedException({ message: 'Неверный токен' });
+    }
+    if (decoded.impersonatedBy) {
+      throw new ForbiddenException({ message: 'Сессия входа под пользователем не продлевается' });
+    }
+
+    // Живая проверка аккаунта МИМО 30с auth-кэша. Под RLS запрос идёт app-пулом
+    // и видит собственную строку тенантного пользователя; аномальный
+    // non-superadmin без тенанта не увидит ничего и получит 401 — fail-closed,
+    // идентично его же /auth/me.
+    const { rows } = await this.pool.query(`SELECT is_active, dismissed_at, purged_at FROM users WHERE id=$1`, [
+      user.userID,
+    ]);
+    if (rows.length === 0 || rows[0].dismissed_at || rows[0].purged_at || !rows[0].is_active) {
+      throw new UnauthorizedException({ message: 'Аккаунт недоступен' });
+    }
+
+    // Атомарный claim обмена (подробности — doc-комментарий выше и
+    // blacklistToken). expires_at строки = НАСТОЯЩИЙ exp старого токена, чтобы
+    // строка пережила токен, который она ревокирует.
+    const exp = typeof decoded.exp === 'number' ? new Date(decoded.exp * 1000) : new Date(Date.now() + 30 * 86400000);
+    const tenantForRow = user.tenantID && user.tenantID !== NO_TENANT_ID ? user.tenantID : null;
+    const claimed = await this.blacklistToken({
+      jti: oldJti,
+      userId: user.userID,
+      tenantId: tenantForRow,
+      graceMs: REFRESH_ROTATE_GRACE_MS,
+      expiresAt: exp,
+      mode: 'claim',
+    });
+    if (!claimed) {
+      throw new UnauthorizedException({ message: 'Токен отозван' });
+    }
+
     const tenantID = user.tenantID && user.tenantID !== NO_TENANT_ID ? user.tenantID : undefined;
     return { token: this.generateToken(user.userID, tenantID) };
   }
 
   async isTokenRevoked(jti: string): Promise<boolean> {
-    const { rows } = await this.pool.query(`SELECT 1 FROM revoked_tokens WHERE jti=$1 LIMIT 1`, [jti]);
+    // «Ревокирован СЕЙЧАС»: строка с будущим revoked_at (grace-окно после
+    // refresh) токен ещё не блокирует — зеркало проверки в JwtStrategy.
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM revoked_tokens WHERE jti=$1 AND (revoked_at IS NULL OR revoked_at <= now()) LIMIT 1`,
+      [jti],
+    );
     return rows.length > 0;
   }
 

@@ -122,14 +122,17 @@ export class ReportsService {
     // APPROVED expenses count — pending / rejected must never reduce profit.
     // Legacy rows have NULL approval_status → treated as approved.
     //
-    // Round 14 (149) — «за какой месяц»: расход с period_month относится к
-    // НАЗНАЧЕННОМУ месяцу, а не к дате факта. Effective-месяц =
-    // COALESCE(period_month, месяц e.date МСК). Строка с периодом попадает в
-    // отчёт, когда её месяц пересекается с месяцами диапазона (месячная
-    // грануляция — выплата «за июль» видна в любом июльском диапазоне);
-    // строки без периода — прежний точный дата-диапазон, байт-в-байт.
-    // Пример: выплата 5 августа «за июль» режет прибыль ИЮЛЯ, а в августовском
-    // P&L не участвует; касса (getCashFlow) видит её 5 августа.
+    // Round 14 (149, семантика уточнена adversarial-ревью) — «за какой месяц»:
+    // расход с period_month относится к НАЗНАЧЕННОМУ месяцу и попадает в отчёт
+    // ТОЛЬКО когда запрошенный диапазон покрывает этот месяц ЦЕЛИКОМ
+    // (1-е…последнее число). В неполномесячные срезы (день/неделя/15.07–15.08)
+    // period-расход НЕ входит вовсе — ни по периоду, ни по дате факта: иначе
+    // каждый под-диапазон месяца включал бы его целиком и сумма недель
+    // задваивала бы месяц (инвариант: под-диапазоны не двоят, месяц полон).
+    // Строки без периода (дефолт клиентов) — прежний точный дата-диапазон,
+    // байт-в-байт. Пример: выплата 5 августа «за июль» режет прибыль отчёта за
+    // ВЕСЬ июль, не видна ни в одном августовском/недельном срезе; касса
+    // (getCashFlow) видит её 5 августа — по дате факта, как и лента «Расходы».
     const { rows: expRows } = await this.pool.query(
       `SELECT COALESCE(SUM(e.amount), 0) as total
          FROM expenses e
@@ -140,8 +143,8 @@ export class ReportsService {
               AND e.date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
               AND e.date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}')
             OR (e.period_month IS NOT NULL
-              AND e.period_month >= to_char($2::date, 'YYYY-MM')
-              AND e.period_month <= to_char($3::date, 'YYYY-MM'))
+              AND to_date(e.period_month || '-01', 'YYYY-MM-DD') >= $2::date
+              AND (to_date(e.period_month || '-01', 'YYYY-MM-DD') + interval '1 month' - interval '1 day')::date <= $3::date)
           )
           AND COALESCE(e.approval_status, 'approved') = 'approved'
           AND COALESCE(ec.name, '') <> 'Зарплата'`,
@@ -697,7 +700,10 @@ export class ReportsService {
     //
     // Round 14 (149) — «за какой месяц»: месячные агрегаты относят расход по
     // effective-месяцу COALESCE(e.period_month, месяц e.date МСК), а не по
-    // дате факта. Выплата 5 августа «за июль» больше НЕ режет августовский
+    // дате факта. Равенство месяца здесь = «диапазон покрывает месяц целиком»
+    // из getFinancial (агрегат всегда ровно один календарный месяц), поэтому
+    // задвоения под-диапазонов, исправленного в getFinancial, тут нет by
+    // construction. Выплата 5 августа «за июль» больше НЕ режет августовский
     // netProfitMonth (она уехала в июль — getFinancial за июль её видит);
     // exp_today дополнительно требует «сегодняшний» расход быть ЗА текущий
     // месяц — выплата задним числом не искажает «прибыль сегодня». Побочная

@@ -630,12 +630,15 @@ export class SuppliersService {
    * остаются в выборке: возврат от поставщика честно уменьшает «Закупку
    * товара» за период.
    *
-   * Round 14 (149): платёж с period_month («за какой месяц») относится к
-   * НАЗНАЧЕННОМУ месяцу, а не к дате факта: строка попадает в отчёт, если её
-   * effective-месяц COALESCE(period_month, месяц date МСК) пересекается с
-   * месяцами диапазона. Платёж 5 августа «за июль» виден в июльском отчёте и
-   * НЕ виден в августовском. Строки без периода — прежний точный
-   * дата-диапазон, байт-в-байт.
+   * Round 14 (149, семантика уточнена adversarial-ревью): платёж с
+   * period_month («за какой месяц») относится к НАЗНАЧЕННОМУ месяцу, а не к
+   * дате факта, и попадает в отчёт ТОЛЬКО когда запрошенный диапазон покрывает
+   * этот месяц ЦЕЛИКОМ (1-е…последнее число). Дневные/недельные срезы
+   * period-платёж НЕ показывают вовсе (ни по периоду, ни по дате факта —
+   * иначе под-диапазоны месяца задваивали бы месячную сумму). Платёж 5
+   * августа «за июль» виден в отчёте за весь июль, невиден в любом августовском
+   * срезе и в неполных диапазонах вроде 15.07–15.08. Строки без периода
+   * (дефолт клиентов) — прежний точный дата-диапазон, байт-в-байт.
    */
   async getPaymentsReport(
     tenantID: string,
@@ -675,8 +678,8 @@ export class SuppliersService {
               AND sp.date >= $2::date::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}'
               AND sp.date < ($3::date + 1)::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}')
             OR (sp.period_month IS NOT NULL
-              AND sp.period_month >= to_char($2::date, 'YYYY-MM')
-              AND sp.period_month <= to_char($3::date, 'YYYY-MM'))
+              AND to_date(sp.period_month || '-01', 'YYYY-MM-DD') >= $2::date
+              AND (to_date(sp.period_month || '-01', 'YYYY-MM-DD') + interval '1 month' - interval '1 day')::date <= $3::date)
           )
         ORDER BY sp.date DESC
         LIMIT 500`,
@@ -857,13 +860,25 @@ export class SuppliersService {
     try {
       await client.query('BEGIN');
 
-      // Cross-tenant guard — как в createPayment.
-      const { rows: supRows } = await client.query('SELECT 1 FROM suppliers WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
-        dto.supplierId,
-        tenantID,
-      ]);
+      // Cross-tenant guard — как в createPayment, плюс FOR UPDATE: лок строки
+      // поставщика сериализует параллельные возвраты, чтобы два одновременных
+      // запроса не проскочили кап по total_paid вдвоём.
+      const { rows: supRows } = await client.query(
+        'SELECT total_paid FROM suppliers WHERE id = $1 AND tenant_id = $2 FOR UPDATE',
+        [dto.supplierId, tenantID],
+      );
       if (supRows.length === 0) {
         throw new BadRequestException({ message: 'Поставщик не найден' });
+      }
+
+      // Кап правдоподобности (adversarial-ревью Round 14): поставщик не может
+      // вернуть больше, чем ему всего оплачено — иначе total_paid уходит в
+      // минус и рождается фантомный долг «из воздуха» (лишний ноль в сумме).
+      const totalPaid = parseFloat(supRows[0].total_paid) || 0;
+      if (amount > totalPaid) {
+        throw new BadRequestException({
+          message: `Возврат ${amount.toLocaleString('ru-RU')} ₽ больше, чем всего оплачено этому поставщику (${totalPaid.toLocaleString('ru-RU')} ₽). Проверьте сумму.`,
+        });
       }
 
       const { rows } = await client.query(

@@ -112,12 +112,26 @@ const journalKindLabels: Record<JournalKind, string> = {
   defect_transfer: 'Брак',
   writeoff: 'Списания',
   supplier_payment: 'Платежи',
-  // 144: возврат денег ОТ поставщика — отдельный kind (не supplier_payment),
-  // потому что supplier_payment сидит в NEGATIVE_KINDS: возврат с минусом
-  // читался бы как отток, хотя деньги ПРИШЛИ.
+  // 144 → Round 14: возврат денег ОТ поставщика. В ПРОВОДЕ сервер шлёт
+  // kind='supplier_payment' + isRefund=true (старые бандлы крашились на
+  // незнакомом kind); 'supplier_refund' — КЛИЕНТСКИЙ синтетический kind,
+  // который выводит effectiveJournalKind по флагу. Отдельный от
+  // supplier_payment, потому что тот сидит в NEGATIVE_KINDS: возврат с
+  // минусом читался бы как отток, хотя деньги ПРИШЛИ.
   supplier_refund: 'Возврат от поставщика',
   used_purchase: 'Б/У',
 };
+
+/**
+ * Эффективный (визуальный) kind строки журнала: сервер шлёт возврат от
+ * поставщика как kind='supplier_payment' + isRefund=true ради совместимости
+ * со старыми бандлами (см. shared JournalDoc.isRefund) — новые клиенты
+ * возвращают его в синтетический 'supplier_refund' и дальше весь рендер
+ * (визуал / знак / лейблы / чип-фильтр) работает по прежним словарям.
+ */
+function effectiveJournalKind(doc: JournalDoc): JournalKind {
+  return doc.kind === 'supplier_payment' && doc.isRefund ? 'supplier_refund' : doc.kind;
+}
 
 // Visual tokens for each JournalDoc kind. Used by both the row card
 // (left accent bar + icon background) and the kind chip filter row.
@@ -509,20 +523,24 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({
   onSelect,
   palette,
 }: WarehouseDocRowProps) {
-  const visual = journalKindVisual[item.kind];
-  const isNegative = NEGATIVE_KINDS.has(item.kind);
+  // Round 14: рендер по ЭФФЕКТИВНОМУ kind — возврат от поставщика приходит
+  // как supplier_payment + isRefund (см. effectiveJournalKind).
+  const kind = effectiveJournalKind(item);
+  const visual = journalKindVisual[kind];
+  const isNegative = NEGATIVE_KINDS.has(kind);
   const amountColor =
-    item.kind === 'used_purchase'
+    kind === 'used_purchase'
       ? colors.purple[700]
-      : item.kind === 'customer_return'
+      : kind === 'customer_return' || kind === 'supplier_refund'
         ? colors.teal[600]
         : isNegative
           ? colors.red[600]
           : colors.green[600];
   // Title prefers payeeName for supplier_payment ("Оплата: ООО Х"),
-  // otherwise falls back to the backend-provided title.
-  const title = item.kind === 'supplier_payment' && item.payeeName ? `Оплата: ${item.payeeName}` : item.title;
-  const subtitle = item.subtitle || journalKindLabels[item.kind];
+  // otherwise falls back to the backend-provided title (у возврата сервер
+  // уже шлёт «Возврат от поставщика: …» — оверрайд «Оплата:» не применяем).
+  const title = kind === 'supplier_payment' && item.payeeName ? `Оплата: ${item.payeeName}` : item.title;
+  const subtitle = item.subtitle || journalKindLabels[kind];
   return (
     <View>
       {showDateHeader && (
@@ -931,7 +949,10 @@ export default function ChecksScreen() {
     // in-memory, как и у чипов типа документа.
     const q = search.trim().toLowerCase();
     return allWarehouseDocs.filter((d) => {
-      if (warehouseKind && d.kind !== warehouseKind) return false;
+      // Round 14: чип сверяем с ЭФФЕКТИВНЫМ kind (возврат от поставщика в
+      // проводе — supplier_payment + isRefund): чип «Платежи» возвраты НЕ
+      // показывает, чип «Возврат от поставщика» показывает ТОЛЬКО их.
+      if (warehouseKind && effectiveJournalKind(d) !== warehouseKind) return false;
       if (fromISO || toISO) {
         const docISO = fmt(new Date(d.occurredAt));
         if (fromISO && docISO < fromISO) return false;
@@ -2049,17 +2070,19 @@ export default function ChecksScreen() {
       <Modal
         visible={!!selectedDoc}
         onClose={() => setSelectedDoc(null)}
-        title={selectedDoc ? journalKindLabels[selectedDoc.kind] : ''}
+        title={selectedDoc ? journalKindLabels[effectiveJournalKind(selectedDoc)] : ''}
       >
         {selectedDoc &&
           (() => {
             const doc = selectedDoc;
-            const visual = journalKindVisual[doc.kind];
-            const isNegative = NEGATIVE_KINDS.has(doc.kind);
+            // Round 14: как и в строке — эффективный kind (isRefund-мап).
+            const docKind = effectiveJournalKind(doc);
+            const visual = journalKindVisual[docKind];
+            const isNegative = NEGATIVE_KINDS.has(docKind);
             const amountColor =
-              doc.kind === 'used_purchase'
+              docKind === 'used_purchase'
                 ? colors.purple[700]
-                : doc.kind === 'customer_return'
+                : docKind === 'customer_return' || docKind === 'supplier_refund'
                   ? colors.teal[600]
                   : isNegative
                     ? colors.red[600]
@@ -2071,7 +2094,7 @@ export default function ChecksScreen() {
                     <Ionicons name={visual.icon} size={28} color={visual.iconColor} />
                   </View>
                   <Text style={[styles.docDetailType, { color: palette.text.primary }]}>
-                    {journalKindLabels[doc.kind]}
+                    {journalKindLabels[docKind]}
                   </Text>
                 </View>
 

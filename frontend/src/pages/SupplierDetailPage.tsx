@@ -519,7 +519,10 @@ export default function SupplierDetailPage() {
     amount: 0,
     date: format(new Date(), 'yyyy-MM-dd'),
     comment: '',
-    // 149 — дефолт «за текущий месяц» (= прежнее поведение отчётов).
+    // 149 (семантика уточнена adversarial-ревью): дефолт поля = месяц ДАТЫ
+    // платежа. При сабмите periodMonth отправляется ТОЛЬКО если отличается от
+    // месяца даты — иначе undefined → NULL → точная дата-семантика отчётов
+    // (дневные/недельные срезы «Закупки товара» не раздуваются до месяца).
     periodMonth: format(new Date(), 'yyyy-MM'),
   };
   const [paymentForm, setPaymentForm] = useState<PaymentFormData>(emptyPaymentForm);
@@ -547,13 +550,18 @@ export default function SupplierDetailPage() {
       toast.error('Введите сумму оплаты');
       return;
     }
+    // 149 — «за какой месяц»: шлём ТОЛЬКО осознанный выбор месяца, ОТЛИЧНОГО
+    // от месяца даты платежа (платёж в августе «за июль» уедет в июльский
+    // отчёт). Совпадает с месяцем даты → undefined → NULL → платёж живёт по
+    // точной дате факта (дневные/недельные срезы корректны).
+    const dateMonth = (paymentForm.date || '').slice(0, 7);
     createPaymentMutation.mutate({
       supplierId: id,
       amount: paymentForm.amount,
       date: paymentForm.date,
       comment: paymentForm.comment,
-      // 149 — «за какой месяц»: отчёт по оплатам отнесёт платёж к этому месяцу.
-      periodMonth: paymentForm.periodMonth || undefined,
+      periodMonth:
+        paymentForm.periodMonth && paymentForm.periodMonth !== dateMonth ? paymentForm.periodMonth : undefined,
     });
   };
 
@@ -1275,7 +1283,17 @@ export default function SupplierDetailPage() {
               type="date"
               className="input"
               value={paymentForm.date}
-              onChange={(e) => setPaymentForm({ ...paymentForm, date: e.target.value })}
+              onChange={(e) =>
+                // Смена даты подтягивает «За месяц» к месяцу новой даты: иначе
+                // залежавшийся дефолт (месяц открытия формы) уехал бы на сервер
+                // как якобы осознанный выбор периода. Пользователь может выбрать
+                // другой месяц ПОСЛЕ даты — тогда он и отправится.
+                setPaymentForm({
+                  ...paymentForm,
+                  date: e.target.value,
+                  periodMonth: e.target.value ? e.target.value.slice(0, 7) : paymentForm.periodMonth,
+                })
+              }
             />
           </div>
           <div>
@@ -1287,7 +1305,8 @@ export default function SupplierDetailPage() {
               onChange={(e) => setPaymentForm({ ...paymentForm, periodMonth: e.target.value })}
             />
             <p className="text-xs text-gray-400 mt-1">
-              Платёж в августе «за июль» попадёт в июльский отчёт по закупкам; касса — по дате факта
+              По умолчанию — месяц даты платежа (отчёты по факту). Выберите другой месяц, если платёж «за июль» делается
+              в августе — он уедет в отчёт за весь июль; касса — всегда по дате факта
             </p>
           </div>
           <div>

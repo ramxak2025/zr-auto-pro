@@ -549,6 +549,14 @@ export class ChecksService {
       if (next !== current) {
         // COUNT(*) OVER () — полный счёт незакрытого конвейера одним запросом,
         // строки капнуты десятью (список «что закрыть» для владельца).
+        //
+        // ТОЛЬКО АКТИВНЫЕ колонки (Round 14, adversarial-находка): чек со
+        // stale work_status на ДЕАКТИВИРОВАННУЮ колонку (updateBoardColumn
+        // isActive:false, в отличие от deleteBoardColumn, work_status у
+        // припаркованных чеков не чистит) невидим ни на доске, ни в очереди
+        // «Оплата» — без EXISTS-сверки гард блокировал бы режим навсегда
+        // списком чеков, которых с доски не убрать (setWorkStatus принимает
+        // только активные ключи). Невидимый драфт = не конвейер.
         const { rows: openRows } = await this.pool.query(
           `SELECT ch.id, ch.number, ch.total_revenue, cl.full_name AS client_name,
                   COUNT(*) OVER () AS open_count
@@ -556,6 +564,12 @@ export class ChecksService {
              LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
             WHERE ch.tenant_id = $1 AND ch.deleted_at IS NULL
               AND ch.is_deferred = true AND ch.work_status IS NOT NULL
+              AND EXISTS (
+                SELECT 1 FROM work_board_columns wbc
+                 WHERE wbc.tenant_id = ch.tenant_id
+                   AND wbc.key = ch.work_status
+                   AND wbc.is_active = true
+              )
             ORDER BY ch.date DESC, ch.id DESC
             LIMIT 10`,
           [tenantID],
@@ -2269,10 +2283,27 @@ export class ChecksService {
     // for a cashier to close later. When mode is OFF, or the actor is a cashier
     // (owner-class / accept_payment), `forceDeferred` is false and EVERYTHING
     // below is byte-for-byte the current flow.
-    const forceDeferred = (await this.isShiftModeEnabled(tenantID)) && !this.isCashier(actor);
+    const shiftMode = await this.isShiftModeEnabled(tenantID);
+    const forceDeferred = shiftMode && !this.isCashier(actor);
     const effectiveIsDeferred: boolean = forceDeferred ? true : dto.isDeferred || false;
     const effectiveCashAmount: number = forceDeferred ? 0 : dto.cashAmount || 0;
     const effectiveCardAmount: number = forceDeferred ? 0 : dto.cardAmount || 0;
+
+    // ── Парковка конвейерного заказа на доску (Round 14, СЕРВЕРНО) ─────────
+    // При включённом режиме смен КАЖДЫЙ отложенный заказ — конвейерный: без
+    // work_status он не виден ни на доске исполнителей, ни в очереди кассира
+    // «Оплата» (getBoard фильтрует по активным колонкам). Раньше work_status
+    // ставил только клиент (orderMode-мастер, fire-and-forget setWorkStatus
+    // после create) — приёмка админом/кассиром (isCashier → orderMode=false)
+    // оставляла work_status=NULL, и машина выпадала из конвейера. Теперь
+    // первую активную колонку подставляет сервер прямо в INSERT — надёжно для
+    // всех клиентов, включая старые. Клиентский setWorkStatus остаётся
+    // безобидным дублем (та же первая колонка). Режим ВЫКЛ → NULL, путь
+    // байт-в-байт прежний. Сид дефолтных колонок — до транзакции (идемпотентен,
+    // отдельное соединение пула).
+    if (shiftMode && effectiveIsDeferred) {
+      await this.ensureBoardColumnsDefaults(tenantID);
+    }
 
     if (!effectiveIsDeferred && services.length === 0 && products.length === 0) {
       throw new BadRequestException({ message: 'Добавьте хотя бы одну услугу или товар' });
@@ -2571,13 +2602,28 @@ export class ChecksService {
       // чистый 400, отсутствие поля → NULL (путь без места байт-в-байт прежний).
       const resolvedLocationId = await this.resolveLocationId(client, tenantID, dto.locationId);
 
+      // Парковка конвейерного заказа (Round 14): первая АКТИВНАЯ колонка доски
+      // — прямо в INSERT (см. блок ensureBoardColumnsDefaults выше). Колонок
+      // нет вообще (все выключены) → NULL, заказ остаётся просто отложенным.
+      let initialWorkStatus: string | null = null;
+      if (shiftMode && effectiveIsDeferred) {
+        const { rows: firstCol } = await client.query(
+          `SELECT key FROM work_board_columns
+            WHERE tenant_id = $1 AND is_active = true
+            ORDER BY sort_order ASC, created_at ASC
+            LIMIT 1`,
+          [tenantID],
+        );
+        initialWorkStatus = firstCol[0]?.key ?? null;
+      }
+
       const { rows: checkRows } = await client.query(
         `INSERT INTO checks (number, date, master_id, client_id, car_id, mileage, comment, discount,
          is_deferred, payment_method, cash_amount, card_amount,
          service_total, product_total, total_revenue, product_cost_total,
          service_salary_total, product_salary_total, total_cost, profit, tenant_id, client_request_id,
-         location_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+         location_id, work_status)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
          RETURNING *`,
         [
           checkNumber,
@@ -2605,6 +2651,7 @@ export class ChecksService {
           // байт-в-байт прежний (частичный индекс NULL-строки не ограничивает).
           clientRequestId,
           resolvedLocationId,
+          initialWorkStatus,
         ],
       );
 
@@ -2904,6 +2951,26 @@ export class ChecksService {
       return result;
     }
 
+    // ── Переоткрытие запрещено (Round 14, adversarial-находка) ────────────
+    // Плоский PATCH {isDeferred:true} по ПРОВЕДЁННОМУ чеку давал состояние
+    // «выдана, но не оплачена» (work_status='delivered' + delivered_at
+    // остаются) и, главное, повторную активацию с ПОВТОРНЫМ списанием склада
+    // (склад при переоткрытии не восстанавливался). Ни один клиент так не
+    // делает — только сырой API; editClosedCheck этот переход тоже не делает.
+    // true→true (уже отложенный) — безобидный no-op, проходит как раньше.
+    if (dto.isDeferred === true) {
+      const { rows: reopenRows } = await this.pool.query(
+        `SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`,
+        [id, tenantID],
+      );
+      if (reopenRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      if (reopenRows[0].is_deferred !== true) {
+        throw new BadRequestException({
+          message: 'Проведённый заказ-наряд нельзя вернуть в черновик',
+        });
+      }
+    }
+
     // POS shift-mode (092): a NON-cashier may not record payment on the plain
     // path either. No-op when shift-mode is OFF (current behaviour). Only fires
     // when this edit actually touches a money field (method/cash/card/
@@ -3110,6 +3177,40 @@ export class ChecksService {
    * Permission: a master may close only THEIR OWN draft; director/admin/
    * superadmin may close any.
    */
+  /**
+   * PATCH /checks/:id/accept-payment (Round 14, роль-пресет «Кассир»).
+   *
+   * Единственное денежное действие держателя `accept_payment` БЕЗ
+   * `checks_edit`: контроллер уже прогейтил право, тело — узкий
+   * AcceptPaymentDto (способ / ноги / скидка). Здесь жёстко собираем
+   * санитизированный dto с isDeferred:false (ничего лишнего из тела
+   * протечь не может — DTO не несёт services/products/comment/date) и
+   * гоним через ТОТ ЖЕ транзакционный activateDeferred: FOR UPDATE,
+   * однократное списание склада, нормализация ног к серверному итогу,
+   * скидка «только на товары», гарантии, пуши — байт-в-байт с обычным
+   * закрытием. Отличие одно: viaAcceptPayment=true снимает own-гейт
+   * checks_edit_all — кассир закрывает ЧУЖИЕ драфты по определению
+   * профессии (сам кассирский гейт shift-mode он проходит по своему же
+   * праву accept_payment). Эхо-ретрай по уже проведённому чеку с теми же
+   * значениями остаётся безобидным no-op'ом; РЕАЛЬНАЯ правка оплаты
+   * проведённого чека по-прежнему требует payment_edit (гейты внутри).
+   */
+  async acceptPayment(
+    id: string,
+    tenantID: string,
+    userRole: string,
+    dto: { paymentMethod?: string; cashAmount?: number; cardAmount?: number; discount?: number },
+    actorUserId: string | null,
+    actor?: ChecksActor,
+  ) {
+    const sanitized: any = { isDeferred: false };
+    if (dto?.paymentMethod !== undefined) sanitized.paymentMethod = dto.paymentMethod;
+    if (dto?.cashAmount !== undefined) sanitized.cashAmount = dto.cashAmount;
+    if (dto?.cardAmount !== undefined) sanitized.cardAmount = dto.cardAmount;
+    if (dto?.discount !== undefined) sanitized.discount = dto.discount;
+    return this.activateDeferred(id, tenantID, userRole, sanitized, actorUserId, actor, { viaAcceptPayment: true });
+  }
+
   private async activateDeferred(
     id: string,
     tenantID: string,
@@ -3117,6 +3218,7 @@ export class ChecksService {
     dto: any,
     actorUserId: string | null,
     actor?: ChecksActor,
+    opts?: { viaAcceptPayment?: boolean },
   ) {
     // POS shift-mode (092): read once BEFORE the transaction so the cashier gate
     // below adds no extra connection while a client is held. OFF → false → gate
@@ -3146,7 +3248,10 @@ export class ChecksService {
 
       // PERMISSION (матрица v3): без `checks_edit_all` закрыть можно только СВОЙ
       // драфт (мастер по умолчанию — как раньше); owner-class/admin — любой.
-      if (isActivating && !userHasPermission(actor, 'checks_edit_all')) {
+      // Исключение (Round 14): путь /accept-payment (viaAcceptPayment) —
+      // контроллер прогейтил `accept_payment`, и кассир закрывает ЧУЖИЕ драфты
+      // по определению профессии; own-охват здесь не применяется.
+      if (isActivating && !opts?.viaAcceptPayment && !userHasPermission(actor, 'checks_edit_all')) {
         if (!actorUserId || String(checkRows[0].master_id) !== String(actorUserId)) {
           await client.query('ROLLBACK');
           throw new ForbiddenException({ message: 'Мастер может закрывать только свой отложенный заказ-наряд' });
@@ -3575,6 +3680,44 @@ export class ChecksService {
         await this.assertManyOwnedByTenant(client, tenantID, 'users', lineMasterIds, 'Мастер');
       }
 
+      // ── Итоговая дата чека — вычисляется ДО запекания зарплаты ────────────
+      // (adversarial-ревью Round 14, MEDIUM-4: ставки мастеров берутся за
+      // МЕСЯЦ ДАТЫ ЧЕКА — см. salaryMap ниже; запись поля date остаётся ниже,
+      // вместе с остальными updateFields).
+      // ACCOUNTING: on a genuine draft→active transition (is_deferred true→false,
+      // authority = lockedIsActivating from the FOR UPDATE read) move the check's
+      // date to the moment of activation (payment) — UNLESS the caller explicitly
+      // picked a date (dto.date, «меняю дату продажи»): then that date wins.
+      // «Явно» = отличается от персистентной даты драфта: оба клиента эхом шлют
+      // date в КАЖДОМ payload (гидрированную из чека), и неизменённое эхо не
+      // должно ни задним числом датировать закрытие, ни падать валидацией на
+      // старом драфте. Обычная правка черновика тоже уважает явную dto.date.
+      // Мастер, как и в create(), может ставить только сегодняшнюю дату — чужая
+      // молча игнорируется (не 403: date есть в каждом клиентском payload).
+      // created_at is left untouched (audit trail).
+      // ONE timestamp, parameterised — reused for the warranty below so
+      // checks.date and warranty.started_at are byte-identical (no now()-vs-JS
+      // skew, which in fullUpdate would otherwise be 10-100ms+ apart across the
+      // line DELETE/INSERTs between the UPDATE and the warranty call).
+      const priorDraftDateTs =
+        checkRows[0].date instanceof Date ? checkRows[0].date.getTime() : new Date(checkRows[0].date).getTime();
+      let requestedDateIso = resolveCheckDateEdit(dto.date, priorDraftDateTs);
+      if (requestedDateIso !== null && !userHasPermission(actor, 'checks_change_datetime')) {
+        // Без «Меняет дату и время чека» — только сегодняшний день (МСК),
+        // зеркально create(). Сиды 1:1: мастер false (прежний кламп), admin/
+        // director true (клампа не было).
+        if (mskDayOf(new Date(requestedDateIso).getTime()) !== mskDayOf(Date.now())) requestedDateIso = null;
+      }
+      const activationDate = requestedDateIso ?? new Date().toISOString();
+      // Дата, которой чек будет обладать ПОСЛЕ этого апдейта, и её МСК-месяц —
+      // источник effective-ставок запекания.
+      const finalCheckDateTs = lockedIsActivating
+        ? new Date(activationDate).getTime()
+        : requestedDateIso !== null
+          ? new Date(requestedDateIso).getTime()
+          : priorDraftDateTs;
+      const rateMonth = mskDayOf(finalCheckDateTs).slice(0, 7); // 'YYYY-MM' МСК
+
       // Calculate service totals and salary
       let serviceTotal = 0;
       let serviceSalaryTotal = 0;
@@ -3587,11 +3730,29 @@ export class ChecksService {
         if (svc.masterId) masterIds.add(svc.masterId);
       }
 
+      // Round 14 (150, adversarial-ревью MEDIUM-4): редактирование чека
+      // перепекает зарплату по effective-ставке МЕСЯЦА ДАТЫ ЧЕКА, а не по
+      // текущим users.* — иначе любой edit июльского чека после ретро-смены
+      // ставки «за июль» молча откатывал бы его начисления на текущую ставку.
+      // Резолв — SQL-зеркало UsersService.effectiveRateForMonth (последняя
+      // строка master_rate_history с month <= месяца чека; NULL-колонка или
+      // отсутствие строк → fallback users.*): подзапрос вместо вызова сервиса,
+      // чтобы не тянуть циклическую зависимость модулей. Приоритет
+      // services.master_percent (ниже) сохранён.
       const salaryMap: Record<string, number> = {};
       if (masterIds.size > 0) {
         const { rows: salaryRows } = await client.query(
-          `SELECT id, COALESCE(salary_percent, 0) as salary_percent FROM users WHERE id = ANY($1) AND tenant_id = $2`,
-          [Array.from(masterIds), tenantID],
+          `SELECT u.id, COALESCE(h.salary_percent, u.salary_percent, 0) as salary_percent
+             FROM users u
+             LEFT JOIN LATERAL (
+               SELECT mrh.salary_percent
+                 FROM master_rate_history mrh
+                WHERE mrh.tenant_id = u.tenant_id AND mrh.user_id = u.id AND mrh.month <= $3
+                ORDER BY mrh.month DESC
+                LIMIT 1
+             ) h ON true
+            WHERE u.id = ANY($1) AND u.tenant_id = $2`,
+          [Array.from(masterIds), tenantID, rateMonth],
         );
         for (const r of salaryRows) {
           salaryMap[r.id] = parseFloat(r.salary_percent) || 0;
@@ -3634,10 +3795,21 @@ export class ChecksService {
       let productSalaryTotal = 0;
       const productLines: any[] = [];
 
-      // Fetch master's product commission settings (tenant-scoped)
+      // Fetch master's product commission settings (tenant-scoped).
+      // Тот же effective-резолв месяца чека, что и salaryMap выше (MEDIUM-4);
+      // приоритет product_commissions (COALESCE в цикле ниже) сохранён.
       const { rows: masterProdRows } = await client.query(
-        'SELECT COALESCE(product_salary_percent, 0) as product_salary_percent FROM users WHERE id = $1 AND tenant_id = $2',
-        [primaryMasterId, tenantID],
+        `SELECT COALESCE(h.product_salary_percent, u.product_salary_percent, 0) as product_salary_percent
+           FROM users u
+           LEFT JOIN LATERAL (
+             SELECT mrh.product_salary_percent
+               FROM master_rate_history mrh
+              WHERE mrh.tenant_id = u.tenant_id AND mrh.user_id = u.id AND mrh.month <= $3
+              ORDER BY mrh.month DESC
+              LIMIT 1
+           ) h ON true
+          WHERE u.id = $1 AND u.tenant_id = $2`,
+        [primaryMasterId, tenantID, rateMonth],
       );
       const globalProductPct = parseFloat(masterProdRows[0]?.product_salary_percent) || 0;
 
@@ -3786,31 +3958,9 @@ export class ChecksService {
         updateVals.push(resolvedLocation);
       }
 
-      // ACCOUNTING: on a genuine draft→active transition (is_deferred true→false,
-      // authority = lockedIsActivating from the FOR UPDATE read) move the check's
-      // date to the moment of activation (payment) — UNLESS the caller explicitly
-      // picked a date (dto.date, «меняю дату продажи»): then that date wins.
-      // «Явно» = отличается от персистентной даты драфта: оба клиента эхом шлют
-      // date в КАЖДОМ payload (гидрированную из чека), и неизменённое эхо не
-      // должно ни задним числом датировать закрытие, ни падать валидацией на
-      // старом драфте. Обычная правка черновика тоже уважает явную dto.date.
-      // Мастер, как и в create(), может ставить только сегодняшнюю дату — чужая
-      // молча игнорируется (не 403: date есть в каждом клиентском payload).
-      // created_at is left untouched (audit trail).
-      // ONE timestamp, parameterised — reused for the warranty below so
-      // checks.date and warranty.started_at are byte-identical (no now()-vs-JS
-      // skew, which in fullUpdate would otherwise be 10-100ms+ apart across the
-      // line DELETE/INSERTs between the UPDATE and the warranty call).
-      const priorDraftDateTs =
-        checkRows[0].date instanceof Date ? checkRows[0].date.getTime() : new Date(checkRows[0].date).getTime();
-      let requestedDateIso = resolveCheckDateEdit(dto.date, priorDraftDateTs);
-      if (requestedDateIso !== null && !userHasPermission(actor, 'checks_change_datetime')) {
-        // Без «Меняет дату и время чека» — только сегодняшний день (МСК),
-        // зеркально create(). Сиды 1:1: мастер false (прежний кламп), admin/
-        // director true (клампа не было).
-        if (mskDayOf(new Date(requestedDateIso).getTime()) !== mskDayOf(Date.now())) requestedDateIso = null;
-      }
-      const activationDate = requestedDateIso ?? new Date().toISOString();
+      // ACCOUNTING: дата чека (priorDraftDateTs / requestedDateIso /
+      // activationDate) вычислена ВЫШЕ, до запекания зарплаты — см. блок
+      // «Итоговая дата чека» (Round 14 review MEDIUM-4). Здесь только запись.
       if (lockedIsActivating) {
         updateFields.push(`date=$${ui++}`);
         updateVals.push(activationDate);
@@ -3964,7 +4114,17 @@ export class ChecksService {
    * fallbacks). Pure computation — reads reference tables (users/services/
    * products) but writes NOTHING; the caller persists the result.
    */
-  private async recomputeClosedCheckLines(client: PoolClient, tenantID: string, dto: any, prior: any) {
+  private async recomputeClosedCheckLines(
+    client: PoolClient,
+    tenantID: string,
+    dto: any,
+    prior: any,
+    // Round 14 review MEDIUM-4: МСК-месяц ('YYYY-MM') ИТОГОВОЙ даты чека —
+    // ставки мастеров резолвятся за него (master_rate_history), а не по
+    // текущим users.*, чтобы правка июльского чека в августе не перепекала
+    // его по августовской ставке. Передаёт editClosedCheck.
+    rateMonth: string,
+  ) {
     const services = dto.services || [];
     const products = dto.products || [];
     const primaryMasterId: string = dto.masterId || prior.master_id;
@@ -3975,11 +4135,23 @@ export class ChecksService {
     if (prior.master_id) masterIds.add(prior.master_id);
     for (const svc of services) if (svc.masterId) masterIds.add(svc.masterId);
 
+    // Effective-ставка месяца чека — SQL-зеркало UsersService.effectiveRateForMonth
+    // (см. комментарий у salaryMap в fullUpdate); приоритет services.master_percent
+    // ниже сохранён.
     const salaryMap: Record<string, number> = {};
     if (masterIds.size > 0) {
       const { rows: salaryRows } = await client.query(
-        `SELECT id, COALESCE(salary_percent, 0) as salary_percent FROM users WHERE id = ANY($1) AND tenant_id = $2`,
-        [Array.from(masterIds), tenantID],
+        `SELECT u.id, COALESCE(h.salary_percent, u.salary_percent, 0) as salary_percent
+           FROM users u
+           LEFT JOIN LATERAL (
+             SELECT mrh.salary_percent
+               FROM master_rate_history mrh
+              WHERE mrh.tenant_id = u.tenant_id AND mrh.user_id = u.id AND mrh.month <= $3
+              ORDER BY mrh.month DESC
+              LIMIT 1
+           ) h ON true
+          WHERE u.id = ANY($1) AND u.tenant_id = $2`,
+        [Array.from(masterIds), tenantID, rateMonth],
       );
       for (const r of salaryRows) salaryMap[r.id] = parseFloat(r.salary_percent) || 0;
     }
@@ -4018,9 +4190,20 @@ export class ChecksService {
     let productSalaryTotal = 0;
     const productLines: any[] = [];
 
+    // Тот же effective-резолв месяца чека, что и salaryMap выше (MEDIUM-4);
+    // приоритет product_commissions (COALESCE ниже) сохранён.
     const { rows: masterProdRows } = await client.query(
-      'SELECT COALESCE(product_salary_percent, 0) as product_salary_percent FROM users WHERE id = $1 AND tenant_id = $2',
-      [primaryMasterId, tenantID],
+      `SELECT COALESCE(h.product_salary_percent, u.product_salary_percent, 0) as product_salary_percent
+         FROM users u
+         LEFT JOIN LATERAL (
+           SELECT mrh.product_salary_percent
+             FROM master_rate_history mrh
+            WHERE mrh.tenant_id = u.tenant_id AND mrh.user_id = u.id AND mrh.month <= $3
+            ORDER BY mrh.month DESC
+            LIMIT 1
+         ) h ON true
+        WHERE u.id = $1 AND u.tenant_id = $2`,
+      [primaryMasterId, tenantID, rateMonth],
     );
     const globalProductPct = parseFloat(masterProdRows[0]?.product_salary_percent) || 0;
 
@@ -4373,7 +4556,11 @@ export class ChecksService {
       );
 
       // Recompute lines + money from the edit DTO (same math as close).
-      const c = await this.recomputeClosedCheckLines(client, tenantID, dto, prior);
+      // Round 14 review MEDIUM-4: ставки — за МСК-месяц ИТОГОВОЙ даты чека
+      // (newDateIso, если владелец сменил дату продажи, иначе прежняя дата) —
+      // правка июльского чека в августе перепекается по июльской ставке.
+      const rateMonth = mskDayOf(newDateIso !== null ? new Date(newDateIso).getTime() : priorDateTs).slice(0, 7);
+      const c = await this.recomputeClosedCheckLines(client, tenantID, dto, prior, rateMonth);
 
       // NEW-4 (антидедлок): реверс СТАРОГО и списание НОВОГО стока лочат строки
       // products в РАЗНЫХ множествах внутри одной транзакции. Лочим ОБЪЕДИНЕНИЕ

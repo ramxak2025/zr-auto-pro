@@ -3,6 +3,7 @@ import { ChecksService } from './checks.service';
 import { CreateCheckDto } from './dto/create-check.dto';
 import { UpdateCheckDto } from './dto/update-check.dto';
 import { UpdateCheckCommentDto } from './dto/update-check-comment.dto';
+import { AcceptPaymentDto } from './dto/accept-payment.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
@@ -304,6 +305,23 @@ export class ChecksController {
     // `user` is forwarded as the actor so the service can resolve the cashier
     // role-gate (role + permissions) when POS shift-mode is ON. OFF → ignored.
     return this.checksService.create(user.tenantID, user.userID, user.role, dto, user);
+  }
+
+  /**
+   * Приём оплаты по отложенному заказ-наряду (Round 14, роль-пресет «Кассир»).
+   * Гейт — `accept_payment` (НЕ `checks_edit`): пресет «Кассир» (edit='none')
+   * иначе физически не мог бы закрыть заказ — flagship-флоу режима смен. Тело
+   * узкое (способ/ноги/скидка, AcceptPaymentDto); сервис жёстко подставляет
+   * isDeferred:false и идёт тем же транзакционным activateDeferred, что и
+   * обычное закрытие, но БЕЗ own-гейта checks_edit_all — кассир закрывает
+   * ЧУЖИЕ драфты по определению профессии. Работает и при выключенном режиме
+   * смен (право явное и выдаётся владельцем сознательно). Двухсегментный
+   * литеральный хвост — не конфликтует с @Patch(':id').
+   */
+  @RequirePermission('accept_payment')
+  @Patch(':id/accept-payment')
+  acceptPayment(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: AcceptPaymentDto) {
+    return this.checksService.acceptPayment(id, user.tenantID, user.role, dto, user.userID, user);
   }
 
   @RequirePermission('checks_edit')

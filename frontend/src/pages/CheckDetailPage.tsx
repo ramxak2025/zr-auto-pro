@@ -143,9 +143,21 @@ export default function CheckDetailPage() {
   // Активация отложенного чека = приём оплаты (Round 14): сервер пересчитывает
   // итог/ноги/скидку сам, гейтит кассира (403 «Только кассир…») и роль
   // (400 «Изменение назначенного заказа запрещено ролью») — тексты дословно.
+  // Выбор пути по праву: держатель accept_payment идёт через выделенный
+  // PATCH /checks/:id/accept-payment (пресет «Кассир» с edit='none' иначе
+  // ловил бы 403 на гейте checks_edit; заодно кассир закрывает ЧУЖИЕ драфты);
+  // остальные (легаси-мастер со своим драфтом, режим ВЫКЛ) — прежний
+  // PATCH {isDeferred:false} под checks_edit, байт-в-байт.
   const acceptPaymentMutation = useMutation({
     mutationFn: (data: { paymentMethod: string; cashAmount: number; cardAmount: number; discount: number }) =>
-      checksApi.update(id!, { isDeferred: false, ...data }),
+      hasPermission('accept_payment')
+        ? checksApi.acceptPayment(id!, {
+            paymentMethod: data.paymentMethod as 'cash' | 'card' | 'cash_card',
+            cashAmount: data.cashAmount,
+            cardAmount: data.cardAmount,
+            discount: data.discount,
+          })
+        : checksApi.update(id!, { isDeferred: false, ...data }),
     onSuccess: (res: any) => {
       if (isQueuedOffline(res)) {
         // SW-офлайн: сервер оплату ещё не видел — без «Оплата принята».

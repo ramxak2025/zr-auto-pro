@@ -442,6 +442,10 @@ export default function SupplierDetailScreen() {
   });
 
   const handleCreateRefund = () => {
+    // Guard от двойного тапа (adversarial-ревью Round 14): второй тап до ответа
+    // сервера создал бы ВТОРОЙ возврат — это два легитимных insert'а, сервер их
+    // не дедуплицирует (в отличие от сторно, где second-reverse получает 400).
+    if (createRefundMutation.isPending) return;
     const amt = parseFloat(refundAmount);
     if (!amt || amt <= 0) {
       Alert.alert('Ошибка', 'Укажите сумму возврата');
@@ -452,6 +456,9 @@ export default function SupplierDetailScreen() {
 
   const handleConfirmReverse = () => {
     if (!reverseTarget) return;
+    // Сервер и так отвергает повторное сторно (FOR UPDATE + reversed_at), guard
+    // здесь — чтобы не показывать пользователю «Платёж уже сторнирован».
+    if (reversePaymentMutation.isPending) return;
     reversePaymentMutation.mutate({ paymentId: reverseTarget.id, reason: reverseReason.trim() || undefined });
   };
 
@@ -592,18 +599,26 @@ export default function SupplierDetailScreen() {
   };
 
   const handleCreatePayment = () => {
+    // Guard от двойного тапа (adversarial-ревью Round 14): два платежа за два
+    // быстрых нажатия сервер дедуплицировать не может.
+    if (createPaymentMutation.isPending) return;
     const amt = parseFloat(paymentAmount);
     if (!amt || amt <= 0) {
       Alert.alert('Ошибка', 'Укажите сумму');
       return;
     }
+    // 149 (семантика уточнена adversarial-ревью): periodMonth шлём ТОЛЬКО если
+    // владелец осознанно выбрал месяц, ОТЛИЧНЫЙ от месяца платежа (дата платежа
+    // на мобиле — всегда «сейчас»). Иначе undefined → NULL в БД → прежняя
+    // точная дата-семантика: дневные/недельные срезы «Закупки товара» видят
+    // платёж по факту, а не весь месяц разом. Платёж «за июль», сделанный в
+    // августе, по-прежнему уезжает в июльский отчёт.
+    const chosenMonth = formatMonthKey(paymentMonth);
     createPaymentMutation.mutate({
       supplierId: id,
       amount: amt,
       comment: paymentComment || undefined,
-      // 149 — «за какой месяц»: отчёт по оплатам отнесёт платёж к выбранному
-      // месяцу (платёж в августе «за июль» уедет в июль).
-      periodMonth: formatMonthKey(paymentMonth),
+      periodMonth: chosenMonth !== formatMonthKey(new Date()) ? chosenMonth : undefined,
     });
   };
 
@@ -1429,7 +1444,9 @@ export default function SupplierDetailScreen() {
             placeholderTextColor={palette.text.tertiary}
           />
         </View>
-        {/* 149 — «за какой месяц» платёж: стрелки вокруг месяца, дефолт текущий. */}
+        {/* 149 — «за какой месяц» платёж: стрелки вокруг месяца. Дефолт =
+            месяц платежа (текущий); в этом случае periodMonth НЕ отправляется
+            и платёж живёт по точной дате факта (см. handleCreatePayment). */}
         <View style={styles.formField}>
           <Text style={[styles.formLabel, f.label]}>За месяц</Text>
           <View
@@ -1475,7 +1492,11 @@ export default function SupplierDetailScreen() {
           <TouchableOpacity style={[styles.cancelBtn, f.cancel]} onPress={() => setPaymentModalOpen(false)}>
             <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.submitBtn} onPress={handleCreatePayment}>
+          <TouchableOpacity
+            style={styles.submitBtn}
+            onPress={handleCreatePayment}
+            disabled={createPaymentMutation.isPending}
+          >
             {createPaymentMutation.isPending ? (
               <ActivityIndicator color={colors.white} size="small" />
             ) : (
@@ -1523,6 +1544,7 @@ export default function SupplierDetailScreen() {
           <TouchableOpacity
             style={[styles.submitBtn, { backgroundColor: colors.teal[600] }]}
             onPress={handleCreateRefund}
+            disabled={createRefundMutation.isPending}
           >
             {createRefundMutation.isPending ? (
               <ActivityIndicator color={colors.white} size="small" />
@@ -1579,6 +1601,7 @@ export default function SupplierDetailScreen() {
               <TouchableOpacity
                 style={[styles.submitBtn, { backgroundColor: colors.red[600] }]}
                 onPress={handleConfirmReverse}
+                disabled={reversePaymentMutation.isPending}
               >
                 {reversePaymentMutation.isPending ? (
                   <ActivityIndicator color={colors.white} size="small" />

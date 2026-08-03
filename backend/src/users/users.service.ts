@@ -635,6 +635,13 @@ export class UsersService {
     return `${msk.getUTCFullYear()}-${String(msk.getUTCMonth() + 1).padStart(2, '0')}`;
   }
 
+  /** Следующий календарный месяц после 'YYYY-MM' (с переходом через год). */
+  private static nextMonthKey(month: string): string {
+    const [y, m] = month.split('-').map((v) => parseInt(v, 10));
+    const d = new Date(Date.UTC(y, m, 1)); // m 1-based → индекс m = следующий месяц
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  }
+
   /**
    * Полуинтервал [monthStart, nextMonthStart) месяца 'YYYY-MM' в МОСКОВСКОЙ
    * бизнес-таймзоне, ISO-инстантами. СОЗНАТЕЛЬНАЯ смена конвенции (Round 14):
@@ -834,6 +841,18 @@ export class UsersService {
    * новой ставкой, остальные месяцы не трогаются. Будущий месяц X: истории
    * достаточно (чеков в X ещё нет, пересчёт — no-op); в users.* ставку
    * перенесёт RateRollforwardService, когда X наступит.
+   *
+   * СНАПШОТ-ЩИТ для ретро-правки (adversarial-ревью Round 14, HIGH):
+   * семантика истории — «действует С месяца X», поэтому одинокая строка за
+   * ПРОШЛЫЙ месяц протекала бы вперёд: effective-процент текущего/будущих
+   * месяцев резолвился бы в ретро-ставку, и ночной rollForwardDueRates
+   * перенёс бы её в users.* + перепёк ТЕКУЩИЙ месяц — вопреки обещанию UI
+   * «остальные месяцы не изменятся». Лечение: при X < текущего месяца, если
+   * за X+1 ещё нет строки, СНАЧАЛА фиксируем за X+1 снапшот процентов,
+   * действовавших ДО правки (effective X+1) — он экранирует X+1 и всё дальше
+   * (более поздние месяцы либо накрыты им же, либо своими строками). Ретро-
+   * правка строго ограничена месяцем X; cron видит latest-строку = снапшот =
+   * users.* и остаётся no-op.
    */
   async setRate(
     id: string,
@@ -860,6 +879,22 @@ export class UsersService {
       const newService = dto.salaryPercent !== undefined ? Number(dto.salaryPercent) || 0 : eff.salaryPercent;
       const newProduct =
         dto.productSalaryPercent !== undefined ? Number(dto.productSalaryPercent) || 0 : eff.productSalaryPercent;
+
+      // Снапшот-щит (см. docstring): ретро-правка прошлого месяца не должна
+      // протекать в X+1 и дальше. Считаем effective X+1 ДО записи строки X и
+      // фиксируем его за X+1, если владелец не назначал ставку за X+1 сам.
+      // ON CONFLICT DO NOTHING (а не upsert) — существующая явная строка X+1
+      // всегда важнее автоснапшота.
+      if (month < currentMonth) {
+        const shieldMonth = UsersService.nextMonthKey(month);
+        const preEdit = await this.effectiveRateForMonth(tenantID, id, shieldMonth, client);
+        await client.query(
+          `INSERT INTO master_rate_history (tenant_id, user_id, month, salary_percent, product_salary_percent, created_by)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT (tenant_id, user_id, month) DO NOTHING`,
+          [tenantID, id, shieldMonth, preEdit.salaryPercent, preEdit.productSalaryPercent, actorID],
+        );
+      }
 
       await this.upsertRateHistory(client, tenantID, id, month, newService, newProduct, actorID);
 
@@ -919,6 +954,13 @@ export class UsersService {
    * Ручные правки ставки сами пишут строку истории за текущий месяц
    * (update/setRate), так что история всегда ≥ users.* по свежести — цикл
    * «cron против ручной правки» невозможен.
+   *
+   * Ретро-правка прошлого месяца НЕ триггерит roll-forward: setRate ставит
+   * снапшот-щит за X+1 (см. setRate), поэтому latest-строка ≤ текущего месяца
+   * — это щит с прежними процентами (= users.*), а не ретро-строка; cron
+   * остаётся no-op. Одинокая прошломесячная строка «подхватывается» только
+   * если она легитимно последняя (назначение «с месяца X» без правок после) —
+   * это и есть заявленная семантика «действует с X».
    */
   async rollForwardDueRates(): Promise<number> {
     const currentMonth = this.mskCurrentMonth();

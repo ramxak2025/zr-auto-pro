@@ -125,14 +125,22 @@ interface BoardCardProps {
   check: Check;
   palette: SemanticPalette;
   onPress: (check: Check) => void;
+  /**
+   * Режим кассовой смены тенанта. Бейдж «ОПЛАЧЕНО — выдать» имеет смысл ТОЛЬКО
+   * при включённом режиме (веха «Выдана» — кассирская механика): на легаси-
+   * доске (режим ВЫКЛ) delivered_at пуст у ВСЕХ исторических оплаченных чеков
+   * и колонки «Выдана» может не быть вовсе — бейдж висел бы вечным
+   * невыполнимым «действием» на каждой карточке (adversarial-находка).
+   */
+  shiftModeEnabled: boolean;
 }
-const BoardCard = React.memo(function BoardCard({ check, palette, onPress }: BoardCardProps) {
+const BoardCard = React.memo(function BoardCard({ check, palette, onPress, shiftModeEnabled }: BoardCardProps) {
   // Round 14: исполнители (check_assignees) и место (tenant_locations) на
   // карточке; «ОПЛАЧЕНО — выдать» — заметный бейдж оплаченного-но-не-выданного
   // конвейерного заказа (единственное место, где оплата видна на доске:
-  // work-status в остальном ортогонален оплате).
+  // work-status в остальном ортогонален оплате). Только при режиме ВКЛ.
   const assignees = check.assignees ?? [];
-  const paidAwaitingDelivery = !check.isDeferred && !check.deliveredAt;
+  const paidAwaitingDelivery = shiftModeEnabled && !check.isDeferred && !check.deliveredAt;
   const isDark = palette.mode === 'dark';
   return (
     <TouchableOpacity
@@ -250,8 +258,9 @@ export default function WorkBoardScreen() {
   // Cash-shift-mode (092): мастеру без права оплаты центральная кнопка таб-бара
   // открывает эту доску, поэтому здесь же даём ему «+» для создания нового
   // заказ-наряда (order-режим CheckCreate). orderMode=false → кнопки нет, доска
-  // байт-в-байт как сейчас для кассиров/владельцев.
-  const { orderMode } = usePosSettings();
+  // байт-в-байт как сейчас для кассиров/владельцев. shiftModeEnabled гейтит
+  // бейдж «ОПЛАЧЕНО — выдать» на карточках (легаси-доска без режима — без него).
+  const { orderMode, shiftModeEnabled } = usePosSettings();
 
   // Колонка занимает ~84% ширины, чтобы соседняя «выглядывала» справа —
   // явный сигнал, что доску можно листать вбок. Кап 360pt на планшетах.
@@ -561,7 +570,15 @@ export default function WorkBoardScreen() {
                       <Text style={[styles.columnEmptyText, { color: palette.text.tertiary }]}>Нет заказ-нарядов</Text>
                     </View>
                   ) : (
-                    items.map((c) => <BoardCard key={c.id} check={c} palette={palette} onPress={setPicker} />)
+                    items.map((c) => (
+                      <BoardCard
+                        key={c.id}
+                        check={c}
+                        palette={palette}
+                        onPress={setPicker}
+                        shiftModeEnabled={shiftModeEnabled}
+                      />
+                    ))
                   )}
                 </ScrollView>
               </View>

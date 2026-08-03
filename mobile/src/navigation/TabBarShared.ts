@@ -10,8 +10,11 @@
  *   • мастер в orderMode → та же легаси-пятёрка: центральная кнопка сама
  *     превращается в «Доску» внутри TabBar.{ios,android} (ветка orderMode,
  *     092 — поведение не тронуто);
- *   • кассир (accept_payment при режиме ВКЛ, роль НЕ owner-class) →
+ *   • ЧИСТЫЙ кассир (accept_payment при режиме ВКЛ, роль НЕ owner-class,
+ *     БЕЗ права checks_create — пресет «Кассир») →
  *     Главная · Смены · ЦЕНТР «Оплата» · Журнал · Ещё;
+ *   • мастер С правом оплаты (092: accept_payment + checks_create) →
+ *     легаси-пятёрка — он и создаёт чеки, и принимает деньги;
  *   • админ / владелец при режиме ВКЛ → Главная · Склад · ЦЕНТР Касса
  *     (приёмка, как сейчас NewCheck) · Доска · Ещё (Журнал — по back из
  *     Доски: nested navigate идёт с initial:false, ChecksHome под ней).
@@ -50,6 +53,15 @@ export interface TabRoleContext {
   orderMode: boolean;
   isCashier: boolean;
   shiftModeEnabled: boolean;
+  /**
+   * Право `checks_create` текущего пользователя (эффективная карта /auth/me).
+   * Отличает ЧИСТОГО кассира (пресет «Кассир»: create=false → кассирский
+   * набор) от МАСТЕРА с правом приёма оплаты (092-тенанты: create=true —
+   * такой мастер и создаёт чеки, и принимает деньги, ему остаётся
+   * легаси-пятёрка с Кассой и Складом; кассирский набор сломал бы его
+   * рабочий процесс без единого изменения настроек владельцем).
+   */
+  canCreateChecks: boolean;
 }
 
 /** Легаси-пятёрка — единственный состав до Round 14, остаётся дефолтом. */
@@ -89,8 +101,12 @@ export function getTabDefinitions(ctx: TabRoleContext): TabDefinition[] {
   // Мастер-исполнитель (без права оплаты): легаси-состав, центр = Доска —
   // подмену делает сам TabBar по orderMode (092), состав не меняется.
   if (ctx.orderMode) return LEGACY_TABS;
-  // Кассир: право приёма оплаты БЕЗ владельческой роли — строгий экран оплаты.
-  if (ctx.isCashier && !OWNER_CLASS_ROLES.has(ctx.role ?? '')) return CASHIER_TABS;
+  // ЧИСТЫЙ кассир (пресет «Кассир»): право приёма оплаты БЕЗ владельческой
+  // роли И БЕЗ права создавать чеки — строгий экран оплаты. Мастер с
+  // accept_payment (092: create=true) НЕ попадает сюда — ему остаётся
+  // легаси-пятёрка (Касса создаёт чеки, Склад на месте), иначе OTA молча
+  // ломала бы его рабочий процесс (adversarial-находка Round 14).
+  if (ctx.isCashier && !OWNER_CLASS_ROLES.has(ctx.role ?? '') && !ctx.canCreateChecks) return CASHIER_TABS;
   // Админ / владелец: приёмка в центре + Доска вместо Журнала.
   if (OWNER_CLASS_ROLES.has(ctx.role ?? '')) return ADMIN_TABS;
   return LEGACY_TABS;

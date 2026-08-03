@@ -1,4 +1,5 @@
-import { Controller, Post, Get, Patch, Body, UseGuards } from '@nestjs/common';
+import { Controller, Post, Get, Patch, Body, Req, UseGuards } from '@nestjs/common';
+import { Request } from 'express';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
@@ -28,13 +29,18 @@ export class AuthController {
   }
 
   // Тихое продление сессии: клиент со СТАРЫМ, но ещё валидным токеном получает
-  // свежий (полный TTL из JwtModule). Guard уже отверг ревокированные /
-  // деактивированные токены; RateLimitGuard глобальный — отдельный не нужен.
-  // Старый jti не ревокируется — см. AuthService.refresh.
+  // свежий (полный TTL из JwtModule). Обмен строго 1:1 — старый jti атомарно
+  // уходит в blacklist с 2-минутным grace-окном доживания, повторный refresh
+  // тем же токеном → 401, impersonation-токен → 403; живые проверки идут МИМО
+  // 30с auth-кэша — подробности в AuthService.refresh. Сырой bearer нужен
+  // сервису ради claims, которые guard не прокидывает (impersonatedBy, exp).
+  // RateLimitGuard глобальный (write-бакет 150/мин) — отдельный не нужен.
   @UseGuards(JwtAuthGuard)
   @Post('refresh')
-  refresh(@CurrentUser() user: JwtPayload) {
-    return this.authService.refresh(user);
+  refresh(@CurrentUser() user: JwtPayload, @Req() req: Request) {
+    const auth = (req.headers['authorization'] as string | undefined) || '';
+    const rawToken = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    return this.authService.refresh(user, rawToken);
   }
 
   @UseGuards(JwtAuthGuard)

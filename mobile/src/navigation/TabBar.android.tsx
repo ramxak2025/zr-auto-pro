@@ -74,10 +74,13 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // открывает «Доску» (состав легаси). Кассир / админ при режиме ВКЛ получают
   // свои составы; OFF/loading → легаси-пятёрка байт-в-байт.
   const { orderMode, isCashier, shiftModeEnabled } = usePosSettings();
-  const { user } = useAuth();
+  const { user, hasPermission } = useAuth();
+  // canCreateChecks отличает чистого кассира (пресет: create=false → кассирский
+  // набор) от мастера с правом оплаты (092: create=true → легаси-пятёрка).
+  const canCreateChecks = hasPermission('checks_create');
   const tabs = React.useMemo(
-    () => getTabDefinitions({ role: user?.role, orderMode, isCashier, shiftModeEnabled }),
-    [user?.role, orderMode, isCashier, shiftModeEnabled],
+    () => getTabDefinitions({ role: user?.role, orderMode, isCashier, shiftModeEnabled, canCreateChecks }),
+    [user?.role, orderMode, isCashier, shiftModeEnabled, canCreateChecks],
   );
 
   // Офлайн-очередь чеков (паритет с TabBar.ios.tsx, волна C, C-6): пока есть

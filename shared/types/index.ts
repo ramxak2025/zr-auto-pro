@@ -3843,10 +3843,12 @@ export interface JournalDoc {
     | 'writeoff'
     | 'supplier_payment'
     /**
-     * 144: возврат денег ОТ поставщика. Отдельный kind (не supplier_payment),
-     * потому что клиентские NEGATIVE_KINDS рисуют supplier_payment с минусом —
-     * возврат получил бы двойной минус. amount приходит уже ABS, знак «+» даёт
-     * клиент.
+     * 144 → Round 14: сервер БОЛЬШЕ НЕ отправляет этот kind в проводе —
+     * возврат денег ОТ поставщика приходит как kind='supplier_payment' +
+     * isRefund=true (пред-Round-14 бандлы крашились на незнакомом kind:
+     * journalKindVisual[kind] без фолбэка). Значение остаётся в union как
+     * КЛИЕНТСКИЙ синтетический kind (новые клиенты мапят по isRefund) и как
+     * значение фильтра ?type=supplier_refund.
      */
     | 'supplier_refund'
     | 'used_purchase';
@@ -3857,6 +3859,12 @@ export interface JournalDoc {
   badge: string;
   badgeColor: string;
   payeeName?: string;
+  /**
+   * Round 14: true — строка является «Возвратом от поставщика» (деньги ПРИШЛИ,
+   * знак «+», ABS-сумма уже в amount). Провод несёт kind='supplier_payment'
+   * ради старых бандлов; новые клиенты выводят визуал/фильтр по этому флагу.
+   */
+  isRefund?: boolean;
 }
 
 // ───────────────────────────────────────────────────────────────────────
