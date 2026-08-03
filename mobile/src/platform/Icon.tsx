@@ -55,7 +55,8 @@ export type IconName =
   | 'megaphone'
   | 'cube'
   | 'card'
-  | 'shield-check';
+  | 'shield-check'
+  | 'board';
 
 type Mapping = { ios: string; android: keyof typeof MaterialCommunityIcons.glyphMap };
 
@@ -108,6 +109,9 @@ const GLYPH_MAP: Record<IconName, Mapping> = {
   cube: { ios: 'cube', android: 'cube-outline' },
   card: { ios: 'creditcard', android: 'credit-card-outline' },
   'shield-check': { ios: 'checkmark.shield', android: 'shield-check-outline' },
+  // «Доска» — таб-слот админа в режиме «Кассир» (Round 14): filled-вариант,
+  // как остальные таб-иконки.
+  board: { ios: 'rectangle.split.3x1.fill', android: 'view-column' },
 };
 
 export interface IconProps {

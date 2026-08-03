@@ -91,6 +91,7 @@ import type {
   ActiveWarranty,
   ChecksBoard,
   VoiceUsage,
+  TenantLocation,
 } from '../../../shared/types';
 // Домен шаблонов (round 8 #3): помощники и инлайн-пикер папок живут в
 // TemplatesScreen — единый источник правил «что общий / как строить дерево»
@@ -430,7 +431,7 @@ export default function CheckCreateScreen() {
   // заказ-наряд» и после создания паркуем заказ в ПЕРВУЮ колонку доски (бэк сам
   // коэрсит чек в отложенный заказ-наряд без оплаты — мы лишь адаптируем UI и
   // ставим work_status, иначе чек с work_status=NULL не попадёт на доску).
-  const { orderMode } = usePosSettings();
+  const { orderMode, shiftModeEnabled } = usePosSettings();
   const { data: boardForOrder } = useQuery<ChecksBoard>({
     queryKey: ['checks', 'board'],
     queryFn: async () => (await checksApi.board()).data,
@@ -441,6 +442,22 @@ export default function CheckCreateScreen() {
   // Первая активная колонка (board.columns уже отсортированы по sortOrder и
   // только активные). undefined, если колонок нет → setWorkStatus пропускаем.
   const firstBoardColumnKey = boardForOrder?.columns?.[0]?.key;
+
+  // ── Места автосервиса (Round 14, tenant_locations) ───────────────────────
+  // Справочник для пикера «Место» конвейерной приёмки. Грузится ТОЛЬКО при
+  // включённом режиме кассовой смены — вне режима касса не шлёт ни одного
+  // лишнего запроса (byte-for-byte OFF guarantee).
+  const { data: orderLocations } = useQuery<TenantLocation[]>({
+    queryKey: ['check-locations'],
+    queryFn: async () => (await checksApi.locations.list()).data,
+    enabled: shiftModeEnabled,
+    staleTime: 5 * 60_000,
+    placeholderData: (prev) => prev,
+  });
+  const activeLocations = useMemo(
+    () => (orderLocations ?? []).filter((l) => l.isActive).sort((a, b) => a.sortOrder - b.sortOrder),
+    [orderLocations],
+  );
 
   // Date with native picker
   const [checkDate, setCheckDate] = useState(new Date());
@@ -472,6 +489,20 @@ export default function CheckCreateScreen() {
   const [cashAmount, setCashAmount] = useState('');
   const [cashGiven, setCashGiven] = useState('');
   const [isDeferred, setIsDeferred] = useState(false);
+
+  // ── Режим «Кассир» (Round 14): исполнители + место приёмки ───────────────
+  // НЕСКОЛЬКО исполнителей (check_assignees) — заказ падает на доску каждого;
+  // место (tenant_locations) — «возле задних ворот». Dirty-флаги отделяют
+  // «тронул поле» от гидрации edit-режима: PATCH шлёт набор ТОЛЬКО при явной
+  // правке (присутствие поля = перезапись), иначе сервер ничего не трогает.
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
+  const [assigneesDirty, setAssigneesDirty] = useState(false);
+  const [orderLocationId, setOrderLocationId] = useState<string | null>(null);
+  const [locationDirty, setLocationDirty] = useState(false);
+  const [showAssigneeSheet, setShowAssigneeSheet] = useState(false);
+  const [showLocationSheet, setShowLocationSheet] = useState(false);
+  const [newLocationName, setNewLocationName] = useState('');
+  const [creatingLocation, setCreatingLocation] = useState(false);
 
   // ── Рассрочка (installment sale) ──────────────────────────────────────────
   // Активна, когда paymentMethod === 'installment'. Первый платёж уходит в чек
@@ -1168,6 +1199,10 @@ export default function CheckCreateScreen() {
     setIsDeferred(c.isDeferred || false);
     setServiceLines(c.services || []);
     setProductLines(c.products || []);
+    // Round 14: гидрируем исполнителей и место БЕЗ dirty-флагов — payload
+    // отправит их только после явной правки (см. proceed()).
+    setAssigneeIds((c.assignees ?? []).map((a) => a.id));
+    setOrderLocationId(c.locationId ?? null);
     if (c.date) setCheckDate(new Date(c.date));
   }, [editId, editCheck, editCheckFresh, editCheckError]);
   useEffect(() => {
@@ -2226,6 +2261,20 @@ export default function CheckCreateScreen() {
           ? { installment: { nextPaymentDate: toYmd(installmentNextDate) } }
           : {}),
         isDeferred: shouldDefer,
+        // Round 14 (режим «Кассир»): исполнители + место. Create — только при
+        // явном выборе (absent → сервер выводит дефолт из строк услуг +
+        // главного мастера, старое поведение). Edit — только если поле ТРОГАЛИ
+        // (присутствие = перезапись набора; отсутствие = «не трогать»).
+        // Вне режима оба стейта пусты → payload байт-в-байт прежний.
+        ...(editId
+          ? {
+              ...(assigneesDirty ? { assigneeIds } : {}),
+              ...(locationDirty ? { locationId: orderLocationId } : {}),
+            }
+          : {
+              ...(assigneeIds.length > 0 ? { assigneeIds } : {}),
+              ...(orderLocationId ? { locationId: orderLocationId } : {}),
+            }),
         services: serviceLines.map((l) => ({
           serviceId: l.serviceId,
           masterId: l.lineMasterId || l.masterId || resolvedMasterId,
@@ -3230,6 +3279,96 @@ export default function CheckCreateScreen() {
           )}
         </View>
 
+        {/* ═══ SECTION 1.6: ИСПОЛНИТЕЛИ И МЕСТО (Round 14, режим «Кассир») ═══
+              Видна ТОЛЬКО при включённом режиме кассовой смены — и мастеру в
+              orderMode, и админу на приёмке (у админа isCashier=true, поэтому
+              гейт именно shiftModeEnabled, не orderMode). Несколько
+              исполнителей → заказ падает на доску каждого; место — карточное
+              поле «где стоит машина». Вне режима секции нет — байт-в-байт. */}
+        {shiftModeEnabled && (
+          <View
+            style={[styles.sectionAssign, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          >
+            <View style={styles.sectionHeader}>
+              <Ionicons name="people-outline" size={16} color={colors.primary[600]} />
+              <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Исполнители и место</Text>
+            </View>
+
+            {/* Исполнители — мультивыбор через шит с чекбоксами */}
+            <TouchableOpacity
+              onPress={() => {
+                haptic('select');
+                setShowAssigneeSheet(true);
+              }}
+              activeOpacity={0.7}
+              style={styles.tagGhostRow}
+              accessibilityRole="button"
+              accessibilityLabel={
+                assigneeIds.length > 0
+                  ? `Исполнители: ${assigneeIds
+                      .map((aid) => masters.find((m) => m.id === aid)?.fullName?.split(' ')[0] || '—')
+                      .join(', ')}`
+                  : 'Назначить исполнителей'
+              }
+            >
+              <Ionicons
+                name="construct-outline"
+                size={15}
+                color={assigneeIds.length > 0 ? colors.primary[600] : palette.text.tertiary}
+              />
+              {assigneeIds.length === 0 ? (
+                <Text style={[styles.tagGhostText, { color: palette.text.tertiary }]}>Исполнители</Text>
+              ) : (
+                <Text style={[styles.tagGhostText, { color: palette.text.primary }]} numberOfLines={2}>
+                  {assigneeIds
+                    .map((aid) => masters.find((m) => m.id === aid)?.fullName?.split(' ')[0] || '—')
+                    .join(', ')}
+                </Text>
+              )}
+              <View style={{ flex: 1 }} />
+              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+            </TouchableOpacity>
+
+            {/* Место — из справочника tenant_locations */}
+            <TouchableOpacity
+              onPress={() => {
+                haptic('select');
+                setShowLocationSheet(true);
+              }}
+              activeOpacity={0.7}
+              style={styles.tagGhostRow}
+              accessibilityRole="button"
+              accessibilityLabel={
+                orderLocationId
+                  ? `Место: ${
+                      (orderLocations ?? []).find((l) => l.id === orderLocationId)?.name ||
+                      editCheck?.location?.name ||
+                      'выбрано'
+                    }`
+                  : 'Указать место'
+              }
+            >
+              <Ionicons
+                name="location-outline"
+                size={15}
+                color={orderLocationId ? colors.primary[600] : palette.text.tertiary}
+              />
+              <Text
+                style={[styles.tagGhostText, { color: orderLocationId ? palette.text.primary : palette.text.tertiary }]}
+                numberOfLines={1}
+              >
+                {orderLocationId
+                  ? (orderLocations ?? []).find((l) => l.id === orderLocationId)?.name ||
+                    editCheck?.location?.name ||
+                    'Место'
+                  : 'Место'}
+              </Text>
+              <View style={{ flex: 1 }} />
+              <Ionicons name="chevron-forward" size={14} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          </View>
+        )}
+
         {/* ═══ SECTION 2: SERVICES & PRODUCTS — white ═══ */}
         <View
           style={[
@@ -3947,6 +4086,166 @@ export default function CheckCreateScreen() {
             );
           })}
         </ScrollView>
+      </Modal>
+
+      {/* ── Шит «Исполнители» (Round 14) — чекбоксы, несколько мастеров ──── */}
+      <Modal visible={showAssigneeSheet} onClose={() => setShowAssigneeSheet(false)} title="Исполнители">
+        <Text style={[styles.assignSheetHint, { color: palette.text.tertiary }]}>
+          Заказ появится на доске у каждого выбранного. Зарплата считается по строкам услуг, как раньше.
+        </Text>
+        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
+          {masters.map((m) => {
+            const isSelected = assigneeIds.includes(m.id);
+            return (
+              <TouchableOpacity
+                key={m.id}
+                style={[
+                  styles.pickerItem,
+                  { borderBottomColor: palette.border.subtle },
+                  isSelected && { backgroundColor: palette.accent.primarySoft },
+                ]}
+                onPress={() => {
+                  haptic('select');
+                  setAssigneesDirty(true);
+                  setAssigneeIds((prev) => (isSelected ? prev.filter((x) => x !== m.id) : [...prev, m.id]));
+                }}
+                accessibilityRole="checkbox"
+                accessibilityState={{ checked: isSelected }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <Ionicons
+                    name={isSelected ? 'checkbox' : 'square-outline'}
+                    size={20}
+                    color={isSelected ? colors.primary[600] : palette.text.tertiary}
+                  />
+                  <Text
+                    style={[
+                      styles.pickerName,
+                      { color: palette.text.primary },
+                      isSelected && { color: isDark ? colors.primary[300] : colors.primary[700] },
+                    ]}
+                  >
+                    {m.fullName}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            );
+          })}
+          {masters.length === 0 && (
+            <Text style={[styles.assignSheetHint, { color: palette.text.tertiary }]}>Нет активных сотрудников</Text>
+          )}
+        </ScrollView>
+        <TouchableOpacity
+          style={styles.assignDoneBtn}
+          onPress={() => setShowAssigneeSheet(false)}
+          accessibilityRole="button"
+          accessibilityLabel="Готово"
+        >
+          <Text style={styles.assignDoneBtnText}>Готово{assigneeIds.length > 0 ? ` (${assigneeIds.length})` : ''}</Text>
+        </TouchableOpacity>
+      </Modal>
+
+      {/* ── Шит «Место» (Round 14) — справочник + создание нового ─────────── */}
+      <Modal visible={showLocationSheet} onClose={() => setShowLocationSheet(false)} title="Место">
+        <ScrollView style={{ maxHeight: SCREEN_HEIGHT * 0.4 }} keyboardShouldPersistTaps="handled">
+          <TouchableOpacity
+            style={[styles.pickerItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => {
+              haptic('select');
+              setLocationDirty(true);
+              setOrderLocationId(null);
+              setShowLocationSheet(false);
+            }}
+          >
+            <Text style={[styles.pickerName, { color: palette.text.tertiary }]}>Без места</Text>
+            {!orderLocationId && <Ionicons name="checkmark" size={20} color={colors.primary[600]} />}
+          </TouchableOpacity>
+          {activeLocations.map((loc) => {
+            const isSelected = orderLocationId === loc.id;
+            return (
+              <TouchableOpacity
+                key={loc.id}
+                style={[
+                  styles.pickerItem,
+                  { borderBottomColor: palette.border.subtle },
+                  isSelected && { backgroundColor: palette.accent.primarySoft },
+                ]}
+                onPress={() => {
+                  haptic('select');
+                  setLocationDirty(true);
+                  setOrderLocationId(loc.id);
+                  setShowLocationSheet(false);
+                }}
+              >
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing[2] }}>
+                  <Ionicons
+                    name="location-outline"
+                    size={16}
+                    color={isSelected ? colors.primary[600] : palette.text.tertiary}
+                  />
+                  <Text
+                    style={[
+                      styles.pickerName,
+                      { color: palette.text.primary },
+                      isSelected && { color: isDark ? colors.primary[300] : colors.primary[700] },
+                    ]}
+                  >
+                    {loc.name}
+                  </Text>
+                </View>
+                {isSelected && <Ionicons name="checkmark" size={20} color={colors.primary[600]} />}
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+        {/* «+ Новое место» — только держателям settings_manage (сервер гейтит
+            POST /checks/locations тем же ключом). */}
+        {hasPermission('settings_manage') && (
+          <View style={[styles.newLocationRow, { borderTopColor: palette.border.subtle }]}>
+            <TextInput
+              value={newLocationName}
+              onChangeText={setNewLocationName}
+              style={[
+                styles.newLocationInput,
+                { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+              ]}
+              placeholder="Новое место — напр. «Бокс 2»"
+              placeholderTextColor={palette.text.tertiary}
+              returnKeyType="done"
+            />
+            <TouchableOpacity
+              style={[styles.newLocationBtn, !newLocationName.trim() && { opacity: 0.5 }]}
+              disabled={!newLocationName.trim() || creatingLocation}
+              onPress={async () => {
+                const name = newLocationName.trim();
+                if (!name) return;
+                setCreatingLocation(true);
+                try {
+                  const res = await checksApi.locations.create({ name });
+                  queryClient.invalidateQueries({ queryKey: ['check-locations'] });
+                  setLocationDirty(true);
+                  setOrderLocationId(res.data.id);
+                  setNewLocationName('');
+                  setShowLocationSheet(false);
+                  haptic('success');
+                } catch (err: any) {
+                  haptic('error');
+                  Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось создать место');
+                } finally {
+                  setCreatingLocation(false);
+                }
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Создать место"
+            >
+              {creatingLocation ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <Ionicons name="add" size={20} color={colors.white} />
+              )}
+            </TouchableOpacity>
+          </View>
+        )}
       </Modal>
 
       {/* Service Picker */}
@@ -5331,6 +5630,47 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.gray[100],
   },
   pickerName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, color: colors.gray[900] },
+  // ── Исполнители и место (Round 14, режим «Кассир») ─────────────────────
+  sectionAssign: {
+    borderRadius: borderRadius['2xl'],
+    padding: spacing[3.5],
+    gap: spacing[1],
+    borderWidth: 1,
+  },
+  assignSheetHint: { fontSize: 11, lineHeight: 15, marginBottom: spacing[2] },
+  assignDoneBtn: {
+    marginTop: spacing[3],
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.primary[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: spacing[3],
+  },
+  assignDoneBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  newLocationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    marginTop: spacing[3],
+    paddingTop: spacing[3],
+    borderTopWidth: 1,
+  },
+  newLocationInput: {
+    flex: 1,
+    borderWidth: 1,
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.sm,
+  },
+  newLocationBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.primary[600],
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   pickerSub: { fontSize: fontSize.xs, color: colors.gray[500], marginTop: 2 },
   pickerPrice: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.primary[600] },
   plateChip: {

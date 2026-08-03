@@ -54,7 +54,7 @@ import {
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
-import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
+import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
 import type { RoleScope } from '../../../shared/types';
 
 // Иконки секций — те же глифы, что у групп матрицы прав в UsersScreen.
@@ -512,6 +512,37 @@ export default function RoleEditorScreen() {
           применяются у сотрудников в течение ~30 секунд.
         </Text>
 
+        {/* ── Мягкое предупреждение (Round 14, режим «Кассир») ─────────────
+            Кассир — строгая роль приёма оплаты; совмещение с исполнительскими
+            правами (создание чеков / правка назначенного заказа) продуктом не
+            рекомендуется. НЕ блокирует сохранение — владелец в своём праве. */}
+        {draft.bools.accept_payment && (draft.bools.checks_create || draft.bools.checks_edit_assigned_order) && (
+          <View
+            style={[
+              styles.cashierWarnRow,
+              {
+                backgroundColor: softTint(colors.amber[600], palette.mode),
+                borderColor: palette.mode === 'dark' ? 'rgba(217, 119, 6, 0.4)' : colors.amber[200],
+              },
+            ]}
+          >
+            <Ionicons
+              name="alert-circle-outline"
+              size={16}
+              color={palette.mode === 'dark' ? colors.amber[200] : colors.amber[700]}
+            />
+            <Text
+              style={[
+                styles.cashierWarnText,
+                { color: palette.mode === 'dark' ? colors.amber[200] : colors.amber[800] },
+              ]}
+            >
+              Кассир обычно не совмещается с работой мастера: у роли включён «Приём оплаты» вместе с исполнительскими
+              правами. Это не запрещено, но деньги надёжнее, когда оплату принимает отдельный человек.
+            </Text>
+          </View>
+        )}
+
         {MATRIX_GROUPS.map((group) => {
           const granted = countGranted(draft, group.rows);
           const expanded = expandedGroup === group.title;
@@ -641,6 +672,18 @@ const styles = StyleSheet.create({
   // Матрица
   matrixTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, marginBottom: spacing[1] },
   matrixHint: { fontSize: 11, lineHeight: 15, marginBottom: spacing[3] },
+  // Мягкое предупреждение «кассир + исполнительские права» (Round 14).
+  cashierWarnRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    marginBottom: spacing[3],
+  },
+  cashierWarnText: { flex: 1, fontSize: 11, lineHeight: 16, fontWeight: fontWeight.medium },
   group: {
     borderRadius: borderRadius['2xl'],
     borderWidth: 1,

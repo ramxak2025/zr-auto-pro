@@ -48,6 +48,7 @@ import QueryErrorState from '../components/QueryErrorState';
 import Modal from '../components/Modal';
 import FreshnessBadge from '../components/FreshnessBadge';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { useUsers } from '../hooks/useUsers';
 import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
@@ -62,6 +63,16 @@ import {
 import type { Check, ChecksBoard } from '../../../shared/types';
 
 const BOARD_KEY = ['checks', 'board'] as const;
+
+/** «Иванов И.» → «ИИ» — инициалы для мини-аватарок исполнителей. */
+function initials(fullName: string | null): string {
+  const parts = (fullName ?? '').trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '—';
+  return parts
+    .slice(0, 2)
+    .map((p) => p[0]!.toUpperCase())
+    .join('');
+}
 
 function formatMoney(v: number) {
   return (
@@ -116,6 +127,13 @@ interface BoardCardProps {
   onPress: (check: Check) => void;
 }
 const BoardCard = React.memo(function BoardCard({ check, palette, onPress }: BoardCardProps) {
+  // Round 14: исполнители (check_assignees) и место (tenant_locations) на
+  // карточке; «ОПЛАЧЕНО — выдать» — заметный бейдж оплаченного-но-не-выданного
+  // конвейерного заказа (единственное место, где оплата видна на доске:
+  // work-status в остальном ортогонален оплате).
+  const assignees = check.assignees ?? [];
+  const paidAwaitingDelivery = !check.isDeferred && !check.deliveredAt;
+  const isDark = palette.mode === 'dark';
   return (
     <TouchableOpacity
       style={[
@@ -132,6 +150,19 @@ const BoardCard = React.memo(function BoardCard({ check, palette, onPress }: Boa
         <Text style={[styles.cardNumber, { color: palette.text.primary }]}>#{check.number}</Text>
         <Text style={[styles.cardTotal, { color: palette.text.primary }]}>{formatMoney(check.totalRevenue)}</Text>
       </View>
+      {paidAwaitingDelivery && (
+        <View
+          style={[
+            styles.paidBadge,
+            { backgroundColor: isDark ? softTint(colors.green[500], 'dark') : colors.green[50] },
+          ]}
+        >
+          <Ionicons name="checkmark-circle" size={13} color={isDark ? colors.green[300] : colors.green[600]} />
+          <Text style={[styles.paidBadgeText, { color: isDark ? colors.green[200] : colors.green[700] }]}>
+            ОПЛАЧЕНО — выдать
+          </Text>
+        </View>
+      )}
       <View style={styles.cardRow}>
         <Ionicons name="person-outline" size={12} color={palette.text.tertiary} />
         <Text style={[styles.cardRowText, { color: palette.text.secondary }]} numberOfLines={1}>
@@ -161,6 +192,43 @@ const BoardCard = React.memo(function BoardCard({ check, palette, onPress }: Boa
           ) : null}
         </View>
       ) : null}
+      {(assignees.length > 0 || check.location?.name) && (
+        <View style={styles.cardFooterRow}>
+          {assignees.length > 0 && (
+            <View style={styles.assigneeRow}>
+              {assignees.slice(0, 3).map((a) => (
+                <View
+                  key={a.id}
+                  style={[
+                    styles.assigneeCircle,
+                    {
+                      backgroundColor: softTint(colors.primary[600], palette.mode),
+                      borderColor: palette.bg.card,
+                    },
+                  ]}
+                >
+                  <Text
+                    style={[styles.assigneeInitials, { color: isDark ? colors.primary[300] : colors.primary[700] }]}
+                  >
+                    {initials(a.fullName)}
+                  </Text>
+                </View>
+              ))}
+              {assignees.length > 3 && (
+                <Text style={[styles.assigneeMore, { color: palette.text.tertiary }]}>+{assignees.length - 3}</Text>
+              )}
+            </View>
+          )}
+          {check.location?.name ? (
+            <View style={[styles.locationChip, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="location-outline" size={11} color={palette.text.tertiary} />
+              <Text style={[styles.locationChipText, { color: palette.text.secondary }]} numberOfLines={1}>
+                {check.location.name}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      )}
     </TouchableOpacity>
   );
 });
@@ -171,7 +239,7 @@ export default function WorkBoardScreen() {
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
   const { width } = useWindowDimensions();
-  const { hasPermission } = useAuth();
+  const { hasPermission, user } = useAuth();
   // Перемещение разрешено тем, кто редактирует чеки (director/admin/master/
   // superadmin — director/superadmin всегда true, остальным по матрице прав).
   const canMove = hasPermission('checks_edit');
@@ -193,6 +261,28 @@ export default function WorkBoardScreen() {
   // Карточка, по которой открыт action sheet выбора статуса.
   const [picker, setPicker] = useState<Check | null>(null);
 
+  // ── Фильтр по исполнителю (Round 14, ?assigneeId=) ───────────────────
+  // Владелец/админ с видимостью «все» — чипы мастеров («Все» + сотрудники);
+  // мастер с видимостью «все» — переключатель «Мои / Все» (мои = self);
+  // мастер со scope 'own' фильтра не видит — сервер и так отдаёт только его.
+  const canSeeAll = hasPermission('checks_view_all');
+  const isMasterRole = user?.role === 'master';
+  const [assigneeFilter, setAssigneeFilter] = useState<string | null>(null);
+  const { data: allUsers } = useUsers();
+  const filterMasters = React.useMemo(() => {
+    const list = Array.isArray(allUsers) ? allUsers : [];
+    const masters = list.filter((u) => u.isActive && !u.hiddenEverywhere && u.role === 'master');
+    // Если мастеров-ролей нет (кастомные роли) — предлагаем всех активных.
+    return masters.length > 0 ? masters : list.filter((u) => u.isActive && !u.hiddenEverywhere);
+  }, [allUsers]);
+
+  // Нефильтрованная доска живёт на ЛЕГАСИ-ключе (общий SWR-кеш с Кассой и
+  // экраном «Оплата»); фильтр — отдельная кеш-ячейка с assigneeId в ключе.
+  const boardKey = React.useMemo(
+    () => (assigneeFilter ? ([...BOARD_KEY, assigneeFilter] as const) : BOARD_KEY),
+    [assigneeFilter],
+  );
+
   const {
     data: board,
     isLoading,
@@ -201,8 +291,8 @@ export default function WorkBoardScreen() {
     dataUpdatedAt,
     refetch,
   } = useQuery<ChecksBoard>({
-    queryKey: BOARD_KEY,
-    queryFn: async () => (await checksApi.board()).data,
+    queryKey: boardKey,
+    queryFn: async () => (await checksApi.board(assigneeFilter ? { assigneeId: assigneeFilter } : undefined)).data,
     staleTime: 30_000,
     // SWR: возврат на доску показывает прошлый снимок мгновенно, фон тянет свежий.
     placeholderData: (prev) => prev,
@@ -210,9 +300,9 @@ export default function WorkBoardScreen() {
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await queryClient.invalidateQueries({ queryKey: BOARD_KEY });
+    await queryClient.invalidateQueries({ queryKey: boardKey });
     setRefreshing(false);
-  }, [queryClient]);
+  }, [queryClient, boardKey]);
 
   // ── Перемещение по доске (оптимистично) ──────────────────────────────
   // Снимаем карточку из текущей группы, добавляем в целевую В НАЧАЛО
@@ -220,8 +310,8 @@ export default function WorkBoardScreen() {
   const moveMutation = useMutation({
     mutationFn: ({ id, target }: MoveVars) => checksApi.setWorkStatus(id, target),
     onMutate: async ({ id, target }) => {
-      await queryClient.cancelQueries({ queryKey: BOARD_KEY });
-      const prev = queryClient.getQueryData<ChecksBoard>(BOARD_KEY);
+      await queryClient.cancelQueries({ queryKey: boardKey });
+      const prev = queryClient.getQueryData<ChecksBoard>(boardKey);
       if (prev) {
         const groups: Record<string, Check[]> = {};
         for (const k of Object.keys(prev.groups)) groups[k] = [...prev.groups[k]];
@@ -236,15 +326,23 @@ export default function WorkBoardScreen() {
         }
         if (moved) {
           groups[target] = [{ ...moved, workStatus: target }, ...(groups[target] ?? [])];
-          queryClient.setQueryData<ChecksBoard>(BOARD_KEY, { columns: prev.columns, groups });
+          queryClient.setQueryData<ChecksBoard>(boardKey, { columns: prev.columns, groups });
         }
       }
-      return { prev };
+      return { prev, boardKey };
     },
     onError: (err: any, _vars, ctx) => {
-      if (ctx?.prev) queryClient.setQueryData(BOARD_KEY, ctx.prev);
+      // Откат optimistic-перемещения — карточка возвращается на место.
+      if (ctx?.prev) queryClient.setQueryData(ctx.boardKey, ctx.prev);
       haptic('error');
-      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось переместить заказ-наряд');
+      const msg: string = err?.response?.data?.message || '';
+      // Гард выдачи (Round 14): «Выдана» до оплаты невозможна — сервер отвечает
+      // 400 «Заказ не оплачен». Человеческий алерт вместо генерик-«Ошибки».
+      if (err?.response?.status === 400 && /не оплачен/i.test(msg)) {
+        Alert.alert('Заказ не оплачен', 'Выдать машину можно только после приёма оплаты кассиром.');
+        return;
+      }
+      Alert.alert('Ошибка', msg || 'Не удалось переместить заказ-наряд');
     },
     onSuccess: (_data, vars) => {
       haptic('success');
@@ -324,6 +422,77 @@ export default function WorkBoardScreen() {
           </View>
         }
       />
+
+      {/* ── Фильтр по исполнителю (Round 14) ────────────────────────────
+          Владелец/админ: чипы «Все» + мастера (?assigneeId=). Мастер с
+          видимостью «все»: переключатель «Мои / Все». Scope 'own' — без UI. */}
+      {canSeeAll &&
+        (isMasterRole ? (
+          <View style={styles.filterRowWrap}>
+            {(
+              [
+                { key: user?.id ?? null, label: 'Мои' },
+                { key: null, label: 'Все' },
+              ] as Array<{ key: string | null; label: string }>
+            ).map((opt) => {
+              const active = assigneeFilter === opt.key;
+              return (
+                <TouchableOpacity
+                  key={opt.label}
+                  style={[
+                    styles.filterChip,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    active && { backgroundColor: colors.primary[600], borderColor: colors.primary[600] },
+                  ]}
+                  onPress={() => {
+                    haptic('select');
+                    setAssigneeFilter(opt.key);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}>
+                    {opt.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        ) : filterMasters.length > 0 ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.filterScroll}
+            contentContainerStyle={styles.filterRowWrap}
+          >
+            {[{ id: null as string | null, fullName: 'Все' }, ...filterMasters].map((m) => {
+              const active = assigneeFilter === m.id;
+              return (
+                <TouchableOpacity
+                  key={m.id ?? 'all'}
+                  style={[
+                    styles.filterChip,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    active && { backgroundColor: colors.primary[600], borderColor: colors.primary[600] },
+                  ]}
+                  onPress={() => {
+                    haptic('select');
+                    setAssigneeFilter(m.id);
+                  }}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                >
+                  <Text
+                    style={[styles.filterChipText, { color: active ? colors.white : palette.text.secondary }]}
+                    numberOfLines={1}
+                  >
+                    {m.id ? (m.fullName ?? '').split(' ')[0] || '—' : 'Все'}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        ) : null)}
 
       {board === undefined && isLoading ? (
         <View style={styles.centerFill}>
@@ -516,6 +685,24 @@ const styles = StyleSheet.create({
   columnEmpty: { alignItems: 'center', justifyContent: 'center', paddingVertical: spacing[12], gap: spacing[2] },
   columnEmptyText: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
 
+  // ── Фильтр по исполнителю (Round 14) ───────────────────────────────
+  filterScroll: { flexGrow: 0 },
+  filterRowWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    paddingHorizontal: spacing[4],
+    paddingBottom: spacing[2.5],
+  },
+  filterChip: {
+    borderRadius: borderRadius.full,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1.5],
+    maxWidth: 140,
+  },
+  filterChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+
   // ── Card ───────────────────────────────────────────────────────────
   card: {
     borderRadius: borderRadius.xl,
@@ -537,6 +724,46 @@ const styles = StyleSheet.create({
     borderColor: colors.primary[200],
   },
   plateTagText: { fontSize: 10, fontWeight: fontWeight.bold, color: colors.primary[700], letterSpacing: 0.5 },
+  // Round 14: бейдж «ОПЛАЧЕНО — выдать» + исполнители + место на карточке.
+  paidBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    alignSelf: 'flex-start',
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+  },
+  paidBadgeText: { fontSize: 10, fontWeight: fontWeight.bold, letterSpacing: 0.4 },
+  cardFooterRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+    marginTop: spacing[0.5],
+  },
+  assigneeRow: { flexDirection: 'row', alignItems: 'center' },
+  assigneeCircle: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: -6,
+  },
+  assigneeInitials: { fontSize: 9, fontWeight: fontWeight.bold },
+  assigneeMore: { fontSize: 10, fontWeight: fontWeight.semibold, marginLeft: 10 },
+  locationChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    borderRadius: borderRadius.full,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 2,
+    maxWidth: 150,
+  },
+  locationChipText: { fontSize: 10, fontWeight: fontWeight.semibold, flexShrink: 1 },
 
   // ── Action sheet ───────────────────────────────────────────────────
   sheetHint: {

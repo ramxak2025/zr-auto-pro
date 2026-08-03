@@ -22,7 +22,8 @@ import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { Tenant, LoyaltySettings, PosSettings } from '../../../shared/types';
+import Modal from '../components/Modal';
+import type { Tenant, LoyaltySettings, PosSettings, PosSettingsConflict } from '../../../shared/types';
 import { POS_SETTINGS_KEY } from '../hooks/usePosSettings';
 import { formatPhone } from '../../../shared/validation/phone';
 import { haptic } from '../platform/haptics';
@@ -374,6 +375,11 @@ export default function CompanySettingsScreen() {
 function PosShiftModeSection({ index }: { index: number }) {
   const palette = useColors();
   const queryClient = useQueryClient();
+  const navigation = useNavigation<any>();
+  // Round 14: 409-конфликт переключения режима — на доске стоят незакрытые
+  // заказы (is_deferred + work_status). Модал показывает первые 10 (номер,
+  // клиент, сумма) и ведёт на Доску.
+  const [conflict, setConflict] = useState<PosSettingsConflict | null>(null);
 
   const { data: settings } = useQuery<PosSettings>({
     queryKey: POS_SETTINGS_KEY,
@@ -393,10 +399,17 @@ function PosShiftModeSection({ index }: { index: number }) {
       if (prev) queryClient.setQueryData<PosSettings>(POS_SETTINGS_KEY, { ...prev, shiftModeEnabled: next });
       return { prev };
     },
-    onError: (_err, _next, ctx) => {
+    onError: (err: any, _next, ctx) => {
       if (ctx?.prev) queryClient.setQueryData(POS_SETTINGS_KEY, ctx.prev);
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось изменить режим');
+      // 409 PosSettingsConflict (Round 14): не генерик-«Ошибка», а список
+      // «Сначала закройте заказы (N)» с переходом на Доску.
+      const body = err?.response?.data;
+      if (err?.response?.status === 409 && typeof body?.count === 'number') {
+        setConflict(body as PosSettingsConflict);
+        return;
+      }
+      Alert.alert('Ошибка', body?.message || 'Не удалось изменить режим');
     },
     onSuccess: () => {
       haptic('success');
@@ -438,6 +451,56 @@ function PosShiftModeSection({ index }: { index: number }) {
           />
         </View>
       </View>
+
+      {/* ── 409: незакрытые заказы конвейера (Round 14) ──────────────── */}
+      <Modal
+        visible={!!conflict}
+        onClose={() => setConflict(null)}
+        title={`Сначала закройте заказы (${conflict?.count ?? 0})`}
+      >
+        <Text style={[styles.conflictHint, { color: palette.text.secondary }]}>
+          Режим нельзя переключить, пока на доске стоят незакрытые заказ-наряды. Примите по ним оплату и выдайте машины
+          — или удалите черновики.
+        </Text>
+        <View style={{ gap: spacing[2] }}>
+          {(conflict?.checks ?? []).map((c) => (
+            <View
+              key={c.id}
+              style={[styles.conflictRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            >
+              <Text style={[styles.conflictNumber, { color: palette.text.primary }]}>#{c.number}</Text>
+              <Text style={[styles.conflictClient, { color: palette.text.secondary }]} numberOfLines={1}>
+                {c.clientName ?? 'Розничный покупатель'}
+              </Text>
+              <Text style={[styles.conflictSum, { color: palette.text.primary }]}>
+                {Math.round(c.totalRevenue ?? 0)
+                  .toString()
+                  .replace(/\B(?=(\d{3})+(?!\d))/g, ' ')}{' '}
+                ₽
+              </Text>
+            </View>
+          ))}
+          {(conflict?.count ?? 0) > (conflict?.checks?.length ?? 0) && (
+            <Text style={[styles.conflictHint, { color: palette.text.tertiary }]}>
+              Показаны первые {conflict?.checks?.length ?? 0} из {conflict?.count}.
+            </Text>
+          )}
+        </View>
+        <TouchableOpacity
+          style={styles.conflictBoardBtn}
+          onPress={() => {
+            setConflict(null);
+            haptic('select');
+            // Доска живёт в Checks-стеке; initial:false держит Журнал под ней.
+            navigation.navigate('Checks', { screen: 'WorkBoard', initial: false });
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Открыть доску заказ-нарядов"
+        >
+          <Ionicons name="albums-outline" size={17} color={colors.white} />
+          <Text style={styles.conflictBoardBtnText}>Открыть доску</Text>
+        </TouchableOpacity>
+      </Modal>
     </AnimatedCard>
   );
 }
@@ -651,6 +714,31 @@ const styles = StyleSheet.create({
   toggleTextWrap: { flex: 1, minWidth: 0 },
   toggleLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   toggleSub: { fontSize: 12, lineHeight: 17, marginTop: 2 },
+  // 409-конфликт переключения режима кассовой смены (Round 14).
+  conflictHint: { fontSize: fontSize.sm, lineHeight: 19, marginBottom: spacing[3] },
+  conflictRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+  },
+  conflictNumber: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  conflictClient: { flex: 1, minWidth: 0, fontSize: fontSize.sm },
+  conflictSum: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  conflictBoardBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    marginTop: spacing[4],
+    borderRadius: borderRadius.xl,
+    backgroundColor: colors.primary[600],
+    paddingVertical: spacing[3],
+  },
+  conflictBoardBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   saveBtn: {
     flexDirection: 'row',
     alignItems: 'center',

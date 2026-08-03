@@ -39,7 +39,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
 import EmptyState from '../components/EmptyState';
@@ -130,10 +130,15 @@ const Tile = React.memo(function Tile({ label, value, icon, tint, tintBg, palett
 
 export default function CashShiftScreen() {
   const navigation = useNavigation<any>();
+  const route = useRoute();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
+  // Round 14, режим «Кассир»: этот же экран — корень таба «Смены»
+  // (CashShiftsTab). У корня таба back-стрелке некуда вести — прячем её;
+  // вход из MoreStack (роут 'CashShift') остаётся с back как раньше.
+  const isTabRoot = route.name === 'CashShiftsTab';
 
   // Открытие/закрытие/инкассация кассовой смены — ключ cash_shifts_manage
   // (сервер: POST /cash-shifts open/close/collect → тот же ключ; «права как в
@@ -340,7 +345,11 @@ export default function CashShiftScreen() {
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <IosScreenHeader title="Кассовая смена" subtitle="Z-отчёт и инкассация" onBack={() => navigation.goBack()} />
+      <IosScreenHeader
+        title="Кассовая смена"
+        subtitle="Z-отчёт и инкассация"
+        onBack={isTabRoot ? undefined : () => navigation.goBack()}
+      />
 
       {loadingFirst ? (
         <View style={styles.loadingWrap}>

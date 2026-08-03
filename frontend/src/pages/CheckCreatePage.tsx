@@ -57,6 +57,8 @@ import type {
   WarrantyClaim,
   Warehouse,
   PosSettings,
+  TenantLocation,
+  CheckAssignee,
 } from '../types';
 
 import { formatPhone } from '../../../shared/validation/phone';
@@ -681,6 +683,50 @@ export default function CheckCreatePage() {
     if (cashierLocked) setIsDeferred(true);
   }, [cashierLocked]);
 
+  // ── Конвейер (Round 14, режим «Кассир»): исполнители + место ────────────
+  // Пока включён режим кассовой смены, приёмка назначает заказу исполнителей
+  // (заказ падает на доску каждого) и место («возле задних ворот»). Вне
+  // режима блок не рендерится и payload байт-в-байт прежний.
+  const conveyorMode = !!posSettings?.shiftModeEnabled;
+  const canManageLocations = hasPermission('settings_manage');
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([]);
+  const [locationId, setLocationId] = useState('');
+  const [newLocationName, setNewLocationName] = useState('');
+  const [creatingLocation, setCreatingLocation] = useState(false);
+
+  const { data: locations } = useQuery<TenantLocation[]>({
+    queryKey: ['checks', 'locations'],
+    queryFn: async () => (await checksApi.locations.list()).data,
+    enabled: conveyorMode,
+    staleTime: 60_000,
+  });
+  const activeLocations = useMemo(
+    () => (locations ?? []).filter((l) => l.isActive).sort((a, b) => a.sortOrder - b.sortOrder),
+    [locations],
+  );
+
+  const toggleAssignee = (id: string) => {
+    setAssigneeIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  };
+
+  // Новое место инлайн из пикера (POST /checks/locations, settings_manage) —
+  // создали → сразу выбрали. 400/403 — текст сервера дословно.
+  const handleCreateLocation = async () => {
+    const name = newLocationName.trim();
+    if (!name || creatingLocation) return;
+    setCreatingLocation(true);
+    try {
+      const res = await checksApi.locations.create({ name });
+      setLocationId(res.data.id);
+      setNewLocationName('');
+      queryClient.invalidateQueries({ queryKey: ['checks', 'locations'] });
+    } catch (err: any) {
+      toast.error(err?.response?.data?.message || 'Не удалось создать место');
+    } finally {
+      setCreatingLocation(false);
+    }
+  };
+
   // Default the picker to the main warehouse once the list arrives.
   useEffect(() => {
     if (!pickerWarehouseId && warehouses && warehouses.length > 0) {
@@ -760,6 +806,10 @@ export default function CheckCreatePage() {
     setSelectedTags(existingCheck.tags || []);
     setDiscount(existingCheck.discount || 0);
     setIsDeferred(existingCheck.isDeferred || false);
+    // Round 14: исполнители + место — гидрируем, иначе сохранение в режиме
+    // конвейера перезаписало бы набор пустым (assigneeIds шлётся при edit).
+    setAssigneeIds((existingCheck.assignees ?? []).map((a: CheckAssignee) => a.id));
+    setLocationId(existingCheck.locationId ?? existingCheck.location?.id ?? '');
 
     if (existingCheck.services?.length) {
       setServiceLines(
@@ -1262,6 +1312,17 @@ export default function CheckCreatePage() {
         : selectedTags.length > 0
           ? { tagIds: selectedTags.map((t) => t.id) }
           : {}),
+      // Round 14 (конвейер): исполнители и место уходят ТОЛЬКО при включённом
+      // режиме кассовой смены. Create: assigneeIds — при явном выборе (иначе
+      // сервер выводит дефолт из строк услуг + мастера). Edit: всегда — пустой
+      // набор снимает исполнителей, ''→null снимает место. Вне режима payload
+      // байт-в-байт прежний.
+      ...(conveyorMode
+        ? {
+            ...(isEditMode || assigneeIds.length > 0 ? { assigneeIds } : {}),
+            locationId: locationId || null,
+          }
+        : {}),
       // Рассрочка — всегда реальная продажа, отложить нельзя.
       isDeferred: isInstallment ? false : isDeferred,
       ...(isInstallment
@@ -2062,6 +2123,93 @@ export default function CheckCreatePage() {
                   </div>
                 </label>
               )}
+            </div>
+          )}
+
+          {/* ===== КОНВЕЙЕР (Round 14): исполнители + место ===== */}
+          {conveyorMode && (
+            <div className="px-5 py-4 border-b border-dashed border-gray-300">
+              <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">Исполнители и место</h3>
+
+              {/* Мультивыбор исполнителей — заказ падает на доску каждого */}
+              {(masters ?? []).length === 0 ? (
+                <p className="text-xs text-gray-400">Нет сотрудников для назначения</p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
+                  {(masters ?? []).map((m) => {
+                    const active = assigneeIds.includes(m.id);
+                    return (
+                      <label
+                        key={m.id}
+                        className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 cursor-pointer transition-colors ${
+                          active ? 'border-primary-300 bg-primary-50' : 'border-gray-200 bg-white hover:bg-gray-50'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={active}
+                          onChange={() => toggleAssignee(m.id)}
+                          className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                        />
+                        <span
+                          className={`text-sm truncate ${active ? 'font-semibold text-primary-700' : 'text-gray-700'}`}
+                        >
+                          {m.fullName}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="text-[10px] text-gray-400 mt-1.5">
+                Заказ появится на доске каждого выбранного исполнителя. Без выбора — исполнители из строк услуг.
+              </p>
+
+              {/* Место («возле задних ворот», «Бокс 2») */}
+              <div className="mt-3">
+                <label className="block text-xs text-gray-500 mb-1">Место</label>
+                <select value={locationId} onChange={(e) => setLocationId(e.target.value)} className="input text-sm">
+                  <option value="">Без места</option>
+                  {activeLocations.map((l) => (
+                    <option key={l.id} value={l.id}>
+                      {l.name}
+                    </option>
+                  ))}
+                  {/* Выбранное, но архивное место (edit-гидрация) — не терять */}
+                  {locationId && !activeLocations.some((l) => l.id === locationId) && (
+                    <option value={locationId}>
+                      {(locations ?? []).find((l) => l.id === locationId)?.name ?? 'Выбранное место'}
+                    </option>
+                  )}
+                </select>
+                {canManageLocations && (
+                  <div className="mt-2 flex items-center gap-1.5">
+                    <input
+                      value={newLocationName}
+                      onChange={(e) => setNewLocationName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          handleCreateLocation();
+                        }
+                      }}
+                      maxLength={100}
+                      placeholder="Новое место — например, «возле задних ворот»"
+                      className="input flex-1 !py-1.5 text-xs"
+                    />
+                    {newLocationName.trim() && (
+                      <button
+                        type="button"
+                        onClick={handleCreateLocation}
+                        disabled={creatingLocation}
+                        className="rounded-lg bg-primary-600 px-2.5 py-1.5 text-xs font-semibold text-white hover:bg-primary-700 disabled:opacity-50"
+                      >
+                        {creatingLocation ? '...' : 'Добавить'}
+                      </button>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
 

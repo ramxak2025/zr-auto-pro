@@ -14,14 +14,17 @@ import {
   Gift,
   Percent,
   Wallet,
+  LayoutGrid,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import Switch from '../components/Switch';
 import QueryState from '../components/QueryState';
+import Modal from '../components/Modal';
 
-import type { Tenant, LoyaltySettings, PosSettings } from '../types';
+import type { Tenant, LoyaltySettings, PosSettings, PosSettingsConflict } from '../types';
+import { formatMoney } from '../../../shared/utils/formatters';
 
 interface CompanyForm {
   name: string;
@@ -43,8 +46,12 @@ interface CompanyForm {
 // rules; this switch just turns the regime on/off tenant-wide.
 function ShiftModeSection() {
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const canManage = hasPermission('settings_manage');
+  // Round 14: 409 при переключении режима с незакрытым конвейером —
+  // модал «Сначала закройте заказы (N)» со списком первых 10.
+  const [conflict, setConflict] = useState<PosSettingsConflict | null>(null);
 
   const {
     data: settings,
@@ -67,7 +74,16 @@ function ShiftModeSection() {
       queryClient.invalidateQueries({ queryKey: ['checks', 'pos-settings'] });
       toast.success(shiftModeEnabled ? 'Режим кассовой смены включён' : 'Режим кассовой смены выключен');
     },
-    onError: () => toast.error('Ошибка сохранения'),
+    onError: (err: any) => {
+      const data = err?.response?.data;
+      // 409 = незакрытый конвейер (отложенные заказы на доске) — не ошибка
+      // сохранения, а инструкция: показываем список, что закрыть.
+      if (err?.response?.status === 409 && Array.isArray(data?.checks)) {
+        setConflict(data as PosSettingsConflict);
+        return;
+      }
+      toast.error(data?.message || 'Ошибка сохранения');
+    },
   });
 
   if (!canManage) return null;
@@ -108,6 +124,54 @@ function ShiftModeSection() {
           </p>
         </>
       )}
+
+      {/* 409: незакрытые заказ-наряды на доске — режим переключать нельзя */}
+      <Modal
+        isOpen={!!conflict}
+        onClose={() => setConflict(null)}
+        title={`Сначала закройте заказы (${conflict?.count ?? 0})`}
+      >
+        <div className="space-y-4">
+          <p className="text-sm text-gray-600">
+            Режим нельзя переключить, пока на доске есть незакрытые заказ-наряды. Примите по ним оплату и выдайте — или
+            снимите с доски.
+          </p>
+          <div className="divide-y divide-gray-100 rounded-xl border border-gray-100">
+            {(conflict?.checks ?? []).map((c) => (
+              <div key={c.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-gray-900">Заказ #{c.number}</p>
+                  <p className="text-xs text-gray-500 truncate">{c.clientName ?? 'Розничный покупатель'}</p>
+                </div>
+                <span className="text-sm font-bold text-gray-700 tabular-nums whitespace-nowrap">
+                  {formatMoney(c.totalRevenue)}
+                </span>
+              </div>
+            ))}
+          </div>
+          {(conflict?.count ?? 0) > (conflict?.checks?.length ?? 0) && (
+            <p className="text-xs text-gray-400">
+              Показаны первые {conflict?.checks?.length ?? 0} из {conflict?.count ?? 0}.
+            </p>
+          )}
+          <div className="flex items-center justify-end gap-3 pt-2 border-t border-gray-200">
+            <button type="button" onClick={() => setConflict(null)} className="btn-secondary">
+              Закрыть
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConflict(null);
+                navigate('/work-board');
+              }}
+              className="btn-primary"
+            >
+              <LayoutGrid className="w-4 h-4" />
+              Перейти на Доску
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

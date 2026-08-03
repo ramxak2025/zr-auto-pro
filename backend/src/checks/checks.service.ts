@@ -1229,6 +1229,12 @@ export class ChecksService {
     // status change above. Nothing about the returned check is altered by it.
     if (targetColumn.notify_client === true && previousStatus !== workStatus) {
       this.fireCarReadyNotification(id, tenantID);
+      // ── Push кассирам «Машина готова к выдаче» (Round 14) ────────────────
+      // Та же веха (переход В колонку с notify_client=true), но получатели —
+      // сотрудники с правом accept_payment (getCashierUserIds), минус актор.
+      // Клиентская СМС выше — независимый механизм, не дублируется и не
+      // трогается. Fire-and-forget: не await'ится, статус-ответ не задерживает.
+      void this.fireOrderReadyPush(id, tenantID, actor?.userID ?? null);
     }
 
     return this.getById(id, tenantID, actor);
@@ -1299,6 +1305,177 @@ export class ChecksService {
     void this.marketing.notifyCarReady(tenantID, checkId).catch((err) => {
       this.logger.warn(`car-ready notify failed for check ${checkId}: ${err?.message ?? err}`);
     });
+  }
+
+  /**
+   * Тело push-а конвейера (Round 14, CASHIER_MODE_SPEC «Уведомления»):
+   * «<марка модель · госномер>»; без авто — имя клиента; совсем без ничего —
+   * «Заказ-наряд #N». Чистая строковая сборка, никаких запросов.
+   */
+  private buildOrderPushBody(row: {
+    make_model?: string | null;
+    plate_number?: string | null;
+    client_name?: string | null;
+    number?: number | null;
+  }): string {
+    const carLabel = [row.make_model, row.plate_number]
+      .filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+      .join(' · ');
+    if (carLabel) return carLabel;
+    if (typeof row.client_name === 'string' && row.client_name.trim().length > 0) return row.client_name;
+    return `Заказ-наряд #${row.number ?? ''}`;
+  }
+
+  /**
+   * Все userId тенанта, кто вправе принять оплату — SQL-зеркало
+   * userHasPermission(actor, 'accept_payment') (та же выборка, что резолвит
+   * isCashier для актора, но по ВСЕМ сотрудникам):
+   *   • owner-class (director/superadmin) — bypass по строковой роли
+   *     (OWNER_CLASS_ROLES в permissions.guard.ts);
+   *   • матрица роли есть → явная ячейка checks.acceptPayment
+   *     (flattenRoleMatrix: accept_payment ← checks.acceptPayment; SQL-выражение
+   *     1:1 из миграции 126: (m->'checks'->>'acceptPayment')::boolean IS TRUE);
+   *   • матрицы нет (role_id NULL — аномалия после cutover 126) → фолбэк
+   *     per-role дефолтов: admin=true (ADMIN_PERMISSION_DEFAULTS), master и
+   *     прочие=false — в SQL это ветка «r.matrix IS NULL AND role='admin'».
+   * Мёртвые аккаунты (неактивные/уволенные/вычищенные) отфильтрованы так же,
+   * как в jwt.strategy.loadValidatedUser. Best-effort: бросает только в caller,
+   * который сам всё глотает.
+   */
+  private async getCashierUserIds(tenantID: string): Promise<string[]> {
+    const { rows } = await this.pool.query(
+      `SELECT u.id
+         FROM users u
+         LEFT JOIN roles r ON r.id = u.role_id
+        WHERE u.tenant_id = $1
+          AND u.is_active = true
+          AND u.dismissed_at IS NULL
+          AND u.purged_at IS NULL
+          AND (
+            u.role IN ('director', 'superadmin')
+            OR (r.matrix IS NOT NULL AND (r.matrix->'checks'->>'acceptPayment')::boolean IS TRUE)
+            OR (r.matrix IS NULL AND u.role = 'admin')
+          )`,
+      [tenantID],
+    );
+    return rows.map((r: { id: string }) => String(r.id));
+  }
+
+  /**
+   * Push «Новая машина» ИСПОЛНИТЕЛЯМ свежесозданного заказа (Round 14,
+   * CASHIER_MODE_SPEC: назначение → исполнителям). Получатели — ПЕРСИСТЕНТНЫЕ
+   * строки check_assignees (синк уже отбросил чужие/битые id), минус создатель
+   * (не шлём актору самому себе) и минус получатель легаси-пуша «Новый
+   * заказ-наряд» (dto.masterId — не дублируем два баннера одному человеку).
+   * Категория 'check_assigned' — тот же mute-тумблер «Уведомлений», что и у
+   * легаси-пуша назначения: продуктовое событие одно и то же.
+   * FIRE-AND-FORGET: вызывается без await ПОСЛЕ COMMIT, всё глотает.
+   */
+  private async fireOrderAssignedPush(
+    checkId: string,
+    tenantID: string,
+    body: string,
+    excludeUserId: string | null,
+    alreadyNotifiedUserId: string | null,
+  ): Promise<void> {
+    if (!this.pushService) return;
+    try {
+      const { rows } = await this.pool.query(`SELECT user_id FROM check_assignees WHERE check_id=$1 AND tenant_id=$2`, [
+        checkId,
+        tenantID,
+      ]);
+      for (const r of rows) {
+        const uid = String(r.user_id);
+        if (excludeUserId && uid === String(excludeUserId)) continue;
+        if (alreadyNotifiedUserId && uid === String(alreadyNotifiedUserId)) continue;
+        this.pushService
+          .sendToUserCategory(uid, 'check_assigned', 'Новая машина', body, { type: 'order-assigned', checkId })
+          .catch(() => {
+            /* non-fatal */
+          });
+      }
+    } catch (err) {
+      this.logger.warn(`order-assigned push failed for check ${checkId}: ${(err as Error)?.message ?? err}`);
+    }
+  }
+
+  /**
+   * Push «Машина готова к выдаче» КАССИРАМ (Round 14, CASHIER_MODE_SPEC:
+   * «Готова» → кассирам) — переход заказа В колонку с notify_client=true.
+   * Получатели — getCashierUserIds (все с правом accept_payment, включая
+   * owner-class), минус актор. НЕЗАВИСИМ от клиентской СМС «машина готова»
+   * (fireCarReadyNotification → MarketingService) — она живёт рядом и не
+   * трогается. sendToUser (без категории): операционное событие очереди
+   * кассира, не глушится тумблерами. FIRE-AND-FORGET после UPDATE.
+   */
+  private async fireOrderReadyPush(checkId: string, tenantID: string, actorUserId: string | null): Promise<void> {
+    if (!this.pushService) return;
+    try {
+      const { rows } = await this.pool.query(
+        `SELECT ch.number, ch.total_revenue, cl.full_name AS client_name, ca.make_model, ca.plate_number
+           FROM checks ch
+           LEFT JOIN clients cl ON cl.id = ch.client_id
+           LEFT JOIN cars ca ON ca.id = ch.car_id
+          WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL`,
+        [checkId, tenantID],
+      );
+      if (rows.length === 0) return;
+      const total = parseFloat(rows[0].total_revenue) || 0;
+      const formatted = new Intl.NumberFormat('ru-RU', {
+        style: 'currency',
+        currency: 'RUB',
+        maximumFractionDigits: 0,
+      }).format(total);
+      const body = `${this.buildOrderPushBody(rows[0])} · ${formatted}`;
+      const cashierIds = await this.getCashierUserIds(tenantID);
+      for (const uid of cashierIds) {
+        if (actorUserId && uid === String(actorUserId)) continue;
+        this.pushService.sendToUser(uid, 'Машина готова к выдаче', body, { type: 'order-ready', checkId }).catch(() => {
+          /* non-fatal */
+        });
+      }
+    } catch (err) {
+      this.logger.warn(`order-ready push failed for check ${checkId}: ${(err as Error)?.message ?? err}`);
+    }
+  }
+
+  /**
+   * Push «Оплачено — можно выдавать» ИСПОЛНИТЕЛЯМ (Round 14, CASHIER_MODE_SPEC:
+   * «Оплачена» → исполнителям) — конвейерный заказ (work_status NOT NULL)
+   * активирован оплатой (is_deferred true→false). Получатели — check_assignees;
+   * фолбэк на master_id, когда исполнителей нет (легаси-заказ); минус актор
+   * (кассир сам себе не шлёт). FIRE-AND-FORGET после COMMIT.
+   */
+  private async fireOrderPaidPush(checkId: string, tenantID: string, actorUserId: string | null): Promise<void> {
+    if (!this.pushService) return;
+    try {
+      const { rows } = await this.pool.query(
+        `SELECT ch.number, ch.master_id, cl.full_name AS client_name, ca.make_model, ca.plate_number
+           FROM checks ch
+           LEFT JOIN clients cl ON cl.id = ch.client_id
+           LEFT JOIN cars ca ON ca.id = ch.car_id
+          WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL`,
+        [checkId, tenantID],
+      );
+      if (rows.length === 0) return;
+      const body = this.buildOrderPushBody(rows[0]);
+      const { rows: assignees } = await this.pool.query(
+        `SELECT user_id FROM check_assignees WHERE check_id=$1 AND tenant_id=$2`,
+        [checkId, tenantID],
+      );
+      const recipients = new Set<string>(assignees.map((r: { user_id: string }) => String(r.user_id)));
+      if (recipients.size === 0 && rows[0].master_id) recipients.add(String(rows[0].master_id));
+      for (const uid of recipients) {
+        if (actorUserId && uid === String(actorUserId)) continue;
+        this.pushService
+          .sendToUser(uid, 'Оплачено — можно выдавать', body, { type: 'order-paid', checkId })
+          .catch(() => {
+            /* non-fatal */
+          });
+      }
+    } catch (err) {
+      this.logger.warn(`order-paid push failed for check ${checkId}: ${(err as Error)?.message ?? err}`);
+    }
   }
 
   /**
@@ -2616,6 +2793,25 @@ export class ChecksService {
           });
       }
 
+      // ── Push «Новая машина» исполнителям (Round 14, CASHIER_MODE_SPEC) ────
+      // Только при ЯВНОМ assigneeIds (кассирский конвейер, приёмка админа) —
+      // легаси-создание с дефолтными исполнителями новых пушей не плодит.
+      // Тело — авто из уже перечитанного savedCheck (марка модель · госномер,
+      // фолбэк — клиент). Получатели читаются из персистентных check_assignees
+      // внутри хелпера; создатель и получатель легаси-пуша выше исключены.
+      // Fire-and-forget ПОСЛЕ COMMIT — не ждём, ответ не роняем.
+      if (this.pushService && Array.isArray(dto.assigneeIds)) {
+        const sc: any = savedCheck as any;
+        const body = this.buildOrderPushBody({
+          make_model: sc?.car?.makeModel ?? null,
+          plate_number: sc?.car?.plateNumber ?? null,
+          client_name: sc?.client?.fullName ?? null,
+          number: sc?.number ?? null,
+        });
+        const legacyNotified = dto.masterId && dto.masterId !== userID ? String(dto.masterId) : null;
+        void this.fireOrderAssignedPush(checkId, tenantID, body, userID ?? null, legacyNotified);
+      }
+
       return savedCheck;
     } catch (err) {
       await client.query('ROLLBACK');
@@ -3163,6 +3359,16 @@ export class ChecksService {
       }
 
       await client.query('COMMIT');
+
+      // ── Push исполнителям «Оплачено — можно выдавать» (Round 14) ──────────
+      // Голый {isDeferred:false} по КОНВЕЙЕРНОМУ заказу (work_status NOT NULL,
+      // строка была под FOR UPDATE) = кассир принял оплату. Строго на реальном
+      // true→false переходе (isActivating) — no-op re-save проведённого чека
+      // пушей не плодит. Fire-and-forget ПОСЛЕ COMMIT: хелпер async и глотает
+      // всё сам — сюда не бросает, транзакцию не трогает, ответ не ждёт.
+      if (isActivating && checkRows[0].work_status != null) {
+        void this.fireOrderPaidPush(id, tenantID, actorUserId);
+      }
     } catch (err) {
       try {
         await client.query('ROLLBACK');
@@ -3720,6 +3926,16 @@ export class ChecksService {
           .catch(() => {
             /* non-fatal */
           });
+      }
+
+      // ── Push исполнителям «Оплачено — можно выдавать» (Round 14) ──────────
+      // Второй маршрут той же вехи: кассирский клиент закрывает конвейерный
+      // заказ (work_status NOT NULL) с ПЕРЕСЫЛКОЙ строк + isDeferred:false —
+      // он идёт через fullUpdate, не через activateDeferred. Строго на реальном
+      // true→false переходе (lockedIsActivating — авторитет из-под FOR UPDATE).
+      // Fire-and-forget ПОСЛЕ COMMIT, зеркально ветке activateDeferred.
+      if (lockedIsActivating && checkRows[0].work_status != null) {
+        void this.fireOrderPaidPush(id, tenantID, actorUserId);
       }
 
       return this.getById(id, tenantID, actor);

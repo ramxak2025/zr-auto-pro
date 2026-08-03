@@ -35,10 +35,11 @@ import { Icon } from '../platform/Icon';
 import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
 import { useColors } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
 import { usePosSettings } from '../hooks/usePosSettings';
 import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
 import { colors } from '../theme';
-import { TAB_DEFINITIONS } from './TabBarShared';
+import { getTabDefinitions, type TabDefinition } from './TabBarShared';
 
 // Floating island geometry — owner explicitly wants the bar to read as
 // a small island floating ABOVE the screen content with content
@@ -64,24 +65,28 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // the JS-side icons / labels that overlay the glass.
   const palette = useColors();
 
-  const focusedIndex = TAB_DEFINITIONS.findIndex(
-    (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
+  // Cash-shift-mode (092) + per-role tab sets (Round 14). orderMode = shift-mode
+  // ON && caller is a master без права «Приём оплаты» — центральный сквиркл
+  // меняет символ и открывает «Доску» (состав слотов легаси). Кассир / админ
+  // при режиме ВКЛ получают свои составы из getTabDefinitions; OFF/loading →
+  // легаси-пятёрка байт-в-байт.
+  const { orderMode, isCashier, shiftModeEnabled } = usePosSettings();
+  const { user } = useAuth();
+  const tabs = React.useMemo(
+    () => getTabDefinitions({ role: user?.role, orderMode, isCashier, shiftModeEnabled }),
+    [user?.role, orderMode, isCashier, shiftModeEnabled],
   );
+
+  const focusedIndex = tabs.findIndex((t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index);
   const safeIndex = focusedIndex < 0 ? 0 : focusedIndex;
 
   // Index of the Касса slot (the one declared with isKassa: true). The
   // Касса button is rendered as a separate sibling on top of the bar,
   // so we need this index to (a) emit the right tab navigation and
   // (b) compute the focused state.
-  const kassaTabIndex = TAB_DEFINITIONS.findIndex((t) => t.isKassa);
+  const kassaTabIndex = tabs.findIndex((t) => t.isKassa);
+  const kassaTab = tabs[kassaTabIndex];
   const kassaFocused = safeIndex === kassaTabIndex;
-
-  // Cash-shift-mode (092). orderMode = shift-mode ON && caller is a master
-  // без права «Приём оплаты». OFF/loading → false → центральная кнопка остаётся
-  // «Касса» байт-в-байт (symbol bag.fill, ведёт на NewCheck). В board-режиме
-  // тот же premium-сквиркл меняет только символ + цель нажатия — открывает
-  // «Доску» внутри Checks-стека.
-  const { orderMode } = usePosSettings();
 
   // Офлайн-очередь чеков (волна C, C-6): пока есть несотправленные записи
   // (pending + отклонённые), таб «Журнал» несёт маленький амбер-бейдж со
@@ -97,7 +102,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
 
   const navigateToTab = React.useCallback(
     (index: number) => {
-      const tab = TAB_DEFINITIONS[index];
+      const tab = tabs[index];
       if (!tab) return;
       const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
       const focused = state.index === routeIndex;
@@ -106,11 +111,18 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
         target: state.routes[routeIndex]?.key ?? tab.routeName,
         canPreventDefault: true,
       });
-      if (!focused && !event.defaultPrevented) {
+      if (event.defaultPrevented) return;
+      if (tab.nestedScreen) {
+        // Слот-«трамплин» (Round 14): «Доска» админа = Checks → WorkBoard.
+        // initial:false держит ChecksHome (Журнал) под доской — back работает.
+        (navigation as any).navigate(tab.routeName, { screen: tab.nestedScreen, initial: false });
+        return;
+      }
+      if (!focused) {
         navigation.navigate(tab.routeName as never);
       }
     },
-    [state, navigation],
+    [tabs, state, navigation],
   );
 
   // Floating island: glass pill with TOP_LIFT above and (BOTTOM_LIFT +
@@ -149,7 +161,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
               view also draws the 1px top rim (theme-aware on the Swift
               side), so JS adds no rim of its own. */}
           <AutexaLiquidGlassTabBar
-            tabCount={TAB_DEFINITIONS.length}
+            tabCount={tabs.length}
             activeIndex={safeIndex}
             onTabPress={navigateToTab}
             style={styles.bar}
@@ -160,7 +172,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
               60pt so icons get vertically centered without doing extra
               offset math. */}
           <View style={styles.iconsRow} pointerEvents="none">
-            {TAB_DEFINITIONS.map((tab) => {
+            {tabs.map((tab) => {
               const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
               const focused = state.index === routeIndex;
 
@@ -193,7 +205,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
             where its in-island slot was. */}
         <View style={styles.kassaSlot} pointerEvents="box-none">
           <AutexaKassaButton
-            symbolName={orderMode ? 'square.grid.2x2.fill' : 'bag.fill'}
+            symbolName={orderMode ? 'square.grid.2x2.fill' : (kassaTab?.kassaSymbol ?? 'bag.fill')}
             focused={orderMode ? false : kassaFocused}
             onPress={orderMode ? openBoard : () => navigateToTab(kassaTabIndex)}
             style={styles.kassaButton}
@@ -207,7 +219,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
 interface TabItemProps {
   focused: boolean;
   label: string;
-  icon: (typeof TAB_DEFINITIONS)[number]['icon'];
+  icon: TabDefinition['icon'];
   palette: ReturnType<typeof useColors>;
   /** >0 → маленький амбер-бейдж на иконке (офлайн-очередь чеков у Журнала). */
   badgeCount?: number;

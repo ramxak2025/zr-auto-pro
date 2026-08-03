@@ -22,7 +22,7 @@
  */
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { BlurView } from 'expo-blur';
-import { House, Package, Receipt, LayoutGrid, type LucideIcon } from 'lucide-react-native';
+import { House, Package, Receipt, LayoutGrid, Clock, SquareKanban, type LucideIcon } from 'lucide-react-native';
 import React from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
 import { GestureDetector, Gesture } from 'react-native-gesture-handler';
@@ -33,10 +33,11 @@ import { SPRING_TIGHT } from '../platform/motion';
 import { Text } from '../platform/Typography';
 import { colors } from '../theme';
 import { useColors } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
 import { usePosSettings } from '../hooks/usePosSettings';
 import { useOfflineCheckQueue } from '../utils/offlineCheckQueue';
 import { KassaButton } from './KassaButton';
-import { TAB_DEFINITIONS } from './TabBarShared';
+import { getTabDefinitions, type TabDefinition } from './TabBarShared';
 
 const BAR_HEIGHT = 60;
 const HORIZONTAL_MARGIN = 14;
@@ -52,21 +53,32 @@ const CAPSULE_PADDING_H = 6;
 // is treated as a tap and the per-tab Pressable handles it.
 const PAN_MIN_DISTANCE = 10;
 
-const TAB_ICONS: Record<string, LucideIcon> = {
-  Dashboard: House,
-  Products: Package,
-  Checks: Receipt,
-  MoreTab: LayoutGrid,
-};
+// Иконки по СЕМАНТИЧЕСКОМУ имени из TabDefinition.icon (не по routeName):
+// один и тот же роут Checks в разных составах — то «Журнал» (receipt), то
+// «Доска» (kanban) — Round 14, режим «Кассир».
+const TAB_ICONS: Record<TabDefinition['icon'], LucideIcon | undefined> = {
+  home: House,
+  warehouse: Package,
+  journal: Receipt,
+  menu: LayoutGrid,
+  clock: Clock,
+  board: SquareKanban,
+} as Record<TabDefinition['icon'], LucideIcon | undefined>;
 
 export default function TabBar({ state, navigation }: BottomTabBarProps) {
   const insets = useSafeAreaInsets();
   const safeBottom = Math.max(insets.bottom, 8);
   const palette = useColors();
-  // Cash-shift-mode (092). orderMode = shift-mode ON && caller is a master
-  // без права «Приём оплаты». OFF/loading → false → центральная кнопка остаётся
-  // «Касса» байт-в-байт. В board-режиме она открывает «Доску».
-  const { orderMode } = usePosSettings();
+  // Cash-shift-mode (092) + per-role tab sets (Round 14). orderMode = shift-mode
+  // ON && caller is a master без права «Приём оплаты» — центральная кнопка
+  // открывает «Доску» (состав легаси). Кассир / админ при режиме ВКЛ получают
+  // свои составы; OFF/loading → легаси-пятёрка байт-в-байт.
+  const { orderMode, isCashier, shiftModeEnabled } = usePosSettings();
+  const { user } = useAuth();
+  const tabs = React.useMemo(
+    () => getTabDefinitions({ role: user?.role, orderMode, isCashier, shiftModeEnabled }),
+    [user?.role, orderMode, isCashier, shiftModeEnabled],
+  );
 
   // Офлайн-очередь чеков (паритет с TabBar.ios.tsx, волна C, C-6): пока есть
   // несотправленные записи (pending + отклонённые), таб «Журнал» несёт
@@ -75,13 +87,11 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
   // на сервере. Снапшот useSyncExternalStore стабилен — лишних ререндеров нет.
   const queuedCheckCount = useOfflineCheckQueue().length;
 
-  const focusedIndex = TAB_DEFINITIONS.findIndex(
-    (t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index,
-  );
+  const focusedIndex = tabs.findIndex((t) => state.routes.findIndex((r) => r.name === t.routeName) === state.index);
   const safeFocusedIndex = focusedIndex < 0 ? 0 : focusedIndex;
 
   const [rowWidth, setRowWidth] = React.useState(0);
-  const slotWidth = rowWidth / TAB_DEFINITIONS.length;
+  const slotWidth = rowWidth / tabs.length;
 
   const capsuleX = useSharedValue(0);
   const lastSlot = useSharedValue(safeFocusedIndex);
@@ -96,7 +106,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
 
   const navigateToIndex = React.useCallback(
     (index: number) => {
-      const tab = TAB_DEFINITIONS[index];
+      const tab = tabs[index];
       if (!tab) return;
       const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
       const focused = state.index === routeIndex;
@@ -105,12 +115,19 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
         target: state.routes[routeIndex]?.key ?? tab.routeName,
         canPreventDefault: true,
       });
-      if (!focused && !event.defaultPrevented) {
+      if (event.defaultPrevented) return;
+      if (tab.nestedScreen) {
+        // Слот-«трамплин» (Round 14): «Доска» админа = Checks → WorkBoard.
+        haptic('tap');
+        (navigation as any).navigate(tab.routeName, { screen: tab.nestedScreen, initial: false });
+        return;
+      }
+      if (!focused) {
         haptic('tap');
         navigation.navigate(tab.routeName as never);
       }
     },
-    [state, navigation],
+    [tabs, state, navigation],
   );
 
   const fireCrossingHaptic = React.useCallback(() => {
@@ -134,7 +151,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
           const clamped = Math.max(0, Math.min(rowWidth - slotWidth, e.x - slotWidth / 2));
           capsuleX.value = clamped;
           const idx = Math.round(e.x / slotWidth);
-          if (idx !== lastSlot.value && idx >= 0 && idx < TAB_DEFINITIONS.length) {
+          if (idx !== lastSlot.value && idx >= 0 && idx < tabs.length) {
             lastSlot.value = idx;
             runOnJS(fireCrossingHaptic)();
           }
@@ -144,8 +161,8 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
           dragging.value = false;
           if (rowWidth === 0 || slotWidth === 0) return;
           const idx = Math.round(e.x / slotWidth);
-          const clamped = Math.max(0, Math.min(TAB_DEFINITIONS.length - 1, idx));
-          const def = TAB_DEFINITIONS[clamped];
+          const clamped = Math.max(0, Math.min(tabs.length - 1, idx));
+          const def = tabs[clamped];
           if (def && !def.isKassa) {
             runOnJS(navigateToIndex)(clamped);
           } else {
@@ -156,7 +173,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
           'worklet';
           dragging.value = false;
         }),
-    [capsuleX, lastSlot, dragging, rowWidth, slotWidth, safeFocusedIndex, navigateToIndex, fireCrossingHaptic],
+    [capsuleX, lastSlot, dragging, rowWidth, slotWidth, safeFocusedIndex, navigateToIndex, fireCrossingHaptic, tabs],
   );
 
   const capsuleStyle = useAnimatedStyle(() => ({
@@ -213,7 +230,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
             activating on static touches. Tap → Pressable. Drag → Pan. */}
         <GestureDetector gesture={panGesture}>
           <View style={styles.row} onLayout={(e) => setRowWidth(e.nativeEvent.layout.width)}>
-            {TAB_DEFINITIONS.map((tab) => {
+            {tabs.map((tab, tabIndex) => {
               const routeIndex = state.routes.findIndex((r) => r.name === tab.routeName);
               const focused = state.index === routeIndex;
 
@@ -237,27 +254,17 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
                     accessibilityRole="button"
                     accessibilityLabel={orderMode ? 'Доска заказ-нарядов' : tab.label}
                   >
-                    <KassaButton board={orderMode} />
+                    <KassaButton board={orderMode} payment={tab.routeName === 'CashierTab'} />
                   </Pressable>
                 );
               }
 
-              const onPress = () => {
-                const event = navigation.emit({
-                  type: 'tabPress',
-                  target: state.routes[routeIndex]?.key ?? tab.routeName,
-                  canPreventDefault: true,
-                });
-                if (!focused && !event.defaultPrevented) {
-                  haptic('tap');
-                  navigation.navigate(tab.routeName as never);
-                }
-              };
+              const onPress = () => navigateToIndex(tabIndex);
 
               return (
                 <TabItem
                   key={tab.routeName}
-                  routeName={tab.routeName}
+                  icon={tab.icon}
                   label={tab.label}
                   focused={focused}
                   onPress={onPress}
@@ -274,7 +281,7 @@ export default function TabBar({ state, navigation }: BottomTabBarProps) {
 }
 
 interface TabItemProps {
-  routeName: string;
+  icon: TabDefinition['icon'];
   label: string;
   focused: boolean;
   onPress: () => void;
@@ -283,7 +290,7 @@ interface TabItemProps {
   badgeCount?: number;
 }
 
-function TabItem({ routeName, label, focused, onPress, palette, badgeCount = 0 }: TabItemProps) {
+function TabItem({ icon, label, focused, onPress, palette, badgeCount = 0 }: TabItemProps) {
   const focusValue = useSharedValue(focused ? 1 : 0);
   React.useEffect(() => {
     focusValue.value = withSpring(focused ? 1 : 0, SPRING_TIGHT);
@@ -293,7 +300,7 @@ function TabItem({ routeName, label, focused, onPress, palette, badgeCount = 0 }
     transform: [{ scale: 1 + focusValue.value * 0.06 }],
   }));
 
-  const Cmp = TAB_ICONS[routeName];
+  const Cmp = TAB_ICONS[icon];
   const tint = focused ? palette.accent.primaryText : palette.text.secondary;
 
   return (

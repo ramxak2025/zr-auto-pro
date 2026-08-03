@@ -51,6 +51,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
+import { CASHIER_ROLE_PRESET } from '../../../shared/types';
 import type { Role } from '../../../shared/types';
 
 /** «5 сотрудников» / «1 сотрудник» / «3 сотрудника». */
@@ -209,6 +210,39 @@ export default function RolesScreen() {
     setRefreshing(false);
   };
 
+  // ── Роль-пресет «Кассир» (Round 14, CASHIER_MODE_SPEC) ────────────────
+  // Один тап: создаёт строгую тенантную роль приёма оплаты из шаблона
+  // CASHIER_ROLE_PRESET (shared/types) и открывает её редактор. Если роль с
+  // именем «Кассир» уже есть — просто открываем её (никаких дублей).
+  const cashierPresetMutation = useMutation({
+    mutationFn: () =>
+      rolesApi.create({
+        name: CASHIER_ROLE_PRESET.name,
+        description: CASHIER_ROLE_PRESET.description,
+        matrix: CASHIER_ROLE_PRESET.matrix,
+      }),
+    onSuccess: (res: any) => {
+      queryClient.invalidateQueries({ queryKey: [...ROLES_QUERY_KEY] });
+      haptic('success');
+      const createdId = res?.data?.id;
+      if (createdId) navigation.navigate('RoleEditor', { roleId: createdId });
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось создать роль «Кассир»');
+    },
+  });
+
+  const openCashierPreset = () => {
+    haptic('tap');
+    const existing = roles.find((r) => r.name.trim().toLowerCase() === CASHIER_ROLE_PRESET.name.toLowerCase());
+    if (existing) {
+      navigation.navigate('RoleEditor', { roleId: existing.id });
+      return;
+    }
+    if (!cashierPresetMutation.isPending) cashierPresetMutation.mutate();
+  };
+
   const openRole = (role: Role) => {
     haptic('tap');
     navigation.navigate('RoleEditor', { roleId: role.id });
@@ -326,6 +360,39 @@ export default function RolesScreen() {
                 <Text style={[styles.groupEmptyText, { color: palette.text.tertiary }]}>Системных ролей нет</Text>
               )}
             </View>
+
+            {/* ── Роль-пресет «Кассир» (Round 14, режим кассовой смены) ─── */}
+            <TouchableOpacity
+              style={[styles.cashierPreset, { borderColor: palette.border.subtle, backgroundColor: palette.bg.card }]}
+              onPress={openCashierPreset}
+              disabled={cashierPresetMutation.isPending}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Создать роль Кассир"
+            >
+              <View style={[styles.cashierPresetIcon, { backgroundColor: softTint(colors.green[500], palette.mode) }]}>
+                <Ionicons
+                  name="cash-outline"
+                  size={17}
+                  color={palette.mode === 'dark' ? colors.green[300] : colors.green[600]}
+                />
+              </View>
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.emptyCustomTitle, { color: palette.text.primary }]}>
+                  {roles.some((r) => r.name.trim().toLowerCase() === 'кассир')
+                    ? 'Открыть роль «Кассир»'
+                    : 'Создать роль «Кассир»'}
+                </Text>
+                <Text style={[styles.emptyCustomSub, { color: palette.text.tertiary }]}>
+                  Готовый пресет для режима кассовой смены: принимает оплату и ведёт смены, состав заказов не меняет.
+                </Text>
+              </View>
+              {cashierPresetMutation.isPending ? (
+                <ActivityIndicator size="small" color={colors.primary[600]} />
+              ) : (
+                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+              )}
+            </TouchableOpacity>
 
             {/* ── Мои роли ──────────────────────────────────────────────── */}
             <Text style={[styles.sectionLabel, { color: palette.text.tertiary, marginTop: spacing[5] }]}>Мои роли</Text>
@@ -530,6 +597,18 @@ const styles = StyleSheet.create({
   },
   emptyCustomTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
   emptyCustomSub: { fontSize: 11, lineHeight: 15, marginTop: 2 },
+  // Роль-пресет «Кассир» (Round 14)
+  cashierPreset: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    marginTop: spacing[3],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[3.5],
+    borderWidth: 1,
+    borderRadius: borderRadius['2xl'],
+  },
+  cashierPresetIcon: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
   footHint: { fontSize: 11, lineHeight: 16, marginTop: spacing[5], marginHorizontal: spacing[1] },
   copyRow: {
     flexDirection: 'row',

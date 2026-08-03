@@ -23,7 +23,7 @@
  *     island geometry, like iOS.
  */
 import { LinearGradient } from 'expo-linear-gradient';
-import { ShoppingBag, LayoutGrid } from 'lucide-react-native';
+import { ShoppingBag, LayoutGrid, RussianRuble } from 'lucide-react-native';
 import React from 'react';
 import { StyleSheet, View } from 'react-native';
 import { colors } from '../theme';
@@ -37,8 +37,12 @@ const RADIUS = 16;
  * CTA opens «Доска» instead of «Касса». Only the glyph changes (ShoppingBag →
  * LayoutGrid); the premium squircle surface stays identical. board=false →
  * byte-for-byte the legacy Касса button.
+ *
+ * `payment` (Round 14, default false) — кассирский центр «Оплата»: глиф ₽
+ * (RussianRuble), зеркало iOS SF `rublesign.circle.fill`. Поверхность та же.
+ * board имеет приоритет (в orderMode кассирского состава не бывает).
  */
-export function KassaButton({ board = false }: { board?: boolean }) {
+export function KassaButton({ board = false, payment = false }: { board?: boolean; payment?: boolean }) {
   return (
     <View style={s.outer}>
       <View style={s.body}>
@@ -53,6 +57,8 @@ export function KassaButton({ board = false }: { board?: boolean }) {
         <View style={s.rim} pointerEvents="none" />
         {board ? (
           <LayoutGrid size={22} color={colors.white} strokeWidth={2.2} />
+        ) : payment ? (
+          <RussianRuble size={22} color={colors.white} strokeWidth={2.2} />
         ) : (
           <ShoppingBag size={22} color={colors.white} strokeWidth={2.2} />
         )}

@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft,
+  Banknote,
   BarChart3,
   BookOpen,
   Box,
@@ -25,7 +26,7 @@ import toast from 'react-hot-toast';
 
 import { rolesApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
-import { PERMISSION_GROUPS } from '../types';
+import { PERMISSION_GROUPS, CASHIER_ROLE_PRESET } from '../types';
 import type { PermissionKey, Role, RoleMatrix, RoleScope, User } from '../types';
 import Modal from './Modal';
 import ConfirmDialog from './ConfirmDialog';
@@ -292,6 +293,9 @@ function buildMatrix(m: EditableMatrix): RoleMatrix {
       sellInstallment: bool('checks', 'sellInstallment'),
       cashShifts: bool('checks', 'cashShifts'),
       board: bool('checks', 'board'),
+      // Round 14 (миграция 148): без этой ячейки сохранение из редактора
+      // молча сбрасывало бы «Изменяет назначенный заказ» в false.
+      editAssignedOrder: bool('checks', 'editAssignedOrder'),
     },
     services: { view: bool('services', 'view'), manage: bool('services', 'manage') },
     warehouse: {
@@ -396,6 +400,28 @@ export default function RolesManagement({ isOpen, onClose, roles, rolesLoading, 
   const customRoles = roles.filter((r) => !r.isSystem);
   const countFor = (role: Role) => users.filter((u) => u.roleId === role.id).length;
 
+  // Round 14: роль-пресет «Кассир» в один тап. Если роль с таким именем уже
+  // есть — открываем её редактор вместо создания дубля.
+  const cashierRole = roles.find((r) => r.name === CASHIER_ROLE_PRESET.name);
+  const createCashierMutation = useMutation({
+    mutationFn: () => rolesApi.create(CASHIER_ROLE_PRESET),
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ['roles'] });
+      toast.success('Роль «Кассир» создана');
+      setView({ kind: 'edit', role: res.data });
+    },
+    onError: (err: any) => {
+      toast.error(err?.response?.data?.message || 'Не удалось создать роль «Кассир»');
+    },
+  });
+  const handleCashierPreset = () => {
+    if (cashierRole) {
+      setView({ kind: 'edit', role: cashierRole });
+    } else {
+      createCashierMutation.mutate();
+    }
+  };
+
   const title = view.kind === 'list' ? 'Роли и права доступа' : view.kind === 'edit' ? 'Настройка роли' : 'Новая роль';
 
   return (
@@ -416,6 +442,31 @@ export default function RolesManagement({ isOpen, onClose, roles, rolesLoading, 
                 <button onClick={() => setView({ kind: 'create' })} className="btn-primary flex-shrink-0">
                   <Plus className="w-4 h-4" />
                   Новая роль
+                </button>
+              </div>
+
+              {/* Round 14: пресет «Кассир» для режима кассовой смены */}
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-emerald-100 bg-emerald-50/60 px-4 py-3">
+                <div className="min-w-0">
+                  <p className="text-sm font-semibold text-emerald-900">Режим кассовой смены</p>
+                  <p className="text-xs text-emerald-700 mt-0.5">
+                    {cashierRole
+                      ? 'Роль «Кассир» уже создана — откройте, чтобы посмотреть или настроить.'
+                      : 'Строгая роль в один тап: приём оплаты и кассовые смены, без прав мастера.'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleCashierPreset}
+                  disabled={createCashierMutation.isPending}
+                  className="btn-secondary flex-shrink-0"
+                >
+                  {createCashierMutation.isPending ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Banknote className="w-4 h-4" />
+                  )}
+                  {cashierRole ? 'Открыть «Кассир»' : 'Создать роль «Кассир»'}
                 </button>
               </div>
 
@@ -596,6 +647,13 @@ function RoleEditor({
   };
   const boolOf = (def: CellDef): boolean => matrix[def.section]?.[def.action] === true;
 
+  // Round 14: мягкое предупреждение (НЕ блокирует сохранение) — роль
+  // одновременно принимает оплату и создаёт/меняет заказы. Совмещение
+  // кассира с работой мастера продуктом не рекомендуется.
+  const cashierMixWarning =
+    matrix.checks?.acceptPayment === true &&
+    (matrix.checks?.create === true || matrix.checks?.editAssignedOrder === true);
+
   const saveMutation = useMutation({
     mutationFn: () => {
       const payload = { name: name.trim(), description: description.trim(), matrix: buildMatrix(matrix) };
@@ -682,6 +740,17 @@ function RoleEditor({
           disabled={readOnly}
         />
       </div>
+
+      {/* Round 14: кассир + исполнительские права — мягкое предупреждение */}
+      {cashierMixWarning && (
+        <div className="flex items-start gap-2.5 bg-yellow-50 border border-yellow-200 rounded-xl px-4 py-3">
+          <Info className="w-4 h-4 text-yellow-600 flex-shrink-0 mt-0.5" />
+          <p className="text-xs text-yellow-800">
+            Кассир обычно не совмещается с работой мастера: роль одновременно принимает оплату и создаёт или меняет
+            заказы. Сохранить можно — но надёжнее разделить эти роли.
+          </p>
+        </div>
+      )}
 
       {/* Матрица прав */}
       <div className="space-y-4">

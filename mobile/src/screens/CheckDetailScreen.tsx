@@ -43,6 +43,7 @@ import { haptic } from '../platform/haptics';
 import { PressableScale } from '../platform/PressableScale';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
+import { usePosSettings } from '../hooks/usePosSettings';
 import {
   colors,
   fontSize,
@@ -124,6 +125,12 @@ export default function CheckDetailScreen() {
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
   const palette = useColors();
+  // Round 14, режим «Кассир»: при включённом режиме кассовой смены кнопка
+  // «Принять оплату» ведёт в единый флоу AcceptPayment и гейтится правом
+  // «Приём оплаты» (сервер при активации требует его же). OFF/loading →
+  // false → легаси-поведение байт-в-байт.
+  const { shiftModeEnabled } = usePosSettings();
+  const canAcceptPayment = hasPermission('accept_payment');
   // Dark-mode flag — gates accent-tile fills (icon chips, action circles,
   // status/plate badges, section headers) onto the muted `softTint` dark
   // formula. The light branch always keeps the exact legacy `[50]` token so
@@ -814,8 +821,20 @@ export default function CheckDetailScreen() {
   // Отложенный черновик правится по-старому (checks_edit). Закрытый (включая
   // рассрочку — Round 13 #9) — только с edit_closed_check/owner-class. Возврат
   // заморожен; мастер — только свои (foreignForMaster глушит обе ветки).
+  // Round 14 (режим «Кассир», миграция 148): КОНВЕЙЕРНЫЙ заказ (отложенный И
+  // стоящий на доске, workStatus != null) дополнительно требует права
+  // «Изменяет назначенный заказ» — без него мастер только выполняет
+  // (двигает карточку), состав не трогает. Зеркалит серверный 400
+  // «Изменение назначенного заказа запрещено ролью»; owner-class байпасится
+  // внутри hasPermission. Вне конвейера — байт-в-байт прежняя логика.
+  const isConveyorOrder = isDeferred && !!check.workStatus;
+  const canEditAssigned = !isConveyorOrder || hasPermission('checks_edit_assigned_order');
   const canEdit =
-    isReturned || foreignForMaster ? false : isDeferred ? hasPermission('checks_edit') : canEditClosedCheck;
+    isReturned || foreignForMaster
+      ? false
+      : isDeferred
+        ? hasPermission('checks_edit') && canEditAssigned
+        : canEditClosedCheck;
   const canDelete = hasPermission('checks_delete') && !isReturned;
   const canViewProfit = hasPermission('profit_view');
   // «Комментарий своего чека — день в день» (round 7, item 10): БЕЗ проверки
@@ -1077,30 +1096,53 @@ export default function CheckDetailScreen() {
           </View>
         )}
 
-        {/* «Принять оплату» — one-tap закрытие отложенного чека.
-            Видна только при isDeferred и только с permission checks_edit
-            (canEdit уже включает !isReturned — возвращённый чек заморожен).
-            Web-parity: PATCH { isDeferred: false }, как на сайте. */}
-        {canEdit && isDeferred && (
-          <TouchableOpacity
-            style={styles.acceptPaymentBtn}
-            onPress={handleAcceptPayment}
-            disabled={acceptPaymentMutation.isPending}
-            activeOpacity={0.85}
-            accessibilityRole="button"
-            accessibilityLabel="Принять оплату"
-            accessibilityState={{ disabled: acceptPaymentMutation.isPending }}
-          >
-            {acceptPaymentMutation.isPending ? (
-              <ActivityIndicator color={colors.white} size="small" />
-            ) : (
-              <>
+        {/* «Принять оплату» — закрытие отложенного чека.
+            Режим кассовой смены ВКЛ (Round 14): кнопку видит держатель права
+            «Приём оплаты» (кассир/владелец) и она ведёт в ЕДИНЫЙ флоу
+            AcceptPayment (скидка + нал/карта/смешанная) — тот же экран, что
+            открывает кассирская очередь «Оплата». Голый PATCH здесь больше не
+            шлём: не-кассиру сервер ответил бы 403.
+            Режим ВЫКЛ: байт-в-байт легаси — one-tap PATCH {isDeferred:false}
+            с подтверждением, гейт canEdit (checks_edit). */}
+        {shiftModeEnabled
+          ? isDeferred &&
+            !isReturned &&
+            canAcceptPayment && (
+              <TouchableOpacity
+                style={styles.acceptPaymentBtn}
+                onPress={() => {
+                  haptic('select');
+                  navigation.navigate('AcceptPayment', { id });
+                }}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Принять оплату"
+              >
                 <Ionicons name="cash-outline" size={17} color={colors.white} />
                 <Text style={styles.acceptPaymentBtnText}>Принять оплату</Text>
-              </>
+              </TouchableOpacity>
+            )
+          : canEdit &&
+            isDeferred && (
+              <TouchableOpacity
+                style={styles.acceptPaymentBtn}
+                onPress={handleAcceptPayment}
+                disabled={acceptPaymentMutation.isPending}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel="Принять оплату"
+                accessibilityState={{ disabled: acceptPaymentMutation.isPending }}
+              >
+                {acceptPaymentMutation.isPending ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <>
+                    <Ionicons name="cash-outline" size={17} color={colors.white} />
+                    <Text style={styles.acceptPaymentBtnText}>Принять оплату</Text>
+                  </>
+                )}
+              </TouchableOpacity>
             )}
-          </TouchableOpacity>
-        )}
 
         {/* Зона действий для отложенного чека: «Продолжить» (открыть кассу в
             режиме редактирования черновика) и «Удалить черновик» (с

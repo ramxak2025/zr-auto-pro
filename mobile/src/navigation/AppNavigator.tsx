@@ -16,6 +16,8 @@ import InventoryScreen from '../screens/InventoryScreen';
 import ChecksScreen from '../screens/ChecksScreen';
 import CheckCreateScreen from '../screens/CheckCreateScreen';
 import CheckDetailScreen from '../screens/CheckDetailScreen';
+import CashierPaymentScreen from '../screens/CashierPaymentScreen';
+import AcceptPaymentScreen from '../screens/AcceptPaymentScreen';
 import ProductPickerScreen from '../screens/ProductPickerScreen';
 import WorkBoardScreen from '../screens/WorkBoardScreen';
 import WorkBoardSettingsScreen from '../screens/WorkBoardSettingsScreen';
@@ -267,6 +269,14 @@ export type RootStackParamList = {
    * — папка, в которой создаём (текущий уровень TemplatesScreen).
    */
   TemplateEditor: { templateId?: string; initialFolderId?: string | null } | undefined;
+  /**
+   * Приём оплаты по отложенному заказ-наряду (Round 14, режим «Кассир») —
+   * ЕДИНЫЙ флоу активации: скидка + способ нал/карта/смешанная → PATCH
+   * { isDeferred:false, ... }. Открывается из кассирской очереди «Оплата»
+   * (CashierTab) и из CheckDetail при включённом режиме. На корневом стеке
+   * (slide-up, перекрывает таб-бар — как CheckCreate).
+   */
+  AcceptPayment: { id: string };
 };
 
 export type TabParamList = {
@@ -275,6 +285,14 @@ export type TabParamList = {
   NewCheck: undefined;
   Checks: undefined;
   MoreTab: undefined;
+  /**
+   * Round 14, режим «Кассир»: доп. табы кассирского состава. Зарегистрированы
+   * ВСЕГДА (react-navigation не терпит динамической регистрации) — но бар
+   * (TabBarShared.getTabDefinitions) рисует их слоты только кассиру при
+   * включённом режиме кассовой смены.
+   */
+  CashShiftsTab: undefined;
+  CashierTab: undefined;
 };
 
 // ProductsStackParamList — каждый "уровень папки склада" есть отдельный
@@ -660,6 +678,15 @@ function TabNavigator() {
       <Tab.Screen name="Products" component={ProductsStackNavigator} />
       <Tab.Screen name="NewCheck" component={CheckCreateScreen} />
       <Tab.Screen name="Checks" component={ChecksStackNavigator} />
+      {/* Round 14, режим «Кассир»: табы кассирского состава. Всегда
+          зарегистрированы, слоты в баре рисуются только кассиру (см.
+          TabBarShared.getTabDefinitions). «Смены» — тот же CashShiftScreen,
+          что живёт в MoreStack (там он остаётся для остальных ролей);
+          здесь он корень таба — шапка сама прячет back, когда некуда
+          возвращаться. «Оплата» — очередь готовых заказов + поиск по
+          госномеру; тап по карточке ведёт на корневой AcceptPayment. */}
+      <Tab.Screen name="CashShiftsTab" component={CashShiftScreen} />
+      <Tab.Screen name="CashierTab" component={CashierPaymentScreen} />
       {/*
         MoreTab — three coordinated listeners keep the «Ещё» back-stack
         and tab behaviour native:
@@ -953,6 +980,13 @@ export default function AppNavigator() {
               «Ещё» идёт через копии в MoreStack выше (таб-бар виден). */}
           <Stack.Screen name="Templates" component={TemplatesScreen} />
           <Stack.Screen name="TemplateEditor" component={TemplateEditorScreen} />
+          {/* Приём оплаты (Round 14, режим «Кассир») — единый флоу активации
+              отложенного заказа. Slide-up поверх таб-бара, как CheckCreate. */}
+          <Stack.Screen
+            name="AcceptPayment"
+            component={AcceptPaymentScreen}
+            options={{ animation: 'slide_from_bottom' }}
+          />
         </>
       )}
     </Stack.Navigator>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -95,6 +95,15 @@ export default function CheckDetailPage() {
   const [commentModalOpen, setCommentModalOpen] = useState(false);
   const [commentDraft, setCommentDraft] = useState('');
 
+  // ── Приём оплаты отложенного заказа (Round 14, режим «Кассир») ──────────
+  // Форма вместо голой кнопки «Завершить»: скидка с живым пересчётом итога,
+  // способ нал/карта/смешанная (авто-доводка сумм как в Кассе), кнопка
+  // «Оплачено — N ₽» → PATCH {isDeferred:false, ...} — сервер пересчитывает.
+  const [payMethod, setPayMethod] = useState<'cash' | 'card' | 'cash_card'>('cash');
+  const [payDiscount, setPayDiscount] = useState(0);
+  const [payCash, setPayCash] = useState(0);
+  const [payHydrated, setPayHydrated] = useState(false);
+
   const {
     data: check,
     isLoading,
@@ -110,6 +119,13 @@ export default function CheckDetailPage() {
     enabled: !!id,
   });
 
+  // Гидрация формы оплаты один раз при загрузке отложенного чека.
+  useEffect(() => {
+    if (!check || payHydrated || !check.isDeferred) return;
+    setPayDiscount(check.discount ?? 0);
+    setPayHydrated(true);
+  }, [check, payHydrated]);
+
   const { data: company } = useQuery<Tenant>({
     queryKey: ['my-company'],
     queryFn: async () => (await myCompanyApi.get()).data,
@@ -124,21 +140,25 @@ export default function CheckDetailPage() {
   });
   const activeColumns = (boardColumns ?? []).filter((c) => c.isActive).sort((a, b) => a.sortOrder - b.sortOrder);
 
-  const finalizeMutation = useMutation({
-    mutationFn: () => checksApi.update(id!, { isDeferred: false }),
+  // Активация отложенного чека = приём оплаты (Round 14): сервер пересчитывает
+  // итог/ноги/скидку сам, гейтит кассира (403 «Только кассир…») и роль
+  // (400 «Изменение назначенного заказа запрещено ролью») — тексты дословно.
+  const acceptPaymentMutation = useMutation({
+    mutationFn: (data: { paymentMethod: string; cashAmount: number; cardAmount: number; discount: number }) =>
+      checksApi.update(id!, { isDeferred: false, ...data }),
     onSuccess: (res: any) => {
       if (isQueuedOffline(res)) {
-        // SW-офлайн: сервер завершение ещё не видел — без «Чек завершён».
-        toast('Нет сети — завершение чека поставлено в очередь', { icon: '📡', duration: 5000 });
+        // SW-офлайн: сервер оплату ещё не видел — без «Оплата принята».
+        toast('Нет сети — приём оплаты поставлен в очередь', { icon: '📡', duration: 5000 });
         return;
       }
       queryClient.invalidateQueries({ queryKey: ['check', id] });
       // Закрытие отложенного чека списывает склад и двигает кассу.
       MONEY_STOCK_QUERY_KEYS.forEach((queryKey) => queryClient.invalidateQueries({ queryKey }));
-      toast.success('Чек завершён');
+      toast.success('Оплата принята — чек проведён');
     },
     onError: (err: any) => {
-      toast.error(err?.response?.data?.message ?? 'Ошибка при завершении чека');
+      toast.error(err?.response?.data?.message ?? 'Не удалось принять оплату');
     },
   });
 
@@ -255,6 +275,16 @@ export default function CheckDetailPage() {
     checkDay.getDate() === today.getDate();
   const canQuickEditComment = isOwnCheck && isCheckToday && !check.isReturned;
 
+  // Живой пересчёт формы приёма оплаты (скидка — только на товары, как в
+  // Кассе; авто-доводка: нал → всё налом, карта → всё картой, смешанная —
+  // ввод нала, карта добивается до итога). Сервер пересчитает ещё раз сам.
+  const payProductTotal = check.productTotal ?? 0;
+  const appliedPayDiscount = Math.min(payDiscount, payProductTotal);
+  const payTotal = (check.serviceTotal ?? 0) + Math.max(payProductTotal - appliedPayDiscount, 0);
+  const finalPayCash = payMethod === 'cash' ? payTotal : payMethod === 'card' ? 0 : Math.min(payCash, payTotal);
+  const finalPayCard =
+    payMethod === 'card' ? payTotal : payMethod === 'cash' ? 0 : Math.max(payTotal - finalPayCash, 0);
+
   return (
     <div className="space-y-5 pb-6">
       {/* Header */}
@@ -306,25 +336,14 @@ export default function CheckDetailPage() {
             <Printer className="w-4 h-4" />
           </button>
           {check.isDeferred && (
-            <>
-              <button
-                type="button"
-                onClick={() => navigate(`/checks/${check.id}/edit`)}
-                className="flex items-center gap-2 rounded-xl bg-primary-50 px-4 py-2.5 text-sm font-semibold text-primary-600 hover:bg-primary-100 transition-colors"
-              >
-                <Pencil className="w-4 h-4" />
-                <span className="hidden sm:inline">Редактировать</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => finalizeMutation.mutate()}
-                disabled={finalizeMutation.isPending}
-                className="flex items-center gap-2 rounded-xl bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700 disabled:opacity-50"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span className="hidden sm:inline">Завершить</span>
-              </button>
-            </>
+            <button
+              type="button"
+              onClick={() => navigate(`/checks/${check.id}/edit`)}
+              className="flex items-center gap-2 rounded-xl bg-primary-50 px-4 py-2.5 text-sm font-semibold text-primary-600 hover:bg-primary-100 transition-colors"
+            >
+              <Pencil className="w-4 h-4" />
+              <span className="hidden sm:inline">Редактировать</span>
+            </button>
           )}
           {hasPermission('checks_delete') && !(user?.role === 'master' && check.isDeferred) && (
             <button
@@ -346,6 +365,128 @@ export default function CheckDetailPage() {
           <p className="text-xs text-red-500 mt-0.5">
             Не учитывается в статистике. Нажмите «Редактировать» чтобы дописать услуги или товары.
           </p>
+        </div>
+      )}
+
+      {/* Приём оплаты отложенного заказа (Round 14, режим «Кассир») */}
+      {check.isDeferred && (
+        <div className="card card-body space-y-4 !border-green-200">
+          <div className="flex items-center gap-2.5">
+            <div className="w-8 h-8 rounded-lg bg-green-50 flex items-center justify-center flex-shrink-0">
+              <Banknote className="w-4 h-4 text-green-600" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-base font-semibold text-gray-900">Приём оплаты</h2>
+              <p className="text-xs text-gray-400 mt-0.5">
+                Заказ станет проведённым: склад спишется, деньги попадут в кассу.
+              </p>
+            </div>
+          </div>
+
+          {/* Скидка на товары — живой пересчёт итога */}
+          <div className="flex items-center gap-2">
+            <label className="text-sm text-gray-600 whitespace-nowrap">Скидка на товары:</label>
+            <input
+              type="number"
+              min={0}
+              max={payProductTotal}
+              value={payDiscount || ''}
+              onChange={(e) => setPayDiscount(Math.min(Math.max(Number(e.target.value) || 0, 0), payProductTotal))}
+              className="input text-sm w-28 text-right"
+              placeholder="0"
+            />
+            <span className="text-xs text-gray-400">₽</span>
+          </div>
+
+          {/* Способ оплаты: нал / карта / смешанная */}
+          <div className="grid grid-cols-3 gap-2">
+            <button
+              type="button"
+              onClick={() => setPayMethod('cash')}
+              className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                payMethod === 'cash'
+                  ? 'border-green-500 bg-green-50 text-green-700'
+                  : 'border-gray-200 text-gray-500 hover:border-gray-300'
+              }`}
+            >
+              <Banknote className="w-5 h-5" />
+              <span className="text-[10px] font-semibold">Нал</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPayMethod('card')}
+              className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                payMethod === 'card'
+                  ? 'border-blue-500 bg-blue-50 text-blue-700'
+                  : 'border-gray-200 text-gray-500 hover:border-gray-300'
+              }`}
+            >
+              <CreditCard className="w-5 h-5" />
+              <span className="text-[10px] font-semibold">Карта</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setPayMethod('cash_card')}
+              className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all ${
+                payMethod === 'cash_card'
+                  ? 'border-purple-500 bg-purple-50 text-purple-700'
+                  : 'border-gray-200 text-gray-500 hover:border-gray-300'
+              }`}
+            >
+              <CreditCard className="w-5 h-5" />
+              <span className="text-[10px] font-semibold">Смешанная</span>
+            </button>
+          </div>
+
+          {/* Смешанная: ввод нала, карта добивается до итога автоматически */}
+          {payMethod === 'cash_card' && (
+            <div className="bg-purple-50 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Banknote className="w-4 h-4 text-green-600" />
+                  <label className="text-sm font-medium text-gray-700">Наличные:</label>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  max={payTotal}
+                  value={payCash || ''}
+                  onChange={(e) => setPayCash(Math.max(Number(e.target.value) || 0, 0))}
+                  className="input w-36 text-right text-lg font-bold"
+                  placeholder="0"
+                />
+              </div>
+              <div className="flex items-center justify-between border-t border-purple-200 pt-2">
+                <div className="flex items-center gap-2">
+                  <CreditCard className="w-4 h-4 text-blue-600" />
+                  <label className="text-sm font-medium text-gray-700">Карта:</label>
+                </div>
+                <span className="text-lg font-bold text-blue-600 tabular-nums">{formatMoney(finalPayCard)}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Итог + кнопка */}
+          <div className="flex items-center justify-between border-t border-gray-100 pt-3">
+            <span className="text-sm font-semibold text-gray-700">К оплате</span>
+            <span className="text-lg font-bold text-gray-900 tabular-nums">{formatMoney(payTotal)}</span>
+          </div>
+          <button
+            type="button"
+            onClick={() =>
+              acceptPaymentMutation.mutate({
+                paymentMethod: payMethod,
+                cashAmount: finalPayCash,
+                cardAmount: finalPayCard,
+                discount: appliedPayDiscount,
+              })
+            }
+            disabled={acceptPaymentMutation.isPending}
+            className="w-full flex items-center justify-center gap-2 rounded-xl bg-green-600 py-3 text-base font-bold text-white hover:bg-green-700 disabled:opacity-50 transition-colors"
+          >
+            <CheckCircle2 className="w-5 h-5" />
+            {acceptPaymentMutation.isPending ? 'Проведение…' : `Оплачено — ${formatMoney(payTotal)}`}
+          </button>
         </div>
       )}
 
