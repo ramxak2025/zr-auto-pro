@@ -291,8 +291,20 @@ export default function SalaryEmployeeCard({
   });
 
   const fineMutation = useMutation({
-    mutationFn: (vars: { amount: number; comment: string }) =>
-      salaryApi.createFine({ userId: employeeId, amount: vars.amount, comment: vars.comment }),
+    mutationFn: (vars: { amount: number; comment: string }) => {
+      // Штраф, выписанный из карточки МЕСЯЦА, относится к этому месяцу —
+      // симметрично выплате (periodMonth) и премии (periodMonthYear) выше.
+      // Без даты сервер ставит «сейчас», и штраф, добавленный в июльской
+      // карточке 3 августа, молча уезжал в август («штрафы не работают»,
+      // жалоба владельца 2026-08-04). Для прошлого месяца — последний день
+      // месяца 12:00 МСК (09:00Z: безопасно от сдвига суток на границах);
+      // для текущего — серверное «сейчас» как раньше.
+      const [y, m] = monthKey.split('-').map(Number);
+      const isCurrentMonth = monthKey === formatMonthKey(new Date());
+      const lastDay = new Date(y, m, 0).getDate();
+      const date = isCurrentMonth ? undefined : `${monthKey}-${String(lastDay).padStart(2, '0')}T09:00:00.000Z`;
+      return salaryApi.createFine({ userId: employeeId, amount: vars.amount, comment: vars.comment, date });
+    },
     onSuccess: () => {
       setActiveForm(null);
       haptic('success');
