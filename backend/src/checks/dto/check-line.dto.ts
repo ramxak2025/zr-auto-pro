@@ -194,4 +194,30 @@ export class BaseCheckDto {
   @IsString({ each: true })
   @MaxLength(64, { each: true })
   tagIds?: string[];
+
+  /**
+   * Место (Round 14, tenant_locations, миграция 146): id из справочника мест
+   * тенанта. ''/null → снять место (location_id=NULL); отсутствие поля на
+   * update = «не трогать». Чужой/несуществующий id → 400 «Место не найдено»
+   * (сервис). @IsOptional пропускает и null (клиент шлёт null для очистки).
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  locationId?: string;
+
+  /**
+   * Исполнители заказа (Round 14, check_assignees, миграция 147). Присутствие
+   * поля = «перезаписать набор ровно этими users» (пустой массив снимает
+   * всех); отсутствие на update = «не трогать», на create = дефолт (distinct
+   * исполнители строк услуг + главный мастер). Чужие/кривые id сервис молча
+   * отбрасывает (INSERT…SELECT матчит только users тенанта) — гонка
+   * «сотрудника уволили, пока заказ заполнялся» не блокирует приёмку.
+   */
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(50)
+  @IsString({ each: true })
+  @MaxLength(64, { each: true })
+  assigneeIds?: string[];
 }

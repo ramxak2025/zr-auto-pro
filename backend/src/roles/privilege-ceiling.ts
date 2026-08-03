@@ -40,6 +40,7 @@ export const PERMISSION_LABELS: Record<string, string> = {
   checks_delete: 'Удаление заказ-нарядов',
   checks_change_datetime: 'Изменение даты и времени заказ-наряда',
   edit_closed_check: 'Редактирование закрытого заказ-наряда',
+  checks_edit_assigned_order: 'Изменение назначенного заказ-наряда',
   payment_edit: 'Изменение оплаты',
   accept_payment: 'Приём оплаты (кассовая смена)',
   sell_installment: 'Продажа в рассрочку',

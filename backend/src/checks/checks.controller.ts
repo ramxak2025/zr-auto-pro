@@ -80,11 +80,17 @@ export class ChecksController {
    * Kanban board (082): заказ-наряды grouped by work_status, tenant-scoped.
    * Declared BEFORE `:id` so the literal path isn't swallowed by the param route.
    * Returns { accepted, in_progress, ready, delivered }, each newest-first.
+   *
+   * `?assigneeId=` (Round 14, check_assignees) — фильтр «мои машины» мастера /
+   * фильтр владельца по мастеру: заказ матчится, если пользователь исполнитель
+   * (check_assignees) ИЛИ главный мастер чека ИЛИ исполнитель строки услуг.
+   * Скоуп checks_view (own/all) сервис уважает независимо — фильтр охват НЕ
+   * расширяет.
    */
   @RequirePermission('checks_view')
   @Get('board')
-  getBoard(@CurrentUser() user: JwtPayload) {
-    return this.checksService.getBoard(user.tenantID, user);
+  getBoard(@CurrentUser() user: JwtPayload, @Query('assigneeId') assigneeId?: string) {
+    return this.checksService.getBoard(user.tenantID, user, undefined, assigneeId);
   }
 
   // ── Board columns (091): owner-configurable kanban columns ──────────────
@@ -208,6 +214,47 @@ export class ChecksController {
     @Body() dto: { name?: string; color?: string; archived?: boolean },
   ) {
     return this.checksService.updateTag(user.tenantID, id, dto);
+  }
+
+  // ── Места (Round 14, tenant_locations, миграция 146) ─────────────────────
+  // Справочник «мест» автосервиса («возле задних ворот», «Бокс 2») для режима
+  // «Кассир»: админ вешает место на заказ при приёмке, мастер видит его на
+  // карточке доски. Литеральные пути объявлены ДО `:id`-роутов (как
+  // board-columns / tags), иначе param-роут проглотил бы их. Чисто карточное
+  // поле — денег/склада/зарплаты не двигает.
+
+  /** Все места тенанта (живые + архив) — читает любой авторизованный. */
+  @Get('locations')
+  listLocations(@CurrentUser() user: JwtPayload) {
+    return this.checksService.listLocations(user.tenantID);
+  }
+
+  /** Создать место — settings_manage (та же ячейка, что справочники/касса). */
+  @RequirePermission('settings_manage')
+  @Post('locations')
+  createLocation(@CurrentUser() user: JwtPayload, @Body() dto: { name?: string; sortOrder?: number }) {
+    return this.checksService.createLocation(user.tenantID, dto);
+  }
+
+  /** Переименовать / пересортировать / архив-разархив — settings_manage. */
+  @RequirePermission('settings_manage')
+  @Patch('locations/:id')
+  updateLocation(
+    @Param('id') id: string,
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: { name?: string; sortOrder?: number; isActive?: boolean },
+  ) {
+    return this.checksService.updateLocation(user.tenantID, id, dto);
+  }
+
+  /**
+   * «Удалить» место = АРХИВ (is_active=false): старые чеки место сохраняют,
+   * пикер его больше не предлагает, имя освобождается. settings_manage.
+   */
+  @RequirePermission('settings_manage')
+  @Delete('locations/:id')
+  removeLocation(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.checksService.deleteLocation(user.tenantID, id);
   }
 
   @RequirePermission('checks_view')

@@ -112,6 +112,12 @@ const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
+/**
+ * Канонический UUID — валидация клиентских id ДО каста `ANY($::uuid[])` /
+ * `=$::uuid`, чтобы кривая строка давала чистый отказ, а не 22P02 → 500.
+ */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 /** Календарный день (yyyy-MM-dd) момента `ts` в Europe/Moscow. */
 function mskDayOf(ts: number): string {
   return new Date(ts + MSK_OFFSET_MS).toISOString().slice(0, 10);
@@ -522,14 +528,54 @@ export class ChecksService {
     return { shiftModeEnabled, isCashier: this.isCashier(actor) };
   }
 
-  /** PATCH /checks/pos-settings — owner-gated flip of the per-tenant flag. */
+  /**
+   * PATCH /checks/pos-settings — owner-gated flip of the per-tenant flag.
+   *
+   * ГАРД СМЕНЫ РЕЖИМА (Round 14, CASHIER_MODE_SPEC): переключать режим при
+   * НЕЗАКРЫТОМ конвейере нельзя — отложенные заказы, стоящие на доске
+   * (is_deferred=true И work_status NOT NULL), потеряли бы свою механику
+   * (деньги/выдача) на полпути. Реальная смена значения при таких заказах →
+   * 409 с count и первыми 10 (номер, клиент, сумма) — владелец видит, что
+   * закрыть. Повторная установка ТОГО ЖЕ значения — no-op без гарда (ретрай
+   * клиента не блокируется).
+   */
   async updatePosSettings(
     tenantID: string,
     dto: { shiftModeEnabled?: boolean },
   ): Promise<{ shiftModeEnabled: boolean }> {
     if (dto?.shiftModeEnabled !== undefined) {
+      const next = dto.shiftModeEnabled === true;
+      const current = await this.isShiftModeEnabled(tenantID);
+      if (next !== current) {
+        // COUNT(*) OVER () — полный счёт незакрытого конвейера одним запросом,
+        // строки капнуты десятью (список «что закрыть» для владельца).
+        const { rows: openRows } = await this.pool.query(
+          `SELECT ch.id, ch.number, ch.total_revenue, cl.full_name AS client_name,
+                  COUNT(*) OVER () AS open_count
+             FROM checks ch
+             LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
+            WHERE ch.tenant_id = $1 AND ch.deleted_at IS NULL
+              AND ch.is_deferred = true AND ch.work_status IS NOT NULL
+            ORDER BY ch.date DESC, ch.id DESC
+            LIMIT 10`,
+          [tenantID],
+        );
+        if (openRows.length > 0) {
+          const count = parseInt(openRows[0].open_count, 10) || openRows.length;
+          throw new ConflictException({
+            message: `Сначала закройте заказы на доске — незакрытых заказ-нарядов: ${count}`,
+            count,
+            checks: openRows.map((r) => ({
+              id: r.id,
+              number: r.number,
+              clientName: r.client_name ?? null,
+              totalRevenue: parseFloat(r.total_revenue) || 0,
+            })),
+          });
+        }
+      }
       await this.pool.query(`UPDATE tenants SET shift_mode_enabled = $1, updated_at = now() WHERE id = $2`, [
-        dto.shiftModeEnabled === true,
+        next,
         tenantID,
       ]);
     }
@@ -671,6 +717,12 @@ export class ChecksService {
       // tracking flag — orthogonal to payment/cash/stock. NULL on historical
       // rows (not tracked on the board). Additive; existing consumers ignore it.
       workStatus: row.work_status ?? null,
+      // Round 14 (146): место заказа (tenant_locations) и веха «Выдана».
+      // deliveredAt проставляет setWorkStatus при входе в колонку 'delivered'
+      // (и снимает при выходе). Чисто трекинговые поля — денег не двигают.
+      // Additive; existing consumers ignore them.
+      locationId: row.location_id ?? null,
+      deliveredAt: row.delivered_at ?? null,
       // Корзина (106): NULL on every live check. A trashed check never reaches
       // the normal list/detail responses (they filter deleted_at IS NULL), so
       // these are effectively always null there — carried through for the trash
@@ -977,12 +1029,19 @@ export class ChecksService {
    */
   async getByIdForActor(id: string, tenantID: string, actor: ChecksActor) {
     if (actor && !userHasPermission(actor, 'checks_view_all')) {
+      // Round 14: третье плечо — ИСПОЛНИТЕЛЬ заказа (check_assignees). Доска
+      // показывает restricted-мастеру назначенные ему заказы (см. getBoard) —
+      // деталь обязана открываться с той же видимостью, иначе карточка доски
+      // ведёт в 404.
       const { rows: scopeRows } = await this.pool.query(
         `SELECT 1 FROM checks ch
           WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL
             AND (ch.master_id = $3 OR EXISTS (
               SELECT 1 FROM check_service_lines sl
                WHERE sl.check_id = ch.id AND sl.master_id = $3
+            ) OR EXISTS (
+              SELECT 1 FROM check_assignees cas
+               WHERE cas.check_id = ch.id AND cas.user_id = $3
             ))`,
         [id, tenantID, actor.userID],
       );
@@ -996,11 +1055,13 @@ export class ChecksService {
       `SELECT ch.*,
               m.full_name as master_name, m.avatar as master_avatar,
               cl.full_name as client_name, cl.phone as client_phone,
-              ca.plate_number, ca.make_model
+              ca.plate_number, ca.make_model,
+              loc.name as location_name
        FROM checks ch
        LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
        LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
        LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
+       LEFT JOIN tenant_locations loc ON loc.id = ch.location_id AND loc.tenant_id = ch.tenant_id
        WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL`,
       [id, tenantID],
     );
@@ -1011,6 +1072,8 @@ export class ChecksService {
     if (row.master_id) ch.master = { id: row.master_id, fullName: row.master_name, avatar: row.master_avatar };
     if (row.client_id) ch.client = { id: row.client_id, fullName: row.client_name, phone: row.client_phone };
     if (row.car_id) ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
+    // Round 14 (146): место заказа — компактно {id,name} для карточки/детали.
+    if (row.location_id) ch.location = { id: row.location_id, name: row.location_name ?? null };
 
     // Load service lines (check_id already verified against tenant above)
     const { rows: svcRows } = await this.pool.query(
@@ -1067,6 +1130,18 @@ export class ChecksService {
     );
     ch.tags = tagRows.map((t) => ({ id: t.id, name: t.name, color: t.color ?? null }));
 
+    // Исполнители заказа (Round 14, check_assignees). Пустой массив — норма
+    // (старый чек / набор снят). JOIN users по тенанту — имя для карточки.
+    const { rows: assigneeRows } = await this.pool.query(
+      `SELECT u.id, u.full_name
+         FROM check_assignees cas
+         JOIN users u ON u.id = cas.user_id AND u.tenant_id = cas.tenant_id
+        WHERE cas.check_id=$1 AND cas.tenant_id=$2
+        ORDER BY u.full_name`,
+      [id, tenantID],
+    );
+    ch.assignees = assigneeRows.map((a) => ({ id: a.id, fullName: a.full_name ?? null }));
+
     // Warranty claims tied to this check (may be empty — only filled when
     // a product/service had warranty_days set at sale time).
     ch.warrantyClaims = await this.warranty.listForCheck(tenantID, id);
@@ -1104,16 +1179,37 @@ export class ChecksService {
         message: valid ? `Недопустимый статус. Ожидается одна из колонок: ${valid}` : 'Недопустимый статус доски',
       });
     }
+    // «Выдана» (Round 14, CASHIER_MODE_SPEC): колонка key='delivered' —
+    // системная веха выдачи машины. Гард: выдать можно только ОПЛАЧЕННЫЙ заказ
+    // (is_deferred=false) — деньги рождаются строго в точке «Оплачено»
+    // (активация чека), выдача без оплаты невозможна ни в UI, ни по API.
+    if (workStatus === 'delivered') {
+      const { rows: defRows } = await this.pool.query(
+        `SELECT is_deferred FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`,
+        [id, tenantID],
+      );
+      if (defRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+      if (defRows[0].is_deferred === true) {
+        throw new BadRequestException({ message: 'Заказ не оплачен' });
+      }
+    }
     // Tenant-scoped single-column update. The `before` CTE captures the prior
     // work_status in the SAME statement so we can detect a *transition* INTO
     // 'ready' (and not re-fire when it was already 'ready'). RETURNING id also
     // confirms the row exists in this tenant; the full payload is re-read via
     // getById below.
+    //
+    // delivered_at (Round 14, 146): вход в колонку 'delivered' проставляет
+    // отметку выдачи (COALESCE — повторный дроп в ту же колонку не сдвигает
+    // время), выход из неё — снимает (карточку вернули в работу). Для всех
+    // остальных переходов CASE даёт NULL, что совпадает с прежним состоянием
+    // (не-delivered чеки отметки не имеют).
     const { rows } = await this.pool.query(
       `WITH before AS (
          SELECT work_status FROM checks WHERE id=$2 AND tenant_id=$3 AND deleted_at IS NULL
        )
-       UPDATE checks SET work_status=$1
+       UPDATE checks SET work_status=$1,
+              delivered_at = CASE WHEN $1 = 'delivered' THEN COALESCE(checks.delivered_at, now()) ELSE NULL END
        FROM before
        WHERE checks.id=$2 AND checks.tenant_id=$3 AND checks.deleted_at IS NULL
        RETURNING checks.id AS id, before.work_status AS old_status`,
@@ -1227,6 +1323,7 @@ export class ChecksService {
     tenantID: string,
     actor?: ChecksActor,
     perColumn = 100,
+    assigneeId?: string,
   ): Promise<{
     columns: WorkBoardColumn[];
     groups: Record<string, any[]>;
@@ -1261,15 +1358,39 @@ export class ChecksService {
     // Same narrowing as getAll: any non-owner-class actor without
     // checks_view_all (master by default, admin/custom role with
     // checks.view='own') sees their own checks + checks where he is a line
-    // EXECUTOR (доска должна совпадать с журналом — см. комментарий в getAll).
+    // EXECUTOR (доска должна совпадать с журналом — см. комментарий в getAll)
+    // + (Round 14) checks where he is an ASSIGNEE (check_assignees): админ
+    // назначил заказ БЕЗ строк — карточка обязана попасть на доску мастера.
     // Never widens beyond the tenant.
     if (actor && !userHasPermission(actor, 'checks_view_all')) {
       where += ` AND (ch.master_id = $${idx} OR EXISTS (
         SELECT 1 FROM check_service_lines sl
          WHERE sl.check_id = ch.id AND sl.master_id = $${idx}
+      ) OR EXISTS (
+        SELECT 1 FROM check_assignees cas
+         WHERE cas.check_id = ch.id AND cas.user_id = $${idx}
       ))`;
       idx++;
       params.push(actor.userID);
+    }
+
+    // Round 14: фильтр «мои машины» (мастер) / фильтр владельца по мастеру.
+    // Заказ матчится, если пользователь — исполнитель (check_assignees) ИЛИ
+    // главный мастер чека ИЛИ исполнитель строки услуг: старые чеки (до 147)
+    // связок не имеют, но принадлежат мастеру — фильтр обязан их показывать.
+    // Невалидный (не-UUID) параметр молча игнорируется (не 22P02 → 500).
+    // Скоуп выше НЕ ослабляется — предикаты соединены AND.
+    if (typeof assigneeId === 'string' && UUID_RE.test(assigneeId.trim())) {
+      const aid = assigneeId.trim().toLowerCase();
+      where += ` AND (ch.master_id = $${idx} OR EXISTS (
+        SELECT 1 FROM check_assignees cas2
+         WHERE cas2.check_id = ch.id AND cas2.user_id = $${idx}
+      ) OR EXISTS (
+        SELECT 1 FROM check_service_lines sl2
+         WHERE sl2.check_id = ch.id AND sl2.master_id = $${idx}
+      ))`;
+      idx++;
+      params.push(aid);
     }
 
     params.push(perColumn);
@@ -1279,11 +1400,18 @@ export class ChecksService {
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
                 ca.plate_number, ca.make_model,
+                loc.name as location_name,
+                (SELECT COALESCE(json_agg(json_build_object('id', u2.id, 'fullName', u2.full_name)
+                                          ORDER BY u2.full_name), '[]'::json)
+                   FROM check_assignees cas3
+                   JOIN users u2 ON u2.id = cas3.user_id AND u2.tenant_id = cas3.tenant_id
+                  WHERE cas3.check_id = ch.id AND cas3.tenant_id = ch.tenant_id) AS assignees_json,
                 ROW_NUMBER() OVER (PARTITION BY ch.work_status ORDER BY ch.date DESC, ch.id DESC) AS rn
          FROM checks ch
          LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
          LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
+         LEFT JOIN tenant_locations loc ON loc.id = ch.location_id AND loc.tenant_id = ch.tenant_id
          WHERE ${where}
        ) sub
        WHERE sub.rn <= $${idx}
@@ -1303,6 +1431,12 @@ export class ChecksService {
       if (row.car_id) {
         ch.car = { id: row.car_id, plateNumber: row.plate_number, makeModel: row.make_model };
       }
+      // Round 14: место + исполнители на карточке доски (авто, клиент, место,
+      // комментарий — см. CASHIER_MODE_SPEC). json_agg отдаёт готовый массив.
+      if (row.location_id) {
+        ch.location = { id: row.location_id, name: row.location_name ?? null };
+      }
+      ch.assignees = Array.isArray(row.assignees_json) ? row.assignees_json : [];
       const key = ch.workStatus as string;
       if (key && groups[key]) groups[key].push(ch);
     }
@@ -1647,7 +1781,6 @@ export class ChecksService {
     checkId: string,
     tagIds: unknown,
   ): Promise<void> {
-    const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     const ids = Array.isArray(tagIds)
       ? Array.from(
           new Set(
@@ -1675,6 +1808,204 @@ export class ChecksService {
        ON CONFLICT DO NOTHING`,
       [checkId, tenantID, ids],
     );
+  }
+
+  /**
+   * Перезаписать набор ИСПОЛНИТЕЛЕЙ заказа (Round 14, check_assignees) ровно
+   * `assigneeIds` — та же философия, что syncCheckTags: undefined сюда не
+   * попадает (вызывающие гейтят), чужие/несуществующие/кривые id молча
+   * отбрасываются (INSERT…SELECT матчит только users СВОЕГО тенанта — гонка
+   * «сотрудника уволили, пока заказ заполнялся» не блокирует приёмку), живой
+   * чек тенанта — или полный no-op. Работает и в транзакции create() (client),
+   * и напрямую через pool (update-пути). Зарплату НЕ трогает — атрибуция
+   * по-прежнему по строкам услуг.
+   */
+  private async syncCheckAssignees(
+    executor: Pool | PoolClient,
+    tenantID: string,
+    checkId: string,
+    assigneeIds: unknown,
+  ): Promise<void> {
+    const ids = Array.isArray(assigneeIds)
+      ? Array.from(
+          new Set(
+            assigneeIds
+              .filter((x): x is string => typeof x === 'string' && UUID_RE.test(x.trim()))
+              .map((x) => x.trim().toLowerCase()),
+          ),
+        ).slice(0, 50)
+      : [];
+    const { rows: chRows } = await executor.query(
+      `SELECT 1 FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL`,
+      [checkId, tenantID],
+    );
+    if (chRows.length === 0) return;
+    await executor.query(`DELETE FROM check_assignees WHERE check_id=$1 AND tenant_id=$2`, [checkId, tenantID]);
+    if (ids.length === 0) return;
+    await executor.query(
+      `INSERT INTO check_assignees (check_id, user_id, tenant_id)
+       SELECT $1, u.id, $2
+         FROM users u
+        WHERE u.tenant_id = $2 AND u.id = ANY($3::uuid[])
+       ON CONFLICT DO NOTHING`,
+      [checkId, tenantID, ids],
+    );
+  }
+
+  /**
+   * Разрешить клиентский `locationId` (Round 14, tenant_locations) в значение
+   * колонки checks.location_id: ''/null → NULL (снять место); валидный id
+   * СВОЕГО тенанта → id (архивное место допускается — гонка «место
+   * заархивировали, пока заказ заполнялся» не блокирует приёмку); чужой /
+   * несуществующий / кривой id → 400 «Место не найдено» (место — одиночное
+   * поле, молчаливый дроп прятал бы ошибку клиента).
+   */
+  private async resolveLocationId(
+    executor: Pool | PoolClient,
+    tenantID: string,
+    locationId: unknown,
+  ): Promise<string | null> {
+    if (locationId === undefined || locationId === null) return null;
+    const raw = String(locationId).trim();
+    if (raw.length === 0) return null;
+    if (!UUID_RE.test(raw)) throw new BadRequestException({ message: 'Место не найдено' });
+    const id = raw.toLowerCase();
+    const { rows } = await executor.query(`SELECT id FROM tenant_locations WHERE id=$1 AND tenant_id=$2`, [
+      id,
+      tenantID,
+    ]);
+    if (rows.length === 0) throw new BadRequestException({ message: 'Место не найдено' });
+    return rows[0].id;
+  }
+
+  // ──────────────────────────────────────────────────────────────────────
+  //  Места (Round 14, tenant_locations, миграция 146) — справочник «мест»
+  //  автосервиса («возле задних ворот», «Бокс 2»). Чисто карточное поле
+  //  заказа: денег / склада / зарплаты не двигает. CRUD — по образцу
+  //  board-columns; DELETE = архив (is_active=false), старые чеки место
+  //  сохраняют.
+  // ──────────────────────────────────────────────────────────────────────
+
+  private mapLocation(row: any): { id: string; name: string; sortOrder: number; isActive: boolean; createdAt: string } {
+    return {
+      id: row.id,
+      name: row.name,
+      sortOrder: typeof row.sort_order === 'number' ? row.sort_order : parseInt(row.sort_order, 10) || 0,
+      isActive: !!row.is_active,
+      createdAt: row.created_at,
+    };
+  }
+
+  /**
+   * Все места тенанта (живые + архив), sort_order → имя. Читает любой
+   * авторизованный: пикер приёмки и карточка доски фильтруют isActive на
+   * клиенте, настройки показывают полный список.
+   */
+  async listLocations(tenantID: string) {
+    const { rows } = await this.pool.query(
+      `SELECT * FROM tenant_locations WHERE tenant_id=$1 ORDER BY sort_order ASC, lower(name) ASC`,
+      [tenantID],
+    );
+    return rows.map((r) => this.mapLocation(r));
+  }
+
+  /**
+   * Создать место (settings_manage). Дубль имени среди живых (без учёта
+   * регистра) → 409 с существующим местом в теле — клиент просто выбирает его
+   * (та же механика, что у меток). 23505 частичного индекса — DB-backstop
+   * гонки двух создателей.
+   */
+  async createLocation(tenantID: string, body: { name?: unknown; sortOrder?: unknown }) {
+    const name = typeof body?.name === 'string' ? body.name.trim() : '';
+    if (name.length === 0) throw new BadRequestException({ message: 'Название места не может быть пустым' });
+    if (name.length > 100)
+      throw new BadRequestException({ message: 'Название места слишком длинное (до 100 символов)' });
+    const sortOrder = Number.isFinite(Number(body?.sortOrder)) ? Math.trunc(Number(body?.sortOrder)) : 0;
+
+    const { rows: dupRows } = await this.pool.query(
+      `SELECT * FROM tenant_locations WHERE tenant_id=$1 AND lower(name)=lower($2) AND is_active`,
+      [tenantID, name],
+    );
+    if (dupRows.length > 0) {
+      throw new ConflictException({ message: 'Такое место уже есть', location: this.mapLocation(dupRows[0]) });
+    }
+    try {
+      const { rows } = await this.pool.query(
+        `INSERT INTO tenant_locations (tenant_id, name, sort_order) VALUES ($1, $2, $3) RETURNING *`,
+        [tenantID, name, sortOrder],
+      );
+      return this.mapLocation(rows[0]);
+    } catch (err) {
+      if ((err as { code?: string })?.code === '23505') {
+        const { rows: winner } = await this.pool.query(
+          `SELECT * FROM tenant_locations WHERE tenant_id=$1 AND lower(name)=lower($2) AND is_active`,
+          [tenantID, name],
+        );
+        if (winner.length > 0) {
+          throw new ConflictException({ message: 'Такое место уже есть', location: this.mapLocation(winner[0]) });
+        }
+      }
+      throw err;
+    }
+  }
+
+  /** Переименовать / пересортировать / архив-разархив (settings_manage). */
+  async updateLocation(
+    tenantID: string,
+    id: string,
+    body: { name?: unknown; sortOrder?: unknown; isActive?: unknown },
+  ) {
+    const sets: string[] = [];
+    const vals: any[] = [];
+    let idx = 1;
+    if (body?.name !== undefined) {
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      if (name.length === 0) throw new BadRequestException({ message: 'Название места не может быть пустым' });
+      if (name.length > 100) {
+        throw new BadRequestException({ message: 'Название места слишком длинное (до 100 символов)' });
+      }
+      sets.push(`name=$${idx++}`);
+      vals.push(name);
+    }
+    if (body?.sortOrder !== undefined) {
+      const sortOrder = Number.isFinite(Number(body.sortOrder)) ? Math.trunc(Number(body.sortOrder)) : 0;
+      sets.push(`sort_order=$${idx++}`);
+      vals.push(sortOrder);
+    }
+    if (body?.isActive !== undefined) {
+      sets.push(`is_active=$${idx++}`);
+      vals.push(body.isActive === true);
+    }
+    if (sets.length === 0) throw new BadRequestException({ message: 'Нет изменений' });
+    vals.push(id, tenantID);
+    try {
+      const { rows } = await this.pool.query(
+        `UPDATE tenant_locations SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+        vals,
+      );
+      if (rows.length === 0) throw new NotFoundException({ message: 'Место не найдено' });
+      return this.mapLocation(rows[0]);
+    } catch (err) {
+      if ((err as { code?: string })?.code === '23505') {
+        throw new ConflictException({ message: 'Такое место уже есть' });
+      }
+      throw err;
+    }
+  }
+
+  /**
+   * «Удалить» место = АРХИВ (is_active=false): старые чеки продолжают
+   * показывать место, пикер приёмки его больше не предлагает, имя
+   * освобождается (частичный UNIQUE-индекс WHERE is_active). Привязки чеков
+   * (checks.location_id) не трогаются.
+   */
+  async deleteLocation(tenantID: string, id: string): Promise<{ success: true }> {
+    const { rowCount } = await this.pool.query(
+      `UPDATE tenant_locations SET is_active=false WHERE id=$1 AND tenant_id=$2`,
+      [id, tenantID],
+    );
+    if (!rowCount) throw new NotFoundException({ message: 'Место не найдено' });
+    return { success: true };
   }
 
   /**
@@ -2059,12 +2390,17 @@ export class ChecksService {
       // nothing about other tenants' volume.
       const checkNumber = await this.allocateCheckNumberTx(client, tenantID);
 
+      // Место (Round 14, 146): валидируем ДО insert'а — чужой/битый id даёт
+      // чистый 400, отсутствие поля → NULL (путь без места байт-в-байт прежний).
+      const resolvedLocationId = await this.resolveLocationId(client, tenantID, dto.locationId);
+
       const { rows: checkRows } = await client.query(
         `INSERT INTO checks (number, date, master_id, client_id, car_id, mileage, comment, discount,
          is_deferred, payment_method, cash_amount, card_amount,
          service_total, product_total, total_revenue, product_cost_total,
-         service_salary_total, product_salary_total, total_cost, profit, tenant_id, client_request_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+         service_salary_total, product_salary_total, total_cost, profit, tenant_id, client_request_id,
+         location_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
          RETURNING *`,
         [
           checkNumber,
@@ -2091,6 +2427,7 @@ export class ChecksService {
           // Идемпотентность (111): NULL без ключа — путь без clientRequestId
           // байт-в-байт прежний (частичный индекс NULL-строки не ограничивает).
           clientRequestId,
+          resolvedLocationId,
         ],
       );
 
@@ -2230,6 +2567,25 @@ export class ChecksService {
         await this.syncCheckTags(client, tenantID, checkId, dto.tagIds);
       }
 
+      // ── Исполнители (Round 14, check_assignees) — в ЭТОЙ ЖЕ транзакции ───
+      // Явный assigneeIds (приёмка админа) или ДЕФОЛТ: distinct исполнители
+      // строк услуг + главный мастер чека — так доски и фильтр «мои машины»
+      // работают и для старых клиентов, не шлющих поле. Чужие/кривые id молча
+      // отбрасываются внутри. Зарплату не двигает.
+      const defaultAssignees = Array.from(
+        new Set(
+          [...serviceLines.map((l: any) => l.masterId), dto.masterId].filter(
+            (x: unknown): x is string => typeof x === 'string' && x.length > 0,
+          ),
+        ),
+      );
+      await this.syncCheckAssignees(
+        client,
+        tenantID,
+        checkId,
+        Array.isArray(dto.assigneeIds) ? dto.assigneeIds : defaultAssignees,
+      );
+
       await client.query('COMMIT');
 
       // A new sale changes revenue/profit/ranking — drop cached aggregates so
@@ -2319,10 +2675,23 @@ export class ChecksService {
       return true;
     };
 
+    // Исполнители (Round 14, check_assignees) — та же механика, что метки:
+    // ТОЛЬКО при явном поле (undefined = «не трогали» — частичные PATCH'и и
+    // старые клиенты набор не стирают), ПОСЛЕ успеха основного пути (его
+    // гейты уже отработали). Денег не двигает — отчётные кеши не трогаем.
+    const assigneeIdsPatch: unknown = dto.assigneeIds;
+    const applyAssignees = async () => {
+      if (assigneeIdsPatch === undefined) return false;
+      await this.syncCheckAssignees(this.pool, tenantID, id, assigneeIdsPatch);
+      return true;
+    };
+
     // If services or products are provided, do a full re-edit (only for deferred checks)
     if (dto.services !== undefined || dto.products !== undefined) {
       const result = await this.fullUpdate(id, tenantID, userRole, dto, actorUserId, actor);
-      if (await applyTags()) return this.getById(id, tenantID, actor);
+      const tagsApplied = await applyTags();
+      const assigneesApplied = await applyAssignees();
+      if (tagsApplied || assigneesApplied) return this.getById(id, tenantID, actor);
       return result;
     }
 
@@ -2333,7 +2702,9 @@ export class ChecksService {
     // field-update below unchanged.
     if (dto.isDeferred === false) {
       const result = await this.activateDeferred(id, tenantID, userRole, dto, actorUserId, actor);
-      if (await applyTags()) return this.getById(id, tenantID, actor);
+      const tagsApplied = await applyTags();
+      const assigneesApplied = await applyAssignees();
+      if (tagsApplied || assigneesApplied) return this.getById(id, tenantID, actor);
       return result;
     }
 
@@ -2430,10 +2801,11 @@ export class ChecksService {
       }
     }
 
-    // Метки на плоском пути: гейты выше (own-охват / payment) уже отработали.
-    // Тег-only PATCH (sets останется пустым) тоже валиден — early return ниже
-    // отдаст getById уже со свежими метками.
+    // Метки и исполнители на плоском пути: гейты выше (own-охват / payment)
+    // уже отработали. Tag/assignee-only PATCH (sets останется пустым) тоже
+    // валиден — early return ниже отдаст getById уже со свежим набором.
     await applyTags();
+    await applyAssignees();
 
     const sets: string[] = [];
     const vals: any[] = [];
@@ -2474,6 +2846,14 @@ export class ChecksService {
     if (dto.paymentStatus !== undefined) {
       sets.push(`payment_status=$${idx++}`);
       vals.push(dto.paymentStatus);
+    }
+    // Место (Round 14, 146): одиночное поле карточки — правится и плоским
+    // PATCH'ем (например, смена «Бокс 1» → «Бокс 2» без перечитывания строк).
+    // ''/null снимает место; чужой/битый id → 400 из resolveLocationId.
+    if (dto.locationId !== undefined) {
+      const resolvedLocation = await this.resolveLocationId(this.pool, tenantID, dto.locationId);
+      sets.push(`location_id=$${idx++}`);
+      vals.push(resolvedLocation);
     }
 
     if (sets.length === 0) return this.getById(id, tenantID, actor);
@@ -2643,33 +3023,80 @@ export class ChecksService {
         }
       }
 
+      // ── Скидка при закрытии (Round 14, кассир — CASHIER_MODE_SPEC) ────────
+      // «Оплачено» — единственная точка рождения денег: кассир при активации
+      // может дать скидку БЕЗ перечитывания строк. total пересчитывается из
+      // ПЕРСИСТЕНТНЫХ сумм драфта той же формулой, что create()/fullUpdate():
+      // revenue = service_total + max(0, product_total − discount). Скидка
+      // не трогает себестоимость/зарплату (total_cost прежний) — меняются
+      // только discount / total_revenue / profit. Строго isActivating (под
+      // FOR UPDATE): повторный re-save проведённого чека скидку здесь не правит.
+      let closeTotal = parseFloat(checkRows[0].total_revenue) || 0;
+      const priorDiscount = parseFloat(checkRows[0].discount) || 0;
+      const discountChanged =
+        isActivating && dto.discount !== undefined && round2(dto.discount || 0) !== round2(priorDiscount);
+      if (discountChanged) {
+        const effDiscount = round2(dto.discount || 0);
+        const serviceTotalRow = parseFloat(checkRows[0].service_total) || 0;
+        const productTotalRow = parseFloat(checkRows[0].product_total) || 0;
+        const discountedProducts = productTotalRow - effDiscount;
+        closeTotal = round2(serviceTotalRow + (discountedProducts > 0 ? discountedProducts : 0));
+      }
+
       // ── Нормализация ног оплаты при закрытии (fix «разбивка > оборота») ────
-      // Оба клиента закрывают отложенный чек ГОЛЫМ {isDeferred:false} — без
-      // способа и без ног. При POS-режиме смен (092) create() принудительно
-      // занулил обе ноги драфта (forceDeferred), поэтому без довода КАЖДЫЙ
-      // такой чек закрывался бы с cash=card=0: тождество cash + card +
-      // warranty + installmentDebt = total недобирает, «Касса сегодня» мастера
-      // теряет деньги. Доводим ноги из способа (пришедшего или персистентного)
-      // и total_revenue чека: 'cash' → (total, 0); 'card' → (0, total);
-      // 'warranty' → (0, 0). 'cash_card' без сумм не трогаем — раскладку знает
-      // только клиент ('installment' отсечён гардом выше).
+      // Оба клиента исторически закрывали отложенный чек ГОЛЫМ
+      // {isDeferred:false}; кассирский экран (Round 14) шлёт способ + суммы
+      // (+скидку). При POS-режиме смен (092) create() принудительно занулил обе
+      // ноги драфта (forceDeferred), поэтому без довода КАЖДЫЙ такой чек
+      // закрывался бы с cash=card=0. Инвариант активного чека (уроки
+      // 118/135/138): cash + card = total ТОЧНО.
+      //   • 'cash'/'card'/'warranty' — ноги ВЫВОДИМ из total (что бы ни прислал
+      //     клиент): единственная точка рождения денег не должна уметь родить
+      //     ногу ≠ total;
+      //   • 'cash_card' — одна нога пришла → вторая математически однозначна;
+      //     обе пришли → реконсиляция к серверному total (наличные — якорь,
+      //     карта добирается), крупный дрейф логируем; совсем без сумм — не
+      //     трогаем (раскладку знает только клиент; 'installment' отсечён выше).
       if (isActivating) {
         const effMethod = dto.paymentMethod !== undefined ? dto.paymentMethod : checkRows[0].payment_method;
-        const rowTotal = parseFloat(checkRows[0].total_revenue) || 0;
+        const rowTotal = closeTotal;
         if (effMethod === 'cash') {
-          if (dto.cashAmount === undefined) dto.cashAmount = rowTotal;
-          if (dto.cardAmount === undefined) dto.cardAmount = 0;
+          dto.cashAmount = rowTotal;
+          dto.cardAmount = 0;
         } else if (effMethod === 'card') {
-          if (dto.cashAmount === undefined) dto.cashAmount = 0;
-          if (dto.cardAmount === undefined) dto.cardAmount = rowTotal;
+          dto.cashAmount = 0;
+          dto.cardAmount = rowTotal;
         } else if (effMethod === 'warranty') {
-          if (dto.cashAmount === undefined) dto.cashAmount = 0;
-          if (dto.cardAmount === undefined) dto.cardAmount = 0;
+          dto.cashAmount = 0;
+          dto.cardAmount = 0;
+        } else if (effMethod === 'cash_card') {
+          if (dto.cashAmount !== undefined && dto.cardAmount === undefined) {
+            dto.cashAmount = round2(Math.min(Math.max(dto.cashAmount || 0, 0), rowTotal));
+            dto.cardAmount = round2(rowTotal - dto.cashAmount);
+          } else if (dto.cardAmount !== undefined && dto.cashAmount === undefined) {
+            dto.cardAmount = round2(Math.min(Math.max(dto.cardAmount || 0, 0), rowTotal));
+            dto.cashAmount = round2(rowTotal - dto.cardAmount);
+          } else if (dto.cashAmount !== undefined && dto.cardAmount !== undefined) {
+            const drift = round2((dto.cashAmount || 0) + (dto.cardAmount || 0) - rowTotal);
+            if (Math.abs(drift) > 5) {
+              this.logger.warn(
+                `cash_card leg drift ${drift}₽ on deferred close (tenant=${tenantID}, check=${id}) — reconciled to server total ${rowTotal}`,
+              );
+            }
+            dto.cashAmount = round2(Math.min(Math.max(dto.cashAmount || 0, 0), rowTotal));
+            dto.cardAmount = round2(rowTotal - dto.cashAmount);
+          }
         }
       }
 
       // Build the field update (the same fields the plain path supports for a
       // close), always including is_deferred=false.
+      //
+      // ВЕХА «Оплачена» (Round 14): активация НЕ трогает work_status —
+      // оплаченный-но-не-выданный заказ ОСТАЁТСЯ на доске в своей колонке;
+      // с доски он уходит только вехой «Выдана» (setWorkStatus 'delivered',
+      // который требует is_deferred=false). Закрытый конвейер =
+      // is_deferred=false AND (delivered_at NOT NULL OR work_status IS NULL).
       const sets: string[] = ['is_deferred=false'];
       const vals: any[] = [];
       let ui = 1;
@@ -2685,6 +3112,17 @@ export class ChecksService {
       if (isActivating) {
         sets.push(`date=$${ui++}`);
         vals.push(activationDate);
+      }
+      // Скидка кассира при активации (Round 14): вместе с total/profit — иначе
+      // строка хранила бы новый discount при старом обороте.
+      if (discountChanged) {
+        const priorTotalCost = parseFloat(checkRows[0].total_cost) || 0;
+        sets.push(`discount=$${ui++}`);
+        vals.push(round2(dto.discount || 0));
+        sets.push(`total_revenue=$${ui++}`);
+        vals.push(closeTotal);
+        sets.push(`profit=$${ui++}`);
+        vals.push(round2(closeTotal - priorTotalCost));
       }
       if (dto.paymentMethod !== undefined) {
         sets.push(`payment_method=$${ui++}`);
@@ -2791,6 +3229,31 @@ export class ChecksService {
     // `dto.isDeferred` is OPTIONAL: only an explicit `false` flips the flag; if
     // the caller omits it the draft stays a draft and no effects fire.
     const isActivating = wasDeferred && dto.isDeferred === false;
+
+    // ── «Мастер изменяет назначенный заказ» (Round 14, миграция 148) ────────
+    // Заказ в КОНВЕЙЕРЕ режима заказов (отложенный + стоит на доске:
+    // is_deferred=true И work_status NOT NULL): без ячейки
+    // checks_edit_assigned_order менять СОСТАВ (строки услуг/товаров, а этот
+    // путь — единственный, который их переписывает) нельзя — мастер только
+    // ВЫПОЛНЯЕТ назначенное. Двигать по доске (setWorkStatus) и править
+    // комментарий (updateOwnComment) остаётся можно — те эндпоинты этим гейтом
+    // не тронуты. Исключения:
+    //   • owner-class — userHasPermission короткозамыкает в true;
+    //   • сид миграции 148 = true ВСЕМ существующим ролям (презервация 1:1) —
+    //     гейт оживает только когда владелец ВЫКЛЮЧИЛ ячейку;
+    //   • КАССИР, закрывающий заказ (isDeferred:false + accept_payment): его
+    //     клиент может эхом переслать строки при приёме оплаты — закрытие
+    //     не должно упираться в ячейку исполнителя.
+    // Обычный (не-режимный) драфт БЕЗ work_status и проведённые чеки
+    // (editClosedCheck-ветка выше) под гейт не попадают.
+    const inOrderPipeline = wasDeferred && checkRows[0].work_status != null;
+    if (
+      inOrderPipeline &&
+      !userHasPermission(actor, 'checks_edit_assigned_order') &&
+      !(dto.isDeferred === false && this.isCashier(actor))
+    ) {
+      throw new BadRequestException({ message: 'Изменение назначенного заказа запрещено ролью' });
+    }
 
     // ── Рассрочка: на отложенном пути запрещена (зеркально create()) ────────
     // План создаётся ТОЛЬКО в create() (createPlanForCheckTx, в одной
@@ -3107,6 +3570,14 @@ export class ChecksService {
       if (dto.isDeferred !== undefined) {
         updateFields.push(`is_deferred=$${ui++}`);
         updateVals.push(dto.isDeferred);
+      }
+      // Место (Round 14, 146): валидация тенанта внутри resolveLocationId
+      // (чужой/битый id → 400); ''/null снимает место; отсутствие поля — не
+      // трогаем колонку.
+      if (dto.locationId !== undefined) {
+        const resolvedLocation = await this.resolveLocationId(client, tenantID, dto.locationId);
+        updateFields.push(`location_id=$${ui++}`);
+        updateVals.push(resolvedLocation);
       }
 
       // ACCOUNTING: on a genuine draft→active transition (is_deferred true→false,
