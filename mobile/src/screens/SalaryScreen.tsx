@@ -34,7 +34,7 @@ import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import QueryErrorState from '../components/QueryErrorState';
-import SalaryEmployeeCard from '../components/salary/SalaryEmployeeCard';
+import SalaryEmployeeCard, { PayoutForm } from '../components/salary/SalaryEmployeeCard';
 import { salaryApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -43,7 +43,7 @@ import { Text } from '../platform/Typography';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import type { SemanticPalette } from '../theme/palette';
-import type { MasterSalary } from '../../../shared/types';
+import type { MasterSalary, SalaryMonthDetail } from '../../../shared/types';
 import {
   formatMoney,
   formatMoneyShort,
@@ -110,9 +110,15 @@ interface EmployeeRowProps {
   master: MasterSalary;
   palette: SemanticPalette;
   onOpen: (m: MasterSalary) => void;
+  /**
+   * Round 16 #1(б) — быстрое «Выдать» прямо из списка (без захода в карточку).
+   * Передаётся только держателю salary_payouts_manage; кнопка видна, когда
+   * по сотруднику реально есть «К выплате».
+   */
+  onIssue?: (m: MasterSalary) => void;
 }
 
-const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen }: EmployeeRowProps) {
+const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen, onIssue }: EmployeeRowProps) {
   const avatar = getAvatarColors(master.masterName);
   const initials = getInitials(master.masterName);
   const status = rowStatus(master);
@@ -238,6 +244,29 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen }:
           </Text>
         </View>
       ) : null}
+
+      {/* Round 16 #1(б) — «Выдать · N ₽» одним тапом из списка: открывает ту же
+          PayoutForm с предзаполненной суммой «К выплате», без захода в карточку.
+          Вложенный TouchableOpacity перехватывает тап у строки (паттерн
+          clearXBadge в CashFlowScreen). */}
+      {onIssue && master.remainingAmount > 0.5 ? (
+        <TouchableOpacity
+          style={[
+            styles.rowIssueBtn,
+            { backgroundColor: palette.mode === 'dark' ? 'rgba(34,197,94,0.16)' : colors.green[50] },
+          ]}
+          activeOpacity={0.75}
+          onPress={() => {
+            haptic('tap');
+            onIssue(master);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={`Выдать зарплату — ${master.masterName}, к выплате ${formatMoney(master.remainingAmount)}`}
+        >
+          <Ionicons name="paper-plane-outline" size={14} color={colors.green[700]} />
+          <Text style={styles.rowIssueBtnText}>Выдать · {formatMoney(master.remainingAmount)}</Text>
+        </TouchableOpacity>
+      ) : null}
     </TouchableOpacity>
   );
 });
@@ -285,9 +314,9 @@ export default function SalaryScreen() {
       queryClient={queryClient}
       palette={palette}
       tabBarHeight={tabBarHeight}
-      // 149 — «Выплата вне программы» (внепрограммный получатель) — тот же
-      // гейт, что и выплаты сотрудникам.
-      canManageOutside={hasPermission('salary_payouts_manage')}
+      // salary_payouts_manage гейтит и «Выплату вне программы» (149), и быструю
+      // выдачу из списка (Round 16 #1б) — это один и тот же серверный ключ.
+      canManagePayouts={hasPermission('salary_payouts_manage')}
     />
   );
 }
@@ -300,10 +329,12 @@ interface OwnerSalaryListProps {
   queryClient: ReturnType<typeof useQueryClient>;
   palette: SemanticPalette;
   tabBarHeight: number;
-  canManageOutside: boolean;
+  /** salary_payouts_manage: выплаты сотрудникам (быстрая выдача из списка) и
+   *  «Выплата вне программы» — один серверный ключ. */
+  canManagePayouts: boolean;
 }
 
-function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canManageOutside }: OwnerSalaryListProps) {
+function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canManagePayouts }: OwnerSalaryListProps) {
   const [selectedMonth, setSelectedMonth] = useState<Date>(
     () => new Date(new Date().getFullYear(), new Date().getMonth(), 1),
   );
@@ -380,6 +411,60 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
     placeholderData: (prev) => prev,
   });
 
+  // ── Round 16 #1(б) — быстрая выдача из списка ──────────────────────────────
+  // Кнопка «Выдать · N ₽» на строке открывает ту же PayoutForm, что и карточка
+  // сотрудника; periodMonth = открытый в списке месяц (та же привязка, что и в
+  // глубоком флоу). Подтверждение сотрудником не меняется — выплата уходит в
+  // pending, сотрудник принимает через SalaryReceivedModal.
+  const [payoutTarget, setPayoutTarget] = useState<MasterSalary | null>(null);
+
+  // Месячная деталь цели — чтобы предупредить о ещё не принятых (pending)
+  // выплатах: из списка их не видно, а из карточки видно. Ключ и форма данных
+  // совпадают с карточкой сотрудника → кэш общий, открывается мгновенно.
+  const { data: targetDetail } = useQuery<SalaryMonthDetail>({
+    queryKey: ['salary-employee-month', payoutTarget?.masterId ?? 'none', monthYear],
+    queryFn: async () => (await salaryApi.getEmployeeMonth(payoutTarget!.masterId, monthYear)).data,
+    enabled: payoutTarget !== null,
+  });
+
+  // Оборона от глобального placeholderData (prev => prev): при смене цели
+  // временно виден ответ ПРОШЛОГО сотрудника — сверяем userId/month из самого
+  // ответа и прячем предупреждение, пока данные не про эту цель.
+  const pendingForTarget = useMemo(() => {
+    if (!payoutTarget || !targetDetail) return 0;
+    if (targetDetail.userId !== payoutTarget.masterId || targetDetail.month !== monthYear) return 0;
+    const payouts = Array.isArray(targetDetail.payouts) ? targetDetail.payouts : [];
+    return payouts.filter((p) => p.status === 'pending').reduce((sum, p) => sum + (p.amount || 0), 0);
+  }, [payoutTarget, targetDetail, monthYear]);
+
+  const quickPayoutMutation = useMutation({
+    mutationFn: (vars: { employeeId: string; type: 'salary' | 'advance'; amount: number; comment?: string }) =>
+      salaryApi.createPayout({
+        employeeId: vars.employeeId,
+        type: vars.type,
+        amount: vars.amount,
+        comment: vars.comment,
+        periodMonth: monthYear,
+      }),
+    onSuccess: () => {
+      haptic('success');
+      setPayoutTarget(null);
+      // Тот же набор инвалидаций, что у карточки сотрудника: список + все
+      // месячные детали (выплата видна и там, и там).
+      queryClient.invalidateQueries({ queryKey: ['salary'] });
+      queryClient.invalidateQueries({ queryKey: ['salary-employee-month'] });
+    },
+    onError: (err: any) => {
+      haptic('error');
+      const msg = err?.response?.data?.message || 'Не удалось создать выплату';
+      Alert.alert('Ошибка', String(Array.isArray(msg) ? msg.join('\n') : msg));
+    },
+  });
+
+  const openQuickIssue = useCallback((m: MasterSalary) => {
+    setPayoutTarget(m);
+  }, []);
+
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await queryClient.invalidateQueries({ queryKey: ['salary'] });
@@ -438,8 +523,15 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
   );
 
   const renderItem = useCallback(
-    ({ item }: { item: MasterSalary }) => <EmployeeRow master={item} palette={palette} onOpen={openEmployee} />,
-    [palette, openEmployee],
+    ({ item }: { item: MasterSalary }) => (
+      <EmployeeRow
+        master={item}
+        palette={palette}
+        onOpen={openEmployee}
+        onIssue={canManagePayouts ? openQuickIssue : undefined}
+      />
+    ),
+    [palette, openEmployee, canManagePayouts, openQuickIssue],
   );
   const keyExtractor = useCallback((item: MasterSalary) => item.masterId, []);
 
@@ -490,7 +582,7 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
 
       {/* 149 — «Выплата вне программы»: получатель без аккаунта (маркетолог,
           уборщица) — расход выбранного месяца. Гейт salary_payouts_manage. */}
-      {canManageOutside ? (
+      {canManagePayouts ? (
         <TouchableOpacity
           style={[styles.outsideBtn, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
           activeOpacity={0.72}
@@ -649,6 +741,47 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
           )}
         </TouchableOpacity>
       </Modal>
+
+      {/* Round 16 #1(б) — быстрая выдача из списка: та же PayoutForm, что в
+          карточке сотрудника (сумма предзаполнена «К выплате», тип — сегмент,
+          комментарий необязателен → «Выдать» в один тап). */}
+      <Modal
+        visible={payoutTarget !== null}
+        onClose={() => setPayoutTarget(null)}
+        title={'Выдать — ' + (payoutTarget?.masterName ?? '')}
+      >
+        {payoutTarget ? (
+          <>
+            <View style={[styles.quickMetaRow, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="calendar-outline" size={13} color={palette.text.tertiary} />
+              <Text style={[styles.quickMetaText, { color: palette.text.secondary }]}>
+                Выплата за {monthLabelFull(selectedMonth).toLowerCase()} — попадёт в этот месяц
+              </Text>
+            </View>
+            {pendingForTarget > 0 ? (
+              <View
+                style={[
+                  styles.quickWarnRow,
+                  { backgroundColor: palette.mode === 'dark' ? 'rgba(245,158,11,0.16)' : colors.amber[50] },
+                ]}
+              >
+                <Ionicons name="time-outline" size={13} color={colors.amber[700]} />
+                <Text style={[styles.quickMetaText, { color: colors.amber[700] }]}>
+                  Уже ожидает подтверждения: {formatMoney(pendingForTarget)} — сотрудник ещё не принял прошлую выплату
+                </Text>
+              </View>
+            ) : null}
+            <PayoutForm
+              palette={palette}
+              initialType="salary"
+              suggestedAmount={Math.max(0, Math.round(payoutTarget.remainingAmount || 0))}
+              pending={quickPayoutMutation.isPending}
+              onSubmit={(vars) => quickPayoutMutation.mutate({ employeeId: payoutTarget.masterId, ...vars })}
+              onCancel={() => setPayoutTarget(null)}
+            />
+          </>
+        ) : null}
+      </Modal>
     </View>
   );
 }
@@ -800,6 +933,45 @@ const styles = StyleSheet.create({
   rowAmount: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.4 },
   rowChipsLine: { paddingLeft: 36 + spacing[3] },
   rowChipsText: { fontSize: 11, fontWeight: fontWeight.medium },
+
+  // Round 16 #1(б) — нижняя полоса «Выдать · N ₽» на строке сотрудника.
+  rowIssueBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.xl,
+    marginTop: spacing[0.5],
+  },
+  rowIssueBtnText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.bold,
+    color: colors.green[700],
+    letterSpacing: -0.2,
+    fontVariant: ['tabular-nums'],
+  },
+
+  // Round 16 #1(б) — инфострока и предупреждение в модале быстрой выдачи.
+  quickMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1.5],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[2],
+    marginBottom: spacing[3],
+  },
+  quickWarnRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing[1.5],
+    borderRadius: borderRadius.lg,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[2],
+    marginBottom: spacing[3],
+  },
+  quickMetaText: { flex: 1, fontSize: 11, fontWeight: fontWeight.medium, lineHeight: 15 },
 
   // «В среднем за смену» line — aligned under the name (skip avatar + gap).
   rowPerDayLine: {

@@ -1,4 +1,4 @@
-import { IsString, IsNotEmpty, IsNumber, IsOptional, IsIn, MaxLength } from 'class-validator';
+import { IsString, IsNotEmpty, IsNumber, IsOptional, IsIn, Matches, MaxLength } from 'class-validator';
 
 /**
  * Premium awarded by the owner. Either `amount` (for type='cash') or
@@ -27,8 +27,13 @@ export class CreatePremiumDto {
   @MaxLength(500)
   reason!: string;
 
+  // Round 16 (баг 2) — месяц-отнесение премии решает АТРИБУЦИЮ по месяцам
+  // (getAll / getEmployeeMonth / listPremiums), поэтому формат жёсткий:
+  // 'YYYY-MM' (единственный клиент — мобильная помесячная карточка — шлёт
+  // ровно monthKey). Мусорный период молча уводил бы премию в fallback-месяц.
   @IsOptional()
   @IsString()
   @MaxLength(7)
+  @Matches(/^\d{4}-\d{2}$/, { message: 'periodMonthYear должен быть в формате YYYY-MM' })
   periodMonthYear?: string;
 }

@@ -108,6 +108,23 @@ export class SalaryService {
     return `${lower} AND ${upper}`;
   }
 
+  /**
+   * Round 16 (баг 2) — SQL-выражение месяца-отнесения премии: НАЗНАЧЕННЫЙ
+   * период (`period_month_year`, 'YYYY-MM'), fallback — месяц created_at МСК.
+   * Зеркало атрибуции выплат (149: COALESCE(period_month, to_char(created_at
+   * МСК))). Раньше премии относились к месяцу по created_at: премия «за июль»,
+   * выданная 3 августа, жила в августе — и в списке (getAll), и в карточке
+   * (getEmployeeMonth). Формат-guard (`~ '^\d{4}-\d{2}$'`): строка не по маске
+   * (легаси/чужой клиент, колонка TEXT без CHECK) падает в fallback по
+   * created_at, а не выпадает из ВСЕХ месяцев разом.
+   */
+  private static premiumMonthExpr(alias: string): string {
+    return (
+      `COALESCE(CASE WHEN ${alias}.period_month_year ~ '^\\d{4}-\\d{2}$' THEN ${alias}.period_month_year END, ` +
+      `to_char(${alias}.created_at AT TIME ZONE '${SalaryService.BUSINESS_TZ}', 'YYYY-MM'))`
+    );
+  }
+
   private static readonly MONTH_NAMES = [
     'Январь',
     'Февраль',
@@ -130,6 +147,15 @@ export class SalaryService {
     // Единые границы периода для ВСЕХ компонент зарплаты (чеки / премии /
     // штрафы / мотивация) — московский полуинтервал, см. periodPredicate.
     const period = (col: string) => SalaryService.periodPredicate(col, dateFrom, dateTo);
+
+    // Месяцы периода — для помесячно-относимых компонент (payments / premiums).
+    const monthYears = this.getMonthYearsForRange(dateFrom, dateTo);
+    // Round 16 (баг 3) — месяц, на который резолвится ОТОБРАЖАЕМЫЙ процент:
+    // последний месяц запрошенного периода (клиенты шлют календарный месяц —
+    // это он и есть). Fallback — текущий месяц, если dateTo нестандартный.
+    const rateMonth = /^\d{4}-\d{2}/.test(dateTo)
+      ? dateTo.slice(0, 7)
+      : `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
 
     const { rows } = await this.pool.query(
       `WITH svc AS (
@@ -158,23 +184,35 @@ export class SalaryService {
           GROUP BY ch.master_id
        )
        SELECT u.id as master_id, u.full_name as master_name,
-              COALESCE(u.salary_percent, 0) as salary_percent,
-              COALESCE(u.product_salary_percent, 0) as product_salary_percent,
+              COALESCE(h.salary_percent, u.salary_percent, 0) as salary_percent,
+              COALESCE(h.product_salary_percent, u.product_salary_percent, 0) as product_salary_percent,
               COALESCE(svc.service_earnings, 0) as service_earnings,
               COALESCE(prod.product_earnings, 0) as product_earnings,
               COALESCE(svc.service_earnings, 0) + COALESCE(prod.product_earnings, 0) as total_earnings,
               COALESCE(prod.total_revenue, 0) as total_revenue,
               COALESCE(prod.check_count, 0) as check_count
          FROM users u
+         -- Round 16 (баг 3) — процент в СПИСКЕ = effective-ставка запрошенного
+         -- месяца (последняя строка master_rate_history с month <= rateMonth;
+         -- NULL-колонка/нет строк → текущие users.*) — ровно как в карточке
+         -- getEmployeeMonth (150) и в запекании чеков (checks.service, LATERAL).
+         -- Начисления НЕ пересчитываются — они суммируются из ЗАПЕЧЁННЫХ
+         -- salary_amount/product_salary_total (setRate прошлого месяца сам
+         -- перепекает его чеки, recomputeMonthSalary) — правка только убирает
+         -- рассинхрон «список показывает старый процент, карточка — новый».
+         LEFT JOIN LATERAL (
+           SELECT mrh.salary_percent, mrh.product_salary_percent
+             FROM master_rate_history mrh
+            WHERE mrh.tenant_id = u.tenant_id AND mrh.user_id = u.id AND mrh.month <= $4
+            ORDER BY mrh.month DESC
+            LIMIT 1
+         ) h ON true
          LEFT JOIN svc ON svc.earner_id = u.id
          LEFT JOIN prod ON prod.earner_id = u.id
         WHERE u.tenant_id = $1 AND u.role IN ('master', 'admin')
         ORDER BY total_earnings DESC`,
-      [tenantID, dateFrom, dateTo],
+      [tenantID, dateFrom, dateTo, rateMonth],
     );
-
-    // Build month_year values for the date range to query payments
-    const monthYears = this.getMonthYearsForRange(dateFrom, dateTo);
 
     // Query payments for all masters in the period.
     // 153 review-fix — контракт совместимости со СТАРЫМИ сборками: их
@@ -232,16 +270,25 @@ export class SalaryService {
       });
     }
 
-    // Premiums for the same period — both cash and rate_bonus rows.
-    const { rows: premRows } = await this.pool.query(
-      `SELECT sp.*, u.full_name as user_name, a.full_name as awarder_name
-       FROM salary_premiums sp
-       LEFT JOIN users u ON u.id = sp.user_id
-       LEFT JOIN users a ON a.id = sp.awarded_by
-       WHERE sp.tenant_id = $1
-         AND (${period('sp.created_at')})`,
-      [tenantID, dateFrom, dateTo],
-    );
+    // Premiums for the period — both cash and rate_bonus rows.
+    // Round 16 (баг 2) — атрибуция по НАЗНАЧЕННОМУ месяцу (premiumMonthExpr:
+    // period_month_year, fallback месяц created_at МСК), как у payments выше
+    // (month_year IN) и выплат (149). Раньше — по created_at: премия «за июль»,
+    // выданная в августе, попадала в августовский список и в его premiumsAmount.
+    let premRows: any[] = [];
+    if (monthYears.length > 0) {
+      const premPlaceholders = monthYears.map((_, i) => `$${i + 2}`).join(', ');
+      const { rows: pr } = await this.pool.query(
+        `SELECT sp.*, u.full_name as user_name, a.full_name as awarder_name
+         FROM salary_premiums sp
+         LEFT JOIN users u ON u.id = sp.user_id
+         LEFT JOIN users a ON a.id = sp.awarded_by
+         WHERE sp.tenant_id = $1
+           AND ${SalaryService.premiumMonthExpr('sp')} IN (${premPlaceholders})`,
+        [tenantID, ...monthYears],
+      );
+      premRows = pr;
+    }
     const premiumsByUser: Record<string, any[]> = {};
     for (const p of premRows) {
       if (!premiumsByUser[p.user_id]) premiumsByUser[p.user_id] = [];
@@ -587,7 +634,11 @@ export class SalaryService {
       params.push(query.userId);
     }
     if (query.monthYear) {
-      conds.push(`sp.period_month_year=$${idx++}`);
+      // Round 16 (баг 2) — тот же месяц-отнесения, что в getAll /
+      // getEmployeeMonth (period_month_year, fallback created_at МСК): раньше
+      // строгое равенство period_month_year теряло премии без периода
+      // (легаси-строки NULL не попадали ни в один месяц).
+      conds.push(`${SalaryService.premiumMonthExpr('sp')}=$${idx++}`);
       params.push(query.monthYear);
     }
     const { rows } = await this.pool.query(
@@ -2052,16 +2103,20 @@ export class SalaryService {
     );
     const motivationAmount = parseFloat(motRows[0].amount) || 0;
 
-    // Premiums awarded in the month (cash premiums add to earnings).
+    // Premiums ASSIGNED to the month (cash premiums add to earnings).
+    // Round 16 (баг 2) — отнесение по premiumMonthExpr (period_month_year,
+    // fallback месяц created_at МСК) — зеркало payouts ниже (149). Раньше —
+    // по created_at: премия «за июль», выданная 3 августа, жила в августовской
+    // карточке, а июльская её не видела.
     const { rows: premRows } = await this.pool.query(
       `SELECT sp.*, u.full_name AS user_name, a.full_name AS awarder_name
          FROM salary_premiums sp
          LEFT JOIN users u ON u.id = sp.user_id
          LEFT JOIN users a ON a.id = sp.awarded_by
         WHERE sp.tenant_id = $1 AND sp.user_id = $2
-          AND sp.created_at >= $3 AND sp.created_at < $4
+          AND ${SalaryService.premiumMonthExpr('sp')} = $3
         ORDER BY sp.created_at DESC`,
-      [tenantID, employeeId, monthStart, nextMonthStart],
+      [tenantID, employeeId, monthYear],
     );
     const premiums = premRows.map((r) => this.mapPremium(r));
     const premiumsAmount = premiums.reduce((sum, p) => sum + (p.type === 'cash' ? p.amount || 0 : 0), 0);

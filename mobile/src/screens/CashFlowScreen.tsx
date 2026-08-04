@@ -147,6 +147,31 @@ function shiftPeriod(period: Exclude<Period, 'custom'>, anchor: Date, dir: -1 | 
   return new Date(anchor.getFullYear() + dir, 0, 1);
 }
 
+// ── Границы пейджера (Round 16 #4б — паттерн MONTH_PAGER из ReportsScreen R15):
+// вперёд — не дальше периода с «сегодня» (будущего движения денег не бывает),
+// назад — 24 месяца, как у отчётов. Сравнение через целочисленный индекс
+// периода — безопасно от Date-компараций и быстрых двойных тапов.
+
+/** Насколько месяцев назад можно листать — единая глубина с ReportsScreen. */
+const PAGER_DEPTH_MONTHS = 24;
+
+/** Сквозной индекс периода: одинаковый индекс ⇔ одна и та же страница пейджера. */
+function periodIndex(period: Exclude<Period, 'custom'>, d: Date): number {
+  if (period === 'day') {
+    // Дни с эпохи по ЛОКАЛЬНОЙ полуночи (RU без DST — сутки всегда 86 400 с).
+    return Math.floor(new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime() / 86_400_000);
+  }
+  if (period === 'week') return Math.floor(startOfWeek(d).getTime() / 86_400_000);
+  if (period === 'month') return d.getFullYear() * 12 + d.getMonth();
+  return d.getFullYear();
+}
+
+/** Самая старая доступная дата-якорь (24 месяца назад от сегодня). */
+function oldestAnchor(): Date {
+  const now = new Date();
+  return new Date(now.getFullYear(), now.getMonth() - PAGER_DEPTH_MONTHS, now.getDate());
+}
+
 function periodRangeLabel(period: Period, anchor: Date, customFrom?: Date, customTo?: Date): string {
   if (period === 'custom') {
     if (!customFrom || !customTo) return 'Диапазон';
@@ -462,8 +487,15 @@ export default function CashFlowScreen() {
   const handlePickPeriod = useCallback((p: Exclude<Period, 'custom'>) => {
     haptic('select');
     setPeriod(p);
-    // При возврате к "регулярному" периоду сбрасываем якорь на сегодня —
-    // иначе пользователь видит "May 2020" после долгого custom-диапазона.
+    // При выборе периода сбрасываем якорь на сегодня — иначе после листания
+    // в прошлое (или долгого custom-диапазона) чип «День» открывал бы день
+    // полугодовой давности. Комментарий это всегда обещал, теперь код делает
+    // (Round 16 #4б; поведение = пресет «Месяц» в ReportsScreen R15).
+    setAnchor(() => {
+      const t = new Date();
+      t.setHours(0, 0, 0, 0);
+      return t;
+    });
     setExpandedDay(null);
   }, []);
 
@@ -479,12 +511,35 @@ export default function CashFlowScreen() {
       // Стрелки активны только для регулярных периодов. Для 'custom'
       // пользователь редактирует диапазон через календарь.
       if (period === 'custom') return;
-      haptic('tap');
-      setAnchor((prev) => shiftPeriod(period, prev, dir));
+      haptic('select');
+      setAnchor((prev) => {
+        // Кламп внутри апдейтера (Round 16 #4б, паттерн R15): быстрый двойной
+        // тап не пролистает за пределы — вперёд не дальше текущего периода,
+        // назад не глубже 24 месяцев.
+        const next = shiftPeriod(period, prev, dir);
+        if (dir === 1 && periodIndex(period, next) > periodIndex(period, new Date())) return prev;
+        if (dir === -1 && periodIndex(period, next) < periodIndex(period, oldestAnchor())) return prev;
+        return next;
+      });
       setExpandedDay(null);
     },
     [period],
   );
+
+  // Тап по заголовку периода — вернуться к текущему (паттерн пейджера R15).
+  const resetAnchor = useCallback(() => {
+    haptic('tap');
+    setAnchor(() => {
+      const t = new Date();
+      t.setHours(0, 0, 0, 0);
+      return t;
+    });
+    setExpandedDay(null);
+  }, []);
+
+  // Состояния границ пейджера — для disabled-стрелок и подсказки «к текущему».
+  const isAtCurrentPeriod = period !== 'custom' && periodIndex(period, anchor) >= periodIndex(period, new Date());
+  const isAtOldestPeriod = period !== 'custom' && periodIndex(period, anchor) <= periodIndex(period, oldestAnchor());
 
   const handleConfirmDate = useCallback(
     (d: Date) => {
@@ -670,21 +725,44 @@ export default function CashFlowScreen() {
             <TouchableOpacity
               style={[styles.rangeArrow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               onPress={() => handleShift(-1)}
+              disabled={isAtOldestPeriod}
               activeOpacity={0.7}
               accessibilityLabel="Предыдущий период"
+              accessibilityState={{ disabled: isAtOldestPeriod }}
             >
-              <Ionicons name="chevron-back" size={18} color={palette.text.primary} />
+              <Ionicons
+                name="chevron-back"
+                size={18}
+                color={palette.text.primary}
+                style={isAtOldestPeriod && styles.rangeArrowDisabled}
+              />
             </TouchableOpacity>
           )}
           <TouchableOpacity
             style={[styles.rangeChip, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
-            onPress={period === 'custom' ? () => setDatePickerMode('customFrom') : undefined}
-            activeOpacity={period === 'custom' ? 0.7 : 1}
-            accessibilityRole={period === 'custom' ? 'button' : undefined}
+            onPress={
+              period === 'custom' ? () => setDatePickerMode('customFrom') : isAtCurrentPeriod ? undefined : resetAnchor
+            }
+            disabled={period !== 'custom' && isAtCurrentPeriod}
+            activeOpacity={period === 'custom' || !isAtCurrentPeriod ? 0.7 : 1}
+            accessibilityRole="button"
+            accessibilityState={{ disabled: period !== 'custom' && isAtCurrentPeriod }}
+            accessibilityLabel={
+              period === 'custom'
+                ? 'Изменить произвольный диапазон'
+                : isAtCurrentPeriod
+                  ? `Выбран текущий период: ${periodRangeLabel(period, anchor, customFrom, customTo)}`
+                  : `Выбран ${periodRangeLabel(period, anchor, customFrom, customTo)}. Нажмите, чтобы вернуться к текущему`
+            }
           >
             <Text style={[styles.rangeChipText, { color: palette.text.primary }]} numberOfLines={1}>
               {periodRangeLabel(period, anchor, customFrom, customTo)}
             </Text>
+            {/* Подсказка «к текущему» (паттерн пейджера R15) — только когда
+                улистали в прошлое: тап по чипу мгновенно возвращает. */}
+            {period !== 'custom' && !isAtCurrentPeriod ? (
+              <Text style={[styles.rangeChipHint, { color: palette.text.tertiary }]}>к текущему</Text>
+            ) : null}
           </TouchableOpacity>
           {period === 'custom' ? (
             <View style={styles.rangeArrowSpacer} />
@@ -692,10 +770,17 @@ export default function CashFlowScreen() {
             <TouchableOpacity
               style={[styles.rangeArrow, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
               onPress={() => handleShift(1)}
+              disabled={isAtCurrentPeriod}
               activeOpacity={0.7}
               accessibilityLabel="Следующий период"
+              accessibilityState={{ disabled: isAtCurrentPeriod }}
             >
-              <Ionicons name="chevron-forward" size={18} color={palette.text.primary} />
+              <Ionicons
+                name="chevron-forward"
+                size={18}
+                color={palette.text.primary}
+                style={isAtCurrentPeriod && styles.rangeArrowDisabled}
+              />
             </TouchableOpacity>
           )}
         </View>
@@ -1436,13 +1521,17 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+  // Кламп границы пейджера (Round 16 #4б) — приглушённая стрелка на упоре.
+  rangeArrowDisabled: { opacity: 0.3 },
   // Placeholder ровно той же ширины, что и rangeArrow — нужен в
   // 'custom'-режиме, чтобы центральная подпись осталась по центру
   // строки, а не уехала к краю.
   rangeArrowSpacer: { width: 40, height: 40 },
   rangeChip: {
     flex: 1,
-    height: 40,
+    // minHeight вместо жёсткой высоты: вторая строка «к текущему» (когда
+    // улистали в прошлое) не должна клипаться.
+    minHeight: 40,
     borderRadius: borderRadius.xl,
     borderWidth: StyleSheet.hairlineWidth,
     backgroundColor: colors.white,
@@ -1450,6 +1539,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing[3],
+    paddingVertical: spacing[1],
   },
   rangeChipText: {
     fontSize: fontSize.sm,
@@ -1457,6 +1547,7 @@ const styles = StyleSheet.create({
     color: colors.gray[900],
     textTransform: 'capitalize',
   },
+  rangeChipHint: { fontSize: 10, marginTop: 1 },
 
   // Произвольный диапазон — тонкая пилюля под строкой периода
   customRangeBtn: {

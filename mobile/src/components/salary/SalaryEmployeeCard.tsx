@@ -488,31 +488,9 @@ export default function SalaryEmployeeCard({
                 </Text>
               </TouchableOpacity>
             ) : null}
-            <PayoutsSection
-              payouts={data.payouts}
-              palette={palette}
-              canManage={canManagePayouts}
-              onMenu={openPayoutMenu}
-            />
-            <FinesSection
-              fines={data.fines}
-              palette={palette}
-              canManage={canManagePayouts}
-              onRemove={confirmRemoveFine}
-              onEdit={(f) => {
-                haptic('tap');
-                setFineToEdit(f);
-              }}
-              removingId={removeFineMutation.isPending ? removeFineMutation.variables : undefined}
-            />
-            <PremiumsSection premiums={data.premiums} palette={palette} />
-            <PaymentsSection
-              payments={data.payments}
-              palette={palette}
-              canManage={canManagePayouts}
-              onMenu={openPaymentMenu}
-            />
-
+            {/* Round 16 #1(в) — действия ПЕРЕД историей: раньше «Выдать
+                зарплату» жила под четырьмя секциями списков, и до неё нужно
+                было доскролливать весь месяц. Логика кнопок не менялась. */}
             {canManagePayouts || canManagePremiums ? (
               <View style={styles.actions}>
                 {canManagePayouts && (
@@ -577,6 +555,30 @@ export default function SalaryEmployeeCard({
                 )}
               </View>
             ) : null}
+            <PayoutsSection
+              payouts={data.payouts}
+              palette={palette}
+              canManage={canManagePayouts}
+              onMenu={openPayoutMenu}
+            />
+            <FinesSection
+              fines={data.fines}
+              palette={palette}
+              canManage={canManagePayouts}
+              onRemove={confirmRemoveFine}
+              onEdit={(f) => {
+                haptic('tap');
+                setFineToEdit(f);
+              }}
+              removingId={removeFineMutation.isPending ? removeFineMutation.variables : undefined}
+            />
+            <PremiumsSection premiums={data.premiums} palette={palette} />
+            <PaymentsSection
+              payments={data.payments}
+              palette={palette}
+              canManage={canManagePayouts}
+              onMenu={openPaymentMenu}
+            />
           </ScrollView>
         </GestureDetector>
       </GestureHandlerRootView>
@@ -1181,7 +1183,12 @@ function Section({
 
 // ── Payout form ────────────────────────────────────────────────────────────────
 
-function PayoutForm({
+/**
+ * Round 16 #1 — экспортируется: та же форма открывается и из карточки
+ * сотрудника, и из быстрой кнопки «Выдать» прямо в списке SalaryScreen
+ * (одна форма — ноль дрейфа между двумя входами).
+ */
+export function PayoutForm({
   palette,
   initialType,
   suggestedAmount,
@@ -1251,6 +1258,28 @@ function PayoutForm({
           />
           <Text style={[styles.currency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
         </View>
+        {/* Round 16 #1(а) — префилл видим явно: владелец понимает, что сумма
+            уже = «К выплате», а после правки может вернуть её одним тапом. */}
+        {suggestedAmount > 0 ? (
+          <View style={styles.suggestRow}>
+            <Text style={[styles.helper, { color: palette.text.tertiary }]}>
+              К выплате — {formatMoney(suggestedAmount)}
+            </Text>
+            {parseAmount(amount) !== suggestedAmount ? (
+              <TouchableOpacity
+                onPress={() => {
+                  haptic('select');
+                  setAmount(String(suggestedAmount));
+                }}
+                hitSlop={8}
+                accessibilityRole="button"
+                accessibilityLabel={`Подставить сумму к выплате ${formatMoney(suggestedAmount)}`}
+              >
+                <Text style={styles.suggestBtnText}>Подставить</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
       </FormField>
 
       <FormField label="Комментарий (необязательно)" palette={palette}>
@@ -1897,8 +1926,9 @@ const styles = StyleSheet.create({
   },
   statusPillText: { fontSize: 10, fontWeight: fontWeight.semibold },
 
-  // Owner actions
-  actions: { marginTop: spacing[2], gap: spacing[2] },
+  // Owner actions — Round 16 #1(в): блок стоит между «Изменить процент» и
+  // историей секций, поэтому отбивка снизу, а не сверху.
+  actions: { marginBottom: spacing[3], gap: spacing[2] },
   actionRow: { flexDirection: 'row', gap: spacing[2] },
   actionPrimary: { flex: 2, borderRadius: borderRadius['2xl'], overflow: 'hidden' },
   actionSecondary: { flex: 1, borderRadius: borderRadius['2xl'], overflow: 'hidden' },
@@ -1942,6 +1972,19 @@ const styles = StyleSheet.create({
   input: { flex: 1, fontSize: fontSize.sm, padding: 0 },
   currency: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
   helper: { fontSize: fontSize.xs, marginTop: spacing[1] },
+  // Round 16 #1(а) — строка «К выплате — N ₽ · Подставить» под полем суммы.
+  suggestRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+    marginTop: spacing[1],
+  },
+  suggestBtnText: {
+    fontSize: fontSize.xs,
+    fontWeight: fontWeight.semibold,
+    color: colors.primary[600],
+  },
   formActions: { flexDirection: 'row', gap: spacing[3], marginTop: spacing[2] },
   cancelBtn: {
     flex: 1,

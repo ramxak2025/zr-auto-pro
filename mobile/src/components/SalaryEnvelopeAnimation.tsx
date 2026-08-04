@@ -73,7 +73,9 @@ function formatMoney(v: number): string {
   return (
     Math.round(v)
       .toString()
-      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' ' + RUBLE
+      .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') +
+    ' ' +
+    RUBLE
   );
 }
 
@@ -94,10 +96,7 @@ function FlyingRuble({ index, reduceMotion }: FlyingRubleProps) {
     // Stagger each glyph by 30 ms so they don't fire as a single burst.
     const delay = 180 + index * 30;
     opacity.value = withDelay(delay, withTiming(1, { duration: 90 }));
-    progress.value = withDelay(
-      delay,
-      withTiming(1, { duration: 700, easing: Easing.out(Easing.cubic) }),
-    );
+    progress.value = withDelay(delay, withTiming(1, { duration: 700, easing: Easing.out(Easing.cubic) }));
     // Fade out near the end of the trajectory so glyphs disappear at the edge.
     opacity.value = withDelay(delay + 400, withTiming(0, { duration: 300 }));
     return () => {
@@ -202,14 +201,8 @@ export default function SalaryEnvelopeAnimation({
     captionOpacity.value = withDelay(220, withTiming(1, { duration: 200 }));
 
     // Translation kicks in after the spring + hover phase (~900 ms).
-    translateX.value = withDelay(
-      900,
-      withTiming(TARGET_X, { duration: 550, easing: Easing.in(Easing.cubic) }),
-    );
-    translateY.value = withDelay(
-      900,
-      withTiming(TARGET_Y, { duration: 550, easing: Easing.in(Easing.cubic) }),
-    );
+    translateX.value = withDelay(900, withTiming(TARGET_X, { duration: 550, easing: Easing.in(Easing.cubic) }));
+    translateY.value = withDelay(900, withTiming(TARGET_Y, { duration: 550, easing: Easing.in(Easing.cubic) }));
     // Fade out the caption shortly before the envelope leaves screen.
     captionOpacity.value = withDelay(900, withTiming(0, { duration: 300 }));
 
@@ -242,11 +235,7 @@ export default function SalaryEnvelopeAnimation({
 
   const envelopeStyle = useAnimatedStyle(() => ({
     opacity: opacity.value,
-    transform: [
-      { translateX: translateX.value },
-      { translateY: translateY.value },
-      { scale: scale.value },
-    ],
+    transform: [{ translateX: translateX.value }, { translateY: translateY.value }, { scale: scale.value }],
   }));
 
   const captionStyle = useAnimatedStyle(() => ({
@@ -325,6 +314,8 @@ const styles = StyleSheet.create({
   },
   rubleText: {
     fontSize: 24,
+    // Явный lineHeight: Typography `body` даёт 22 — глиф ₽ 24pt обрезался бы.
+    lineHeight: 30,
     fontWeight: fontWeight.bold,
     color: '#facc15', // amber-400 — pops on the dark backdrop
     textShadowColor: 'rgba(0,0,0,0.4)',
@@ -340,6 +331,8 @@ const styles = StyleSheet.create({
   },
   captionAmount: {
     fontSize: fontSize['3xl'],
+    // Явный lineHeight (класс «631К ₽»): 30pt в унаследованных 22 обрезается.
+    lineHeight: 38,
     fontWeight: fontWeight.bold,
     color: colors.white,
     letterSpacing: -0.5,

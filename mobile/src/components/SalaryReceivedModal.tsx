@@ -33,6 +33,8 @@ import {
   AccessibilityInfo,
   ActivityIndicator,
   Pressable,
+  ScrollView,
+  useWindowDimensions,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, {
@@ -182,6 +184,11 @@ export default function SalaryReceivedModal({
   decision = null,
 }: SalaryReceivedModalProps) {
   const palette = useColors();
+  // Живая высота окна (не module-level Dimensions): карточка никогда не выше
+  // экрана — на маленьких iPhone/при крупном системном шрифте контент внутри
+  // скроллится, а не сжимается и не обрезается (Round 16 #5).
+  const { height: winH } = useWindowDimensions();
+  const maxCardHeight = Math.max(320, winH - spacing[12] * 2);
   const [reduceMotion, setReduceMotion] = React.useState(false);
   useEffect(() => {
     let cancelled = false;
@@ -238,51 +245,71 @@ export default function SalaryReceivedModal({
         </View>
 
         <Animated.View
-          style={[styles.cardWrap, { backgroundColor: palette.bg.elevated }, cardStyle]}
+          style={[styles.cardWrap, { backgroundColor: palette.bg.elevated, maxHeight: maxCardHeight }, cardStyle]}
           pointerEvents="box-none"
         >
-          <LinearGradient
-            colors={[colors.green[500], colors.green[700]] as [string, string]}
-            start={{ x: 0, y: 0 }}
-            end={{ x: 1, y: 1 }}
-            style={styles.iconRing}
+          {/* Контент в ScrollView: пока помещается — ведёт себя как статичная
+              карточка (bounces выключен), а на маленьких экранах / при крупном
+              шрифте скроллится вместо обрезания сверху и снизу. */}
+          <ScrollView
+            style={styles.cardScroll}
+            contentContainerStyle={styles.cardContent}
+            bounces={false}
+            showsVerticalScrollIndicator={false}
           >
-            <Ionicons name="mail" size={48} color={colors.white} />
-          </LinearGradient>
+            <LinearGradient
+              colors={[colors.green[500], colors.green[700]] as [string, string]}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.iconRing}
+            >
+              <Ionicons name="mail" size={48} color={colors.white} />
+            </LinearGradient>
 
-          <Text style={[styles.title, { color: palette.text.secondary }]}>{title}</Text>
-          <Text style={[styles.amount, { color: palette.text.primary }]}>{formatMoney(item.amount)}</Text>
-          <Text style={[styles.from, { color: palette.text.secondary }]}>От {ownerName}</Text>
+            <Text style={[styles.title, { color: palette.text.secondary }]}>{title}</Text>
+            <Text
+              style={[styles.amount, { color: palette.text.primary }]}
+              numberOfLines={1}
+              adjustsFontSizeToFit
+              minimumFontScale={0.6}
+              maxFontSizeMultiplier={1.3}
+            >
+              {formatMoney(item.amount)}
+            </Text>
+            <Text style={[styles.from, { color: palette.text.secondary }]}>От {ownerName}</Text>
 
-          {item.comment ? (
-            <Text style={[styles.comment, { color: palette.text.secondary }]}>«{item.comment}»</Text>
-          ) : null}
+            {item.comment ? (
+              <Text style={[styles.comment, { color: palette.text.secondary }]}>«{item.comment}»</Text>
+            ) : null}
 
-          {isPayout ? (
-            <View style={styles.payoutCtaRow}>
-              <RejectButton
-                busy={confirming && decision === 'reject'}
-                disabled={confirming}
-                palette={palette}
-                onPress={() => onReject?.()}
-              />
-              <AcceptButton
-                busy={confirming && decision === 'accept'}
-                disabled={confirming}
-                onPress={() => onAccept?.()}
-              />
-            </View>
-          ) : (
-            <View style={styles.ctaWrap}>
-              <View style={styles.ctaShadowWrap}>
-                <CTAButton confirming={confirming} onPress={onConfirm} />
+            {isPayout ? (
+              <View style={styles.payoutCtaRow}>
+                <RejectButton
+                  busy={confirming && decision === 'reject'}
+                  disabled={confirming}
+                  palette={palette}
+                  onPress={() => onReject?.()}
+                />
+                <AcceptButton
+                  busy={confirming && decision === 'accept'}
+                  disabled={confirming}
+                  onPress={() => onAccept?.()}
+                />
               </View>
-            </View>
-          )}
+            ) : (
+              <View style={styles.ctaWrap}>
+                <View style={styles.ctaShadowWrap}>
+                  <CTAButton confirming={confirming} onPress={onConfirm} />
+                </View>
+              </View>
+            )}
 
-          <Text style={[styles.hint, { color: palette.text.tertiary }]}>
-            {isPayout ? 'Примите или отклоните выплату от руководителя' : 'Подтвердите получение денег от руководителя'}
-          </Text>
+            <Text style={[styles.hint, { color: palette.text.tertiary }]}>
+              {isPayout
+                ? 'Примите или отклоните выплату от руководителя'
+                : 'Подтвердите получение денег от руководителя'}
+            </Text>
+          </ScrollView>
         </Animated.View>
       </View>
     </RNModal>
@@ -462,14 +489,24 @@ const styles = StyleSheet.create({
     maxWidth: 360,
     backgroundColor: colors.white,
     borderRadius: borderRadius['3xl'],
-    paddingHorizontal: spacing[6],
-    paddingVertical: spacing[7],
-    alignItems: 'center',
     shadowColor: colors.black,
     shadowOpacity: 0.25,
     shadowRadius: 32,
     shadowOffset: { width: 0, height: 10 },
     elevation: 22,
+  },
+  // Скролл-слой отдельно от тени: overflow:hidden на самом cardWrap срезал бы
+  // iOS-тень, поэтому клип закруглений живёт на ScrollView.
+  cardScroll: {
+    width: '100%',
+    flexGrow: 0,
+    borderRadius: borderRadius['3xl'],
+    overflow: 'hidden',
+  },
+  cardContent: {
+    alignItems: 'center',
+    paddingHorizontal: spacing[6],
+    paddingVertical: spacing[7],
   },
   iconRing: {
     width: 88,
@@ -493,9 +530,16 @@ const styles = StyleSheet.create({
   },
   amount: {
     fontSize: 40,
+    // Явная высота строки (Round 16 #5): без неё крупный глиф-бокс наследует
+    // Typography `body` lineHeight:22 и цифры обрезаются сверху и снизу —
+    // класс бага «631К ₽», эталон фикса MarketingReportsScreen.kpiValue /
+    // InstallmentDetailScreen.summaryRemaining.
+    lineHeight: 48,
     fontWeight: fontWeight.bold,
     color: colors.gray[900],
     letterSpacing: -1,
+    includeFontPadding: false,
+    textAlign: 'center',
     marginTop: 4,
     marginBottom: 8,
   },
