@@ -29,6 +29,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
+import type { User } from '../../../shared/types';
 
 // ── Android LayoutAnimation enable ──────────────────────────────────────
 // Required for collapsible day cards to animate height changes on Android.
@@ -261,6 +262,8 @@ interface EmployeePickerRowProps {
   id: string;
   fullName: string;
   active: boolean;
+  /** Round 16 #4б-хвост — статус сотрудника для бейджа в строке пикера. */
+  status?: 'inactive' | 'dismissed';
   onPick: (id: string, fullName: string) => void;
   palette: ReturnType<typeof useColors>;
 }
@@ -268,6 +271,7 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
   id,
   fullName,
   active,
+  status,
   onPick,
   palette,
 }: EmployeePickerRowProps) {
@@ -291,9 +295,19 @@ const EmployeePickerRow = React.memo(function EmployeePickerRow({
           { color: palette.text.secondary },
           active && { color: colors.primary[600], fontWeight: fontWeight.bold },
         ]}
+        numberOfLines={1}
       >
         {fullName}
       </Text>
+      {/* Деактивированный / уволенный сотрудник выбираем (его движение денег за
+          прошлый месяц открывается), но помечен явным бейджем. */}
+      {status ? (
+        <View style={[styles.employeeStatusBadge, { backgroundColor: palette.bg.muted }]}>
+          <Text style={[styles.employeeStatusText, { color: palette.text.tertiary }]}>
+            {status === 'dismissed' ? 'Уволен' : 'Неактивен'}
+          </Text>
+        </View>
+      ) : null}
       {active && <CheckBadge size={18} />}
     </TouchableOpacity>
   );
@@ -365,15 +379,63 @@ export default function CashFlowScreen() {
   const dateTo = useMemo(() => fmt(rangeTo), [rangeTo]);
 
   // ── Queries ──────────────────────────────────────────────────────────
-  const { data: employees } = useQuery<any[]>({
-    queryKey: ['masters'],
+  // Источник пикера сотрудников (Round 16 #4б-хвост). Раньше был
+  // usersApi.getMasters() — но бэкенд фильтрует его `is_active = true`, поэтому
+  // ДЕАКТИВИРОВАННЫЙ сотрудник в пикере не появлялся, и его персональное
+  // движение денег за прошлый месяц было не открыть. getCashFlow при этом
+  // отдаёт данные по ЛЮБОМУ master_id (подтверждено бэкендом), так что чинить
+  // надо именно ИСТОЧНИК списка, а не сервер.
+  //   • ['users-all'] — весь штат (active + inactive, все роли, БЕЗ уволенных);
+  //     тот же ключ и форма, что у EmployeesScreen (useAllStaff) → общий кэш,
+  //     пикер открывается мгновенно. Эндпоинт /users открытый (без права).
+  const { data: allStaff } = useQuery<User[]>({
+    queryKey: ['users-all'],
     queryFn: async () => {
-      const res = await usersApi.getMasters();
-      return res.data;
+      const res = await usersApi.getAll();
+      return Array.isArray(res.data) ? res.data : [];
     },
     enabled: canFilterByEmployee,
     placeholderData: (prev) => prev,
+    staleTime: 60_000,
   });
+
+  //   • ['users-dismissed'] — «Уволенные» (recycle bin). Эндпоинт /users/dismissed
+  //     ГЕЙТИТСЯ user_management, поэтому дёргаем его ТОЛЬКО у держателя права
+  //     (иначе 403). Тот же ключ/гейт, что у EmployeesScreen. Без права пикер
+  //     просто не покажет уволенных — деактивированные (главный кейс) всё равно
+  //     приходят из ['users-all'].
+  const canSeeDismissed = hasPermission('user_management');
+  const { data: dismissedStaff } = useQuery<User[]>({
+    queryKey: ['users-dismissed'],
+    queryFn: async () => {
+      const res = await usersApi.listDismissed();
+      return Array.isArray(res.data) ? res.data : [];
+    },
+    enabled: canFilterByEmployee && canSeeDismissed,
+    placeholderData: (prev) => prev,
+    staleTime: 60_000,
+  });
+
+  // Итоговый список пикера: master/admin (тот же охват, что был у getMasters —
+  // владельцев/директоров пикер не показывал), но с ослабленными фильтрами
+  // is_active и dismissed_at. Активные сверху, затем неактивные, затем уволенные;
+  // внутри группы — по имени. Дедуп по id (уволенный не задвоится).
+  const pickerEmployees = useMemo<User[]>(() => {
+    const isCandidate = (u: User) => u.role === 'master' || u.role === 'admin';
+    const byId = new Map<string, User>();
+    for (const u of Array.isArray(allStaff) ? allStaff : []) {
+      if (isCandidate(u)) byId.set(u.id, u);
+    }
+    for (const u of Array.isArray(dismissedStaff) ? dismissedStaff : []) {
+      if (isCandidate(u) && !u.purgedAt) byId.set(u.id, u);
+    }
+    const rank = (u: User) => (u.dismissedAt ? 2 : u.isActive ? 0 : 1);
+    return Array.from(byId.values()).sort((a, b) => {
+      const r = rank(a) - rank(b);
+      if (r !== 0) return r;
+      return (a.fullName || '').localeCompare(b.fullName || '', 'ru');
+    });
+  }, [allStaff, dismissedStaff]);
 
   const effectiveEmployeeId = mode === 'employee' ? employeeId : '';
 
@@ -1326,12 +1388,13 @@ export default function CashFlowScreen() {
                 Обычный ScrollView гарантирует, что строки видны и пресс
                 по любой из них срабатывает. */}
             <ScrollView style={{ maxHeight: 320 }} keyboardShouldPersistTaps="handled">
-              {(Array.isArray(employees) ? employees : []).map((item: any) => (
+              {pickerEmployees.map((item) => (
                 <EmployeePickerRow
                   key={item.id}
                   id={item.id}
                   fullName={item.fullName}
                   active={employeeId === item.id}
+                  status={item.dismissedAt ? 'dismissed' : item.isActive ? undefined : 'inactive'}
                   onPick={pickEmployee}
                   palette={palette}
                 />
@@ -1768,4 +1831,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   employeeAvatarText: { fontSize: fontSize.xs, fontWeight: fontWeight.bold, color: colors.primary[700] },
+  // Round 16 #4б-хвост — бейдж «Неактивен» / «Уволен» в строке пикера.
+  employeeStatusBadge: { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 7 },
+  employeeStatusText: { fontSize: 10, fontWeight: fontWeight.bold, letterSpacing: 0.3, textTransform: 'uppercase' },
 });

@@ -154,6 +154,14 @@ const EmployeeRow = React.memo(function EmployeeRow({
           <Text style={[styles.rowRole, { color: palette.text.secondary }]} numberOfLines={1}>
             {roleLabels[user.role] || user.role}
           </Text>
+          {/* Round 16 #4б-хвост — деактивированный сотрудник (is_active=false,
+              ещё не уволен): раньше его прятал фильтр списка, теперь показываем
+              с явным бейджем «Неактивен». */}
+          {!user.isActive && !user.dismissedAt ? (
+            <View style={[styles.inactiveBadge, { backgroundColor: palette.bg.muted }]}>
+              <Text style={[styles.inactiveBadgeText, { color: palette.text.tertiary }]}>Неактивен</Text>
+            </View>
+          ) : null}
           {showMetrics && (
             <>
               <View style={[styles.metaDot, { backgroundColor: palette.border.strong }]} />
@@ -268,8 +276,14 @@ export default function EmployeesScreen() {
         // #5 — fully hidden employees (e.g. the owner) never appear.
         // Defensive: a dismissed / purged user must never surface among the
         // active staff even from a stale cache (the API already excludes them).
-        .filter((u) => u.isActive && !u.hiddenEverywhere && !u.dismissedAt && !u.purgedAt)
+        // Round 16 #4б-хвост: `isActive` больше НЕ фильтруем — деактивированные
+        // (is_active=false, ещё не уволенные) раньше проваливались между обоими
+        // списками (ни активные, ни «Уволенные»); теперь они в списке с бейджем
+        // «Неактивен» и уходят в самый низ сортировкой ниже.
+        .filter((u) => !u.hiddenEverywhere && !u.dismissedAt && !u.purgedAt)
         .sort((a, b) => {
+          // Активные всегда выше деактивированных — независимо от расписания.
+          if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
           // На смене → опоздавшие → остальные → выходной/нет данных
           const sa = todayMap.get(a.id);
           const sb = todayMap.get(b.id);
@@ -691,6 +705,9 @@ const styles = StyleSheet.create({
     flexShrink: 1,
   },
   metaDot: { width: 3, height: 3, borderRadius: 1.5 },
+  // Round 16 #4б-хвост — бейдж «Неактивен» в мета-строке деактивированного.
+  inactiveBadge: { paddingHorizontal: 6, paddingVertical: 1, borderRadius: 6 },
+  inactiveBadgeText: { fontSize: 10, fontWeight: '700', letterSpacing: 0.3, textTransform: 'uppercase' },
   rowMetrics: {
     fontSize: 12,
     fontWeight: '600',
