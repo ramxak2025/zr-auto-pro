@@ -51,17 +51,19 @@ test('premiumMonthExpr: period_month_year с формат-guard, fallback create
   );
 });
 
-test('getAll: премии выбираются по назначенному месяцу, а не по created_at-диапазону', () => {
+test('getAll: премии — по periodMonthMembership (месяц-к-дате ИЛИ дата факта), не разворот в целые месяцы', () => {
   const block = slice('Premiums for the period', 'Penalties for the same period');
+  // Round 16 MEDIUM: раньше premiumMonthExpr IN (целые месяцы диапазона) —
+  // узкий срез, задевший границу месяца, тянул премии ДВУХ целых месяцев.
   assert.match(
     block,
-    /premiumMonthExpr\('sp'\)\} IN \(\$\{premPlaceholders\}\)/,
-    'getAll должен относить премии через premiumMonthExpr IN (месяцы периода)',
+    /monthMember\('sp\.period_month_year', 'sp\.created_at'\)/,
+    'getAll обязан относить премии через periodMonthMembership(period_month_year, created_at)',
   );
   assert.doesNotMatch(
     block,
-    /period\('sp\.created_at'\)/,
-    'старая атрибуция по created_at-диапазону должна быть удалена из getAll',
+    /premiumMonthExpr\('sp'\)\} IN/,
+    'старый разворот premiumMonthExpr IN (целые месяцы диапазона) должен быть удалён (баг MEDIUM)',
   );
 });
 
@@ -99,7 +101,7 @@ test('createPremium DTO: periodMonthYear строго YYYY-MM', () => {
 // ── БАГ 3. Список показывает effective-процент запрошенного месяца ──────────
 
 test('getAll: процент резолвится из master_rate_history (LATERAL), как в карточке', () => {
-  const block = slice('async getAll', 'private getMonthYearsForRange');
+  const block = slice('async getAll', 'async getPayments');
   assert.match(
     block,
     /LEFT JOIN LATERAL \(\s*SELECT mrh\.salary_percent, mrh\.product_salary_percent\s*FROM master_rate_history mrh\s*WHERE mrh\.tenant_id = u\.tenant_id AND mrh\.user_id = u\.id AND mrh\.month <= \$4\s*ORDER BY mrh\.month DESC\s*LIMIT 1\s*\) h ON true/,
@@ -122,7 +124,7 @@ test('getAll: процент резолвится из master_rate_history (LATE
 });
 
 test('getAll: rateMonth — последний месяц запрошенного периода (месяц dateTo)', () => {
-  const block = slice('async getAll', 'private getMonthYearsForRange');
+  const block = slice('async getAll', 'async getPayments');
   assert.match(
     block,
     /rateMonth = \/\^\\d\{4\}-\\d\{2\}\/\.test\(dateTo\)\s*\? dateTo\.slice\(0, 7\)/,

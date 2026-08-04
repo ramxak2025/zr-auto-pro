@@ -28,9 +28,11 @@ const migration = read('migrations', '153_salary_corrections.sql');
 // ── 1. Суммы исключают отменённое/сторнированное ─────────────────────────────
 
 test('getAll: paidAmount исключает сторнированные legacy-выплаты', () => {
+  // Round 16: paidAmount = acceptedPayoutsAmount + legacyPaidAmount; legacy-часть
+  // по-прежнему исключает reversed (сторно восстанавливает долг сотруднику).
   assert.match(
     service,
-    /paidAmount = masterPayments\.reduce\([\s\S]{0,120}?p\.reversedAt \? 0 : p\.amount/,
+    /legacyPaidAmount = masterPayments\.reduce\([\s\S]{0,120}?p\.reversedAt \? 0 : p\.amount/,
     'getAll должен суммировать только не-reversed salary_payments',
   );
 });
@@ -79,9 +81,11 @@ test('getAll.payments: reversed исключены + confirmed_at замапле
   // на сторнированной строке; серверный compat — не отдавать reversed в
   // getAll.payments (карточка месяца — getEmployeeMonth, web-история —
   // getPayments: там reversed остаются и рисуются зачёркнутыми).
+  // Round 16: month_year IN (месяцы) заменён на periodMonthMembership, но
+  // reversed_at IS NULL остаётся первым условием — сторно по-прежнему скрыто.
   assert.match(
     service,
-    /sp\.month_year IN \(\$\{placeholders\}\)\s+AND sp\.reversed_at IS NULL/,
+    /sp\.reversed_at IS NULL\s+AND \$\{monthMember\('sp\.month_year', 'sp\.date'\)\}/,
     'сторнированные legacy-выплаты не должны попадать в getAll.payments',
   );
   // Pre-existing gap: без confirmed_at клиентский фильтр `!confirmedAt` был
