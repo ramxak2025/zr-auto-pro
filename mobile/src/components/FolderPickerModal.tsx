@@ -7,6 +7,11 @@
  * (folders are created elsewhere). Scoped to a SINGLE warehouse: it never lets
  * a product hop between warehouses.
  *
+ * Generalised for three callers: одиночный перенос товара (легаси-вызов без
+ * новых пропсов), массовый перенос выделенных товаров (currentCategory=null,
+ * subtitle/confirmLabel) и перенос ПАПКИ (excludePrefix прячет саму папку и её
+ * поддерево, чтобы её нельзя было вложить в себя).
+ *
  * Data is CACHE-FIRST and reuses the EXACT query keys ProductsScreen / the
  * login prefetch already warm, so the picker opens populated with zero flicker:
  *   • ['warehouse-categories', { warehouseId }]  — explicit folder rows
@@ -41,13 +46,24 @@ interface FolderPickerModalProps {
   onClose: () => void;
   /** Warehouse the product lives in — folders are read ONLY from this one. */
   warehouseId: string | null;
-  /** Product's current category path — highlighted + the «here already» guard. */
-  currentCategory?: string;
+  /** Product's current category path — highlighted + the «here already» guard.
+   *  `null` → «текущей» папки нет вовсе (массовый перенос): guard выключен,
+   *  перенос в корень разрешён. `undefined` — легаси-поведение (= ''). */
+  currentCategory?: string | null;
   /** Selected target folder path. '' = warehouse root (no folder). */
   onConfirm: (categoryPath: string) => void;
   /** Disables the confirm button while the move mutation is in flight. */
   busy?: boolean;
   title?: string;
+  /** Вторая строка под заголовком (например «Выбрано: 5»). */
+  subtitle?: string;
+  /** Подпись кнопки подтверждения. */
+  confirmLabel?: string;
+  /** Подпись disabled-кнопки, когда цель совпадает с текущей папкой. */
+  alreadyHereLabel?: string;
+  /** Папка с этим path и всё её поддерево скрываются из выбора и поиска
+   *  (перенос папки внутрь самой себя запрещён). */
+  excludePrefix?: string;
 }
 
 type FolderEntry = { name: string; fullPath: string; count: number };
@@ -60,6 +76,10 @@ export default function FolderPickerModal({
   onConfirm,
   busy,
   title = 'Перенести в папку',
+  subtitle,
+  confirmLabel = 'Перенести сюда',
+  alreadyHereLabel = 'Товар уже здесь',
+  excludePrefix,
 }: FolderPickerModalProps) {
   const palette = useColors();
 
@@ -127,6 +147,13 @@ export default function FolderPickerModal({
     return set;
   }, [products, extraFolders]);
 
+  // Скрываем саму excludePrefix-папку и её поддерево (предки остаются видны —
+  // в них переносить можно).
+  const isExcluded = useCallback(
+    (full: string) => !!excludePrefix && (full === excludePrefix || full.startsWith(excludePrefix + '/')),
+    [excludePrefix],
+  );
+
   const countUnder = useCallback(
     (prefix: string) => {
       let n = 0;
@@ -160,25 +187,26 @@ export default function FolderPickerModal({
         const fullPath = prefix ? `${prefix}/${name}` : name;
         return { name, fullPath, count: countUnder(fullPath) };
       })
+      .filter((entry) => !isExcluded(entry.fullPath))
       .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
-  }, [allPaths, path, countUnder]);
+  }, [allPaths, path, countUnder, isExcluded]);
 
   // While searching: flatten the whole tree to matching full paths (one-tap).
   const searchResults = useMemo<FolderEntry[]>(() => {
     if (!search) return [];
     const needle = search.toLowerCase();
     return Array.from(allPaths)
-      .filter((full) => full.toLowerCase().includes(needle))
+      .filter((full) => full.toLowerCase().includes(needle) && !isExcluded(full))
       .map((fullPath) => {
         const parts = fullPath.split('/');
         return { name: parts[parts.length - 1], fullPath, count: countUnder(fullPath) };
       })
       .sort((a, b) => a.fullPath.localeCompare(b.fullPath, 'ru'))
       .slice(0, 100);
-  }, [search, allPaths, countUnder]);
+  }, [search, allPaths, countUnder, isExcluded]);
 
   const targetPath = path.join('/');
-  const isHereAlready = (currentCategory || '') === targetPath;
+  const isHereAlready = currentCategory === null ? false : (currentCategory || '') === targetPath;
 
   const enterFolder = useCallback((name: string) => {
     haptic('tap');
@@ -246,9 +274,16 @@ export default function FolderPickerModal({
             <TouchableOpacity onPress={onClose} style={[styles.headerBtn, { backgroundColor: palette.bg.muted }]}>
               <Ionicons name="close" size={20} color={palette.text.primary} />
             </TouchableOpacity>
-            <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
-              {title}
-            </Text>
+            <View style={styles.headerCenter}>
+              <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                {title}
+              </Text>
+              {subtitle ? (
+                <Text style={[styles.headerSubtitle, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  {subtitle}
+                </Text>
+              ) : null}
+            </View>
             <View style={styles.headerBtn} />
           </View>
 
@@ -330,7 +365,7 @@ export default function FolderPickerModal({
                     <Text
                       style={[styles.confirmBtnText, { color: isHereAlready ? palette.text.tertiary : colors.white }]}
                     >
-                      {isHereAlready ? 'Товар уже здесь' : 'Перенести сюда'}
+                      {isHereAlready ? alreadyHereLabel : confirmLabel}
                     </Text>
                   </>
                 )}
@@ -354,7 +389,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   headerBtn: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { flex: 1, textAlign: 'center', fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
+  headerCenter: { flex: 1, alignItems: 'center', gap: 1, minWidth: 0 },
+  headerTitle: { textAlign: 'center', fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
+  headerSubtitle: { fontSize: 12, fontWeight: '500' },
 
   searchWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[3], paddingBottom: spacing[1] },
 

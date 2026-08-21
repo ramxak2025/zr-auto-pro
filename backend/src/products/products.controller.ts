@@ -10,6 +10,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { StockUpdateDto } from './dto/stock-update.dto';
 import { BulkAdjustPriceDto } from './dto/bulk-adjust-price.dto';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
+import { BulkMoveDto } from './dto/bulk-move.dto';
 
 // ROLE-ONLY (консолидация 2026-07). Reads stay open to every authenticated user
 // (a master needs to browse products to build a check) — but the service STRIPS
@@ -89,6 +90,18 @@ export class ProductsController {
   @Post('bulk-delete')
   bulkDelete(@CurrentUser() user: JwtPayload, @Body() dto: BulkDeleteDto) {
     return this.productsService.bulkSoftDelete(user.tenantID, dto);
+  }
+
+  // Bulk move of products into another folder (targetCategory=''→ в корень),
+  // transactionally and scoped to the current warehouseId (absent → main) so
+  // same-named paths in Б/У / брак are never touched. Requires the same
+  // 'warehouse_manage' as single-product edits (PATCH /products/:id); owner-class
+  // bypasses via PermissionsGuard.
+  // Literal path — registered before the `:id` routes so it isn't swallowed as an id.
+  @RequirePermission('warehouse_manage')
+  @Post('bulk-move')
+  bulkMove(@CurrentUser() user: JwtPayload, @Body() dto: BulkMoveDto) {
+    return this.productsService.bulkMove(user.tenantID, dto);
   }
 
   // ── Trash bin ──────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import { NO_TENANT_ID } from '../common/auth-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { WarehouseService } from '../warehouse/warehouse.service';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
+import { BulkMoveDto } from './dto/bulk-move.dto';
 
 /** Actor shape (JWT payload subset) needed to decide cost-price visibility. */
 type ProductActor = { role?: string; permissions?: Record<string, boolean> } | undefined;
@@ -830,6 +831,48 @@ export class ProductsService {
       await client.query('ROLLBACK');
       this.logger.error(`bulkSoftDelete failed: ${err instanceof Error ? err.message : err}`);
       throw new InternalServerErrorException({ message: 'Не удалось удалить товары' });
+    } finally {
+      client.release();
+    }
+  }
+
+  /**
+   * Bulk move of live products into another folder — the transactional
+   * replacement for the client-side «PATCH each product in a loop». Mirrors
+   * shared BulkMoveRequest/BulkMoveResponse.
+   *
+   *   • targetCategory '' → в корень (category=NULL); непустой path →
+   *     папка гарантируется через WarehouseService.createCategory (идемпотентен,
+   *     оживляет trashed-строку по имени — своя короткая транзакция, поэтому
+   *     папка может остаться созданной при откате самого переноса; это безвредно).
+   *   • Скоуп — резолвнутый склад (warehouseId; absent → main), через
+   *     IS NOT DISTINCT FROM, чтобы одноимённые товары/папки в Б/У / браке
+   *     не задевались (тот же контракт, что у removeCategory).
+   *
+   * Returns { movedProducts } — число реально переписанных строк; трэшнутые
+   * товары и товары чужого склада отфильтрованы предикатом и не считаются.
+   */
+  async bulkMove(tenantID: string, dto: BulkMoveDto): Promise<{ movedProducts: number }> {
+    const target = WarehouseService.normalizeFolderPath(dto.targetCategory);
+    const warehouseId = await this.warehouseService.resolveWarehouseId(tenantID, dto.warehouseId);
+    if (target) {
+      await this.warehouseService.createCategory(tenantID, target, warehouseId ?? undefined);
+    }
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const res = await client.query(
+        `UPDATE products SET category = NULLIF($3, '')
+         WHERE tenant_id=$1 AND deleted_at IS NULL AND id = ANY($2::uuid[])
+           AND warehouse_id IS NOT DISTINCT FROM $4`,
+        [tenantID, dto.productIds, target, warehouseId],
+      );
+      await client.query('COMMIT');
+      return { movedProducts: res.rowCount ?? 0 };
+    } catch (err) {
+      await client.query('ROLLBACK');
+      this.logger.error(`bulkMove failed: ${err instanceof Error ? err.message : err}`);
+      throw new InternalServerErrorException({ message: 'Не удалось перенести товары' });
     } finally {
       client.release();
     }

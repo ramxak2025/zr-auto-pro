@@ -497,6 +497,18 @@ export default function ProductsScreen() {
   // warehouse only — the picker is scoped to the product's warehouseId).
   const [moveProduct, setMoveProduct] = useState<Product | null>(null);
 
+  // Массовый перенос выбранных ТОВАРОВ (bulk-move) — пикер открывается из
+  // bulk-бара режима выделения. Папки переносятся по одной (long-press).
+  const [showBulkMovePicker, setShowBulkMovePicker] = useState(false);
+
+  // Перенос ПАПКИ в другую папку/корень (rename пути). Источник — long-press
+  // модалка действий папки.
+  const [moveFolderTarget, setMoveFolderTarget] = useState<{
+    name: string;
+    fullPath: string;
+    catId: string;
+  } | null>(null);
+
   // «История движения товара» — read-only журнал stock-movements по одному
   // товару. Открывается из action-sheet (long-press) и из окна
   // редактирования товара. null → модалка закрыта.
@@ -714,6 +726,59 @@ export default function ProductsScreen() {
     onError: () => {
       haptic('error');
       Alert.alert('Ошибка', 'Не удалось перенести товар');
+    },
+  });
+
+  // Массовый перенос товаров — один POST /products/bulk-move вместо цикла
+  // PATCH-ей. targetCategory '' = корень склада.
+  const bulkMoveMutation = useMutation({
+    mutationFn: (data: { productIds: string[]; targetCategory: string; warehouseId?: string }) =>
+      productsApi.bulkMove(data),
+    onSuccess: (res) => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      setShowBulkMovePicker(false);
+      exitSelectMode();
+      const n = res?.data?.movedProducts ?? 0;
+      Alert.alert('Готово', `Перемещено: ${n} ${productsWord(n)}`);
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось переместить товары');
+    },
+  });
+
+  // Перенос папки: PATCH /warehouse/categories/:id/rename с новым полным
+  // путём. Производная папка (существует только из-за category-путей товаров,
+  // catId '') сначала материализуется через create — его id и переименовываем.
+  // 400 бэка (цикл/коллизия имён) показываем дословно.
+  const moveFolderMutation = useMutation({
+    mutationFn: async ({ catId, fullPath, newPath }: { catId: string; fullPath: string; newPath: string }) => {
+      let id = catId;
+      if (!id) {
+        const res = await warehouseCategoriesApi.create(fullPath, activeWarehouseId || undefined);
+        id = res.data.id;
+      }
+      return warehouseCategoriesApi.rename(id, newPath);
+    },
+    onSuccess: (_res, vars) => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['products'] });
+      queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-categories'] });
+      setMoveFolderTarget(null);
+      // Если открытый уровень лежал внутри перенесённой папки — его path
+      // больше не существует, мягко возвращаемся в корень склада.
+      const current = activePath.join('/');
+      if (current === vars.fullPath || current.startsWith(vars.fullPath + '/')) {
+        navigation.popToTop();
+      }
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось переместить папку');
     },
   });
 
@@ -1160,21 +1225,18 @@ export default function ProductsScreen() {
     }
   };
 
-  // #60 — long-press по папке. Пустую сразу ведём в подтверждение; полную — в
-  // выбор действий (перенести товары в корень / удалить вместе с товарами).
-  // Гейт снаружи (onLongPress передаётся только при canDeleteWarehouse),
-  // подстрахуемся и по данным.
+  // #60 — long-press по папке открывает выбор действий (перенос папки /
+  // перенос товаров в корень / удаление). Пустая папка тоже идёт в модалку —
+  // там теперь не только удаление, но и «Переместить папку». Гейт снаружи
+  // (onLongPress передаётся только при canDeleteWarehouse), подстрахуемся и
+  // по данным.
   const openFolderActions = useCallback(
     (folderName: string) => {
       const entry = sortedFolders.find(([n]) => n === folderName);
       if (!entry) return;
       const info = entry[1];
       haptic('impact');
-      if (info.count === 0) {
-        setConfirmFolderDelete({ name: folderName, fullPath: info.fullPath, catId: info.catId, mode: 'empty' });
-      } else {
-        setFolderActions({ name: folderName, fullPath: info.fullPath, catId: info.catId, count: info.count });
-      }
+      setFolderActions({ name: folderName, fullPath: info.fullPath, catId: info.catId, count: info.count });
     },
     [sortedFolders],
   );
@@ -1241,6 +1303,9 @@ export default function ProductsScreen() {
 
   // Сколько всего выбрано (товары + папки) — драйвит счётчики и disabled-бар.
   const selectedCount = selectedProductIds.size + selectedFolderNames.size;
+  // «Переместить (N)» активна только когда выбраны ТОЛЬКО товары — папки
+  // переносятся по одной через long-press.
+  const bulkMoveEligible = selectedProductIds.size > 0 && selectedFolderNames.size === 0;
   // «Выбрать всё» / «Снять всё» на текущем уровне (видимые папки + товары).
   const visibleSelectableCount = sortedFolders.length + currentProducts.length;
   const allVisibleSelected =
@@ -3463,50 +3528,97 @@ export default function ProductsScreen() {
         variant="danger"
       />
 
-      {/* #60 — выбор действия для ПОЛНОЙ папки. Long-press по папке доступен
+      {/* #60 — выбор действия для папки. Long-press по папке доступен
           только при праве «Удаление на складе» (или owner-class). Раньше UI
           удаления папок был выключен (iter#12) из-за нестабильного swipe —
           теперь это НЕ swipe, а long-press + явный выбор, поэтому безопасно.
-          Переименование/реордер папок по-прежнему только в web-админ. */}
+          Пустая папка попадает сюда же: у неё «Переместить папку» + простое
+          удаление. Реордер папок по-прежнему только в web-админ. */}
       <Modal
         visible={!!folderActions}
         onClose={() => setFolderActions(null)}
         title={folderActions ? `Папка «${folderActions.name}»` : 'Папка'}
       >
-        <TouchableOpacity
-          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
-          onPress={() => folderActions && moveFolderToRoot(folderActions)}
-        >
-          <View style={[styles.opsIcon, { backgroundColor: palette.accent.primarySoft }]}>
-            <Ionicons name="arrow-up-outline" size={22} color={palette.accent.primary} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Перенести товары в корень</Text>
-            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
-              Товары останутся на складе, папка будет удалена
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
-          onPress={() => {
-            const fa = folderActions;
-            setFolderActions(null);
-            if (fa) setConfirmFolderDelete({ name: fa.name, fullPath: fa.fullPath, catId: fa.catId, mode: 'contents' });
-          }}
-        >
-          <View style={[styles.opsIcon, { backgroundColor: 'rgba(239, 68, 68, 0.14)' }]}>
-            <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Удалить папку с товарами</Text>
-            <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
-              Товары уйдут в Корзину — можно восстановить
-            </Text>
-          </View>
-          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
-        </TouchableOpacity>
+        {canManageWarehouse && (
+          <TouchableOpacity
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => {
+              const fa = folderActions;
+              setFolderActions(null);
+              if (fa) setMoveFolderTarget({ name: fa.name, fullPath: fa.fullPath, catId: fa.catId });
+            }}
+          >
+            <View style={[styles.opsIcon, { backgroundColor: palette.accent.primarySoft }]}>
+              <Ionicons name="folder-open-outline" size={22} color={palette.accent.primary} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Переместить папку</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                В другую папку или в корень склада, вместе с содержимым
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        )}
+        {folderActions && folderActions.count > 0 ? (
+          <>
+            <TouchableOpacity
+              style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+              onPress={() => folderActions && moveFolderToRoot(folderActions)}
+            >
+              <View style={[styles.opsIcon, { backgroundColor: palette.accent.primarySoft }]}>
+                <Ionicons name="arrow-up-outline" size={22} color={palette.accent.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Перенести товары в корень</Text>
+                <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                  Товары останутся на складе, папка будет удалена
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+              onPress={() => {
+                const fa = folderActions;
+                setFolderActions(null);
+                if (fa)
+                  setConfirmFolderDelete({ name: fa.name, fullPath: fa.fullPath, catId: fa.catId, mode: 'contents' });
+              }}
+            >
+              <View style={[styles.opsIcon, { backgroundColor: 'rgba(239, 68, 68, 0.14)' }]}>
+                <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Удалить папку с товарами</Text>
+                <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                  Товары уйдут в Корзину — можно восстановить
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+            </TouchableOpacity>
+          </>
+        ) : (
+          <TouchableOpacity
+            style={[styles.opsItem, { borderBottomColor: palette.border.subtle }]}
+            onPress={() => {
+              const fa = folderActions;
+              setFolderActions(null);
+              if (fa) setConfirmFolderDelete({ name: fa.name, fullPath: fa.fullPath, catId: fa.catId, mode: 'empty' });
+            }}
+          >
+            <View style={[styles.opsIcon, { backgroundColor: 'rgba(239, 68, 68, 0.14)' }]}>
+              <Ionicons name="trash-outline" size={22} color={colors.red[600]} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.opsItemTitle, { color: palette.text.primary }]}>Удалить папку</Text>
+              <Text style={[styles.opsItemDesc, { color: palette.text.tertiary }]}>
+                Папка пустая — будет удалена без Корзины
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </TouchableOpacity>
+        )}
       </Modal>
 
       {/* Warehouse switcher sheet (main / defect / used). */}
@@ -3667,6 +3779,52 @@ export default function ProductsScreen() {
         }}
       />
 
+      {/* Массовый перенос выбранных товаров. currentCategory=null — у выборки
+          нет «текущей» папки, поэтому перенос в корень тоже разрешён. */}
+      <FolderPickerModal
+        visible={showBulkMovePicker}
+        onClose={() => setShowBulkMovePicker(false)}
+        warehouseId={activeWarehouseId ?? null}
+        currentCategory={null}
+        busy={bulkMoveMutation.isPending}
+        title="Переместить товары"
+        subtitle={`Выбрано: ${selectedProductIds.size}`}
+        confirmLabel="Переместить сюда"
+        onConfirm={(target) => {
+          if (selectedProductIds.size === 0) return;
+          bulkMoveMutation.mutate({
+            productIds: Array.from(selectedProductIds),
+            targetCategory: target ?? '',
+            ...(activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
+          });
+        }}
+      />
+
+      {/* Перенос ПАПКИ: excludePrefix прячет саму папку и её поддерево (нельзя
+          вложить в себя), currentCategory = родитель папки — перенос «туда же»
+          блокируется как no-op. */}
+      <FolderPickerModal
+        visible={!!moveFolderTarget}
+        onClose={() => setMoveFolderTarget(null)}
+        warehouseId={activeWarehouseId ?? null}
+        currentCategory={moveFolderTarget ? moveFolderTarget.fullPath.split('/').slice(0, -1).join('/') : undefined}
+        excludePrefix={moveFolderTarget?.fullPath}
+        busy={moveFolderMutation.isPending}
+        title="Переместить папку"
+        subtitle={moveFolderTarget ? `Папка «${moveFolderTarget.name}»` : undefined}
+        confirmLabel="Переместить сюда"
+        alreadyHereLabel="Папка уже здесь"
+        onConfirm={(target) => {
+          if (!moveFolderTarget) return;
+          const newPath = target ? `${target}/${moveFolderTarget.name}` : moveFolderTarget.name;
+          moveFolderMutation.mutate({
+            catId: moveFolderTarget.catId,
+            fullPath: moveFolderTarget.fullPath,
+            newPath,
+          });
+        }}
+      />
+
       {/* Transfer qty dialog — same shape for defect_transfer and
           used_transfer; only the action title and movement type differ. */}
       <Modal
@@ -3820,9 +3978,11 @@ export default function ProductsScreen() {
         products={allProducts}
       />
 
-      {/* REQ A — липкий нижний бар «Удалить (N)». Виден только в режиме
-          выделения; сидит над floating tab bar (учитываем tabBarHeight) и
-          home indicator. Кнопка disabled, пока ничего не выбрано. */}
+      {/* REQ A — липкий нижний бар «Переместить (N)» + «Удалить (N)». Виден
+          только в режиме выделения; сидит над floating tab bar (учитываем
+          tabBarHeight) и home indicator. Кнопки disabled, пока ничего не
+          выбрано. «Переместить» работает только по товарам: при выбранных
+          папках она серая и по тапу объясняет, как переносить папки. */}
       {selectMode && (
         <View
           style={[
@@ -3835,25 +3995,47 @@ export default function ProductsScreen() {
             },
           ]}
         >
-          <TouchableOpacity
-            style={[styles.bulkDeleteBtn, selectedCount === 0 && styles.bulkDeleteBtnDisabled]}
-            disabled={selectedCount === 0 || bulkDeleteMutation.isPending}
-            onPress={() => {
-              haptic('warning');
-              setConfirmBulk('selection');
-            }}
-          >
-            {bulkDeleteMutation.isPending ? (
-              <ActivityIndicator color={colors.white} size="small" />
-            ) : (
-              <>
-                <Ionicons name="trash-outline" size={18} color={colors.white} />
+          <View style={styles.bulkBarRow}>
+            {canManageWarehouse && (
+              <TouchableOpacity
+                style={[styles.bulkMoveBtn, !bulkMoveEligible && styles.bulkDeleteBtnDisabled]}
+                disabled={selectedCount === 0 || bulkMoveMutation.isPending}
+                onPress={() => {
+                  if (selectedFolderNames.size > 0) {
+                    haptic('warning');
+                    Alert.alert('Перемещение', 'Папки переносятся по одной — долгим нажатием');
+                    return;
+                  }
+                  haptic('tap');
+                  setShowBulkMovePicker(true);
+                }}
+              >
+                <Ionicons name="folder-open-outline" size={18} color={colors.white} />
                 <Text style={styles.bulkDeleteBtnText}>
-                  {selectedCount > 0 ? `Удалить (${selectedCount})` : 'Удалить'}
+                  {selectedProductIds.size > 0 ? `Переместить (${selectedProductIds.size})` : 'Переместить'}
                 </Text>
-              </>
+              </TouchableOpacity>
             )}
-          </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.bulkDeleteBtn, selectedCount === 0 && styles.bulkDeleteBtnDisabled]}
+              disabled={selectedCount === 0 || bulkDeleteMutation.isPending}
+              onPress={() => {
+                haptic('warning');
+                setConfirmBulk('selection');
+              }}
+            >
+              {bulkDeleteMutation.isPending ? (
+                <ActivityIndicator color={colors.white} size="small" />
+              ) : (
+                <>
+                  <Ionicons name="trash-outline" size={18} color={colors.white} />
+                  <Text style={styles.bulkDeleteBtnText}>
+                    {selectedCount > 0 ? `Удалить (${selectedCount})` : 'Удалить'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
@@ -3913,12 +4095,24 @@ const styles = StyleSheet.create({
     paddingTop: spacing[3],
     borderTopWidth: StyleSheet.hairlineWidth,
   },
+  bulkBarRow: { flexDirection: 'row', gap: spacing[2.5] },
   bulkDeleteBtn: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing[2],
     backgroundColor: colors.red[600],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3.5],
+  },
+  bulkMoveBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    backgroundColor: colors.primary[600],
     borderRadius: borderRadius.xl,
     paddingVertical: spacing[3.5],
   },

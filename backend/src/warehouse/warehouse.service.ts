@@ -19,14 +19,30 @@ export class WarehouseService {
   }
 
   /**
+   * Normalize a user-supplied folder path: trim, collapse repeated '/',
+   * strip leading/trailing '/'. Empty input stays '' (= root). Shared by
+   * renameCategory and ProductsService.bulkMove so «Цель//Имя/» and
+   * «Цель/Имя» always resolve to the same DB path.
+   */
+  static normalizeFolderPath(raw: string): string {
+    return raw
+      .trim()
+      .replace(/\/{2,}/g, '/')
+      .replace(/^\/+|\/+$/g, '');
+  }
+
+  /**
    * Resolve which warehouse a category read / write should target.
    *
    *   - explicit warehouseId from caller → verify it lives in tenant;
    *   - null / undefined → fall back to the tenant's "main" warehouse
    *     (matches the pre-migration tenant-scoped behaviour, so callers
    *     that pre-date the per-warehouse split keep their old folders).
+   *
+   * Public: reused by ProductsService.bulkMove to scope the mass move
+   * to the same warehouse the folder tree lives in.
    */
-  private async resolveWarehouseId(tenantID: string, warehouseId?: string | null): Promise<string | null> {
+  async resolveWarehouseId(tenantID: string, warehouseId?: string | null): Promise<string | null> {
     // Мусор от битых клиентов (' ', 'undefined', 'null', '' после trim) раньше
     // проходил truthy-проверку и падал в pg 22P02 «invalid input syntax for
     // type uuid» → 500 в Sentry (AUTEXA-BACKEND-2..7, 04.07). Не-UUID теперь
@@ -345,12 +361,36 @@ export class WarehouseService {
   async renameCategory(id: string, tenantID: string, newPath: string) {
     // Only a live folder can be renamed (trashed rows now exist after #60's
     // soft-delete and must not be reachable through rename).
+    // The folder's warehouse_id is resolved too: a single folder id maps to
+    // exactly one (path, warehouse_id), and every subtree UPDATE below must stay
+    // scoped to THAT warehouse (same-named paths in Б/У / брак are untouched).
     const { rows: catRows } = await this.pool.query(
-      'SELECT path FROM warehouse_categories WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
+      'SELECT path, warehouse_id FROM warehouse_categories WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL',
       [id, tenantID],
     );
     if (catRows.length === 0) throw new BadRequestException({ message: 'Категория не найдена' });
     const oldPath = catRows[0].path;
+    const warehouseId = (catRows[0].warehouse_id as string | null) ?? null;
+
+    newPath = WarehouseService.normalizeFolderPath(newPath);
+    if (!newPath) throw new BadRequestException({ message: 'Название папки не может быть пустым' });
+    // The UI also uses rename as «перенос папки» (newPath = 'Цель/Имя'), so a
+    // cycle must be rejected: moving a folder into its own subtree would make
+    // the substring() re-prefix below rewrite paths into an infinite nesting.
+    if (newPath === oldPath) return { message: 'OK' };
+    if (newPath.startsWith(oldPath + '/')) {
+      throw new BadRequestException({ message: 'Нельзя переместить папку внутрь неё самой' });
+    }
+    const { rows: clashRows } = await this.pool.query(
+      `SELECT id FROM warehouse_categories
+        WHERE tenant_id=$1 AND path=$2 AND deleted_at IS NULL
+          AND warehouse_id IS NOT DISTINCT FROM $3
+        LIMIT 1`,
+      [tenantID, newPath, warehouseId],
+    );
+    if (clashRows.length > 0) {
+      throw new BadRequestException({ message: 'Папка с таким именем уже существует в целевой папке' });
+    }
     // Subtree LIKE pattern with metacharacters escaped (fix #6). $2 (oldPath) stays
     // UNescaped — the `substring(... from length($2)+1)` re-prefix math depends on
     // its true length; only the LIKE match uses the escaped pattern ($4).
@@ -367,23 +407,23 @@ export class WarehouseService {
         newPath,
       ]);
 
-      // Rename all subcategories
+      // Rename all subcategories (scoped to the folder's warehouse)
       await client.query(
         `UPDATE warehouse_categories SET path = $3 || substring(path from length($2) + 1)
-         WHERE tenant_id=$1 AND path LIKE $4 ESCAPE '\\'`,
-        [tenantID, oldPath, newPath, subtreeLike],
+         WHERE tenant_id=$1 AND warehouse_id IS NOT DISTINCT FROM $5 AND path LIKE $4 ESCAPE '\\'`,
+        [tenantID, oldPath, newPath, subtreeLike, warehouseId],
       );
 
-      // Update products category references
-      await client.query('UPDATE products SET category=$3 WHERE tenant_id=$1 AND category=$2', [
-        tenantID,
-        oldPath,
-        newPath,
-      ]);
+      // Update products category references (scoped to the folder's warehouse)
+      await client.query(
+        `UPDATE products SET category=$3
+         WHERE tenant_id=$1 AND warehouse_id IS NOT DISTINCT FROM $4 AND category=$2`,
+        [tenantID, oldPath, newPath, warehouseId],
+      );
       await client.query(
         `UPDATE products SET category = $3 || substring(category from length($2) + 1)
-         WHERE tenant_id=$1 AND category LIKE $4 ESCAPE '\\'`,
-        [tenantID, oldPath, newPath, subtreeLike],
+         WHERE tenant_id=$1 AND warehouse_id IS NOT DISTINCT FROM $5 AND category LIKE $4 ESCAPE '\\'`,
+        [tenantID, oldPath, newPath, subtreeLike, warehouseId],
       );
 
       await client.query('COMMIT');
