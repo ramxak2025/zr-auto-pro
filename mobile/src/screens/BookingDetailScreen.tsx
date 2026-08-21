@@ -18,7 +18,16 @@
  * Android-safe: пикер кроссплатформенный, никаких iOS-only API.
  */
 import React, { useCallback, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
+import {
+  View,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  ActivityIndicator,
+  Alert,
+} from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -27,6 +36,7 @@ import QueryErrorState from '../components/QueryErrorState';
 import { ListSkeleton } from '../components/Skeleton';
 import ConfirmDialog from '../components/ConfirmDialog';
 import DateTimePickerModal from '../components/DateTimePickerModal';
+import Modal from '../components/Modal';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
 import { bookingsApi } from '../api/services';
@@ -53,6 +63,8 @@ export default function BookingDetailScreen() {
   const [rescheduleStep, setRescheduleStep] = useState<'date' | 'time' | null>(null);
   const [rescheduleDraft, setRescheduleDraft] = useState<Date | null>(null);
   const [confirmCancel, setConfirmCancel] = useState(false);
+  const [commentModalOpen, setCommentModalOpen] = useState(false);
+  const [commentDraft, setCommentDraft] = useState('');
 
   // Поиск записи в кэше обоих списков (без сети, если данные уже есть). Это
   // initialData реактивного запроса ниже, чтобы экран открывался мгновенно.
@@ -130,11 +142,29 @@ export default function BookingDetailScreen() {
     },
   });
 
+  // Комментарий записи — тот же PATCH /bookings/:id, что и перенос. Пустая
+  // строка очищает комментарий. Текст ошибки бэкенда показываем дословно.
+  const commentMutation = useMutation({
+    mutationFn: (comment: string) => bookingsApi.update(bookingId, { comment }),
+    onSuccess: async () => {
+      haptic('success');
+      setCommentModalOpen(false);
+      await queryClient.invalidateQueries({ queryKey: ['bookings'] });
+      await queryClient.invalidateQueries({ queryKey: ['booking-detail', bookingId] });
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert('Ошибка', err?.response?.data?.message || 'Не удалось сохранить комментарий');
+    },
+  });
+
   // ── Permissions (отражаем серверную проверку) ────────────────────────────
   // Мастер может отменить/перенести ТОЛЬКО свою запись; админ/владелец — любую.
   const isOwnBooking = !!booking?.masterId && booking.masterId === user?.id;
   const canMutate = isOwnerClass || isOwnBooking;
   const active = booking ? isActiveBooking(booking.status) : false;
+  // Сервер принимает PATCH только для status='scheduled' (НЕ isActiveBooking).
+  const canEditComment = canMutate && booking?.status === 'scheduled';
 
   // «Подтвердить приход» → CheckCreate с префиллом. CheckCreate после успешного
   // сохранения чека сам вызовет convert(bookingId, checkId).
@@ -156,6 +186,13 @@ export default function BookingDetailScreen() {
     setRescheduleDraft(new Date(booking.scheduledAt));
     setRescheduleStep('date');
     setShowReschedule(true);
+  };
+
+  const openCommentEditor = () => {
+    if (!booking) return;
+    haptic('select');
+    setCommentDraft(booking.comment ?? '');
+    setCommentModalOpen(true);
   };
 
   // ── States ─────────────────────────────────────────────────────────────
@@ -274,10 +311,38 @@ export default function BookingDetailScreen() {
         {/* ── Comment ── */}
         {booking.comment ? (
           <>
-            <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>КОММЕНТАРИЙ</Text>
+            <View style={styles.commentLabelRow}>
+              <Text style={[iosSectionLabel, styles.commentLabelInRow, { color: palette.text.secondary }]}>
+                КОММЕНТАРИЙ
+              </Text>
+              {canEditComment ? (
+                <TouchableOpacity
+                  onPress={openCommentEditor}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                  accessibilityRole="button"
+                  accessibilityLabel="Изменить комментарий"
+                >
+                  <Ionicons name="pencil" size={16} color={colors.primary[600]} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
             <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
               <Text style={[styles.commentText, { color: palette.text.primary }]}>{booking.comment}</Text>
             </View>
+          </>
+        ) : canEditComment ? (
+          <>
+            <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>КОММЕНТАРИЙ</Text>
+            <TouchableOpacity
+              style={[styles.addCommentCard, { borderColor: palette.border.strong }]}
+              onPress={openCommentEditor}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Добавить комментарий"
+            >
+              <Ionicons name="add-circle-outline" size={18} color={palette.text.secondary} />
+              <Text style={[styles.addCommentText, { color: palette.text.secondary }]}>Добавить комментарий</Text>
+            </TouchableOpacity>
           </>
         ) : null}
 
@@ -416,6 +481,47 @@ export default function BookingDetailScreen() {
         }}
       />
 
+      {/* ── Comment editor (паттерн CheckDetailScreen) ── */}
+      <Modal visible={commentModalOpen} onClose={() => setCommentModalOpen(false)} title="Комментарий к записи">
+        <TextInput
+          value={commentDraft}
+          onChangeText={setCommentDraft}
+          style={[
+            styles.commentInput,
+            { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
+          ]}
+          multiline
+          maxLength={2000}
+          autoFocus
+          placeholder="Например: установка ГБО, ТО, диагностика…"
+          placeholderTextColor={palette.text.tertiary}
+        />
+        <View style={[styles.commentActions, { borderTopColor: palette.border.subtle }]}>
+          <TouchableOpacity
+            style={[styles.commentCancelBtn, { borderColor: palette.border.strong }]}
+            onPress={() => setCommentModalOpen(false)}
+            disabled={commentMutation.isPending}
+          >
+            <Text style={[styles.commentCancelBtnText, { color: palette.text.secondary }]}>Отмена</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.commentSaveBtn}
+            onPress={() => {
+              if (commentMutation.isPending) return;
+              commentMutation.mutate(commentDraft.trim());
+            }}
+            activeOpacity={0.85}
+            disabled={commentMutation.isPending}
+          >
+            {commentMutation.isPending ? (
+              <ActivityIndicator color={colors.white} size="small" />
+            ) : (
+              <Text style={styles.commentSaveBtnText}>Сохранить</Text>
+            )}
+          </TouchableOpacity>
+        </View>
+      </Modal>
+
       {/* Перекрывающий лоадер при отмене — короткий, на весь экран не нужен. */}
       {cancelMutation.isPending ? (
         <View style={styles.busyOverlay} pointerEvents="none">
@@ -477,6 +583,61 @@ const styles = StyleSheet.create({
   },
   plateChipText: { fontSize: 12, fontWeight: '700', letterSpacing: 0.3 },
   commentText: { fontSize: 15, lineHeight: 21 },
+
+  // Comment: editable header + placeholder + editor modal
+  commentLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing[4],
+    marginBottom: spacing[2],
+  },
+  commentLabelInRow: { marginLeft: spacing[1] },
+  addCommentCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+  },
+  addCommentText: { fontSize: 14, fontWeight: '600' },
+  // Геометрия поля — как commentInput в BookingCreateScreen.
+  commentInput: {
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    padding: spacing[3.5],
+    minHeight: 90,
+    fontSize: 15,
+    textAlignVertical: 'top',
+    marginBottom: spacing[3],
+  },
+  commentActions: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    gap: spacing[3],
+    paddingTop: spacing[4],
+    borderTopWidth: 1,
+  },
+  commentCancelBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  commentCancelBtnText: { fontSize: 14, fontWeight: '500' },
+  commentSaveBtn: {
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    borderRadius: borderRadius.lg,
+    backgroundColor: colors.primary[600],
+    minWidth: 132,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  commentSaveBtnText: { fontSize: 14, fontWeight: '600', color: colors.white },
 
   checkCard: {
     flexDirection: 'row',
