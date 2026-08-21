@@ -639,8 +639,8 @@ export default function InventoryScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   scopeRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: spacing[4], gap: spacing[2] },
-  chipsScroll: { gap: spacing[2], paddingVertical: spacing[1], paddingRight: spacing[2] },
-  catScroll: { marginTop: spacing[2], paddingHorizontal: spacing[4] },
+  chipsScroll: { gap: spacing[2], paddingVertical: spacing[1], paddingRight: spacing[2], alignItems: 'center' },
+  catScroll: { flexGrow: 0, flexShrink: 0, marginTop: spacing[2], paddingHorizontal: spacing[4] },
   chip: {
     paddingHorizontal: spacing[3],
     paddingVertical: spacing[1.5],
