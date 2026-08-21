@@ -374,6 +374,26 @@ export interface BulkDeleteResponse {
   deletedCategories: number;
 }
 
+/**
+ * Body for POST /products/bulk-move — массовый перенос товаров в другую папку
+ * (категорию). Транзакционно: либо переносятся ВСЕ, либо ничего (в отличие от
+ * клиентского цикла PATCH-ей). Скоуп — текущий склад (`warehouseId`; absent →
+ * основной), чтобы одноимённые пути в Б/У/браке не задевались.
+ *   • productIds     → какие товары переносим (≤2000).
+ *   • targetCategory → path целевой папки («Масла/Синтетика»); '' = в корень
+ *     (category=NULL). Несуществующая папка создаётся идемпотентно.
+ */
+export interface BulkMoveRequest {
+  productIds: string[];
+  targetCategory: string;
+  warehouseId?: string;
+}
+
+/** Response of POST /products/bulk-move. */
+export interface BulkMoveResponse {
+  movedProducts: number;
+}
+
 export interface CreateServiceRequest {
   name: string;
   category?: string;

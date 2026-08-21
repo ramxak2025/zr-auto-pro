@@ -164,6 +164,33 @@ export interface SubscriptionPayment {
 export interface PosSettings {
   shiftModeEnabled: boolean;
   isCashier: boolean;
+  /**
+   * 155 — явный список «кто принимает оплату», выбранный владельцем в
+   * настройках компании (tenants.payment_acceptors). null/absent = режим
+   * «по ролям» (право accept_payment из матрицы) — прежнее поведение.
+   * Непустой список = принимают ТОЛЬКО перечисленные (+ owner-class всегда).
+   * PATCH принимает это поле только под settings_manage.
+   */
+  paymentAcceptorIds?: string[] | null;
+}
+
+/**
+ * 155 — строка экрана «Кто принимает оплату» (настройки компании,
+ * GET /checks/payment-acceptors). Активные сотрудники тенанта + резолв, кто
+ * сейчас фактически принимает оплату и почему (по списку или по роли).
+ */
+export interface PaymentAcceptorInfo {
+  id: string;
+  fullName: string | null;
+  roleName?: string | null;
+  /** Право accept_payment из матрицы роли (без учёта allowlist). */
+  hasRolePermission: boolean;
+  /** owner-class (director/superadmin) — принимает всегда, из списка не убирается. */
+  isOwnerClass: boolean;
+  /** Итог: фактически может принимать оплату при текущих настройках. */
+  effective: boolean;
+  /** Отмечен в явном списке владельца (когда список задан). */
+  selected: boolean;
 }
 
 /**
@@ -310,7 +337,11 @@ export type NotificationCategory =
   | 'booking_reminder'
   | 'call_incoming'
   | 'profile_request'
-  | 'account';
+  | 'account'
+  // 155 — кассовая смена: владельцу «смена закрыта» (суммы, сейф, размен),
+  // кассиру «инкассация N с кассы/сейфа, остаток M».
+  | 'cash_shift_closed'
+  | 'cash_collection';
 
 /** GET /notifications/preferences — `muted` is the set the user opted OUT of. */
 export interface NotificationPreferences {
@@ -1358,7 +1389,10 @@ export const CASHIER_ROLE_PRESET: { name: string; description: string; matrix: R
       editClosed: false,
       editPayment: false,
       acceptPayment: true,
-      sellInstallment: false,
+      // 155 — решение владельца (2026-08): кассир может продать в рассрочку
+      // при приёме оплаты (существующий механизм installments, тот же гейт
+      // sell_installment на сервере).
+      sellInstallment: true,
       cashShifts: true,
       board: false,
       editAssignedOrder: false,
@@ -1636,6 +1670,12 @@ export interface TenantLocation {
 export interface CheckAssignee {
   id: string;
   fullName: string | null;
+  /**
+   * Аватар сотрудника (users.avatar — URL или data-URI), 155/доска: карточка
+   * доски показывает ФОТО исполнителей, чтобы было видно, кто делает машину.
+   * Absent на legacy-кэшах → UI рисует инициалы (fallback).
+   */
+  avatar?: string | null;
 }
 
 export interface Check {
@@ -1657,6 +1697,15 @@ export interface Check {
   paymentMethod: PaymentMethod;
   cashAmount: number;
   cardAmount: number;
+  /**
+   * 155 — кто фактически ПРИНЯЛ оплату (кассир, активировавший отложенный
+   * заказ, или автор обычного активного чека). null на чеках до миграции —
+   * потребители делают fallback на masterId. Основа персональной
+   * ответственности за деньги в режиме кассовой смены.
+   */
+  acceptedBy?: string | null;
+  acceptedByName?: string | null;
+  acceptedAt?: string | null;
   serviceTotal: number;
   productTotal: number;
   totalRevenue: number;
@@ -1870,6 +1919,16 @@ export interface CashShift {
   status: CashShiftStatus;
   note?: string | null;
   createdAt: string;
+  /**
+   * 155 — сколько наличных переведено в СЕЙФ при закрытии смены. Null на
+   * сменах до миграции и когда всё осталось в кассе.
+   */
+  toSafeAmount?: number | null;
+  /**
+   * 155 — остаток-«размен» после закрытия (closingAmount − toSafeAmount).
+   * Следующая смена стартует с этой суммы (open() подставляет её дефолтом).
+   */
+  carryoverAmount?: number | null;
 }
 
 export interface CashCollection {
@@ -1919,6 +1978,68 @@ export interface CashShiftReport {
   collections: CashCollection[];
   windowStart: string;
   windowEnd: string;
+  /**
+   * 155 — разбивка выручки окна смены ПО ПРИНЯВШИМ оплату (checks.accepted_by,
+   * fallback master_id для чеков до миграции). Каждый принимавший отвечает за
+   * свои деньги и при закрытии сдаёт свою сумму отдельно. Absent на старом
+   * бэкенде.
+   */
+  perAcceptor?: CashShiftAcceptorTotal[];
+  /**
+   * 155 — фактическая сдача по сотрудникам при закрытии (cash_shift_settlements).
+   * Пуст, если смену закрыли одной общей суммой (старые клиенты).
+   */
+  settlements?: CashShiftSettlement[];
+  /** 155 — текущий баланс СЕЙФА тенанта (отдельный кошелёк). Absent на старом бэкенде. */
+  safeBalance?: number;
+}
+
+/**
+ * 155 — строка разбивки Z-отчёта «по принявшим»: сколько нала/карты принял
+ * каждый сотрудник за окно смены. userId=null — неатрибутированные чеки
+ * (созданы до миграции внутри окна) — сводятся в строку «Не распределено».
+ */
+export interface CashShiftAcceptorTotal {
+  userId: string | null;
+  name: string | null;
+  cashSales: number;
+  cardSales: number;
+  checksCount: number;
+}
+
+/**
+ * 155 — сдача одного сотрудника при закрытии смены: expected — расчётный нал
+ * по его чекам, actual — фактически сданная им сумма. Σ actual по всем
+ * строкам = closingAmount смены (сервер проверяет).
+ */
+export interface CashShiftSettlement {
+  userId: string | null;
+  name?: string | null;
+  expectedAmount: number;
+  actualAmount: number;
+}
+
+/**
+ * 155 — операция СЕЙФА (отдельного кошелька тенанта): deposit — перевод из
+ * кассы при закрытии смены; collection — инкассация владельцем из сейфа;
+ * adjustment — ручная корректировка (знак в amount). Баланс = Σdeposit +
+ * Σadjustment − Σcollection.
+ */
+export interface SafeTransaction {
+  id: string;
+  type: 'deposit' | 'collection' | 'adjustment';
+  amount: number;
+  shiftId?: string | null;
+  actorId?: string | null;
+  actorName?: string | null;
+  note?: string | null;
+  createdAt: string;
+}
+
+/** 155 — GET /cash-shifts/safe: баланс сейфа + последние операции (newest-first). */
+export interface SafeState {
+  balance: number;
+  transactions: SafeTransaction[];
 }
 
 // ───────────────────────────────────────────────────────────────────────
@@ -2252,6 +2373,17 @@ export interface Delivery {
   purchaseOrderId?: string | null;
   /** User who accepted the supply at receiving (order-sourced supplies). */
   receivedBy?: string | null;
+  /**
+   * 154 — soft-delete: NOT NULL = поставка ПОМЕЧЕНА удалённой (остатки и долг
+   * уже откачены сервером), UI рисует бейдж «Удалена» + зачёркнутую сумму
+   * (паттерн сторно-платежа 144) и прячет действия. Absent на legacy-кэшах.
+   */
+  deletedAt?: string | null;
+  deletedByName?: string | null;
+  deleteReason?: string | null;
+  /** 154 — момент последней корректировки строк/цен поставки (кто — correctedByName). */
+  correctedAt?: string | null;
+  correctedByName?: string | null;
 }
 
 export interface DeliveryItem {
@@ -2263,6 +2395,19 @@ export interface DeliveryItem {
   total: number;
   /** The purchase-order line this supply line received against (098); null otherwise. */
   purchaseOrderItemId?: string | null;
+}
+
+/**
+ * 154 — корректировка существующей поставки (PATCH /suppliers/deliveries/:id).
+ * items — ПОЛНЫЙ новый набор строк (сервер считает дельты к текущим, двигает
+ * остатки корректирующими stock_movements и долг поставщику — Δ суммы).
+ * Оплаченную поставку с несторнированным авто-платежом сервер не принимает
+ * (400: сначала сторно платежа).
+ */
+export interface UpdateDeliveryRequest {
+  date?: string;
+  comment?: string;
+  items?: Array<{ productId: string; quantity: number; price: number }>;
 }
 
 export interface SupplierPayment {

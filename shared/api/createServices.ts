@@ -33,9 +33,12 @@ import type {
   ChecksBoard,
   WorkBoardColumn,
   PosSettings,
+  PaymentAcceptorInfo,
+  SafeState,
   TenantLocation,
   Supplier,
   Delivery,
+  UpdateDeliveryRequest,
   SupplierPayment,
   MasterSalary,
   SalarySummary,
@@ -206,6 +209,8 @@ import type {
   BulkAdjustPriceResponse,
   BulkDeleteRequest,
   BulkDeleteResponse,
+  BulkMoveRequest,
+  BulkMoveResponse,
   CreateServiceRequest,
   UpdateServiceRequest,
   CreateCheckRequest,
@@ -564,6 +569,12 @@ export function createProductsApi(api: HttpClient) {
      * Gated by 'warehouse_delete'; owner-class bypasses.
      */
     bulkDelete: (data: BulkDeleteRequest) => api.post<BulkDeleteResponse>('/products/bulk-delete', data),
+    /**
+     * 154+ — массовый ПЕРЕНОС товаров в другую папку (транзакционно, в отличие
+     * от клиентского цикла PATCH-ей). targetCategory — path целевой папки,
+     * '' = в корень. Гейт 'warehouse_manage'.
+     */
+    bulkMove: (data: BulkMoveRequest) => api.post<BulkMoveResponse>('/products/bulk-move', data),
     remove: (id: string) => api.delete(`/products/${id}`),
     // ── Trash bin ─────────────────────────────────────────────────────
     // Soft-deleted products live in the trash. They stay searchable here
@@ -659,8 +670,16 @@ export function createChecksApi(api: HttpClient) {
      * заказов (номер, клиент, сумма) — «сначала закройте заказы». Повторная
      * установка того же значения — no-op без гарда.
      */
-    updatePosSettings: (data: { shiftModeEnabled: boolean }) =>
-      api.patch<{ shiftModeEnabled: boolean }>('/checks/pos-settings', data),
+    updatePosSettings: (data: { shiftModeEnabled?: boolean; paymentAcceptorIds?: string[] | null }) =>
+      api.patch<PosSettings>('/checks/pos-settings', data),
+    /**
+     * 155 — экран «Кто принимает оплату» (настройки компании): активные
+     * сотрудники + резолв, кто фактически принимает и почему. Чтение —
+     * settings_manage. Выбор сохраняется через updatePosSettings
+     * ({ paymentAcceptorIds }): null = «по ролям», список = только они
+     * (+ owner-class всегда).
+     */
+    paymentAcceptors: () => api.get<PaymentAcceptorInfo[]>('/checks/payment-acceptors'),
     getById: (id: string) => api.get<Check>(`/checks/${id}`),
     create: (data: CreateCheckRequest) => api.post<Check>('/checks', data),
     update: (id: string, data: UpdateCheckRequest) => api.patch<Check>(`/checks/${id}`, data),
@@ -678,10 +697,15 @@ export function createChecksApi(api: HttpClient) {
     acceptPayment: (
       id: string,
       data: {
-        paymentMethod?: 'cash' | 'card' | 'cash_card';
+        // 155: + 'installment' — кассир продаёт в рассрочку при приёме оплаты
+        // (гейт sell_installment на сервере; ноги = первый взнос, остаток —
+        // план рассрочки, создаётся в той же транзакции активации).
+        paymentMethod?: 'cash' | 'card' | 'cash_card' | 'installment';
         cashAmount?: number;
         cardAmount?: number;
         discount?: number;
+        /** Только при paymentMethod='installment': дата следующего платежа (YYYY-MM-DD) + комментарий плана. */
+        installment?: { nextPaymentDate?: string; comment?: string };
       },
     ) => api.patch<Check>(`/checks/${id}/accept-payment`, data),
     /**
@@ -796,6 +820,22 @@ export function createSuppliersApi(api: HttpClient) {
     getDeliveries: (params?: { supplierId?: string }) => api.get<Delivery[]>('/suppliers/deliveries', { params }),
     createDelivery: (data: CreateDeliveryRequest) => api.post<{ id: string }>('/suppliers/deliveries', data),
     getDeliveryById: (id: string) => api.get<Delivery>(`/suppliers/deliveries/${id}`),
+    /**
+     * 154 — корректировка поставки: полный новый набор строк / цена / дата /
+     * комментарий. Сервер в ОДНОЙ транзакции двигает остатки корректирующими
+     * stock_movements (дельты qty) и долг поставщику (Δ суммы). Оплаченная
+     * поставка с несторнированным авто-платежом → 400 (сначала сторно).
+     * Гейт 'suppliers_manage'.
+     */
+    updateDelivery: (id: string, data: UpdateDeliveryRequest) =>
+      api.patch<Delivery>(`/suppliers/deliveries/${id}`, data),
+    /**
+     * 154 — SOFT-delete поставки: строка остаётся в истории с пометкой
+     * «Удалена» (deletedAt), остатки склада и долг поставщику откатываются в
+     * той же транзакции. Гейт 'suppliers_manage'.
+     */
+    deleteDelivery: (id: string, reason?: string) =>
+      api.delete<Delivery>(`/suppliers/deliveries/${id}`, { data: { reason } }),
     getPayments: (params?: { supplierId?: string }) => api.get<SupplierPayment[]>('/suppliers/payments', { params }),
     /**
      * Отчёт по оплатам поставщикам за период — источник секции «Закупка товара
@@ -1092,6 +1132,8 @@ export function createReportsApi(api: HttpClient) {
           installmentPaidCard?: number;
           received?: number;
           refunds?: number;
+          /** 155 — инкассации за день (из кассы + из сейфа), справочно. */
+          collections?: number;
         }>;
         totals: {
           cash: number;
@@ -1105,7 +1147,15 @@ export function createReportsApi(api: HttpClient) {
           installmentPaidCard?: number;
           received?: number;
           refunds?: number;
+          /** 155 — инкассации за период, справочно. */
+          collections?: number;
         };
+        /**
+         * 155 — текущие остатки «кошельков» тенанта: drawer — касса (размен
+         * последней закрытой смены либо живой expected открытой), safe — сейф.
+         * Absent на старом бэкенде / без права.
+         */
+        wallets?: { drawer: number; safe: number };
       }>('/reports/cashflow', { params }),
     /**
      * Defect + writeoff aggregates for the period. Owners use this to see
@@ -1907,9 +1957,22 @@ export function createCashShiftsApi(api: HttpClient) {
   return {
     /** Open a shift. 409 if one is already open for the tenant. */
     open: (data: { openingAmount: number; note?: string }) => api.post<CashShiftReport>('/cash-shifts/open', data),
-    /** Close the shift; returns the final Z-report with computed difference. */
-    close: (id: string, data: { closingAmount: number; note?: string }) =>
-      api.post<CashShiftReport>(`/cash-shifts/${id}/close`, data),
+    /**
+     * Close the shift; returns the final Z-report with computed difference.
+     * 155: `toSafeAmount` — сколько перевести в СЕЙФ (0..closingAmount; остаток
+     * = размен на завтра, следующая смена стартует с него); `settlements` —
+     * сдача по сотрудникам (Σ actualAmount должна равняться closingAmount).
+     * Старые клиенты шлют только closingAmount — всё остаётся в кассе.
+     */
+    close: (
+      id: string,
+      data: {
+        closingAmount: number;
+        note?: string;
+        toSafeAmount?: number;
+        settlements?: Array<{ userId: string | null; actualAmount: number }>;
+      },
+    ) => api.post<CashShiftReport>(`/cash-shifts/${id}/close`, data),
     /** The currently-open shift with live Z-report, or null when none is open. */
     current: () => api.get<CashShiftReport | null>('/cash-shifts/current'),
     /** Full Z-report for one shift (live for open, frozen headline for closed). */
@@ -1920,6 +1983,18 @@ export function createCashShiftsApi(api: HttpClient) {
     /** Record an инкассация; returns the refreshed Z-report. */
     collect: (id: string, data: { amount: number; note?: string }) =>
       api.post<CashShiftReport>(`/cash-shifts/${id}/collect`, data),
+    /**
+     * 155 — СЕЙФ (отдельный кошелёк тенанта): баланс + история операций.
+     * Чтение — cash_shifts_manage либо owner-class.
+     */
+    safe: () => api.get<SafeState>('/cash-shifts/safe'),
+    /**
+     * 155 — инкассация владельцем ИЗ СЕЙФА (без открытой смены и без
+     * подтверждения кассира; кассиру уходит пуш «инкассация N, остаток M»).
+     * Гейт cash_shifts_manage. amount > 0, не больше баланса сейфа.
+     */
+    safeCollect: (data: { amount: number; note?: string }) =>
+      api.post<SafeState>('/cash-shifts/safe/collect', data),
   };
 }
 
