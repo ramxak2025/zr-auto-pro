@@ -909,27 +909,52 @@ export default function SupplierDetailPage() {
             />
           ) : (
             <div className="space-y-2">
-              {deliveries.map((delivery) => (
-                <div key={delivery.id} className="bg-white rounded-xl border border-gray-100 shadow-sm p-3.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
-                        <Calendar className="h-3.5 w-3.5 text-gray-400" />
-                        <p className="text-sm font-semibold text-gray-900">
-                          {format(new Date(delivery.date), 'dd MMM yyyy', { locale: ru })}
-                        </p>
+              {deliveries.map((delivery) => {
+                // 154 — soft-delete: остатки и долг уже откачены сервером,
+                // строка остаётся в истории с бейджем «Удалена» + зачёркнутой
+                // суммой (паттерн сторно-платежа) и без действий.
+                const isDeleted = !!delivery.deletedAt;
+                return (
+                  <div
+                    key={delivery.id}
+                    className={`bg-white rounded-xl border border-gray-100 shadow-sm p-3.5 ${isDeleted ? 'opacity-70' : ''}`}
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Calendar className="h-3.5 w-3.5 text-gray-400" />
+                          <p className="text-sm font-semibold text-gray-900">
+                            {format(new Date(delivery.date), 'dd MMM yyyy', { locale: ru })}
+                          </p>
+                          {isDeleted && <span className="badge-danger flex-shrink-0">Удалена</span>}
+                        </div>
+                        {delivery.comment && (
+                          <p className="text-xs text-gray-500 mt-1.5 truncate">{delivery.comment}</p>
+                        )}
+                        {isDeleted && delivery.deleteReason && (
+                          <p className="text-xs text-red-600 mt-1">Причина: {delivery.deleteReason}</p>
+                        )}
+                        {!isDeleted && delivery.correctedAt && (
+                          <p className="text-[11px] text-gray-400 mt-1">
+                            Изменена {format(new Date(delivery.correctedAt), 'dd MMM yyyy', { locale: ru })}
+                            {delivery.correctedByName ? ` · ${delivery.correctedByName}` : ''}
+                          </p>
+                        )}
                       </div>
-                      {delivery.comment && <p className="text-xs text-gray-500 mt-1.5 truncate">{delivery.comment}</p>}
-                    </div>
-                    <div className="text-right flex-shrink-0">
-                      <p className="text-base font-bold text-primary-600 tabular-nums">
-                        {formatMoney(delivery.totalAmount)}
-                      </p>
-                      <div className="mt-1">{statusBadge(delivery.paymentStatus)}</div>
+                      <div className="text-right flex-shrink-0">
+                        <p
+                          className={`text-base font-bold tabular-nums ${
+                            isDeleted ? 'text-gray-400 line-through' : 'text-primary-600'
+                          }`}
+                        >
+                          {formatMoney(delivery.totalAmount)}
+                        </p>
+                        {!isDeleted && <div className="mt-1">{statusBadge(delivery.paymentStatus)}</div>}
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

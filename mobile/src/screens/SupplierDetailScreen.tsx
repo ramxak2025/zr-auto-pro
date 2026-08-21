@@ -29,6 +29,7 @@ import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
 import { getPoStatusMeta, formatPoDate } from './purchaseOrders/purchaseOrderHelpers';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
+import { useTabBarScrollInsets } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint, getBadgeColors } from '../theme';
 import {
@@ -41,6 +42,7 @@ import {
   type PaginatedResponse,
   type PurchaseOrder,
   type PurchaseOrderSuggestionGroup,
+  type UpdateDeliveryRequest,
 } from '../../../shared/types';
 import { formatPhone } from '../../../shared/validation/phone';
 import { addMonths, formatMonthKey, monthLabelFull } from '../components/salary/salaryFormat';
@@ -111,6 +113,10 @@ export default function SupplierDetailScreen() {
     [palette],
   );
   const { id, openDefectReturn } = (route.params ?? {}) as { id: string; openDefectReturn?: boolean };
+  // Плавающий таб-бар: iOS — contentInset, Android — paddingBottom (см.
+  // useTabBarScrollInsets + референс SupplyReceiveScreen). Без этого последняя
+  // карточка истории упирается в стекло бара.
+  const { contentInset, contentContainerPaddingBottom } = useTabBarScrollInsets();
   const [refreshing, setRefreshing] = useState(false);
   const [tab, setTab] = useState<'deliveries' | 'payments' | 'returns'>('deliveries');
   const [expandedDelivery, setExpandedDelivery] = useState<string | null>(null);
@@ -143,6 +149,21 @@ export default function SupplierDetailScreen() {
   // iOS-only, поэтому кросс-платформенный <Modal> с TextInput.
   const [reverseTarget, setReverseTarget] = useState<SupplierPayment | null>(null);
   const [reverseReason, setReverseReason] = useState('');
+
+  // 154 — корректировка поставки: модал со строками (qty/price), датой и
+  // комментарием. «Сохранить» шлёт ПОЛНЫЙ новый набор строк — сервер сам
+  // считает дельты остатков и долга. Новые товары в этой итерации не
+  // добавляются — только правка/удаление существующих строк.
+  const [editTarget, setEditTarget] = useState<Delivery | null>(null);
+  const [editLines, setEditLines] = useState<Array<{ productId: string; name: string; qty: string; price: string }>>(
+    [],
+  );
+  const [editDate, setEditDate] = useState('');
+  const [editComment, setEditComment] = useState('');
+
+  // 154 — soft-delete поставки: confirm с полем причины (паттерн сторно).
+  const [deleteTarget, setDeleteTarget] = useState<Delivery | null>(null);
+  const [deleteReason, setDeleteReason] = useState('');
 
   // Return-defect form. Modal is rendered as a wide RN sheet (uses the
   // shared <Modal>), product picker reused for selection but scoped to
@@ -462,6 +483,124 @@ export default function SupplierDetailScreen() {
     reversePaymentMutation.mutate({ paymentId: reverseTarget.id, reason: reverseReason.trim() || undefined });
   };
 
+  // 154 — корректировка поставки. Сервер в одной транзакции двигает остатки
+  // корректирующими stock_movements и долг поставщику (Δ суммы). Оплаченная
+  // поставка с несторнированным авто-платежом → 400, показываем дословно.
+  const updateDeliveryMutation = useMutation({
+    mutationFn: (vars: { deliveryId: string; data: UpdateDeliveryRequest }) =>
+      suppliersApi.updateDelivery(vars.deliveryId, vars.data),
+    onSuccess: () => {
+      haptic('success');
+      invalidateAll();
+      setEditTarget(null);
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || 'Не удалось изменить поставку';
+      Alert.alert('Ошибка', Array.isArray(msg) ? msg.join('\n') : String(msg));
+    },
+  });
+
+  // 154 — SOFT-delete поставки: строка остаётся в истории с бейджем
+  // «Удалена», остатки склада и долг поставщику откатываются на сервере.
+  const deleteDeliveryMutation = useMutation({
+    mutationFn: (vars: { deliveryId: string; reason?: string }) =>
+      suppliersApi.deleteDelivery(vars.deliveryId, vars.reason),
+    onSuccess: () => {
+      haptic('success');
+      invalidateAll();
+      setDeleteTarget(null);
+      setDeleteReason('');
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message || 'Не удалось удалить поставку';
+      Alert.alert('Ошибка', Array.isArray(msg) ? msg.join('\n') : String(msg));
+    },
+  });
+
+  const openEditDelivery = (d: Delivery) => {
+    haptic('tap');
+    setEditLines(
+      d.items.map((it) => ({
+        productId: it.productId,
+        name: it.product?.name || 'Товар',
+        qty: String(it.quantity),
+        price: String(it.price),
+      })),
+    );
+    setEditDate(formatDate(d.date));
+    setEditComment(d.comment || '');
+    setEditTarget(d);
+  };
+
+  // Живой пересчёт итога модала корректировки — невалидные строки дают 0,
+  // чтобы сумма не прыгала в NaN во время набора.
+  const editTotal = editLines.reduce((sum, l) => {
+    const qty = Number(l.qty.replace(',', '.'));
+    const price = Number(l.price.replace(',', '.'));
+    return sum + (qty > 0 && isFinite(price) && price >= 0 ? qty * price : 0);
+  }, 0);
+
+  const handleSaveDeliveryEdit = () => {
+    if (!editTarget) return;
+    // Guard от двойного тапа: две корректировки подряд — два легитимных
+    // PATCH, вторая посчитает дельты уже от новых строк.
+    if (updateDeliveryMutation.isPending) return;
+    if (editLines.length === 0) {
+      Alert.alert('Ошибка', 'Нельзя сохранить поставку без товаров. Если она ошибочна целиком — удалите её.');
+      return;
+    }
+    const items: Array<{ productId: string; quantity: number; price: number }> = [];
+    for (const l of editLines) {
+      const qty = Number(l.qty.replace(',', '.'));
+      const price = Number(l.price.replace(',', '.'));
+      if (!qty || qty <= 0) {
+        Alert.alert('Ошибка', `Укажите количество больше нуля: «${l.name}»`);
+        return;
+      }
+      if (!isFinite(price) || price < 0) {
+        Alert.alert('Ошибка', `Укажите корректную цену: «${l.name}»`);
+        return;
+      }
+      items.push({ productId: l.productId, quantity: qty, price });
+    }
+    // Дата — ДД.ММ.ГГГГ (как отображается в карточке). Отправляем только
+    // если владелец её реально поменял, чтобы не затирать исходное время
+    // поставки полуночью.
+    const trimmedDate = editDate.trim();
+    const m = /^(\d{2})\.(\d{2})\.(\d{4})$/.exec(trimmedDate);
+    if (!m) {
+      Alert.alert('Ошибка', 'Дата должна быть в формате ДД.ММ.ГГГГ');
+      return;
+    }
+    const day = Number(m[1]);
+    const month = Number(m[2]);
+    const year = Number(m[3]);
+    const parsed = new Date(year, month - 1, day);
+    if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) {
+      Alert.alert('Ошибка', 'Такой даты не существует');
+      return;
+    }
+    const dateChanged = trimmedDate !== formatDate(editTarget.date);
+    const isoDate = `${m[3]}-${m[2]}-${m[1]}`;
+    const comment = editComment.trim();
+    updateDeliveryMutation.mutate({
+      deliveryId: editTarget.id,
+      data: {
+        items,
+        ...(dateChanged ? { date: isoDate } : {}),
+        ...(comment !== (editTarget.comment || '') ? { comment } : {}),
+      },
+    });
+  };
+
+  const handleConfirmDeleteDelivery = () => {
+    if (!deleteTarget) return;
+    // Guard от двойного тапа — сервер повторное удаление и так отвергнет,
+    // но пользователю незачем видеть «Поставка уже удалена».
+    if (deleteDeliveryMutation.isPending) return;
+    deleteDeliveryMutation.mutate({ deliveryId: deleteTarget.id, reason: deleteReason.trim() || undefined });
+  };
+
   // Backend (POST /suppliers/:id/return-defect) does three things atomically:
   //  1) decrement defect-warehouse stock by qty,
   //  2) log a stock_movements row of type defect_return_to_supplier,
@@ -703,7 +842,9 @@ export default function SupplierDetailScreen() {
       />
 
       <ScrollView
-        contentContainerStyle={styles.scrollContent}
+        contentContainerStyle={[styles.scrollContent, { paddingBottom: contentContainerPaddingBottom + spacing[8] }]}
+        contentInset={contentInset}
+        scrollIndicatorInsets={contentInset}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
@@ -1052,6 +1193,9 @@ export default function SupplierDetailScreen() {
 
             {(deliveries || []).map((d) => {
               const isExpanded = expandedDelivery === d.id;
+              // 154 — soft-delete: карточка остаётся в истории, раскрывается
+              // для просмотра, но действия и статус оплаты скрыты.
+              const isDeleted = !!d.deletedAt;
               return (
                 <TouchableOpacity
                   key={d.id}
@@ -1070,7 +1214,11 @@ export default function SupplierDetailScreen() {
                     style={[
                       styles.deliveryAccent,
                       {
-                        backgroundColor: d.paymentStatus === 'paid' ? colors.green[500] : 'transparent',
+                        backgroundColor: isDeleted
+                          ? palette.text.tertiary
+                          : d.paymentStatus === 'paid'
+                            ? colors.green[500]
+                            : 'transparent',
                       },
                     ]}
                   />
@@ -1091,7 +1239,14 @@ export default function SupplierDetailScreen() {
                             </Text>
                           </View>
                         )}
-                        {d.paymentStatus === 'paid' ? (
+                        {isDeleted ? (
+                          // 154 — точный паттерн бейджа «Сторнировано» у платежа.
+                          <View style={[styles.statusBadge, { backgroundColor: dark ? db.red.bg : colors.red[50] }]}>
+                            <Text style={[styles.statusBadgeText, { color: dark ? db.red.text : colors.red[600] }]}>
+                              Удалена
+                            </Text>
+                          </View>
+                        ) : d.paymentStatus === 'paid' ? (
                           <View
                             style={[styles.statusBadge, dark ? { backgroundColor: db.green.bg } : styles.statusPaid]}
                           >
@@ -1117,7 +1272,17 @@ export default function SupplierDetailScreen() {
                         )}
                       </View>
                       <View style={styles.deliveryTopRight}>
-                        <Text style={[styles.deliveryAmount, { color: palette.text.primary }]}>
+                        <Text
+                          style={[
+                            styles.deliveryAmount,
+                            { color: palette.text.primary },
+                            // 154 — точный паттерн зачёркнутой суммы сторно-платежа.
+                            isDeleted && {
+                              color: palette.text.tertiary,
+                              textDecorationLine: 'line-through' as const,
+                            },
+                          ]}
+                        >
                           {formatMoney(d.totalAmount)}
                         </Text>
                         <Ionicons
@@ -1132,6 +1297,14 @@ export default function SupplierDetailScreen() {
                     <Text style={[styles.itemsSummary, { color: palette.text.tertiary }]}>
                       {d.items.length} {d.items.length === 1 ? 'товар' : d.items.length < 5 ? 'товара' : 'товаров'}
                     </Text>
+
+                    {/* 154 — пометка корректировки. */}
+                    {d.correctedAt ? (
+                      <Text style={[styles.correctedText, { color: palette.text.tertiary }]}>
+                        Изменена {formatDate(d.correctedAt)}
+                        {d.correctedByName ? ` · ${d.correctedByName}` : ''}
+                      </Text>
+                    ) : null}
 
                     {/* Expanded items list */}
                     {isExpanded && (
@@ -1163,6 +1336,68 @@ export default function SupplierDetailScreen() {
                             <Text style={styles.openOrderLinkText}>Открыть заказ</Text>
                             <Ionicons name="chevron-forward" size={12} color={colors.primary[600]} />
                           </TouchableOpacity>
+                        )}
+
+                        {/* 154 — кто и почему удалил (только в раскрытом виде,
+                            паттерн «Причина: …» сторно-платежа). */}
+                        {isDeleted && (
+                          <View style={{ marginTop: spacing[1] }}>
+                            <Text style={[styles.commentText, { color: dark ? colors.red[400] : colors.red[600] }]}>
+                              Удалена {formatDate(d.deletedAt!)}
+                              {d.deletedByName ? ` · ${d.deletedByName}` : ''}
+                            </Text>
+                            {d.deleteReason ? (
+                              <Text style={[styles.commentText, { color: dark ? colors.red[400] : colors.red[600] }]}>
+                                Причина: {d.deleteReason}
+                              </Text>
+                            ) : null}
+                          </View>
+                        )}
+
+                        {/* 154 — действия над поставкой. Гейт suppliers_manage
+                            (сервер дублирует проверку); у удалённой скрыты. */}
+                        {canManageSuppliers && !isDeleted && (
+                          <View style={[styles.deliveryActionsRow, { borderTopColor: palette.border.subtle }]}>
+                            <TouchableOpacity
+                              style={[
+                                styles.deliveryActionBtn,
+                                { borderColor: palette.border.strong, backgroundColor: palette.bg.muted },
+                              ]}
+                              onPress={() => openEditDelivery(d)}
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons name="create-outline" size={14} color={accentIconColor} />
+                              <Text style={[styles.deliveryActionText, { color: palette.text.primary }]}>Изменить</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              style={[
+                                styles.deliveryActionBtn,
+                                dark
+                                  ? {
+                                      backgroundColor: softTint(colors.red[600], 'dark'),
+                                      borderColor: 'rgba(248, 113, 113, 0.35)',
+                                    }
+                                  : { backgroundColor: colors.red[50], borderColor: colors.red[200] },
+                              ]}
+                              onPress={() => {
+                                haptic('tap');
+                                setDeleteReason('');
+                                setDeleteTarget(d);
+                              }}
+                              activeOpacity={0.7}
+                            >
+                              <Ionicons
+                                name="trash-outline"
+                                size={14}
+                                color={dark ? colors.red[400] : colors.red[600]}
+                              />
+                              <Text
+                                style={[styles.deliveryActionText, { color: dark ? colors.red[400] : colors.red[600] }]}
+                              >
+                                Удалить
+                              </Text>
+                            </TouchableOpacity>
+                          </View>
                         )}
                       </View>
                     )}
@@ -1607,6 +1842,178 @@ export default function SupplierDetailScreen() {
                   <ActivityIndicator color={colors.white} size="small" />
                 ) : (
                   <Text style={styles.submitBtnText}>Сторнировать</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+      </Modal>
+
+      {/* 154 — корректировка поставки: правка/удаление существующих строк,
+          дата, комментарий. «Сохранить» шлёт ПОЛНЫЙ новый набор строк
+          {productId, quantity, price} — сервер сам считает дельты остатков
+          и долга. Добавление новых товаров — не в этой итерации. */}
+      <Modal visible={!!editTarget} onClose={() => setEditTarget(null)} title="Изменить поставку">
+        {editTarget && (
+          <>
+            <ScrollView style={{ maxHeight: 420 }} keyboardShouldPersistTaps="handled">
+              {editLines.length === 0 ? (
+                <Text style={[styles.editEmptyText, { color: palette.text.tertiary }]}>
+                  Все строки удалены. Если поставка ошибочна целиком — закройте окно и нажмите «Удалить».
+                </Text>
+              ) : (
+                editLines.map((l, idx) => {
+                  const lineQty = Number(l.qty.replace(',', '.'));
+                  const linePrice = Number(l.price.replace(',', '.'));
+                  const lineTotal = lineQty > 0 && isFinite(linePrice) && linePrice >= 0 ? lineQty * linePrice : 0;
+                  return (
+                    <View
+                      key={`${l.productId}-${idx}`}
+                      style={[styles.editLineRow, { borderBottomColor: palette.border.subtle }]}
+                    >
+                      <View style={styles.editLineTop}>
+                        <Text style={[styles.editLineName, { color: palette.text.primary }]} numberOfLines={1}>
+                          {l.name}
+                        </Text>
+                        <TouchableOpacity
+                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                          onPress={() => {
+                            haptic('tap');
+                            setEditLines((lines) => lines.filter((_, i) => i !== idx));
+                          }}
+                        >
+                          <Ionicons name="trash-outline" size={16} color={dark ? colors.red[400] : colors.red[600]} />
+                        </TouchableOpacity>
+                      </View>
+                      <View style={styles.editLineInputs}>
+                        <TextInput
+                          value={l.qty}
+                          onChangeText={(v) =>
+                            setEditLines((lines) => lines.map((x, i) => (i === idx ? { ...x, qty: v } : x)))
+                          }
+                          style={[styles.formInput, f.input, styles.editQtyInput]}
+                          keyboardType="numeric"
+                          placeholder="0"
+                          placeholderTextColor={palette.text.tertiary}
+                        />
+                        <Text style={{ color: palette.text.tertiary }}>×</Text>
+                        <TextInput
+                          value={l.price}
+                          onChangeText={(v) =>
+                            setEditLines((lines) => lines.map((x, i) => (i === idx ? { ...x, price: v } : x)))
+                          }
+                          style={[styles.formInput, f.input, styles.editPriceInput]}
+                          keyboardType="numeric"
+                          placeholder="0"
+                          placeholderTextColor={palette.text.tertiary}
+                        />
+                        <Text style={[styles.editLineTotal, { color: palette.text.secondary }]} numberOfLines={1}>
+                          {formatMoney(lineTotal)}
+                        </Text>
+                      </View>
+                    </View>
+                  );
+                })
+              )}
+
+              <View style={[styles.defectTotalRow, { borderTopColor: palette.border.subtle, marginTop: spacing[3] }]}>
+                <Text style={[styles.defectTotalLabel, { color: palette.text.primary }]}>Итого:</Text>
+                <Text style={[styles.defectTotalValue, { color: palette.text.primary }]}>{formatMoney(editTotal)}</Text>
+              </View>
+
+              <View style={styles.formField}>
+                <Text style={[styles.formLabel, f.label]}>Дата</Text>
+                <TextInput
+                  value={editDate}
+                  onChangeText={setEditDate}
+                  style={[styles.formInput, f.input]}
+                  placeholder="ДД.ММ.ГГГГ"
+                  placeholderTextColor={palette.text.tertiary}
+                />
+              </View>
+              <View style={styles.formField}>
+                <Text style={[styles.formLabel, f.label]}>Комментарий</Text>
+                <TextInput
+                  value={editComment}
+                  onChangeText={setEditComment}
+                  style={[styles.formInput, f.input, { height: 50, textAlignVertical: 'top' }]}
+                  multiline
+                  placeholder="Необязательно"
+                  placeholderTextColor={palette.text.tertiary}
+                />
+              </View>
+            </ScrollView>
+            <View style={[styles.formActions, f.actions]}>
+              <TouchableOpacity style={[styles.cancelBtn, f.cancel]} onPress={() => setEditTarget(null)}>
+                <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.submitBtn}
+                onPress={handleSaveDeliveryEdit}
+                disabled={updateDeliveryMutation.isPending}
+              >
+                {updateDeliveryMutation.isPending ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text style={styles.submitBtnText}>Сохранить</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </>
+        )}
+      </Modal>
+
+      {/* 154 — удаление поставки: confirm с полем причины (паттерн сторно).
+          Строка останется в истории с пометкой «Удалена». */}
+      <Modal
+        visible={!!deleteTarget}
+        onClose={() => {
+          setDeleteTarget(null);
+          setDeleteReason('');
+        }}
+        title="Удалить поставку?"
+      >
+        {deleteTarget && (
+          <>
+            <View
+              style={[styles.expenseNotice, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+            >
+              <Ionicons name="alert-circle-outline" size={16} color={dark ? colors.red[400] : colors.red[600]} />
+              <Text style={[styles.expenseNoticeText, { color: palette.text.secondary }]}>
+                Поставка от {formatDate(deleteTarget.date)} на {formatMoney(deleteTarget.totalAmount)} останется в
+                истории с пометкой «Удалена», а остатки склада и долг поставщику откатятся. Отменить удаление нельзя.
+              </Text>
+            </View>
+            <View style={styles.formField}>
+              <Text style={[styles.formLabel, f.label]}>Причина удаления</Text>
+              <TextInput
+                value={deleteReason}
+                onChangeText={setDeleteReason}
+                style={[styles.formInput, f.input, { height: 50, textAlignVertical: 'top' }]}
+                multiline
+                placeholder="Например: ошиблись при приёмке"
+                placeholderTextColor={palette.text.tertiary}
+              />
+            </View>
+            <View style={[styles.formActions, f.actions]}>
+              <TouchableOpacity
+                style={[styles.cancelBtn, f.cancel]}
+                onPress={() => {
+                  setDeleteTarget(null);
+                  setDeleteReason('');
+                }}
+              >
+                <Text style={[styles.cancelBtnText, f.cancelText]}>Отмена</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.submitBtn, { backgroundColor: colors.red[600] }]}
+                onPress={handleConfirmDeleteDelivery}
+                disabled={deleteDeliveryMutation.isPending}
+              >
+                {deleteDeliveryMutation.isPending ? (
+                  <ActivityIndicator color={colors.white} size="small" />
+                ) : (
+                  <Text style={styles.submitBtnText}>Удалить</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -2235,6 +2642,36 @@ const styles = StyleSheet.create({
     textAlign: 'right',
   },
   commentText: { fontSize: fontSize.xs, color: colors.gray[400], fontStyle: 'italic', marginTop: spacing[1.5] },
+  // 154 — мелкая пометка «Изменена {дата}» у откорректированной поставки.
+  correctedText: { fontSize: 11, marginTop: spacing[1] },
+  // 154 — действия «Изменить» / «Удалить» в раскрытой карточке поставки.
+  deliveryActionsRow: {
+    flexDirection: 'row',
+    gap: spacing[2],
+    marginTop: spacing[2.5],
+    paddingTop: spacing[2.5],
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  deliveryActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2],
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+  },
+  deliveryActionText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  // 154 — модал корректировки поставки.
+  editLineRow: { paddingVertical: spacing[2.5], borderBottomWidth: StyleSheet.hairlineWidth, gap: spacing[2] },
+  editLineTop: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  editLineName: { flex: 1, minWidth: 0, fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
+  editLineInputs: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  editQtyInput: { width: 64, textAlign: 'center' },
+  editPriceInput: { flex: 1, textAlign: 'right' },
+  editLineTotal: { minWidth: 78, textAlign: 'right', fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  editEmptyText: { fontSize: fontSize.sm, textAlign: 'center', paddingVertical: spacing[4], lineHeight: 19 },
   // Payments
   paymentCard: {
     flexDirection: 'row',

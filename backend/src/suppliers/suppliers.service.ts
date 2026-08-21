@@ -389,9 +389,14 @@ export class SuppliersService {
       params.push(query.supplierId);
     }
 
+    // 154: удалённые поставки НЕ прячем (как reversed-платежи в getPayments) —
+    // UI рисует бейдж «Удалена»; joins на users дают имена для аудита.
     const { rows } = await this.pool.query(
-      `SELECT d.*, s.name as supplier_name
+      `SELECT d.*, s.name as supplier_name,
+              du.full_name as deleted_by_name, cu.full_name as corrected_by_name
        FROM deliveries d JOIN suppliers s ON s.id = d.supplier_id
+       LEFT JOIN users du ON du.id = d.deleted_by
+       LEFT JOIN users cu ON cu.id = d.corrected_by
        WHERE ${where} AND d.tenant_id = $1 ORDER BY d.date DESC LIMIT 500`,
       params,
     );
@@ -407,6 +412,12 @@ export class SuppliersService {
       // Order-sourced supplies (098) link back to their purchase order + receiver.
       purchaseOrderId: r.purchase_order_id ?? null,
       receivedBy: r.received_by ?? null,
+      // 154 — soft-delete + след корректировки.
+      deletedAt: r.deleted_at ?? null,
+      deletedByName: (r.deleted_by_name as string) ?? null,
+      deleteReason: r.delete_reason ?? null,
+      correctedAt: r.corrected_at ?? null,
+      correctedByName: (r.corrected_by_name as string) ?? null,
       items: [] as any[],
     }));
 
@@ -444,8 +455,11 @@ export class SuppliersService {
 
   async getDeliveryById(id: string, tenantID: string) {
     const { rows } = await this.pool.query(
-      `SELECT d.*, s.name as supplier_name
+      `SELECT d.*, s.name as supplier_name,
+              du.full_name as deleted_by_name, cu.full_name as corrected_by_name
        FROM deliveries d JOIN suppliers s ON s.id = d.supplier_id
+       LEFT JOIN users du ON du.id = d.deleted_by
+       LEFT JOIN users cu ON cu.id = d.corrected_by
        WHERE d.id=$1 AND d.tenant_id=$2`,
       [id, tenantID],
     );
@@ -462,6 +476,12 @@ export class SuppliersService {
       comment: r.comment,
       purchaseOrderId: r.purchase_order_id ?? null,
       receivedBy: r.received_by ?? null,
+      // 154 — soft-delete + след корректировки.
+      deletedAt: r.deleted_at ?? null,
+      deletedByName: (r.deleted_by_name as string) ?? null,
+      deleteReason: r.delete_reason ?? null,
+      correctedAt: r.corrected_at ?? null,
+      correctedByName: (r.corrected_by_name as string) ?? null,
     };
 
     const { rows: itemRows } = await this.pool.query(
@@ -565,6 +585,327 @@ export class SuppliersService {
     } finally {
       client.release();
     }
+  }
+
+  // ── Корректировка / soft-delete поставки (154) ─────────────────────────────
+
+  /**
+   * Лок товаров строго ORDER BY id FOR UPDATE — тот же порядок, что в
+   * StockMovementsService, чтобы параллельные складские операции не
+   * взаимоблокировались. Возвращает найденные строки в порядке лока.
+   */
+  private async lockDeliveryProductsTx(client: PoolClient, tenantID: string, productIds: string[]) {
+    if (productIds.length === 0) return [] as any[];
+    const { rows } = await client.query(
+      `SELECT id, name, stock, warehouse_id FROM products
+        WHERE id = ANY($1) AND tenant_id = $2
+        ORDER BY id FOR UPDATE`,
+      [productIds, tenantID],
+    );
+    return rows;
+  }
+
+  /**
+   * Применяет дельты остатков по уже ЗАЛОЧЕННЫМ товарам: положительная дельта →
+   * корректирующее движение 'income', отрицательная → 'expense' (по образцу
+   * applySingleWarehouse: stock_before/after, warehouse, user). Нехватка остатка
+   * (продано больше, чем остаётся после уменьшения) — 400, НЕ клампим: иначе
+   * склад и деньги поставщика разъехались бы молча.
+   */
+  private async applyDeliveryStockDeltasTx(
+    client: PoolClient,
+    tenantID: string,
+    userID: string | null,
+    supplierId: string,
+    lockedProducts: any[],
+    deltas: Map<string, number>,
+    reason: string,
+    insufficientAction: string,
+  ) {
+    const EPS = 1e-9;
+    let mainWarehouseId: string | null = null;
+
+    for (const p of lockedProducts) {
+      const delta = deltas.get(p.id) ?? 0;
+      if (Math.abs(delta) < EPS) continue;
+
+      const stockBefore = parseFloat(p.stock) || 0;
+      let stockAfter = stockBefore + delta;
+      if (delta < 0 && stockAfter < -EPS) {
+        throw new BadRequestException({
+          message: `Недостаточно остатка по «${p.name}»: ${insufficientAction}`,
+        });
+      }
+      stockAfter = Math.max(stockAfter, 0);
+
+      // Движение пишем на склад товара; товары без склада — на main (тот же
+      // fallback, что resolveWarehouse в stock-movements).
+      let warehouseId: string | null = p.warehouse_id ?? null;
+      if (!warehouseId) {
+        if (!mainWarehouseId) {
+          mainWarehouseId = (await this.warehouses.resolveByKind(tenantID, 'main')).id;
+        }
+        warehouseId = mainWarehouseId;
+      }
+
+      await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [stockAfter, p.id, tenantID]);
+      await client.query(
+        `INSERT INTO stock_movements (
+           product_id, type, quantity, stock_before, stock_after, reason,
+           tenant_id, user_id, warehouse_id, supplier_id
+         ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          p.id,
+          delta > 0 ? 'income' : 'expense',
+          Math.abs(delta),
+          stockBefore,
+          stockAfter,
+          reason,
+          tenantID,
+          userID,
+          warehouseId,
+          supplierId,
+        ],
+      );
+    }
+  }
+
+  /**
+   * Оплаченную поставку с ЖИВЫМ (несторнированным) авто-платежом править /
+   * удалять нельзя: сумма платежа перестала бы соответствовать поставке.
+   * Владелец сначала сторнирует платёж (reversePayment вернёт 'unpaid').
+   */
+  private async assertNoActiveDeliveryPaymentTx(client: PoolClient, tenantID: string, deliveryId: string) {
+    const { rows } = await client.query(
+      'SELECT 1 FROM supplier_payments WHERE delivery_id=$1 AND tenant_id=$2 AND reversed_at IS NULL LIMIT 1',
+      [deliveryId, tenantID],
+    );
+    if (rows.length > 0) {
+      throw new BadRequestException({ message: 'Сначала сторнируйте платёж по поставке' });
+    }
+  }
+
+  /**
+   * Корректировка поставки (154). Одна транзакция, порядок локов: deliveries
+   * FOR UPDATE → products ORDER BY id FOR UPDATE → suppliers (UPDATE берёт лок
+   * последним). `items` — ПОЛНЫЙ новый набор строк: считаем дельту qty на
+   * каждый product_id, двигаем остатки корректирующими stock_movements
+   * ('Корректировка поставки'), перезаписываем delivery_items (DELETE+INSERT),
+   * пересчитываем total_amount; долг поставщику — на Δ суммы (зеркально
+   * createDelivery). cost_price товаров сознательно НЕ трогаем — корректировка
+   * задним числом не должна перезаписывать более свежий last-cost.
+   */
+  async updateDelivery(
+    tenantID: string,
+    userID: string | null,
+    id: string,
+    dto: { date?: string; comment?: string; items?: Array<{ productId: string; quantity: number; price: number }> },
+  ) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows: delRows } = await client.query('SELECT * FROM deliveries WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
+        id,
+        tenantID,
+      ]);
+      if (delRows.length === 0) throw new NotFoundException({ message: 'Поставка не найдена' });
+      const delivery = delRows[0];
+      if (delivery.deleted_at) throw new BadRequestException({ message: 'Поставка удалена' });
+
+      // unpaid/partial правим свободно; paid — только после сторно авто-платежа.
+      if (delivery.payment_status === 'paid') {
+        await this.assertNoActiveDeliveryPaymentTx(client, tenantID, id);
+      }
+
+      const oldTotal = parseFloat(delivery.total_amount) || 0;
+      let newTotal = oldTotal;
+
+      if (dto.items) {
+        const { rows: oldItems } = await client.query(
+          'SELECT product_id, quantity, purchase_order_item_id FROM delivery_items WHERE delivery_id=$1',
+          [id],
+        );
+
+        // Дельта qty на каждый product_id: полный новый набор против текущего.
+        // Строки, чей товар физически удалён (product_id NULL), остаток не двигают.
+        const oldQty = new Map<string, number>();
+        for (const it of oldItems) {
+          if (!it.product_id) continue;
+          oldQty.set(it.product_id, (oldQty.get(it.product_id) ?? 0) + (parseFloat(it.quantity) || 0));
+        }
+        const newQty = new Map<string, number>();
+        for (const it of dto.items) {
+          newQty.set(it.productId, (newQty.get(it.productId) ?? 0) + (Number(it.quantity) || 0));
+        }
+
+        const allIds = [...new Set([...oldQty.keys(), ...newQty.keys()])];
+        const lockedProducts = await this.lockDeliveryProductsTx(client, tenantID, allIds);
+        const lockedIds = new Set(lockedProducts.map((p) => p.id));
+        for (const pid of newQty.keys()) {
+          if (!lockedIds.has(pid)) throw new BadRequestException({ message: `Товар ${pid} не найден` });
+        }
+
+        const deltas = new Map<string, number>();
+        for (const pid of allIds) {
+          deltas.set(pid, (newQty.get(pid) ?? 0) - (oldQty.get(pid) ?? 0));
+        }
+
+        await this.applyDeliveryStockDeltasTx(
+          client,
+          tenantID,
+          userID,
+          delivery.supplier_id,
+          lockedProducts,
+          deltas,
+          'Корректировка поставки',
+          'нельзя уменьшить поставку',
+        );
+
+        // Связь строк с заказом (098) переживает перезапись: новая строка того
+        // же товара наследует purchase_order_item_id старой (DTO её не несёт).
+        const poItemByProduct = new Map<string, string>();
+        if (delivery.purchase_order_id) {
+          for (const it of oldItems) {
+            if (it.purchase_order_item_id && it.product_id && !poItemByProduct.has(it.product_id)) {
+              poItemByProduct.set(it.product_id, it.purchase_order_item_id);
+            }
+          }
+        }
+
+        await client.query('DELETE FROM delivery_items WHERE delivery_id=$1', [id]);
+        newTotal = 0;
+        for (const it of dto.items) {
+          const qty = Number(it.quantity) || 0;
+          const price = Number(it.price) || 0;
+          const lineTotal = Math.round(qty * price * 100) / 100;
+          newTotal += lineTotal;
+          await client.query(
+            `INSERT INTO delivery_items (delivery_id, product_id, quantity, price, total, purchase_order_item_id)
+             VALUES ($1,$2,$3,$4,$5,$6)`,
+            [id, it.productId, qty, price, lineTotal, poItemByProduct.get(it.productId) ?? null],
+          );
+        }
+        newTotal = Math.round(newTotal * 100) / 100;
+
+        // У order-sourced поставки изменение qty строки с purchase_order_item_id
+        // двигает received_quantity заказа на ту же дельту (кламп в [0, quantity]).
+        for (const [pid, poItemId] of poItemByProduct) {
+          const delta = deltas.get(pid) ?? 0;
+          if (Math.abs(delta) < 1e-9) continue;
+          await client.query(
+            `UPDATE purchase_order_items
+                SET received_quantity = LEAST(GREATEST(received_quantity + $1, 0), quantity)
+              WHERE id = $2 AND tenant_id = $3`,
+            [delta, poItemId, tenantID],
+          );
+        }
+      }
+
+      await client.query(
+        `UPDATE deliveries
+            SET date = COALESCE($1, date),
+                comment = COALESCE($2, comment),
+                total_amount = $3,
+                corrected_at = now(),
+                corrected_by = $4
+          WHERE id = $5 AND tenant_id = $6`,
+        [dto.date ?? null, dto.comment ?? null, newTotal, userID, id, tenantID],
+      );
+
+      // Δ денег — зеркально createDelivery: и total_purchases, и current_debt
+      // двигаются на дельту суммы (suppliers лочится последним — UPDATE).
+      const moneyDelta = Math.round((newTotal - oldTotal) * 100) / 100;
+      if (moneyDelta !== 0) {
+        await client.query(
+          `UPDATE suppliers SET total_purchases = total_purchases + $1, current_debt = current_debt + $1
+            WHERE id = $2 AND tenant_id = $3`,
+          [moneyDelta, delivery.supplier_id, tenantID],
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      this.logger.error(`Delivery update error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
+
+    return this.getDeliveryById(id, tenantID);
+  }
+
+  /**
+   * Soft-delete поставки (154): строка НЕ удаляется — помечается deleted_at /
+   * deleted_by / delete_reason (UI рисует бейдж «Удалена»). В той же транзакции
+   * откатываются остатки (expense-движение 'Удаление поставки' по каждой
+   * строке; нехватка — 400, не клампим) и деньги поставщика зеркально
+   * createDelivery: total_purchases/current_debt минус вся сумма (защиты от
+   * ухода current_debt в минус сознательно нет — зеркальность важнее).
+   */
+  async deleteDelivery(tenantID: string, userID: string | null, id: string, reason?: string) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows: delRows } = await client.query('SELECT * FROM deliveries WHERE id=$1 AND tenant_id=$2 FOR UPDATE', [
+        id,
+        tenantID,
+      ]);
+      if (delRows.length === 0) throw new NotFoundException({ message: 'Поставка не найдена' });
+      const delivery = delRows[0];
+      if (delivery.deleted_at) throw new BadRequestException({ message: 'Поставка уже удалена' });
+
+      await this.assertNoActiveDeliveryPaymentTx(client, tenantID, id);
+
+      const { rows: oldItems } = await client.query(
+        'SELECT product_id, quantity FROM delivery_items WHERE delivery_id=$1',
+        [id],
+      );
+      const deltas = new Map<string, number>();
+      for (const it of oldItems) {
+        if (!it.product_id) continue;
+        deltas.set(it.product_id, (deltas.get(it.product_id) ?? 0) - (parseFloat(it.quantity) || 0));
+      }
+
+      const lockedProducts = await this.lockDeliveryProductsTx(client, tenantID, [...deltas.keys()]);
+      await this.applyDeliveryStockDeltasTx(
+        client,
+        tenantID,
+        userID,
+        delivery.supplier_id,
+        lockedProducts,
+        deltas,
+        'Удаление поставки',
+        'нельзя удалить поставку',
+      );
+
+      const totalAmount = parseFloat(delivery.total_amount) || 0;
+      await client.query(
+        `UPDATE suppliers SET total_purchases = total_purchases - $1, current_debt = current_debt - $1
+          WHERE id = $2 AND tenant_id = $3`,
+        [totalAmount, delivery.supplier_id, tenantID],
+      );
+
+      await client.query(
+        `UPDATE deliveries SET deleted_at = now(), deleted_by = $1, delete_reason = $2
+          WHERE id = $3 AND tenant_id = $4`,
+        [userID, reason?.trim() || null, id, tenantID],
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      this.logger.error(`Delivery delete error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
+
+    return this.getDeliveryById(id, tenantID);
   }
 
   // Payments

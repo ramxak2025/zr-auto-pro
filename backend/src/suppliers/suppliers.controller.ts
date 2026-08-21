@@ -11,6 +11,8 @@ import {
   ForbiddenException,
 } from '@nestjs/common';
 import { SuppliersService } from './suppliers.service';
+import { UpdateDeliveryDto } from './dto/update-delivery.dto';
+import { DeleteDeliveryDto } from './dto/delete-delivery.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission, userHasPermission } from '../common/guards/permissions.guard';
@@ -61,6 +63,27 @@ export class SuppliersController {
   @Get('deliveries/:id')
   getDeliveryById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.suppliersService.getDeliveryById(id, user.tenantID);
+  }
+
+  // ── Корректировка / soft-delete поставки (154) ─────────────────────────────
+  // Литеральный сегмент 'deliveries/:id' объявлен ДО generic ':id'-роутов
+  // поставщика ниже — та же грабля маршрутизации, что у 'payments-report'.
+
+  // Корректировка поставки: items — ПОЛНЫЙ новый набор строк; остатки двигаются
+  // корректирующими stock_movements, долг поставщику — на Δ суммы. Оплаченная
+  // поставка с несторнированным авто-платежом не правится (400).
+  @RequirePermission('suppliers_manage')
+  @Patch('deliveries/:id')
+  updateDelivery(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdateDeliveryDto) {
+    return this.suppliersService.updateDelivery(user.tenantID, user.userID, id, dto);
+  }
+
+  // Soft-delete поставки: строка остаётся с бейджем «Удалена», остатки и долг
+  // откатываются в той же транзакции.
+  @RequirePermission('suppliers_manage')
+  @Delete('deliveries/:id')
+  deleteDelivery(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: DeleteDeliveryDto) {
+    return this.suppliersService.deleteDelivery(user.tenantID, user.userID, id, dto?.reason);
   }
 
   @RequirePermission('suppliers_access')
