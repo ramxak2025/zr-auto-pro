@@ -4020,7 +4020,7 @@ export default function CheckCreateScreen() {
                 {orderMode
                   ? editId
                     ? 'Сохранить заказ-наряд'
-                    : 'Создать заказ-наряд'
+                    : 'Отправить на доску'
                   : isDeferred
                     ? 'Отложить'
                     : editId

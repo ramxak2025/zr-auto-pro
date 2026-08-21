@@ -53,7 +53,14 @@ import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 import { startTrackedActivity, endTrackedActivity, CASH_SHIFT_ACTIVITY_SLOT } from '../utils/liveActivityStore';
-import type { CashShift, CashShiftReport, CashCollection } from '../../../shared/types';
+import type {
+  CashShift,
+  CashShiftReport,
+  CashShiftAcceptorTotal,
+  CashCollection,
+  SafeState,
+  SafeTransaction,
+} from '../../../shared/types';
 
 // ────────────────────────────────────────────────────────────────────────
 //  Formatting helpers
@@ -91,7 +98,21 @@ function parseAmount(input: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-type InputModal = 'open' | 'collect' | 'close' | null;
+type InputModal = 'open' | 'collect' | 'close' | 'safeCollect' | null;
+
+/** Ключ строки сдачи: userId либо маркер «Не распределено» (userId === null). */
+function acceptorKey(userId: string | null): string {
+  return userId ?? '__unattributed__';
+}
+
+/** Достаёт текст ошибки бэка (400/409) — показываем владельцу дословно. */
+function serverMessage(err: unknown): string | null {
+  const body = (err as { response?: { data?: { message?: string | string[] } } })?.response?.data;
+  const msg = body?.message;
+  if (typeof msg === 'string' && msg.trim()) return msg;
+  if (Array.isArray(msg) && msg.length > 0) return msg.join('\n');
+  return null;
+}
 
 // ────────────────────────────────────────────────────────────────────────
 //  Tile — одна метрика Z-отчёта
@@ -151,8 +172,14 @@ export default function CashShiftScreen() {
   const [inputModal, setInputModal] = useState<InputModal>(null);
   const [amountInput, setAmountInput] = useState('');
   const [noteInput, setNoteInput] = useState('');
+  // 155 — закрытие смены: фактическая сдача по каждому принимавшему оплату
+  // (ключ = acceptorKey(userId)) + сколько наличных перевести в сейф.
+  const [settlementInputs, setSettlementInputs] = useState<Record<string, string>>({});
+  const [toSafeInput, setToSafeInput] = useState('');
   // Z-отчёт в модалке — из истории (report(id)) или результат закрытия смены.
   const [detailReport, setDetailReport] = useState<CashShiftReport | null>(null);
+  // 155 — модал истории операций сейфа (SafeState.transactions).
+  const [safeDetail, setSafeDetail] = useState<SafeState | null>(null);
 
   // ── Queries ────────────────────────────────────────────────────────────
   const currentQuery = useQuery<CashShiftReport | null>({
@@ -177,6 +204,36 @@ export default function CashShiftScreen() {
     [listQuery.data],
   );
 
+  // 155 — размен последней закрытой смены (сервер подставляет его дефолтом,
+  // если open() отправлен без openingAmount). История — новые сверху.
+  const lastCarryover = useMemo(() => {
+    const v = history[0]?.carryoverAmount;
+    return typeof v === 'number' && Number.isFinite(v) ? v : null;
+  }, [history]);
+
+  // 155 — строки «Сдача по сотрудникам» при закрытии: каждый, кто принял нал
+  // (плюс «Не распределено» — чеки без accepted_by), сдаёт свою сумму отдельно.
+  const closeSettlementRows: CashShiftAcceptorTotal[] = useMemo(
+    () => (current?.perAcceptor ?? []).filter((r) => r.cashSales > 0 || r.userId === null),
+    [current?.perAcceptor],
+  );
+
+  // 155 — СЕЙФ. Пока смена открыта, баланс приходит в её Z-отчёте; без
+  // открытой смены (и только под cash_shifts_manage — эндпоинт гейтится)
+  // спрашиваем /cash-shifts/safe отдельно.
+  const safeQuery = useQuery<SafeState>({
+    queryKey: ['cash-safe'],
+    queryFn: async () => (await cashShiftsApi.safe()).data,
+    enabled: isOwner && !current,
+    placeholderData: (prev) => prev,
+  });
+  const safeBalance: number | null =
+    current && typeof current.safeBalance === 'number'
+      ? current.safeBalance
+      : typeof safeQuery.data?.balance === 'number'
+        ? safeQuery.data.balance
+        : null;
+
   // ── Mutations ──────────────────────────────────────────────────────────
   const invalidateShift = useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['cash-shift', 'current'] });
@@ -187,25 +244,35 @@ export default function CashShiftScreen() {
     setInputModal(null);
     setAmountInput('');
     setNoteInput('');
+    setSettlementInputs({});
+    setToSafeInput('');
   }, []);
 
   const openMutation = useMutation({
-    mutationFn: (d: { openingAmount: number; note?: string }) => cashShiftsApi.open(d),
-    onSuccess: (_res, vars) => {
+    // 155 — openingAmount опционален: без него сервер сам подставляет размен
+    // прошлой смены (carryoverAmount последней закрытой).
+    mutationFn: (d: { openingAmount?: number; note?: string }) =>
+      cashShiftsApi.open(d as Parameters<typeof cashShiftsApi.open>[0]),
+    onSuccess: (res, vars) => {
       invalidateShift();
       closeInputModal();
       haptic('success');
       // Live Activity (iOS 16.1+): касса открыта → на Lock Screen / Dynamic
-      // Island. Fire-and-forget; no-op на Android / iOS < 16.1.
+      // Island. Fire-and-forget; no-op на Android / iOS < 16.1. Сумму берём
+      // из ответа (сервер мог подставить размен сам), fallback — введённая.
       void startTrackedActivity(
         CASH_SHIFT_ACTIVITY_SLOT,
         { kind: 'shift' },
-        { title: 'Кассовая смена', status: 'Касса открыта', amount: vars.openingAmount },
+        {
+          title: 'Кассовая смена',
+          status: 'Касса открыта',
+          amount: res.data?.openingAmount ?? vars.openingAmount ?? 0,
+        },
       );
     },
-    onError: () => {
+    onError: (err) => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось открыть смену. Возможно, смена уже открыта.');
+      Alert.alert('Ошибка', serverMessage(err) ?? 'Не удалось открыть смену. Возможно, смена уже открыта.');
     },
   });
 
@@ -224,10 +291,25 @@ export default function CashShiftScreen() {
   });
 
   const closeMutation = useMutation({
-    mutationFn: ({ id, closingAmount, note }: { id: string; closingAmount: number; note?: string }) =>
-      cashShiftsApi.close(id, { closingAmount, note }),
+    // 155: + toSafeAmount (перевод наличных в сейф при закрытии) и settlements
+    // (фактическая сдача по сотрудникам; Σ actualAmount = closingAmount).
+    mutationFn: ({
+      id,
+      closingAmount,
+      note,
+      toSafeAmount,
+      settlements,
+    }: {
+      id: string;
+      closingAmount: number;
+      note?: string;
+      toSafeAmount?: number;
+      settlements?: Array<{ userId: string | null; actualAmount: number }>;
+    }) => cashShiftsApi.close(id, { closingAmount, note, toSafeAmount, settlements }),
     onSuccess: (res) => {
       invalidateShift();
+      // Сейф пополнился переводом при закрытии — перечитываем его баланс.
+      queryClient.invalidateQueries({ queryKey: ['cash-safe'] });
       closeInputModal();
       haptic('success');
       // Показываем итоговый Z-отчёт с расхождением сразу после закрытия.
@@ -235,13 +317,32 @@ export default function CashShiftScreen() {
       // Live Activity: смена закрыта → завершаем активность. Fire-and-forget.
       void endTrackedActivity(CASH_SHIFT_ACTIVITY_SLOT, { title: 'Кассовая смена', status: 'Касса закрыта' });
     },
-    onError: () => {
+    onError: (err) => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось закрыть смену');
+      // 400 бэка (например, Σ сдачи ≠ сумме закрытия) — показываем дословно.
+      Alert.alert('Ошибка', serverMessage(err) ?? 'Не удалось закрыть смену');
     },
   });
 
-  const anyMutating = openMutation.isPending || collectMutation.isPending || closeMutation.isPending;
+  // 155 — инкассация владельцем ИЗ СЕЙФА (без открытой смены). Ответ — свежий
+  // SafeState: кладём его в кэш сразу и инвалидируем сейф + текущий отчёт.
+  const safeCollectMutation = useMutation({
+    mutationFn: (d: { amount: number; note?: string }) => cashShiftsApi.safeCollect(d),
+    onSuccess: (res) => {
+      queryClient.setQueryData(['cash-safe'], res.data);
+      queryClient.invalidateQueries({ queryKey: ['cash-safe'] });
+      queryClient.invalidateQueries({ queryKey: ['cash-shift', 'current'] });
+      closeInputModal();
+      haptic('success');
+    },
+    onError: (err) => {
+      haptic('error');
+      Alert.alert('Ошибка', serverMessage(err) ?? 'Не удалось выполнить инкассацию из сейфа');
+    },
+  });
+
+  const anyMutating =
+    openMutation.isPending || collectMutation.isPending || closeMutation.isPending || safeCollectMutation.isPending;
 
   // ── Handlers ───────────────────────────────────────────────────────────
   const onRefresh = useCallback(async () => {
@@ -253,18 +354,50 @@ export default function CashShiftScreen() {
     setRefreshing(false);
   }, [queryClient]);
 
-  const openModal = useCallback((kind: Exclude<InputModal, null>) => {
-    haptic('tap');
-    setAmountInput('');
-    setNoteInput('');
-    setInputModal(kind);
-  }, []);
+  const openModal = useCallback(
+    (kind: Exclude<InputModal, null>) => {
+      haptic('tap');
+      // 155 — открытие: предзаполняем разменом прошлой смены (сервер сделает
+      // так же, если поле оставить пустым и отправить без openingAmount).
+      setAmountInput(kind === 'open' && lastCarryover !== null ? String(Math.round(lastCarryover)) : '');
+      setNoteInput('');
+      // 155 — закрытие: дефолт сдачи каждого сотрудника = его расчётный нал.
+      if (kind === 'close') {
+        const defaults: Record<string, string> = {};
+        for (const r of closeSettlementRows) defaults[acceptorKey(r.userId)] = String(Math.round(r.cashSales));
+        setSettlementInputs(defaults);
+      } else {
+        setSettlementInputs({});
+      }
+      setToSafeInput('');
+      setInputModal(kind);
+    },
+    [lastCarryover, closeSettlementRows],
+  );
+
+  // 155 — «Итого сдано» (Σ инпутов по сотрудникам) = closingAmount смены.
+  // null, если хоть одна строка не парсится в неотрицательное число.
+  const settlementsTotal = useMemo(() => {
+    if (closeSettlementRows.length === 0) return null;
+    let sum = 0;
+    for (const r of closeSettlementRows) {
+      const v = parseAmount(settlementInputs[acceptorKey(r.userId)] ?? '');
+      if (v === null || v < 0) return null;
+      sum += v;
+    }
+    return sum;
+  }, [closeSettlementRows, settlementInputs]);
 
   const handleSubmit = useCallback(() => {
     const amount = parseAmount(amountInput);
     const note = noteInput.trim() || undefined;
 
     if (inputModal === 'open') {
+      // Пустой инпут = размен подставит сервер (отправляем БЕЗ openingAmount).
+      if (amountInput.trim() === '') {
+        openMutation.mutate({ note });
+        return;
+      }
       if (amount === null || amount < 0) {
         Alert.alert('Ошибка', 'Укажите сумму наличных в кассе на начало смены');
         return;
@@ -281,15 +414,66 @@ export default function CashShiftScreen() {
       collectMutation.mutate({ id: openShiftId, amount, note });
       return;
     }
-    if (inputModal === 'close') {
-      if (!openShiftId) return;
-      if (amount === null || amount < 0) {
-        Alert.alert('Ошибка', 'Укажите фактическую сумму наличных в кассе');
+    if (inputModal === 'safeCollect') {
+      if (amount === null || amount <= 0) {
+        Alert.alert('Ошибка', 'Укажите сумму инкассации из сейфа');
         return;
       }
-      closeMutation.mutate({ id: openShiftId, closingAmount: amount, note });
+      safeCollectMutation.mutate({ amount, note });
+      return;
     }
-  }, [amountInput, noteInput, inputModal, openShiftId, openMutation, collectMutation, closeMutation]);
+    if (inputModal === 'close') {
+      if (!openShiftId) return;
+      // 155 — сдача по сотрудникам: closingAmount = Σ фактических сумм.
+      // Fallback на общий инпут, когда perAcceptor пуст (старый бэкенд).
+      let closingAmount: number;
+      let settlements: Array<{ userId: string | null; actualAmount: number }> | undefined;
+      if (closeSettlementRows.length > 0) {
+        if (settlementsTotal === null) {
+          Alert.alert('Ошибка', 'Укажите фактически сданную сумму по каждому сотруднику');
+          return;
+        }
+        closingAmount = settlementsTotal;
+        settlements = closeSettlementRows.map((r) => ({
+          userId: r.userId,
+          actualAmount: parseAmount(settlementInputs[acceptorKey(r.userId)] ?? '') ?? 0,
+        }));
+      } else {
+        if (amount === null || amount < 0) {
+          Alert.alert('Ошибка', 'Укажите фактическую сумму наличных в кассе');
+          return;
+        }
+        closingAmount = amount;
+      }
+      // 155 — перевод в сейф: 0..closingAmount; пустое поле = всё остаётся
+      // на размен в кассе.
+      const toSafe = toSafeInput.trim() === '' ? 0 : parseAmount(toSafeInput);
+      if (toSafe === null || toSafe < 0 || toSafe > closingAmount) {
+        Alert.alert('Ошибка', `Сумма «В сейф» должна быть от 0 до ${formatMoney(closingAmount)}`);
+        return;
+      }
+      closeMutation.mutate({
+        id: openShiftId,
+        closingAmount,
+        note,
+        ...(toSafe > 0 ? { toSafeAmount: toSafe } : null),
+        ...(settlements ? { settlements } : null),
+      });
+    }
+  }, [
+    amountInput,
+    noteInput,
+    inputModal,
+    openShiftId,
+    openMutation,
+    collectMutation,
+    closeMutation,
+    safeCollectMutation,
+    closeSettlementRows,
+    settlementInputs,
+    settlementsTotal,
+    toSafeInput,
+  ]);
 
   const openHistoryDetail = useCallback(
     async (shiftId: string) => {
@@ -307,6 +491,22 @@ export default function CashShiftScreen() {
     [queryClient],
   );
 
+  // 155 — тап по карточке сейфа: подтягиваем свежий SafeState (баланс +
+  // история операций) и открываем модал. Эндпоинт гейтится cash_shifts_manage.
+  const openSafeHistory = useCallback(async () => {
+    haptic('tap');
+    try {
+      const state = await queryClient.fetchQuery({
+        queryKey: ['cash-safe'],
+        queryFn: async () => (await cashShiftsApi.safe()).data,
+        staleTime: 0,
+      });
+      setSafeDetail(state);
+    } catch {
+      Alert.alert('Ошибка', 'Не удалось загрузить историю сейфа');
+    }
+  }, [queryClient]);
+
   // ── Render ─────────────────────────────────────────────────────────────
   const loadingFirst = currentQuery.isLoading && !currentQuery.data && listQuery.isLoading;
 
@@ -316,9 +516,12 @@ export default function CashShiftScreen() {
         return {
           title: 'Открыть смену',
           amountLabel: 'Наличные в кассе на начало',
-          amountPlaceholder: '0',
+          amountPlaceholder: lastCarryover !== null ? String(Math.round(lastCarryover)) : '0',
           submitLabel: 'Открыть смену',
-          hint: 'Разменная касса — сколько наличных лежит в кассе перед началом работы.',
+          hint:
+            lastCarryover !== null
+              ? `Размен с прошлой смены: ${formatMoney(lastCarryover)}. Оставьте поле пустым — смена откроется с этой суммой автоматически.`
+              : 'Разменная касса — сколько наличных лежит в кассе перед началом работы.',
         };
       case 'collect':
         return {
@@ -327,6 +530,17 @@ export default function CashShiftScreen() {
           amountPlaceholder: '0',
           submitLabel: 'Записать инкассацию',
           hint: 'Сумма наличных, которую вы забираете из кассы. Уменьшает ожидаемый остаток.',
+        };
+      case 'safeCollect':
+        return {
+          title: 'Инкассация из сейфа',
+          amountLabel: 'Сумма изъятия из сейфа',
+          amountPlaceholder: safeBalance !== null ? String(Math.round(safeBalance)) : '0',
+          submitLabel: 'Забрать из сейфа',
+          hint:
+            safeBalance !== null
+              ? `В сейфе сейчас: ${formatMoney(safeBalance)}. Кассиру придёт уведомление об инкассации.`
+              : 'Кассиру придёт уведомление об инкассации.',
         };
       case 'close':
         return {
@@ -341,7 +555,7 @@ export default function CashShiftScreen() {
       default:
         return null;
     }
-  }, [inputModal, current]);
+  }, [inputModal, current, lastCarryover, safeBalance]);
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -380,6 +594,19 @@ export default function CashShiftScreen() {
             <ClosedShiftView isOwner={isOwner} palette={palette} onOpen={() => openModal('open')} />
           )}
 
+          {/* 155 — Сейф: отдельный «кошелёк» тенанта. Баланс — из Z-отчёта
+              открытой смены либо из /cash-shifts/safe. Тап — история операций;
+              «Инкассация из сейфа» — только под cash_shifts_manage. */}
+          {safeBalance !== null && (
+            <SafeCard
+              balance={safeBalance}
+              isOwner={isOwner}
+              palette={palette}
+              onPress={isOwner ? openSafeHistory : undefined}
+              onCollect={isOwner ? () => openModal('safeCollect') : undefined}
+            />
+          )}
+
           {/* История смен */}
           <Text style={[iosSectionLabel, styles.historyLabel, { color: palette.text.tertiary }]}>История смен</Text>
           {history.length === 0 ? (
@@ -410,21 +637,131 @@ export default function CashShiftScreen() {
       <Modal visible={inputModal !== null} onClose={closeInputModal} title={modalConfig?.title ?? ''}>
         {modalConfig && (
           <View>
-            <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{modalConfig.amountLabel}</Text>
-            <View
-              style={[styles.amountWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
-            >
-              <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>₽</Text>
-              <TextInput
-                value={amountInput}
-                onChangeText={setAmountInput}
-                style={[styles.amountInput, { color: palette.text.primary }]}
-                keyboardType="numeric"
-                placeholder={modalConfig.amountPlaceholder}
-                placeholderTextColor={palette.text.tertiary}
-                autoFocus
-              />
-            </View>
+            {/* 155 — закрытие с разбивкой: каждый принимавший оплату сдаёт
+                свою сумму; «Итого сдано» и становится closingAmount. Общий
+                инпут остаётся fallback'ом, когда perAcceptor пуст. */}
+            {inputModal === 'close' && closeSettlementRows.length > 0 ? (
+              <View>
+                <Text style={[styles.formLabel, { color: palette.text.secondary }]}>Сдача по сотрудникам</Text>
+                <View
+                  style={[
+                    styles.settlementCard,
+                    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                  ]}
+                >
+                  {closeSettlementRows.map((row, i) => (
+                    <View
+                      key={acceptorKey(row.userId)}
+                      style={[
+                        styles.settlementRow,
+                        i < closeSettlementRows.length - 1 && {
+                          borderBottomWidth: StyleSheet.hairlineWidth,
+                          borderBottomColor: palette.border.subtle,
+                        },
+                      ]}
+                    >
+                      <View style={styles.settlementLeft}>
+                        <Text style={[styles.settlementName, { color: palette.text.primary }]} numberOfLines={1}>
+                          {row.name ?? (row.userId === null ? 'Не распределено' : 'Сотрудник')}
+                        </Text>
+                        <Text style={[styles.settlementExpected, { color: palette.text.tertiary }]}>
+                          расчётно: {formatMoney(row.cashSales)} нал
+                        </Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.settlementInputWrap,
+                          { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+                        ]}
+                      >
+                        <TextInput
+                          value={settlementInputs[acceptorKey(row.userId)] ?? ''}
+                          onChangeText={(v) =>
+                            setSettlementInputs((prev) => ({ ...prev, [acceptorKey(row.userId)]: v }))
+                          }
+                          style={[styles.settlementInput, { color: palette.text.primary }]}
+                          keyboardType="numeric"
+                          placeholder={String(Math.round(row.cashSales))}
+                          placeholderTextColor={palette.text.tertiary}
+                        />
+                        <Text style={[styles.settlementCurrency, { color: palette.text.tertiary }]}>₽</Text>
+                      </View>
+                    </View>
+                  ))}
+                </View>
+                <View style={styles.settlementTotalRow}>
+                  <Text style={[styles.settlementTotalLabel, { color: palette.text.secondary }]}>Итого сдано</Text>
+                  <Text style={[styles.settlementTotalValue, { color: palette.text.primary }]}>
+                    {settlementsTotal !== null ? formatMoney(settlementsTotal) : '—'}
+                  </Text>
+                </View>
+              </View>
+            ) : (
+              <View>
+                <Text style={[styles.formLabel, { color: palette.text.secondary }]}>{modalConfig.amountLabel}</Text>
+                <View
+                  style={[styles.amountWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                >
+                  <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>₽</Text>
+                  <TextInput
+                    value={amountInput}
+                    onChangeText={setAmountInput}
+                    style={[styles.amountInput, { color: palette.text.primary }]}
+                    keyboardType="numeric"
+                    placeholder={modalConfig.amountPlaceholder}
+                    placeholderTextColor={palette.text.tertiary}
+                    autoFocus
+                  />
+                </View>
+              </View>
+            )}
+
+            {/* 155 — перевод наличных в сейф при закрытии; остаток становится
+                разменом, с которого стартует следующая смена. */}
+            {inputModal === 'close' && (
+              <View>
+                <View style={styles.toSafeLabelRow}>
+                  <Text style={[styles.formLabel, { color: palette.text.secondary, marginBottom: 0 }]}>
+                    Перевести в сейф
+                  </Text>
+                  <TouchableOpacity
+                    onPress={() => {
+                      haptic('select');
+                      const closing = closeSettlementRows.length > 0 ? settlementsTotal : parseAmount(amountInput);
+                      if (closing !== null && closing >= 0) setToSafeInput(String(Math.round(closing)));
+                    }}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    accessibilityRole="button"
+                    accessibilityLabel="Перевести всё в сейф"
+                  >
+                    <Text style={[styles.toSafeAllBtn, { color: colors.primary[600] }]}>Всё в сейф</Text>
+                  </TouchableOpacity>
+                </View>
+                <View
+                  style={[styles.amountWrap, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
+                >
+                  <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>₽</Text>
+                  <TextInput
+                    value={toSafeInput}
+                    onChangeText={setToSafeInput}
+                    style={[styles.amountInput, { color: palette.text.primary }]}
+                    keyboardType="numeric"
+                    placeholder="0"
+                    placeholderTextColor={palette.text.tertiary}
+                  />
+                </View>
+                {(() => {
+                  const closing = closeSettlementRows.length > 0 ? settlementsTotal : parseAmount(amountInput);
+                  const toSafe = toSafeInput.trim() === '' ? 0 : parseAmount(toSafeInput);
+                  if (closing === null || toSafe === null || toSafe < 0 || toSafe > closing) return null;
+                  return (
+                    <Text style={[styles.hint, { color: palette.text.tertiary, marginTop: spacing[2] }]}>
+                      Останется на размен: {formatMoney(closing - toSafe)} — с этой суммы начнётся следующая смена.
+                    </Text>
+                  );
+                })()}
+              </View>
+            )}
 
             <Text style={[styles.formLabel, { color: palette.text.secondary, marginTop: spacing[4] }]}>
               Комментарий (необязательно)
@@ -469,6 +806,123 @@ export default function CashShiftScreen() {
       <Modal visible={detailReport !== null} onClose={() => setDetailReport(null)} title="Z-отчёт">
         {detailReport && <ReportDetail report={detailReport} palette={palette} />}
       </Modal>
+
+      {/* 155 — история операций сейфа */}
+      <Modal visible={safeDetail !== null} onClose={() => setSafeDetail(null)} title="Сейф">
+        {safeDetail && <SafeHistoryDetail state={safeDetail} palette={palette} />}
+      </Modal>
+    </View>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//  SafeCard — «Сейф: N ₽» (155). Тап — история операций, кнопка —
+//  инкассация из сейфа (обе — только под cash_shifts_manage).
+// ────────────────────────────────────────────────────────────────────────
+
+interface SafeCardProps {
+  balance: number;
+  isOwner: boolean;
+  palette: SemanticPalette;
+  onPress?: () => void;
+  onCollect?: () => void;
+}
+
+function SafeCard({ balance, isOwner, palette, onPress, onCollect }: SafeCardProps) {
+  return (
+    <View style={[styles.safeCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
+      <TouchableOpacity
+        style={styles.safeCardRow}
+        onPress={onPress}
+        disabled={!onPress}
+        activeOpacity={0.6}
+        accessibilityRole="button"
+        accessibilityLabel="История операций сейфа"
+      >
+        <View
+          style={[styles.safeIcon, { backgroundColor: palette.mode === 'dark' ? palette.bg.muted : colors.amber[50] }]}
+        >
+          <Ionicons name="archive-outline" size={18} color={colors.amber[600]} />
+        </View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <Text style={[styles.safeLabel, { color: palette.text.secondary }]}>Сейф</Text>
+          <Text style={[styles.safeValue, { color: palette.text.primary }]}>{formatMoney(balance)}</Text>
+        </View>
+        {onPress ? <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} /> : null}
+      </TouchableOpacity>
+      {isOwner && onCollect && (
+        <TouchableOpacity
+          style={[styles.safeCollectBtn, { borderColor: colors.amber[600] }]}
+          onPress={onCollect}
+          activeOpacity={0.85}
+          accessibilityRole="button"
+          accessibilityLabel="Инкассация из сейфа"
+        >
+          <Ionicons name="briefcase-outline" size={16} color={colors.amber[600]} />
+          <Text style={[styles.safeCollectBtnText, { color: colors.amber[600] }]}>Инкассация из сейфа</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+  );
+}
+
+// ────────────────────────────────────────────────────────────────────────
+//  SafeHistoryDetail — операции сейфа в модалке (155)
+// ────────────────────────────────────────────────────────────────────────
+
+const SAFE_TX_LABELS: Record<SafeTransaction['type'], string> = {
+  deposit: 'Из кассы',
+  collection: 'Инкассация',
+  adjustment: 'Корректировка',
+};
+
+function safeTxAmountLabel(tx: SafeTransaction): string {
+  // deposit — приход (+), collection — расход (−), adjustment — знак уже
+  // в amount (формат formatMoney сам ставит минус отрицательным).
+  if (tx.type === 'deposit') return `+${formatMoney(tx.amount)}`;
+  if (tx.type === 'collection') return `−${formatMoney(Math.abs(tx.amount))}`;
+  return tx.amount > 0 ? `+${formatMoney(tx.amount)}` : formatMoney(tx.amount);
+}
+
+function safeTxTint(tx: SafeTransaction, palette: SemanticPalette): string {
+  if (tx.type === 'deposit') return colors.green[600];
+  if (tx.type === 'collection') return colors.rose[600];
+  return tx.amount >= 0 ? palette.text.primary : colors.rose[600];
+}
+
+function SafeHistoryDetail({ state, palette }: { state: SafeState; palette: SemanticPalette }) {
+  return (
+    <View>
+      <View style={styles.reportHeader}>
+        <Text style={[styles.reportTitle, { color: palette.text.primary }]}>{formatMoney(state.balance)}</Text>
+        <Text style={[styles.reportPeriod, { color: palette.text.tertiary }]}>Текущий баланс сейфа</Text>
+      </View>
+      {state.transactions.length === 0 ? (
+        <Text style={[styles.safeEmptyText, { color: palette.text.tertiary }]}>Операций по сейфу пока нет</Text>
+      ) : (
+        state.transactions.map((tx, i) => (
+          <View
+            key={tx.id}
+            style={[
+              styles.safeTxRow,
+              i < state.transactions.length - 1 && {
+                borderBottomWidth: StyleSheet.hairlineWidth,
+                borderBottomColor: palette.border.subtle,
+              },
+            ]}
+          >
+            <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
+              <Text style={[styles.safeTxType, { color: palette.text.primary }]}>{SAFE_TX_LABELS[tx.type]}</Text>
+              <Text style={[styles.safeTxMeta, { color: palette.text.tertiary }]} numberOfLines={2}>
+                {formatDateTime(tx.createdAt)}
+                {tx.actorName ? ` · ${tx.actorName}` : ''}
+                {tx.note ? ` · ${tx.note}` : ''}
+              </Text>
+            </View>
+            <Text style={[styles.safeTxAmount, { color: safeTxTint(tx, palette) }]}>{safeTxAmountLabel(tx)}</Text>
+          </View>
+        ))
+      )}
     </View>
   );
 }
@@ -723,6 +1177,16 @@ function ReportDetail({ report, palette }: ReportDetailProps) {
     </View>
   );
 
+  // 155 — сейф и размен закрытой смены (null на сменах до миграции).
+  const toSafe = typeof report.shift.toSafeAmount === 'number' ? report.shift.toSafeAmount : null;
+  const carryover = typeof report.shift.carryoverAmount === 'number' ? report.shift.carryoverAmount : null;
+  const safeParts: string[] = [];
+  if (toSafe !== null) safeParts.push(`В сейф: ${formatMoney(toSafe)}`);
+  if (carryover !== null) safeParts.push(`Размен: ${formatMoney(carryover)}`);
+
+  const perAcceptor = report.perAcceptor ?? [];
+  const settlements = report.settlements ?? [];
+
   return (
     <View>
       {/* Шапка отчёта */}
@@ -733,6 +1197,9 @@ function ReportDetail({ report, palette }: ReportDetailProps) {
         <Text style={[styles.reportPeriod, { color: palette.text.tertiary }]}>
           {formatDateTime(report.shift.openedAt)} → {formatDateTime(report.shift.closedAt ?? report.windowEnd)}
         </Text>
+        {safeParts.length > 0 && (
+          <Text style={[styles.reportSafeLine, { color: palette.text.secondary }]}>{safeParts.join(' · ')}</Text>
+        )}
       </View>
 
       <Row label="Разменная касса" value={formatMoney(report.openingAmount)} />
@@ -745,6 +1212,41 @@ function ReportDetail({ report, palette }: ReportDetailProps) {
       <Row label="Ожидается в кассе" value={formatMoney(report.expectedAmount)} strong />
       {closed && report.factualAmount !== null && (
         <Row label="Фактически в кассе" value={formatMoney(report.factualAmount)} strong />
+      )}
+
+      {/* 155 — разбивка выручки по принявшим оплату */}
+      {perAcceptor.length > 0 && (
+        <View>
+          <Text style={[iosSectionLabel, styles.reportSectionLabel, { color: palette.text.tertiary }]}>
+            По сотрудникам
+          </Text>
+          {perAcceptor.map((a) => (
+            <Row
+              key={acceptorKey(a.userId)}
+              label={a.name ?? (a.userId === null ? 'Не распределено' : 'Сотрудник')}
+              value={`нал ${formatMoney(a.cashSales)} · карта ${formatMoney(a.cardSales)} · чеков ${a.checksCount}`}
+            />
+          ))}
+        </View>
+      )}
+
+      {/* 155 — фактическая сдача по сотрудникам при закрытии */}
+      {settlements.length > 0 && (
+        <View>
+          <Text style={[iosSectionLabel, styles.reportSectionLabel, { color: palette.text.tertiary }]}>Сдано</Text>
+          {settlements.map((s) => {
+            const d = s.actualAmount - s.expectedAmount;
+            const dText = d === 0 ? 'сходится' : `${d > 0 ? '+' : ''}${formatMoney(d)}`;
+            return (
+              <Row
+                key={acceptorKey(s.userId)}
+                label={s.name ?? (s.userId === null ? 'Не распределено' : 'Сотрудник')}
+                value={`расчётно ${formatMoney(s.expectedAmount)} · сдано ${formatMoney(s.actualAmount)} · ${dText}`}
+                tint={d === 0 ? undefined : d > 0 ? colors.green[600] : colors.rose[600]}
+              />
+            );
+          })}
+        </View>
       )}
 
       {/* Расхождение */}
@@ -958,7 +1460,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   reportLabel: { fontSize: 14 },
-  reportValue: { fontSize: 14, fontWeight: '600' },
+  reportValue: { fontSize: 14, fontWeight: '600', flexShrink: 1, textAlign: 'right', marginLeft: spacing[2] },
   reportValueStrong: { fontSize: 16, fontWeight: '800' },
   diffBanner: {
     flexDirection: 'row',
@@ -972,4 +1474,77 @@ const styles = StyleSheet.create({
   diffBannerLabel: { fontSize: 14, fontWeight: '700' },
   diffBannerValue: { fontSize: 18, fontWeight: '800' },
   reportNote: { fontSize: 12, marginTop: spacing[3], lineHeight: 17 },
+  reportSafeLine: { fontSize: 12, fontWeight: '600', marginTop: 4 },
+  reportSectionLabel: { marginTop: spacing[4], marginBottom: spacing[1] },
+
+  // 155 — сдача по сотрудникам в модале закрытия
+  settlementCard: {
+    borderRadius: borderRadius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[3],
+  },
+  settlementRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    paddingVertical: spacing[2.5],
+  },
+  settlementLeft: { flex: 1, minWidth: 0, gap: 2 },
+  settlementName: { fontSize: 14, fontWeight: '600' },
+  settlementExpected: { fontSize: 11 },
+  settlementInputWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: borderRadius.md,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[2.5],
+    minWidth: 104,
+  },
+  settlementInput: { flex: 1, fontSize: 16, fontWeight: '700', paddingVertical: spacing[2], textAlign: 'right' },
+  settlementCurrency: { fontSize: 14, fontWeight: '600', marginLeft: spacing[1] },
+  settlementTotalRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: spacing[2.5],
+    paddingHorizontal: spacing[1],
+  },
+  settlementTotalLabel: { fontSize: 14, fontWeight: '700' },
+  settlementTotalValue: { fontSize: 18, fontWeight: '800', letterSpacing: -0.3 },
+
+  // 155 — «Перевести в сейф» в модале закрытия
+  toSafeLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: spacing[4],
+    marginBottom: spacing[2],
+  },
+  toSafeAllBtn: { fontSize: 13, fontWeight: '700' },
+
+  // 155 — карточка сейфа
+  safeCard: { ...iosCard, paddingVertical: spacing[3] },
+  safeCardRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  safeIcon: { width: 36, height: 36, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  safeLabel: { fontSize: 12, fontWeight: '500' },
+  safeValue: { fontSize: 20, fontWeight: '800', letterSpacing: -0.4 },
+  safeCollectBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1.5,
+    paddingVertical: spacing[2.5],
+    marginTop: spacing[3],
+    minHeight: 44,
+  },
+  safeCollectBtnText: { fontSize: 14, fontWeight: '700' },
+
+  // 155 — история операций сейфа
+  safeEmptyText: { fontSize: 13, textAlign: 'center', paddingVertical: spacing[4] },
+  safeTxRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5], paddingVertical: spacing[2.5] },
+  safeTxType: { fontSize: 14, fontWeight: '600' },
+  safeTxMeta: { fontSize: 11 },
+  safeTxAmount: { fontSize: 15, fontWeight: '700' },
 });

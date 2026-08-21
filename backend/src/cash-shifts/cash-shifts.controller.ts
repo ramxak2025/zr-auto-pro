@@ -30,6 +30,20 @@ export class CashShiftsController {
     return this.cashShifts.current(user.tenantID);
   }
 
+  // ─── Сейф (155). Литеральные 'safe'/'safe/collect' объявлены ДО любых
+  // ':id'-роутов — иначе Nest сматчил бы 'safe/collect' как :id='safe'. ───
+  @RequirePermission('cash_shifts_manage')
+  @Get('safe')
+  safe(@CurrentUser() user: JwtPayload) {
+    return this.cashShifts.safe(user.tenantID);
+  }
+
+  @RequirePermission('cash_shifts_manage')
+  @Post('safe/collect')
+  safeCollect(@CurrentUser() user: JwtPayload, @Body() dto: CollectCashDto) {
+    return this.cashShifts.safeCollect(user, dto);
+  }
+
   @Get()
   list(@CurrentUser() user: JwtPayload, @Query() query: { page?: string; limit?: string }) {
     return this.cashShifts.list(user.tenantID, query);

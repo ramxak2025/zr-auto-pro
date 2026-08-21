@@ -10,6 +10,7 @@ import {
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
+import { PushService } from '../push/push.service';
 import { OpenShiftDto } from './dto/open-shift.dto';
 import { CloseShiftDto } from './dto/close-shift.dto';
 import { CollectCashDto } from './dto/collect-cash.dto';
@@ -26,6 +27,20 @@ function num(v: unknown): number {
 /** Round to 2 decimals — money is stored NUMERIC(14,2); avoids 0.1+0.2 drift. */
 function round2(n: number): number {
   return Math.round((n + Number.EPSILON) * 100) / 100;
+}
+
+/** Money for push bodies: без копеек, с русским разделителем тысяч. */
+function fmtMoney(n: number): string {
+  return Math.round(n).toLocaleString('ru-RU');
+}
+
+/** Разбивка окна смены «по принявшим оплату» (155). */
+export interface AcceptorTotal {
+  userId: string | null;
+  name: string | null;
+  cashSales: number;
+  cardSales: number;
+  checksCount: number;
 }
 
 /**
@@ -61,7 +76,10 @@ function round2(n: number): number {
 export class CashShiftsService {
   private readonly logger = new Logger('CashShiftsService');
 
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private push: PushService,
+  ) {}
 
   // ─── Row mapping ───────────────────────────────────────────────────────
   private mapShift(r: any) {
@@ -79,6 +97,22 @@ export class CashShiftsService {
       expectedAmount: r.expected_amount === null || r.expected_amount === undefined ? null : num(r.expected_amount),
       difference: r.difference === null || r.difference === undefined ? null : num(r.difference),
       status: r.status,
+      note: r.note ?? null,
+      createdAt: r.created_at,
+      // 155 — пересменка: null на сменах, закрытых до миграции.
+      toSafeAmount: r.to_safe_amount === null || r.to_safe_amount === undefined ? null : num(r.to_safe_amount),
+      carryoverAmount: r.carryover_amount === null || r.carryover_amount === undefined ? null : num(r.carryover_amount),
+    };
+  }
+
+  private mapSafeTransaction(r: any) {
+    return {
+      id: r.id,
+      type: r.type,
+      amount: num(r.amount),
+      shiftId: r.shift_id ?? null,
+      actorId: r.actor_id ?? null,
+      actorName: r.actor_name ?? null,
       note: r.note ?? null,
       createdAt: r.created_at,
     };
@@ -128,6 +162,7 @@ export class CashShiftsService {
     checksCount: number;
     cashExpenses: number;
     collectionsTotal: number;
+    perAcceptor: AcceptorTotal[];
   }> {
     // Sales — mirror reports.getCashFlow exactly: only non-deferred checks,
     // sum cash_amount / card_amount columns (split & return aware). Window is
@@ -165,6 +200,24 @@ export class CashShiftsService {
       [tenantID, shiftId],
     );
 
+    // 155 — разбивка «по принявшим оплату»: accepted_by с fallback на
+    // master_id (чеки до миграции). Оба NULL → строка userId=null
+    // («Не распределено»).
+    const { rows: accRows } = await db.query(
+      `SELECT COALESCE(c.accepted_by, c.master_id)     AS user_id,
+              u.full_name                              AS name,
+              COALESCE(SUM(c.cash_amount), 0)          AS cash_sales,
+              COALESCE(SUM(c.card_amount), 0)          AS card_sales,
+              COUNT(*)                                 AS checks_count
+         FROM checks c
+         LEFT JOIN users u ON u.id = COALESCE(c.accepted_by, c.master_id) AND u.tenant_id = c.tenant_id
+        WHERE c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
+          AND c.date >= $2 AND c.date <= $3
+        GROUP BY 1, 2
+        ORDER BY cash_sales DESC, name ASC NULLS LAST`,
+      [tenantID, openedAt, windowEnd],
+    );
+
     return {
       cashSales: num(salesRows[0].cash_sales),
       cardSales: num(salesRows[0].card_sales),
@@ -172,6 +225,13 @@ export class CashShiftsService {
       checksCount: parseInt(salesRows[0].checks_count, 10) || 0,
       cashExpenses: num(expRows[0].cash_expenses),
       collectionsTotal: num(colRows[0].collections),
+      perAcceptor: accRows.map((r: any) => ({
+        userId: r.user_id ?? null,
+        name: r.name ?? null,
+        cashSales: num(r.cash_sales),
+        cardSales: num(r.card_sales),
+        checksCount: parseInt(r.checks_count, 10) || 0,
+      })),
     };
   }
 
@@ -198,6 +258,18 @@ export class CashShiftsService {
         ORDER BY cc.collected_at ASC`,
       [tenantID, shiftRow.id],
     );
+
+    // 155 — фактическая сдача по сотрудникам (пусто, если смену закрыли одной
+    // общей суммой) + текущий баланс сейфа.
+    const { rows: setRows } = await db.query(
+      `SELECT s.user_id, u.full_name AS name, s.expected_amount, s.actual_amount
+         FROM cash_shift_settlements s
+         LEFT JOIN users u ON u.id = s.user_id AND u.tenant_id = s.tenant_id
+        WHERE s.tenant_id = $1 AND s.shift_id = $2
+        ORDER BY s.actual_amount DESC, name ASC NULLS LAST`,
+      [tenantID, shiftRow.id],
+    );
+    const safeBalance = await this.safeBalance(tenantID, db);
 
     const opening = num(shiftRow.opening_amount);
     const expectedLive = round2(opening + figures.cashSales - figures.cashExpenses - figures.collectionsTotal);
@@ -239,7 +311,26 @@ export class CashShiftsService {
       collections: colRows.map((r) => this.mapCollection(r)),
       windowStart: openedAt,
       windowEnd,
+      perAcceptor: figures.perAcceptor,
+      settlements: setRows.map((r: any) => ({
+        userId: r.user_id ?? null,
+        name: r.name ?? null,
+        expectedAmount: num(r.expected_amount),
+        actualAmount: num(r.actual_amount),
+      })),
+      safeBalance,
     };
+  }
+
+  /** 155 — баланс сейфа: Σ deposit + Σ adjustment − Σ collection. */
+  private async safeBalance(tenantID: string, db: Queryable = this.pool): Promise<number> {
+    const { rows } = await db.query(
+      `SELECT COALESCE(SUM(CASE WHEN type = 'collection' THEN -amount ELSE amount END), 0) AS balance
+         FROM safe_transactions
+        WHERE tenant_id = $1`,
+      [tenantID],
+    );
+    return round2(num(rows[0].balance));
   }
 
   // ─── Open ──────────────────────────────────────────────────────────────
@@ -254,7 +345,23 @@ export class CashShiftsService {
       throw new ConflictException({ message: 'Смена уже открыта' });
     }
 
-    const opening = round2(num(dto.openingAmount));
+    // 155 — без openingAmount стартуем с размена, оставленного последней
+    // закрытой сменой. Смены, закрытые до миграции (carryover_amount IS NULL),
+    // оставляли ВСЁ в кассе → fallback closing_amount; смен не было → 0.
+    let opening: number;
+    if (dto.openingAmount === undefined || dto.openingAmount === null) {
+      const { rows: lastRows } = await this.pool.query(
+        `SELECT COALESCE(carryover_amount, closing_amount, 0) AS carryover
+           FROM cash_shifts
+          WHERE tenant_id = $1 AND status = 'closed'
+          ORDER BY closed_at DESC NULLS LAST
+          LIMIT 1`,
+        [user.tenantID],
+      );
+      opening = round2(num(lastRows[0]?.carryover));
+    } else {
+      opening = round2(num(dto.openingAmount));
+    }
     try {
       const { rows } = await this.pool.query(
         `INSERT INTO cash_shifts (tenant_id, opened_by, opening_amount, status, note)
@@ -277,6 +384,14 @@ export class CashShiftsService {
   // ─── Close ─────────────────────────────────────────────────────────────
   async close(user: JwtPayload, id: string, dto: CloseShiftDto) {
     const client = await this.pool.connect();
+    // Итоги закрытия — для пуша директорам ПОСЛЕ коммита.
+    let closedFigures: {
+      cashSales: number;
+      cardSales: number;
+      toSafe: number;
+      carryover: number;
+      difference: number;
+    } | null = null;
     try {
       await client.query('BEGIN');
       // Lock the row so two concurrent closes can't both compute & write.
@@ -303,6 +418,30 @@ export class CashShiftsService {
       const closing = round2(num(dto.closingAmount));
       const difference = round2(closing - expected);
 
+      // 155 — пересменка: часть нала уходит в сейф, остаток — размен на
+      // завтра. Без toSafeAmount (старые клиенты) всё остаётся в кассе.
+      const toSafe = round2(num(dto.toSafeAmount ?? 0));
+      if (toSafe < 0 || toSafe > closing) {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({
+          message: `Сумма в сейф (${fmtMoney(toSafe)} ₽) не может превышать фактический нал (${fmtMoney(closing)} ₽)`,
+        });
+      }
+      const carryover = round2(closing - toSafe);
+
+      // 155 — сдача по сотрудникам: Σ actual обязана сойтись с фактическим
+      // налом (допуск копейка на float-арифметику клиента).
+      const settlements = dto.settlements ?? [];
+      if (settlements.length > 0) {
+        const actualSum = round2(settlements.reduce((sum, s) => sum + num(s.actualAmount), 0));
+        if (Math.abs(actualSum - closing) > 0.01) {
+          await client.query('ROLLBACK');
+          throw new BadRequestException({
+            message: `Сумма сдач по сотрудникам (${fmtMoney(actualSum)} ₽) не совпадает с фактическим налом (${fmtMoney(closing)} ₽)`,
+          });
+        }
+      }
+
       await client.query(
         `UPDATE cash_shifts
             SET status = 'closed',
@@ -311,12 +450,36 @@ export class CashShiftsService {
                 closing_amount = $3,
                 expected_amount = $4,
                 difference = $5,
-                note = COALESCE($6, note)
-          WHERE id = $7 AND tenant_id = $8`,
-        [user.userID, closedAt, closing, expected, difference, dto.note ?? null, id, user.tenantID],
+                to_safe_amount = $6,
+                carryover_amount = $7,
+                note = COALESCE($8, note)
+          WHERE id = $9 AND tenant_id = $10`,
+        [user.userID, closedAt, closing, expected, difference, toSafe, carryover, dto.note ?? null, id, user.tenantID],
       );
 
+      if (toSafe > 0) {
+        await client.query(
+          `INSERT INTO safe_transactions (tenant_id, type, amount, shift_id, actor_id)
+           VALUES ($1, 'deposit', $2, $3, $4)`,
+          [user.tenantID, toSafe, id, user.userID],
+        );
+      }
+
+      if (settlements.length > 0) {
+        // expected — расчётный НАЛ этого сотрудника по окну смены (perAcceptor);
+        // сотрудник вне разбивки сдаёт «сверх расчёта» → expected 0.
+        const expectedByUser = new Map(figures.perAcceptor.map((a) => [a.userId, a.cashSales]));
+        for (const s of settlements) {
+          await client.query(
+            `INSERT INTO cash_shift_settlements (tenant_id, shift_id, user_id, expected_amount, actual_amount)
+             VALUES ($1, $2, $3, $4, $5)`,
+            [user.tenantID, id, s.userId, round2(expectedByUser.get(s.userId) ?? 0), round2(num(s.actualAmount))],
+          );
+        }
+      }
+
       await client.query('COMMIT');
+      closedFigures = { cashSales: figures.cashSales, cardSales: figures.cardSales, toSafe, carryover, difference };
     } catch (err) {
       try {
         await client.query('ROLLBACK');
@@ -330,6 +493,11 @@ export class CashShiftsService {
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
       client.release();
+    }
+
+    // Fire-and-forget ПОСЛЕ коммита: пуш не задерживает ответ и не роняет закрытие.
+    if (closedFigures) {
+      void this.fireShiftClosedPush(user, closedFigures);
     }
 
     const row = await this.fetchShiftRow(this.pool, user.tenantID, id);
@@ -432,6 +600,169 @@ export class CashShiftsService {
 
     // Echo the refreshed Z-report so the UI sees the new collections total +
     // recomputed expected balance immediately.
-    return this.report(user.tenantID, id);
+    const report = await this.report(user.tenantID, id);
+    // 'cash_collection' кассирам: сколько забрали из ящика и что осталось.
+    void this.fireCollectionPush(user, round2(num(dto.amount)), 'кассы', report.expectedAmount);
+    return report;
+  }
+
+  // ─── Сейф (155) ────────────────────────────────────────────────────────
+  async safe(tenantID: string) {
+    const balance = await this.safeBalance(tenantID);
+    const { rows } = await this.pool.query(
+      `SELECT st.*, u.full_name AS actor_name
+         FROM safe_transactions st
+         LEFT JOIN users u ON u.id = st.actor_id AND u.tenant_id = st.tenant_id
+        WHERE st.tenant_id = $1
+        ORDER BY st.created_at DESC
+        LIMIT 100`,
+      [tenantID],
+    );
+    return { balance, transactions: rows.map((r) => this.mapSafeTransaction(r)) };
+  }
+
+  /** Инкассация владельцем ИЗ СЕЙФА — не требует открытой смены. */
+  async safeCollect(user: JwtPayload, dto: CollectCashDto) {
+    const amount = round2(num(dto.amount));
+    if (!(amount > 0)) {
+      throw new BadRequestException({ message: 'Сумма инкассации должна быть положительной' });
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Баланс сейфа — агрегат по insert-only таблице, FOR UPDATE его не
+      // защищает; advisory-xact-lock сериализует конкурентные инкассации.
+      await client.query(`SELECT pg_advisory_xact_lock(hashtext('safe:' || $1::text))`, [user.tenantID]);
+
+      const balance = await this.safeBalance(user.tenantID, client);
+      if (amount > balance) {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({
+          message: `В сейфе только ${fmtMoney(balance)} ₽ — нельзя инкассировать ${fmtMoney(amount)} ₽`,
+        });
+      }
+
+      await client.query(
+        `INSERT INTO safe_transactions (tenant_id, type, amount, actor_id, note)
+         VALUES ($1, 'collection', $2, $3, $4)`,
+        [user.tenantID, amount, user.userID, dto.note ?? null],
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      if (err instanceof BadRequestException) throw err;
+      this.logger.error(`Safe collection error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
+
+    const state = await this.safe(user.tenantID);
+    void this.fireCollectionPush(user, amount, 'сейфа', state.balance);
+    return state;
+  }
+
+  // ─── Пуши (155) — best-effort, всегда после коммита ────────────────────
+
+  /** 'cash_shift_closed' — всем активным директорам тенанта, кроме актора. */
+  private async fireShiftClosedPush(
+    actor: JwtPayload,
+    f: { cashSales: number; cardSales: number; toSafe: number; carryover: number; difference: number },
+  ): Promise<void> {
+    try {
+      const { rows } = await this.pool.query(
+        `SELECT id FROM users
+          WHERE tenant_id = $1 AND role = 'director'
+            AND is_active = true AND dismissed_at IS NULL AND purged_at IS NULL
+            AND id <> $2`,
+        [actor.tenantID, actor.userID],
+      );
+      const diffPart =
+        f.difference === 0
+          ? 'Без расхождений'
+          : `Расхождение: ${f.difference > 0 ? '+' : ''}${fmtMoney(f.difference)} ₽`;
+      const body =
+        `Нал: ${fmtMoney(f.cashSales)} ₽, карта: ${fmtMoney(f.cardSales)} ₽. ` +
+        `В сейф: ${fmtMoney(f.toSafe)} ₽, размен: ${fmtMoney(f.carryover)} ₽. ${diffPart}`;
+      await Promise.all(
+        rows.map((r: { id: string }) =>
+          this.push.sendToUserInTenant(r.id, actor.tenantID, 'cash_shift_closed', 'Касса закрыта', body, {
+            type: 'cash_shift_closed',
+          }),
+        ),
+      );
+    } catch (err) {
+      this.logger.error(`cash_shift_closed push failed: ${err}`);
+    }
+  }
+
+  /** 'cash_collection' — эффективным кассирам тенанта, кроме актора. */
+  private async fireCollectionPush(
+    actor: JwtPayload,
+    amount: number,
+    source: 'кассы' | 'сейфа',
+    rest: number,
+  ): Promise<void> {
+    try {
+      const cashierIds = await this.getCashierUserIds(actor.tenantID);
+      const body = `Инкассация ${fmtMoney(amount)} ₽ из ${source}. Остаток: ${fmtMoney(rest)} ₽`;
+      await Promise.all(
+        cashierIds
+          .filter((uid) => uid !== actor.userID)
+          .map((uid) =>
+            this.push.sendToUserInTenant(uid, actor.tenantID, 'cash_collection', 'Инкассация', body, {
+              type: 'cash_collection',
+            }),
+          ),
+      );
+    } catch (err) {
+      this.logger.error(`cash_collection push failed: ${err}`);
+    }
+  }
+
+  /**
+   * Эффективные кассиры тенанта — SQL-зеркало checks.getCashierUserIds +
+   * allowlist tenants.payment_acceptors (155): непустой список = принимают
+   * ТОЛЬКО перечисленные (+ owner-class всегда); NULL/пустой = по матрице
+   * роли (accept_payment). Дублируется локально, чтобы не тянуть ChecksService.
+   */
+  private async getCashierUserIds(tenantID: string): Promise<string[]> {
+    const { rows: tRows } = await this.pool.query(`SELECT payment_acceptors FROM tenants WHERE id = $1`, [tenantID]);
+    const raw = tRows[0]?.payment_acceptors;
+    const acceptors = Array.isArray(raw) ? raw.filter((v: unknown): v is string => typeof v === 'string') : [];
+
+    if (acceptors.length > 0) {
+      const { rows } = await this.pool.query(
+        `SELECT u.id FROM users u
+          WHERE u.tenant_id = $1
+            AND u.is_active = true AND u.dismissed_at IS NULL AND u.purged_at IS NULL
+            AND (u.id::text = ANY($2::text[]) OR u.role IN ('director', 'superadmin'))`,
+        [tenantID, acceptors],
+      );
+      return rows.map((r: { id: string }) => String(r.id));
+    }
+
+    const { rows } = await this.pool.query(
+      `SELECT u.id
+         FROM users u
+         LEFT JOIN roles r ON r.id = u.role_id
+        WHERE u.tenant_id = $1
+          AND u.is_active = true
+          AND u.dismissed_at IS NULL
+          AND u.purged_at IS NULL
+          AND (
+            u.role IN ('director', 'superadmin')
+            OR (r.matrix IS NOT NULL AND (r.matrix->'checks'->>'acceptPayment')::boolean IS TRUE)
+            OR (r.matrix IS NULL AND u.role = 'admin')
+          )`,
+      [tenantID],
+    );
+    return rows.map((r: { id: string }) => String(r.id));
   }
 }

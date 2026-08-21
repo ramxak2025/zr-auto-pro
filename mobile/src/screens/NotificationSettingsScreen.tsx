@@ -142,6 +142,24 @@ const SECTIONS: CategorySection[] = [
         iconColor: colors.rose[600],
         iconBg: colors.rose[50],
       },
+      // 155 — кассовая смена: владельцу приходит итог закрытой смены (суммы,
+      // сейф, размен), кассиру — «инкассация N с кассы/сейфа, остаток M».
+      {
+        key: 'cash_shift_closed',
+        label: 'Закрытие кассы',
+        sublabel: 'Итоги смены: суммы, сейф, размен',
+        icon: 'lock-closed-outline',
+        iconColor: colors.purple[600],
+        iconBg: colors.purple[50],
+      },
+      {
+        key: 'cash_collection',
+        label: 'Инкассация',
+        sublabel: 'Изъятие наличных из кассы или сейфа',
+        icon: 'briefcase-outline',
+        iconColor: colors.orange[600],
+        iconBg: colors.orange[50],
+      },
     ],
   },
   {

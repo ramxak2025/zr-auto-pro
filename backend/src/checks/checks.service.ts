@@ -33,6 +33,14 @@ interface ChecksActor {
   permissions?: Record<string, boolean>;
 }
 
+/**
+ * Актор для резолва «эффективного кассира» (155): id нужен для сверки с
+ * allowlist владельца, роль/матрица — для режима «по ролям». Все поля
+ * опциональны, чтобы контроллерный JwtPayload и внутренние вызовы подходили
+ * без кастов; отсутствие поля резолвится fail-closed.
+ */
+type CashierActor = { userID?: string; role?: string; permissions?: Record<string, boolean> };
+
 // Only tables we explicitly want to allow as targets of cross-tenant
 // assertions. Keeping this as an allow-list (not a string the caller
 // passes through) means even if a future refactor mistakenly forwards
@@ -493,39 +501,79 @@ export class ChecksService {
   }
 
   /**
-   * Is the actor a cashier (may accept payment / close a check)? Owner-class
-   * roles (director/admin/superadmin) are implicit cashiers; a master is a
-   * cashier only with the explicit `accept_payment` permission. Reuses the same
-   * pure resolver the PermissionsGuard uses, so the rule is identical everywhere.
+   * Одно PK-чтение tenants для POS-решений запроса: режим смен + allowlist
+   * «кто принимает оплату» (155, tenants.payment_acceptors). Пути, которым
+   * нужны оба значения (create / activateDeferred / fullUpdate), читают строку
+   * ОДИН раз и передают список в isEffectiveCashierWith — лишних запросов в
+   * рамках одного запроса нет. FAIL-OPEN, как isShiftModeEnabled: ошибка
+   * чтения → режим выключен + режим «по ролям» (текущее поведение). Кривые
+   * элементы списка (не-UUID) отфильтровываются, чтобы каст `ANY($::uuid[])`
+   * ниже не мог дать 22P02; полностью выпотрошенный список = NULL («по ролям»).
    */
-  private isCashier(actor?: { role?: string; permissions?: Record<string, boolean> }): boolean {
+  private async readPosTenantRow(
+    tenantID: string,
+  ): Promise<{ shiftModeEnabled: boolean; paymentAcceptorIds: string[] | null }> {
+    try {
+      const { rows } = await this.pool.query(
+        `SELECT shift_mode_enabled, payment_acceptors FROM tenants WHERE id = $1`,
+        [tenantID],
+      );
+      const raw = rows[0]?.payment_acceptors;
+      const list = Array.isArray(raw) ? raw.map((x: unknown) => String(x)).filter((x) => UUID_RE.test(x)) : [];
+      return {
+        shiftModeEnabled: rows[0]?.shift_mode_enabled === true,
+        paymentAcceptorIds: list.length > 0 ? list : null,
+      };
+    } catch (err) {
+      this.logger.error(`POS tenants read failed for tenant=${tenantID}: ${err}`);
+      return { shiftModeEnabled: false, paymentAcceptorIds: null };
+    }
+  }
+
+  /**
+   * Эффективный кассир (155) по УЖЕ прочитанному allowlist'у:
+   *   • owner-class (director/superadmin) — всегда кассир, из списка не
+   *     убирается;
+   *   • список задан (непустой JSONB-массив) → принимают ТОЛЬКО перечисленные;
+   *   • списка нет (NULL) → прежний режим «по ролям»: право `accept_payment`
+   *     из матрицы (тот же pure-резолвер, что и PermissionsGuard).
+   */
+  private isEffectiveCashierWith(paymentAcceptorIds: string[] | null, actor?: CashierActor): boolean {
+    if (actor?.role === 'director' || actor?.role === 'superadmin') return true;
+    if (paymentAcceptorIds) return !!actor?.userID && paymentAcceptorIds.includes(String(actor.userID));
     return userHasPermission(actor, 'accept_payment');
+  }
+
+  /** Эффективный кассир с собственным чтением tenants (одиночные точки). */
+  private async isEffectiveCashier(tenantID: string, actor?: CashierActor): Promise<boolean> {
+    const { paymentAcceptorIds } = await this.readPosTenantRow(tenantID);
+    return this.isEffectiveCashierWith(paymentAcceptorIds, actor);
   }
 
   /**
    * Guard the "take payment" actions (close a draft / record cash/card / mark
-   * paid). No-op when shift-mode is OFF. When ON, only a cashier may proceed.
+   * paid). No-op when shift-mode is OFF. When ON, only an effective cashier
+   * (155: allowlist владельца, иначе право по матрице) may proceed.
    */
-  private async assertCashierForPayment(
-    tenantID: string,
-    actor?: { role?: string; permissions?: Record<string, boolean> },
-  ): Promise<void> {
-    if (!(await this.isShiftModeEnabled(tenantID))) return;
-    if (this.isCashier(actor)) return;
+  private async assertCashierForPayment(tenantID: string, actor?: CashierActor): Promise<void> {
+    const { shiftModeEnabled, paymentAcceptorIds } = await this.readPosTenantRow(tenantID);
+    if (!shiftModeEnabled) return;
+    if (this.isEffectiveCashierWith(paymentAcceptorIds, actor)) return;
     throw new ForbiddenException({ message: 'Принять оплату и закрыть заказ-наряд может только кассир смены' });
   }
 
   /**
    * GET /checks/pos-settings — mode flag + the caller's resolved cashier
    * capability (so a client can pick the master order-create flow / tab bar
-   * without re-deriving the rule).
+   * without re-deriving the rule) + (155) явный allowlist владельца
+   * (null = режим «по ролям»).
    */
   async getPosSettings(
     tenantID: string,
-    actor?: { role?: string; permissions?: Record<string, boolean> },
-  ): Promise<{ shiftModeEnabled: boolean; isCashier: boolean }> {
-    const shiftModeEnabled = await this.isShiftModeEnabled(tenantID);
-    return { shiftModeEnabled, isCashier: this.isCashier(actor) };
+    actor?: CashierActor,
+  ): Promise<{ shiftModeEnabled: boolean; isCashier: boolean; paymentAcceptorIds: string[] | null }> {
+    const { shiftModeEnabled, paymentAcceptorIds } = await this.readPosTenantRow(tenantID);
+    return { shiftModeEnabled, isCashier: this.isEffectiveCashierWith(paymentAcceptorIds, actor), paymentAcceptorIds };
   }
 
   /**
@@ -538,11 +586,41 @@ export class ChecksService {
    * 409 с count и первыми 10 (номер, клиент, сумма) — владелец видит, что
    * закрыть. Повторная установка ТОГО ЖЕ значения — no-op без гарда (ретрай
    * клиента не блокируется).
+   *
+   * 155 — `paymentAcceptorIds`: явный allowlist «кто принимает оплату».
+   * Санитизация: остаются только ЖИВЫЕ сотрудники тенанта (не dismissed);
+   * пустой массив нормализуется в NULL («по ролям»). ГАРД ВКЛЮЧЕНИЯ режима:
+   * при флипе false→true (с учётом одновременно переданного списка) нужен
+   * ≥1 активный НЕ-owner-class эффективный кассир — иначе 409: все заказы
+   * навсегда зависли бы отложенными, а owner-class «кассиров по определению»
+   * у стойки может не быть.
    */
   async updatePosSettings(
     tenantID: string,
-    dto: { shiftModeEnabled?: boolean },
-  ): Promise<{ shiftModeEnabled: boolean }> {
+    dto: { shiftModeEnabled?: boolean; paymentAcceptorIds?: string[] | null },
+    actor?: CashierActor,
+  ): Promise<{ shiftModeEnabled: boolean; isCashier: boolean; paymentAcceptorIds: string[] | null }> {
+    // Санитизация списка ДО гардов: гард включения должен видеть уже чистый
+    // (живые сотрудники) список. undefined = поле не прислали, не трогаем.
+    let nextList: string[] | null | undefined = undefined;
+    if (dto?.paymentAcceptorIds !== undefined) {
+      const requested = Array.isArray(dto.paymentAcceptorIds)
+        ? Array.from(new Set(dto.paymentAcceptorIds.map((x) => String(x)).filter((x) => UUID_RE.test(x))))
+        : [];
+      if (requested.length === 0) {
+        nextList = null;
+      } else {
+        const { rows } = await this.pool.query(
+          `SELECT id FROM users
+            WHERE tenant_id = $1 AND id = ANY($2::uuid[])
+              AND is_active = true AND dismissed_at IS NULL AND purged_at IS NULL`,
+          [tenantID, requested],
+        );
+        const alive = rows.map((r: { id: string }) => String(r.id));
+        nextList = alive.length > 0 ? alive : null;
+      }
+    }
+
     if (dto?.shiftModeEnabled !== undefined) {
       const next = dto.shiftModeEnabled === true;
       const current = await this.isShiftModeEnabled(tenantID);
@@ -587,13 +665,118 @@ export class ChecksService {
             })),
           });
         }
+        // ── ГАРД ВКЛЮЧЕНИЯ (155): некому принимать оплату ────────────────
+        // Реальный флип false→true возможен только когда при новых настройках
+        // (переданный список приоритетнее сохранённого) есть хотя бы один
+        // активный НЕ-owner-class эффективный кассир.
+        if (next) {
+          const effectiveList =
+            nextList !== undefined ? nextList : (await this.readPosTenantRow(tenantID)).paymentAcceptorIds;
+          if (!(await this.hasActiveNonOwnerCashier(tenantID, effectiveList))) {
+            throw new ConflictException({
+              message:
+                'Некому принимать оплату. Создайте роль «Кассир» и назначьте сотрудника, либо выберите принимающих оплату в настройках',
+            });
+          }
+        }
       }
       await this.pool.query(`UPDATE tenants SET shift_mode_enabled = $1, updated_at = now() WHERE id = $2`, [
         next,
         tenantID,
       ]);
     }
-    return { shiftModeEnabled: await this.isShiftModeEnabled(tenantID) };
+    if (nextList !== undefined) {
+      await this.pool.query(`UPDATE tenants SET payment_acceptors = $1::jsonb, updated_at = now() WHERE id = $2`, [
+        nextList === null ? null : JSON.stringify(nextList),
+        tenantID,
+      ]);
+    }
+    return this.getPosSettings(tenantID, actor);
+  }
+
+  /**
+   * Есть ли у тенанта хотя бы один активный НЕ-owner-class эффективный кассир
+   * при данном allowlist'е (155)? Owner-class (director/superadmin) не
+   * считается: режим смен без обычного кассира бессмыслен. Список задан →
+   * пересечение списка с живыми сотрудниками; NULL → режим «по ролям» — SQL-
+   * зеркало getCashierUserIds без owner-class-плеча.
+   */
+  private async hasActiveNonOwnerCashier(tenantID: string, list: string[] | null): Promise<boolean> {
+    if (list) {
+      const { rows } = await this.pool.query(
+        `SELECT 1 FROM users u
+          WHERE u.tenant_id = $1 AND u.id = ANY($2::uuid[])
+            AND u.is_active = true AND u.dismissed_at IS NULL AND u.purged_at IS NULL
+            AND u.role NOT IN ('director', 'superadmin')
+          LIMIT 1`,
+        [tenantID, list],
+      );
+      return rows.length > 0;
+    }
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM users u
+         LEFT JOIN roles r ON r.id = u.role_id
+        WHERE u.tenant_id = $1
+          AND u.is_active = true AND u.dismissed_at IS NULL AND u.purged_at IS NULL
+          AND u.role NOT IN ('director', 'superadmin')
+          AND (
+            (r.matrix IS NOT NULL AND (r.matrix->'checks'->>'acceptPayment')::boolean IS TRUE)
+            OR (r.matrix IS NULL AND u.role = 'admin')
+          )
+        LIMIT 1`,
+      [tenantID],
+    );
+    return rows.length > 0;
+  }
+
+  /**
+   * GET /checks/payment-acceptors (155) — экран «Кто принимает оплату» в
+   * настройках компании: активные (не dismissed) сотрудники тенанта + резолв,
+   * кто фактически принимает при текущих настройках и почему. Платформенные
+   * superadmin-аккаунты не показываем; директор в списке с isOwnerClass=true
+   * (принимает всегда, галка с него не снимается).
+   */
+  async listPaymentAcceptors(tenantID: string): Promise<
+    Array<{
+      id: string;
+      fullName: string | null;
+      roleName: string | null;
+      hasRolePermission: boolean;
+      isOwnerClass: boolean;
+      effective: boolean;
+      selected: boolean;
+    }>
+  > {
+    const { paymentAcceptorIds } = await this.readPosTenantRow(tenantID);
+    const { rows } = await this.pool.query(
+      `SELECT u.id, u.full_name, u.role, r.name AS role_name,
+              (
+                (r.matrix IS NOT NULL AND (r.matrix->'checks'->>'acceptPayment')::boolean IS TRUE)
+                OR (r.matrix IS NULL AND u.role = 'admin')
+              ) AS matrix_accepts
+         FROM users u
+         LEFT JOIN roles r ON r.id = u.role_id
+        WHERE u.tenant_id = $1
+          AND u.is_active = true AND u.dismissed_at IS NULL AND u.purged_at IS NULL
+          AND u.role <> 'superadmin'
+        ORDER BY u.full_name NULLS LAST, u.id`,
+      [tenantID],
+    );
+    return rows.map((u: any) => {
+      const isOwnerClass = u.role === 'director';
+      const hasRolePermission = isOwnerClass || u.matrix_accepts === true;
+      const selected = paymentAcceptorIds !== null && paymentAcceptorIds.includes(String(u.id));
+      const effective = isOwnerClass || (paymentAcceptorIds ? selected : hasRolePermission);
+      return {
+        id: u.id,
+        fullName: u.full_name ?? null,
+        roleName: u.role_name ?? null,
+        hasRolePermission,
+        isOwnerClass,
+        effective,
+        selected,
+      };
+    });
   }
 
   /**
@@ -731,6 +914,13 @@ export class ChecksService {
       // tracking flag — orthogonal to payment/cash/stock. NULL on historical
       // rows (not tracked on the board). Additive; existing consumers ignore it.
       workStatus: row.work_status ?? null,
+      // 155: кто фактически ПРИНЯЛ оплату (кассир при активации / автор
+      // активного чека). NULL на чеках до миграции — клиенты делают fallback
+      // на masterId. Имя приходит только там, где путь джойнит users по
+      // accepted_by (деталь); в списках оно null. Additive.
+      acceptedBy: row.accepted_by ?? null,
+      acceptedByName: row.accepted_by_name ?? null,
+      acceptedAt: row.accepted_at ?? null,
       // Round 14 (146): место заказа (tenant_locations) и веха «Выдана».
       // deliveredAt проставляет setWorkStatus при входе в колонку 'delivered'
       // (и снимает при выходе). Чисто трекинговые поля — денег не двигают.
@@ -1070,12 +1260,14 @@ export class ChecksService {
               m.full_name as master_name, m.avatar as master_avatar,
               cl.full_name as client_name, cl.phone as client_phone,
               ca.plate_number, ca.make_model,
-              loc.name as location_name
+              loc.name as location_name,
+              ab.full_name as accepted_by_name
        FROM checks ch
        LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
        LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
        LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
        LEFT JOIN tenant_locations loc ON loc.id = ch.location_id AND loc.tenant_id = ch.tenant_id
+       LEFT JOIN users ab ON ab.id = ch.accepted_by AND ab.tenant_id = ch.tenant_id
        WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL`,
       [id, tenantID],
     );
@@ -1147,14 +1339,14 @@ export class ChecksService {
     // Исполнители заказа (Round 14, check_assignees). Пустой массив — норма
     // (старый чек / набор снят). JOIN users по тенанту — имя для карточки.
     const { rows: assigneeRows } = await this.pool.query(
-      `SELECT u.id, u.full_name
+      `SELECT u.id, u.full_name, u.avatar
          FROM check_assignees cas
          JOIN users u ON u.id = cas.user_id AND u.tenant_id = cas.tenant_id
         WHERE cas.check_id=$1 AND cas.tenant_id=$2
         ORDER BY u.full_name`,
       [id, tenantID],
     );
-    ch.assignees = assigneeRows.map((a) => ({ id: a.id, fullName: a.full_name ?? null }));
+    ch.assignees = assigneeRows.map((a) => ({ id: a.id, fullName: a.full_name ?? null, avatar: a.avatar ?? null }));
 
     // Warranty claims tied to this check (may be empty — only filled when
     // a product/service had warranty_days set at sale time).
@@ -1275,6 +1467,37 @@ export class ChecksService {
    */
   async updateOwnComment(id: string, tenantID: string, actorUserId: string, comment: string, actor?: ChecksActor) {
     const normalized = comment.trim().length === 0 ? null : comment;
+
+    // 155 — комментарий с доски: держатель ЭФФЕКТИВНОГО `checks_edit`
+    // (owner-class / матрица / дефолт мастера) правит комментарий ЛЮБОГО
+    // живого не-возвратного чека тенанта — без ограничения «свой + сегодня».
+    // Комментарий не двигает денег, поэтому own-охват (checks_edit_all) здесь
+    // намеренно не применяется. Возвратный чек заморожен целиком (как в
+    // fullUpdate). 404-анонимность чужих/несуществующих сохраняется ниже.
+    if (userHasPermission(actor, 'checks_edit')) {
+      const { rowCount: edited } = await this.pool.query(
+        `UPDATE checks
+            SET comment = $1
+          WHERE id = $2
+            AND tenant_id = $3
+            AND deleted_at IS NULL
+            AND is_returned IS NOT TRUE`,
+        [normalized, id, tenantID],
+      );
+      if (!edited) {
+        const { rows } = await this.pool.query(
+          `SELECT deleted_at, is_returned FROM checks WHERE id = $1 AND tenant_id = $2`,
+          [id, tenantID],
+        );
+        const row = rows[0];
+        if (!row || row.deleted_at !== null) {
+          throw new NotFoundException({ message: 'Заказ-наряд не найден' });
+        }
+        throw new BadRequestException({ message: 'Возвращённый заказ-наряд редактировать нельзя' });
+      }
+      return this.getById(id, tenantID, actor);
+    }
+
     const { rowCount } = await this.pool.query(
       `UPDATE checks
           SET comment = $1
@@ -1355,8 +1578,26 @@ export class ChecksService {
    * Мёртвые аккаунты (неактивные/уволенные/вычищенные) отфильтрованы так же,
    * как в jwt.strategy.loadValidatedUser. Best-effort: бросает только в caller,
    * который сам всё глотает.
+   *
+   * 155 — режим allowlist'а: список задан → пересечение списка с живыми
+   * сотрудниками + owner-class (director) тенанта; NULL → прежняя выборка
+   * «по ролям» ниже.
    */
   private async getCashierUserIds(tenantID: string): Promise<string[]> {
+    const { paymentAcceptorIds } = await this.readPosTenantRow(tenantID);
+    if (paymentAcceptorIds) {
+      const { rows } = await this.pool.query(
+        `SELECT u.id
+           FROM users u
+          WHERE u.tenant_id = $1
+            AND u.is_active = true
+            AND u.dismissed_at IS NULL
+            AND u.purged_at IS NULL
+            AND (u.role IN ('director', 'superadmin') OR u.id = ANY($2::uuid[]))`,
+        [tenantID, paymentAcceptorIds],
+      );
+      return rows.map((r: { id: string }) => String(r.id));
+    }
     const { rows } = await this.pool.query(
       `SELECT u.id
          FROM users u
@@ -1603,7 +1844,7 @@ export class ChecksService {
                 cl.full_name as client_name, cl.phone as client_phone,
                 ca.plate_number, ca.make_model,
                 loc.name as location_name,
-                (SELECT COALESCE(json_agg(json_build_object('id', u2.id, 'fullName', u2.full_name)
+                (SELECT COALESCE(json_agg(json_build_object('id', u2.id, 'fullName', u2.full_name, 'avatar', u2.avatar)
                                           ORDER BY u2.full_name), '[]'::json)
                    FROM check_assignees cas3
                    JOIN users u2 ON u2.id = cas3.user_id AND u2.tenant_id = cas3.tenant_id
@@ -2294,8 +2535,11 @@ export class ChecksService {
     // for a cashier to close later. When mode is OFF, or the actor is a cashier
     // (owner-class / accept_payment), `forceDeferred` is false and EVERYTHING
     // below is byte-for-byte the current flow.
-    const shiftMode = await this.isShiftModeEnabled(tenantID);
-    const forceDeferred = shiftMode && !this.isCashier(actor);
+    // 155: режим смен + allowlist «кто принимает оплату» — ОДНО чтение tenants
+    // на запрос; эффективного кассира резолвит isEffectiveCashierWith (список
+    // владельца, иначе право по матрице). Режим ВЫКЛ → байт-в-байт прежний путь.
+    const { shiftModeEnabled: shiftMode, paymentAcceptorIds } = await this.readPosTenantRow(tenantID);
+    const forceDeferred = shiftMode && !this.isEffectiveCashierWith(paymentAcceptorIds, actor);
     const effectiveIsDeferred: boolean = forceDeferred ? true : dto.isDeferred || false;
     const effectiveCashAmount: number = forceDeferred ? 0 : dto.cashAmount || 0;
     const effectiveCardAmount: number = forceDeferred ? 0 : dto.cardAmount || 0;
@@ -2633,8 +2877,8 @@ export class ChecksService {
          is_deferred, payment_method, cash_amount, card_amount,
          service_total, product_total, total_revenue, product_cost_total,
          service_salary_total, product_salary_total, total_cost, profit, tenant_id, client_request_id,
-         location_id, work_status)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
+         location_id, work_status, accepted_by, accepted_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
          RETURNING *`,
         [
           checkNumber,
@@ -2663,6 +2907,11 @@ export class ChecksService {
           clientRequestId,
           resolvedLocationId,
           initialWorkStatus,
+          // 155 — атрибуция «кто принял»: АКТИВНЫЙ чек рождается с деньгами —
+          // принял актор, вне зависимости от режима смен. Драфт — NULL:
+          // деньги примет тот, кто активирует (activateDeferred).
+          effectiveIsDeferred ? null : userID,
+          effectiveIsDeferred ? null : new Date().toISOString(),
         ],
       );
 
@@ -3223,15 +3472,29 @@ export class ChecksService {
     id: string,
     tenantID: string,
     userRole: string,
-    dto: { paymentMethod?: string; cashAmount?: number; cardAmount?: number; discount?: number },
+    dto: {
+      paymentMethod?: string;
+      cashAmount?: number;
+      cardAmount?: number;
+      discount?: number;
+      installment?: { nextPaymentDate?: string; comment?: string };
+    },
     actorUserId: string | null,
     actor?: ChecksActor,
   ) {
+    // 155: @RequirePermission('accept_payment') снят с контроллера —
+    // эффективного кассира (allowlist владельца, иначе право по матрице)
+    // резолвит сервис. Owner-class проходит всегда.
+    if (!(await this.isEffectiveCashier(tenantID, actor))) {
+      throw new ForbiddenException({ message: 'Приём оплаты доступен только кассиру' });
+    }
     const sanitized: any = { isDeferred: false };
     if (dto?.paymentMethod !== undefined) sanitized.paymentMethod = dto.paymentMethod;
     if (dto?.cashAmount !== undefined) sanitized.cashAmount = dto.cashAmount;
     if (dto?.cardAmount !== undefined) sanitized.cardAmount = dto.cardAmount;
     if (dto?.discount !== undefined) sanitized.discount = dto.discount;
+    // 155: рассрочка при приёме оплаты — параметры плана уходят в активацию.
+    if (dto?.installment !== undefined) sanitized.installment = dto.installment;
     return this.activateDeferred(id, tenantID, userRole, sanitized, actorUserId, actor, { viaAcceptPayment: true });
   }
 
@@ -3244,10 +3507,10 @@ export class ChecksService {
     actor?: ChecksActor,
     opts?: { viaAcceptPayment?: boolean },
   ) {
-    // POS shift-mode (092): read once BEFORE the transaction so the cashier gate
-    // below adds no extra connection while a client is held. OFF → false → gate
-    // is a no-op and this close behaves exactly as today.
-    const shiftMode = await this.isShiftModeEnabled(tenantID);
+    // POS shift-mode (092) + allowlist (155): read once BEFORE the transaction
+    // so the cashier gate below adds no extra connection while a client is
+    // held. OFF → false → gate is a no-op and this close behaves exactly as today.
+    const { shiftModeEnabled: shiftMode, paymentAcceptorIds } = await this.readPosTenantRow(tenantID);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -3311,27 +3574,58 @@ export class ChecksService {
         }
       }
 
-      // POS shift-mode CASHIER gate (092): closing a draft IS taking payment.
-      // When shift-mode is ON, only a cashier (owner-class / accept_payment) may
-      // close. No-op when OFF — `shiftMode` is false and this branch is skipped.
-      if (isActivating && shiftMode && !this.isCashier(actor)) {
+      // POS shift-mode CASHIER gate (092 + 155): closing a draft IS taking
+      // payment. When shift-mode is ON, only an EFFECTIVE cashier (allowlist
+      // владельца, иначе право по матрице; owner-class всегда) may close.
+      // No-op when OFF — `shiftMode` is false and this branch is skipped.
+      if (isActivating && shiftMode && !this.isEffectiveCashierWith(paymentAcceptorIds, actor)) {
         await client.query('ROLLBACK');
         throw new ForbiddenException({ message: 'Принять оплату и закрыть заказ-наряд может только кассир смены' });
       }
 
-      // ── Рассрочка: гарды (зеркально editClosedCheck / плоскому пути) ───────
-      // План создаётся только в create(); закрытие/правка через этот путь не
-      // умеет его создать — installment-чек без плана навсегда повис бы в
-      // корзине «Рассрочка (долг)» без возможности погашения.
-      if (dto.paymentMethod === 'installment') {
-        await client.query('ROLLBACK');
-        throw new BadRequestException({
-          message: 'Перевести существующий заказ-наряд в рассрочку нельзя — рассрочка оформляется при создании чека',
-        });
+      // ── Рассрочка при приёме оплаты (155) ────────────────────────────────
+      // Раньше installment на этом пути был запрещён целиком. Теперь РЕАЛЬНАЯ
+      // активация драфта (isActivating) может закрыться рассрочкой: ноги =
+      // первый взнос, остаток — долг плана, план создаётся в ЭТОЙ ЖЕ
+      // транзакции ниже. Гарды: право sell_installment, наличие клиента
+      // (кого «должать»), отсутствие плана (эхо-ретрай по чеку с планом
+      // отсечён внятным 400). Перевод УЖЕ проведённого чека в рассрочку
+      // по-прежнему запрещён — план создаётся только в точке рождения денег.
+      const isInstallmentClose = dto.paymentMethod === 'installment';
+      if (isInstallmentClose) {
+        if (!isActivating) {
+          await client.query('ROLLBACK');
+          throw new BadRequestException({
+            message: 'Перевести существующий заказ-наряд в рассрочку нельзя — рассрочка оформляется при создании чека',
+          });
+        }
+        if (!userHasPermission(actor, 'sell_installment')) {
+          await client.query('ROLLBACK');
+          throw new ForbiddenException({ message: 'Нет права продавать в рассрочку' });
+        }
+        if (!checkRows[0].client_id) {
+          await client.query('ROLLBACK');
+          throw new BadRequestException({ message: 'Для рассрочки выберите клиента' });
+        }
+        // Loud failure instead of a silently-untracked debt if DI ever misfires.
+        if (!this.installments) {
+          await client.query('ROLLBACK');
+          throw new InternalServerErrorException({ message: 'Сервис рассрочки недоступен' });
+        }
+        if (await this.installments.hasPlanForCheckTx(client, tenantID, id)) {
+          await client.query('ROLLBACK');
+          throw new BadRequestException({
+            message: 'Заказ-наряд продан в рассрочку — измените рассрочку отдельно, затем заказ-наряд',
+          });
+        }
       }
       // Чек с существующим планом: способ/ноги оплаты трогать нельзя — иначе
       // корзина «Рассрочка (долг)» разъедется с installment_plans.
-      if (dto.paymentMethod !== undefined || dto.cashAmount !== undefined || dto.cardAmount !== undefined) {
+      // (installment-закрытие выше уже удостоверилось, что плана нет.)
+      if (
+        !isInstallmentClose &&
+        (dto.paymentMethod !== undefined || dto.cashAmount !== undefined || dto.cardAmount !== undefined)
+      ) {
         const hasInstallment = this.installments
           ? await this.installments.hasPlanForCheckTx(client, tenantID, id)
           : (
@@ -3381,7 +3675,10 @@ export class ChecksService {
       //   • 'cash_card' — одна нога пришла → вторая математически однозначна;
       //     обе пришли → реконсиляция к серверному total (наличные — якорь,
       //     карта добирается), крупный дрейф логируем; совсем без сумм — не
-      //     трогаем (раскладку знает только клиент; 'installment' отсечён выше).
+      //     трогаем (раскладку знает только клиент);
+      //   • 'installment' (155) — ноги = ПЕРВЫЙ ВЗНОС: инвариант cash+card=total
+      //     НЕ применяется (как в create()), только кап ≤ total — остаток
+      //     уходит в долг плана рассрочки.
       if (isActivating) {
         const effMethod = dto.paymentMethod !== undefined ? dto.paymentMethod : checkRows[0].payment_method;
         const rowTotal = closeTotal;
@@ -3411,6 +3708,10 @@ export class ChecksService {
             dto.cashAmount = round2(Math.min(Math.max(dto.cashAmount || 0, 0), rowTotal));
             dto.cardAmount = round2(rowTotal - dto.cashAmount);
           }
+        } else if (effMethod === 'installment') {
+          // Отсутствующие ноги = 0 (весь итог — в долг плана); явные — капаем.
+          dto.cashAmount = round2(Math.min(Math.max(dto.cashAmount || 0, 0), rowTotal));
+          dto.cardAmount = round2(Math.min(Math.max(dto.cardAmount || 0, 0), Math.max(rowTotal - dto.cashAmount, 0)));
         }
       }
 
@@ -3436,6 +3737,13 @@ export class ChecksService {
       const activationDate = new Date().toISOString();
       if (isActivating) {
         sets.push(`date=$${ui++}`);
+        vals.push(activationDate);
+        // 155 — атрибуция «кто принял»: активация драфта — точка рождения
+        // денег на этом пути (оба маршрута: /accept-payment и голый
+        // {isDeferred:false}). Тот же таймстамп, что и date.
+        sets.push(`accepted_by=$${ui++}`);
+        vals.push(actorUserId);
+        sets.push(`accepted_at=$${ui++}`);
         vals.push(activationDate);
       }
       // Скидка кассира при активации (Round 14): вместе с total/profit — иначе
@@ -3485,6 +3793,23 @@ export class ChecksService {
           checkRows[0].client_id ?? null,
           checkRows[0].car_id ?? null,
         );
+
+        // ── Рассрочка при приёме оплаты (155): план в ЭТОЙ ЖЕ транзакции ──
+        // down_payment = капнутые ноги (совпадают с cash_amount+card_amount
+        // чека копейка в копейку), остаток — долг клиента. Атомарно с
+        // активацией: упал insert плана — откатилось и закрытие, installment-
+        // чек без плана возникнуть не может. Гарды (право/клиент/нет плана)
+        // отработали выше.
+        if (isInstallmentClose && this.installments) {
+          await this.installments.createPlanForCheckTx(client, tenantID, actorUserId, {
+            checkId: id,
+            clientId: checkRows[0].client_id,
+            total: closeTotal,
+            downPayment: (dto.cashAmount || 0) + (dto.cardAmount || 0),
+            nextPaymentDate: dto.installment?.nextPaymentDate,
+            comment: dto.installment?.comment,
+          });
+        }
       }
 
       await client.query('COMMIT');
@@ -3522,9 +3847,9 @@ export class ChecksService {
     actorUserId: string | null = null,
     actor?: ChecksActor,
   ) {
-    // POS shift-mode (092): read once up front so the cashier close-gate below
-    // adds no nested connection. OFF → false → the gate is a no-op.
-    const shiftMode = await this.isShiftModeEnabled(tenantID);
+    // POS shift-mode (092) + allowlist (155): read once up front so the cashier
+    // close-gate below adds no nested connection. OFF → false → the gate is a no-op.
+    const { shiftModeEnabled: shiftMode, paymentAcceptorIds } = await this.readPosTenantRow(tenantID);
     // Verify check exists and is deferred. A trashed check (Корзина, 106) is
     // treated as gone — you can't edit / close one; restore it first.
     const { rows: checkRows } = await this.pool.query(
@@ -3585,7 +3910,7 @@ export class ChecksService {
     if (
       inOrderPipeline &&
       !userHasPermission(actor, 'checks_edit_assigned_order') &&
-      !(dto.isDeferred === false && this.isCashier(actor))
+      !(dto.isDeferred === false && this.isEffectiveCashierWith(paymentAcceptorIds, actor))
     ) {
       throw new BadRequestException({ message: 'Изменение назначенного заказа запрещено ролью' });
     }
@@ -3665,7 +3990,7 @@ export class ChecksService {
       // only a cashier may. No-op when OFF. A throw here rolls back via the catch.
       // A non-closing re-edit of a still-deferred draft (lockedIsActivating=false)
       // is unaffected — masters keep building their order.
-      if (lockedIsActivating && shiftMode && !this.isCashier(actor)) {
+      if (lockedIsActivating && shiftMode && !this.isEffectiveCashierWith(paymentAcceptorIds, actor)) {
         throw new ForbiddenException({ message: 'Принять оплату и закрыть заказ-наряд может только кассир смены' });
       }
 

@@ -1,6 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsIn, IsNumber, IsOptional, Max, Min } from 'class-validator';
-import { MONEY_MAX } from './check-line.dto';
+import { IsIn, IsNumber, IsOptional, Max, Min, ValidateNested } from 'class-validator';
+import { CheckInstallmentDto, MONEY_MAX } from './check-line.dto';
 
 /**
  * PATCH /checks/:id/accept-payment (Round 14, роль-пресет «Кассир»).
@@ -15,13 +15,24 @@ import { MONEY_MAX } from './check-line.dto';
  * isDeferred:false и гонит запрос через тот же транзакционный
  * activateDeferred (нормализация ног, скидка «только на товары», склад,
  * гарантии, пуши) — контракт денег байт-в-байт с обычным закрытием.
- * 'installment'/'warranty' намеренно не входят: кассирский экран предлагает
- * нал / карта / смешанная; рассрочка оформляется только при создании чека.
+ *
+ * 155: + 'installment' — кассир продаёт в рассрочку при приёме оплаты (гейт
+ * sell_installment в сервисе; ноги = первый взнос, остаток — план рассрочки в
+ * той же транзакции активации). `installment` — параметры плана (дата
+ * следующего платежа + комментарий). 'warranty' по-прежнему не входит.
  */
 export class AcceptPaymentDto {
   @IsOptional()
-  @IsIn(['cash', 'card', 'cash_card'], { message: 'Способ оплаты: нал, карта или смешанная' })
-  paymentMethod?: 'cash' | 'card' | 'cash_card';
+  @IsIn(['cash', 'card', 'cash_card', 'installment'], {
+    message: 'Способ оплаты: нал, карта, смешанная или рассрочка',
+  })
+  paymentMethod?: 'cash' | 'card' | 'cash_card' | 'installment';
+
+  /** Только при paymentMethod='installment': параметры плана рассрочки. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CheckInstallmentDto)
+  installment?: CheckInstallmentDto;
 
   @IsOptional()
   @Type(() => Number)

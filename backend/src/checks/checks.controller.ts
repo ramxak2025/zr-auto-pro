@@ -4,6 +4,7 @@ import { CreateCheckDto } from './dto/create-check.dto';
 import { UpdateCheckDto } from './dto/update-check.dto';
 import { UpdateCheckCommentDto } from './dto/update-check-comment.dto';
 import { AcceptPaymentDto } from './dto/accept-payment.dto';
+import { UpdatePosSettingsDto } from './dto/update-pos-settings.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
@@ -150,8 +151,9 @@ export class ChecksController {
   /**
    * Read the tenant's POS «Кассовая смена + роли» mode + whether the CALLER is a
    * cashier. Open to any authenticated role: a master needs the flag to swap its
-   * tab bar / order-create flow. `isCashier` is derived server-side (owner-class
-   * role OR the `accept_payment` permission).
+   * tab bar / order-create flow. `isCashier` is derived server-side (155:
+   * owner-class role, либо allowlist владельца, либо право `accept_payment`
+   * из матрицы при пустом списке).
    */
   @Get('pos-settings')
   getPosSettings(@CurrentUser() user: JwtPayload) {
@@ -159,13 +161,27 @@ export class ChecksController {
   }
 
   /**
-   * Flip POS shift-mode on/off. `settings_manage` (настройки интеграций/кассы —
-   * та же ячейка, что и остальные settings-эндпоинты; сид admin=true, 1:1).
+   * Flip POS shift-mode on/off + (155) явный список «кто принимает оплату»
+   * (`paymentAcceptorIds`: null = «по ролям»). `settings_manage` (настройки
+   * интеграций/кассы — та же ячейка, что и остальные settings-эндпоинты;
+   * сид admin=true, 1:1).
    */
   @RequirePermission('settings_manage')
   @Patch('pos-settings')
-  updatePosSettings(@CurrentUser() user: JwtPayload, @Body() dto: { shiftModeEnabled?: boolean }) {
-    return this.checksService.updatePosSettings(user.tenantID, dto);
+  updatePosSettings(@CurrentUser() user: JwtPayload, @Body() dto: UpdatePosSettingsDto) {
+    return this.checksService.updatePosSettings(user.tenantID, dto, user);
+  }
+
+  /**
+   * 155 — экран «Кто принимает оплату» (настройки компании): активные (не
+   * dismissed) сотрудники тенанта + резолв, кто фактически принимает оплату
+   * при текущих настройках и почему. `settings_manage`. Литеральный путь —
+   * объявлен ДО `:id`, как pos-settings.
+   */
+  @RequirePermission('settings_manage')
+  @Get('payment-acceptors')
+  listPaymentAcceptors(@CurrentUser() user: JwtPayload) {
+    return this.checksService.listPaymentAcceptors(user.tenantID);
   }
 
   /**
@@ -309,16 +325,15 @@ export class ChecksController {
 
   /**
    * Приём оплаты по отложенному заказ-наряду (Round 14, роль-пресет «Кассир»).
-   * Гейт — `accept_payment` (НЕ `checks_edit`): пресет «Кассир» (edit='none')
-   * иначе физически не мог бы закрыть заказ — flagship-флоу режима смен. Тело
-   * узкое (способ/ноги/скидка, AcceptPaymentDto); сервис жёстко подставляет
-   * isDeferred:false и идёт тем же транзакционным activateDeferred, что и
-   * обычное закрытие, но БЕЗ own-гейта checks_edit_all — кассир закрывает
+   * Гейт (155) — ЭФФЕКТИВНЫЙ кассир, резолвится в СЕРВИСЕ (allowlist владельца
+   * tenants.payment_acceptors, иначе право `accept_payment` из матрицы) —
+   * поэтому @RequirePermission здесь снят, остаётся только аутентификация.
+   * Тело узкое (способ/ноги/скидка/рассрочка, AcceptPaymentDto); сервис жёстко
+   * подставляет isDeferred:false и идёт тем же транзакционным activateDeferred,
+   * что и обычное закрытие, но БЕЗ own-гейта checks_edit_all — кассир закрывает
    * ЧУЖИЕ драфты по определению профессии. Работает и при выключенном режиме
-   * смен (право явное и выдаётся владельцем сознательно). Двухсегментный
-   * литеральный хвост — не конфликтует с @Patch(':id').
+   * смен. Двухсегментный литеральный хвост — не конфликтует с @Patch(':id').
    */
-  @RequirePermission('accept_payment')
   @Patch(':id/accept-payment')
   acceptPayment(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: AcceptPaymentDto) {
     return this.checksService.acceptPayment(id, user.tenantID, user.role, dto, user.userID, user);

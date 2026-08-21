@@ -6,19 +6,21 @@ import {
   CreditCard,
   Receipt,
   ArrowDownToLine,
+  Landmark,
   Lock,
   Unlock,
   Printer,
   Scale,
   TrendingUp,
   TrendingDown,
+  Users,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { cashShiftsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 
-import type { CashShift, CashShiftReport } from '../../../shared/types';
+import type { CashShift, CashShiftReport, SafeTransaction } from '../../../shared/types';
 import { formatMoney, formatDateTime } from '../../../shared/utils/formatters';
 import QueryState from '../components/QueryState';
 import PageHeader from '../components/PageHeader';
@@ -103,6 +105,13 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
           value={report.factualAmount == null ? '—' : formatMoney(report.factualAmount)}
           strong
         />
+        {/* 155 — распределение нала при закрытии: сейф / размен на завтра */}
+        {s.toSafeAmount != null && (
+          <Row label="Переведено в сейф" value={formatMoney(s.toSafeAmount)} color="text-amber-600" />
+        )}
+        {s.carryoverAmount != null && (
+          <Row label="Осталось на размен" value={formatMoney(s.carryoverAmount)} color="text-gray-700" />
+        )}
       </div>
 
       {/* Difference */}
@@ -118,6 +127,63 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
               </span>
             );
           })()}
+        </div>
+      )}
+
+      {/* 155 — разбивка выручки по принявшим оплату (checks.accepted_by) */}
+      {(report.perAcceptor?.length ?? 0) > 0 && (
+        <div>
+          <p className="text-sm font-semibold text-gray-900 mb-2 flex items-center gap-1.5">
+            <Users className="h-3.5 w-3.5 text-gray-400" /> По сотрудникам
+          </p>
+          <div className="space-y-1">
+            {report.perAcceptor!.map((a) => (
+              <div
+                key={a.userId ?? '__none__'}
+                className="flex items-center justify-between gap-3 text-xs text-gray-600 py-1 border-b border-gray-100 last:border-0"
+              >
+                <span className="min-w-0 truncate">
+                  {a.name || 'Не распределено'} · {a.checksCount} чек.
+                </span>
+                <span className="flex-shrink-0 tabular-nums">
+                  <span className="font-medium text-green-600">нал {formatMoney(a.cashSales)}</span>
+                  <span className="text-gray-300 mx-1">·</span>
+                  <span className="font-medium text-blue-600">карта {formatMoney(a.cardSales)}</span>
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* 155 — фактическая сдача по сотрудникам при закрытии */}
+      {(report.settlements?.length ?? 0) > 0 && (
+        <div>
+          <p className="text-sm font-semibold text-gray-900 mb-2">Сдано</p>
+          <div className="space-y-1">
+            {report.settlements!.map((st) => {
+              const d = st.actualAmount - st.expectedAmount;
+              return (
+                <div
+                  key={st.userId ?? '__none__'}
+                  className="flex items-center justify-between gap-3 text-xs text-gray-600 py-1 border-b border-gray-100 last:border-0"
+                >
+                  <span className="min-w-0 truncate">
+                    {st.name || 'Не распределено'} · расчётно {formatMoney(st.expectedAmount)}
+                  </span>
+                  <span className="flex-shrink-0 tabular-nums">
+                    <span className="font-medium text-gray-900">{formatMoney(st.actualAmount)}</span>
+                    {d !== 0 && (
+                      <span className={`ml-1.5 font-medium ${d > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                        ({d > 0 ? '+' : '−'}
+                        {formatMoney(Math.abs(d))})
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
         </div>
       )}
 
@@ -186,10 +252,15 @@ export default function CashShiftPage() {
   const [openModal, setOpenModal] = useState(false);
   const [collectModal, setCollectModal] = useState(false);
   const [closeModal, setCloseModal] = useState(false);
+  const [safeCollectModal, setSafeCollectModal] = useState(false);
   const [openingInput, setOpeningInput] = useState('');
   const [collectInput, setCollectInput] = useState('');
   const [closingInput, setClosingInput] = useState('');
   const [noteInput, setNoteInput] = useState('');
+  // 155 — закрытие смены: перевод в сейф + сдача по сотрудникам
+  const [toSafeInput, setToSafeInput] = useState('');
+  const [settleInputs, setSettleInputs] = useState<Record<string, string>>({});
+  const [safeCollectInput, setSafeCollectInput] = useState('');
 
   // ─── Queries ───────────────────────────────────────────────────────────────
   const {
@@ -226,6 +297,16 @@ export default function CashShiftPage() {
     enabled: !!reportShiftId,
   });
 
+  // 155 — СЕЙФ (отдельный кошелёк тенанта): баланс + история операций.
+  // Чтение гейтится сервером (cash_shifts_manage / owner-class); на старом
+  // бэкенде эндпоинта нет — секция просто не рендерится (data отсутствует).
+  const { data: safeState } = useQuery({
+    queryKey: ['cash-shift', 'safe'],
+    queryFn: () => cashShiftsApi.safe().then((r) => r.data),
+    enabled: canManage,
+    retry: false,
+  });
+
   const refresh = () => queryClient.invalidateQueries({ queryKey: ['cash-shift'] });
 
   // ─── Mutations ───────────────────────────────────────────────────────────────
@@ -255,8 +336,16 @@ export default function CashShiftPage() {
   });
 
   const closeMutation = useMutation({
-    mutationFn: ({ id, closingAmount, note }: { id: string; closingAmount: number; note?: string }) =>
-      cashShiftsApi.close(id, { closingAmount, note }),
+    mutationFn: ({
+      id,
+      ...data
+    }: {
+      id: string;
+      closingAmount: number;
+      note?: string;
+      toSafeAmount?: number;
+      settlements?: Array<{ userId: string | null; actualAmount: number }>;
+    }) => cashShiftsApi.close(id, data),
     onSuccess: (res) => {
       const rep = res.data;
       const diff = rep.difference ?? 0;
@@ -265,11 +354,32 @@ export default function CashShiftPage() {
       setCloseModal(false);
       setClosingInput('');
       setNoteInput('');
+      setToSafeInput('');
+      setSettleInputs({});
       refresh();
       // Surface the freshly-closed Z-report (with computed difference) instantly.
       setReportShiftId(rep.shift.id);
     },
-    onError: () => toast.error('Не удалось закрыть смену'),
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      toast.error(typeof msg === 'string' ? msg : 'Не удалось закрыть смену');
+    },
+  });
+
+  // 155 — инкассация владельцем ИЗ СЕЙФА (без открытой смены).
+  const safeCollectMutation = useMutation({
+    mutationFn: (data: { amount: number; note?: string }) => cashShiftsApi.safeCollect(data),
+    onSuccess: () => {
+      toast.success('Инкассация из сейфа записана');
+      setSafeCollectModal(false);
+      setSafeCollectInput('');
+      setNoteInput('');
+      refresh();
+    },
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      toast.error(typeof msg === 'string' ? msg : 'Не удалось выполнить инкассацию из сейфа');
+    },
   });
 
   const shift = currentReport?.shift;
@@ -282,6 +392,76 @@ export default function CashShiftPage() {
     if (Number.isNaN(n) || closingInput.trim() === '') return null;
     return diffMeta(n - currentReport.expectedAmount);
   })();
+
+  // 155 — баланс сейфа: живой SafeState, fallback — safeBalance из Z-отчёта
+  // (старый бэкенд не шлёт ни того, ни другого — карточка скрыта).
+  const safeBalance = safeState?.balance ?? currentReport?.safeBalance;
+
+  // 155 — превью «Останется на размен» в диалоге закрытия: факт − в сейф.
+  const carryoverPreview = (() => {
+    const closing = parseAmount(closingInput);
+    if (Number.isNaN(closing) || closingInput.trim() === '') return null;
+    const toSafe = toSafeInput.trim() === '' ? 0 : parseAmount(toSafeInput);
+    if (Number.isNaN(toSafe)) return null;
+    return closing - toSafe;
+  })();
+
+  // 155 — сдача по сотрудникам: Σ введённых сумм (пустые поля = 0).
+  const perAcceptor = currentReport?.perAcceptor ?? [];
+  const settlementsFilled = perAcceptor.some((a) => (settleInputs[a.userId ?? '__none__'] ?? '').trim() !== '');
+  const settlementsSum = perAcceptor.reduce((sum, a) => {
+    const raw = (settleInputs[a.userId ?? '__none__'] ?? '').trim();
+    if (raw === '') return sum;
+    const n = parseAmount(raw);
+    return Number.isNaN(n) ? sum : sum + n;
+  }, 0);
+
+  const handleCloseSubmit = () => {
+    if (!shift) return;
+    const amount = parseAmount(closingInput);
+    if (Number.isNaN(amount) || amount < 0) {
+      toast.error('Введите корректную сумму');
+      return;
+    }
+    let toSafeAmount: number | undefined;
+    if (toSafeInput.trim() !== '') {
+      const t = parseAmount(toSafeInput);
+      if (Number.isNaN(t) || t < 0) {
+        toast.error('Введите корректную сумму перевода в сейф');
+        return;
+      }
+      if (t > amount) {
+        toast.error('В сейф нельзя перевести больше фактического нала');
+        return;
+      }
+      toSafeAmount = t;
+    }
+    let settlements: Array<{ userId: string | null; actualAmount: number }> | undefined;
+    if (settlementsFilled) {
+      for (const a of perAcceptor) {
+        const raw = (settleInputs[a.userId ?? '__none__'] ?? '').trim();
+        if (raw !== '' && (Number.isNaN(parseAmount(raw)) || parseAmount(raw) < 0)) {
+          toast.error(`Некорректная сумма сдачи: ${a.name || 'Не распределено'}`);
+          return;
+        }
+      }
+      if (Math.abs(settlementsSum - amount) > 0.009) {
+        toast.error('Сумма сдач по сотрудникам должна равняться фактическому налу');
+        return;
+      }
+      settlements = perAcceptor.map((a) => {
+        const raw = (settleInputs[a.userId ?? '__none__'] ?? '').trim();
+        return { userId: a.userId, actualAmount: raw === '' ? 0 : parseAmount(raw) };
+      });
+    }
+    closeMutation.mutate({
+      id: shift.id,
+      closingAmount: amount,
+      note: noteInput.trim() || undefined,
+      toSafeAmount,
+      settlements,
+    });
+  };
 
   return (
     <div className="space-y-6">
@@ -392,6 +572,8 @@ export default function CashShiftPage() {
                   onClick={() => {
                     setClosingInput('');
                     setNoteInput('');
+                    setToSafeInput('');
+                    setSettleInputs({});
                     setCloseModal(true);
                   }}
                   className="btn-primary flex-1 justify-center"
@@ -429,6 +611,75 @@ export default function CashShiftPage() {
           </div>
         )}
       </QueryState>
+
+      {/* 155 — СЕЙФ: отдельный кошелёк тенанта. Карточка появляется только
+          когда бэкенд отдаёт баланс (SafeState либо safeBalance в Z-отчёте);
+          гейт кнопки — как у существующих кнопок инкассации (canManage). */}
+      {safeBalance != null && (
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-amber-50">
+                <Landmark className="h-5 w-5 text-amber-600" />
+              </div>
+              <div>
+                <p className="text-xs text-gray-500">Сейф</p>
+                <p className="text-xl font-bold text-gray-900 tabular-nums">{formatMoney(safeBalance)}</p>
+              </div>
+            </div>
+            {canManage && (
+              <button
+                onClick={() => {
+                  setSafeCollectInput('');
+                  setNoteInput('');
+                  setSafeCollectModal(true);
+                }}
+                disabled={safeBalance <= 0}
+                className="btn-secondary"
+              >
+                <ArrowDownToLine className="w-4 h-4" /> Инкассация из сейфа
+              </button>
+            )}
+          </div>
+
+          {(safeState?.transactions?.length ?? 0) > 0 && (
+            <div>
+              <p className="text-sm font-semibold text-gray-900 mb-2">История операций</p>
+              <div className="divide-y divide-gray-100">
+                {safeState!.transactions.slice(0, 10).map((t: SafeTransaction) => {
+                  const isOut = t.type === 'collection' || (t.type === 'adjustment' && t.amount < 0);
+                  const label =
+                    t.type === 'deposit'
+                      ? 'Из кассы (закрытие смены)'
+                      : t.type === 'collection'
+                        ? 'Инкассация'
+                        : 'Корректировка';
+                  return (
+                    <div key={t.id} className="flex items-center justify-between gap-3 py-2">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-gray-900 truncate">{label}</p>
+                        <p className="text-xs text-gray-500 truncate">
+                          {formatDateTime(t.createdAt)}
+                          {t.actorName ? ` · ${t.actorName}` : ''}
+                          {t.note ? ` · ${t.note}` : ''}
+                        </p>
+                      </div>
+                      <span
+                        className={`flex-shrink-0 text-sm font-semibold tabular-nums ${
+                          isOut ? 'text-amber-600' : 'text-green-600'
+                        }`}
+                      >
+                        {isOut ? '−' : '+'}
+                        {formatMoney(Math.abs(t.amount))}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* History */}
       <div className="space-y-3">
@@ -608,24 +859,121 @@ export default function CashShiftPage() {
               </span>
             </div>
           )}
+
+          {/* 155 — сдача по сотрудникам: каждый принимавший сдаёт свой нал */}
+          {perAcceptor.length > 0 && (
+            <div>
+              <p className="text-sm font-medium text-gray-700 mb-2">Сдача по сотрудникам</p>
+              <div className="space-y-2">
+                {perAcceptor.map((a) => {
+                  const key = a.userId ?? '__none__';
+                  return (
+                    <div key={key} className="flex items-center gap-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm text-gray-900 truncate">{a.name || 'Не распределено'}</p>
+                        <p className="text-[11px] text-gray-400">Расчётно наличными {formatMoney(a.cashSales)}</p>
+                      </div>
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        value={settleInputs[key] ?? ''}
+                        onChange={(e) => setSettleInputs((prev) => ({ ...prev, [key]: e.target.value }))}
+                        placeholder="0"
+                        aria-label={`Сдача: ${a.name || 'Не распределено'}`}
+                        className="input w-28 text-right tabular-nums"
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+              {settlementsFilled && (
+                <div className="mt-2 flex items-center justify-between text-xs">
+                  <span className="text-gray-500">Итого сдано</span>
+                  <span className="font-semibold text-gray-900 tabular-nums">{formatMoney(settlementsSum)}</span>
+                </div>
+              )}
+              <p className="text-[11px] text-gray-400 mt-1.5">
+                Сумма сдач должна совпасть с фактическим налом. Оставьте поля пустыми, чтобы закрыть одной общей суммой.
+              </p>
+            </div>
+          )}
+
+          {/* 155 — перевод части нала в сейф; остаток — размен на завтра */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Перевести в сейф, ₽</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              value={toSafeInput}
+              onChange={(e) => setToSafeInput(e.target.value)}
+              placeholder="0"
+              className="input"
+            />
+            {carryoverPreview != null && (
+              <p className={`text-xs mt-1 ${carryoverPreview < 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                Останется на размен: {formatMoney(carryoverPreview)}
+              </p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Примечание (необязательно)</label>
+            <input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} className="input" />
+          </div>
+          <button
+            onClick={handleCloseSubmit}
+            disabled={closeMutation.isPending}
+            className="btn-primary w-full justify-center"
+          >
+            <Lock className="w-4 h-4" /> {closeMutation.isPending ? 'Закрываем…' : 'Закрыть смену'}
+          </button>
+        </div>
+      </Modal>
+
+      {/* ─── Safe collect modal (155 — инкассация из сейфа) ─── */}
+      <Modal isOpen={safeCollectModal} onClose={() => setSafeCollectModal(false)} title="Инкассация из сейфа">
+        <div className="space-y-4">
+          {safeBalance != null && (
+            <div className="rounded-xl bg-gray-50 p-3 text-xs text-gray-600 flex justify-between">
+              <span>Баланс сейфа</span>
+              <span className="font-semibold text-gray-900">{formatMoney(safeBalance)}</span>
+            </div>
+          )}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Сумма инкассации, ₽</label>
+            <input
+              type="number"
+              inputMode="decimal"
+              autoFocus
+              value={safeCollectInput}
+              onChange={(e) => setSafeCollectInput(e.target.value)}
+              placeholder="0"
+              className="input"
+            />
+            <p className="text-xs text-gray-400 mt-1">Не больше текущего баланса сейфа.</p>
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">Примечание (необязательно)</label>
             <input value={noteInput} onChange={(e) => setNoteInput(e.target.value)} className="input" />
           </div>
           <button
             onClick={() => {
-              if (!shift) return;
-              const amount = parseAmount(closingInput);
-              if (Number.isNaN(amount) || amount < 0) {
+              const amount = parseAmount(safeCollectInput);
+              if (Number.isNaN(amount) || amount <= 0) {
                 toast.error('Введите корректную сумму');
                 return;
               }
-              closeMutation.mutate({ id: shift.id, closingAmount: amount, note: noteInput.trim() || undefined });
+              if (safeBalance != null && amount > safeBalance) {
+                toast.error('Сумма больше баланса сейфа');
+                return;
+              }
+              safeCollectMutation.mutate({ amount, note: noteInput.trim() || undefined });
             }}
-            disabled={closeMutation.isPending}
+            disabled={safeCollectMutation.isPending}
             className="btn-primary w-full justify-center"
           >
-            <Lock className="w-4 h-4" /> {closeMutation.isPending ? 'Закрываем…' : 'Закрыть смену'}
+            <ArrowDownToLine className="w-4 h-4" />{' '}
+            {safeCollectMutation.isPending ? 'Записываем…' : 'Записать инкассацию'}
           </button>
         </div>
       </Modal>

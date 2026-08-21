@@ -4,9 +4,11 @@
  * Колонки ДИНАМИЧЕСКИЕ (owner-configurable, миграция 091): рендерятся из
  * `checksApi.board().columns` (активные, по sortOrder), каждая колонка
  * наполняется из `board().groups[column.key]` (newest-first, ≤100 на бэке,
- * учитывает право checks_view_all). Тап по карточке → action sheet
- * (cross-platform Modal) со списком активных колонок → `setWorkStatus(id,
- * column.key)` с оптимистичным апдейтом кеша ['checks','board'] + инвалидация.
+ * учитывает право checks_view_all). ТАП по карточке → сразу деталь заказ-
+ * наряда; ЛОНГ-ПРЕСС (~350 мс) → action sheet (cross-platform Modal) со
+ * списком активных колонок → `setWorkStatus(id, column.key)` с оптимистичным
+ * апдейтом кеша ['checks','board'] + инвалидация. В шите также «Изменить
+ * комментарий» (PATCH /checks/:id/comment) и дубль «Открыть заказ-наряд».
  * Haptic на успех. Pull-to-refresh на любой колонке обновляет всю доску.
  *
  * Шестерёнка в шапке (owner-class: director/admin/superadmin) открывает
@@ -26,14 +28,17 @@ import React, { useCallback, useState } from 'react';
 import {
   View,
   Text,
+  TextInput,
   ScrollView,
   TouchableOpacity,
   StyleSheet,
   RefreshControl,
+  ActivityIndicator,
   Alert,
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { Image } from 'expo-image';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
@@ -124,7 +129,10 @@ function syncOrderLiveActivity(vars: MoveVars): void {
 interface BoardCardProps {
   check: Check;
   palette: SemanticPalette;
+  /** Тап — сразу деталь заказ-наряда (как кнопка «Открыть» из шита). */
   onPress: (check: Check) => void;
+  /** Лонг-пресс (~350 мс) — шит выбора этапа. */
+  onLongPress: (check: Check) => void;
   /**
    * Режим кассовой смены тенанта. Бейдж «ОПЛАЧЕНО — выдать» имеет смысл ТОЛЬКО
    * при включённом режиме (веха «Выдана» — кассирская механика): на легаси-
@@ -134,7 +142,13 @@ interface BoardCardProps {
    */
   shiftModeEnabled: boolean;
 }
-const BoardCard = React.memo(function BoardCard({ check, palette, onPress, shiftModeEnabled }: BoardCardProps) {
+const BoardCard = React.memo(function BoardCard({
+  check,
+  palette,
+  onPress,
+  onLongPress,
+  shiftModeEnabled,
+}: BoardCardProps) {
   // Round 14: исполнители (check_assignees) и место (tenant_locations) на
   // карточке; «ОПЛАЧЕНО — выдать» — заметный бейдж оплаченного-но-не-выданного
   // конвейерного заказа (единственное место, где оплата видна на доске:
@@ -151,8 +165,11 @@ const BoardCard = React.memo(function BoardCard({ check, palette, onPress, shift
       ]}
       activeOpacity={0.7}
       onPress={() => onPress(check)}
+      onLongPress={() => onLongPress(check)}
+      delayLongPress={350}
       accessibilityRole="button"
       accessibilityLabel={`Заказ-наряд №${check.number}`}
+      accessibilityHint="Нажмите, чтобы открыть; удерживайте, чтобы сменить этап"
     >
       <View style={styles.cardHeader}>
         <Text style={[styles.cardNumber, { color: palette.text.primary }]}>#{check.number}</Text>
@@ -200,11 +217,22 @@ const BoardCard = React.memo(function BoardCard({ check, palette, onPress, shift
           ) : null}
         </View>
       ) : null}
+      {/* Комментарий заказа — справка под клиентом/авто (155). */}
+      {check.comment ? (
+        <View style={styles.cardCommentRow}>
+          <Ionicons name="chatbubble-outline" size={12} color={palette.text.tertiary} />
+          <Text style={[styles.cardCommentText, { color: palette.text.tertiary }]} numberOfLines={2}>
+            {check.comment}
+          </Text>
+        </View>
+      ) : null}
       {(assignees.length > 0 || check.location?.name) && (
         <View style={styles.cardFooterRow}>
           {assignees.length > 0 && (
             <View style={styles.assigneeRow}>
-              {assignees.slice(0, 3).map((a) => (
+              {/* 155: кружки 32pt с ФОТО сотрудника (users.avatar — URL/data-URI),
+                  фолбэк — прежние инициалы. До 4 штук, дальше «+N». */}
+              {assignees.slice(0, 4).map((a) => (
                 <View
                   key={a.id}
                   style={[
@@ -215,15 +243,19 @@ const BoardCard = React.memo(function BoardCard({ check, palette, onPress, shift
                     },
                   ]}
                 >
-                  <Text
-                    style={[styles.assigneeInitials, { color: isDark ? colors.primary[300] : colors.primary[700] }]}
-                  >
-                    {initials(a.fullName)}
-                  </Text>
+                  {a.avatar ? (
+                    <Image source={{ uri: a.avatar }} style={styles.assigneeAvatar} contentFit="cover" />
+                  ) : (
+                    <Text
+                      style={[styles.assigneeInitials, { color: isDark ? colors.primary[300] : colors.primary[700] }]}
+                    >
+                      {initials(a.fullName)}
+                    </Text>
+                  )}
                 </View>
               ))}
-              {assignees.length > 3 && (
-                <Text style={[styles.assigneeMore, { color: palette.text.tertiary }]}>+{assignees.length - 3}</Text>
+              {assignees.length > 4 && (
+                <Text style={[styles.assigneeMore, { color: palette.text.tertiary }]}>+{assignees.length - 4}</Text>
               )}
             </View>
           )}
@@ -267,8 +299,11 @@ export default function WorkBoardScreen() {
   const COLUMN_WIDTH = Math.min(Math.round(width * 0.84), 360);
 
   const [refreshing, setRefreshing] = useState(false);
-  // Карточка, по которой открыт action sheet выбора статуса.
+  // Карточка, по которой открыт action sheet выбора статуса (лонг-пресс).
   const [picker, setPicker] = useState<Check | null>(null);
+  // 155: редактор комментария (пункт шита «Изменить комментарий»).
+  const [commentEditor, setCommentEditor] = useState<Check | null>(null);
+  const [commentText, setCommentText] = useState('');
 
   // ── Фильтр по исполнителю (Round 14, ?assigneeId=) ───────────────────
   // Владелец/админ с видимостью «все» — чипы мастеров («Все» + сотрудники);
@@ -384,6 +419,50 @@ export default function WorkBoardScreen() {
     setPicker(null);
     if (current) navigation.navigate('CheckDetail', { id: current.id });
   }, [picker, navigation]);
+
+  // 155: ТАП по карточке — сразу деталь (как «Открыть заказ-наряд» из шита);
+  // шит выбора этапа переехал на лонг-пресс.
+  const handleCardPress = useCallback(
+    (check: Check) => {
+      navigation.navigate('CheckDetail', { id: check.id });
+    },
+    [navigation],
+  );
+
+  const handleCardLongPress = useCallback((check: Check) => {
+    haptic('select');
+    setPicker(check);
+  }, []);
+
+  // ── Комментарий с доски (155) ────────────────────────────────────────
+  // PATCH /checks/:id/comment (бэкенд гейтит эффективным checks_edit) →
+  // инвалидация доски (BOARD_KEY — префикс, накрывает и варианты с
+  // assigneeId), журнала и детали чека.
+  const commentMutation = useMutation({
+    mutationFn: ({ id, text }: { id: string; text: string }) => checksApi.updateComment(id, text),
+    onSuccess: (_data, vars) => {
+      haptic('success');
+      setCommentEditor(null);
+      queryClient.invalidateQueries({ queryKey: BOARD_KEY });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['check', vars.id] });
+    },
+    onError: (err: any) => {
+      haptic('error');
+      Alert.alert(
+        'Не удалось сохранить комментарий',
+        err?.response?.data?.message || 'Проверьте соединение и попробуйте ещё раз.',
+      );
+    },
+  });
+
+  const handleEditComment = useCallback(() => {
+    const current = picker;
+    setPicker(null);
+    if (!current) return;
+    setCommentText(current.comment ?? '');
+    setCommentEditor(current);
+  }, [picker]);
 
   const columns = board?.columns ?? [];
   const totalActive = board ? columns.reduce((sum, col) => sum + (board.groups[col.key]?.length ?? 0), 0) : 0;
@@ -575,7 +654,8 @@ export default function WorkBoardScreen() {
                         key={c.id}
                         check={c}
                         palette={palette}
-                        onPress={setPicker}
+                        onPress={handleCardPress}
+                        onLongPress={handleCardLongPress}
                         shiftModeEnabled={shiftModeEnabled}
                       />
                     ))
@@ -600,7 +680,12 @@ export default function WorkBoardScreen() {
             {columns.map((column) => {
               const vis = columnVisual(column);
               const isCurrent = picker.workStatus === column.key;
-              const disabled = isCurrent || !canMove;
+              // 155: «Выдана» для неоплаченного заказа задизейблена ЗАРАНЕЕ с
+              // подписью «Сначала оплата у кассира» — вместо пост-фактум 400
+              // (сам алерт-обработчик 400 в moveMutation.onError оставлен как
+              // страховка от гонки «оплатили с другого телефона»).
+              const deliveredLocked = column.key === WORK_STATUS_DELIVERED && picker.isDeferred === true;
+              const disabled = isCurrent || !canMove || deliveredLocked;
               return (
                 <TouchableOpacity
                   key={column.id}
@@ -608,6 +693,7 @@ export default function WorkBoardScreen() {
                     styles.sheetRow,
                     { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
                     isCurrent && { borderColor: vis.color, backgroundColor: vis.bg },
+                    deliveredLocked && !isCurrent && { opacity: 0.55 },
                   ]}
                   activeOpacity={disabled ? 1 : 0.7}
                   disabled={disabled}
@@ -616,19 +702,41 @@ export default function WorkBoardScreen() {
                   <View style={[styles.sheetIconWrap, { backgroundColor: vis.bg }]}>
                     <View style={[styles.sheetDot, { backgroundColor: vis.color }]} />
                   </View>
-                  <Text style={[styles.sheetRowLabel, { color: palette.text.primary }]} numberOfLines={1}>
-                    {vis.label}
-                  </Text>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[styles.sheetRowLabel, { color: palette.text.primary }]} numberOfLines={1}>
+                      {vis.label}
+                    </Text>
+                    {deliveredLocked && !isCurrent && (
+                      <Text style={[styles.sheetRowSub, { color: palette.text.tertiary }]} numberOfLines={1}>
+                        Сначала оплата у кассира
+                      </Text>
+                    )}
+                  </View>
                   {isCurrent ? (
                     <View style={[styles.sheetCurrentTag, { backgroundColor: vis.color }]}>
                       <Text style={styles.sheetCurrentTagText}>Текущий</Text>
                     </View>
+                  ) : deliveredLocked ? (
+                    <Ionicons name="lock-closed-outline" size={16} color={palette.text.tertiary} />
                   ) : canMove ? (
                     <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
                   ) : null}
                 </TouchableOpacity>
               );
             })}
+
+            {/* 155: комментарий правится прямо с доски (гейт checks_edit —
+                тот же, что и перемещение). */}
+            {canMove && (
+              <TouchableOpacity
+                style={[styles.sheetOpenBtn, { borderColor: palette.border.subtle }]}
+                activeOpacity={0.7}
+                onPress={handleEditComment}
+              >
+                <Ionicons name="chatbubble-outline" size={17} color={colors.primary[600]} />
+                <Text style={styles.sheetOpenBtnText}>Изменить комментарий</Text>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={[styles.sheetOpenBtn, { borderColor: palette.border.subtle }]}
@@ -637,6 +745,52 @@ export default function WorkBoardScreen() {
             >
               <Ionicons name="open-outline" size={17} color={colors.primary[600]} />
               <Text style={styles.sheetOpenBtnText}>Открыть заказ-наряд</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+      </Modal>
+
+      {/* Модал редактирования комментария (155): multiline, ≤2000 симв. */}
+      <Modal
+        visible={!!commentEditor}
+        onClose={() => setCommentEditor(null)}
+        title={commentEditor ? `Комментарий — #${commentEditor.number}` : ''}
+      >
+        {commentEditor ? (
+          <View style={{ gap: spacing[3] }}>
+            <TextInput
+              value={commentText}
+              onChangeText={setCommentText}
+              style={[
+                styles.commentInput,
+                {
+                  backgroundColor: palette.bg.muted,
+                  borderColor: palette.border.subtle,
+                  color: palette.text.primary,
+                },
+              ]}
+              multiline
+              maxLength={2000}
+              placeholder="Комментарий к заказ-наряду"
+              placeholderTextColor={palette.text.tertiary}
+              autoFocus
+            />
+            <TouchableOpacity
+              style={[styles.commentSaveBtn, { backgroundColor: colors.primary[600] }]}
+              activeOpacity={0.85}
+              disabled={commentMutation.isPending}
+              onPress={() => {
+                if (!commentEditor) return;
+                commentMutation.mutate({ id: commentEditor.id, text: commentText.trim() });
+              }}
+              accessibilityRole="button"
+              accessibilityLabel="Сохранить комментарий"
+            >
+              {commentMutation.isPending ? (
+                <ActivityIndicator color={colors.white} />
+              ) : (
+                <Text style={styles.commentSaveBtnText}>Сохранить</Text>
+              )}
             </TouchableOpacity>
           </View>
         ) : null}
@@ -760,17 +914,24 @@ const styles = StyleSheet.create({
     marginTop: spacing[0.5],
   },
   assigneeRow: { flexDirection: 'row', alignItems: 'center' },
+  // 155: 32pt — под фото сотрудника (avatar); overflow hidden обрезает
+  // картинку по кругу, фолбэк-инициалы центрируются как раньше.
   assigneeCircle: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     borderWidth: 1.5,
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: -6,
+    marginRight: -8,
+    overflow: 'hidden',
   },
-  assigneeInitials: { fontSize: 9, fontWeight: fontWeight.bold },
-  assigneeMore: { fontSize: 10, fontWeight: fontWeight.semibold, marginLeft: 10 },
+  assigneeAvatar: { width: '100%', height: '100%' },
+  assigneeInitials: { fontSize: 11, fontWeight: fontWeight.bold },
+  assigneeMore: { fontSize: 10, fontWeight: fontWeight.semibold, marginLeft: 12 },
+  // Комментарий на карточке — вторичная справка, tertiary-цвет.
+  cardCommentRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing[1.5] },
+  cardCommentText: { flex: 1, fontSize: fontSize.xs, lineHeight: 15 },
   locationChip: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -801,7 +962,8 @@ const styles = StyleSheet.create({
   },
   sheetIconWrap: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   sheetDot: { width: 14, height: 14, borderRadius: 7 },
-  sheetRowLabel: { flex: 1, fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  sheetRowLabel: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  sheetRowSub: { fontSize: 11, fontWeight: fontWeight.medium, marginTop: 1 },
   sheetCurrentTag: { paddingHorizontal: spacing[2], paddingVertical: 3, borderRadius: borderRadius.full },
   sheetCurrentTagText: { color: colors.white, fontSize: 10, fontWeight: fontWeight.bold },
   sheetOpenBtn: {
@@ -815,4 +977,23 @@ const styles = StyleSheet.create({
     marginTop: spacing[2],
   },
   sheetOpenBtnText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.primary[600] },
+
+  // ── Комментарий с доски (155) ──────────────────────────────────────
+  commentInput: {
+    minHeight: 96,
+    maxHeight: 200,
+    borderWidth: 1,
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+    fontSize: fontSize.sm,
+    textAlignVertical: 'top',
+  },
+  commentSaveBtn: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[3],
+  },
+  commentSaveBtnText: { color: colors.white, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
 });

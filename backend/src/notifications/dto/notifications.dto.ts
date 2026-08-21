@@ -36,6 +36,10 @@ export const NOTIFICATION_CATEGORIES = [
   'call_incoming',
   'profile_request',
   'account',
+  // 155 — кассовая смена: директору «касса закрыта» (суммы, сейф, размен),
+  // кассирам «инкассация N из кассы/сейфа, остаток M».
+  'cash_shift_closed',
+  'cash_collection',
 ] as const;
 export type NotificationCategory = (typeof NOTIFICATION_CATEGORIES)[number];
 

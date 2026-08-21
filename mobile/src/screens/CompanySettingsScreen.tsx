@@ -23,7 +23,13 @@ import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import Modal from '../components/Modal';
-import type { Tenant, LoyaltySettings, PosSettings, PosSettingsConflict } from '../../../shared/types';
+import type {
+  Tenant,
+  LoyaltySettings,
+  PosSettings,
+  PosSettingsConflict,
+  PaymentAcceptorInfo,
+} from '../../../shared/types';
 import { POS_SETTINGS_KEY } from '../hooks/usePosSettings';
 import { formatPhone } from '../../../shared/validation/phone';
 import { haptic } from '../platform/haptics';
@@ -338,15 +344,20 @@ export default function CompanySettingsScreen() {
               is one tap and never entangles with tenant fields. */}
           {canManagePosSettings && <PosShiftModeSection index={3} />}
 
+          {/* 155 — «Кто принимает оплату»: явный список кассиров (allowlist в
+              pos-settings) либо режим «по ролям». Self-contained card рядом с
+              тумблером режима, ключ settings_manage. */}
+          {canManagePosSettings && <PaymentAcceptorsSection index={4} />}
+
           {/* Программа лояльности — ключ settings_manage (сервер: PATCH
               /loyalty/settings). Self-contained card: owns its own query +
               form + save, so saving cashback config never touches tenant
               fields and vice-versa. */}
-          {canManagePosSettings && <LoyaltySettingsSection index={4} />}
+          {canManagePosSettings && <LoyaltySettingsSection index={5} />}
 
           {/* Save */}
           {dirty && (
-            <AnimatedCard index={5}>
+            <AnimatedCard index={6}>
               <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={mutation.isPending}>
                 {mutation.isPending ? (
                   <ActivityIndicator color={colors.white} size="small" />
@@ -501,6 +512,207 @@ function PosShiftModeSection({ index }: { index: number }) {
           <Text style={styles.conflictBoardBtnText}>Открыть доску</Text>
         </TouchableOpacity>
       </Modal>
+    </AnimatedCard>
+  );
+}
+
+// ── «Кто принимает оплату» (155, payment acceptors allowlist) ───────────
+// Self-contained card под settings_manage. Читает GET /checks/payment-acceptors
+// (активные сотрудники + резолв «кто фактически принимает и почему») и
+// pos-settings (paymentAcceptorIds). Два режима:
+//   • null — «по ролям»: принимают все с правом «Приём оплаты» (как раньше);
+//   • список — принимают ТОЛЬКО перечисленные (+ owner-class всегда, из
+//     списка не убираются).
+// Сохранение — PATCH /checks/pos-settings ({ paymentAcceptorIds }); 409 при
+// включении режима без единого кассира показываем дословно.
+function PaymentAcceptorsSection({ index }: { index: number }) {
+  const palette = useColors();
+  const queryClient = useQueryClient();
+
+  const { data: settings } = useQuery<PosSettings>({
+    queryKey: POS_SETTINGS_KEY,
+    queryFn: async () => (await checksApi.getPosSettings()).data,
+    staleTime: 60_000,
+  });
+
+  const { data: acceptors } = useQuery<PaymentAcceptorInfo[]>({
+    queryKey: ['payment-acceptors'],
+    queryFn: async () => (await checksApi.paymentAcceptors()).data,
+    staleTime: 60_000,
+  });
+
+  // Локальный черновик списка: null = режим «по ролям». Синхронизируется с
+  // сервером на каждом свежем pos-settings (как соседние секции).
+  const [manualIds, setManualIds] = useState<string[] | null>(null);
+  const [dirty, setDirty] = useState(false);
+  useEffect(() => {
+    if (settings) {
+      setManualIds(settings.paymentAcceptorIds ?? null);
+      setDirty(false);
+    }
+  }, [settings]);
+
+  const mutation = useMutation({
+    mutationFn: (paymentAcceptorIds: string[] | null) => checksApi.updatePosSettings({ paymentAcceptorIds }),
+    onSuccess: () => {
+      haptic('success');
+      setDirty(false);
+      queryClient.invalidateQueries({ queryKey: POS_SETTINGS_KEY });
+      queryClient.invalidateQueries({ queryKey: ['payment-acceptors'] });
+    },
+    onError: (err: any) => {
+      haptic('error');
+      // 409 «Некому принимать оплату…» и прочие ошибки бэка — дословно.
+      const msg = err?.response?.data?.message;
+      Alert.alert('Ошибка', typeof msg === 'string' && msg ? msg : 'Не удалось сохранить список');
+    },
+  });
+
+  const rows = acceptors ?? [];
+  const effectiveNames = rows.filter((a) => a.effective).map((a) => a.fullName || 'Без имени');
+  const isManual = manualIds !== null;
+
+  const toggle = (a: PaymentAcceptorInfo) => {
+    if (a.isOwnerClass || manualIds === null) return;
+    haptic('select');
+    setManualIds((prev) => {
+      if (prev === null) return prev;
+      return prev.includes(a.id) ? prev.filter((id) => id !== a.id) : [...prev, a.id];
+    });
+    setDirty(true);
+  };
+
+  const startManual = () => {
+    haptic('select');
+    // Стартуем с тех, кто фактически принимает сейчас (owner-class в списке
+    // не хранится — они принимают всегда и без него).
+    setManualIds(rows.filter((a) => a.effective && !a.isOwnerClass).map((a) => a.id));
+    setDirty(true);
+  };
+
+  const resetToRoles = () => {
+    haptic('select');
+    setManualIds(null);
+    // null сохраняем сразу — это явное действие «Сбросить к ролям».
+    mutation.mutate(null);
+  };
+
+  const cardStyle = StyleSheet.flatten([
+    styles.card,
+    { backgroundColor: palette.bg.card, borderColor: palette.border.subtle },
+  ]);
+  const cardTitleStyle = StyleSheet.flatten([styles.cardTitle, { color: palette.text.primary }]);
+
+  return (
+    <AnimatedCard index={index}>
+      <View style={cardStyle}>
+        <View style={styles.cardHeader}>
+          <Ionicons name="card-outline" size={16} color={palette.text.tertiary} />
+          <Text style={cardTitleStyle}>Кто принимает оплату</Text>
+        </View>
+
+        {!isManual ? (
+          <>
+            {/* Режим «по ролям» — прежнее поведение. */}
+            <View style={[styles.acceptorPlaque, { backgroundColor: palette.bg.muted }]}>
+              <Ionicons name="people-outline" size={15} color={palette.text.secondary} />
+              <Text style={[styles.acceptorPlaqueText, { color: palette.text.secondary }]}>
+                По ролям: принимают все с правом «Приём оплаты»
+              </Text>
+            </View>
+            {effectiveNames.length > 0 && (
+              <Text style={[styles.acceptorEffectiveList, { color: palette.text.tertiary }]}>
+                Сейчас принимают: {effectiveNames.join(', ')}
+              </Text>
+            )}
+            <TouchableOpacity
+              style={[styles.acceptorModeBtn, { borderColor: palette.border.subtle }]}
+              onPress={startManual}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityLabel="Выбрать сотрудников вручную"
+            >
+              <Ionicons name="checkbox-outline" size={16} color={colors.primary[600]} />
+              <Text style={[styles.acceptorModeBtnText, { color: colors.primary[600] }]}>Выбрать вручную</Text>
+            </TouchableOpacity>
+          </>
+        ) : (
+          <>
+            {/* Режим явного списка: чекбоксы по каждому активному сотруднику. */}
+            <View style={{ gap: 2 }}>
+              {rows.map((a) => {
+                const checked = a.isOwnerClass || (manualIds?.includes(a.id) ?? false);
+                return (
+                  <TouchableOpacity
+                    key={a.id}
+                    style={styles.acceptorRow}
+                    onPress={() => toggle(a)}
+                    disabled={a.isOwnerClass}
+                    activeOpacity={0.7}
+                    accessibilityRole="checkbox"
+                    accessibilityState={{ checked, disabled: a.isOwnerClass }}
+                    accessibilityLabel={a.fullName || 'Без имени'}
+                  >
+                    <Ionicons
+                      name={checked ? 'checkbox' : 'square-outline'}
+                      size={22}
+                      color={
+                        a.isOwnerClass ? palette.text.tertiary : checked ? colors.primary[600] : palette.text.tertiary
+                      }
+                    />
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                      <Text style={[styles.acceptorName, { color: palette.text.primary }]} numberOfLines={1}>
+                        {a.fullName || 'Без имени'}
+                      </Text>
+                      {a.roleName ? (
+                        <Text style={[styles.acceptorRole, { color: palette.text.tertiary }]} numberOfLines={1}>
+                          {a.roleName}
+                        </Text>
+                      ) : null}
+                    </View>
+                    {a.isOwnerClass && (
+                      <Text style={[styles.acceptorAlways, { color: palette.text.tertiary }]}>всегда может</Text>
+                    )}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View style={styles.acceptorActionsRow}>
+              <TouchableOpacity
+                style={[styles.acceptorModeBtn, { borderColor: palette.border.subtle, flex: 1 }]}
+                onPress={resetToRoles}
+                disabled={mutation.isPending}
+                activeOpacity={0.8}
+                accessibilityRole="button"
+                accessibilityLabel="Сбросить к ролям"
+              >
+                <Ionicons name="refresh-outline" size={15} color={palette.text.secondary} />
+                <Text style={[styles.acceptorModeBtnText, { color: palette.text.secondary }]}>Сбросить к ролям</Text>
+              </TouchableOpacity>
+              {dirty && (
+                <TouchableOpacity
+                  style={[styles.acceptorSaveBtn, { backgroundColor: colors.primary[600], flex: 1 }]}
+                  onPress={() => mutation.mutate(manualIds)}
+                  disabled={mutation.isPending}
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel="Сохранить список"
+                >
+                  {mutation.isPending ? (
+                    <ActivityIndicator color={colors.white} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="checkmark-circle-outline" size={15} color={colors.white} />
+                      <Text style={styles.acceptorSaveBtnText}>Сохранить</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              )}
+            </View>
+          </>
+        )}
+      </View>
     </AnimatedCard>
   );
 }
@@ -714,6 +926,50 @@ const styles = StyleSheet.create({
   toggleTextWrap: { flex: 1, minWidth: 0 },
   toggleLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   toggleSub: { fontSize: 12, lineHeight: 17, marginTop: 2 },
+  // 155 — «Кто принимает оплату»
+  acceptorPlaque: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2],
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[2.5],
+  },
+  acceptorPlaqueText: { flex: 1, minWidth: 0, fontSize: fontSize.xs, lineHeight: 17, fontWeight: fontWeight.medium },
+  acceptorEffectiveList: { fontSize: fontSize.xs, lineHeight: 17 },
+  acceptorRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    paddingVertical: spacing[2],
+    minHeight: 40,
+  },
+  acceptorName: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  acceptorRole: { fontSize: 11, marginTop: 1 },
+  acceptorAlways: { fontSize: 11, fontWeight: fontWeight.medium, flexShrink: 0 },
+  acceptorActionsRow: { flexDirection: 'row', gap: spacing[2.5] },
+  acceptorModeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    paddingVertical: spacing[2.5],
+    minHeight: 40,
+  },
+  acceptorModeBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
+  acceptorSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    borderRadius: borderRadius.xl,
+    paddingVertical: spacing[2.5],
+    minHeight: 40,
+  },
+  acceptorSaveBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, color: colors.white },
+
   // 409-конфликт переключения режима кассовой смены (Round 14).
   conflictHint: { fontSize: fontSize.sm, lineHeight: 19, marginBottom: spacing[3] },
   conflictRow: {

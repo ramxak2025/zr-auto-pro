@@ -958,6 +958,56 @@ export default function CashFlowScreen() {
           <EmptyState title="Нет операций" description="За выбранный период чеков не было" icon="wallet" />
         ) : (
           <>
+            {/* 155 — «кошельки» тенанта: касса (размен последней закрытой
+                смены либо живой expected открытой) и сейф. Поле опциональное —
+                старый бэк / роль без права его не шлёт. Справочно, вне периода. */}
+            {cashflow?.wallets && (
+              <View style={styles.walletsRow}>
+                <View
+                  style={[styles.walletCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <View
+                    style={[
+                      styles.walletIcon,
+                      {
+                        backgroundColor:
+                          palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50],
+                      },
+                    ]}
+                  >
+                    <Ionicons name="cash-outline" size={15} color={colors.green[600]} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[styles.walletLabel, { color: palette.text.tertiary }]}>Касса</Text>
+                    <Text style={[styles.walletValue, { color: palette.text.primary }]} numberOfLines={1}>
+                      {formatMoney(cashflow.wallets.drawer ?? 0)}
+                    </Text>
+                  </View>
+                </View>
+                <View
+                  style={[styles.walletCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+                >
+                  <View
+                    style={[
+                      styles.walletIcon,
+                      {
+                        backgroundColor:
+                          palette.mode === 'dark' ? softTint(colors.amber[600], 'dark') : colors.amber[50],
+                      },
+                    ]}
+                  >
+                    <Ionicons name="archive-outline" size={15} color={colors.amber[600]} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={[styles.walletLabel, { color: palette.text.tertiary }]}>Сейф</Text>
+                    <Text style={[styles.walletValue, { color: palette.text.primary }]} numberOfLines={1}>
+                      {formatMoney(cashflow.wallets.safe ?? 0)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            )}
+
             {/* Hero totals card */}
             <AnimatedCard
               index={0}
@@ -1275,6 +1325,17 @@ export default function CashFlowScreen() {
                           <View style={[styles.dayDot, { backgroundColor: colors.rose[500] }]} />
                           <Text style={[styles.dayDetailText, { color: colors.rose[600] }]}>
                             Возвраты: −{formatMoney(day.refunds)} · уже вычтены из дня продажи
+                          </Text>
+                        </View>
+                      )}
+                      {/* 155 — инкассации за день (из кассы + из сейфа).
+                          Справочно: деньги уже учтены в приходе дня продажи,
+                          из итога дня не минусуются. Поле опциональное. */}
+                      {typeof day.collections === 'number' && day.collections > 0 && (
+                        <View style={styles.dayDetailItem}>
+                          <View style={[styles.dayDot, { backgroundColor: colors.amber[600] }]} />
+                          <Text style={[styles.dayDetailText, { color: palette.text.secondary }]}>
+                            Инкассации: −{formatMoney(day.collections)}
                           </Text>
                         </View>
                       )}
@@ -1669,6 +1730,22 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
+
+  // 155 — «кошельки»: две компактные карточки Касса / Сейф над hero-итогом.
+  walletsRow: { flexDirection: 'row', gap: spacing[3] },
+  walletCard: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+    paddingHorizontal: spacing[3],
+    paddingVertical: spacing[3],
+  },
+  walletIcon: { width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  walletLabel: { fontSize: 11, fontWeight: '500' },
+  walletValue: { fontSize: 16, fontWeight: '700', letterSpacing: -0.3 },
 
   // Totals card — hero
   totalsCard: {

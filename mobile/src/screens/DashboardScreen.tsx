@@ -41,6 +41,7 @@ import {
   productsApi,
   myCompanyApi,
   installmentsApi,
+  cashShiftsApi,
 } from '../api/services';
 import { formatInstallmentMoney, dueLabel } from '../components/installments/installmentUi';
 import { getImageUrl } from '../api/axios';
@@ -65,9 +66,11 @@ import type {
   Product,
   Tenant,
   InstallmentWidget,
+  CashShiftReport,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { usePreference, prefKey } from '../hooks/usePreference';
+import { usePosSettings } from '../hooks/usePosSettings';
 import {
   DASHBOARD_WIDGETS_PREF,
   isWidgetVisible,
@@ -4272,6 +4275,105 @@ function MasterDashboard() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
+//  CASHIER SHIFT CARD (155) — компактная карточка «Касса» для кассира при
+//  включённом режиме кассовой смены. Переиспользует queryKey
+//  ['cash-shift', 'current'] экрана смен (TanStack дедуплицирует запрос).
+//  Тап ведёт на экран «Кассовая смена». Аддитивна: вне режима / не кассиру
+//  рендерит null и ничего в вёрстке дашборда не меняет.
+// ════════════════════════════════════════════════════════════════════════════
+function CashierShiftCard() {
+  const navigation = useNavigation<any>();
+  const palette = useColors();
+  const { shiftModeEnabled, isCashier } = usePosSettings();
+  const visible = shiftModeEnabled && isCashier;
+
+  const { data } = useQuery<CashShiftReport | null>({
+    queryKey: ['cash-shift', 'current'],
+    queryFn: async () => (await cashShiftsApi.current()).data,
+    placeholderData: (prev) => prev,
+    enabled: visible,
+  });
+  // Пустое тело axios может прийти как "" — валидная открытая смена только
+  // объект с полем shift (тот же гард, что на CashShiftScreen).
+  const report = data && data.shift ? data : null;
+
+  if (!visible) return null;
+
+  const goToShifts = () => {
+    haptic('select');
+    navigation.navigate('Main', { screen: 'MoreTab', params: { screen: 'CashShift', initial: false } });
+  };
+
+  const stats = report
+    ? [
+        { label: 'Нал', value: formatMoneyCompact(report.cashSales), color: colors.green[600] },
+        { label: 'Карта', value: formatMoneyCompact(report.cardSales), color: colors.blue[600] },
+        { label: 'В кассе', value: formatMoneyCompact(report.expectedAmount), color: colors.primary[600] },
+        { label: 'Чеков', value: String(report.checksCount), color: colors.slate[600] },
+      ]
+    : [];
+
+  return (
+    <AnimatedCard index={0}>
+      <TouchableOpacity
+        style={[styles.cashierCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+        onPress={goToShifts}
+        activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel="Открыть кассовую смену"
+      >
+        <View style={styles.cashierHeaderRow}>
+          <View
+            style={[
+              styles.cashierIcon,
+              { backgroundColor: palette.mode === 'dark' ? softTint(colors.green[600], 'dark') : colors.green[50] },
+            ]}
+          >
+            <Ionicons name="cash-outline" size={16} color={colors.green[600]} />
+          </View>
+          <Text style={[styles.cashierTitle, { color: palette.text.primary }]}>Касса</Text>
+          <View
+            style={[
+              styles.cashierBadge,
+              {
+                backgroundColor: report
+                  ? palette.mode === 'dark'
+                    ? softTint(colors.green[600], 'dark')
+                    : colors.green[50]
+                  : palette.bg.muted,
+              },
+            ]}
+          >
+            <Text style={[styles.cashierBadgeText, { color: report ? colors.green[600] : palette.text.tertiary }]}>
+              {report ? 'Смена открыта' : 'Смена закрыта'}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+        </View>
+        {report ? (
+          <View style={styles.cashierStatsRow}>
+            {stats.map((s) => (
+              <View key={s.label} style={styles.cashierStat}>
+                <Text style={[styles.cashierStatValue, { color: s.color }]} numberOfLines={1}>
+                  {s.value}
+                </Text>
+                <Text style={[styles.cashierStatLabel, { color: palette.text.tertiary }]} numberOfLines={1}>
+                  {s.label}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : (
+          <Text style={[styles.cashierClosedText, { color: palette.text.tertiary }]}>
+            Смена не открыта — нажмите, чтобы открыть
+          </Text>
+        )}
+      </TouchableOpacity>
+    </AnimatedCard>
+  );
+}
+
+// ════════════════════════════════════════════════════════════════════════════
 //  ROOT
 // ════════════════════════════════════════════════════════════════════════════
 export default function DashboardScreen() {
@@ -4394,6 +4496,9 @@ export default function DashboardScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary[600]} />
         }
       >
+        {/* 155 — карточка кассира: видна только при включённом режиме
+            кассовой смены и только кассиру (внутри сама рендерит null). */}
+        <CashierShiftCard />
         {/* Owner = new 6-block layout. Master = unchanged previous experience. */}
         {isMaster ? (
           <>
@@ -4441,6 +4546,24 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
   },
   widgetsBtnText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, letterSpacing: -0.1 },
+
+  // 155 — карточка кассира «Касса» (режим кассовой смены)
+  cashierCard: {
+    borderRadius: borderRadius['2xl'],
+    borderWidth: 1,
+    padding: spacing[4],
+    gap: spacing[3],
+  },
+  cashierHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  cashierIcon: { width: 28, height: 28, borderRadius: 9, alignItems: 'center', justifyContent: 'center' },
+  cashierTitle: { flex: 1, minWidth: 0, fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  cashierBadge: { borderRadius: borderRadius.full, paddingHorizontal: spacing[2.5], paddingVertical: 3 },
+  cashierBadgeText: { fontSize: 11, fontWeight: fontWeight.bold },
+  cashierStatsRow: { flexDirection: 'row', gap: spacing[2] },
+  cashierStat: { flex: 1, minWidth: 0 },
+  cashierStatValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, letterSpacing: -0.2 },
+  cashierStatLabel: { fontSize: 10, marginTop: 1 },
+  cashierClosedText: { fontSize: fontSize.xs },
 
   // Master-only header
   headerSection: { marginBottom: spacing[1] },

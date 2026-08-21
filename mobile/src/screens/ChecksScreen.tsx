@@ -25,6 +25,7 @@ import { checksApi, usersApi, journalApi } from '../api/services';
 // рядом с мутациями деталки (mobile-audit C1).
 import { CHECK_MONEY_DEPENDENT_KEYS } from './CheckDetailScreen';
 import { useAuth } from '../contexts/AuthContext';
+import { usePosSettings } from '../hooks/usePosSettings';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
 import SearchInput from '../components/SearchInput';
@@ -244,6 +245,13 @@ interface CheckRowProps {
   onPressIn: (checkId: string) => void;
   onDelete: (checkId: string, checkNumber: number) => void;
   palette: SemanticPalette;
+  /**
+   * Режим кассовой смены тенанта (155): в журнале карточки получают явную
+   * тонировку по статусу оплаты — неоплаченный (isDeferred) тёплый оранжевый
+   * (подложка + акцент-полоса + бейдж «Не оплачен»), оплаченный — тонкая
+   * зелёная акцент-полоса. При выключенном режиме вид байт-в-байт прежний.
+   */
+  shiftModeEnabled: boolean;
 }
 const CheckRow = React.memo(function CheckRow({
   check,
@@ -255,6 +263,7 @@ const CheckRow = React.memo(function CheckRow({
   onPressIn,
   onDelete,
   palette,
+  shiftModeEnabled,
 }: CheckRowProps) {
   const badgeKey = paymentMethodBadgeColor[check.paymentMethod] || 'gray';
   // Один lookup палитры бейджей на строку (внутри getBadgeColors — статические
@@ -300,13 +309,23 @@ const CheckRow = React.memo(function CheckRow({
             // исполнитель, получает мягкий фиолетовый тинт, чтобы отличаться от
             // «своих» с одного взгляда. Отложенный сохраняет свою карточную
             // поверхность (его состояние сигналит красная рамка ниже), поэтому
-            // два трактования не конфликтуют.
+            // два трактования не конфликтуют. 155: при режиме кассовой смены
+            // неоплаченный (isDeferred) получает тёплую оранжевую подложку —
+            // кассир с одного взгляда видит, по каким заказам ждут оплату.
             backgroundColor:
-              isExecutor && !check.isDeferred ? softTint(EXECUTOR_ACCENT, palette.mode) : palette.bg.card,
+              shiftModeEnabled && check.isDeferred
+                ? softTint(colors.orange[600], palette.mode)
+                : isExecutor && !check.isDeferred
+                  ? softTint(EXECUTOR_ACCENT, palette.mode)
+                  : palette.bg.card,
             borderColor: check.isDeferred
-              ? palette.mode === 'dark'
-                ? 'rgba(239,68,68,0.3)'
-                : colors.red[100]
+              ? shiftModeEnabled
+                ? palette.mode === 'dark'
+                  ? 'rgba(249,115,22,0.35)'
+                  : 'rgba(249,115,22,0.28)'
+                : palette.mode === 'dark'
+                  ? 'rgba(239,68,68,0.3)'
+                  : colors.red[100]
               : isExecutor
                 ? palette.mode === 'dark'
                   ? 'rgba(124,58,237,0.35)'
@@ -323,12 +342,23 @@ const CheckRow = React.memo(function CheckRow({
             синяя полоса на каждой карточке была декорацией, а не информацией —
             без неё исключительные состояния считываются мгновенно, как
             непрочитанная точка в Mail. Полоса рендерится всегда (transparent),
-            чтобы геометрия контента не гуляла между строками. */}
+            чтобы геометрия контента не гуляла между строками. 155: в режиме
+            кассовой смены полоса кодирует ОПЛАТУ — оранжевая у неоплаченного,
+            тонкая зелёная у оплаченного (исполнительский фиолет уступает:
+            его сигналят подложка и чип «Исполнитель»). */}
         <View
           style={[
             styles.accentBar,
             {
-              backgroundColor: check.isDeferred ? colors.red[400] : isExecutor ? EXECUTOR_ACCENT : 'transparent',
+              backgroundColor: shiftModeEnabled
+                ? check.isDeferred
+                  ? colors.orange[500]
+                  : colors.green[500]
+                : check.isDeferred
+                  ? colors.red[400]
+                  : isExecutor
+                    ? EXECUTOR_ACCENT
+                    : 'transparent',
             },
           ]}
         />
@@ -428,18 +458,39 @@ const CheckRow = React.memo(function CheckRow({
                   <Text style={styles.returnedBadgeText}>ВОЗВРАТ</Text>
                 </View>
               )}
-              {check.isDeferred && (
-                <View
-                  style={[
-                    styles.deferredBadge,
-                    {
-                      backgroundColor: palette.mode === 'dark' ? 'rgba(239,68,68,0.18)' : colors.red[100],
-                    },
-                  ]}
-                >
-                  <Text style={styles.deferredText}>Отложен</Text>
-                </View>
-              )}
+              {check.isDeferred &&
+                (shiftModeEnabled ? (
+                  // 155: в режиме кассовой смены отложенный = «Не оплачен» —
+                  // оранжевый бейдж в тон подложке (кассирская семантика).
+                  <View
+                    style={[
+                      styles.deferredBadge,
+                      {
+                        backgroundColor: palette.mode === 'dark' ? 'rgba(249,115,22,0.18)' : colors.orange[50],
+                      },
+                    ]}
+                  >
+                    <Text
+                      style={[
+                        styles.deferredText,
+                        { color: palette.mode === 'dark' ? colors.orange[400] : colors.orange[700] },
+                      ]}
+                    >
+                      Не оплачен
+                    </Text>
+                  </View>
+                ) : (
+                  <View
+                    style={[
+                      styles.deferredBadge,
+                      {
+                        backgroundColor: palette.mode === 'dark' ? 'rgba(239,68,68,0.18)' : colors.red[100],
+                      },
+                    ]}
+                  >
+                    <Text style={styles.deferredText}>Отложен</Text>
+                  </View>
+                ))}
               {/* «По гарантии» — красная плашка «УБЫТОК»: жёлтый бейдж «Гарантия»
                   под суммой + УБЫТОК тут читаются как «гарантия → в убыток».
                   Сплошной rose[500]/белый текст — корректно в обеих темах. */}
@@ -652,6 +703,9 @@ export default function ChecksScreen() {
   const { hasPermission } = useAuth();
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
+  // 155: режим кассовой смены — журнал тонирует карточки по статусу оплаты
+  // (usePosSettings отдаёт false, пока настройки грузятся, — вид как прежде).
+  const { shiftModeEnabled } = usePosSettings();
   // «Корзина» — часть цикла удаления: бэкенд гейтит GET /checks/trash и
   // POST /checks/:id/restore ключом checks_delete («права как в Битрикс24»,
   // 2026-07: admin живёт по матрице из /auth/me, superadmin/director
@@ -1179,9 +1233,19 @@ export default function ChecksScreen() {
         onPressIn={prefetchCheckDetail}
         onDelete={handleDelete}
         palette={palette}
+        shiftModeEnabled={shiftModeEnabled}
       />
     ),
-    [dateHeaderByIndex, canDelete, canViewProfit, openCheckDetail, prefetchCheckDetail, handleDelete, palette],
+    [
+      dateHeaderByIndex,
+      canDelete,
+      canViewProfit,
+      openCheckDetail,
+      prefetchCheckDetail,
+      handleDelete,
+      palette,
+      shiftModeEnabled,
+    ],
   );
 
   const renderWarehouseDoc = useCallback(

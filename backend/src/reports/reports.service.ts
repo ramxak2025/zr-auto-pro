@@ -398,6 +398,7 @@ export class ReportsService {
           installmentPaidCard: 0,
           received: 0,
           refunds: 0,
+          collections: 0,
         },
       };
     }
@@ -417,10 +418,14 @@ export class ReportsService {
       // расширялся executor-OR'ом (волна cashflow M3, 6534cc8) и мастер видел
       // в «Движении денег» чужие чеки, где он лишь исполнитель строки.
       // Раскрытие дня обязано использовать тот же строгий предикат: клиент
-      // шлёт ?masterId в checks.getAll, который фильтрует тем же строгим
-      // ch.master_id — поэтому список дня сходится с суммой дня.
-      masterFilter = ` AND master_id = $${mIdx}`;
-      refundMasterFilter = ` AND ch.master_id = $${mIdx}`;
+      // шлёт ?masterId в checks.getAll, который фильтрует тем же
+      // COALESCE-предикатом — поэтому список дня сходится с суммой дня.
+      //
+      // 155 (решение владельца 5.1) — «деньги видны на том, кто ПРИНЯЛ
+      // оплату»: атрибуция по checks.accepted_by (кассир, взявший деньги),
+      // fallback master_id для чеков до миграции.
+      masterFilter = ` AND COALESCE(accepted_by, master_id) = $${mIdx}`;
+      refundMasterFilter = ` AND COALESCE(ch.accepted_by, ch.master_id) = $${mIdx}`;
     }
 
     // ITEM 2 — гарантия ИСКЛЮЧЕНА из оборота (total): работа по гарантии денег
@@ -525,6 +530,28 @@ export class ReportsService {
       params,
     );
 
+    // 155 — инкассации за период (справочная строка дня): из ЯЩИКА
+    // (cash_collections) + из СЕЙФА (safe_transactions type='collection').
+    // По сотруднику не атрибутируются — фильтр masterId на них не влияет.
+    const { rows: collectionRows } = await this.pool.query(
+      `SELECT day, COALESCE(SUM(amount), 0) AS collections FROM (
+         SELECT to_char((collected_at AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') AS day, amount
+           FROM cash_collections
+          WHERE tenant_id = $1
+            AND collected_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+            AND collected_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         UNION ALL
+         SELECT to_char((created_at AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') AS day, amount
+           FROM safe_transactions
+          WHERE tenant_id = $1 AND type = 'collection'
+            AND created_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+            AND created_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+       ) c
+       GROUP BY 1
+       ORDER BY 1`,
+      [tenantID, dateFrom, dateTo],
+    );
+
     const dayKey = (d: any): string => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
 
     const days = rows.map((r) => ({
@@ -539,6 +566,7 @@ export class ReportsService {
       installmentPaidCard: 0,
       total: parseFloat(r.total) || 0,
       refunds: 0,
+      collections: 0,
       // «Касса за день» — реально принятые деньги (нал+карта+погашения
       // рассрочки), считается после вливания погашений ниже.
       received: 0,
@@ -559,6 +587,7 @@ export class ReportsService {
       installmentPaidCard: 0,
       total: 0,
       refunds: 0,
+      collections: 0,
       received: 0,
     });
 
@@ -585,6 +614,16 @@ export class ReportsService {
       }
       existing.refunds += parseFloat(r.refunds) || 0;
     }
+    for (const r of collectionRows) {
+      const key = dayKey(r.day);
+      let existing = byKey.get(key);
+      if (!existing) {
+        existing = emptyDay(r.day);
+        byKey.set(key, existing);
+        days.push(existing);
+      }
+      existing.collections += parseFloat(r.collections) || 0;
+    }
     for (const d of days) {
       d.received = d.cash + d.card + d.installmentPaid;
     }
@@ -602,6 +641,7 @@ export class ReportsService {
       installmentPaidCard: 0,
       received: 0,
       refunds: 0,
+      collections: 0,
     };
     for (const d of days) {
       totals.cash += d.cash;
@@ -615,9 +655,75 @@ export class ReportsService {
       totals.total += d.total;
       totals.received += d.received;
       totals.refunds += d.refunds;
+      totals.collections += d.collections;
     }
 
-    return { days, totals };
+    // 155 — текущие остатки «кошельков»: drawer — касса (живой expected
+    // открытой смены либо размен последней закрытой), safe — сейф. Эндпоинт
+    // и так под cashflow_view, поэтому отдаём всем, кто сюда дошёл.
+    const wallets = await this.getWallets(tenantID);
+
+    return { days, totals, wallets };
+  }
+
+  /**
+   * 155 — остатки кошельков тенанта. drawer при ОТКРЫТОЙ смене — живой
+   * expected по формуле cash-shifts (opening + наличная выручка окна −
+   * одобренные расходы окна − инкассации смены); без открытой — carryover
+   * последней закрытой (до-миграционные закрытия оставляли всё в кассе →
+   * fallback closing_amount). safe = Σ deposit + Σ adjustment − Σ collection.
+   */
+  private async getWallets(tenantID: string): Promise<{ drawer: number; safe: number }> {
+    const { rows: safeRows } = await this.pool.query(
+      `SELECT COALESCE(SUM(CASE WHEN type = 'collection' THEN -amount ELSE amount END), 0) AS balance
+         FROM safe_transactions
+        WHERE tenant_id = $1`,
+      [tenantID],
+    );
+    const safe = parseFloat(safeRows[0].balance) || 0;
+
+    const { rows: openRows } = await this.pool.query(
+      `SELECT id, opened_at, opening_amount FROM cash_shifts
+        WHERE tenant_id = $1 AND status = 'open'
+        ORDER BY opened_at DESC
+        LIMIT 1`,
+      [tenantID],
+    );
+
+    if (openRows.length === 0) {
+      const { rows: lastRows } = await this.pool.query(
+        `SELECT COALESCE(carryover_amount, closing_amount, 0) AS carryover
+           FROM cash_shifts
+          WHERE tenant_id = $1 AND status = 'closed'
+          ORDER BY closed_at DESC NULLS LAST
+          LIMIT 1`,
+        [tenantID],
+      );
+      const drawer = lastRows.length > 0 ? parseFloat(lastRows[0].carryover) || 0 : 0;
+      return { drawer: Math.round(drawer * 100) / 100, safe: Math.round(safe * 100) / 100 };
+    }
+
+    const shift = openRows[0];
+    const { rows: figRows } = await this.pool.query(
+      `SELECT
+         (SELECT COALESCE(SUM(cash_amount), 0) FROM checks
+           WHERE tenant_id = $1 AND is_deferred = false AND deleted_at IS NULL
+             AND date >= $2 AND date <= now())                       AS cash_sales,
+         (SELECT COALESCE(SUM(amount), 0) FROM expenses
+           WHERE tenant_id = $1
+             AND COALESCE(approval_status, 'approved') = 'approved'
+             AND date >= $2 AND date <= now())                       AS cash_expenses,
+         (SELECT COALESCE(SUM(amount), 0) FROM cash_collections
+           WHERE tenant_id = $1 AND shift_id = $3)                   AS collections`,
+      [tenantID, shift.opened_at, shift.id],
+    );
+    const f = figRows[0];
+    const drawer =
+      (parseFloat(shift.opening_amount) || 0) +
+      (parseFloat(f.cash_sales) || 0) -
+      (parseFloat(f.cash_expenses) || 0) -
+      (parseFloat(f.collections) || 0);
+    return { drawer: Math.round(drawer * 100) / 100, safe: Math.round(safe * 100) / 100 };
   }
 
   // ──────────────────────────────────────────────────────────────────────

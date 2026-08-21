@@ -16,6 +16,11 @@
  * активация идёт тем же серверным путём, что обычное закрытие (все
  * пересчёты/гейты сохранены; не-кассиру сервер ответит 403).
  *
+ * 155: при праве sell_installment доступен способ «Рассрочка» — первый взнос
+ * (0..итог, нал или карта) уходит в cashAmount/cardAmount, остаток — план
+ * рассрочки, который сервер создаёт в той же транзакции активации
+ * (installment.nextPaymentDate — дата следующего платежа, по умолчанию +30 дн).
+ *
  * Android-совместимо: только кросс-платформенные примитивы.
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react';
@@ -42,6 +47,9 @@ import { useColors } from '../contexts/ThemeContext';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
+import DateTimePickerModal from '../components/DateTimePickerModal';
+import InstallmentSaleFields from '../components/installments/InstallmentSaleFields';
+import { toYmd, formatYmdHuman } from '../components/installments/installmentUi';
 import { haptic } from '../platform/haptics';
 import { buildShadow } from '../platform/iosSurface';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
@@ -62,13 +70,21 @@ function parseMoneyInput(raw: string): number {
   return Number.isFinite(n) && n > 0 ? n : 0;
 }
 
-type PayMethod = 'cash' | 'card' | 'cash_card';
+type PayMethod = 'cash' | 'card' | 'cash_card' | 'installment';
 
 const METHODS: Array<{ key: PayMethod; label: string; icon: keyof typeof Ionicons.glyphMap }> = [
   { key: 'cash', label: 'Наличные', icon: 'cash-outline' },
   { key: 'card', label: 'Карта', icon: 'card-outline' },
   { key: 'cash_card', label: 'Смешанная', icon: 'swap-horizontal-outline' },
 ];
+
+// «Рассрочка» (155) — доп. способ при праве sell_installment: первый взнос
+// (может быть 0) уходит в cash/card, остаток — план рассрочки на сервере.
+const INSTALLMENT_METHOD: (typeof METHODS)[number] = {
+  key: 'installment',
+  label: 'Рассрочка',
+  icon: 'calendar-outline',
+};
 
 export default function AcceptPaymentScreen() {
   const route = useRoute<any>();
@@ -96,6 +112,19 @@ export default function AcceptPaymentScreen() {
   const [cashPart, setCashPart] = useState('');
   const discountRef = useRef<TextInput>(null);
 
+  // ── Рассрочка (155) ──────────────────────────────────────────────────
+  // Первый взнос (0..total, по умолчанию 0), способ взноса нал/карта и дата
+  // следующего платежа (+30 дней по умолчанию — как в Кассе).
+  const canSellInstallment = hasPermission('sell_installment');
+  const [installmentFirst, setInstallmentFirst] = useState('');
+  const [installmentPart, setInstallmentPart] = useState<'cash' | 'card'>('cash');
+  const [installmentNextDate, setInstallmentNextDate] = useState<Date>(() => new Date(Date.now() + 30 * 86400000));
+  const [showInstallmentDatePicker, setShowInstallmentDatePicker] = useState(false);
+  const methods = useMemo(
+    () => (canSellInstallment ? [...METHODS, INSTALLMENT_METHOD] : METHODS),
+    [canSellInstallment],
+  );
+
   // Одноразовая гидрация скидки из чека (админ мог дать её на приёмке).
   const hydratedRef = useRef(false);
   useEffect(() => {
@@ -116,6 +145,9 @@ export default function AcceptPaymentScreen() {
   // Смешанная: нал вводится, карта доводится до итога (кламп ≥ 0).
   const cashNum = Math.min(parseMoneyInput(cashPart), total);
   const cardCalc = Math.max(total - cashNum, 0);
+  // Рассрочка: первый взнос клампится к итогу, остаток уходит в план.
+  const installmentFirstNum = Math.min(parseMoneyInput(installmentFirst), total);
+  const installmentRemaining = Math.max(total - installmentFirstNum, 0);
 
   const payMutation = useMutation({
     mutationFn: () => {
@@ -123,7 +155,11 @@ export default function AcceptPaymentScreen() {
       let finalCard = 0;
       if (method === 'cash') finalCash = total;
       else if (method === 'card') finalCard = total;
-      else {
+      else if (method === 'installment') {
+        // Взнос уходит выбранным способом; остаток — план рассрочки (сервер).
+        if (installmentPart === 'cash') finalCash = installmentFirstNum;
+        else finalCard = installmentFirstNum;
+      } else {
         finalCash = cashNum;
         finalCard = cardCalc;
       }
@@ -138,6 +174,8 @@ export default function AcceptPaymentScreen() {
         cardAmount: finalCard,
         // Скидка уходит ЯВНО числом — 0 тоже значение (стирание скидки).
         discount: discountNum,
+        // Только при рассрочке: дата следующего платежа плана (YYYY-MM-DD).
+        ...(method === 'installment' ? { installment: { nextPaymentDate: toYmd(installmentNextDate) } } : {}),
       });
     },
     onSuccess: async () => {
@@ -153,6 +191,9 @@ export default function AcceptPaymentScreen() {
       queryClient.invalidateQueries({ queryKey: ['cashflow'] });
       // Кассовая смена: принятая оплата ложится в текущую смену кассира.
       queryClient.invalidateQueries({ queryKey: ['cash-shift'] });
+      // Рассрочка: активация с остатком создаёт план — раздел «Рассрочка»
+      // должен увидеть его без ручного pull-to-refresh.
+      queryClient.invalidateQueries({ queryKey: ['installments'] });
       for (const queryKey of CHECK_MONEY_DEPENDENT_KEYS) {
         queryClient.invalidateQueries({ queryKey });
       }
@@ -396,7 +437,7 @@ export default function AcceptPaymentScreen() {
           >
             <Text style={[styles.sectionLabel, { color: palette.text.primary }]}>Способ оплаты</Text>
             <View style={styles.methodRow}>
-              {METHODS.map((m) => {
+              {methods.map((m) => {
                 const active = method === m.key;
                 return (
                   <TouchableOpacity
@@ -457,9 +498,71 @@ export default function AcceptPaymentScreen() {
                 </View>
               </View>
             )}
+
+            {method === 'installment' && (
+              <View style={{ marginTop: spacing[3], gap: spacing[2.5] }}>
+                <InstallmentSaleFields
+                  palette={palette}
+                  total={total}
+                  firstPayment={installmentFirst}
+                  onFirstPaymentChange={setInstallmentFirst}
+                  remaining={installmentRemaining}
+                  nextDateLabel={formatYmdHuman(toYmd(installmentNextDate))}
+                  onOpenDatePicker={() => setShowInstallmentDatePicker(true)}
+                />
+                {/* Способ первого взноса: нал / карта (взнос уходит в
+                    cashAmount / cardAmount активации). */}
+                <View style={styles.partRow}>
+                  <Text style={[styles.partLabel, { color: palette.text.secondary }]}>Взнос</Text>
+                  {(
+                    [
+                      { key: 'cash', label: 'Наличные', icon: 'cash-outline' },
+                      { key: 'card', label: 'Карта', icon: 'card-outline' },
+                    ] as Array<{ key: 'cash' | 'card'; label: string; icon: keyof typeof Ionicons.glyphMap }>
+                  ).map((p) => {
+                    const active = installmentPart === p.key;
+                    return (
+                      <TouchableOpacity
+                        key={p.key}
+                        style={[
+                          styles.partChip,
+                          { borderColor: palette.border.subtle, backgroundColor: palette.bg.muted },
+                          active && {
+                            backgroundColor: softTint(colors.primary[600], palette.mode),
+                            borderColor: colors.primary[isDark ? 400 : 300],
+                          },
+                        ]}
+                        onPress={() => {
+                          haptic('select');
+                          setInstallmentPart(p.key);
+                        }}
+                        activeOpacity={0.7}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: active }}
+                        accessibilityLabel={`Взнос — ${p.label}`}
+                      >
+                        <Ionicons
+                          name={p.icon}
+                          size={15}
+                          color={active ? colors.primary[isDark ? 300 : 600] : palette.text.tertiary}
+                        />
+                        <Text
+                          style={[
+                            styles.partChipText,
+                            { color: active ? colors.primary[isDark ? 300 : 700] : palette.text.secondary },
+                          ]}
+                        >
+                          {p.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </View>
+            )}
           </View>
 
-          {/* ── CTA «Оплачено — N ₽» ───────────────────────────────────── */}
+          {/* ── CTA «Оплачено — N ₽» / «Оформить рассрочку» ────────────── */}
           <TouchableOpacity
             activeOpacity={0.85}
             disabled={payMutation.isPending}
@@ -468,7 +571,11 @@ export default function AcceptPaymentScreen() {
               payMutation.mutate();
             }}
             accessibilityRole="button"
-            accessibilityLabel={`Оплачено — ${formatMoney(total)}`}
+            accessibilityLabel={
+              method === 'installment'
+                ? `Оформить рассрочку — взнос ${formatMoney(installmentFirstNum)}`
+                : `Оплачено — ${formatMoney(total)}`
+            }
           >
             <LinearGradient
               colors={[colors.green[500], colors.green[600]]}
@@ -481,12 +588,28 @@ export default function AcceptPaymentScreen() {
               ) : (
                 <>
                   <Ionicons name="checkmark-circle-outline" size={20} color={colors.white} />
-                  <Text style={styles.payBtnText}>Оплачено — {formatMoney(total)}</Text>
+                  <Text style={styles.payBtnText}>
+                    {method === 'installment'
+                      ? `Оформить рассрочку — взнос ${formatMoney(installmentFirstNum)}`
+                      : `Оплачено — ${formatMoney(total)}`}
+                  </Text>
                 </>
               )}
             </LinearGradient>
           </TouchableOpacity>
         </ScrollView>
+
+        {/* Дата следующего платежа по рассрочке (паттерн CheckCreateScreen). */}
+        <DateTimePickerModal
+          visible={showInstallmentDatePicker}
+          value={installmentNextDate}
+          mode="date"
+          onConfirm={(d) => {
+            setInstallmentNextDate(d);
+            setShowInstallmentDatePicker(false);
+          }}
+          onCancel={() => setShowInstallmentDatePicker(false)}
+        />
       </KeyboardAvoidingView>
     );
   }
@@ -623,6 +746,21 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[1],
   },
   splitCardAmount: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+
+  // Рассрочка: способ первого взноса (нал/карта).
+  partRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  partLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium, marginRight: spacing[1] },
+  partChip: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[1.5],
+    borderRadius: borderRadius.xl,
+    borderWidth: 1,
+    paddingVertical: spacing[2],
+  },
+  partChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold },
 
   // CTA
   payBtn: {

@@ -23,7 +23,7 @@ import Switch from '../components/Switch';
 import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 
-import type { Tenant, LoyaltySettings, PosSettings, PosSettingsConflict } from '../types';
+import type { Tenant, LoyaltySettings, PaymentAcceptorInfo, PosSettings, PosSettingsConflict } from '../types';
 import { formatMoney } from '../../../shared/utils/formatters';
 
 interface CompanyForm {
@@ -65,6 +65,41 @@ function ShiftModeSection() {
     enabled: canManage,
   });
 
+  // 155 — «Кто принимает оплату»: активные сотрудники + резолв, кто сейчас
+  // фактически принимает (по списку владельца либо по праву accept_payment).
+  const {
+    data: acceptors,
+    isLoading: acceptorsLoading,
+    isError: acceptorsError,
+    isFetching: acceptorsFetching,
+    refetch: refetchAcceptors,
+  } = useQuery<PaymentAcceptorInfo[]>({
+    queryKey: ['checks', 'payment-acceptors'],
+    queryFn: async () => (await checksApi.paymentAcceptors()).data,
+    enabled: canManage,
+  });
+
+  // Локальный черновик ручного выбора: null = правок нет (показываем серверное
+  // состояние), Set = отмеченные вручную (owner-class в Set не входит — он
+  // принимает всегда и из списка не убирается).
+  const [acceptorDraft, setAcceptorDraft] = useState<Set<string> | null>(null);
+
+  const acceptorsMutation = useMutation({
+    mutationFn: (paymentAcceptorIds: string[] | null) => checksApi.updatePosSettings({ paymentAcceptorIds }),
+    onSuccess: (_res, ids) => {
+      queryClient.invalidateQueries({ queryKey: ['checks', 'pos-settings'] });
+      queryClient.invalidateQueries({ queryKey: ['checks', 'payment-acceptors'] });
+      setAcceptorDraft(null);
+      toast.success(ids === null ? 'Режим «по ролям» восстановлен' : 'Список принимающих оплату сохранён');
+    },
+    // 409 и прочие ошибки сервера показываем его текстом (например, конфликт
+    // включения режима) — без перевода в общий «Ошибка сохранения», если текст есть.
+    onError: (err: any) => {
+      const msg = err?.response?.data?.message;
+      toast.error(typeof msg === 'string' ? msg : 'Ошибка сохранения');
+    },
+  });
+
   const mutation = useMutation({
     mutationFn: (shiftModeEnabled: boolean) => checksApi.updatePosSettings({ shiftModeEnabled }),
     onSuccess: (_res, shiftModeEnabled) => {
@@ -89,6 +124,35 @@ function ShiftModeSection() {
   if (!canManage) return null;
 
   const enabled = settings?.shiftModeEnabled ?? false;
+
+  // 155: null/absent = режим «по ролям» (право «Приём оплаты» из матрицы);
+  // массив = явный ручной список владельца (+ owner-class всегда).
+  const serverAcceptorIds = settings?.paymentAcceptorIds ?? null;
+  const manualMode = acceptorDraft !== null || Array.isArray(serverAcceptorIds);
+
+  const startManual = () => {
+    // Черновик стартует с фактических принимающих (без owner-class — они
+    // «всегда могут» и в список не пишутся).
+    setAcceptorDraft(
+      new Set(
+        (acceptors ?? [])
+          .filter((a) => !a.isOwnerClass && (Array.isArray(serverAcceptorIds) ? a.selected : a.effective))
+          .map((a) => a.id),
+      ),
+    );
+  };
+
+  const toggleAcceptor = (id: string) => {
+    setAcceptorDraft((prev) => {
+      const next = new Set(prev ?? (acceptors ?? []).filter((a) => !a.isOwnerClass && a.selected).map((a) => a.id));
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const isAcceptorChecked = (a: PaymentAcceptorInfo) =>
+    a.isOwnerClass || (acceptorDraft ? acceptorDraft.has(a.id) : a.selected);
 
   return (
     <div className="card p-5 space-y-3">
@@ -122,6 +186,108 @@ function ShiftModeSection() {
           <p className="text-[11px] text-gray-500">
             Право «Приём оплаты (кассир)» назначается сотруднику в разделе «Сотрудники».
           </p>
+
+          {/* 155 — «Кто принимает оплату»: режим «по ролям» либо явный список */}
+          <div className="pt-3 border-t border-gray-100 space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-gray-900">Кто принимает оплату</h3>
+              {manualMode ? (
+                <button
+                  type="button"
+                  onClick={() => acceptorsMutation.mutate(null)}
+                  disabled={acceptorsMutation.isPending}
+                  className="btn-ghost btn-sm text-xs"
+                >
+                  Сбросить к ролям
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={startManual}
+                  disabled={acceptorsLoading || acceptorsError || acceptorsMutation.isPending}
+                  className="btn-secondary btn-sm"
+                >
+                  Выбрать вручную
+                </button>
+              )}
+            </div>
+            <p className="text-xs text-gray-500">
+              {manualMode
+                ? 'Оплату принимают только отмеченные сотрудники. Директор и администратор владельца принимают всегда.'
+                : 'По ролям: оплату принимают сотрудники с правом «Приём оплаты» из матрицы роли.'}
+            </p>
+
+            {acceptorsLoading ? (
+              <p className="text-xs text-gray-400 py-2">Загружаем сотрудников…</p>
+            ) : acceptorsError ? (
+              <div className="flex items-center justify-between gap-3 text-xs text-gray-500 py-1">
+                <span>Не удалось загрузить список сотрудников.</span>
+                <button
+                  type="button"
+                  onClick={() => refetchAcceptors()}
+                  disabled={acceptorsFetching}
+                  className="btn-secondary btn-sm press-soft"
+                >
+                  Повторить
+                </button>
+              </div>
+            ) : (
+              <div className="divide-y divide-gray-100">
+                {(acceptors ?? []).map((a) =>
+                  manualMode ? (
+                    <label key={a.id} className="flex items-center gap-3 py-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={isAcceptorChecked(a)}
+                        // owner-class — «всегда может», из списка не убирается.
+                        disabled={a.isOwnerClass || acceptorsMutation.isPending}
+                        onChange={() => toggleAcceptor(a.id)}
+                        className="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-60"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm text-gray-900 truncate">{a.fullName || 'Без имени'}</p>
+                        <p className="text-[11px] text-gray-500 truncate">
+                          {a.roleName || '—'}
+                          {a.isOwnerClass ? ' · всегда может принимать' : ''}
+                        </p>
+                      </div>
+                    </label>
+                  ) : (
+                    <div key={a.id} className="flex items-center justify-between gap-3 py-2">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm text-gray-900 truncate">{a.fullName || 'Без имени'}</p>
+                        <p className="text-[11px] text-gray-500 truncate">
+                          {a.roleName || '—'}
+                          {a.isOwnerClass ? ' · всегда может принимать' : ''}
+                        </p>
+                      </div>
+                      {a.effective ? (
+                        <span className="badge badge-green flex-shrink-0">Принимает</span>
+                      ) : (
+                        <span className="text-[11px] text-gray-400 flex-shrink-0">Нет права</span>
+                      )}
+                    </div>
+                  ),
+                )}
+              </div>
+            )}
+
+            {acceptorDraft !== null && (
+              <button
+                type="button"
+                onClick={() => acceptorsMutation.mutate([...acceptorDraft])}
+                disabled={acceptorsMutation.isPending}
+                className="w-full flex items-center justify-center gap-2 bg-primary-600 text-white rounded-xl py-2.5 text-sm font-semibold hover:bg-primary-700 disabled:opacity-50 transition-colors shadow-sm"
+              >
+                {acceptorsMutation.isPending ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                Сохранить список
+              </button>
+            )}
+          </div>
         </>
       )}
 

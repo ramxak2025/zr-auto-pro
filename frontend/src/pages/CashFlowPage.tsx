@@ -1,6 +1,18 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Wallet, Banknote, CreditCard, ShieldAlert, Users, CalendarClock, Coins, PiggyBank, Undo2 } from 'lucide-react';
+import {
+  Wallet,
+  Banknote,
+  CreditCard,
+  ShieldAlert,
+  Users,
+  CalendarClock,
+  Coins,
+  PiggyBank,
+  Undo2,
+  ArrowDownToLine,
+  Landmark,
+} from 'lucide-react';
 import { format, startOfMonth } from 'date-fns';
 import { ru } from 'date-fns/locale';
 
@@ -38,6 +50,9 @@ interface CashFlowDay {
   // Возвраты по дате ФАКТИЧЕСКОГО возврата — информационно: деньги уже вычтены
   // из дня продажи, в total НЕ входят и из cash/card дня возврата не вычитаются.
   refunds?: number;
+  // 155 — инкассации за день (из кассы + из сейфа), справочно. Опционально:
+  // старый бэкенд не шлёт.
+  collections?: number;
 }
 
 interface CashFlowData {
@@ -54,7 +69,15 @@ interface CashFlowData {
     installmentPaidCard?: number;
     received?: number;
     refunds?: number;
+    /** 155 — инкассации за период, справочно. */
+    collections?: number;
   };
+  /**
+   * 155 — текущие остатки «кошельков» тенанта: drawer — касса (размен последней
+   * закрытой смены либо живой expected открытой), safe — сейф. Absent на
+   * старом бэкенде / без права.
+   */
+  wallets?: { drawer: number; safe: number };
 }
 
 // days[].date теперь приходит строкой 'YYYY-MM-DD' (to_char по МСК); slice(0,10) —
@@ -117,6 +140,11 @@ export default function CashFlowPage() {
   // строка (уже вычтены из дня продажи).
   const hasReceived = typeof totals.received === 'number';
   const hasRefunds = typeof totals.refunds === 'number' && totals.refunds > 0;
+  // 155 — инкассации (из кассы + из сейфа) — справочная строка, показываем
+  // только когда бэкенд прислал ненулевой итог за период.
+  const hasCollections = typeof totals.collections === 'number' && totals.collections > 0;
+  // 155 — остатки «кошельков» (касса / сейф) — карточки при наличии в ответе.
+  const wallets = cashFlow?.wallets;
 
   // Разбивка погашений по способу оплаты (119) — подпись «в т.ч. наличными /
   // картой» только когда бэкенд прислал поля и часть ненулевая.
@@ -239,6 +267,36 @@ export default function CashFlowPage() {
             )}
           </div>
         )}
+        {hasCollections && (
+          <div className="stat-card">
+            <div className="flex items-center gap-2 mb-1">
+              <ArrowDownToLine className="w-4 h-4 text-amber-500" />
+              <div className="stat-label">Инкассации</div>
+            </div>
+            <div className="stat-value tabular-nums text-amber-600">−{formatMoney(totals.collections ?? 0)}</div>
+            <p className="text-[11px] text-gray-500 mt-0.5">Изъято из кассы и сейфа за период</p>
+          </div>
+        )}
+        {wallets && (
+          <>
+            <div className="stat-card">
+              <div className="flex items-center gap-2 mb-1">
+                <Wallet className="w-4 h-4 text-emerald-500" />
+                <div className="stat-label">Касса</div>
+              </div>
+              <div className="stat-value tabular-nums text-emerald-700">{formatMoney(wallets.drawer)}</div>
+              <p className="text-[11px] text-gray-500 mt-0.5">Остаток в кассе сейчас</p>
+            </div>
+            <div className="stat-card">
+              <div className="flex items-center gap-2 mb-1">
+                <Landmark className="w-4 h-4 text-amber-500" />
+                <div className="stat-label">Сейф</div>
+              </div>
+              <div className="stat-value tabular-nums text-amber-700">{formatMoney(wallets.safe)}</div>
+              <p className="text-[11px] text-gray-500 mt-0.5">Остаток в сейфе сейчас</p>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Table */}
@@ -308,6 +366,12 @@ export default function CashFlowPage() {
                     <span className="text-rose-600 tabular-nums">{formatMoney(day.refunds ?? 0)}</span>
                   </div>
                 )}
+                {(day.collections ?? 0) > 0 && (
+                  <div className="mt-1 flex items-center justify-between text-xs">
+                    <span className="text-gray-500">Инкассации</span>
+                    <span className="text-amber-600 tabular-nums">−{formatMoney(day.collections ?? 0)}</span>
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -329,6 +393,11 @@ export default function CashFlowPage() {
                   {hasRefunds && (
                     <th className="text-right" title="Уже вычтены из дня продажи — справочно">
                       Возвраты
+                    </th>
+                  )}
+                  {hasCollections && (
+                    <th className="text-right" title="Изъято из кассы и сейфа — справочно">
+                      Инкассации
                     </th>
                   )}
                   <th className="w-[22%]">Доля периода</th>
@@ -373,6 +442,11 @@ export default function CashFlowPage() {
                     {hasRefunds && (
                       <td className="text-right tabular-nums text-rose-600">
                         {(day.refunds ?? 0) > 0 ? formatMoney(day.refunds ?? 0) : '\u2014'}
+                      </td>
+                    )}
+                    {hasCollections && (
+                      <td className="text-right tabular-nums text-amber-600">
+                        {(day.collections ?? 0) > 0 ? `\u2212${formatMoney(day.collections ?? 0)}` : '\u2014'}
                       </td>
                     )}
                     <td>
@@ -427,6 +501,11 @@ export default function CashFlowPage() {
                   {hasRefunds && (
                     <td className="text-right tabular-nums font-bold text-rose-600">
                       {formatMoney(totals.refunds ?? 0)}
+                    </td>
+                  )}
+                  {hasCollections && (
+                    <td className="text-right tabular-nums font-bold text-amber-600">
+                      −{formatMoney(totals.collections ?? 0)}
                     </td>
                   )}
                   <td className="text-right tabular-nums font-bold text-gray-900">100%</td>
