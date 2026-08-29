@@ -24,6 +24,7 @@ import {
   TextInput,
   Switch,
   Platform,
+  Share,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -113,6 +114,15 @@ interface UserDraft {
   isActive: boolean;
 }
 
+// Генератор пароля для сотрудника: без неоднозначных символов (0/O, 1/l/I),
+// чтобы пароль можно было продиктовать по телефону.
+const PW_ALPHABET = 'abcdefghjkmnpqrstuvwxyzABCDEFGHJKMNPQRSTUVWXYZ23456789';
+function genPassword(len = 10): string {
+  let out = '';
+  for (let i = 0; i < len; i++) out += PW_ALPHABET[Math.floor(Math.random() * PW_ALPHABET.length)];
+  return out;
+}
+
 function toUserDraft(u?: User): UserDraft {
   return {
     id: u?.id,
@@ -145,6 +155,7 @@ export default function AdminTenantDetailScreen() {
   const [busy, setBusy] = React.useState<null | 'extend' | 'plan' | 'suspend' | 'impersonate'>(null);
   const [editingUser, setEditingUser] = React.useState<UserDraft | null>(null);
   const [savingUser, setSavingUser] = React.useState(false);
+  const [pwVisible, setPwVisible] = React.useState(false);
 
   const {
     data: tenant,
@@ -291,11 +302,27 @@ export default function AdminTenantDetailScreen() {
         await usersApi.create(payload);
       }
     },
-    onSuccess: () => {
+    onSuccess: (_res: unknown, draft: UserDraft) => {
       haptic('success');
       setEditingUser(null);
       queryClient.invalidateQueries({ queryKey: ['admin-tenant', id] });
       queryClient.invalidateQueries({ queryKey: ['admin-tenant-cabinet', id] });
+      // Пароли хранятся только bcrypt-хэшем и позже не восстановимы — единственный
+      // момент увидеть/передать действующий пароль это сразу после установки.
+      if (draft.password) {
+        const phone = draft.phone.trim() ? formatPhone(draft.phone) : '';
+        const creds = `${draft.fullName.trim()}${phone ? `\nТелефон: ${phone}` : ''}\nПароль: ${draft.password}`;
+        Alert.alert('Пароль установлен', creds, [
+          {
+            text: 'Поделиться',
+            onPress: () => {
+              // expo-clipboard в проекте нет — «Скопировать» доступно в системном share-листе.
+              Share.share({ message: `Autexa — вход\n${creds}` }).catch(() => {});
+            },
+          },
+          { text: 'Готово', style: 'cancel' },
+        ]);
+      }
     },
     onError: (error: unknown) => {
       haptic('error');
@@ -670,6 +697,7 @@ export default function AdminTenantDetailScreen() {
           <Pressable
             onPress={() => {
               haptic('tap');
+              setPwVisible(false);
               setEditingUser(toUserDraft());
             }}
             style={[styles.employeesAdd, { backgroundColor: palette.accent.primary }]}
@@ -693,6 +721,7 @@ export default function AdminTenantDetailScreen() {
                 key={u.id}
                 onPress={() => {
                   haptic('tap');
+                  setPwVisible(false);
                   setEditingUser(toUserDraft(u));
                 }}
                 style={[styles.userRow, surface.card]}
@@ -977,18 +1006,37 @@ export default function AdminTenantDetailScreen() {
                 <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>
                   {editingUser.id ? 'Новый пароль (необязательно)' : 'Пароль'}
                 </Text>
-                <View style={[styles.inputWrap, surface.cardCompact]}>
+                <View style={[styles.inputWrap, styles.pwRow, surface.cardCompact]}>
                   <TextInput
-                    style={[styles.sheetInput, { color: palette.text.primary }]}
+                    style={[styles.sheetInput, styles.pwInput, { color: palette.text.primary }]}
                     placeholder="Минимум 6 символов"
                     placeholderTextColor={palette.text.tertiary}
-                    secureTextEntry
+                    secureTextEntry={!pwVisible}
                     autoCapitalize="none"
                     autoCorrect={false}
                     value={editingUser.password}
                     onChangeText={(v) => setEditingUser({ ...editingUser, password: v })}
                   />
+                  <Pressable onPress={() => setPwVisible((v) => !v)} hitSlop={8}>
+                    <Ionicons
+                      name={pwVisible ? 'eye-off-outline' : 'eye-outline'}
+                      size={20}
+                      color={palette.text.tertiary}
+                    />
+                  </Pressable>
                 </View>
+                <Pressable
+                  onPress={() => {
+                    haptic('select');
+                    setPwVisible(true);
+                    setEditingUser({ ...editingUser, password: genPassword() });
+                  }}
+                  style={styles.genPwBtn}
+                  hitSlop={4}
+                >
+                  <Ionicons name="sparkles-outline" size={14} color={palette.accent.primary} />
+                  <Text style={[styles.genPwText, { color: palette.accent.primary }]}>Сгенерировать пароль</Text>
+                </Pressable>
 
                 <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Роль</Text>
                 <View style={styles.roleRow}>
@@ -1338,6 +1386,17 @@ const styles = StyleSheet.create({
   fieldLabel: { fontSize: 12, fontWeight: '600', marginLeft: spacing[1], marginTop: spacing[2] },
   inputWrap: { paddingHorizontal: spacing[3] },
   sheetInput: { fontSize: 16, paddingVertical: spacing[3] },
+  pwRow: { flexDirection: 'row', alignItems: 'center' },
+  pwInput: { flex: 1 },
+  genPwBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: spacing[1],
+    marginTop: spacing[1.5],
+    marginLeft: spacing[1],
+  },
+  genPwText: { fontSize: 13, fontWeight: '600' },
   roleRow: { flexDirection: 'row', gap: spacing[2] },
   roleChip: {
     flex: 1,
