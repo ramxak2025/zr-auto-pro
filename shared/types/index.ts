@@ -88,6 +88,12 @@ export interface Tenant {
    */
   shiftModeEnabled?: boolean;
   /**
+   * 156 — мульти-точки: общая база клиентов всех точек (true, дефолт) или
+   * у каждой точки своя (false). Мутируется через PATCH /my-company
+   * (company_manage). Absent на легаси-payload'ах → считать true.
+   */
+  pointsSharedClients?: boolean;
+  /**
    * 102 — explicit suspension marker (superadmin POST /tenants/:id/suspend).
    * Non-null ⇒ the tenant is suspended (and is_active is forced false).
    * Absent/null on legacy payloads.
@@ -341,7 +347,10 @@ export type NotificationCategory =
   // 155 — кассовая смена: владельцу «смена закрыта» (суммы, сейф, размен),
   // кассиру «инкассация N с кассы/сейфа, остаток M».
   | 'cash_shift_closed'
-  | 'cash_collection';
+  | 'cash_collection'
+  // Приход/уход сотрудников (самооткрытие смены): владельцу и админам
+  // «пришёл на работу (± опоздание)» / «ушёл с работы».
+  | 'shift_attendance';
 
 /** GET /notifications/preferences — `muted` is the set the user opted OUT of. */
 export interface NotificationPreferences {
@@ -718,6 +727,12 @@ export interface User {
    * role_id и в ответах, которые roles не джойнят.
    */
   roleName?: string | null;
+  /**
+   * 156 — мульти-точки: текущая выбранная точка (POST /points/switch).
+   * null = не выбрана («все точки» / одноточечный тенант); absent в путях,
+   * которые колонку не выбирают — клиенты делают fallback на GET /points.
+   */
+  currentPointId?: string | null;
   salaryPercent: number;
   productSalaryPercent?: number;
   permissions: UserPermissions;
@@ -1662,6 +1677,31 @@ export interface TenantLocation {
 }
 
 /**
+ * Точка (филиал) тенанта — мульти-точки, миграция 156 tenant_points. НЕ путать
+ * с {@link TenantLocation} («места» внутри двора). Точки заводит ТОЛЬКО
+ * суперадмин (POST/PATCH/DELETE /tenants/:id/points) — их количество и есть
+ * лимит; DELETE = архив. Тенант читает свои точки через GET /points,
+ * переключается POST /points/switch, назначает сотрудников PUT
+ * /points/:id/members (user_management). 0–1 точка = одноточечный режим.
+ */
+export interface TenantPoint {
+  id: string;
+  name: string;
+  address?: string | null;
+  sortOrder: number;
+  isActive: boolean;
+  createdAt?: string;
+  /** Назначенные на точку сотрудники (GET /points). Пусто = явных назначений нет. */
+  memberIds?: string[];
+}
+
+/** GET /points — живые точки своего тенанта + моя текущая точка. */
+export interface PointsListResponse {
+  points: TenantPoint[];
+  currentPointId: string | null;
+}
+
+/**
  * Исполнитель заказ-наряда (Round 14, миграция 147 check_assignees): админ при
  * приёмке назначает одного или нескольких мастеров — заказ падает на доску
  * каждого. Зарплатная атрибуция НЕ меняется (по строкам услуг, как раньше) —
@@ -1783,6 +1823,14 @@ export interface Check {
    */
   location?: { id: string; name: string | null } | null;
   locationId?: string | null;
+  /**
+   * 156 — мульти-точки: точка (филиал), на которой создан заказ. Штампуется
+   * сервером из current_point_id автора; null у одноточечных тенантов и на
+   * исторических чеках. UI показывает бейдж точки только когда у тенанта
+   * больше одной живой точки.
+   */
+  point?: { id: string; name: string | null } | null;
+  pointId?: string | null;
   /**
    * Веха «Выдана» (Round 14, миграция 146): проставляется сервером при
    * setWorkStatus в колонку key='delivered' (гард: только оплаченный,

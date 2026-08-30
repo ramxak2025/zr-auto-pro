@@ -121,6 +121,16 @@ const SECTIONS: CategorySection[] = [
         iconColor: colors.cyan[600],
         iconBg: colors.cyan[50],
       },
+      // Приход/уход сотрудников — владельцу и админам при само-открытии/закрытии
+      // смены мастером (категория shift_attendance, см. ShiftsService).
+      {
+        key: 'shift_attendance',
+        label: 'Приход и уход сотрудников',
+        sublabel: 'Открытие и закрытие смены, опоздания',
+        icon: 'walk-outline',
+        iconColor: colors.indigo[600],
+        iconBg: colors.indigo[50],
+      },
     ],
   },
   {

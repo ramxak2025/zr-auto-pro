@@ -3,12 +3,16 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
+import { PushService } from '../push/push.service';
 
 @Injectable()
 export class ShiftsService {
   private readonly logger = new Logger('ShiftsService');
 
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private push: PushService,
+  ) {}
 
   /**
    * Per-tenant master toggle for the «Смены» subsystem (migration 070,
@@ -101,6 +105,7 @@ export class ShiftsService {
         [userID, today, tenantID],
       );
 
+      let late: { minutes: number; status: string } | null = null;
       if (schedRows.length > 0 && schedRows[0].shift_start) {
         const schedEntry = schedRows[0];
         const now = new Date();
@@ -115,6 +120,7 @@ export class ShiftsService {
         if (lateMinutes > 0) {
           lateStatus = lateMinutes < 60 ? 'late_minor' : 'late_major';
         }
+        late = { minutes: Math.max(lateMinutes, 0), status: lateStatus };
 
         await client.query(
           `UPDATE schedule_entries SET actual_arrival = now(), late_minutes = $1, late_status = $2
@@ -131,6 +137,7 @@ export class ShiftsService {
          FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
         [shift.id],
       );
+      void this.fireAttendancePush(tenantID, userID, fullRows[0].user_full_name, 'arrived', late);
       return this.mapShift(fullRows[0]);
     } catch (err) {
       await client.query('ROLLBACK');
@@ -161,6 +168,52 @@ export class ShiftsService {
        FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
       [id],
     );
+    void this.fireAttendancePush(tenantID, fullRows[0].user_id, fullRows[0].user_full_name, 'left', null, actor.userID);
     return this.mapShift(fullRows[0]);
+  }
+
+  /**
+   * 'shift_attendance' — владельцу (director) и админам тенанта: «пришёл на
+   * работу» (с опозданием из графика, если есть) / «ушёл с работы».
+   * Best-effort после коммита — по паттерну пушей кассовой смены (155).
+   * Сам сотрудник и актор (если чужую смену закрыл админ) пуш не получают.
+   * Авто-закрытие крон-джобой пуш не шлёт — это не реальный уход.
+   */
+  private async fireAttendancePush(
+    tenantID: string,
+    shiftUserID: string,
+    fullName: string,
+    kind: 'arrived' | 'left',
+    late: { minutes: number; status: string } | null,
+    actorID: string = shiftUserID,
+  ): Promise<void> {
+    try {
+      const { rows } = await this.pool.query(
+        `SELECT id FROM users
+          WHERE tenant_id = $1 AND role IN ('director', 'admin')
+            AND is_active = true AND dismissed_at IS NULL AND purged_at IS NULL
+            AND id <> $2 AND id <> $3`,
+        [tenantID, shiftUserID, actorID],
+      );
+      if (rows.length === 0) return;
+      // Время в тексте — московское настенное, как бизнес-дата смен.
+      const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+      const hhmm = new Date(Date.now() + MSK_OFFSET_MS).toISOString().slice(11, 16);
+      const title = kind === 'arrived' ? 'Пришёл на работу' : 'Ушёл с работы';
+      let body = kind === 'arrived' ? `${fullName} открыл(а) смену в ${hhmm}` : `${fullName} закрыл(а) смену в ${hhmm}`;
+      if (kind === 'arrived' && late && late.status !== 'on_time') {
+        body +=
+          late.status === 'late_major'
+            ? `. Опоздание ${late.minutes} мин (больше часа)`
+            : `. Опоздание ${late.minutes} мин`;
+      }
+      await Promise.all(
+        rows.map((r: { id: string }) =>
+          this.push.sendToUserInTenant(r.id, tenantID, 'shift_attendance', title, body, { type: 'shift_attendance' }),
+        ),
+      );
+    } catch (err) {
+      this.logger.error(`shift_attendance push failed: ${err}`);
+    }
   }
 }
