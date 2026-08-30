@@ -84,7 +84,24 @@ export class ClientsService {
     };
   }
 
-  async getAll(tenantID: string, query: any) {
+  /**
+   * 156 — мульти-точки, раздельная база клиентов: точка запрашивающего, если
+   * тенант выбрал points_shared_clients=false И точка у сотрудника выбрана;
+   * иначе null (общая база — дефолт, поведение прежнее).
+   */
+  private async separatePointFor(tenantID: string, userID?: string): Promise<string | null> {
+    if (!userID) return null;
+    const { rows } = await this.pool.query(
+      `SELECT t.points_shared_clients AS shared, u.current_point_id AS point
+         FROM tenants t, users u
+        WHERE t.id = $1 AND u.id = $2 AND u.tenant_id = $1`,
+      [tenantID, userID],
+    );
+    if (rows.length === 0) return null;
+    return rows[0].shared === false && rows[0].point ? rows[0].point : null;
+  }
+
+  async getAll(tenantID: string, query: any, actorUserID?: string) {
     const page = parseInt(query.page) || 1;
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
@@ -144,6 +161,15 @@ export class ClientsService {
       );
 
       where += ` AND (${ors.join(' OR ')})`;
+    }
+
+    // 156 — раздельная база клиентов по точкам: клиенты СВОЕЙ точки + общие/
+    // исторические (point_id IS NULL, в т.ч. розничный покупатель). Общая
+    // база (дефолт) — фильтра нет, поведение прежнее.
+    const separatePoint = await this.separatePointFor(tenantID, actorUserID);
+    if (separatePoint) {
+      params.push(separatePoint);
+      where += ` AND (c.point_id = $${params.length} OR c.point_id IS NULL)`;
     }
 
     const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM clients c WHERE ${where}`, params);
@@ -217,7 +243,7 @@ export class ClientsService {
     return client;
   }
 
-  async create(tenantID: string, dto: any) {
+  async create(tenantID: string, dto: any, actorUserID?: string) {
     // full_name / phone are NOT NULL. Coerce + validate here so a missing field
     // returns a friendly 400 instead of a raw Postgres NOT NULL 500 — that raw
     // 500 was #57 BUG B ("создание клиента падает"): any create call that
@@ -256,11 +282,15 @@ export class ClientsService {
       }
     }
 
+    // 156 — при раздельной базе новый клиент рождается НА точке автора;
+    // при общей базе (дефолт) point_id остаётся NULL — виден всем.
+    const creationPoint = await this.separatePointFor(tenantID, actorUserID);
+
     try {
       const { rows } = await this.pool.query(
-        `INSERT INTO clients (full_name, phone, comment, source, owner_notes, tenant_id)
-         VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-        [fullName, phone, dto.comment ?? null, dto.source ?? null, dto.ownerNotes ?? null, tenantID],
+        `INSERT INTO clients (full_name, phone, comment, source, owner_notes, tenant_id, point_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+        [fullName, phone, dto.comment ?? null, dto.source ?? null, dto.ownerNotes ?? null, tenantID, creationPoint],
       );
       const client = this.mapClient(rows[0]);
       (client as any).cars = [];

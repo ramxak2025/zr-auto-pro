@@ -14,7 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
-import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
+import { myCompanyApi, loyaltyApi, checksApi, pointsApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { KeyboardAwareView } from '../components/KeyboardAware';
@@ -29,6 +29,7 @@ import type {
   PosSettings,
   PosSettingsConflict,
   PaymentAcceptorInfo,
+  PointsListResponse,
 } from '../../../shared/types';
 import { POS_SETTINGS_KEY } from '../hooks/usePosSettings';
 import { formatPhone } from '../../../shared/validation/phone';
@@ -46,6 +47,8 @@ interface CompanyForm {
   ogrn: string;
   receiptFooter: string;
   shiftsEnabled: boolean;
+  /** 156 — мульти-точки: общая база клиентов всех точек (true, дефолт). */
+  pointsSharedClients: boolean;
 }
 
 export default function CompanySettingsScreen() {
@@ -66,6 +69,16 @@ export default function CompanySettingsScreen() {
     queryFn: async () => (await myCompanyApi.get()).data,
   });
 
+  // 156 — мульти-точки: сколько живых точек у тенанта. Переключатель «Общая
+  // база клиентов» виден только когда точек больше одной (0–1 = одноточечный
+  // режим, ничего нового не показываем).
+  const { data: pointsData } = useQuery<PointsListResponse>({
+    queryKey: ['points'],
+    queryFn: async () => (await pointsApi.list()).data,
+    staleTime: 60_000,
+  });
+  const pointsCount = pointsData?.points.length ?? 0;
+
   const [form, setForm] = useState<CompanyForm>({
     name: '',
     phone: '',
@@ -78,6 +91,7 @@ export default function CompanySettingsScreen() {
     ogrn: '',
     receiptFooter: '',
     shiftsEnabled: false,
+    pointsSharedClients: true,
   });
   const [dirty, setDirty] = useState(false);
 
@@ -95,6 +109,7 @@ export default function CompanySettingsScreen() {
         ogrn: company.ogrn || '',
         receiptFooter: company.receiptFooter || '',
         shiftsEnabled: company.shiftsEnabled === true,
+        pointsSharedClients: company.pointsSharedClients !== false,
       });
       setDirty(false);
     }
@@ -130,6 +145,8 @@ export default function CompanySettingsScreen() {
       // Boolean toggle — отправляем всегда (включая false), иначе выключить
       // фичу было бы невозможно (`undefined` бэкенд игнорирует).
       ...(canManageShifts ? { shiftsEnabled: form.shiftsEnabled } : null),
+      // 156 — только когда есть что переключать (>1 точки) и есть право.
+      ...(canManageShifts && pointsCount > 1 ? { pointsSharedClients: form.pointsSharedClients } : null),
     });
   };
 
@@ -340,26 +357,58 @@ export default function CompanySettingsScreen() {
             </AnimatedCard>
           )}
 
+          {/* 156 — мульти-точки: общая или раздельная база клиентов. Видна
+              только при >1 живой точке (0–1 точка = одноточечный режим, ничего
+              нового не показываем) и тому же праву, что и «Смены». */}
+          {canManageShifts && pointsCount > 1 && (
+            <AnimatedCard index={3}>
+              <View style={cardStyle}>
+                <View style={styles.cardHeader}>
+                  <Ionicons name="location-outline" size={16} color={palette.text.tertiary} />
+                  <Text style={cardTitleStyle}>Точки</Text>
+                </View>
+
+                <View style={styles.toggleRow}>
+                  <View style={styles.toggleTextWrap}>
+                    <Text style={[styles.toggleLabel, { color: palette.text.primary }]}>
+                      Общая база клиентов всех точек
+                    </Text>
+                    <Text style={[styles.toggleSub, { color: palette.text.secondary }]}>
+                      Выкл: у каждой точки свой список клиентов.
+                    </Text>
+                  </View>
+                  <Switch
+                    value={form.pointsSharedClients}
+                    onValueChange={(v) => update({ pointsSharedClients: v })}
+                    trackColor={{ false: palette.border.subtle, true: palette.accent.primary }}
+                    thumbColor={Platform.OS === 'android' ? colors.white : undefined}
+                    ios_backgroundColor={palette.border.subtle}
+                  />
+                </View>
+              </View>
+            </AnimatedCard>
+          )}
+
           {/* Режим кассовой смены (092) — ключ settings_manage (сервер: PATCH
               /checks/pos-settings). Self-contained card (own query + save),
               decoupled from the company «Сохранить» flow so flipping the mode
               is one tap and never entangles with tenant fields. */}
-          {canManagePosSettings && <PosShiftModeSection index={3} />}
+          {canManagePosSettings && <PosShiftModeSection index={4} />}
 
           {/* 155 — «Кто принимает оплату»: явный список кассиров (allowlist в
               pos-settings) либо режим «по ролям». Self-contained card рядом с
               тумблером режима, ключ settings_manage. */}
-          {canManagePosSettings && <PaymentAcceptorsSection index={4} />}
+          {canManagePosSettings && <PaymentAcceptorsSection index={5} />}
 
           {/* Программа лояльности — ключ settings_manage (сервер: PATCH
               /loyalty/settings). Self-contained card: owns its own query +
               form + save, so saving cashback config never touches tenant
               fields and vice-versa. */}
-          {canManagePosSettings && <LoyaltySettingsSection index={5} />}
+          {canManagePosSettings && <LoyaltySettingsSection index={6} />}
 
           {/* Save */}
           {dirty && (
-            <AnimatedCard index={6}>
+            <AnimatedCard index={7}>
               <TouchableOpacity style={styles.saveBtn} onPress={handleSave} disabled={mutation.isPending}>
                 {mutation.isPending ? (
                   <ActivityIndicator color={colors.white} size="small" />

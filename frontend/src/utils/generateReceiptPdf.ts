@@ -19,27 +19,38 @@ export async function generateReceiptPdf(check: Check, tenant?: Partial<Tenant> 
   const footer = tenant?.receiptFooter || 'Спасибо за визит!';
 
   const dateStr = new Date(check.date).toLocaleDateString('ru-RU', {
-    day: '2-digit', month: '2-digit', year: 'numeric',
-    hour: '2-digit', minute: '2-digit',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
   });
 
-  const servicesHtml = (check.services ?? []).map(svc => `
+  const servicesHtml = (check.services ?? [])
+    .map(
+      (svc) => `
     <tr>
       <td style="max-width:120px;word-wrap:break-word;font-size:10px;padding:3px 1px;vertical-align:top">${esc(svc.name)}${svc.master?.fullName ? `<br><span style="font-size:8px;color:#666">${esc(svc.master.fullName)}</span>` : ''}</td>
       <td style="text-align:center;width:24px;font-size:10px;padding:3px 1px">${svc.quantity}</td>
       <td style="text-align:right;width:50px;white-space:nowrap;font-size:10px;padding:3px 1px">${fmt(svc.price)}</td>
       <td style="text-align:right;width:55px;font-weight:bold;white-space:nowrap;font-size:10px;padding:3px 1px">${fmt(svc.total)}</td>
     </tr>
-  `).join('');
+  `,
+    )
+    .join('');
 
-  const productsHtml = (check.products ?? []).map(prod => `
+  const productsHtml = (check.products ?? [])
+    .map(
+      (prod) => `
     <tr>
       <td style="max-width:120px;word-wrap:break-word;font-size:10px;padding:3px 1px;vertical-align:top">${esc(prod.name)}</td>
       <td style="text-align:center;width:24px;font-size:10px;padding:3px 1px">${prod.quantity}</td>
       <td style="text-align:right;width:50px;white-space:nowrap;font-size:10px;padding:3px 1px">${fmt(prod.sellPrice)}</td>
       <td style="text-align:right;width:55px;font-weight:bold;white-space:nowrap;font-size:10px;padding:3px 1px">${fmt(prod.totalSell)}</td>
     </tr>
-  `).join('');
+  `,
+    )
+    .join('');
 
   const requisites: string[] = [];
   if (inn) requisites.push(`ИНН ${inn}`);
@@ -68,26 +79,35 @@ ${companyPhone ? `<div style="font-size:9px;text-align:center;color:#444;margin-
 <div style="font-size:10px;text-align:center;color:#333;margin-bottom:4px">${esc(dateStr)}</div>
 <hr style="border:none;border-top:1px dashed #000;margin:6px 0">
 
+${check.point?.name ? `<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px"><span style="color:#555">Точка:</span><span style="font-weight:bold">${esc(check.point.name)}</span></div>` : ''}
 ${check.client?.fullName ? `<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px"><span style="color:#555">Клиент:</span><span style="font-weight:bold">${esc(check.client.fullName)}</span></div>` : ''}
 ${check.car?.makeModel ? `<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px"><span style="color:#555">Авто:</span><span style="font-weight:bold">${esc(check.car.makeModel)}${check.car.plateNumber ? ` [${esc(check.car.plateNumber)}]` : ''}</span></div>` : ''}
 ${check.master?.fullName ? `<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px"><span style="color:#555">Мастер:</span><span style="font-weight:bold">${esc(check.master.fullName)}</span></div>` : ''}
 ${check.mileage ? `<div style="display:flex;justify-content:space-between;font-size:10px;margin-bottom:2px"><span style="color:#555">Пробег:</span><span style="font-weight:bold">${check.mileage.toLocaleString('ru-RU')} км</span></div>` : ''}
 
-${(check.services?.length ?? 0) > 0 ? `
+${
+  (check.services?.length ?? 0) > 0
+    ? `
 <hr style="border:none;border-top:1px dashed #000;margin:6px 0">
 <div style="font-size:11px;font-weight:bold;text-align:center;letter-spacing:1px;margin:4px 0;text-transform:uppercase">Услуги</div>
 <table style="width:100%;border-collapse:collapse;margin-bottom:2px">
 <thead><tr><th style="${thStyle};text-align:left">Наименование</th><th style="${thStyle};text-align:center">Кол</th><th style="${thStyle};text-align:right">Цена</th><th style="${thStyle};text-align:right">Сумма</th></tr></thead>
 <tbody>${servicesHtml}</tbody>
-</table>` : ''}
+</table>`
+    : ''
+}
 
-${(check.products?.length ?? 0) > 0 ? `
+${
+  (check.products?.length ?? 0) > 0
+    ? `
 <hr style="border:none;border-top:1px dashed #000;margin:6px 0">
 <div style="font-size:11px;font-weight:bold;text-align:center;letter-spacing:1px;margin:4px 0;text-transform:uppercase">Товары</div>
 <table style="width:100%;border-collapse:collapse;margin-bottom:2px">
 <thead><tr><th style="${thStyle};text-align:left">Наименование</th><th style="${thStyle};text-align:center">Кол</th><th style="${thStyle};text-align:right">Цена</th><th style="${thStyle};text-align:right">Сумма</th></tr></thead>
 <tbody>${productsHtml}</tbody>
-</table>` : ''}
+</table>`
+    : ''
+}
 
 <hr style="border:none;border-top:1px dashed #000;margin:6px 0">
 ${check.serviceTotal > 0 ? `<div style="display:flex;justify-content:space-between;font-size:10px;padding:2px 0"><span>Услуги:</span><span>${fmt(check.serviceTotal)} ₽</span></div>` : ''}
@@ -100,14 +120,22 @@ ${(check.discount ?? 0) > 0 ? `<div style="display:flex;justify-content:space-be
 
 <div style="font-size:11px;font-weight:bold;text-align:center;padding:4px;margin:4px 0;border:1px solid #000">${esc(paymentMethodLabels[check.paymentMethod] ?? check.paymentMethod)}</div>
 
-${check.paymentMethod === 'cash_card' ? `
+${
+  check.paymentMethod === 'cash_card'
+    ? `
 <div style="display:flex;justify-content:space-between;font-size:10px;padding:2px 0"><span>Наличные:</span><span>${fmt(check.cashAmount)} ₽</span></div>
-<div style="display:flex;justify-content:space-between;font-size:10px;padding:2px 0"><span>Карта:</span><span>${fmt(check.cardAmount)} ₽</span></div>` : ''}
+<div style="display:flex;justify-content:space-between;font-size:10px;padding:2px 0"><span>Карта:</span><span>${fmt(check.cardAmount)} ₽</span></div>`
+    : ''
+}
 
-${check.comment ? `
+${
+  check.comment
+    ? `
 <hr style="border:none;border-top:1px dashed #000;margin:6px 0">
 <div style="font-size:9px;color:#555;margin-bottom:2px">Комментарий:</div>
-<div style="font-size:9px;color:#444;background:#f5f5f5;padding:4px 6px;border-radius:2px;margin:4px 0;white-space:pre-wrap">${esc(check.comment)}</div>` : ''}
+<div style="font-size:9px;color:#444;background:#f5f5f5;padding:4px 6px;border-radius:2px;margin:4px 0;white-space:pre-wrap">${esc(check.comment)}</div>`
+    : ''
+}
 
 <hr style="border:none;border-top:1px dashed #000;margin:6px 0">
 <div style="font-size:10px;text-align:center;margin-top:6px;white-space:pre-wrap">${esc(footer)}</div>
@@ -137,9 +165,5 @@ ${check.comment ? `
 }
 
 function esc(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }

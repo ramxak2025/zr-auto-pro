@@ -10,6 +10,8 @@ import {
   RefreshControl,
   Dimensions,
   Platform,
+  StyleProp,
+  ViewStyle,
 } from 'react-native';
 import Animated, {
   useAnimatedStyle,
@@ -42,6 +44,7 @@ import {
   myCompanyApi,
   installmentsApi,
   cashShiftsApi,
+  pointsApi,
 } from '../api/services';
 import { formatInstallmentMoney, dueLabel } from '../components/installments/installmentUi';
 import { getImageUrl } from '../api/axios';
@@ -67,6 +70,7 @@ import type {
   Tenant,
   InstallmentWidget,
   CashShiftReport,
+  PointsListResponse,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { usePreference, prefKey } from '../hooks/usePreference';
@@ -3473,6 +3477,103 @@ function OwnerFreshnessBadge() {
   );
 }
 
+/**
+ * PointSwitcherChip — мульти-точки (156): компактный переключатель текущей
+ * точки в шапке дашборда. Полностью скрыт при 0–1 живой точке — одноточечный
+ * режим не показывает ничего нового.
+ *
+ * Права:
+ *   • user_management (владелец/админ) — видит все живые точки + «Все точки»
+ *     (сброс выбора, currentPointId → null).
+ *   • мастер — видит только точки, где он в `memberIds`. Если он не назначен
+ *   ни на одну — «не ограничен» (см. shared/types TenantPoint): чип не
+ *   показывается, переключать для него нечего.
+ */
+function PointSwitcherChip({ style }: { style?: StyleProp<ViewStyle> }) {
+  const { user, hasPermission } = useAuth();
+  const palette = useColors();
+  const queryClient = useQueryClient();
+
+  const { data } = useQuery<PointsListResponse>({
+    queryKey: ['points'],
+    queryFn: async () => (await pointsApi.list()).data,
+    staleTime: 60_000,
+  });
+
+  const points = data?.points ?? [];
+  const canManage = hasPermission('user_management');
+  const assignedPoints = useMemo(
+    () => (user ? points.filter((p) => p.memberIds?.includes(user.id)) : []),
+    [points, user],
+  );
+  // Владелец/админ выбирает из всех точек. Мастер, назначенный хоть на одну
+  // точку, — только из своих (memberIds). Мастер БЕЗ явных назначений «не
+  // ограничен» (см. TenantPoint) — это про ДОСТУП, а не про то, что ему
+  // нечего переключать: он, как и владелец, видит полный список точек (но
+  // без пункта «Все точки» — сброс выбора остаётся только у user_management).
+  const selectable = canManage || assignedPoints.length === 0 ? points : assignedPoints;
+
+  const switchMutation = useMutation({
+    mutationFn: (pointId: string | null) => pointsApi.switch(pointId),
+    onSuccess: () => {
+      haptic('success');
+      queryClient.invalidateQueries({ queryKey: ['points'] });
+      // Точка меняет видимую базу клиентов (если pointsSharedClients=false) и
+      // авторство новых чеков — обновляем журнал/клиентов, чтобы список не
+      // показывал устаревшую выборку другой точки.
+      queryClient.invalidateQueries({ queryKey: ['clients'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
+      queryClient.invalidateQueries({ queryKey: ['checks'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
+      queryClient.invalidateQueries({ queryKey: ['checks-trash'] });
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось переключить точку');
+    },
+  });
+
+  if (points.length <= 1) return null;
+
+  const current = points.find((p) => p.id === data?.currentPointId) ?? null;
+  const label = current ? current.name : canManage ? 'Все точки' : (selectable[0]?.name ?? 'Точка');
+
+  const openPicker = () => {
+    haptic('tap');
+    const options: Array<{ text: string; onPress?: () => void; style?: 'cancel' }> = selectable.map((p) => ({
+      text: p.id === data?.currentPointId ? `✓ ${p.name}` : p.name,
+      onPress: () => switchMutation.mutate(p.id),
+    }));
+    if (canManage) {
+      options.push({
+        text: data?.currentPointId == null ? '✓ Все точки' : 'Все точки',
+        onPress: () => switchMutation.mutate(null),
+      });
+    }
+    options.push({ text: 'Отмена', style: 'cancel' });
+    Alert.alert('Точка', 'Выберите точку', options);
+  };
+
+  return (
+    <TouchableOpacity
+      style={[styles.pointChip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }, style]}
+      onPress={openPicker}
+      activeOpacity={0.7}
+      disabled={switchMutation.isPending}
+      accessibilityRole="button"
+      accessibilityLabel={`Точка: ${label}. Нажмите, чтобы переключить`}
+    >
+      <Ionicons name="location-outline" size={13} color={palette.text.secondary} />
+      <Text style={[styles.pointChipText, { color: palette.text.secondary }]} numberOfLines={1}>
+        {label}
+      </Text>
+      <Ionicons name="chevron-down" size={12} color={palette.text.tertiary} />
+    </TouchableOpacity>
+  );
+}
+
 // ── Configurable owner widgets ───────────────────────────────────────────────
 // Реестр настраиваемых виджетов: id + русский лейбл + сам компонент. Порядок
 // здесь = порядок на дашборде. Hero / KPI / график / снапшот-строка — НЕ тут,
@@ -3546,6 +3647,7 @@ function AdminDashboard({ name }: { name: string }) {
   return (
     <View style={{ gap: spacing[5] }}>
       <View style={styles.adminTopRow}>
+        <PointSwitcherChip />
         <View style={{ flex: 1 }}>
           <OwnerFreshnessBadge />
         </View>
@@ -4538,6 +4640,7 @@ export default function DashboardScreen() {
                 {greeting}, {displayName}!
               </Text>
               <Text style={[styles.headerSub, { color: palette.text.tertiary }]}>Обзор показателей автосервиса</Text>
+              <PointSwitcherChip style={styles.pointChipUnderGreeting} />
             </View>
             {shiftsEnabled && <ShiftControl />}
             <MasterDashboard />
@@ -4600,6 +4703,19 @@ const styles = StyleSheet.create({
   headerSection: { marginBottom: spacing[1] },
   headerTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   headerSub: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
+  // 156 — мульти-точки: компактный переключатель точки в шапке.
+  pointChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1],
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    alignSelf: 'flex-start',
+  },
+  pointChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, maxWidth: 130 },
+  pointChipUnderGreeting: { marginTop: spacing[1.5] },
 
   // Legacy card (master path)
   card: {

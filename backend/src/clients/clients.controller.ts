@@ -24,7 +24,7 @@ export class ClientsController {
   @RequirePermission('clients_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.clientsService.getAll(user.tenantID, query);
+    return this.clientsService.getAll(user.tenantID, query, user.userID);
   }
 
   // Выгрузка всей клиентской базы (имя+телефон) — ровно то, от чего защищает
@@ -78,7 +78,7 @@ export class ClientsController {
 
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.clientsService.create(user.tenantID, dto);
+    return this.clientsService.create(user.tenantID, dto, user.userID);
   }
 
   // Edit an EXISTING client's own profile fields (name/phone/comment/source/

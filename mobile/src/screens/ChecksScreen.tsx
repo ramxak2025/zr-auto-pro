@@ -419,6 +419,21 @@ const CheckRow = React.memo(function CheckRow({
                     </Text>
                   </View>
                 )}
+                {/* 156 — мульти-точки: маленький серый чип точки, на которой
+                    создан заказ. Только когда у чека есть точка. */}
+                {check.point && (
+                  <View
+                    style={[
+                      styles.pointChip,
+                      { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+                    ]}
+                  >
+                    <Ionicons name="location-outline" size={10} color={palette.text.tertiary} />
+                    <Text style={[styles.pointChipText, { color: palette.text.tertiary }]} numberOfLines={1}>
+                      {check.point.name}
+                    </Text>
+                  </View>
+                )}
               </View>
             </View>
             <View style={styles.checkAmountCol}>
@@ -2716,6 +2731,18 @@ const styles = StyleSheet.create({
     marginLeft: 2,
     letterSpacing: 0.3,
   },
+  // 156 — мульти-точки: серый чип точки на карточке чека в журнале.
+  pointChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    paddingHorizontal: 6,
+    paddingVertical: 1.5,
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: 140,
+  },
+  pointChipText: { fontSize: 11, fontWeight: fontWeight.medium, flexShrink: 1 },
   checkAmountCol: { alignItems: 'flex-end', gap: spacing[1] },
   checkSumRow: { flexDirection: 'row', alignItems: 'center', gap: spacing[1.5] },
   // 17pt bold + tabular-nums — деньги: самый крупный текст карточки,

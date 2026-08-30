@@ -90,6 +90,8 @@ export class TenantsService {
       receiptFooter: row.receipt_footer,
       shiftsEnabled: row.shifts_enabled === true,
       shiftModeEnabled: row.shift_mode_enabled === true,
+      // 156 — мульти-точки: общая (true, дефолт) vs раздельная база клиентов.
+      pointsSharedClients: row.points_shared_clients !== false,
       suspendedAt: row.suspended_at ?? null,
       suspendedReason: row.suspended_reason ?? null,
       // 115 — индивидуальная надбавка минут голосового ввода поверх тарифа.
@@ -1262,6 +1264,12 @@ export class TenantsService {
     if (dto.shiftModeEnabled !== undefined) {
       sets.push(`shift_mode_enabled=$${idx++}`);
       vals.push(dto.shiftModeEnabled === true);
+    }
+    // 156 — мульти-точки: выбор тенанта «общая база клиентов всех точек»
+    // (true, дефолт) vs «у каждой точки своя» (false).
+    if (dto.pointsSharedClients !== undefined) {
+      sets.push(`points_shared_clients=$${idx++}`);
+      vals.push(dto.pointsSharedClients !== false);
     }
 
     if (sets.length === 0) return this.getMyCompany(tenantId);

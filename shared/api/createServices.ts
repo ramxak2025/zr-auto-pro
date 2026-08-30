@@ -56,6 +56,8 @@ import type {
   SubscriptionInfo,
   FeatureCatalogItem,
   TenantCabinet,
+  TenantPoint,
+  PointsListResponse,
   PlatformStats,
   MrrTrendPoint,
   SubscriptionRevenue,
@@ -392,6 +394,31 @@ export function createTenantsApi(api: HttpClient) {
     /** Lift a suspension (re-activate; the subscription window itself is untouched). */
     unsuspend: (id: string) => api.post<Tenant>(`/tenants/${id}/unsuspend`),
     impersonate: (id: string) => api.post<ImpersonateResponse>(`/tenants/${id}/impersonate`),
+    // ── Мульти-точки (156, tenant_points) — суперадмин-CRUD в карточке тенанта ──
+    points: {
+      list: (tenantId: string) => api.get<TenantPoint[]>(`/tenants/${tenantId}/points`),
+      create: (tenantId: string, data: { name: string; address?: string }) =>
+        api.post<TenantPoint>(`/tenants/${tenantId}/points`, data),
+      update: (tenantId: string, pointId: string, data: Partial<Pick<TenantPoint, 'name' | 'address' | 'isActive' | 'sortOrder'>>) =>
+        api.patch<TenantPoint>(`/tenants/${tenantId}/points/${pointId}`, data),
+      /** «Удалить» = архив (isActive=false): старые чеки точку сохраняют. */
+      remove: (tenantId: string, pointId: string) => api.delete(`/tenants/${tenantId}/points/${pointId}`),
+    },
+  };
+}
+
+/**
+ * Мульти-точки (156) — тенант-сторона: живые точки своего тенанта,
+ * переключение текущей точки, назначение сотрудников (user_management).
+ */
+export function createPointsApi(api: HttpClient) {
+  return {
+    list: () => api.get<PointsListResponse>('/points'),
+    /** pointId: null = сбросить выбор («все точки»). */
+    switch: (pointId: string | null) =>
+      api.post<{ currentPointId: string | null }>('/points/switch', { pointId }),
+    setMembers: (pointId: string, userIds: string[]) =>
+      api.put<{ memberIds: string[] }>(`/points/${pointId}/members`, { userIds }),
   };
 }
 

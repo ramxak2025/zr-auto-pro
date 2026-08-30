@@ -73,6 +73,15 @@ iOS можно и нужно активно улучшать. Можно исп�
 
 Соответствующая логика: `src/utils/plateMask.ts` (есть тесты в `src/utils/__tests__/plateMask.test.ts` — поддерживай зелёными), `src/components/RussianPlateInput.tsx`, `src/components/PlateModeSwitcher.tsx`.
 
+## Правило клавиатуры
+
+Любая форма с `TextInput` — только через `src/components/KeyboardAware.tsx`
+(`KeyboardAwareView` для нескроллящихся контейнеров/шторок, `KeyboardAwareScroll`
+для форм со скроллом). Raw `KeyboardAvoidingView` из `'react-native'` и
+`automaticallyAdjustKeyboardInsets` **запрещены к новому использованию**: на iOS
+без offset они «уносят» поле вверх, на Android — no-op (миграция завершена
+2026-08-30, не откатывать).
+
 ## Правила по нижнему tab bar
 
 - Swift-native / UIKit / SwiftUI bar (а не RN-only).

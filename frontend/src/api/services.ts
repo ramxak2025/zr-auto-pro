@@ -4,6 +4,7 @@ import {
   createUsersApi,
   createRolesApi,
   createTenantsApi,
+  createPointsApi,
   createMyCompanyApi,
   createPlansApi,
   createSubscriptionApi,
@@ -93,6 +94,7 @@ export const authApi = createAuthApi(api);
 export const usersApi = createUsersApi(api);
 export const rolesApi = createRolesApi(api);
 export const tenantsApi = createTenantsApi(api);
+export const pointsApi = createPointsApi(api);
 export const myCompanyApi = createMyCompanyApi(api);
 export const plansApi = createPlansApi(api);
 export const subscriptionApi = createSubscriptionApi(api);

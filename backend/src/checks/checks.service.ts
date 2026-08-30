@@ -927,6 +927,12 @@ export class ChecksService {
       // Additive; existing consumers ignore them.
       locationId: row.location_id ?? null,
       deliveredAt: row.delivered_at ?? null,
+      // 156 — мульти-точки: точка (филиал), на которой создан заказ. Штамп
+      // сервера из current_point_id автора; NULL у одноточечных тенантов и на
+      // исторических чеках. point.name приходит там, где путь джойнит
+      // tenant_points (журнал/деталь/доска). Additive.
+      pointId: row.point_id ?? null,
+      point: row.point_id ? { id: row.point_id, name: row.point_name ?? null } : null,
       // Корзина (106): NULL on every live check. A trashed check never reaches
       // the normal list/detail responses (they filter deleted_at IS NULL), so
       // these are effectively always null there — carried through for the trash
@@ -1125,6 +1131,7 @@ export class ChecksService {
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
                 ca.plate_number, ca.make_model,
+                pt.name as point_name,
                 (ch.master_id IS DISTINCT FROM $${meIdx} AND EXISTS (
                    SELECT 1 FROM check_service_lines sl
                     WHERE sl.check_id = ch.id AND sl.master_id = $${meIdx}
@@ -1138,6 +1145,7 @@ export class ChecksService {
          LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
          LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
+         LEFT JOIN tenant_points pt ON pt.id = ch.point_id AND pt.tenant_id = ch.tenant_id
          WHERE ${keysetWhere}
          ORDER BY ch.date DESC, ch.created_at DESC, ch.id DESC
          LIMIT $${idx}`,
@@ -1154,6 +1162,7 @@ export class ChecksService {
                 m.full_name as master_name, m.avatar as master_avatar,
                 cl.full_name as client_name, cl.phone as client_phone,
                 ca.plate_number, ca.make_model,
+                pt.name as point_name,
                 (ch.master_id IS DISTINCT FROM $${meIdx} AND EXISTS (
                    SELECT 1 FROM check_service_lines sl
                     WHERE sl.check_id = ch.id AND sl.master_id = $${meIdx}
@@ -1167,6 +1176,7 @@ export class ChecksService {
          LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
          LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
+         LEFT JOIN tenant_points pt ON pt.id = ch.point_id AND pt.tenant_id = ch.tenant_id
          WHERE ${where}
          ORDER BY ch.date DESC, ch.created_at DESC, ch.id DESC
          LIMIT $${idx} OFFSET $${idx + 1}`,
@@ -1261,12 +1271,14 @@ export class ChecksService {
               cl.full_name as client_name, cl.phone as client_phone,
               ca.plate_number, ca.make_model,
               loc.name as location_name,
+              pt.name as point_name,
               ab.full_name as accepted_by_name
        FROM checks ch
        LEFT JOIN users m ON m.id = ch.master_id AND m.tenant_id = ch.tenant_id
        LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
        LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
        LEFT JOIN tenant_locations loc ON loc.id = ch.location_id AND loc.tenant_id = ch.tenant_id
+       LEFT JOIN tenant_points pt ON pt.id = ch.point_id AND pt.tenant_id = ch.tenant_id
        LEFT JOIN users ab ON ab.id = ch.accepted_by AND ab.tenant_id = ch.tenant_id
        WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL`,
       [id, tenantID],
@@ -1844,6 +1856,7 @@ export class ChecksService {
                 cl.full_name as client_name, cl.phone as client_phone,
                 ca.plate_number, ca.make_model,
                 loc.name as location_name,
+                pt.name as point_name,
                 (SELECT COALESCE(json_agg(json_build_object('id', u2.id, 'fullName', u2.full_name, 'avatar', u2.avatar)
                                           ORDER BY u2.full_name), '[]'::json)
                    FROM check_assignees cas3
@@ -1855,6 +1868,7 @@ export class ChecksService {
          LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = ch.tenant_id
          LEFT JOIN cars ca ON ca.id = ch.car_id AND ca.tenant_id = ch.tenant_id
          LEFT JOIN tenant_locations loc ON loc.id = ch.location_id AND loc.tenant_id = ch.tenant_id
+         LEFT JOIN tenant_points pt ON pt.id = ch.point_id AND pt.tenant_id = ch.tenant_id
          WHERE ${where}
        ) sub
        WHERE sub.rn <= $${idx}
@@ -2872,13 +2886,22 @@ export class ChecksService {
         initialWorkStatus = firstCol[0]?.key ?? null;
       }
 
+      // 156 — мульти-точки: штампуем точку АВТОРА заказа (его текущий выбор в
+      // переключателе). NULL у одноточечных тенантов / без выбора — колонка
+      // остаётся пустой, поведение прежнее.
+      const { rows: authorPointRows } = await client.query(
+        `SELECT current_point_id FROM users WHERE id=$1 AND tenant_id=$2`,
+        [userID, tenantID],
+      );
+      const authorPointId = authorPointRows[0]?.current_point_id ?? null;
+
       const { rows: checkRows } = await client.query(
         `INSERT INTO checks (number, date, master_id, client_id, car_id, mileage, comment, discount,
          is_deferred, payment_method, cash_amount, card_amount,
          service_total, product_total, total_revenue, product_cost_total,
          service_salary_total, product_salary_total, total_cost, profit, tenant_id, client_request_id,
-         location_id, work_status, accepted_by, accepted_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+         location_id, work_status, accepted_by, accepted_at, point_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
          RETURNING *`,
         [
           checkNumber,
@@ -2912,6 +2935,7 @@ export class ChecksService {
           // деньги примет тот, кто активирует (activateDeferred).
           effectiveIsDeferred ? null : userID,
           effectiveIsDeferred ? null : new Date().toISOString(),
+          authorPointId,
         ],
       );
 

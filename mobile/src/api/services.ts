@@ -5,6 +5,7 @@ import {
   createProfileApi,
   createUsersApi,
   createTenantsApi,
+  createPointsApi,
   createAdminApi,
   createMyCompanyApi,
   createPlansApi,
@@ -89,6 +90,7 @@ export const registrationApi: typeof registrationApiBase = {
 export const profileApi = createProfileApi(api);
 export const usersApi = createUsersApi(api);
 export const tenantsApi = createTenantsApi(api);
+export const pointsApi = createPointsApi(api);
 // Superadmin platform-operator endpoints not tied to a single tenant
 // (audit log). Mirrors the createNotificationsApi factory wiring above.
 export const adminApi = createAdminApi(api);

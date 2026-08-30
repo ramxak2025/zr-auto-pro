@@ -187,6 +187,7 @@ export function buildOrderHtml(check: Check, company?: Tenant | null): string {
   <div class="title">Заказ-наряд №${check.number} <span class="date">от ${dateLabel}</span></div>
 
   <table class="info">
+    ${check.point?.name ? infoRow('Точка', escapeHtml(check.point.name)) : ''}
     ${infoRow('Клиент', clientName)}
     ${infoRow('Автомобиль', carLabel)}
     ${infoRow('Пробег', mileageLabel)}

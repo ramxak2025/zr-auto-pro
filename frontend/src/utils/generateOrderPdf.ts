@@ -140,6 +140,7 @@ export async function generateOrderPdf(check: Check, tenant?: Partial<Tenant> | 
 
   <table style="width:100%;border-collapse:collapse;margin-bottom:6px">
     <tbody>
+      ${check.point?.name ? infoRow('Точка', esc(check.point.name)) : ''}
       ${infoRow('Клиент', check.client?.fullName ? esc(check.client.fullName) : 'Розничный покупатель')}
       ${check.client?.phone ? infoRow('Телефон', esc(check.client.phone)) : ''}
       ${infoRow('Автомобиль', carValue)}

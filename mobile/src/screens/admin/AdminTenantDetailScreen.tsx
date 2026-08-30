@@ -41,7 +41,15 @@ import { useColors } from '../../contexts/ThemeContext';
 import { useIosSurface } from '../../platform/iosSurface';
 import { colors, spacing, borderRadius, getBadgeColors } from '../../theme';
 import { useAdminTabBarScrollInsets } from '../../hooks/useAdminTabBarHeight';
-import type { Tenant, Plan, TenantCabinet, SubscriptionStatus, User, PermissionKey } from '../../../../shared/types';
+import type {
+  Tenant,
+  Plan,
+  TenantCabinet,
+  SubscriptionStatus,
+  User,
+  PermissionKey,
+  TenantPoint,
+} from '../../../../shared/types';
 import { UserRole, PERMISSION_KEYS, ROLE_PERMISSION_DEFAULTS } from '../../../../shared/types';
 import type { UpdateUserRequest, ExtendSubscriptionRequest } from '../../../../shared/api/types';
 import { formatPhone, normalizePhone, isValidPhone } from '../../../../shared/validation/phone';
@@ -137,6 +145,23 @@ function toUserDraft(u?: User): UserDraft {
   };
 }
 
+/** Editable branch-point form state (156, tenant_points). */
+interface PointDraft {
+  id?: string;
+  name: string;
+  address: string;
+  isActive: boolean;
+}
+
+function toPointDraft(p?: TenantPoint): PointDraft {
+  return {
+    id: p?.id,
+    name: p?.name ?? '',
+    address: p?.address ?? '',
+    isActive: p ? p.isActive : true,
+  };
+}
+
 export default function AdminTenantDetailScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
@@ -158,6 +183,8 @@ export default function AdminTenantDetailScreen() {
   const [editingUser, setEditingUser] = React.useState<UserDraft | null>(null);
   const [savingUser, setSavingUser] = React.useState(false);
   const [pwVisible, setPwVisible] = React.useState(false);
+  const [editingPoint, setEditingPoint] = React.useState<PointDraft | null>(null);
+  const [savingPoint, setSavingPoint] = React.useState(false);
 
   const {
     data: tenant,
@@ -193,11 +220,22 @@ export default function AdminTenantDetailScreen() {
     queryFn: async () => (await plansApi.getAll()).data,
   });
 
+  // ── Мульти-точки (156) — живые + архивные точки тенанта. Заводит/архивирует
+  // ТОЛЬКО суперадмин; их количество и есть лимит точек тенанта. ──
+  const { data: points = [] } = useQuery<TenantPoint[]>({
+    queryKey: ['admin-tenant-points', id],
+    queryFn: async () => (await tenantsApi.points.list(id)).data,
+  });
+
   const invalidate = React.useCallback(() => {
     queryClient.invalidateQueries({ queryKey: ['admin-tenant', id] });
     queryClient.invalidateQueries({ queryKey: ['admin-tenant-cabinet', id] });
     queryClient.invalidateQueries({ queryKey: ['admin-tenants'] });
     queryClient.invalidateQueries({ queryKey: ['admin-stats'] });
+  }, [queryClient, id]);
+
+  const invalidatePoints = React.useCallback(() => {
+    queryClient.invalidateQueries({ queryKey: ['admin-tenant-points', id] });
   }, [queryClient, id]);
 
   const extendMutation = useMutation({
@@ -357,6 +395,89 @@ export default function AdminTenantDetailScreen() {
       Alert.alert('Ошибка', 'Не удалось уволить сотрудника');
     },
   });
+
+  // ── Мульти-точки (156) — CRUD точки из карточки тенанта ──
+  const savePointMutation = useMutation({
+    mutationFn: async (draft: PointDraft) => {
+      setSavingPoint(true);
+      const payload = { name: draft.name.trim(), address: draft.address.trim() || undefined };
+      if (draft.id) {
+        await tenantsApi.points.update(id, draft.id, payload);
+      } else {
+        await tenantsApi.points.create(id, payload);
+      }
+    },
+    onSuccess: () => {
+      haptic('success');
+      setEditingPoint(null);
+      invalidatePoints();
+    },
+    onError: (error: unknown) => {
+      haptic('error');
+      const msg = (error as { response?: { data?: { message?: unknown } } })?.response?.data?.message;
+      const reason = Array.isArray(msg) ? msg.filter((m): m is string => typeof m === 'string').join('\n') : msg;
+      Alert.alert(
+        'Ошибка',
+        typeof reason === 'string' && reason.trim()
+          ? reason
+          : editingPoint?.id
+            ? 'Не удалось сохранить точку'
+            : 'Не удалось создать точку',
+      );
+    },
+    onSettled: () => setSavingPoint(false),
+  });
+
+  const toggleArchivePointMutation = useMutation({
+    mutationFn: async (point: { id: string; isActive: boolean }) =>
+      tenantsApi.points.update(id, point.id, { isActive: !point.isActive }),
+    onSuccess: (_res, point) => {
+      haptic('success');
+      setEditingPoint((prev) => (prev && prev.id === point.id ? { ...prev, isActive: !point.isActive } : prev));
+      invalidatePoints();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось изменить статус точки');
+    },
+  });
+
+  const removePointMutation = useMutation({
+    mutationFn: async (pointId: string) => tenantsApi.points.remove(id, pointId),
+    onSuccess: () => {
+      haptic('success');
+      setEditingPoint(null);
+      invalidatePoints();
+    },
+    onError: () => {
+      haptic('error');
+      Alert.alert('Ошибка', 'Не удалось удалить точку');
+    },
+  });
+
+  const handleSavePoint = React.useCallback(() => {
+    if (!editingPoint) return;
+    if (!editingPoint.name.trim()) {
+      haptic('error');
+      Alert.alert('Укажите название', 'Название точки обязательно.');
+      return;
+    }
+    savePointMutation.mutate(editingPoint);
+  }, [editingPoint, savePointMutation]);
+
+  const handleDeletePoint = React.useCallback(() => {
+    if (!editingPoint?.id) return;
+    const name = editingPoint.name.trim() || 'Точка';
+    haptic('warning');
+    Alert.alert('Удалить точку?', `«${name}» станет архивной. Историю заказ-нарядов это не затронет.`, [
+      { text: 'Отмена', style: 'cancel' },
+      {
+        text: 'Удалить',
+        style: 'destructive',
+        onPress: () => editingPoint.id && removePointMutation.mutate(editingPoint.id),
+      },
+    ]);
+  }, [editingPoint, removePointMutation]);
 
   const handleSaveUser = React.useCallback(() => {
     if (!editingUser) return;
@@ -690,6 +811,65 @@ export default function AdminTenantDetailScreen() {
             )}
           </Pressable>
         </View>
+
+        {/* Points (156, tenant_points) — superadmin CRUD for tenant branches.
+            «Удалить» здесь = архив (isActive=false); история заказ-нарядов
+            точку сохраняет. */}
+        <View style={styles.employeesHead}>
+          <Text style={[styles.sectionLabel, { color: palette.text.tertiary, marginTop: 0 }]}>
+            Точки ({points.length})
+          </Text>
+          <Pressable
+            onPress={() => {
+              haptic('tap');
+              setEditingPoint(toPointDraft());
+            }}
+            style={[styles.employeesAdd, { backgroundColor: palette.accent.primary }]}
+            hitSlop={6}
+          >
+            <Ionicons name="add" size={18} color={colors.white} />
+          </Pressable>
+        </View>
+
+        {points.length === 0 ? (
+          <View style={[styles.card, surface.card, styles.emptyUsers]}>
+            <Ionicons name="location-outline" size={28} color={palette.text.tertiary} />
+            <Text style={[styles.emptyUsersText, { color: palette.text.secondary }]}>
+              У этого автосервиса пока нет точек
+            </Text>
+          </View>
+        ) : (
+          <View style={{ gap: spacing[2.5] }}>
+            {points.map((p) => (
+              <Pressable
+                key={p.id}
+                onPress={() => {
+                  haptic('tap');
+                  setEditingPoint(toPointDraft(p));
+                }}
+                style={[styles.userRow, surface.card]}
+              >
+                <InitialAvatar name={p.name} palette={palette} size={38} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.userName, { color: palette.text.primary }]} numberOfLines={1}>
+                    {p.name}
+                  </Text>
+                  {p.address ? (
+                    <Text style={[styles.userMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
+                      {p.address}
+                    </Text>
+                  ) : null}
+                </View>
+                {!p.isActive && (
+                  <View style={[styles.userBadge, { backgroundColor: getBadgeColors(palette.mode).gray.bg }]}>
+                    <Text style={[styles.userBadgeText, { color: getBadgeColors(palette.mode).gray.text }]}>Архив</Text>
+                  </View>
+                )}
+                <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+              </Pressable>
+            ))}
+          </View>
+        )}
 
         {/* Employees */}
         <View style={styles.employeesHead}>
@@ -1124,6 +1304,114 @@ export default function AdminTenantDetailScreen() {
           </View>
         </KeyboardProvider>
       </Modal>
+
+      {/* Create / edit point (branch) sheet — same shell as the employee
+          sheet above (KeyboardAwareView inside KeyboardProvider). Archive
+          toggle + delete only apply to an EXISTING point. */}
+      <Modal
+        visible={!!editingPoint}
+        transparent
+        statusBarTranslucent
+        animationType="slide"
+        onRequestClose={() => setEditingPoint(null)}
+      >
+        <KeyboardProvider>
+          <View style={styles.sheetBackdrop}>
+            <KeyboardAwareView style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
+              <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
+                <Pressable onPress={() => setEditingPoint(null)} hitSlop={8}>
+                  <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
+                </Pressable>
+                <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>
+                  {editingPoint?.id ? 'Точка' : 'Новая точка'}
+                </Text>
+                <Pressable onPress={handleSavePoint} disabled={savingPoint} hitSlop={8}>
+                  {savingPoint ? (
+                    <ActivityIndicator size="small" color={palette.accent.primary} />
+                  ) : (
+                    <Text style={[styles.sheetSave, { color: palette.accent.primary }]}>Сохранить</Text>
+                  )}
+                </Pressable>
+              </View>
+
+              {editingPoint && (
+                <ScrollView
+                  contentContainerStyle={styles.sheetScroll}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Название</Text>
+                  <View style={[styles.inputWrap, surface.cardCompact]}>
+                    <TextInput
+                      style={[styles.sheetInput, { color: palette.text.primary }]}
+                      placeholder="Например, «на Ленина»"
+                      placeholderTextColor={palette.text.tertiary}
+                      value={editingPoint.name}
+                      onChangeText={(v) => setEditingPoint({ ...editingPoint, name: v })}
+                    />
+                  </View>
+
+                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Адрес</Text>
+                  <View style={[styles.inputWrap, surface.cardCompact]}>
+                    <TextInput
+                      style={[styles.sheetInput, { color: palette.text.primary }]}
+                      placeholder="г. Москва, ул. Ленина, д. 1"
+                      placeholderTextColor={palette.text.tertiary}
+                      value={editingPoint.address}
+                      onChangeText={(v) => setEditingPoint({ ...editingPoint, address: v })}
+                    />
+                  </View>
+
+                  {editingPoint.id && (
+                    <>
+                      <Pressable
+                        onPress={() =>
+                          editingPoint.id &&
+                          toggleArchivePointMutation.mutate({ id: editingPoint.id, isActive: editingPoint.isActive })
+                        }
+                        disabled={toggleArchivePointMutation.isPending}
+                        style={[styles.archivePointBtn, { borderColor: palette.border.subtle }]}
+                      >
+                        {toggleArchivePointMutation.isPending ? (
+                          <ActivityIndicator size="small" color={palette.text.secondary} />
+                        ) : (
+                          <>
+                            <Ionicons
+                              name={editingPoint.isActive ? 'archive-outline' : 'arrow-undo-outline'}
+                              size={18}
+                              color={palette.text.secondary}
+                            />
+                            <Text style={[styles.archivePointText, { color: palette.text.secondary }]}>
+                              {editingPoint.isActive ? 'Архивировать' : 'Разархивировать'}
+                            </Text>
+                          </>
+                        )}
+                      </Pressable>
+
+                      <Pressable
+                        onPress={handleDeletePoint}
+                        disabled={removePointMutation.isPending}
+                        style={[styles.deleteUserBtn, { borderColor: colors.red[200] }]}
+                      >
+                        {removePointMutation.isPending ? (
+                          <ActivityIndicator size="small" color={colors.red[600]} />
+                        ) : (
+                          <>
+                            <Ionicons name="trash-outline" size={18} color={colors.red[600]} />
+                            <Text style={[styles.deleteUserText, { color: colors.red[600] }]}>Удалить точку</Text>
+                          </>
+                        )}
+                      </Pressable>
+                    </>
+                  )}
+
+                  <View style={{ height: spacing[8] }} />
+                </ScrollView>
+              )}
+            </KeyboardAwareView>
+          </View>
+        </KeyboardProvider>
+      </Modal>
     </View>
   );
 }
@@ -1436,4 +1724,16 @@ const styles = StyleSheet.create({
     marginTop: spacing[5],
   },
   deleteUserText: { fontSize: 15, fontWeight: '700' },
+  // Points sheet — neutral archive/unarchive toggle (delete reuses deleteUserBtn).
+  archivePointBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: spacing[2],
+    paddingVertical: spacing[3.5],
+    borderRadius: borderRadius['2xl'],
+    borderWidth: StyleSheet.hairlineWidth,
+    marginTop: spacing[5],
+  },
+  archivePointText: { fontSize: 15, fontWeight: '700' },
 });

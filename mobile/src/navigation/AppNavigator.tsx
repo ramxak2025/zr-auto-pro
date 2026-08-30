@@ -65,6 +65,7 @@ import ReviewsReputationScreen from '../screens/ReviewsReputationScreen';
 import WinbackScreen from '../screens/WinbackScreen';
 import CarsScreen from '../screens/CarsScreen';
 import CompanySettingsScreen from '../screens/CompanySettingsScreen';
+import PointsScreen from '../screens/PointsScreen';
 import NotificationSettingsScreen from '../screens/NotificationSettingsScreen';
 import SubscriptionScreen from '../screens/SubscriptionScreen';
 import SubscriptionBlockedScreen from '../screens/SubscriptionBlockedScreen';
@@ -535,6 +536,13 @@ function MoreStackNavigator() {
       <MoreStack.Screen name="Roles" component={GatedRoles} />
       <MoreStack.Screen name="RoleEditor" component={GatedRoleEditor} />
       <MoreStack.Screen name="CompanySettings" component={CompanySettingsScreen} />
+      {/* Точки (156, мульти-точки) — тенант-сторона: назначение сотрудников на
+          живые точки. Заводит/архивирует точки только суперадмин
+          (AdminTenantDetailScreen); строка в меню видна только при >1 точке
+          И user_management (см. MoreScreen). UNGATED здесь — MoreScreen уже
+          решает видимость входа, а сама шторка назначения самогейтится
+          canManage внутри экрана. */}
+      <MoreStack.Screen name="Points" component={PointsScreen} />
       {/* Приём оплат (эквайринг) + онлайн-касса 54-ФЗ. Owner-class; lives in
           MoreStack so the floating tab bar stays visible (like CompanySettings).
           Screen self-gates non-owners; menu row is roles-filtered too. */}

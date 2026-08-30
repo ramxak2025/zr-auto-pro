@@ -7,7 +7,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { subscriptionApi, knowledgeApi, bookingsApi } from '../api/services';
+import { subscriptionApi, knowledgeApi, bookingsApi, pointsApi } from '../api/services';
 import { countUpcoming } from './bookings/bookingHelpers';
 import type { Booking } from '../../../shared/types';
 import { getImageUrl } from '../api/axios';
@@ -15,7 +15,7 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, so
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
+import type { UserPermissions, SubscriptionInfo, PointsListResponse } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
@@ -368,6 +368,18 @@ const menuSections: MenuSection[] = [
         iconColor: colors.indigo[600],
       },
       {
+        // Точки (156, мульти-точки) — назначение сотрудников на филиалы.
+        // Дополнительно к permission-гейту скрыта при 0–1 живой точке (см.
+        // filterItem — точка не входит в статичную роль-only модель выше).
+        label: 'Точки',
+        description: 'Автосервисы-филиалы и сотрудники',
+        screen: 'Points',
+        permission: 'user_management',
+        icon: 'location-outline',
+        iconBg: colors.orange[50],
+        iconColor: colors.orange[600],
+      },
+      {
         // Notifications moved to the bell button in the profile header
         // (top-right of MoreScreen) — every user manages their own
         // notifications, so it's a primary header action rather than a
@@ -513,6 +525,18 @@ export default function MoreScreen() {
   });
   const upcomingBookingsCount = countUpcoming(upcomingBookings);
 
+  // 156 — мульти-точки: строка «Точки» видна только когда живых точек > 1
+  // (0–1 = одноточечный режим, ничего нового не показываем). Дешёвый запрос,
+  // тот же ключ ['points'], что и переключатель точки на дашборде.
+  const canSeePoints = hasPermission('user_management');
+  const { data: pointsData } = useQuery<PointsListResponse>({
+    queryKey: ['points'],
+    queryFn: async () => (await pointsApi.list()).data,
+    enabled: canSeePoints,
+    staleTime: 60 * 1000,
+  });
+  const pointsCount = pointsData?.points.length ?? 0;
+
   // Lock badges mirror FeatureGate exactly: gate on the server-resolved
   // `sub.features` (authoritative, keyed by planId) — NOT the fragile
   // plan-NAME match against sub.plans. Superadmin bypasses everything;
@@ -535,6 +559,8 @@ export default function MoreScreen() {
     // по ним; superadmin/director байпасятся внутри самого hasPermission.
     if (item.permission && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
+    // 156 — «Точки» дополнительно скрыта при 0–1 живой точке.
+    if (item.screen === 'Points' && pointsCount <= 1) return false;
     return true;
   };
 

@@ -1028,6 +1028,16 @@ export default function CheckDetailScreen() {
               </Text>
             </View>
           )}
+          {/* 156 — мульти-точки: бейдж точки, на которой создан заказ. Только
+              когда у чека есть точка (одноточечные тенанты/старые чеки — null). */}
+          {check.point && (
+            <View style={[styles.pointChip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+              <Ionicons name="location-outline" size={11} color={palette.text.secondary} />
+              <Text style={[styles.pointChipText, { color: palette.text.secondary }]} numberOfLines={1}>
+                {check.point.name}
+              </Text>
+            </View>
+          )}
           <Text style={[styles.timeChip, { color: palette.text.tertiary }]}>{formatTime(check.date)}</Text>
         </View>
 
@@ -2413,6 +2423,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   paymentChipText: { fontSize: 12, fontWeight: fontWeight.medium },
+  // 156 — мульти-точки: серый бейдж точки в мете чека.
+  pointChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[1],
+    paddingHorizontal: spacing[2.5],
+    paddingVertical: spacing[1.5],
+    borderRadius: borderRadius.full,
+    borderWidth: StyleSheet.hairlineWidth,
+    maxWidth: 160,
+  },
+  pointChipText: { fontSize: 12, fontWeight: fontWeight.medium, flexShrink: 1 },
   timeChip: { fontSize: 12, marginLeft: 'auto' },
 
   // Метки чека (Round 12 #9) — компактные чипы отдельной строкой в мете.

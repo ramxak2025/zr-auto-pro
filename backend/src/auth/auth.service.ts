@@ -32,7 +32,7 @@ const USER_WITH_TENANT_COLUMNS = `
   u.id, u.phone, u.full_name, u.avatar, u.role, u.role_id,
   r.name as role_name, r.matrix as role_matrix,
   COALESCE(u.salary_percent, 0) as salary_percent,
-  u.is_active, u.dismissed_at, u.purged_at, u.tenant_id, u.created_at,
+  u.is_active, u.dismissed_at, u.purged_at, u.tenant_id, u.current_point_id, u.created_at,
   CASE WHEN t.id IS NOT NULL THEN
     json_build_object('id',t.id,'name',t.name,'slug',COALESCE(t.slug,''),
       'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
@@ -86,6 +86,9 @@ function mapUserRow(row: any) {
     permissions: effectivePermissionsFor(row.role, row.role_matrix),
     isActive: row.is_active,
     tenantId: row.tenant_id,
+    // 156 — мульти-точки: текущая выбранная точка (undefined в путях, которые
+    // колонку не выбирают — аддитивно, клиенты делают fallback на GET /points).
+    currentPointId: row.current_point_id ?? null,
     createdAt: row.created_at,
   };
 
