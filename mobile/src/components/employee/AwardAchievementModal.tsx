@@ -14,10 +14,11 @@
  * touches landed on a sheet positioned outside the visible bounds.
  *
  * Replaced with the same CENTERED card pattern as EquipmentScreen's
- * `CenteredDialog`: `animationType="fade"`, a `KeyboardAvoidingView`
- * wrapper, the shared `ModalBlurBackdrop` (tap-outside / blurred area to
- * close) and a vertically-centered card (88% width, max 460pt wide,
- * max 520pt tall). The card scrolls internally if it overflows.
+ * `CenteredDialog`: `animationType="fade"`, a `KeyboardAwareView`
+ * wrapper (react-native-keyboard-controller — see components/KeyboardAware.tsx),
+ * the shared `ModalBlurBackdrop` (tap-outside / blurred area to close) and a
+ * vertically-centered card (88% width, max 460pt wide, max 520pt tall). The
+ * card scrolls internally if it overflows.
  */
 import React from 'react';
 import {
@@ -28,14 +29,15 @@ import {
   StyleSheet,
   TextInput,
   View,
-  KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
 } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { employeesApi } from '../../api/services';
 import ModalBlurBackdrop from '../ModalBlurBackdrop';
+import { KeyboardAwareView } from '../KeyboardAware';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { colors, spacing, fontSize, fontWeight, borderRadius } from '../../theme';
@@ -95,168 +97,172 @@ export function AwardAchievementModal({ visible, onClose, employeeId }: AwardAch
 
   return (
     <RNModal visible={visible} animationType="fade" transparent onRequestClose={onClose}>
-      {/* Blurred backdrop — tapping the blurred area closes the dialog. */}
-      <ModalBlurBackdrop onPress={onClose} />
-      {/* The card is a sibling above the backdrop so the blur never sits on
-          top of it. KeyboardAvoidingView keeps the centered card clear of
-          the keyboard when the text fields are focused. */}
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.centerRoot}
-        pointerEvents="box-none"
-      >
-        <View style={[styles.card, { backgroundColor: palette.bg.elevated }]}>
-          {/* Header strip — title centered, × top-right (mirrors CenteredDialog). */}
-          <View style={styles.header}>
-            <View style={styles.headerSpacer} />
-            <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
-              Новый значок
-            </Text>
-            <Pressable
-              onPress={onClose}
-              hitSlop={12}
-              accessibilityRole="button"
-              accessibilityLabel="Закрыть"
-              style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
-            >
-              <Ionicons name="close" size={20} color={palette.text.secondary} />
-            </Pressable>
-          </View>
-
-          <ScrollView
-            style={styles.body}
-            contentContainerStyle={styles.bodyContent}
-            keyboardShouldPersistTaps="handled"
-            showsVerticalScrollIndicator={false}
-          >
-            {/* Preview */}
-            <View
-              style={[
-                styles.preview,
-                {
-                  borderColor: color,
-                  shadowColor: color,
-                  backgroundColor: palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(255, 255, 255, 0.6)',
-                },
-              ]}
-            >
-              <Text style={styles.previewIcon}>{icon}</Text>
-              <Text style={[styles.previewName, { color: palette.text.primary }]} numberOfLines={1}>
-                {name || 'Название значка'}
+      {/* Клавиатура (миграция на keyboard-controller). RN-core <Modal> —
+          отдельное нативное окно, корневой KeyboardProvider из App.tsx туда
+          не дотягивается → вложенный провайдер обязателен (как в Modal.tsx /
+          EditProfileModal.tsx). */}
+      <KeyboardProvider>
+        {/* Blurred backdrop — tapping the blurred area closes the dialog. */}
+        <ModalBlurBackdrop onPress={onClose} />
+        {/* The card is a sibling above the backdrop so the blur never sits on
+            top of it. KeyboardAwareView keeps the centered card clear of the
+            keyboard when the text fields are focused; pointerEvents="box-none"
+            keeps taps outside the card falling through to the backdrop. */}
+        <KeyboardAwareView style={styles.centerRoot} pointerEvents="box-none">
+          <View style={[styles.card, { backgroundColor: palette.bg.elevated }]}>
+            {/* Header strip — title centered, × top-right (mirrors CenteredDialog). */}
+            <View style={styles.header}>
+              <View style={styles.headerSpacer} />
+              <Text style={[styles.headerTitle, { color: palette.text.primary }]} numberOfLines={1}>
+                Новый значок
               </Text>
-              {!!description && (
-                <Text style={[styles.previewDesc, { color: palette.text.secondary }]} numberOfLines={2}>
-                  {description}
-                </Text>
-              )}
+              <Pressable
+                onPress={onClose}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Закрыть"
+                style={[styles.closeBtn, { backgroundColor: palette.bg.muted }]}
+              >
+                <Ionicons name="close" size={20} color={palette.text.secondary} />
+              </Pressable>
             </View>
 
-            <Field label="Название">
-              <TextInput
-                value={name}
-                onChangeText={setName}
-                placeholder="Лучший мастер месяца"
-                placeholderTextColor={palette.text.tertiary}
+            <ScrollView
+              style={styles.body}
+              contentContainerStyle={styles.bodyContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+            >
+              {/* Preview */}
+              <View
                 style={[
-                  styles.input,
+                  styles.preview,
                   {
-                    color: palette.text.primary,
-                    borderColor: palette.border.subtle,
-                    backgroundColor: palette.bg.muted,
+                    borderColor: color,
+                    shadowColor: color,
+                    backgroundColor: palette.mode === 'dark' ? 'rgba(255,255,255,0.05)' : 'rgba(255, 255, 255, 0.6)',
                   },
                 ]}
-              />
-            </Field>
-
-            <Field label="Описание">
-              <TextInput
-                value={description}
-                onChangeText={setDescription}
-                placeholder="За высочайшее качество работы"
-                placeholderTextColor={palette.text.tertiary}
-                multiline
-                numberOfLines={3}
-                style={[
-                  styles.input,
-                  {
-                    color: palette.text.primary,
-                    borderColor: palette.border.subtle,
-                    backgroundColor: palette.bg.muted,
-                    minHeight: 70,
-                    paddingTop: 12,
-                    textAlignVertical: 'top',
-                  },
-                ]}
-              />
-            </Field>
-
-            <Field label="Иконка">
-              <View style={styles.iconRow}>
-                {EMOJI_CHOICES.map((e) => (
-                  <Pressable
-                    key={e}
-                    onPress={() => {
-                      setIcon(e);
-                      haptic('tap');
-                    }}
-                    style={[
-                      styles.iconBtn,
-                      {
-                        backgroundColor: e === icon ? colors.primary[50] : palette.bg.muted,
-                        borderColor: e === icon ? colors.primary[400] : palette.border.subtle,
-                      },
-                    ]}
-                  >
-                    <Text style={styles.iconGlyph}>{e}</Text>
-                  </Pressable>
-                ))}
+              >
+                <Text style={styles.previewIcon}>{icon}</Text>
+                <Text style={[styles.previewName, { color: palette.text.primary }]} numberOfLines={1}>
+                  {name || 'Название значка'}
+                </Text>
+                {!!description && (
+                  <Text style={[styles.previewDesc, { color: palette.text.secondary }]} numberOfLines={2}>
+                    {description}
+                  </Text>
+                )}
               </View>
-            </Field>
 
-            <Field label="Цвет">
-              <View style={styles.iconRow}>
-                {COLOR_CHOICES.map((c) => (
-                  <Pressable
-                    key={c}
-                    onPress={() => {
-                      setColor(c);
-                      haptic('tap');
-                    }}
-                    style={[
-                      styles.colorBtn,
-                      {
-                        backgroundColor: c,
-                        borderColor: c === color ? (palette.mode === 'dark' ? colors.white : '#0F172A') : 'transparent',
-                      },
-                    ]}
-                  />
-                ))}
-              </View>
-            </Field>
-          </ScrollView>
+              <Field label="Название">
+                <TextInput
+                  value={name}
+                  onChangeText={setName}
+                  placeholder="Лучший мастер месяца"
+                  placeholderTextColor={palette.text.tertiary}
+                  style={[
+                    styles.input,
+                    {
+                      color: palette.text.primary,
+                      borderColor: palette.border.subtle,
+                      backgroundColor: palette.bg.muted,
+                    },
+                  ]}
+                />
+              </Field>
 
-          {/* Footer CTA — pinned inside the card. */}
-          <View style={[styles.footer, { borderTopColor: palette.border.subtle }]}>
-            <Pressable
-              onPress={onClose}
-              style={[styles.btn, styles.btnSecondary, { backgroundColor: palette.bg.muted }]}
-            >
-              <Text style={[styles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
-            </Pressable>
-            <Pressable
-              onPress={onSave}
-              disabled={addMutation.isPending}
-              style={[styles.btn, styles.btnPrimary, addMutation.isPending && styles.btnDisabled]}
-            >
-              {addMutation.isPending ? (
-                <ActivityIndicator size="small" color={colors.white} />
-              ) : (
-                <Text style={styles.btnPrimaryText}>Выдать</Text>
-              )}
-            </Pressable>
+              <Field label="Описание">
+                <TextInput
+                  value={description}
+                  onChangeText={setDescription}
+                  placeholder="За высочайшее качество работы"
+                  placeholderTextColor={palette.text.tertiary}
+                  multiline
+                  numberOfLines={3}
+                  style={[
+                    styles.input,
+                    {
+                      color: palette.text.primary,
+                      borderColor: palette.border.subtle,
+                      backgroundColor: palette.bg.muted,
+                      minHeight: 70,
+                      paddingTop: 12,
+                      textAlignVertical: 'top',
+                    },
+                  ]}
+                />
+              </Field>
+
+              <Field label="Иконка">
+                <View style={styles.iconRow}>
+                  {EMOJI_CHOICES.map((e) => (
+                    <Pressable
+                      key={e}
+                      onPress={() => {
+                        setIcon(e);
+                        haptic('tap');
+                      }}
+                      style={[
+                        styles.iconBtn,
+                        {
+                          backgroundColor: e === icon ? colors.primary[50] : palette.bg.muted,
+                          borderColor: e === icon ? colors.primary[400] : palette.border.subtle,
+                        },
+                      ]}
+                    >
+                      <Text style={styles.iconGlyph}>{e}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              </Field>
+
+              <Field label="Цвет">
+                <View style={styles.iconRow}>
+                  {COLOR_CHOICES.map((c) => (
+                    <Pressable
+                      key={c}
+                      onPress={() => {
+                        setColor(c);
+                        haptic('tap');
+                      }}
+                      style={[
+                        styles.colorBtn,
+                        {
+                          backgroundColor: c,
+                          borderColor:
+                            c === color ? (palette.mode === 'dark' ? colors.white : '#0F172A') : 'transparent',
+                        },
+                      ]}
+                    />
+                  ))}
+                </View>
+              </Field>
+            </ScrollView>
+
+            {/* Footer CTA — pinned inside the card. */}
+            <View style={[styles.footer, { borderTopColor: palette.border.subtle }]}>
+              <Pressable
+                onPress={onClose}
+                style={[styles.btn, styles.btnSecondary, { backgroundColor: palette.bg.muted }]}
+              >
+                <Text style={[styles.btnSecondaryText, { color: palette.text.primary }]}>Отменить</Text>
+              </Pressable>
+              <Pressable
+                onPress={onSave}
+                disabled={addMutation.isPending}
+                style={[styles.btn, styles.btnPrimary, addMutation.isPending && styles.btnDisabled]}
+              >
+                {addMutation.isPending ? (
+                  <ActivityIndicator size="small" color={colors.white} />
+                ) : (
+                  <Text style={styles.btnPrimaryText}>Выдать</Text>
+                )}
+              </Pressable>
+            </View>
           </View>
-        </View>
-      </KeyboardAvoidingView>
+        </KeyboardAwareView>
+      </KeyboardProvider>
     </RNModal>
   );
 }

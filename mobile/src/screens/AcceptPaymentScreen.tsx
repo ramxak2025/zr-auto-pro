@@ -27,8 +27,6 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   ScrollView,
   StyleSheet,
   Text,
@@ -44,6 +42,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import { checksApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
+import { KeyboardAwareView } from '../components/KeyboardAware';
 import IosScreenHeader from '../components/IosScreenHeader';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
@@ -254,11 +253,10 @@ export default function AcceptPaymentScreen() {
   } else if (check) {
     const assignees = check.assignees ?? [];
     body = (
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-      >
+      // Клавиатура (миграция на keyboard-controller). Раньше — RN-core KAV с
+      // ручным keyboardVerticalOffset=8; KeyboardAwareView сам берёт offset
+      // из insets.bottom и работает одинаково на iOS и Android.
+      <KeyboardAwareView style={{ flex: 1 }}>
         <ScrollView
           style={{ flex: 1 }}
           contentContainerStyle={styles.scrollContent}
@@ -610,7 +608,7 @@ export default function AcceptPaymentScreen() {
           }}
           onCancel={() => setShowInstallmentDatePicker(false)}
         />
-      </KeyboardAvoidingView>
+      </KeyboardAwareView>
     );
   }
 

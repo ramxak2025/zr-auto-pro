@@ -24,12 +24,12 @@ import {
   StyleSheet,
   ScrollView,
   Modal,
-  KeyboardAvoidingView,
-  Platform,
   ActivityIndicator,
 } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '../components/Button';
+import { KeyboardAwareView } from '../components/KeyboardAware';
 import { getPalette } from '../theme/palette';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
 import { haptic } from '../platform/haptics';
@@ -127,129 +127,69 @@ export default function RegistrationRequestSheet({ visible, onClose }: Props) {
 
   return (
     <Modal visible={visible} transparent statusBarTranslucent animationType="slide" onRequestClose={resetAndClose}>
-      <View style={styles.backdrop}>
-        <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.kav}>
-          <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
-            {/* Handle row */}
-            <View style={[styles.handleRow, { borderBottomColor: palette.border.subtle }]}>
-              <TouchableOpacity onPress={resetAndClose} hitSlop={8}>
-                <Text style={[styles.cancel, { color: palette.text.secondary }]}>
-                  {submitted ? 'Закрыть' : 'Отмена'}
-                </Text>
-              </TouchableOpacity>
-              <Text style={[styles.title, { color: palette.text.primary }]}>Регистрация</Text>
-              <View style={styles.cancelPlaceholder} />
-            </View>
-
-            {submitted ? (
-              <View style={styles.successWrap}>
-                <View style={[styles.successIcon, { backgroundColor: colors.green[50] }]}>
-                  <Ionicons name="checkmark-circle" size={48} color={colors.green[500]} />
-                </View>
-                <Text style={[styles.successTitle, { color: palette.text.primary }]}>Заявка отправлена</Text>
-                <Text style={[styles.successText, { color: palette.text.secondary }]}>
-                  После одобрения войдёте под своим телефоном и паролем.
-                </Text>
-                <View style={styles.successBtn}>
-                  <Button title="Вернуться ко входу" onPress={resetAndClose} size="lg" />
-                </View>
+      {/* Клавиатура (миграция на keyboard-controller). RN-core <Modal> —
+          отдельное нативное окно, корневой KeyboardProvider из App.tsx туда
+          не дотягивается → вложенный провайдер обязателен (как в Modal.tsx /
+          EditProfileModal.tsx). KeyboardAwareView сам берёт offset из insets —
+          вместо RN-core KAV без offset, которая на iOS поднимала шторку без
+          учёта safe area, а на Android была no-op. */}
+      <KeyboardProvider>
+        <View style={styles.backdrop}>
+          <KeyboardAwareView style={styles.kav}>
+            <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
+              {/* Handle row */}
+              <View style={[styles.handleRow, { borderBottomColor: palette.border.subtle }]}>
+                <TouchableOpacity onPress={resetAndClose} hitSlop={8}>
+                  <Text style={[styles.cancel, { color: palette.text.secondary }]}>
+                    {submitted ? 'Закрыть' : 'Отмена'}
+                  </Text>
+                </TouchableOpacity>
+                <Text style={[styles.title, { color: palette.text.primary }]}>Регистрация</Text>
+                <View style={styles.cancelPlaceholder} />
               </View>
-            ) : (
-              <ScrollView
-                contentContainerStyle={styles.scroll}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-              >
-                <Text style={[styles.intro, { color: palette.text.secondary }]}>
-                  Оставьте заявку — после одобрения вы войдёте под указанным телефоном и паролем.
-                </Text>
 
-                {formError ? (
-                  <View style={styles.errorBanner}>
-                    <Ionicons name="alert-circle" size={18} color={colors.red[500]} />
-                    <Text style={styles.errorBannerText}>{formError}</Text>
+              {submitted ? (
+                <View style={styles.successWrap}>
+                  <View style={[styles.successIcon, { backgroundColor: colors.green[50] }]}>
+                    <Ionicons name="checkmark-circle" size={48} color={colors.green[500]} />
                   </View>
-                ) : null}
+                  <Text style={[styles.successTitle, { color: palette.text.primary }]}>Заявка отправлена</Text>
+                  <Text style={[styles.successText, { color: palette.text.secondary }]}>
+                    После одобрения войдёте под своим телефоном и паролем.
+                  </Text>
+                  <View style={styles.successBtn}>
+                    <Button title="Вернуться ко входу" onPress={resetAndClose} size="lg" />
+                  </View>
+                </View>
+              ) : (
+                <ScrollView
+                  contentContainerStyle={styles.scroll}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  <Text style={[styles.intro, { color: palette.text.secondary }]}>
+                    Оставьте заявку — после одобрения вы войдёте под указанным телефоном и паролем.
+                  </Text>
 
-                {/* Company */}
-                <Text style={[styles.label, { color: palette.text.secondary }]}>НАЗВАНИЕ АВТОСЕРВИСА</Text>
-                <TextInput
-                  value={companyName}
-                  onChangeText={(t) => {
-                    setCompanyName(t);
-                    setFormError('');
-                  }}
-                  placeholder="Например, «Автосервис на Ленина»"
-                  placeholderTextColor={palette.text.tertiary}
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: palette.bg.muted,
-                      borderColor: palette.border.subtle,
-                      color: palette.text.primary,
-                    },
-                  ]}
-                />
+                  {formError ? (
+                    <View style={styles.errorBanner}>
+                      <Ionicons name="alert-circle" size={18} color={colors.red[500]} />
+                      <Text style={styles.errorBannerText}>{formError}</Text>
+                    </View>
+                  ) : null}
 
-                {/* Owner */}
-                <Text style={[styles.label, { color: palette.text.secondary }]}>ИМЯ ВЛАДЕЛЬЦА</Text>
-                <TextInput
-                  value={ownerName}
-                  onChangeText={(t) => {
-                    setOwnerName(t);
-                    setFormError('');
-                  }}
-                  placeholder="Ваше имя"
-                  placeholderTextColor={palette.text.tertiary}
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: palette.bg.muted,
-                      borderColor: palette.border.subtle,
-                      color: palette.text.primary,
-                    },
-                  ]}
-                />
-
-                {/* Phone */}
-                <Text style={[styles.label, { color: palette.text.secondary }]}>ТЕЛЕФОН</Text>
-                <TextInput
-                  value={phone}
-                  onChangeText={(t) => {
-                    setPhone(formatPhone(t));
-                    setFormError('');
-                  }}
-                  placeholder="+7 (___) ___-__-__"
-                  placeholderTextColor={palette.text.tertiary}
-                  keyboardType="phone-pad"
-                  autoComplete="tel"
-                  style={[
-                    styles.input,
-                    {
-                      backgroundColor: palette.bg.muted,
-                      borderColor: palette.border.subtle,
-                      color: palette.text.primary,
-                    },
-                  ]}
-                />
-
-                {/* Password */}
-                <Text style={[styles.label, { color: palette.text.secondary }]}>ПАРОЛЬ</Text>
-                <View style={styles.passwordWrap}>
+                  {/* Company */}
+                  <Text style={[styles.label, { color: palette.text.secondary }]}>НАЗВАНИЕ АВТОСЕРВИСА</Text>
                   <TextInput
-                    value={password}
+                    value={companyName}
                     onChangeText={(t) => {
-                      setPassword(t);
+                      setCompanyName(t);
                       setFormError('');
                     }}
-                    placeholder="Минимум 8 символов"
+                    placeholder="Например, «Автосервис на Ленина»"
                     placeholderTextColor={palette.text.tertiary}
-                    secureTextEntry={!showPassword}
-                    autoCapitalize="none"
-                    autoCorrect={false}
                     style={[
                       styles.input,
-                      styles.passwordInput,
                       {
                         backgroundColor: palette.bg.muted,
                         borderColor: palette.border.subtle,
@@ -257,47 +197,115 @@ export default function RegistrationRequestSheet({ visible, onClose }: Props) {
                       },
                     ]}
                   />
-                  <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPassword((s) => !s)} hitSlop={8}>
-                    <Ionicons name={showPassword ? 'eye' : 'eye-off'} size={20} color={colors.gray[400]} />
-                  </TouchableOpacity>
-                </View>
 
-                {/* Comment */}
-                <Text style={[styles.label, { color: palette.text.secondary }]}>КОММЕНТАРИЙ (НЕОБЯЗАТЕЛЬНО)</Text>
-                <TextInput
-                  value={comment}
-                  onChangeText={setComment}
-                  placeholder="Город, количество постов, пожелания…"
-                  placeholderTextColor={palette.text.tertiary}
-                  multiline
-                  maxLength={500}
-                  style={[
-                    styles.input,
-                    styles.commentInput,
-                    {
-                      backgroundColor: palette.bg.muted,
-                      borderColor: palette.border.subtle,
-                      color: palette.text.primary,
-                    },
-                  ]}
-                />
+                  {/* Owner */}
+                  <Text style={[styles.label, { color: palette.text.secondary }]}>ИМЯ ВЛАДЕЛЬЦА</Text>
+                  <TextInput
+                    value={ownerName}
+                    onChangeText={(t) => {
+                      setOwnerName(t);
+                      setFormError('');
+                    }}
+                    placeholder="Ваше имя"
+                    placeholderTextColor={palette.text.tertiary}
+                    style={[
+                      styles.input,
+                      {
+                        backgroundColor: palette.bg.muted,
+                        borderColor: palette.border.subtle,
+                        color: palette.text.primary,
+                      },
+                    ]}
+                  />
 
-                <View style={styles.submitWrap}>
-                  <Button title="Отправить заявку" onPress={handleSubmit} loading={submitting} size="lg" />
-                </View>
-                {submitting ? (
-                  <View style={styles.pendingRow}>
-                    <ActivityIndicator size="small" color={palette.accent.primary} />
-                    <Text style={[styles.pendingText, { color: palette.text.tertiary }]}>Отправляем заявку…</Text>
+                  {/* Phone */}
+                  <Text style={[styles.label, { color: palette.text.secondary }]}>ТЕЛЕФОН</Text>
+                  <TextInput
+                    value={phone}
+                    onChangeText={(t) => {
+                      setPhone(formatPhone(t));
+                      setFormError('');
+                    }}
+                    placeholder="+7 (___) ___-__-__"
+                    placeholderTextColor={palette.text.tertiary}
+                    keyboardType="phone-pad"
+                    autoComplete="tel"
+                    style={[
+                      styles.input,
+                      {
+                        backgroundColor: palette.bg.muted,
+                        borderColor: palette.border.subtle,
+                        color: palette.text.primary,
+                      },
+                    ]}
+                  />
+
+                  {/* Password */}
+                  <Text style={[styles.label, { color: palette.text.secondary }]}>ПАРОЛЬ</Text>
+                  <View style={styles.passwordWrap}>
+                    <TextInput
+                      value={password}
+                      onChangeText={(t) => {
+                        setPassword(t);
+                        setFormError('');
+                      }}
+                      placeholder="Минимум 8 символов"
+                      placeholderTextColor={palette.text.tertiary}
+                      secureTextEntry={!showPassword}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      style={[
+                        styles.input,
+                        styles.passwordInput,
+                        {
+                          backgroundColor: palette.bg.muted,
+                          borderColor: palette.border.subtle,
+                          color: palette.text.primary,
+                        },
+                      ]}
+                    />
+                    <TouchableOpacity style={styles.eyeBtn} onPress={() => setShowPassword((s) => !s)} hitSlop={8}>
+                      <Ionicons name={showPassword ? 'eye' : 'eye-off'} size={20} color={colors.gray[400]} />
+                    </TouchableOpacity>
                   </View>
-                ) : null}
 
-                <View style={{ height: spacing[8] }} />
-              </ScrollView>
-            )}
-          </View>
-        </KeyboardAvoidingView>
-      </View>
+                  {/* Comment */}
+                  <Text style={[styles.label, { color: palette.text.secondary }]}>КОММЕНТАРИЙ (НЕОБЯЗАТЕЛЬНО)</Text>
+                  <TextInput
+                    value={comment}
+                    onChangeText={setComment}
+                    placeholder="Город, количество постов, пожелания…"
+                    placeholderTextColor={palette.text.tertiary}
+                    multiline
+                    maxLength={500}
+                    style={[
+                      styles.input,
+                      styles.commentInput,
+                      {
+                        backgroundColor: palette.bg.muted,
+                        borderColor: palette.border.subtle,
+                        color: palette.text.primary,
+                      },
+                    ]}
+                  />
+
+                  <View style={styles.submitWrap}>
+                    <Button title="Отправить заявку" onPress={handleSubmit} loading={submitting} size="lg" />
+                  </View>
+                  {submitting ? (
+                    <View style={styles.pendingRow}>
+                      <ActivityIndicator size="small" color={palette.accent.primary} />
+                      <Text style={[styles.pendingText, { color: palette.text.tertiary }]}>Отправляем заявку…</Text>
+                    </View>
+                  ) : null}
+
+                  <View style={{ height: spacing[8] }} />
+                </ScrollView>
+              )}
+            </View>
+          </KeyboardAwareView>
+        </View>
+      </KeyboardProvider>
     </Modal>
   );
 }

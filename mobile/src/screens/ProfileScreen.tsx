@@ -28,7 +28,6 @@ import {
   ActivityIndicator,
   Alert,
   Platform,
-  KeyboardAvoidingView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
@@ -36,6 +35,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import * as ImagePicker from 'expo-image-picker';
 import IosScreenHeader from '../components/IosScreenHeader';
 import CachedImage from '../components/CachedImage';
+import { KeyboardAwareView } from '../components/KeyboardAware';
 import DeleteAccountModal from '../components/DeleteAccountModal';
 import { Text } from '../platform/Typography';
 import { useAuth } from '../contexts/AuthContext';
@@ -475,7 +475,9 @@ export default function ProfileScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Мой профиль" onBack={() => navigation.goBack()} />
 
-      <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* Клавиатура (миграция на keyboard-controller): KeyboardAwareView
+          вместо RN-core KAV — offset из insets, одинаково iOS/Android. */}
+      <KeyboardAwareView style={styles.flex}>
         <ScrollView
           style={styles.flex}
           contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[8] }]}
@@ -744,7 +746,7 @@ export default function ProfileScreen() {
             <Text style={styles.deleteAccountText}>Удалить аккаунт</Text>
           </TouchableOpacity>
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareView>
 
       <DeleteAccountModal
         visible={deleteVisible}

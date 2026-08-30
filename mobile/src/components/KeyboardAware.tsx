@@ -21,7 +21,7 @@
  * `bottomOffset`/contentContainerStyle, а не хардкодим.
  */
 import React from 'react';
-import { RefreshControlProps, StyleProp, ViewStyle } from 'react-native';
+import { RefreshControlProps, StyleProp, ViewProps, ViewStyle } from 'react-native';
 import {
   KeyboardAvoidingView as KCAvoidingView,
   KeyboardAwareScrollView as KCAwareScrollView,
@@ -37,6 +37,12 @@ interface KeyboardAwareViewProps {
    * действий, которую нельзя перекрывать клавиатурой). По умолчанию 0.
    */
   extraOffset?: number;
+  /**
+   * Проброс на нативный View — нужен центрированным Modal-диалогам с
+   * тап-мимо-закрытием: overlay должен быть `box-none`, чтобы тап МИМО
+   * карточки проваливался на бэкдроп под ним (см. Modal.tsx, AwardAchievementModal.tsx).
+   */
+  pointerEvents?: ViewProps['pointerEvents'];
 }
 
 /**
@@ -45,13 +51,18 @@ interface KeyboardAwareViewProps {
  * `behavior='padding'` работает одинаково на iOS/Android под
  * keyboard-controller (в отличие от RN-core, где Android — no-op).
  */
-export function KeyboardAwareView({ style, children, extraOffset = 0 }: KeyboardAwareViewProps) {
+export function KeyboardAwareView({ style, children, extraOffset = 0, pointerEvents }: KeyboardAwareViewProps) {
   const insets = useSafeAreaInsets();
   // Смещение, на которое поднимаемся: safe-area снизу + доп. отступ.
   // НЕ хардкод — берём из insets (правило Safe Area проекта).
   const keyboardVerticalOffset = insets.bottom + extraOffset;
   return (
-    <KCAvoidingView behavior="padding" keyboardVerticalOffset={keyboardVerticalOffset} style={style}>
+    <KCAvoidingView
+      behavior="padding"
+      keyboardVerticalOffset={keyboardVerticalOffset}
+      style={style}
+      pointerEvents={pointerEvents}
+    >
       {children}
     </KCAvoidingView>
   );

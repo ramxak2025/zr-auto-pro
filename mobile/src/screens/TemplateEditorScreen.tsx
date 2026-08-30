@@ -25,8 +25,6 @@ import {
   StyleSheet,
   Alert,
   Switch,
-  Platform,
-  KeyboardAvoidingView,
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
@@ -34,6 +32,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
+import { KeyboardAwareView } from '../components/KeyboardAware';
 import { checkTemplatesApi, servicesApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
@@ -365,7 +364,9 @@ export default function TemplateEditorScreen() {
         subtitle={isSharedTpl ? 'Общий — виден всем сотрудникам' : undefined}
         onBack={() => navigation.goBack()}
       />
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1 }}>
+      {/* Клавиатура (миграция на keyboard-controller): KeyboardAwareView
+          вместо RN-core KAV — offset из insets, одинаково iOS/Android. */}
+      <KeyboardAwareView style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[8] }]}
           keyboardShouldPersistTaps="handled"
@@ -650,7 +651,7 @@ export default function TemplateEditorScreen() {
             </>
           )}
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareView>
 
       {/* Выбор папки размещения */}
       <Modal visible={showFolderPicker} onClose={() => setShowFolderPicker(false)} title="Папка шаблона">

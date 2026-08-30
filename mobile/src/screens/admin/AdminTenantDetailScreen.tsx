@@ -26,12 +26,14 @@ import {
   Platform,
   Share,
 } from 'react-native';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { tenantsApi, plansApi, usersApi } from '../../api/services';
 import IosScreenHeader from '../../components/IosScreenHeader';
 import DateTimePickerModal from '../../components/DateTimePickerModal';
+import { KeyboardAwareView } from '../../components/KeyboardAware';
 import { Text } from '../../platform/Typography';
 import { haptic } from '../../platform/haptics';
 import { useAuth } from '../../contexts/AuthContext';
@@ -948,7 +950,13 @@ export default function AdminTenantDetailScreen() {
         </Pressable>
       </Modal>
 
-      {/* Create / edit employee sheet */}
+      {/* Create / edit employee sheet.
+          Клавиатура (миграция на keyboard-controller): раньше эта шторка
+          вообще НЕ обрабатывала клавиатуру — поля пароля/телефона могли
+          прятаться под клавиатурой. RN-core <Modal> монтирует отдельное
+          нативное окно → нужен вложенный KeyboardProvider (как в Modal.tsx /
+          EditProfileModal.tsx). KeyboardAwareView вокруг sheet-контейнера
+          поднимает шторку над клавиатурой на обеих платформах. */}
       <Modal
         visible={!!editingUser}
         transparent
@@ -956,163 +964,165 @@ export default function AdminTenantDetailScreen() {
         animationType="slide"
         onRequestClose={() => setEditingUser(null)}
       >
-        <View style={styles.sheetBackdrop}>
-          <View style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
-            <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
-              <Pressable onPress={() => setEditingUser(null)} hitSlop={8}>
-                <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
-              </Pressable>
-              <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>
-                {editingUser?.id ? 'Сотрудник' : 'Новый сотрудник'}
-              </Text>
-              <Pressable onPress={handleSaveUser} disabled={savingUser} hitSlop={8}>
-                {savingUser ? (
-                  <ActivityIndicator size="small" color={palette.accent.primary} />
-                ) : (
-                  <Text style={[styles.sheetSave, { color: palette.accent.primary }]}>Сохранить</Text>
-                )}
-              </Pressable>
-            </View>
-
-            {editingUser && (
-              <ScrollView
-                contentContainerStyle={styles.sheetScroll}
-                showsVerticalScrollIndicator={false}
-                keyboardShouldPersistTaps="handled"
-              >
-                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Имя</Text>
-                <View style={[styles.inputWrap, surface.cardCompact]}>
-                  <TextInput
-                    style={[styles.sheetInput, { color: palette.text.primary }]}
-                    placeholder="ФИО сотрудника"
-                    placeholderTextColor={palette.text.tertiary}
-                    value={editingUser.fullName}
-                    onChangeText={(v) => setEditingUser({ ...editingUser, fullName: v })}
-                  />
-                </View>
-
-                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Телефон</Text>
-                <View style={[styles.inputWrap, surface.cardCompact]}>
-                  <TextInput
-                    style={[styles.sheetInput, { color: palette.text.primary }]}
-                    placeholder="+7 (___) ___-__-__"
-                    placeholderTextColor={palette.text.tertiary}
-                    keyboardType="phone-pad"
-                    value={editingUser.phone}
-                    onChangeText={(v) => setEditingUser({ ...editingUser, phone: formatPhone(v) })}
-                  />
-                </View>
-
-                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>
-                  {editingUser.id ? 'Новый пароль (необязательно)' : 'Пароль'}
-                </Text>
-                <View style={[styles.inputWrap, styles.pwRow, surface.cardCompact]}>
-                  <TextInput
-                    style={[styles.sheetInput, styles.pwInput, { color: palette.text.primary }]}
-                    placeholder="Минимум 6 символов"
-                    placeholderTextColor={palette.text.tertiary}
-                    secureTextEntry={!pwVisible}
-                    autoCapitalize="none"
-                    autoCorrect={false}
-                    value={editingUser.password}
-                    onChangeText={(v) => setEditingUser({ ...editingUser, password: v })}
-                  />
-                  <Pressable onPress={() => setPwVisible((v) => !v)} hitSlop={8}>
-                    <Ionicons
-                      name={pwVisible ? 'eye-off-outline' : 'eye-outline'}
-                      size={20}
-                      color={palette.text.tertiary}
-                    />
-                  </Pressable>
-                </View>
-                <Pressable
-                  onPress={() => {
-                    haptic('select');
-                    setPwVisible(true);
-                    setEditingUser({ ...editingUser, password: genPassword() });
-                  }}
-                  style={styles.genPwBtn}
-                  hitSlop={4}
-                >
-                  <Ionicons name="sparkles-outline" size={14} color={palette.accent.primary} />
-                  <Text style={[styles.genPwText, { color: palette.accent.primary }]}>Сгенерировать пароль</Text>
+        <KeyboardProvider>
+          <View style={styles.sheetBackdrop}>
+            <KeyboardAwareView style={[styles.sheet, { backgroundColor: palette.bg.canvas }]}>
+              <View style={[styles.sheetHandleRow, { borderBottomColor: palette.border.subtle }]}>
+                <Pressable onPress={() => setEditingUser(null)} hitSlop={8}>
+                  <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
                 </Pressable>
+                <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>
+                  {editingUser?.id ? 'Сотрудник' : 'Новый сотрудник'}
+                </Text>
+                <Pressable onPress={handleSaveUser} disabled={savingUser} hitSlop={8}>
+                  {savingUser ? (
+                    <ActivityIndicator size="small" color={palette.accent.primary} />
+                  ) : (
+                    <Text style={[styles.sheetSave, { color: palette.accent.primary }]}>Сохранить</Text>
+                  )}
+                </Pressable>
+              </View>
 
-                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Роль</Text>
-                <View style={styles.roleRow}>
-                  {SELECTABLE_ROLES.map(({ role, label }) => {
-                    const on = editingUser.role === role;
-                    return (
-                      <Pressable
-                        key={role}
-                        onPress={() => {
-                          haptic('select');
-                          setEditingUser({ ...editingUser, role });
-                        }}
-                        style={[
-                          styles.roleChip,
-                          {
-                            backgroundColor: on ? palette.accent.primary : palette.bg.card,
-                            borderColor: on ? palette.accent.primary : palette.border.subtle,
-                          },
-                        ]}
-                      >
-                        <Text style={[styles.roleChipText, { color: on ? colors.white : palette.text.secondary }]}>
-                          {label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
+              {editingUser && (
+                <ScrollView
+                  contentContainerStyle={styles.sheetScroll}
+                  showsVerticalScrollIndicator={false}
+                  keyboardShouldPersistTaps="handled"
+                >
+                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Имя</Text>
+                  <View style={[styles.inputWrap, surface.cardCompact]}>
+                    <TextInput
+                      style={[styles.sheetInput, { color: palette.text.primary }]}
+                      placeholder="ФИО сотрудника"
+                      placeholderTextColor={palette.text.tertiary}
+                      value={editingUser.fullName}
+                      onChangeText={(v) => setEditingUser({ ...editingUser, fullName: v })}
+                    />
+                  </View>
 
-                <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Процент зарплаты</Text>
-                <View style={[styles.inputWrap, surface.cardCompact]}>
-                  <TextInput
-                    style={[styles.sheetInput, { color: palette.text.primary }]}
-                    placeholder="0"
-                    placeholderTextColor={palette.text.tertiary}
-                    keyboardType="number-pad"
-                    value={editingUser.salaryPercent}
-                    onChangeText={(v) => setEditingUser({ ...editingUser, salaryPercent: v.replace(/[^0-9]/g, '') })}
-                  />
-                </View>
+                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Телефон</Text>
+                  <View style={[styles.inputWrap, surface.cardCompact]}>
+                    <TextInput
+                      style={[styles.sheetInput, { color: palette.text.primary }]}
+                      placeholder="+7 (___) ___-__-__"
+                      placeholderTextColor={palette.text.tertiary}
+                      keyboardType="phone-pad"
+                      value={editingUser.phone}
+                      onChangeText={(v) => setEditingUser({ ...editingUser, phone: formatPhone(v) })}
+                    />
+                  </View>
 
-                <View style={[styles.switchBox, surface.cardCompact]}>
-                  <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
-                    {editingUser.isActive ? 'Активен' : 'Отключён'}
+                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>
+                    {editingUser.id ? 'Новый пароль (необязательно)' : 'Пароль'}
                   </Text>
-                  <Switch
-                    value={editingUser.isActive}
-                    onValueChange={(v) => {
-                      haptic('select');
-                      setEditingUser({ ...editingUser, isActive: v });
-                    }}
-                    trackColor={{ true: palette.accent.primary }}
-                  />
-                </View>
-
-                {editingUser.id && (
+                  <View style={[styles.inputWrap, styles.pwRow, surface.cardCompact]}>
+                    <TextInput
+                      style={[styles.sheetInput, styles.pwInput, { color: palette.text.primary }]}
+                      placeholder="Минимум 6 символов"
+                      placeholderTextColor={palette.text.tertiary}
+                      secureTextEntry={!pwVisible}
+                      autoCapitalize="none"
+                      autoCorrect={false}
+                      value={editingUser.password}
+                      onChangeText={(v) => setEditingUser({ ...editingUser, password: v })}
+                    />
+                    <Pressable onPress={() => setPwVisible((v) => !v)} hitSlop={8}>
+                      <Ionicons
+                        name={pwVisible ? 'eye-off-outline' : 'eye-outline'}
+                        size={20}
+                        color={palette.text.tertiary}
+                      />
+                    </Pressable>
+                  </View>
                   <Pressable
-                    onPress={handleDeleteUser}
-                    disabled={deleteUserMutation.isPending}
-                    style={[styles.deleteUserBtn, { borderColor: colors.red[200] }]}
+                    onPress={() => {
+                      haptic('select');
+                      setPwVisible(true);
+                      setEditingUser({ ...editingUser, password: genPassword() });
+                    }}
+                    style={styles.genPwBtn}
+                    hitSlop={4}
                   >
-                    {deleteUserMutation.isPending ? (
-                      <ActivityIndicator size="small" color={colors.red[600]} />
-                    ) : (
-                      <>
-                        <Ionicons name="person-remove-outline" size={18} color={colors.red[600]} />
-                        <Text style={[styles.deleteUserText, { color: colors.red[600] }]}>Уволить сотрудника</Text>
-                      </>
-                    )}
+                    <Ionicons name="sparkles-outline" size={14} color={palette.accent.primary} />
+                    <Text style={[styles.genPwText, { color: palette.accent.primary }]}>Сгенерировать пароль</Text>
                   </Pressable>
-                )}
 
-                <View style={{ height: spacing[8] }} />
-              </ScrollView>
-            )}
+                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Роль</Text>
+                  <View style={styles.roleRow}>
+                    {SELECTABLE_ROLES.map(({ role, label }) => {
+                      const on = editingUser.role === role;
+                      return (
+                        <Pressable
+                          key={role}
+                          onPress={() => {
+                            haptic('select');
+                            setEditingUser({ ...editingUser, role });
+                          }}
+                          style={[
+                            styles.roleChip,
+                            {
+                              backgroundColor: on ? palette.accent.primary : palette.bg.card,
+                              borderColor: on ? palette.accent.primary : palette.border.subtle,
+                            },
+                          ]}
+                        >
+                          <Text style={[styles.roleChipText, { color: on ? colors.white : palette.text.secondary }]}>
+                            {label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={[styles.fieldLabel, { color: palette.text.tertiary }]}>Процент зарплаты</Text>
+                  <View style={[styles.inputWrap, surface.cardCompact]}>
+                    <TextInput
+                      style={[styles.sheetInput, { color: palette.text.primary }]}
+                      placeholder="0"
+                      placeholderTextColor={palette.text.tertiary}
+                      keyboardType="number-pad"
+                      value={editingUser.salaryPercent}
+                      onChangeText={(v) => setEditingUser({ ...editingUser, salaryPercent: v.replace(/[^0-9]/g, '') })}
+                    />
+                  </View>
+
+                  <View style={[styles.switchBox, surface.cardCompact]}>
+                    <Text style={[styles.switchLabel, { color: palette.text.primary }]}>
+                      {editingUser.isActive ? 'Активен' : 'Отключён'}
+                    </Text>
+                    <Switch
+                      value={editingUser.isActive}
+                      onValueChange={(v) => {
+                        haptic('select');
+                        setEditingUser({ ...editingUser, isActive: v });
+                      }}
+                      trackColor={{ true: palette.accent.primary }}
+                    />
+                  </View>
+
+                  {editingUser.id && (
+                    <Pressable
+                      onPress={handleDeleteUser}
+                      disabled={deleteUserMutation.isPending}
+                      style={[styles.deleteUserBtn, { borderColor: colors.red[200] }]}
+                    >
+                      {deleteUserMutation.isPending ? (
+                        <ActivityIndicator size="small" color={colors.red[600]} />
+                      ) : (
+                        <>
+                          <Ionicons name="person-remove-outline" size={18} color={colors.red[600]} />
+                          <Text style={[styles.deleteUserText, { color: colors.red[600] }]}>Уволить сотрудника</Text>
+                        </>
+                      )}
+                    </Pressable>
+                  )}
+
+                  <View style={{ height: spacing[8] }} />
+                </ScrollView>
+              )}
+            </KeyboardAwareView>
           </View>
-        </View>
+        </KeyboardProvider>
       </Modal>
     </View>
   );

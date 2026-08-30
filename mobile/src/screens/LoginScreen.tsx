@@ -7,7 +7,6 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
-  KeyboardAvoidingView,
   Platform,
   Animated,
   AccessibilityInfo,
@@ -15,6 +14,7 @@ import {
 import Constants from 'expo-constants';
 import CachedImage from '../components/CachedImage';
 import { Button } from '../components/Button';
+import { KeyboardAwareView } from '../components/KeyboardAware';
 import RegistrationRequestSheet from './RegistrationRequestSheet';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
@@ -135,7 +135,12 @@ export default function LoginScreen() {
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
-      <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.flex}>
+      {/* Клавиатура (Round 11 #1, миграция). Раньше — RN-core KeyboardAvoidingView
+          behavior='padding' БЕЗ keyboardVerticalOffset: на iOS поднимал весь
+          центрированный блок без учёта safe area, из-за чего форма «улетала»
+          выше, чем нужно; на Android — no-op. KeyboardAwareView даёт offset
+          из insets и одинаково работает на обеих платформах. */}
+      <KeyboardAwareView style={styles.flex}>
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
           <View style={styles.container}>
             {/* Logo */}
@@ -230,7 +235,7 @@ export default function LoginScreen() {
           {/* Footer — версия из app.json (не хардкодить, чтобы не устаревала). */}
           <Text style={styles.footer}>Autexa v{Constants.expoConfig?.version ?? ''} © 2026</Text>
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareView>
 
       {Platform.OS !== 'ios' && (
         <RegistrationRequestSheet visible={registerOpen} onClose={() => setRegisterOpen(false)} />

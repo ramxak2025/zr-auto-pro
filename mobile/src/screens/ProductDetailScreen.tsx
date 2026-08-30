@@ -45,7 +45,6 @@ import {
   Dimensions,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
@@ -58,6 +57,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 
 import BarcodeScanner, { isBarcodeScannerAvailable } from '../components/BarcodeScanner';
 import CachedImage from '../components/CachedImage';
+import { KeyboardAwareView } from '../components/KeyboardAware';
 import IosScreenHeader from '../components/IosScreenHeader';
 import SectionHeader from '../components/SectionHeader';
 import FolderPickerModal from '../components/FolderPickerModal';
@@ -548,11 +548,10 @@ export default function ProductDetailScreen() {
       />
 
       {editing ? (
-        <KeyboardAvoidingView
-          style={{ flex: 1 }}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-          keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}
-        >
+        // Клавиатура (миграция на keyboard-controller): KeyboardAwareView
+        // вместо RN-core KAV с ручным offset=8 — offset берётся из insets,
+        // одинаково на iOS и Android.
+        <KeyboardAwareView style={{ flex: 1 }}>
           <ScrollView
             style={styles.scroll}
             contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[10] }]}
@@ -781,7 +780,7 @@ export default function ProductDetailScreen() {
               </TouchableOpacity>
             </View>
           </ScrollView>
-        </KeyboardAvoidingView>
+        </KeyboardAwareView>
       ) : (
         <ScrollView
           style={styles.scroll}

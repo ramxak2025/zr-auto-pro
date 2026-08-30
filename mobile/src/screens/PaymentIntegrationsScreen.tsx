@@ -34,7 +34,6 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
   Switch,
   Platform,
 } from 'react-native';
@@ -45,6 +44,7 @@ import { paymentsApi, fiscalApi, walletApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
 import Modal from '../components/Modal';
+import { KeyboardAwareView } from '../components/KeyboardAware';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
@@ -111,7 +111,9 @@ export default function PaymentIntegrationsScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Приём оплат и касса" onBack={() => navigation.goBack()} />
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* Клавиатура (миграция на keyboard-controller): KeyboardAwareView
+          вместо RN-core KAV — offset из insets, одинаково iOS/Android. */}
+      <KeyboardAwareView style={{ flex: 1 }}>
         <ScrollView
           contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}
           keyboardShouldPersistTaps="handled"
@@ -120,7 +122,7 @@ export default function PaymentIntegrationsScreen() {
           <FiscalSection index={1} />
           <WalletSection index={2} />
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareView>
     </View>
   );
 }

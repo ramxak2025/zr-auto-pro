@@ -8,7 +8,6 @@ import {
   StyleSheet,
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
   Switch,
   Platform,
 } from 'react-native';
@@ -18,6 +17,7 @@ import { useNavigation } from '@react-navigation/native';
 import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
 import AnimatedCard from '../components/AnimatedCard';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { KeyboardAwareView } from '../components/KeyboardAware';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -158,7 +158,9 @@ export default function CompanySettingsScreen() {
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Настройки компании" onBack={() => navigation.goBack()} />
 
-      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      {/* Клавиатура (миграция на keyboard-controller): KeyboardAwareView
+          вместо RN-core KAV — offset из insets, одинаково iOS/Android. */}
+      <KeyboardAwareView style={{ flex: 1 }}>
         <ScrollView contentContainerStyle={[styles.scrollContent, { paddingBottom: tabBarHeight + spacing[4] }]}>
           {/* Basic info */}
           <AnimatedCard index={0}>
@@ -371,7 +373,7 @@ export default function CompanySettingsScreen() {
             </AnimatedCard>
           )}
         </ScrollView>
-      </KeyboardAvoidingView>
+      </KeyboardAwareView>
     </View>
   );
 }

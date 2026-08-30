@@ -21,24 +21,15 @@
  *
  * Деньги/склад считает СЕРВЕР в транзакции — экран лишь шлёт корректный payload.
  *
- * Android-safe: ScrollView + степперы + TextInput, без iOS-only API.
+ * Android-safe: KeyboardAwareScroll + степперы + TextInput, без iOS-only API.
  */
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-  Alert,
-  Platform,
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
+import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import ConfirmDialog from '../components/ConfirmDialog';
 import QtyInput from '../components/QtyInput';
 import { ListSkeleton } from '../components/Skeleton';
@@ -55,6 +46,15 @@ import { formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purc
 import { roundQty } from '../utils/units';
 
 type PayMode = 'debt' | 'paid';
+
+/**
+ * Высота нижнего бара приёмки (стоимость накладной + 2 кнопки способа
+ * оплаты) — для extraKeyboardBottomOffset, чтобы фокус в поле цены не
+ * оказался вплотную к клавиатуре (тот же приём, что SAVE_BAR_HEIGHT в
+ * PurchaseOrderCreateScreen.tsx). Бар — сестра скролла, marginBottom
+ * держит его над плавающим tab bar отдельно.
+ */
+const BOTTOM_BAR_HEIGHT = spacing[3] * 2 + spacing[2.5] * 2 + 24 + (spacing[3.5] * 2 + 16) * 2;
 
 interface LineState {
   /** «Принять сейчас» — дельта приёмки (в т.ч. дробная), не больше остатка. */
@@ -274,13 +274,18 @@ export default function SupplyReceiveScreen() {
         onBack={() => navigation.goBack()}
       />
 
-      <ScrollView
+      {/* Клавиатура (миграция на keyboard-controller). Раньше — обычный
+          ScrollView с automaticallyAdjustKeyboardInsets (ТОЛЬКО iOS); на
+          Android поле цены пряталось под клавиатурой. Теперь общий
+          KeyboardAwareScroll: авто-скролл к активному полю одинаково
+          iOS+Android. reserveTabBar={false} — paddingBottom уже включает
+          tabBarHeight сам (contentContainerStyle ниже); extraKeyboardBottomOffset
+          поднимает фокус над нижним баром приёмки (BOTTOM_BAR_HEIGHT), как в
+          PurchaseOrderCreateScreen. */}
+      <KeyboardAwareScroll
         contentContainerStyle={[styles.scroll, { paddingBottom: tabBarHeight + spacing[10] }]}
-        contentInset={{ bottom: tabBarHeight }}
-        scrollIndicatorInsets={{ bottom: tabBarHeight }}
-        keyboardShouldPersistTaps="handled"
-        keyboardDismissMode="interactive"
-        automaticallyAdjustKeyboardInsets={Platform.OS === 'ios'}
+        reserveTabBar={false}
+        extraKeyboardBottomOffset={BOTTOM_BAR_HEIGHT}
       >
         {/* ── Подсказка ── */}
         <View style={[styles.hintCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
@@ -442,7 +447,7 @@ export default function SupplyReceiveScreen() {
             </Text>
           </View>
         ) : null}
-      </ScrollView>
+      </KeyboardAwareScroll>
 
       {/* ── Нижний бар: стоимость накладной + два способа приёмки ── */}
       {canWrite ? (
