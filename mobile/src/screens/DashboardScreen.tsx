@@ -73,8 +73,11 @@ import { usePreference, prefKey } from '../hooks/usePreference';
 import { usePosSettings } from '../hooks/usePosSettings';
 import {
   DASHBOARD_WIDGETS_PREF,
+  DASHBOARD_WIDGETS_ORDER_PREF,
+  applyWidgetOrder,
   isWidgetVisible,
   type DashboardWidgetDef,
+  type WidgetOrder,
   type WidgetVisibility,
 } from './dashboard/dashboardWidgets';
 import DashboardWidgetsModal from './dashboard/DashboardWidgetsModal';
@@ -3504,6 +3507,16 @@ function AdminDashboard({ name }: { name: string }) {
     reset,
   } = usePreference<WidgetVisibility>(prefKey(DASHBOARD_WIDGETS_PREF, user?.id), {});
 
+  // Пользовательский порядок — тоже локально, per-user. Пустая сохранёнка =
+  // порядок реестра; новые виджеты падают в конец (фолбэк в applyWidgetOrder).
+  const {
+    value: order,
+    setValue: setOrder,
+    reset: resetOrder,
+  } = usePreference<WidgetOrder>(prefKey(DASHBOARD_WIDGETS_ORDER_PREF, user?.id), []);
+
+  const orderedWidgets = useMemo(() => applyWidgetOrder(DASHBOARD_WIDGETS, order), [order]);
+
   const handleToggle = useCallback(
     (id: string, next: boolean) => {
       setValue({ ...visibility, [id]: next });
@@ -3511,7 +3524,24 @@ function AdminDashboard({ name }: { name: string }) {
     [visibility, setValue],
   );
 
-  const visibleWidgets = DASHBOARD_WIDGETS.filter((w) => isWidgetVisible(visibility, w.id));
+  const handleMove = useCallback(
+    (id: string, dir: -1 | 1) => {
+      const ids = orderedWidgets.map((w) => w.id);
+      const from = ids.indexOf(id);
+      const to = from + dir;
+      if (from < 0 || to < 0 || to >= ids.length) return;
+      [ids[from], ids[to]] = [ids[to], ids[from]];
+      setOrder(ids);
+    },
+    [orderedWidgets, setOrder],
+  );
+
+  const handleReset = useCallback(() => {
+    reset();
+    resetOrder();
+  }, [reset, resetOrder]);
+
+  const visibleWidgets = orderedWidgets.filter((w) => isWidgetVisible(visibility, w.id));
 
   return (
     <View style={{ gap: spacing[5] }}>
@@ -3545,10 +3575,11 @@ function AdminDashboard({ name }: { name: string }) {
 
       <DashboardWidgetsModal
         visible={settingsOpen}
-        widgets={DASHBOARD_WIDGETS}
+        widgets={orderedWidgets}
         visibility={visibility}
         onToggle={handleToggle}
-        onReset={reset}
+        onMove={handleMove}
+        onReset={handleReset}
         onClose={() => setSettingsOpen(false)}
       />
     </View>

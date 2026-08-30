@@ -35,3 +35,24 @@ export function isWidgetVisible(visibility: WidgetVisibility, id: string): boole
 
 /** Ключ настройки видимости виджетов (per-user через prefKey). */
 export const DASHBOARD_WIDGETS_PREF = 'dashboard-widgets';
+
+/** Пользовательский порядок виджетов: массив id. Пустой массив = порядок по умолчанию. */
+export type WidgetOrder = string[];
+
+/** Ключ настройки порядка виджетов (per-user через prefKey). */
+export const DASHBOARD_WIDGETS_ORDER_PREF = 'dashboard-widgets-order';
+
+/**
+ * Применяет сохранённый порядок к реестру. Id, которых нет в сохранёнке
+ * (новые виджеты), остаются в конце в порядке реестра — тот же дефолт-фолбэк,
+ * что и у видимости.
+ */
+export function applyWidgetOrder(defs: DashboardWidgetDef[], order: WidgetOrder): DashboardWidgetDef[] {
+  if (order.length === 0) return defs;
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const rank = (d: DashboardWidgetDef) => {
+    const saved = pos.get(d.id);
+    return saved !== undefined ? saved : order.length + defs.indexOf(d);
+  };
+  return [...defs].sort((a, b) => rank(a) - rank(b));
+}

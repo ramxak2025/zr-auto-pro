@@ -23,20 +23,36 @@ import { isWidgetVisible } from './dashboardWidgets';
 
 interface Props {
   visible: boolean;
+  /** Уже в пользовательском порядке — модалка рендерит как есть. */
   widgets: DashboardWidgetDef[];
   visibility: WidgetVisibility;
   onToggle: (id: string, next: boolean) => void;
+  /** Сдвиг виджета на одну позицию: dir −1 вверх, +1 вниз. */
+  onMove: (id: string, dir: -1 | 1) => void;
   onReset: () => void;
   onClose: () => void;
 }
 
-export default function DashboardWidgetsModal({ visible, widgets, visibility, onToggle, onReset, onClose }: Props) {
+export default function DashboardWidgetsModal({
+  visible,
+  widgets,
+  visibility,
+  onToggle,
+  onMove,
+  onReset,
+  onClose,
+}: Props) {
   const palette = useColors();
   const insets = useSafeAreaInsets();
 
   const handleToggle = (id: string, next: boolean) => {
     haptic('tap');
     onToggle(id, next);
+  };
+
+  const handleMove = (id: string, dir: -1 | 1) => {
+    haptic('select');
+    onMove(id, dir);
   };
 
   const handleReset = () => {
@@ -82,7 +98,7 @@ export default function DashboardWidgetsModal({ visible, widgets, visibility, on
           showsVerticalScrollIndicator={false}
         >
           <Text style={[iosSectionLabel, styles.sectionTitle, { color: palette.text.secondary }]}>
-            ВИДИМОСТЬ ВИДЖЕТОВ
+            ПОРЯДОК И ВИДИМОСТЬ
           </Text>
           <View style={[styles.card, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
             {widgets.map((w, idx) => (
@@ -91,6 +107,30 @@ export default function DashboardWidgetsModal({ visible, widgets, visibility, on
                   <Text style={[styles.rowLabel, { color: palette.text.primary }]} numberOfLines={2}>
                     {w.label}
                   </Text>
+                  <Pressable
+                    onPress={() => handleMove(w.id, -1)}
+                    disabled={idx === 0}
+                    hitSlop={6}
+                    style={[styles.moveBtn, { backgroundColor: palette.bg.muted }, idx === 0 && styles.moveBtnOff]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Поднять «${w.label}» выше`}
+                  >
+                    <Ionicons name="chevron-up" size={16} color={palette.text.secondary} />
+                  </Pressable>
+                  <Pressable
+                    onPress={() => handleMove(w.id, 1)}
+                    disabled={idx === widgets.length - 1}
+                    hitSlop={6}
+                    style={[
+                      styles.moveBtn,
+                      { backgroundColor: palette.bg.muted },
+                      idx === widgets.length - 1 && styles.moveBtnOff,
+                    ]}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Опустить «${w.label}» ниже`}
+                  >
+                    <Ionicons name="chevron-down" size={16} color={palette.text.secondary} />
+                  </Pressable>
                   <Switch
                     value={isWidgetVisible(visibility, w.id)}
                     onValueChange={(next) => handleToggle(w.id, next)}
@@ -117,11 +157,11 @@ export default function DashboardWidgetsModal({ visible, widgets, visibility, on
             accessibilityLabel="Сбросить настройки виджетов"
           >
             <Ionicons name="refresh-outline" size={18} color={palette.accent.primary} />
-            <Text style={[styles.resetBtnText, { color: palette.accent.primary }]}>Сбросить (показать все)</Text>
+            <Text style={[styles.resetBtnText, { color: palette.accent.primary }]}>Сбросить (порядок и видимость)</Text>
           </Pressable>
 
           <Text style={[styles.footer, { color: palette.text.tertiary }]}>
-            Настройки видимости хранятся только на этом устройстве.
+            Порядок и видимость виджетов хранятся только на этом устройстве.
           </Text>
         </ScrollView>
       </View>
@@ -165,6 +205,14 @@ const styles = StyleSheet.create({
     minHeight: 54,
   },
   rowLabel: { flex: 1, fontSize: 16, fontWeight: '500', letterSpacing: -0.2 },
+  moveBtn: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  moveBtnOff: { opacity: 0.35 },
   separator: { height: StyleSheet.hairlineWidth, marginLeft: spacing[4] },
 
   resetBtn: {
