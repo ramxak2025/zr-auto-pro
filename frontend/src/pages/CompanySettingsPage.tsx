@@ -15,6 +15,7 @@ import {
   Percent,
   Wallet,
   LayoutGrid,
+  Clock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
@@ -24,7 +25,13 @@ import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 
 import type { Tenant, LoyaltySettings, PaymentAcceptorInfo, PosSettings, PosSettingsConflict } from '../types';
-import { formatMoney } from '../../../shared/utils/formatters';
+import {
+  formatMoney,
+  formatDateTime,
+  RU_TIMEZONES,
+  DEFAULT_TIMEZONE,
+  timezoneOption,
+} from '../../../shared/utils/formatters';
 
 interface CompanyForm {
   name: string;
@@ -37,6 +44,8 @@ interface CompanyForm {
   kpp: string;
   ogrn: string;
   receiptFooter: string;
+  /** 157 — часовой пояс автосервиса (IANA-id). Дефолт — Москва. */
+  timezone: string;
 }
 
 // ---- POS «Кассовая смена + роли» ----
@@ -529,6 +538,7 @@ export default function CompanySettingsPage() {
     kpp: '',
     ogrn: '',
     receiptFooter: '',
+    timezone: DEFAULT_TIMEZONE,
   });
 
   const [dirty, setDirty] = useState(false);
@@ -546,6 +556,7 @@ export default function CompanySettingsPage() {
         kpp: company.kpp || '',
         ogrn: company.ogrn || '',
         receiptFooter: company.receiptFooter || '',
+        timezone: company.timezone || DEFAULT_TIMEZONE,
       });
       setDirty(false);
     }
@@ -578,6 +589,9 @@ export default function CompanySettingsPage() {
       kpp: form.kpp || undefined,
       ogrn: form.ogrn || undefined,
       receiptFooter: form.receiptFooter || undefined,
+      // 157 — пояс отправляем всегда: это значение поля, а не тумблер, и
+      // сервер принимает только id из белого списка.
+      timezone: form.timezone || DEFAULT_TIMEZONE,
     });
   };
 
@@ -682,6 +696,27 @@ export default function CompanySettingsPage() {
                 className="input"
                 placeholder="г. Москва, ул. Примерная, д. 1"
               />
+            </div>
+
+            {/* 157 — часовой пояс автосервиса. Обычный select в стиле
+                остальных полей формы; список фиксированный, сервер принимает
+                только эти id. */}
+            <div>
+              <label className="label">
+                <Clock className="h-3 w-3 inline mr-1" />
+                Часовой пояс
+              </label>
+              <select value={form.timezone} onChange={(e) => update({ timezone: e.target.value })} className="input">
+                {RU_TIMEZONES.map((z) => (
+                  <option key={z.id} value={z.id}>
+                    {z.label} · {z.utc} — {z.hint}
+                  </option>
+                ))}
+              </select>
+              <p className="mt-1 text-xs text-gray-500">
+                От пояса зависит, что считается «сегодня»: выручка за день, смены и отчёты. Сейчас в этом поясе:{' '}
+                {formatDateTime(new Date().toISOString(), timezoneOption(form.timezone).id)}
+              </p>
             </div>
 
             <div>

@@ -139,6 +139,9 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen, o
   const workedShifts = master.workedShifts || 0;
   const perDay = master.perDay;
   const hasPerDay = perDay != null && workedShifts > 0;
+  // Кнопка выдачи видна держателю salary_payouts_manage и только когда по
+  // сотруднику реально есть остаток к выплате.
+  const canIssue = !!onIssue && master.remainingAmount > 0.5;
 
   return (
     <TouchableOpacity
@@ -178,12 +181,35 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen, o
           </View>
         </View>
 
+        {/* Round 17 (в) — «К выплате» и действие «Выдать» ПРЯМО в ряду:
+            раньше кнопка была отдельной полосой под строкой (+28 pt на каждого
+            сотрудника). Вложенный TouchableOpacity перехватывает тап у строки
+            (паттерн clearXBadge в CashFlowScreen). */}
         <View style={styles.rowAmountCol}>
           <Text style={[styles.rowAmount, { color: headlineColor }]} numberOfLines={1}>
             {formatMoney(headlineAmount)}
           </Text>
-          <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} style={{ marginTop: 2 }} />
+          {canIssue ? (
+            <TouchableOpacity
+              style={[
+                styles.rowIssueChip,
+                { backgroundColor: palette.mode === 'dark' ? 'rgba(34,197,94,0.16)' : colors.green[50] },
+              ]}
+              activeOpacity={0.75}
+              hitSlop={6}
+              onPress={() => {
+                haptic('tap');
+                onIssue?.(master);
+              }}
+              accessibilityRole="button"
+              accessibilityLabel={`Выдать зарплату — ${master.masterName}, к выплате ${formatMoney(master.remainingAmount)}`}
+            >
+              <Ionicons name="paper-plane-outline" size={11} color={colors.green[700]} />
+              <Text style={styles.rowIssueChipText}>Выдать</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
+        <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
       </View>
 
       {hasPerDay ? (
@@ -197,7 +223,7 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen, o
           <Text style={[styles.rowPerDayValue, { color: palette.text.primary }]} numberOfLines={1}>
             ≈ {formatMoney(perDay as number)}
           </Text>
-          <Text style={[styles.rowPerDayCaption, { color: palette.text.tertiary }]}>в среднем за смену</Text>
+          <Text style={[styles.rowPerDayCaption, { color: palette.text.tertiary }]}>за смену</Text>
         </View>
       ) : null}
 
@@ -243,29 +269,6 @@ const EmployeeRow = React.memo(function EmployeeRow({ master, palette, onOpen, o
             ) : null}
           </Text>
         </View>
-      ) : null}
-
-      {/* Round 16 #1(б) — «Выдать · N ₽» одним тапом из списка: открывает ту же
-          PayoutForm с предзаполненной суммой «К выплате», без захода в карточку.
-          Вложенный TouchableOpacity перехватывает тап у строки (паттерн
-          clearXBadge в CashFlowScreen). */}
-      {onIssue && master.remainingAmount > 0.5 ? (
-        <TouchableOpacity
-          style={[
-            styles.rowIssueBtn,
-            { backgroundColor: palette.mode === 'dark' ? 'rgba(34,197,94,0.16)' : colors.green[50] },
-          ]}
-          activeOpacity={0.75}
-          onPress={() => {
-            haptic('tap');
-            onIssue(master);
-          }}
-          accessibilityRole="button"
-          accessibilityLabel={`Выдать зарплату — ${master.masterName}, к выплате ${formatMoney(master.remainingAmount)}`}
-        >
-          <Ionicons name="paper-plane-outline" size={14} color={colors.green[700]} />
-          <Text style={styles.rowIssueBtnText}>Выдать · {formatMoney(master.remainingAmount)}</Text>
-        </TouchableOpacity>
       ) : null}
     </TouchableOpacity>
   );
@@ -412,15 +415,16 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
   });
 
   // ── Round 16 #1(б) — быстрая выдача из списка ──────────────────────────────
-  // Кнопка «Выдать · N ₽» на строке открывает ту же PayoutForm, что и карточка
+  // Кнопка «Выдать» на строке открывает ту же PayoutForm, что и карточка
   // сотрудника; periodMonth = открытый в списке месяц (та же привязка, что и в
-  // глубоком флоу). Подтверждение сотрудником не меняется — выплата уходит в
-  // pending, сотрудник принимает через SalaryReceivedModal.
+  // глубоком флоу). Round 17 (158): выплата фиксируется сразу — сотрудник лишь
+  // получает уведомление (SalaryReceivedModal), решения от него не ждём.
   const [payoutTarget, setPayoutTarget] = useState<MasterSalary | null>(null);
 
-  // Месячная деталь цели — чтобы предупредить о ещё не принятых (pending)
-  // выплатах: из списка их не видно, а из карточки видно. Ключ и форма данных
-  // совпадают с карточкой сотрудника → кэш общий, открывается мгновенно.
+  // Месячная деталь цели — чтобы показать контекст по уже выданному: сколько
+  // сотрудник ещё не просмотрел и остались ли НЕзафиксированные выплаты старого
+  // формата. Ключ и форма данных совпадают с карточкой сотрудника → кэш общий,
+  // открывается мгновенно.
   const { data: targetDetail } = useQuery<SalaryMonthDetail>({
     queryKey: ['salary-employee-month', payoutTarget?.masterId ?? 'none', monthYear],
     queryFn: async () => (await salaryApi.getEmployeeMonth(payoutTarget!.masterId, monthYear)).data,
@@ -430,11 +434,20 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
   // Оборона от глобального placeholderData (prev => prev): при смене цели
   // временно виден ответ ПРОШЛОГО сотрудника — сверяем userId/month из самого
   // ответа и прячем предупреждение, пока данные не про эту цель.
-  const pendingForTarget = useMemo(() => {
-    if (!payoutTarget || !targetDetail) return 0;
-    if (targetDetail.userId !== payoutTarget.masterId || targetDetail.month !== monthYear) return 0;
+  const targetHints = useMemo(() => {
+    const empty = { unviewed: 0, unsettled: 0 };
+    if (!payoutTarget || !targetDetail) return empty;
+    if (targetDetail.userId !== payoutTarget.masterId || targetDetail.month !== monthYear) return empty;
     const payouts = Array.isArray(targetDetail.payouts) ? targetDetail.payouts : [];
-    return payouts.filter((p) => p.status === 'pending').reduce((sum, p) => sum + (p.amount || 0), 0);
+    let unviewed = 0;
+    let unsettled = 0;
+    for (const p of payouts) {
+      // 158 — выдано, но сотрудник ещё не открыл уведомление.
+      if (p.status === 'accepted' && !p.viewedAt) unviewed += p.amount || 0;
+      // Легаси-строка старой модели: расхода нет, фиксируется из карточки.
+      else if (p.status === 'pending') unsettled += p.amount || 0;
+    }
+    return { unviewed, unsettled };
   }, [payoutTarget, targetDetail, monthYear]);
 
   const quickPayoutMutation = useMutation({
@@ -450,9 +463,20 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
       haptic('success');
       setPayoutTarget(null);
       // Тот же набор инвалидаций, что у карточки сотрудника: список + все
-      // месячные детали (выплата видна и там, и там).
-      queryClient.invalidateQueries({ queryKey: ['salary'] });
-      queryClient.invalidateQueries({ queryKey: ['salary-employee-month'] });
+      // месячные детали (выплата видна и там, и там). Round 17 (158): выдача
+      // сразу пишет расход — устаревают ещё касса, расходы и отчёты.
+      for (const key of [
+        'salary',
+        'salary-employee-month',
+        'expenses',
+        'cashflow',
+        'dashboard-v2',
+        'dashboard-chart',
+        'financial-report',
+        'reports',
+      ]) {
+        queryClient.invalidateQueries({ queryKey: [key] });
+      }
     },
     onError: (err: any) => {
       haptic('error');
@@ -758,16 +782,29 @@ function OwnerSalaryList({ navigation, queryClient, palette, tabBarHeight, canMa
                 Выплата за {monthLabelFull(selectedMonth).toLowerCase()} — попадёт в этот месяц
               </Text>
             </View>
-            {pendingForTarget > 0 ? (
+            {/* Round 17 (158) — подтверждения больше нет: вместо «ждёт
+                подтверждения» показываем, что сотрудник ещё не открыл
+                уведомление, и отдельно — незафиксированные строки старого
+                формата (их фиксируют в карточке сотрудника). */}
+            {targetHints.unsettled > 0 ? (
               <View
                 style={[
                   styles.quickWarnRow,
                   { backgroundColor: palette.mode === 'dark' ? 'rgba(245,158,11,0.16)' : colors.amber[50] },
                 ]}
               >
-                <Ionicons name="time-outline" size={13} color={colors.amber[700]} />
+                <Ionicons name="alert-circle-outline" size={13} color={colors.amber[700]} />
                 <Text style={[styles.quickMetaText, { color: colors.amber[700] }]}>
-                  Уже ожидает подтверждения: {formatMoney(pendingForTarget)} — сотрудник ещё не принял прошлую выплату
+                  Не зафиксировано: {formatMoney(targetHints.unsettled)} — выплата старого формата без расхода,
+                  зафиксируйте её в карточке сотрудника
+                </Text>
+              </View>
+            ) : null}
+            {targetHints.unviewed > 0 ? (
+              <View style={[styles.quickWarnRow, { backgroundColor: palette.bg.muted }]}>
+                <Ionicons name="eye-off-outline" size={13} color={palette.text.tertiary} />
+                <Text style={[styles.quickMetaText, { color: palette.text.secondary }]}>
+                  Выдано, но ещё не просмотрено сотрудником: {formatMoney(targetHints.unviewed)}
                 </Text>
               </View>
             ) : null}
@@ -908,11 +945,11 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius['2xl'],
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing[3],
-    paddingVertical: spacing[3],
-    gap: spacing[2],
-    minHeight: 68,
+    paddingVertical: spacing[2.5],
+    gap: spacing[1.5],
+    minHeight: 60,
   },
-  rowTopLine: { flexDirection: 'row', alignItems: 'center', gap: spacing[3] },
+  rowTopLine: { flexDirection: 'row', alignItems: 'center', gap: spacing[2.5] },
   rowAvatar: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   rowAvatarText: { fontSize: 13, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: 0.2 },
   rowNameCol: { flex: 1, gap: 3 },
@@ -929,27 +966,25 @@ const styles = StyleSheet.create({
   rowPercentText: { fontSize: 10, fontWeight: fontWeight.semibold },
   rowStatusPill: { paddingHorizontal: spacing[1.5], paddingVertical: 2, borderRadius: 8 },
   rowStatusText: { fontSize: 10, fontWeight: fontWeight.semibold },
-  rowAmountCol: { alignItems: 'flex-end', gap: 0 },
+  rowAmountCol: { alignItems: 'flex-end', gap: 3 },
   rowAmount: { fontSize: fontSize.base, fontWeight: fontWeight.bold, letterSpacing: -0.4 },
-  rowChipsLine: { paddingLeft: 36 + spacing[3] },
+  rowChipsLine: { paddingLeft: 36 + spacing[2.5] },
   rowChipsText: { fontSize: 11, fontWeight: fontWeight.medium },
 
-  // Round 16 #1(б) — нижняя полоса «Выдать · N ₽» на строке сотрудника.
-  rowIssueBtn: {
+  // Round 17 (в) — компактный чип «Выдать» под суммой ПРЯМО в ряду.
+  rowIssueChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing[1.5],
-    paddingVertical: spacing[2],
-    borderRadius: borderRadius.xl,
-    marginTop: spacing[0.5],
+    gap: 3,
+    paddingHorizontal: spacing[2],
+    paddingVertical: 3,
+    borderRadius: borderRadius.full,
   },
-  rowIssueBtnText: {
-    fontSize: fontSize.xs,
+  rowIssueChipText: {
+    fontSize: 11,
     fontWeight: fontWeight.bold,
     color: colors.green[700],
     letterSpacing: -0.2,
-    fontVariant: ['tabular-nums'],
   },
 
   // Round 16 #1(б) — инфострока и предупреждение в модале быстрой выдачи.
@@ -978,7 +1013,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
-    paddingLeft: 36 + spacing[3],
+    paddingLeft: 36 + spacing[2.5],
   },
   rowPerDayPill: {
     flexDirection: 'row',

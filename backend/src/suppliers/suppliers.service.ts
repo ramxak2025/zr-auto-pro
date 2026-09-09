@@ -1278,6 +1278,10 @@ export class SuppliersService {
    * receive (applyIncomeTx) before this is called, so this method NEVER touches
    * products.stock. It only writes the financial/ledger rows for the supply.
    *
+   * Поставка задним числом (159): `occurredAt` (ISO) датирует ОБЕ денежные
+   * строки — накладную (deliveries.date) и авто-платёж (supplier_payments.date)
+   * — выбранной датой поставки. Не передан ⇒ now(), как раньше.
+   *
    * Caller MUST already hold an open transaction on `client` (and SHOULD have
    * verified the supplier belongs to the tenant). This method issues no
    * BEGIN / COMMIT / ROLLBACK itself.
@@ -1291,6 +1295,8 @@ export class SuppliersService {
       purchaseOrderId: string;
       comment?: string | null;
       paymentMode: 'debt' | 'paid';
+      /** Дата поставки (ISO). Пусто ⇒ now() — поведение до 159. */
+      occurredAt?: string | null;
       lines: Array<{ productId: string; purchaseOrderItemId: string; quantity: number; price: number }>;
     },
   ): Promise<{ deliveryId: string; paymentId: string | null; invoiceTotal: number }> {
@@ -1304,10 +1310,12 @@ export class SuppliersService {
     const paid = params.paymentMode === 'paid';
 
     // 1) The supply header (a deliveries row), linked to its order + receiver.
+    // Дата накладной — выбранная дата поставки (159), иначе now().
+    const occurredAt = params.occurredAt ?? null;
     const { rows: delRows } = await client.query(
       `INSERT INTO deliveries
          (supplier_id, date, total_amount, payment_status, comment, tenant_id, purchase_order_id, received_by)
-       VALUES ($1, now(), $2, $3, $4, $5, $6, $7) RETURNING id`,
+       VALUES ($1, COALESCE($8::timestamptz, now()), $2, $3, $4, $5, $6, $7) RETURNING id`,
       [
         params.supplierId,
         invoiceTotal,
@@ -1316,6 +1324,7 @@ export class SuppliersService {
         tenantID,
         params.purchaseOrderId,
         userID,
+        occurredAt,
       ],
     );
     const deliveryId = delRows[0].id;
@@ -1348,8 +1357,8 @@ export class SuppliersService {
     if (paid && invoiceTotal > 0) {
       const { rows: payRows } = await client.query(
         `INSERT INTO supplier_payments (supplier_id, amount, date, comment, tenant_id, delivery_id, created_by)
-         VALUES ($1, $2, now(), $3, $4, $5, $6) RETURNING id`,
-        [params.supplierId, invoiceTotal, 'Оплата при приёмке заказа', tenantID, deliveryId, userID],
+         VALUES ($1, $2, COALESCE($7::timestamptz, now()), $3, $4, $5, $6) RETURNING id`,
+        [params.supplierId, invoiceTotal, 'Оплата при приёмке заказа', tenantID, deliveryId, userID, occurredAt],
       );
       paymentId = payRows[0].id;
       await client.query(

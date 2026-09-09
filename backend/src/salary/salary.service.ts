@@ -1132,18 +1132,29 @@ export class SalaryService {
     };
   }
 
-  // ─── Payouts with confirmation (100_salary_payouts_and_fines) ────────────
+  // ─── Payouts (100_salary_payouts_and_fines + 158_salary_payout_viewed) ────
   //
-  // A NEW, separate flow from the legacy salary_payments path (which writes the
-  // expense immediately on create). Here the владелец (director/superadmin)
-  // issues a payout → it sits `pending` → the employee accepts or rejects →
-  // ONLY on accept is an expense recorded (dated the accept day). The legacy
-  // createPayment / confirmPayment path is intentionally left untouched.
+  // Round 17 (158) — ПОДТВЕРЖДЕНИЕ МАСТЕРОМ УБРАНО. Выплата фиксируется в
+  // момент выдачи: строка пишется сразу со status='accepted', а зеркальный
+  // расход («Зарплата») — в ТОЙ ЖЕ транзакции, ровно ОДИН раз. У сотрудника
+  // больше нет кнопок «принять/отклонить» — он получает уведомление, а
+  // владелец видит «просмотрено / не просмотрено» (viewed_at).
+  //
+  // ЛЕГАСИ status='pending' — выплаты СТАРОГО flow, у которых расхода нет.
+  // Миграция их не трогает (выдумывать движение денег нельзя): владелец сам
+  // либо фиксирует (settlePayout — создаст расход), либо отменяет
+  // (cancelPayout). Новые pending не создаются никогда.
 
   /**
-   * Owner (director/superadmin) issues a salary / advance payout to an
-   * employee. Starts `pending` and pushes the employee to decide. No money
-   * moves yet — the expense is written only when the employee accepts.
+   * Владелец (director/superadmin) выдаёт сотруднику ЗП / АВАНС — деньги
+   * фиксируются СРАЗУ:
+   *   • строка salary_payouts со status='accepted' + decided_at=now();
+   *   • зеркальный расход через ExpensesService.recordSalaryExpense в ТОЙ ЖЕ
+   *     транзакции + обратная связь expense_id (сторно при отмене);
+   *   • ровно ОДИН расход на выдачу — второй записи взяться неоткуда, отдельной
+   *     «фиксации» больше нет.
+   * Сотруднику уходит пуш «выдана» (без слова «подтвердите») — закрытие
+   * уведомления в приложении помечает выплату просмотренной.
    */
   async createPayout(
     tenantID: string,
@@ -1170,48 +1181,97 @@ export class SalaryService {
     if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
 
     const comment = dto.comment ? String(dto.comment).trim() || null : null;
-    const { rows } = await this.pool.query(
-      `INSERT INTO salary_payouts (tenant_id, employee_id, type, amount, status, comment, created_by, period_month)
-       VALUES ($1, $2, $3, $4, 'pending', $5, $6, $7)
-       RETURNING *`,
-      [tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth],
-    );
-    const p = rows[0];
-    p.user_name = userRows[0].full_name;
+    const employeeName = (userRows[0].full_name as string) || 'Сотрудник';
+    const typeLabel = type === 'advance' ? 'Аванс' : 'Зарплата';
+    const note = comment ? ` — ${comment}` : '';
+    const description = `${typeLabel}: ${employeeName}${note}`;
 
-    // Push the employee to confirm receipt. Category 'salary' respects the
-    // employee's «Уведомления» toggle. Fire-and-forget (push is never source
-    // of truth).
-    const title = type === 'advance' ? 'Аванс к выплате' : 'Зарплата к выплате';
+    // Выплата и её зеркальный расход — ОДНА транзакция (паттерн createPayment):
+    // падение между ними оставило бы деньги без расхода, а долг сотруднику —
+    // уменьшённым.
+    const client = await this.pool.connect();
+    let p: any;
+    try {
+      await client.query('BEGIN');
+      const { rows } = await client.query(
+        `INSERT INTO salary_payouts
+           (tenant_id, employee_id, type, amount, status, comment, created_by, period_month, decided_at)
+         VALUES ($1, $2, $3, $4, 'accepted', $5, $6, $7, now())
+         RETURNING *`,
+        [tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth],
+      );
+      p = rows[0];
+      // 149 — период выплаты («за какой месяц») пробрасывается в расход.
+      const expense = await this.expenses.recordSalaryExpense(
+        tenantID,
+        {
+          amount,
+          description,
+          date: new Date().toISOString(),
+          createdBy,
+          periodMonth,
+        },
+        client,
+      );
+      const { rows: upd } = await client.query(
+        `UPDATE salary_payouts SET expense_id = $3 WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+        [p.id, tenantID, expense.id],
+      );
+      if (upd.length > 0) p = upd[0];
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+    p.user_name = employeeName;
+
+    // ── Post-commit side-effects (fire-and-forget) ──────────────────────────
+    // Новый расход двигает кассу — сбрасываем серверные кэши отчётов и просим
+    // другие устройства перечитать денежные экраны.
+    invalidateReportsForTenant(tenantID);
+    this.push.sendDataToTenant(tenantID, createdBy, { type: 'cash-changed', tenantId: tenantID }).catch(() => {
+      /* best-effort */
+    });
+
+    // Уведомление сотруднику — БЕЗ «подтвердите»: решение принимать нечего,
+    // деньги уже зафиксированы. Категория 'salary' уважает тумблер
+    // «Уведомления». Fire-and-forget (пуш никогда не источник правды).
+    const title = type === 'advance' ? 'Аванс выдан' : 'Зарплата выдана';
     const formatted = amount.toLocaleString('ru-RU');
-    this.push.sendToUserInTenant(
-      dto.employeeId,
-      tenantID,
-      'salary',
-      title,
-      `Сумма: ${formatted} ₽ — подтвердите получение`,
-      {
-        kind: 'payout',
-        payoutId: p.id,
-        payoutType: type,
-        action: 'decide',
-      },
-    );
+    this.push.sendToUserInTenant(dto.employeeId, tenantID, 'salary', title, `Сумма: ${formatted} ₽`, {
+      // `type` читает листенер SalaryNotificationContext (как 'cash-changed'
+      // в App.tsx) — он поднимает уведомление «выплата выдана».
+      type: 'payout-issued',
+      kind: 'payout',
+      payoutId: p.id,
+      payoutType: type,
+    });
 
     return this.mapPayout(p);
   }
 
   /**
-   * The employee accepts or rejects a pending payout. Money path — fully
-   * transactional and idempotent:
-   *   - the row is locked FOR UPDATE and the flip only happens while it is
-   *     still `pending` (a second accept can never double-record an expense);
-   *   - on accept the «Зарплата» expense is inserted INSIDE the same
-   *     transaction and linked back via expense_id, so status + expense commit
-   *     atomically;
-   *   - on reject nothing is recorded.
-   * Only the recipient may decide (the role gate on the route is open; this
-   * is the real authorization check).
+   * ЛЕГАСИ-ручка решения по выплате. Round 17 (158): подтверждение мастером
+   * убрано, поэтому у ЗАФИКСИРОВАННОЙ выплаты (новый flow — сразу 'accepted',
+   * а также отменённой/отклонённой) решать нечего: вызов трактуется как
+   * «просмотрено» (viewed_at) и отвечает 200 — приложения СТАРЫХ версий, где в
+   * модалке ещё живут «Принять / Отклонить», не падают и не спамят ошибкой.
+   *
+   * Для оставшихся с прошлой модели pending-выплат прежнее поведение сохранено
+   * 1:1 (иначе мастер со старым клиентом не смог бы закрыть висящую строку):
+   *   - строка лочится FOR UPDATE, переход возможен только пока она `pending`
+   *     (второй accept не может записать расход дважды);
+   *   - на accept расход «Зарплата» пишется В ТОЙ ЖЕ транзакции и связывается
+   *     через expense_id — статус и расход коммитятся атомарно;
+   *   - на reject не пишется ничего.
+   * Решать может ТОЛЬКО получатель (гейт роли на роуте открыт — это и есть
+   * настоящая авторизация).
    */
   async decidePayout(payoutId: string, tenantID: string, userID: string, decision: 'accept' | 'reject') {
     const client = await this.pool.connect();
@@ -1250,10 +1310,21 @@ export class SalaryService {
         await client.query('ROLLBACK');
         throw new ForbiddenException({ message: 'Решение принимает только получатель выплаты' });
       }
-      // Idempotency guard: only a pending payout can be decided.
+      // Round 17 (158) — решать нечего: выплата уже зафиксирована (или
+      // отменена/отклонена). Помечаем ПРОСМОТРЕННОЙ и отвечаем 200: старый
+      // клиент с кнопками «Принять/Отклонить» закрывает уведомление штатно,
+      // деньги при этом не двигаются.
       if (payout.status !== 'pending') {
-        await client.query('ROLLBACK');
-        throw new BadRequestException({ message: 'Выплата уже обработана' });
+        const { rows: seen } = await client.query(
+          `UPDATE salary_payouts SET viewed_at = COALESCE(viewed_at, now())
+            WHERE id = $1 AND tenant_id = $2
+            RETURNING *`,
+          [payoutId, tenantID],
+        );
+        const viewed = seen[0] ?? payout;
+        await client.query('COMMIT');
+        viewed.user_name = employeeName;
+        return this.mapPayout(viewed);
       }
 
       if (decision === 'accept') {
@@ -1276,7 +1347,8 @@ export class SalaryService {
         );
         const { rows: upd } = await client.query(
           `UPDATE salary_payouts
-              SET status = 'accepted', decided_at = now(), expense_id = $3
+              SET status = 'accepted', decided_at = now(), expense_id = $3,
+                  viewed_at = COALESCE(viewed_at, now())
             WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
             RETURNING *`,
           [payoutId, tenantID, expense.id],
@@ -1292,7 +1364,7 @@ export class SalaryService {
       } else {
         const { rows: upd } = await client.query(
           `UPDATE salary_payouts
-              SET status = 'rejected', decided_at = now()
+              SET status = 'rejected', decided_at = now(), viewed_at = COALESCE(viewed_at, now())
             WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
             RETURNING *`,
           [payoutId, tenantID],
@@ -1351,15 +1423,167 @@ export class SalaryService {
   }
 
   /**
+   * Round 17 (158) — «просмотрено»: получатель увидел выплату (закрыл
+   * уведомление в приложении). Замена подтверждения — НИКАКИХ денежных
+   * последствий, только отметка для владельца.
+   *
+   * Идемпотентно: COALESCE(viewed_at, now()) фиксирует ПЕРВЫЙ просмотр —
+   * повторные вызовы (второй девайс, ретрай оффлайн-очереди) время не двигают.
+   * Авторизация — тем же условием, что и запись: WHERE employee_id = $3, так
+   * что чужую выплату пометить нельзя.
+   */
+  async markPayoutViewed(payoutId: string, tenantID: string, userID: string) {
+    const { rows } = await this.pool.query(
+      `UPDATE salary_payouts
+          SET viewed_at = COALESCE(viewed_at, now())
+        WHERE id = $1 AND tenant_id = $2 AND employee_id = $3
+        RETURNING id, viewed_at`,
+      [payoutId, tenantID, userID],
+    );
+    if (rows.length === 0) throw new NotFoundException({ message: 'Выплата не найдена' });
+    return { payoutId: rows[0].id, viewedAt: rows[0].viewed_at };
+  }
+
+  /**
+   * Round 17 (158) — фиксация ЛЕГАСИ pending-выплаты владельцем.
+   *
+   * Старая модель оставила строки, по которым мастер так и не принял решение, а
+   * значит зеркального расхода у них нет. Миграция их не трогает (создавать
+   * расход за владельца = выдумывать движение денег, помечать accepted без
+   * расхода = терять его), поэтому решение принимает владелец руками: либо
+   * «Зафиксировать» (здесь: расход + status='accepted'), либо «Отменить»
+   * (cancelPayout). Транзакция и лок — как в accept-ветке decidePayout, так что
+   * расход не может записаться дважды.
+   */
+  async settlePayout(payoutId: string, tenantID: string, actorId: string) {
+    const client = await this.pool.connect();
+    let result: any;
+    let employeeName = 'Сотрудник';
+    let employeeId: string | null = null;
+    let amount = 0;
+    let typeLabel = 'Зарплата';
+    try {
+      await client.query('BEGIN');
+      const { rows: lockRows } = await client.query(
+        // FOR UPDATE OF p — адресный лок (голый FOR UPDATE ловит nullable-
+        // сторону LEFT JOIN и падает в рантайме; урок decidePayout).
+        `SELECT p.*, u.full_name AS employee_name
+           FROM salary_payouts p
+           LEFT JOIN users u ON u.id = p.employee_id
+          WHERE p.id = $1 AND p.tenant_id = $2
+          FOR UPDATE OF p`,
+        [payoutId, tenantID],
+      );
+      if (lockRows.length === 0) {
+        await client.query('ROLLBACK');
+        throw new NotFoundException({ message: 'Выплата не найдена' });
+      }
+      const payout = lockRows[0];
+      employeeName = payout.employee_name || employeeName;
+      employeeId = payout.employee_id ?? null;
+      amount = parseFloat(payout.amount) || 0;
+      typeLabel = payout.type === 'advance' ? 'Аванс' : 'Зарплата';
+
+      if (payout.status !== 'pending') {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({ message: 'Выплата уже зафиксирована' });
+      }
+
+      const note = payout.comment ? ` — ${payout.comment}` : '';
+      const expense = await this.expenses.recordSalaryExpense(
+        tenantID,
+        {
+          amount,
+          description: `${typeLabel}: ${employeeName}${note}`,
+          date: new Date().toISOString(),
+          createdBy: payout.created_by ?? actorId,
+          periodMonth: (payout.period_month as string | null) ?? null,
+        },
+        client,
+      );
+      const { rows: upd } = await client.query(
+        `UPDATE salary_payouts
+            SET status = 'accepted', decided_at = now(), expense_id = $3
+          WHERE id = $1 AND tenant_id = $2 AND status = 'pending'
+          RETURNING *`,
+        [payoutId, tenantID, expense.id],
+      );
+      // Защитно: лок уже гарантирует единственного писателя, но проверка
+      // rowcount по WHERE status='pending' делает невозможность двойной записи
+      // расхода явной.
+      if (upd.length === 0) {
+        await client.query('ROLLBACK');
+        throw new BadRequestException({ message: 'Выплата уже зафиксирована' });
+      }
+      result = upd[0];
+
+      await this.audit.logTx(
+        client,
+        { userId: actorId, name: await this.actorNameTx(client, actorId) },
+        'salary_payout_settle',
+        {
+          targetType: 'salary_payout',
+          targetId: payoutId,
+          targetName: employeeName,
+          detail: {
+            tenantId: tenantID,
+            before: { status: 'pending', amount, periodMonth: payout.period_month ?? null },
+            expenseId: expense.id,
+          },
+        },
+      );
+
+      await client.query('COMMIT');
+    } catch (err) {
+      try {
+        await client.query('ROLLBACK');
+      } catch {
+        /* already rolled back */
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    result.user_name = employeeName;
+
+    // Расход двигает кассу — те же post-commit эффекты, что и у createPayout.
+    invalidateReportsForTenant(tenantID);
+    this.push.sendDataToTenant(tenantID, actorId, { type: 'cash-changed', tenantId: tenantID }).catch(() => {
+      /* best-effort */
+    });
+    if (employeeId) {
+      const formatted = amount.toLocaleString('ru-RU');
+      this.push.sendToUserInTenant(
+        employeeId,
+        tenantID,
+        'salary',
+        typeLabel === 'Аванс' ? 'Аванс выдан' : 'Зарплата выдана',
+        `Сумма: ${formatted} ₽`,
+        { type: 'payout-issued', kind: 'payout', payoutId, payoutType: result.type },
+      );
+    }
+
+    return this.mapPayout(result);
+  }
+
+  /**
    * List payouts. Owner (director/superadmin) sees the whole tenant (optionally
    * filtered by employee / status / month); an employee is scoped to their own
    * by the controller. `monthYear` filters by the ASSIGNED month (149):
    * COALESCE(period_month, месяц created_at МСК) — выплата «за июль»,
-   * выписанная в августе, попадает в июльский фильтр.
+   * выписанная в августе, попадает в июльский фильтр. `unviewed` (158) —
+   * только НЕ просмотренные получателем: этим запросом клиент сотрудника
+   * поднимает уведомление «выплата выдана».
    */
   async listPayouts(
     tenantID: string,
-    query: { employeeId?: string; status?: 'pending' | 'accepted' | 'rejected'; monthYear?: string },
+    query: {
+      employeeId?: string;
+      status?: 'pending' | 'accepted' | 'rejected' | 'cancelled';
+      monthYear?: string;
+      unviewed?: boolean | string;
+    },
   ) {
     const conds: string[] = ['p.tenant_id = $1'];
     const params: any[] = [tenantID];
@@ -1371,6 +1595,10 @@ export class SalaryService {
     if (query.status) {
       conds.push(`p.status = $${idx++}`);
       params.push(query.status);
+    }
+    // Query-строка приходит текстом ('true'/'1'), из сервиса — boolean.
+    if (query.unviewed === true || query.unviewed === 'true' || query.unviewed === '1') {
+      conds.push('p.viewed_at IS NULL');
     }
     if (query.monthYear) {
       conds.push(
@@ -1579,11 +1807,11 @@ export class SalaryService {
   }
 
   /**
-   * Правка PENDING-выплаты (сумма/комментарий). ПРИНЯТУЮ выплату править
-   * НЕЛЬЗЯ — только отменить и создать заново: у неё уже есть зеркальный
-   * расход и подтверждение сотрудника; «тихая» правка суммы сделала бы расход
-   * и подтверждение ложью. Отмена+новая выплата проще и честнее — оба шага
-   * оставляют аудит-след и новое подтверждение сотрудника.
+   * Правка НЕЗАФИКСИРОВАННОЙ (легаси-pending) выплаты — сумма / комментарий.
+   * ЗАФИКСИРОВАННУЮ править НЕЛЬЗЯ — только отменить и выдать заново: у неё
+   * уже есть зеркальный расход, и «тихая» правка суммы сделала бы расход
+   * ложью. Отмена+новая выплата проще и честнее — оба шага оставляют
+   * аудит-след и корректное сторно.
    */
   async updatePendingPayout(
     payoutId: string,
@@ -1631,7 +1859,7 @@ export class SalaryService {
       if (payout.status !== 'pending') {
         await client.query('ROLLBACK');
         throw new BadRequestException({
-          message: 'Изменить можно только выплату со статусом «Ожидает». Принятую — отмените и создайте заново.',
+          message: 'Зафиксированную выплату изменить нельзя — отмените её и выдайте заново.',
         });
       }
 
@@ -1690,7 +1918,8 @@ export class SalaryService {
 
     result.user_name = employeeName;
 
-    // Сотрудник видел старую сумму в пуше «подтвердите» — сообщаем новую.
+    // Сотрудник видел старую сумму в пуше — сообщаем новую (без «подтвердите»:
+    // подтверждения выплат больше нет, 158).
     if (employeeId && amountChanged) {
       const formatted = (parseFloat(result.amount) || 0).toLocaleString('ru-RU');
       this.push.sendToUserInTenant(
@@ -1698,8 +1927,8 @@ export class SalaryService {
         tenantID,
         'salary',
         'Сумма выплаты изменена',
-        `Новая сумма: ${formatted} ₽ — подтвердите получение`,
-        { kind: 'payout', payoutId, payoutType: result.type, action: 'decide' },
+        `Новая сумма: ${formatted} ₽`,
+        { type: 'payout-updated', kind: 'payout', payoutId, payoutType: result.type },
       );
     }
 
@@ -2050,6 +2279,9 @@ export class SalaryService {
       cancelledAt: r.cancelled_at ?? null,
       cancelledBy: r.cancelled_by ?? undefined,
       cancelReason: r.cancel_reason ?? null,
+      // Round 17 (158) — «просмотрено сотрудником». Заменило подтверждение:
+      // деньги от этой отметки не зависят, владелец просто видит, дошло ли.
+      viewedAt: r.viewed_at ?? null,
     };
   }
 

@@ -72,9 +72,11 @@ export class SalaryController {
     return this.salaryService.confirmPayment(id, user.tenantID, user.userID);
   }
 
-  // ── Payouts with confirmation (100_salary_payouts_and_fines) ─────────────
+  // ── Payouts (100_salary_payouts_and_fines + 158_salary_payout_viewed) ────
 
-  // Owner issues a ЗП / АВАНС; employee then accepts or rejects it.
+  // Владелец выдаёт ЗП / АВАНС — Round 17 (158): фиксируется СРАЗУ (расход в
+  // той же транзакции), подтверждения сотрудником больше нет; сотрудник
+  // получает уведомление, владелец видит «просмотрено / не просмотрено».
   @RequirePermission('salary_payouts_manage')
   @Post('payouts')
   createPayout(@CurrentUser() user: JwtPayload, @Body() dto: CreatePayoutDto) {
@@ -93,16 +95,17 @@ export class SalaryController {
 
   // ── Round 15 (153) — корректировки владельцем ────────────────────────────
 
-  // Отмена выплаты (pending И accepted). У принятой — сторно зеркального
-  // расхода (снапшот в аудит); строка остаётся зачёркнутой с причиной.
+  // Отмена выплаты (зафиксированной И легаси-pending). У зафиксированной —
+  // сторно зеркального расхода (снапшот в аудит); строка остаётся зачёркнутой
+  // с причиной.
   @RequirePermission('salary_payouts_manage')
   @Post('payouts/:id/cancel')
   cancelPayout(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: CancelPayoutDto) {
     return this.salaryService.cancelPayout(id, user.tenantID, user.userID, dto?.reason);
   }
 
-  // Правка PENDING-выплаты (сумма/комментарий). Принятую — отменить и создать
-  // заново (сервис вернёт 400 с этой подсказкой).
+  // Правка НЕЗАФИКСИРОВАННОЙ (легаси-pending) выплаты — сумма/комментарий.
+  // Зафиксированную — отменить и выдать заново (сервис вернёт 400 с подсказкой).
   @RequirePermission('salary_payouts_manage')
   @Patch('payouts/:id')
   updatePayout(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdatePayoutDto) {
@@ -119,12 +122,32 @@ export class SalaryController {
     return this.salaryService.reversePayment(id, user.tenantID, user.userID, reason);
   }
 
-  // Employee's decision on a pending payout. Role gate is intentionally open —
-  // the service authorizes the caller as the recipient (and ignores anyone
-  // else), mirroring confirmPayment above.
+  // ЛЕГАСИ-ручка решения по выплате (Round 17 / 158: подтверждения больше нет).
+  // Оставлена ЖИВОЙ ради приложений старых версий: у зафиксированной выплаты
+  // сервис трактует вызов как «просмотрено» и отвечает 200, у оставшихся с
+  // прошлой модели pending — прежнее accept/reject. Role gate намеренно
+  // открыт — авторизация получателя внутри сервиса, как у confirmPayment.
   @Post('payouts/:id/decide')
   decidePayout(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: DecidePayoutDto) {
     return this.salaryService.decidePayout(id, user.tenantID, user.userID, dto.decision);
+  }
+
+  // Round 17 (158) — «просмотрено»: получатель закрыл уведомление о выплате.
+  // Денег не двигает; авторизация получателя — внутри сервиса (WHERE
+  // employee_id), поэтому role gate открыт, как у decide/confirm.
+  @Post('payouts/:id/viewed')
+  markPayoutViewed(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.salaryService.markPayoutViewed(id, user.tenantID, user.userID);
+  }
+
+  // Round 17 (158) — фиксация ЛЕГАСИ pending-выплаты владельцем: создаёт
+  // зеркальный расход и переводит строку в «зафиксирована». Нужна только для
+  // строк, доставшихся от модели с подтверждением (новые выплаты фиксируются
+  // сразу). Тот же денежный гейт, что и у выдачи.
+  @RequirePermission('salary_payouts_manage')
+  @Post('payouts/:id/settle')
+  settlePayout(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.salaryService.settlePayout(id, user.tenantID, user.userID);
   }
 
   // List payouts + statuses. Owner (director/superadmin) sees the whole tenant;
@@ -134,7 +157,14 @@ export class SalaryController {
   @Get('payouts')
   listPayouts(
     @CurrentUser() user: JwtPayload,
-    @Query() query: { employeeId?: string; status?: 'pending' | 'accepted' | 'rejected'; monthYear?: string },
+    @Query()
+    query: {
+      employeeId?: string;
+      status?: 'pending' | 'accepted' | 'rejected' | 'cancelled';
+      monthYear?: string;
+      /** 158 — только НЕ просмотренные получателем ('true'/'1' в query). */
+      unviewed?: string;
+    },
   ) {
     // Охват «все» → 'salary_view_all' (owner-class тоже true); иначе self-scope.
     const privileged = canViewAllSalary(user);

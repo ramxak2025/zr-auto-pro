@@ -4,22 +4,22 @@
  *
  * Two flows coexist:
  *
- *   1. NEW payouts (100_salary_payouts_and_fines) — `createPayout` →
- *      `decidePayout`. The владелец issues a ЗП / АВАНС; it starts `pending`
- *      and the employee must ACCEPT or REJECT. On accept the backend records
- *      the expense (category «Зарплата»); on reject it's voided and the owner
- *      sees the «Отклонено» status. Detected via
- *      `salaryApi.listPayouts({ status: 'pending' })` (the server scopes an
- *      employee to their own rows).
+ *   1. ВЫПЛАТЫ (salary_payouts) — `createPayout`. Round 17 (158): решения
+ *      сотрудника БОЛЬШЕ НЕТ — выплата фиксируется в момент выдачи (расход
+ *      пишется там же), сотруднику показывается уведомление «выплата выдана»,
+ *      а закрытие («Понятно») помечает её ПРОСМОТРЕННОЙ для владельца
+ *      (`salaryApi.markPayoutViewed`). Детект —
+ *      `salaryApi.listPayouts({ status: 'accepted', unviewed: true })` (сервер
+ *      сам ограничивает сотрудника его собственными строками).
  *
  *   2. LEGACY salary_payments — `createPayment` → `confirmPayment`. A single
  *      «Подтвердить получение» acknowledgement. Detected by walking the
  *      current-month `salaryApi.getAll(...)` for an unconfirmed payment whose
  *      `userId` is the current user. Kept intact for already-issued payments.
  *
- * The NEW payout takes precedence: we check payouts first and only fall back to
- * legacy detection when there's no pending payout. After a decision/confirm we
- * re-check so a second pending item surfaces immediately.
+ * Выплата имеет приоритет: сначала проверяем её и только потом легаси. После
+ * закрытия/подтверждения перепроверяем — следующая непросмотренная всплывает
+ * сразу.
  *
  * Re-checks fire after login, on app foreground, and on a salary/payout push.
  * Owners (superadmin / director) never see the modal — they're the SENDERS.
@@ -68,11 +68,16 @@ function findPendingPayment(rows: MasterSalary[] | undefined, userId: string): S
   return null;
 }
 
-function findPendingPayout(rows: SalaryPayout[] | undefined, userId: string): SalaryPayout | null {
+/**
+ * 158 — первая НЕ ПРОСМОТРЕННАЯ зафиксированная выплата сотрудника. Статус и
+ * viewed_at сервер уже отфильтровал, но проверяем ещё раз: ответ может прийти
+ * из кэша старой версии клиента/прокси, а показывать чужую или отменённую
+ * выплату нельзя.
+ */
+function findUnviewedPayout(rows: SalaryPayout[] | undefined, userId: string): SalaryPayout | null {
   if (!rows || rows.length === 0) return null;
-  // Oldest first so the employee clears the queue in the order it arrived.
   for (const p of rows) {
-    if (p.status === 'pending' && p.userId === userId) return p;
+    if (p.status === 'accepted' && !p.viewedAt && p.userId === userId) return p;
   }
   return null;
 }
@@ -105,10 +110,8 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
   const [pendingPayout, setPendingPayout] = React.useState<SalaryPayout | null>(null);
   const [pendingPayment, setPendingPayment] = React.useState<SalaryPayment | null>(null);
   const [modalVisible, setModalVisible] = React.useState(false);
-  // Any decide/confirm mutation in flight. `decision` says which payout button
-  // is busy so only that one spins.
+  // Любая mutation в полёте (просмотр выплаты / подтверждение легаси-платежа).
   const [busy, setBusy] = React.useState(false);
-  const [decision, setDecision] = React.useState<'accept' | 'reject' | null>(null);
 
   // Owners / directors never see the modal — they're the senders, not the
   // recipients. «Сотрудник» = admin + master.
@@ -123,10 +126,10 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
     // Чистим только то, что ПОДТВЕРЖДЕНО успешным ответом сервера: упавшая
     // сеть не закрывает валидный модал вслепую.
     let payoutsKnownEmpty = false;
-    // 1) NEW payouts first — these need an accept/reject decision.
+    // 1) ВЫПЛАТЫ — зафиксированные, но ещё не просмотренные сотрудником.
     try {
-      const res = await salaryApi.listPayouts({ status: 'pending' });
-      const payout = findPendingPayout(res.data, user.id);
+      const res = await salaryApi.listPayouts({ status: 'accepted', unviewed: true });
+      const payout = findUnviewedPayout(res.data, user.id);
       if (payout) {
         setPendingPayout(payout);
         setPendingPayment(null);
@@ -225,76 +228,30 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
     }
   }, [pendingPayment, busy, queryClient, checkOnce]);
 
-  // NEW payout — accept.
-  const onAccept = React.useCallback(async () => {
+  // 158 — сотрудник закрыл уведомление о выплате: помечаем «просмотрено».
+  // Денег не двигает — только снимает у владельца отметку «не просмотрено».
+  const onAcknowledge = React.useCallback(async () => {
     if (!pendingPayout || busy) return;
     setBusy(true);
-    setDecision('accept');
     try {
-      await salaryApi.decidePayout(pendingPayout.id, 'accept');
+      await salaryApi.markPayoutViewed(pendingPayout.id);
       setModalVisible(false);
-      setTimeout(() => {
-        setPendingPayout(null);
-        setDecision(null);
-      }, 240);
+      setTimeout(() => setPendingPayout(null), 240);
       haptic('success');
-      // Accept records an expense (category «Зарплата») — cash leaves the till,
-      // so the dashboard/cashflow + the employee's month card must refresh.
-      queryClient.invalidateQueries({ queryKey: ['salary'] });
-      queryClient.invalidateQueries({ queryKey: ['salary-employee-month'] });
-      queryClient.invalidateQueries({ queryKey: ['dashboard-v2'] });
-      queryClient.invalidateQueries({ queryKey: ['cashflow'] });
-      setTimeout(() => checkOnce(), 500);
-    } catch (err) {
-      // Round 15 review-fix (п.2а): 4xx — выплата отменена владельцем /
-      // уже обработана: закрыть модал, показать причину, пересинхронизироваться.
-      if (isClientError(err)) {
-        setModalVisible(false);
-        setTimeout(() => {
-          setPendingPayout(null);
-          setDecision(null);
-        }, 240);
-        Alert.alert('Выплата недоступна', serverMessage(err));
-        setTimeout(() => checkOnce(), 500);
-      } else {
-        // Stay on the modal so the employee can retry.
-        setDecision(null);
-      }
-    } finally {
-      setBusy(false);
-    }
-  }, [pendingPayout, busy, queryClient, checkOnce]);
-
-  // NEW payout — reject.
-  const onReject = React.useCallback(async () => {
-    if (!pendingPayout || busy) return;
-    setBusy(true);
-    setDecision('reject');
-    try {
-      await salaryApi.decidePayout(pendingPayout.id, 'reject');
-      setModalVisible(false);
-      setTimeout(() => {
-        setPendingPayout(null);
-        setDecision(null);
-      }, 240);
-      haptic('warning');
-      // Reject voids the payout — no expense recorded; refresh the owner list +
-      // the employee's month card so the «Отклонено» status shows.
+      // Отметка видна владельцу в списке выплат и в карточке месяца.
       queryClient.invalidateQueries({ queryKey: ['salary'] });
       queryClient.invalidateQueries({ queryKey: ['salary-employee-month'] });
       setTimeout(() => checkOnce(), 500);
     } catch (err) {
-      // Round 15 review-fix (п.2а) — симметрично onAccept.
+      // 4xx — выплату отменили, пока модал был открыт: держать его «до
+      // победного» нельзя (сервер будет отвечать так же). Закрываем, честно
+      // показываем причину и пересинхронизируемся. Сеть/5xx — остаёмся,
+      // повтор может пройти.
       if (isClientError(err)) {
         setModalVisible(false);
-        setTimeout(() => {
-          setPendingPayout(null);
-          setDecision(null);
-        }, 240);
+        setTimeout(() => setPendingPayout(null), 240);
         Alert.alert('Выплата недоступна', serverMessage(err));
         setTimeout(() => checkOnce(), 500);
-      } else {
-        setDecision(null);
       }
     } finally {
       setBusy(false);
@@ -316,10 +273,8 @@ export function SalaryNotificationProvider({ children }: ProviderProps) {
         payment={pendingPayment}
         payout={pendingPayout}
         confirming={busy}
-        decision={decision}
         onConfirm={onConfirm}
-        onAccept={onAccept}
-        onReject={onReject}
+        onAcknowledge={onAcknowledge}
       />
     </SalaryNotificationContext.Provider>
   );

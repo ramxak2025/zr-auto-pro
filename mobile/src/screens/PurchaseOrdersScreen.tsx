@@ -103,8 +103,10 @@ const PurchaseOrderRow = React.memo(function PurchaseOrderRow({
             {item.itemCount ?? 0} {'поз.'}
           </Text>
           <Text style={[styles.rowDot, { color: textTertiary }]}>·</Text>
+          {/* У проведённой поставки ведущая дата — ДАТА ПОСТАВКИ (159), она
+              может быть выбрана задним числом; у остальных — дата создания. */}
           <Text style={[styles.rowMetaText, { color: textTertiary }]} numberOfLines={1}>
-            {formatPoDate(item.createdAt)}
+            {formatPoDate(item.status === 'received' && item.receivedAt ? item.receivedAt : item.createdAt)}
           </Text>
         </View>
       </View>

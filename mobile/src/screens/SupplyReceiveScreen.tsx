@@ -12,8 +12,14 @@
  *   • «Принять без оплаты» (paymentMode:'debt')  → сумма падает в долг поставщику;
  *   • «Оплатить сразу»     (paymentMode:'paid')  → автоматически создаётся платёж.
  *
+ * Дата поставки (миграция 159): вверху экрана — «Дата поставки» с обычным
+ * DateTimePickerModal (тот же пикер, что в кассе/расходах). По умолчанию
+ * сегодня; можно выбрать прошедшую — тогда ЭТОЙ датой сервер датирует всю
+ * приёмку: движения склада, накладную, долг/авто-платёж. Будущее пикер не
+ * отдаёт (сервер тоже вернёт 400).
+ *
  * Контракт (миграция 098, backend готов): purchaseOrdersApi.receive(orderId,
- * { items:[{ itemId, receivedQuantity, purchasePrice }], paymentMode }) — атомарно
+ * { items:[{ itemId, receivedQuantity, purchasePrice }], paymentMode, receivedAt }) — атомарно
  * создаёт поставку, привязанную к заказу (Delivery.purchaseOrderId), обновляет
  * себестоимость + остаток, и поднимает долг ИЛИ создаёт платёж. Возвращает
  * обновлённый заказ → кладём в кэш ['purchase-order', id]; инвалидируем
@@ -31,6 +37,7 @@ import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import { KeyboardAwareScroll } from '../components/KeyboardAware';
 import ConfirmDialog from '../components/ConfirmDialog';
+import DateTimePickerModal from '../components/DateTimePickerModal';
 import QtyInput from '../components/QtyInput';
 import { ListSkeleton } from '../components/Skeleton';
 import QueryErrorState from '../components/QueryErrorState';
@@ -42,7 +49,15 @@ import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { PurchaseOrder } from '../../../shared/types';
-import { formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purchaseOrderHelpers';
+import {
+  formatMoney,
+  formatPoDate,
+  formatSupplyDate,
+  isFutureDay,
+  isSameDay,
+  outstandingQty,
+  toSupplyDateStr,
+} from './purchaseOrders/purchaseOrderHelpers';
 import { roundQty } from '../utils/units';
 
 type PayMode = 'debt' | 'paid';
@@ -105,6 +120,10 @@ export default function SupplyReceiveScreen() {
   const [seeded, setSeeded] = useState(false);
   const [pendingMode, setPendingMode] = useState<PayMode | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Дата поставки (159) — по умолчанию сегодня; прошедшая разрешена.
+  const [supplyDate, setSupplyDate] = useState<Date>(() => new Date());
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const backdated = !isSameDay(supplyDate, new Date());
 
   useEffect(() => {
     if (seeded || items.length === 0) return;
@@ -186,7 +205,18 @@ export default function SupplyReceiveScreen() {
     mutationFn: (vars: {
       mode: PayMode;
       items: Array<{ itemId: string; receivedQuantity: number; purchasePrice: number }>;
-    }) => purchaseOrdersApi.receive(orderId, { items: vars.items, paymentMode: vars.mode }),
+      receivedAt?: string;
+    }) =>
+      purchaseOrdersApi.receive(orderId, {
+        items: vars.items,
+        paymentMode: vars.mode,
+        // 'YYYY-MM-DD' — сервер трактует его как календарный день по МСК.
+        // Шлём ТОЛЬКО осознанно выбранную дату: «сегодня» на устройстве в
+        // дальневосточном поясе может быть «завтра» по МСК, и сервер честно
+        // отклонил бы такую приёмку как будущую. Без поля сервер ставит свой
+        // текущий момент — ровно прежнее поведение.
+        ...(vars.receivedAt ? { receivedAt: vars.receivedAt } : {}),
+      }),
     onSuccess: (res, vars) => {
       haptic('success');
       const updated = res.data;
@@ -210,14 +240,15 @@ export default function SupplyReceiveScreen() {
       }
       queryClient.invalidateQueries({ queryKey: ['suppliers'] });
       const total = vars.items.reduce((s, l) => s + l.receivedQuantity * l.purchasePrice, 0);
+      const dateSuffix = backdated ? ` Дата поставки — ${formatSupplyDate(supplyDate)}.` : '';
       navigation.goBack();
       // Сообщение после возврата — глобальный Alert поверх предыдущего экрана.
       setTimeout(() => {
         Alert.alert(
           'Поставка принята',
-          vars.mode === 'paid'
+          (vars.mode === 'paid'
             ? `Накладная на ${formatMoney(total)} оплачена сразу — платёж добавлен в раздел «Платежи».`
-            : `Накладная на ${formatMoney(total)} добавлена в долг поставщику.`,
+            : `Накладная на ${formatMoney(total)} добавлена в долг поставщику.`) + dateSuffix,
         );
       }, 350);
     },
@@ -243,7 +274,23 @@ export default function SupplyReceiveScreen() {
 
   const confirmReceive = () => {
     if (!pendingMode) return;
-    receiveMutation.mutate({ mode: pendingMode, items: payloadItems });
+    receiveMutation.mutate({
+      mode: pendingMode,
+      items: payloadItems,
+      receivedAt: backdated ? toSupplyDateStr(supplyDate) : undefined,
+    });
+  };
+
+  // Пикер даты: будущее не принимаем (сервер вернёт 400) — честно говорим сразу.
+  const applyPickedDate = (d: Date) => {
+    if (isFutureDay(d)) {
+      haptic('warning');
+      Alert.alert('Дата поставки', 'Дата поставки не может быть в будущем.');
+      return;
+    }
+    haptic('select');
+    setSupplyDate(d);
+    setDatePickerOpen(false);
   };
 
   // ── Loading / error (нет seed-данных) ─────────────────────────────────────
@@ -295,6 +342,40 @@ export default function SupplyReceiveScreen() {
             {formatPoDate(po.orderedAt || po.createdAt)}.
           </Text>
         </View>
+
+        {/* ── Дата поставки (159): по умолчанию сегодня, можно выбрать
+            прошедшую — сервер датирует ею склад, накладную и долг/оплату. ── */}
+        <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>ДАТА ПОСТАВКИ</Text>
+        <TouchableOpacity
+          style={[styles.dateCard, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}
+          onPress={() => {
+            haptic('tap');
+            setDatePickerOpen(true);
+          }}
+          disabled={!canWrite}
+          activeOpacity={0.75}
+        >
+          <View style={styles.dateCardSide}>
+            <Ionicons name="calendar-outline" size={18} color={colors.primary[600]} />
+            <Text style={[styles.dateCardValue, { color: palette.text.primary }]}>{formatSupplyDate(supplyDate)}</Text>
+          </View>
+          <View style={styles.dateCardSide}>
+            {backdated ? (
+              <View
+                style={[styles.dateBadge, { backgroundColor: dark ? getBadgeColors('dark').blue.bg : colors.blue[50] }]}
+              >
+                <Text
+                  style={[styles.dateBadgeText, { color: dark ? getBadgeColors('dark').blue.text : colors.blue[600] }]}
+                >
+                  Задним числом
+                </Text>
+              </View>
+            ) : (
+              <Text style={[styles.dateHint, { color: palette.text.tertiary }]}>Сегодня</Text>
+            )}
+            <Ionicons name="chevron-forward" size={16} color={palette.text.tertiary} />
+          </View>
+        </TouchableOpacity>
 
         {/* ── Позиции ── */}
         <Text style={[iosSectionLabel, styles.sectionLabel, { color: palette.text.secondary }]}>
@@ -506,12 +587,25 @@ export default function SupplyReceiveScreen() {
         onConfirm={confirmReceive}
         title={pendingMode === 'paid' ? 'Оплатить и принять?' : 'Принять в долг?'}
         message={
-          pendingMode === 'paid'
+          (pendingMode === 'paid'
             ? `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад, а платёж на эту сумму создастся автоматически.`
-            : `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад. Сумма добавится в долг поставщику.`
+            : `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад. Сумма добавится в долг поставщику.`) +
+          (backdated
+            ? `\n\nДата поставки — ${formatSupplyDate(supplyDate)}: этой датой будут записаны склад, накладная и деньги.`
+            : '')
         }
         confirmText={pendingMode === 'paid' ? 'Оплатить сразу' : 'Принять в долг'}
         variant="primary"
+      />
+
+      {/* Единый пикер даты приложения (iOS — нативный UIDatePicker, Android —
+          JS-календарь). Будущее отсекается в applyPickedDate. */}
+      <DateTimePickerModal
+        visible={datePickerOpen}
+        value={supplyDate}
+        mode="date"
+        onConfirm={applyPickedDate}
+        onCancel={() => setDatePickerOpen(false)}
       />
     </View>
   );
@@ -533,6 +627,22 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
   },
   hintText: { flex: 1, fontSize: 13, lineHeight: 18 },
+
+  // Дата поставки
+  dateCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing[3.5],
+    paddingVertical: spacing[3],
+    borderRadius: borderRadius.xl,
+    borderWidth: StyleSheet.hairlineWidth,
+  },
+  dateCardSide: { flexDirection: 'row', alignItems: 'center', gap: spacing[2] },
+  dateCardValue: { fontSize: 15, fontWeight: '700', letterSpacing: -0.2, fontVariant: ['tabular-nums'] },
+  dateHint: { fontSize: 13, fontWeight: '500' },
+  dateBadge: { paddingHorizontal: spacing[2], paddingVertical: 2, borderRadius: borderRadius.sm },
+  dateBadgeText: { fontSize: 11, fontWeight: '700' },
 
   // Items
   itemsCard: { borderRadius: borderRadius.xl, borderWidth: StyleSheet.hairlineWidth, overflow: 'hidden' },

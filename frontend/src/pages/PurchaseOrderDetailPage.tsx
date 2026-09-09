@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ArrowLeft, Pencil, PackageCheck, XCircle, Send, Clock, Wallet } from 'lucide-react';
+import { ArrowLeft, Pencil, PackageCheck, XCircle, Send, Clock, Wallet, CalendarClock } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 import { purchaseOrdersApi } from '../api/services';
@@ -10,12 +10,22 @@ import InlineLoader from '../components/InlineLoader';
 import QueryState from '../components/QueryState';
 import EmptyState from '../components/EmptyState';
 import ConfirmDialog from '../components/ConfirmDialog';
+import Modal from '../components/Modal';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
 
 import type { PurchaseOrder, PurchaseOrderItem } from '../types';
-import { formatMoney, formatDateTime } from '../../../shared/utils/formatters';
+import { formatMoney, formatDateTime, formatDateShort } from '../../../shared/utils/formatters';
 
 const outstanding = (it: PurchaseOrderItem) => Math.max(0, it.quantity - it.receivedQuantity);
+
+// «YYYY-MM-DD» локального дня — формат, который понимает и <input type="date">,
+// и сервер (он трактует его как календарный день по МСК). toISOString() здесь
+// нельзя: на МСК он уводит дату на день назад.
+const toDateInput = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+
+/** Дата поставки не может быть в будущем — потолок для `max` у input и проверки. */
+const todayInput = (): string => toDateInput(new Date());
 
 // Закупочная цена из free-text поля («12,5» → 12.5); мусор/отрицательное → 0.
 const parsePrice = (t: string): number => {
@@ -43,6 +53,11 @@ export default function PurchaseOrderDetailPage() {
   // (оплатить сразу). null — диалог закрыт.
   const [pendingMode, setPendingMode] = useState<PayMode | null>(null);
   const [cancelOpen, setCancelOpen] = useState(false);
+  // Дата поставки (159): при приёмке — выбирается (в т.ч. прошедшая), у
+  // проведённой поставки — меняется задним числом через модалку.
+  const [receiveDate, setReceiveDate] = useState<string>(() => todayInput());
+  const [dateModalOpen, setDateModalOpen] = useState(false);
+  const [newDate, setNewDate] = useState<string>('');
 
   const {
     data: po,
@@ -98,7 +113,12 @@ export default function PurchaseOrderDetailPage() {
   // ('paid'). Инвалидируем леджер поставщика, чтобы Поставки/Платежи/Долг
   // освежились сразу.
   const receiveMutation = useMutation({
-    mutationFn: (vars: { items: ReceiveLine[]; paymentMode: PayMode }) => purchaseOrdersApi.receive(id!, vars),
+    // `receivedAt` шлём ТОЛЬКО когда владелец реально выбрал другую дату:
+    // «сегодня» в браузере дальневосточного пояса может быть «завтра» по МСК,
+    // и сервер честно отклонил бы такую приёмку как будущую. Без поля сервер
+    // ставит свой текущий момент — прежнее поведение.
+    mutationFn: (vars: { items: ReceiveLine[]; paymentMode: PayMode; receivedAt?: string }) =>
+      purchaseOrdersApi.receive(id!, vars),
     onSuccess: (res, vars) => {
       invalidateAfterMutation(res.data);
       invalidateStock();
@@ -113,16 +133,39 @@ export default function PurchaseOrderDetailPage() {
       setDeltas({});
       setPrices({});
       const total = vars.items.reduce((s, l) => s + l.receivedQuantity * l.purchasePrice, 0);
+      const dateSuffix = vars.receivedAt ? ` (дата поставки ${vars.receivedAt.split('-').reverse().join('.')})` : '';
+      setReceiveDate(todayInput());
       toast.success(
-        vars.paymentMode === 'paid'
+        (vars.paymentMode === 'paid'
           ? `Поставка на ${formatMoney(total)} принята и оплачена`
-          : `Поставка на ${formatMoney(total)} принята в долг поставщику`,
+          : `Поставка на ${formatMoney(total)} принята в долг поставщику`) + dateSuffix,
       );
     },
-    onError: () => toast.error('Не удалось провести приёмку'),
+    onError: (err: any) => toast.error(err?.response?.data?.message || 'Не удалось провести приёмку'),
   });
 
-  const isBusy = orderMutation.isPending || cancelMutation.isPending || receiveMutation.isPending;
+  // Смена даты УЖЕ ПРОВЕДЁННОЙ поставки (159). Сервер одной транзакцией
+  // переносит на новую дату накладную, оплату, движения склада и received_at.
+  const changeDateMutation = useMutation({
+    mutationFn: (date: string) => purchaseOrdersApi.changeDate(id!, date),
+    onSuccess: (res) => {
+      invalidateAfterMutation(res.data);
+      invalidateStock();
+      const supplierId = res.data.supplierId;
+      if (supplierId) {
+        queryClient.invalidateQueries({ queryKey: ['supplier', supplierId] });
+        queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', supplierId] });
+        queryClient.invalidateQueries({ queryKey: ['supplier-payments', supplierId] });
+      }
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      setDateModalOpen(false);
+      toast.success('Дата поставки изменена');
+    },
+    onError: (err: any) => toast.error(err?.response?.data?.message || 'Не удалось изменить дату поставки'),
+  });
+
+  const isBusy =
+    orderMutation.isPending || cancelMutation.isPending || receiveMutation.isPending || changeDateMutation.isPending;
 
   const items = useMemo(() => po?.items || [], [po]);
 
@@ -136,6 +179,7 @@ export default function PurchaseOrderDetailPage() {
     }
     setDeltas(initDeltas);
     setPrices(initPrices);
+    setReceiveDate(todayInput());
     setReceiveMode(true);
   };
 
@@ -175,7 +219,33 @@ export default function PurchaseOrderDetailPage() {
       toast.error('Укажите количество для приёмки');
       return;
     }
-    receiveMutation.mutate({ items: payloadItems, paymentMode: pendingMode });
+    if (receiveDate > todayInput()) {
+      toast.error('Дата поставки не может быть в будущем');
+      return;
+    }
+    receiveMutation.mutate({
+      items: payloadItems,
+      paymentMode: pendingMode,
+      receivedAt: receiveDate !== todayInput() ? receiveDate : undefined,
+    });
+  };
+
+  const openDateModal = () => {
+    // Предзаполняем текущей датой поставки — владелец правит, а не вводит с нуля.
+    setNewDate(po?.receivedAt ? toDateInput(new Date(po.receivedAt)) : todayInput());
+    setDateModalOpen(true);
+  };
+
+  const submitNewDate = () => {
+    if (!newDate) {
+      toast.error('Выберите дату поставки');
+      return;
+    }
+    if (newDate > todayInput()) {
+      toast.error('Дата поставки не может быть в будущем');
+      return;
+    }
+    changeDateMutation.mutate(newDate);
   };
 
   if (isLoading) return <InlineLoader minHeight="min-h-[60vh]" />;
@@ -199,6 +269,7 @@ export default function PurchaseOrderDetailPage() {
 
   const isDraft = po.status === 'draft';
   const isOrdered = po.status === 'ordered';
+  const isReceived = po.status === 'received';
 
   return (
     <div className="space-y-6 max-w-3xl mx-auto">
@@ -239,6 +310,15 @@ export default function PurchaseOrderDetailPage() {
             <span className="text-gray-900">{formatDateTime(po.receivedAt)}</span>
           </div>
         )}
+        {po.dateCorrectedAt && (
+          <div className="flex justify-between">
+            <span className="text-gray-500">Дата изменена</span>
+            <span className="text-gray-900">
+              {formatDateShort(po.dateCorrectedAt)}
+              {po.dateCorrectedByName ? ` · ${po.dateCorrectedByName}` : ''}
+            </span>
+          </div>
+        )}
         {po.note && (
           <div className="flex justify-between gap-4">
             <span className="text-gray-500 flex-shrink-0">Комментарий</span>
@@ -246,6 +326,29 @@ export default function PurchaseOrderDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Дата поставки (159) — в режиме приёмки. По умолчанию сегодня; можно
+          выбрать прошедшую: ею сервер датирует склад, накладную и деньги. */}
+      {receiveMode && (
+        <div className="card card-body flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <label className="label mb-0" htmlFor="po-receive-date">
+              Дата поставки
+            </label>
+            <p className="text-xs text-gray-500">
+              Можно указать прошедшую — этой датой запишутся приход на склад, накладная и деньги.
+            </p>
+          </div>
+          <input
+            id="po-receive-date"
+            type="date"
+            max={todayInput()}
+            className="input w-44"
+            value={receiveDate}
+            onChange={(e) => setReceiveDate(e.target.value)}
+          />
+        </div>
+      )}
 
       {/* Items */}
       <div className="card overflow-hidden">
@@ -391,6 +494,14 @@ export default function PurchaseOrderDetailPage() {
                   </button>
                 </>
               )}
+              {/* Проведённая поставка: дату можно поправить задним числом (159)
+                  — сервер перенесёт склад, накладную и деньги на неё же. */}
+              {isReceived && (
+                <button type="button" onClick={openDateModal} disabled={isBusy} className="btn-secondary">
+                  <CalendarClock className="w-4 h-4" />
+                  Изменить дату
+                </button>
+              )}
             </>
           )}
         </div>
@@ -412,13 +523,47 @@ export default function PurchaseOrderDetailPage() {
         onConfirm={confirmReceive}
         title={pendingMode === 'paid' ? 'Оплатить и принять?' : 'Принять в долг?'}
         message={
-          pendingMode === 'paid'
+          (pendingMode === 'paid'
             ? `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад, а платёж на эту сумму создастся автоматически.`
-            : `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад. Сумма добавится в долг поставщику — погасите позже через «Новая оплата».`
+            : `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад. Сумма добавится в долг поставщику — погасите позже через «Новая оплата».`) +
+          (receiveDate !== todayInput()
+            ? ` Дата поставки — ${receiveDate.split('-').reverse().join('.')}: ею будут записаны склад, накладная и деньги.`
+            : '')
         }
         confirmText={pendingMode === 'paid' ? 'Оплатить сразу' : 'Принять в долг'}
         variant="primary"
       />
+
+      {/* Смена даты проведённой поставки (159) */}
+      <Modal isOpen={dateModalOpen} onClose={() => setDateModalOpen(false)} title="Дата поставки" size="sm">
+        <div className="space-y-4">
+          <div>
+            <label className="label" htmlFor="po-new-date">
+              Новая дата
+            </label>
+            <input
+              id="po-new-date"
+              type="date"
+              max={todayInput()}
+              className="input"
+              value={newDate}
+              onChange={(e) => setNewDate(e.target.value)}
+            />
+          </div>
+          <p className="text-sm text-gray-500">
+            На эту дату переедут приход товара на склад, накладная поставщика и оплата по ней. Суммы и остатки не
+            меняются.
+          </p>
+          <div className="flex justify-end gap-3">
+            <button type="button" className="btn-secondary" onClick={() => setDateModalOpen(false)}>
+              Отмена
+            </button>
+            <button type="button" className="btn-primary" onClick={submitNewDate} disabled={isBusy}>
+              {changeDateMutation.isPending ? 'Сохранение...' : 'Сохранить'}
+            </button>
+          </div>
+        </div>
+      </Modal>
     </div>
   );
 }

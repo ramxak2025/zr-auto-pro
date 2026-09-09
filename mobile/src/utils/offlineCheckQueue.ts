@@ -50,6 +50,8 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import { extractApiErrorMessage } from './apiError';
+
 // ── Типы ────────────────────────────────────────────────────────────────────
 
 export type QueuedCheckStatus = 'pending' | 'failed';
@@ -204,21 +206,13 @@ export function isPermanentServerRejection(error: unknown): boolean {
   return status >= 400 && status < 500;
 }
 
-/** Русское сообщение сервера из axios-ошибки (для bucket'а 'failed'). */
+/**
+ * Русское сообщение сервера из axios-ошибки (для bucket'а 'failed'). Разбор
+ * живёт в `utils/apiError.ts` — тот же порядок полей нужен всем экранам,
+ * здесь отличается только fallback про чек.
+ */
 export function extractServerMessage(error: unknown): string {
-  const e = error as {
-    response?: { data?: { message?: string | string[]; error?: string } | string };
-    message?: string;
-  } | null;
-  const data = e?.response?.data;
-  if (typeof data === 'string' && data.trim()) return data;
-  const message = (data as { message?: string | string[] } | undefined)?.message;
-  if (Array.isArray(message) && message.length > 0) return message.join('\n');
-  if (typeof message === 'string' && message) return message;
-  const errorText = (data as { error?: string } | undefined)?.error;
-  if (typeof errorText === 'string' && errorText) return errorText;
-  if (typeof e?.message === 'string' && e.message) return e.message;
-  return 'Сервер отклонил чек';
+  return extractApiErrorMessage(error, 'Сервер отклонил чек');
 }
 
 // ── Сериализация ────────────────────────────────────────────────────────────

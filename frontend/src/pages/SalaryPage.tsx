@@ -165,18 +165,32 @@ function PaymentHistorySection({
 
 // ─── Round 15 (153) — выплаты-с-подтверждением выбранного месяца ─────────────
 
+/**
+ * История выплат сотрудника за месяц.
+ *
+ * Round 17 (158) — подтверждение мастером убрано: выплата фиксируется в момент
+ * выдачи (status='accepted' + зеркальный расход), а вместо «принял/отклонил»
+ * владелец видит «просмотрено / не просмотрено» (viewedAt). Строки со
+ * status='pending' — ЛЕГАСИ старой модели БЕЗ расхода: их владелец либо
+ * фиксирует (settlePayout — создаст расход), либо отменяет.
+ */
 function PayoutsHistorySection({
   userId,
   monthYear,
   canManage,
   onCancel,
   onEdit,
+  onSettle,
+  settlingId,
 }: {
   userId: string;
   monthYear: string;
   canManage: boolean;
   onCancel: (p: SalaryPayout) => void;
   onEdit: (p: SalaryPayout) => void;
+  /** 158 — зафиксировать легаси-`pending` выплату (создаст расход). */
+  onSettle: (p: SalaryPayout) => void;
+  settlingId?: string;
 }) {
   const { data: payouts, isLoading } = useQuery({
     queryKey: ['salary-payouts', userId, monthYear],
@@ -195,17 +209,17 @@ function PayoutsHistorySection({
   }
   const list = payouts || [];
   if (list.length === 0) {
-    return <p className="py-3 text-xs text-gray-500 text-center">Нет выплат с подтверждением</p>;
+    return <p className="py-3 text-xs text-gray-500 text-center">Выплат нет</p>;
   }
 
   const statusMeta = (s: SalaryPayout['status']) =>
     s === 'accepted'
-      ? { label: 'Принято', cls: 'bg-green-50 text-green-600' }
+      ? { label: 'Выдано', cls: 'bg-green-50 text-green-600' }
       : s === 'rejected'
         ? { label: 'Отклонено', cls: 'bg-red-50 text-red-600' }
         : s === 'cancelled'
           ? { label: 'Отменена', cls: 'bg-red-50 text-red-600' }
-          : { label: 'Ожидает', cls: 'bg-amber-50 text-amber-600' };
+          : { label: 'Не зафиксирована', cls: 'bg-amber-50 text-amber-600' };
 
   return (
     <div className="divide-y divide-gray-100">
@@ -230,7 +244,20 @@ function PayoutsHistorySection({
                   {p.type === 'advance' ? 'Аванс' : 'Зарплата'}
                 </span>
                 <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${meta.cls}`}>{meta.label}</span>
+                {/* 158 — «просмотрено» вместо подтверждения (только у выданных). */}
+                {p.status === 'accepted' && (
+                  <span
+                    className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${
+                      p.viewedAt ? 'bg-gray-100 text-gray-500' : 'bg-amber-50 text-amber-600'
+                    }`}
+                  >
+                    {p.viewedAt ? 'Просмотрено' : 'Не просмотрено'}
+                  </span>
+                )}
               </div>
+              {p.status === 'pending' && (
+                <p className="text-[10px] text-amber-600 mt-0.5">Расход не записан — зафиксируйте или отмените</p>
+              )}
               {p.comment && <p className="text-[10px] text-gray-400 truncate mt-0.5">{p.comment}</p>}
               {isCancelled && p.cancelReason && (
                 <p className="text-[10px] text-red-500 truncate mt-0.5">Причина отмены: {p.cancelReason}</p>
@@ -243,14 +270,25 @@ function PayoutsHistorySection({
             {showActions && (
               <div className="flex items-center gap-1 ml-2 flex-shrink-0">
                 {p.status === 'pending' && (
-                  <button
-                    type="button"
-                    onClick={() => onEdit(p)}
-                    className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-                    title="Изменить сумму"
-                  >
-                    <Pencil className="w-3.5 h-3.5" />
-                  </button>
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => onSettle(p)}
+                      disabled={settlingId === p.id}
+                      className="px-2 py-1 rounded-lg text-[10px] font-semibold text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-50 transition-colors"
+                      title="Записать расход и зафиксировать выплату"
+                    >
+                      {settlingId === p.id ? '…' : 'Зафиксировать'}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onEdit(p)}
+                      className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+                      title="Изменить сумму"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                  </>
                 )}
                 <button
                   type="button"
@@ -658,6 +696,17 @@ function AdminSalaryView() {
     onError: correctionError('Не удалось отменить выплату'),
   });
 
+  // Round 17 (158) — фиксация ЛЕГАСИ-`pending` выплаты: сервер пишет зеркальный
+  // расход и переводит строку в «Выдано». Деньги двигаются → invalidateMoney.
+  const settlePayoutMutation = useMutation({
+    mutationFn: (id: string) => salaryApi.settlePayout(id),
+    onSuccess: () => {
+      toast.success('Выплата зафиксирована, расход записан');
+      invalidateMoney();
+    },
+    onError: correctionError('Не удалось зафиксировать выплату'),
+  });
+
   const updatePayoutMutation = useMutation({
     mutationFn: (vars: { id: string; amount: number }) => salaryApi.updatePayout(vars.id, { amount: vars.amount }),
     onSuccess: () => {
@@ -986,6 +1035,8 @@ function AdminSalaryView() {
                           canManage={canPayout}
                           onCancel={(p) => openCorrection({ kind: 'cancel-payout', payout: p })}
                           onEdit={(p) => openCorrection({ kind: 'edit-payout', payout: p })}
+                          onSettle={(p) => settlePayoutMutation.mutate(p.id)}
+                          settlingId={settlePayoutMutation.isPending ? settlePayoutMutation.variables : undefined}
                         />
                       </div>
                       <div>
@@ -1114,6 +1165,8 @@ function AdminSalaryView() {
                                 canManage={canPayout}
                                 onCancel={(p) => openCorrection({ kind: 'cancel-payout', payout: p })}
                                 onEdit={(p) => openCorrection({ kind: 'edit-payout', payout: p })}
+                                onSettle={(p) => settlePayoutMutation.mutate(p.id)}
+                                settlingId={settlePayoutMutation.isPending ? settlePayoutMutation.variables : undefined}
                               />
                             </div>
                             <div>
@@ -1362,7 +1415,7 @@ function AdminSalaryView() {
               {correction.payout.type === 'advance' ? 'Аванс' : 'Зарплата'} {formatMoney(correction.payout.amount)}.{' '}
               {correction.payout.status === 'accepted'
                 ? 'Связанный расход будет сторнирован: сумма вернётся в «Остаток», касса и лента расходов обновятся. Прибыль не изменится.'
-                : 'Сотрудник больше не увидит её в подтверждении.'}
+                : 'Расход по ней не записан — отмена просто закроет строку, деньги никуда не двинутся.'}
             </p>
           )}
           {correction?.kind === 'reverse-payment' && (

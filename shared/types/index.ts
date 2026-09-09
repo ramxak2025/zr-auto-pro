@@ -94,6 +94,15 @@ export interface Tenant {
    */
   pointsSharedClients?: boolean;
   /**
+   * 157 — часовой пояс автосервиса, IANA-идентификатор ('Europe/Moscow',
+   * 'Asia/Yekaterinburg', …). Владелец выбирает его в «Настройках компании»;
+   * от пояса зависят границы «сегодня», смены и отчёты. Мутируется через
+   * PATCH /my-company (company_manage), значение проверяется сервером по
+   * белому списку российских поясов. Absent на легаси-payload'ах → считать
+   * 'Europe/Moscow' (см. DEFAULT_TIMEZONE в shared/utils/formatters).
+   */
+  timezone?: string;
+  /**
    * 102 — explicit suspension marker (superadmin POST /tenants/:id/suspend).
    * Non-null ⇒ the tenant is suspended (and is_active is forced false).
    * Absent/null on legacy payloads.
@@ -2537,8 +2546,16 @@ export interface PurchaseOrder {
   createdByName?: string | null;
   /** Set when the order leaves `draft` (or backfilled on first receive). */
   orderedAt?: string | null;
-  /** Set only when the order is fully received. */
+  /**
+   * Set only when the order is fully received. Это ДАТА ПОСТАВКИ: при приёмке
+   * её можно выбрать (в т.ч. прошедшую), а у проведённой поставки — изменить
+   * задним числом (миграция 159).
+   */
   receivedAt?: string | null;
+  /** Когда дату проведённой поставки меняли задним числом (159). */
+  dateCorrectedAt?: string | null;
+  /** Кто менял дату проведённой поставки (159) — только на detail-ответе. */
+  dateCorrectedByName?: string | null;
   createdAt: string;
   /** Present on detail / mutation responses; omitted on list. */
   items?: PurchaseOrderItem[];
@@ -3967,13 +3984,17 @@ export interface SalaryPenalty {
 }
 
 // ───────────────────────────────────────────────────────────────────────
-//  Salary payouts-with-confirmation + fines (100_salary_payouts_and_fines)
+//  Salary payouts + fines (100_salary_payouts_and_fines, 158_salary_payout_viewed)
 //
-//  PAYOUT: владелец (director + superadmin) issues a ЗП / АВАНС to an employee
-//  → it starts `pending` and the employee accepts or rejects it (push-driven).
-//  On accept the amount is recorded into expenses (category «Зарплата», dated
-//  the accept day) and `expenseId` links it; on reject the payout is voided and
-//  nothing is recorded. Separate from the legacy `SalaryPayment` flow.
+//  PAYOUT: владелец (director + superadmin) выдаёт ЗП / АВАНС сотруднику.
+//  Round 17 (158) — ПОДТВЕРЖДЕНИЕ МАСТЕРОМ УБРАНО: выплата фиксируется сразу
+//  (status='accepted'), расход (категория «Зарплата») пишется в той же
+//  транзакции и связывается через `expenseId`; сотрудник получает уведомление,
+//  закрытие которого проставляет `viewedAt` («просмотрено»). Отмена владельцем
+//  (cancelPayout) сторнирует расход.
+//  ЛЕГАСИ status='pending' — строки старой модели БЕЗ расхода: владелец
+//  фиксирует их (settlePayout) или отменяет; новые pending не создаются.
+//  Separate from the legacy `SalaryPayment` flow.
 //
 //  FINE (штраф): a mandatory-comment deduction, backed by salary_penalties
 //  (056). `SalaryFine` is the owner-facing shape of a penalty with the reason
@@ -3997,9 +4018,10 @@ export interface SalaryPayout {
   createdBy?: string;
   creatorName?: string;
   createdAt: string;
-  /** When the employee accepted / rejected. Null while `pending`. */
+  /** Когда выплата зафиксирована (158: момент выдачи; легаси — момент решения
+   *  сотрудника). Null только у нефиксированной легаси-`pending`. */
   decidedAt?: string | null;
-  /** Expense row written on accept (category «Зарплата»). Null until accepted. */
+  /** Зеркальный расход (категория «Зарплата»). Null у легаси-`pending`. */
   expenseId?: string | null;
   /**
    * 149 — «за какой месяц» выплата ('YYYY-MM'). Помесячная карточка и фильтр
@@ -4015,6 +4037,12 @@ export interface SalaryPayout {
   cancelledAt?: string | null;
   cancelledBy?: string;
   cancelReason?: string | null;
+  /**
+   * Round 17 (158) — момент, когда ПОЛУЧАТЕЛЬ увидел выплату (закрыл
+   * уведомление). Заменило подтверждение мастером: на деньги не влияет,
+   * владелец просто видит «просмотрено / не просмотрено». null = ещё не видел.
+   */
+  viewedAt?: string | null;
 }
 
 /** A штраф with a MANDATORY reason. Backed by salary_penalties (056). */

@@ -14,20 +14,22 @@ export class CreateProductDto {
   @IsOptional()
   photo?: string | null;
 
-  @IsNumber()
+  // Сообщения валидации — по-русски (см. UpdateProductDto): клиент показывает
+  // текст сервера пользователю дословно.
+  @IsNumber({}, { message: 'Себестоимость должна быть числом' })
   @IsOptional()
   costPrice?: number;
 
-  @IsNumber()
+  @IsNumber({}, { message: 'Цена продажи должна быть числом' })
   @IsOptional()
   sellPrice?: number;
 
   // Дробные остатки (120): 12.5 м / 0.75 кг; не глубже 3 знаков — NUMERIC(12,3).
-  @IsNumber({ maxDecimalPlaces: 3 })
+  @IsNumber({ maxDecimalPlaces: 3 }, { message: 'Остаток должен быть числом (не более 3 знаков после запятой)' })
   @IsOptional()
   stock?: number;
 
-  @IsNumber({ maxDecimalPlaces: 3 })
+  @IsNumber({ maxDecimalPlaces: 3 }, { message: 'Мин. остаток должен быть числом (не более 3 знаков после запятой)' })
   @IsOptional()
   minStock?: number;
 

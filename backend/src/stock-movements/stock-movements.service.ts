@@ -235,6 +235,10 @@ export class StockMovementsService {
    * resulting movement row (stock_movements.supplier_id) so the journal can
    * attribute the receipt to its supplier.
    *
+   * Поставка задним числом (159): `occurredAt` датирует движение выбранной
+   * датой поставки, `purchaseOrderId` связывает его с заказом — оба поля
+   * дописываются на уже созданной строке, складская математика не меняется.
+   *
    * Caller MUST already have an open transaction on `client`. This method never
    * issues BEGIN / COMMIT / ROLLBACK itself.
    */
@@ -249,6 +253,20 @@ export class StockMovementsService {
       warehouseId?: string;
       supplierId?: string;
       reason?: string;
+      /**
+       * Дата ФАКТА прихода (159 — поставка задним числом). ISO-строка; когда
+       * не передана, движение датируется now() как раньше. Меняет ТОЛЬКО метку
+       * времени строки: количество кредитуется на текущий остаток, поэтому
+       * stock_before/stock_after остаются «как сейчас» (историю остатков задним
+       * числом никто не пересчитывает — тот же контракт, что у корректировок
+       * поставки в 154).
+       */
+      occurredAt?: string | null;
+      /**
+       * Заказ поставщику, по которому идёт приёмка (159). Связь нужна, чтобы
+       * смена даты проведённой поставки перевезла движения склада на новую дату.
+       */
+      purchaseOrderId?: string | null;
     },
   ): Promise<{ id: string; stockAfter: number; warehouseId: string }> {
     if (!params?.productId) {
@@ -288,6 +306,21 @@ export class StockMovementsService {
         result.id,
         tenantID,
       ]);
+    }
+
+    // Приёмка задним числом (159): дата движения = дата поставки, а
+    // purchase_order_id связывает приход с заказом — по этой связи смена даты
+    // проведённой поставки переносит движения склада. Тем же приёмом, что и
+    // supplier_id выше: складскую математику не форкаем, дописываем поля на
+    // уже созданной строке.
+    if (params.occurredAt || params.purchaseOrderId) {
+      await client.query(
+        `UPDATE stock_movements
+            SET created_at = COALESCE($1::timestamptz, created_at),
+                purchase_order_id = COALESCE($2::uuid, purchase_order_id)
+          WHERE id = $3 AND tenant_id = $4`,
+        [params.occurredAt ?? null, params.purchaseOrderId ?? null, result.id, tenantID],
+      );
     }
 
     return { id: result.id, stockAfter: result.stockAfter, warehouseId: result.warehouseId };

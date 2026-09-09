@@ -336,18 +336,30 @@ export class ProductsService {
       await this.assertSupplierInTenant(dto.supplierId, tenantID);
     }
 
-    // Get current prices before update for price history
+    // Get current prices (и остаток) before update for price history
     const { rows: current } = await this.pool.query(
-      'SELECT cost_price, sell_price FROM products WHERE id=$1 AND tenant_id=$2',
+      'SELECT cost_price, sell_price, stock FROM products WHERE id=$1 AND tenant_id=$2',
       [id, tenantID],
     );
 
     // NEW-3: валидируем значение остатка ДО любой записи (то же правило, что в
     // applyStockPatch), чтобы невалидный минус отклонял ВЕСЬ запрос до того, как
     // основной UPDATE закоммитит правки полей — сохраняем прежний fail-fast.
+    //
+    // Минус запрещён как НОВОЕ значение, но разрешён как ЭХО текущего: товар,
+    // проданный «в минус» (оверселл разрешён продуктово, checks.service), уже
+    // лежит в базе с stock < 0, и GET отдаёт это значение клиенту. Форма
+    // редактирования, присылающая товар целиком, возвращала тот же минус — и
+    // весь PATCH отклонялся, из-за чего не сохранялась, в частности,
+    // себестоимость. API не имеет права отвергать значение, которое сам выдал:
+    // no-op остатка проходит, реальная попытка увести остаток в минус — нет.
     if (dto.stock !== undefined) {
       const parsedStock = parseFloat(String(dto.stock));
-      if (!isFinite(parsedStock) || parsedStock < 0) {
+      if (!isFinite(parsedStock)) {
+        throw new BadRequestException({ message: 'Остаток должен быть числом' });
+      }
+      const currentStock = current.length > 0 ? parseFloat(current[0].stock) || 0 : 0;
+      if (parsedStock < 0 && parsedStock !== currentStock) {
         throw new BadRequestException({ message: 'Остаток не может быть отрицательным' });
       }
     }
@@ -471,8 +483,8 @@ export class ProductsService {
    */
   private async applyStockPatch(id: string, tenantID: string, stock: unknown, userID?: string): Promise<number> {
     const newStock = parseFloat(String(stock));
-    if (!isFinite(newStock) || newStock < 0) {
-      throw new BadRequestException({ message: 'Остаток не может быть отрицательным' });
+    if (!isFinite(newStock)) {
+      throw new BadRequestException({ message: 'Остаток должен быть числом' });
     }
     const client = await this.pool.connect();
     try {
@@ -485,6 +497,11 @@ export class ProductsService {
         throw new NotFoundException({ message: 'Товар не найден' });
       }
       const stockBefore = parseFloat(rows[0].stock) || 0;
+      // Минус — только эхо уже сохранённого остатка (см. комментарий в update()).
+      // Под FOR UPDATE, поэтому проверка идёт по актуальному значению строки.
+      if (newStock < 0 && newStock !== stockBefore) {
+        throw new BadRequestException({ message: 'Остаток не может быть отрицательным' });
+      }
       if (stockBefore !== newStock) {
         await client.query('UPDATE products SET stock=$1 WHERE id=$2 AND tenant_id=$3', [newStock, id, tenantID]);
         await client.query(

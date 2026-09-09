@@ -33,6 +33,7 @@ import {
 } from 'lucide-react';
 import { productsApi, uploadsApi, warehouseCategoriesApi, warehousesApi, stockMovementsApi } from '../api/services';
 import type { Product, BundleItem, PaginatedResponse, StockMovement, Warehouse as WarehouseRecord } from '../types';
+import type { UpdateProductRequest } from '../../../shared/api/types';
 
 import { useAuth } from '../contexts/AuthContext';
 import Modal from '../components/Modal';
@@ -68,6 +69,35 @@ const CATEGORY_ICONS: Record<string, string> = {};
 // ---------------------------------------------------------------------------
 // Product Form Modal
 // ---------------------------------------------------------------------------
+
+/**
+ * Число из пользовательского ввода: пробелы-разряды убираются, запятая — такой
+ * же десятичный разделитель, что и точка (русская локаль и в форме, и в Excel).
+ * Пустое/непарсящееся → 0. Правило одно на всю страницу: форма товара + импорт
+ * из XLSX/CSV.
+ */
+function toNum(s: string): number {
+  return (
+    parseFloat(
+      String(s ?? '')
+        .replace(/\s/g, '')
+        .replace(',', '.'),
+    ) || 0
+  );
+}
+
+/**
+ * Текст ошибки от сервера для тоста. Тот же разбор, что уже используется на
+ * этой странице (`err?.response?.data?.message`), плюс МАССИВ: class-validator
+ * шлёт список нарушений массивом, и без этой ветки пользователь видел бы
+ * `[object Object]` вместо причины отказа.
+ */
+function serverMessage(err: any, fallback: string): string {
+  const msg = err?.response?.data?.message;
+  if (Array.isArray(msg) && msg.length > 0) return msg.join('\n');
+  if (typeof msg === 'string' && msg) return msg;
+  return fallback;
+}
 
 interface ProductFormData {
   name: string;
@@ -191,10 +221,10 @@ function ProductFormModal({
       name: name.trim(),
       category: category.trim(),
       photo: photo || undefined,
-      costPrice: parseFloat(costPrice) || 0,
-      sellPrice: parseFloat(sellPrice) || 0,
-      stock: parseFloat(stock) || 0,
-      minStock: parseFloat(minStock) || 0,
+      costPrice: toNum(costPrice),
+      sellPrice: toNum(sellPrice),
+      stock: toNum(stock),
+      minStock: toNum(minStock),
       unit,
       isBundle,
       bundleItems: isBundle ? bundleItems : [],
@@ -345,11 +375,14 @@ function ProductFormModal({
             <label className="block text-sm font-medium text-gray-700 mb-1.5">
               Остаток {unit !== DEFAULT_UNIT && <span className="text-gray-400 font-normal">({unitLabel(unit)})</span>}
             </label>
+            {/* Без min="0": товар, проданный «в минус» (оверселл разрешён
+                продуктово), хранит отрицательный остаток, и браузерная
+                валидация блокировала бы отправку всей формы — включая правку
+                цены, которую остаток вообще не касается. */}
             <input
               type="number"
               value={stock}
               onChange={(e) => setStock(e.target.value)}
-              min="0"
               step={unit === DEFAULT_UNIT ? '1' : '0.001'}
               className="block w-full rounded-xl border border-gray-300 px-4 py-2.5 text-sm text-gray-900 focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20"
             />
@@ -2025,17 +2058,19 @@ export default function ProductsPage() {
       queryClient.invalidateQueries({ queryKey: ['products'] });
       closeForm();
     },
-    onError: () => toast.error('Не удалось создать товар'),
+    onError: (err: any) => toast.error(serverMessage(err, 'Не удалось создать товар')),
   });
 
   const updateMutation = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: ProductFormData }) => productsApi.update(id, data),
+    mutationFn: ({ id, data }: { id: string; data: UpdateProductRequest }) => productsApi.update(id, data),
     onSuccess: () => {
       toast.success('Товар обновлён');
       queryClient.invalidateQueries({ queryKey: ['products'] });
       closeForm();
     },
-    onError: () => toast.error('Не удалось обновить товар'),
+    // Показываем ПРИЧИНУ отказа: немой тост скрывал, какое поле не приняли.
+    // class-validator шлёт message массивом — склеиваем.
+    onError: (err: any) => toast.error(serverMessage(err, 'Не удалось обновить товар')),
   });
 
   const deleteMutation = useMutation({
@@ -2177,7 +2212,19 @@ export default function ProductsPage() {
 
   function handleFormSubmit(data: ProductFormData) {
     if (editingProduct) {
-      updateMutation.mutate({ id: editingProduct.id, data });
+      // PATCH — ЧАСТИЧНЫЙ: числовое поле уходит на сервер, только если его
+      // реально изменили. Безусловная отправка `stock` ломала сохранение
+      // себестоимости у товара, проданного «в минус» (оверселл разрешён
+      // продуктово): stock < 0 против @Min(0) в UpdateProductDto — сервер
+      // отклонял ВЕСЬ PATCH. Заодно не плодим лишние записи price_history /
+      // stock_movements.
+      const { costPrice, sellPrice, stock, minStock, ...rest } = data;
+      const patch: UpdateProductRequest = { ...rest };
+      if (costPrice !== editingProduct.costPrice) patch.costPrice = costPrice;
+      if (sellPrice !== editingProduct.sellPrice) patch.sellPrice = sellPrice;
+      if (stock !== editingProduct.stock) patch.stock = stock;
+      if (minStock !== editingProduct.minStock) patch.minStock = minStock;
+      updateMutation.mutate({ id: editingProduct.id, data: patch });
     } else {
       // Auto-fill category from current folder path
       if (!data.category && activePath.length > 0) {
@@ -2258,9 +2305,7 @@ export default function ProductsPage() {
     }
 
     const col = (row: string[], idx: number) => (idx >= 0 && row ? String(row[idx] ?? '').trim() : '');
-    // Russian locale uses "," as decimal sep in Excel → normalize
-    const toNum = (s: string) => parseFloat(s.replace(/\s/g, '').replace(',', '.')) || 0;
-
+    // Числа из Excel идут в русской локали («1 250,50») — их нормализует toNum.
     const rows = rawRows
       .slice(headerIdx + 1)
       .map((row) => ({

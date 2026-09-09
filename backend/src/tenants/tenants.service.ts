@@ -14,6 +14,8 @@ import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateTenantSubscription } from '../common/interceptors/subscription-guard.interceptor';
 import { AuditService, AuditActor } from './audit.service';
+import { UpdateMyCompanyDto } from './dto/company.dto';
+import { assertSupportedTimezone, invalidateTenantTimezone, normalizeTimezone } from '../common/timezone';
 
 /**
  * One month of the platform MRR trend (GET /admin/mrr-trends). Matches the
@@ -92,6 +94,9 @@ export class TenantsService {
       shiftModeEnabled: row.shift_mode_enabled === true,
       // 156 — мульти-точки: общая (true, дефолт) vs раздельная база клиентов.
       pointsSharedClients: row.points_shared_clients !== false,
+      // 157 — часовой пояс автосервиса. Легаси-строки и запросы, которые
+      // колонку не выбирают, дают undefined → Europe/Moscow (прежнее поведение).
+      timezone: normalizeTimezone(row.timezone),
       suspendedAt: row.suspended_at ?? null,
       suspendedReason: row.suspended_reason ?? null,
       // 115 — индивидуальная надбавка минут голосового ввода поверх тарифа.
@@ -1211,7 +1216,7 @@ export class TenantsService {
     return this.mapTenant(rows[0]);
   }
 
-  async updateMyCompany(tenantId: string, dto: any) {
+  async updateMyCompany(tenantId: string, dto: UpdateMyCompanyDto) {
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -1271,6 +1276,19 @@ export class TenantsService {
       sets.push(`points_shared_clients=$${idx++}`);
       vals.push(dto.pointsSharedClients !== false);
     }
+    // 157 — часовой пояс автосервиса: от него зависят «сегодня», смены и
+    // отчёты. DTO уже отсёк значения вне белого списка; повторная проверка
+    // здесь — защита для вызовов в обход контроллера (скрипты, тесты).
+    if (dto.timezone !== undefined) {
+      let tz: string;
+      try {
+        tz = assertSupportedTimezone(dto.timezone);
+      } catch (err) {
+        throw new BadRequestException({ message: (err as Error).message });
+      }
+      sets.push(`timezone=$${idx++}`);
+      vals.push(tz);
+    }
 
     if (sets.length === 0) return this.getMyCompany(tenantId);
 
@@ -1282,6 +1300,9 @@ export class TenantsService {
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Компания не найдена' });
+    // Пояс закеширован на 5 минут (getTenantTimezone) — после смены сбрасываем
+    // сразу, чтобы следующий расчёт «сегодня» шёл уже по новому поясу.
+    if (dto.timezone !== undefined) invalidateTenantTimezone(tenantId);
     return this.mapTenant(rows[0]);
   }
 

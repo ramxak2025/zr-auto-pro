@@ -7,6 +7,7 @@ import { PurchaseOrdersService } from './purchase-orders.service';
 import { CreatePurchaseOrderDto } from './dto/create-purchase-order.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
 import { ReceivePurchaseOrderDto } from './dto/receive-purchase-order.dto';
+import { ChangePurchaseOrderDateDto } from './dto/change-purchase-order-date.dto';
 
 /**
  * Заказы поставщикам + приёмка (purchase orders + receiving). Tenant-scoped from
@@ -15,7 +16,7 @@ import { ReceivePurchaseOrderDto } from './dto/receive-purchase-order.dto';
  * ROLE-ONLY (консолидация 2026-07). Часть контура «Поставщики» — гейтится теми
  * же ключами:
  *   • view   — list / detail / suggestions → 'suppliers_access';
- *   • manage — create / edit / order / receive / cancel → 'suppliers_manage'.
+ *   • manage — create / edit / order / receive / date / cancel → 'suppliers_manage'.
  * Owner-class (director/admin/superadmin) обходит гейты через PermissionsGuard.
  */
 @UseGuards(JwtAuthGuard, RolesGuard, PermissionsGuard)
@@ -73,6 +74,18 @@ export class PurchaseOrdersController {
   @Post(':id/receive')
   receive(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: ReceivePurchaseOrderDto) {
     return this.purchaseOrders.receive(id, user.tenantID, user.userID, dto);
+  }
+
+  // ─── Смена даты проведённой поставки (159) ─────────────────────────────
+  // Гейт — тот же 'suppliers_manage', что у приёмки и у корректировки поставки
+  // PATCH /suppliers/deliveries/:id (она уже умеет менять дату накладной).
+  // Отдельного права не заводим: одна операция не должна гейтиться строже
+  // соседней ручки, которая делает то же самое с той же накладной.
+  // Путь ':id/date' — отдельный сегмент, с @Patch(':id') не конфликтует.
+  @RequirePermission('suppliers_manage')
+  @Patch(':id/date')
+  changeDate(@CurrentUser() user: JwtPayload, @Param('id') id: string, @Body() dto: ChangePurchaseOrderDateDto) {
+    return this.purchaseOrders.changeReceivedDate(id, user.tenantID, user.userID, dto);
   }
 
   // ─── Cancel (not yet received) ─────────────────────────────────────────

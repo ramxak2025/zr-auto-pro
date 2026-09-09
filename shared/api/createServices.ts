@@ -473,6 +473,16 @@ export function createAdminApi(api: HttpClient) {
   };
 }
 
+/**
+ * Реквизиты собственного тенанта (ключ company_manage).
+ *
+ * `update` принимает Partial<Tenant>, но сервер понимает только поля, которые
+ * объявлены в UpdateMyCompanyDto: name, phone, address, email, description,
+ * legalName, inn, kpp, ogrn, receiptFooter, shiftsEnabled, shiftModeEnabled,
+ * pointsSharedClients и `timezone` (157 — часовой пояс автосервиса, IANA-id из
+ * белого списка RU_TIMEZONES; неизвестное значение → 400). Остальные поля
+ * Tenant игнорируются (whitelist на сервере), 400 из-за них не будет.
+ */
 export function createMyCompanyApi(api: HttpClient) {
   return {
     get: () => api.get<Tenant>('/my-company'),
@@ -985,13 +995,15 @@ export function createSalaryApi(api: HttpClient) {
       api.post<SalaryPenalty>('/salary/penalties', data),
     removePenalty: (id: string) => api.delete(`/salary/penalties/${id}`),
 
-    // ── Payouts with confirmation (100_salary_payouts_and_fines) ───────────
-    // Владелец (director/superadmin) issues a ЗП / АВАНС → employee accepts or
-    // rejects → on accept it's recorded to expenses; on reject it's voided.
+    // ── Payouts (100_salary_payouts_and_fines + 158_salary_payout_viewed) ──
+    // Владелец (director/superadmin) выдаёт ЗП / АВАНС. Round 17 (158):
+    // подтверждения мастером НЕТ — выплата фиксируется сразу (расход пишется в
+    // той же транзакции), сотрудник получает уведомление, владелец видит
+    // «просмотрено / не просмотрено» (viewedAt).
     /**
-     * Owner issues a payout (starts `pending`, pushes the employee to decide).
-     * `periodMonth` (149) — «за какой месяц» ('YYYY-MM'): помесячная карточка и
-     * P&L отнесут выплату к нему; absent = месяц выписки.
+     * Выдать выплату — фиксируется СРАЗУ (status='accepted' + зеркальный
+     * расход). `periodMonth` (149) — «за какой месяц» ('YYYY-MM'): помесячная
+     * карточка и P&L отнесут выплату к нему; absent = месяц выписки.
      */
     createPayout: (data: {
       employeeId: string;
@@ -1008,19 +1020,42 @@ export function createSalaryApi(api: HttpClient) {
      * salary_payouts_manage.
      */
     createOutsidePayout: (data: CreateOutsidePayoutRequest) => api.post<Expense>('/salary/outside-payouts', data),
-    /** The recipient employee accepts or rejects a pending payout. */
+    /**
+     * ЛЕГАСИ-решение по выплате. Round 17 (158): подтверждения больше нет —
+     * у зафиксированной выплаты сервер трактует вызов как «просмотрено» и
+     * отвечает 200 (клиенты старых версий не падают); прежнее accept/reject
+     * работает только для оставшихся легаси-`pending`. Новый клиент вместо
+     * этого зовёт `markPayoutViewed`.
+     */
     decidePayout: (id: string, decision: 'accept' | 'reject') =>
       api.post<SalaryPayout>(`/salary/payouts/${id}/decide`, { decision }),
     /**
+     * 158 — получатель закрыл уведомление о выплате: ставит `viewedAt`
+     * (первый просмотр, повторные вызовы время не двигают). Денег не двигает.
+     */
+    markPayoutViewed: (id: string) => api.post<{ payoutId: string; viewedAt: string }>(`/salary/payouts/${id}/viewed`),
+    /**
+     * 158 — владелец ФИКСИРУЕТ легаси-`pending` выплату (строку старой модели
+     * без расхода): пишет зеркальный расход и переводит её в «зафиксирована».
+     * Для новых выплат не нужна — они фиксируются в момент выдачи. Гейт —
+     * salary_payouts_manage.
+     */
+    settlePayout: (id: string) => api.post<SalaryPayout>(`/salary/payouts/${id}/settle`),
+    /**
      * List payouts + statuses. Owner sees the whole tenant; an employee is
      * scoped to their own server-side. `monthYear` filters by issue month.
+     * `unviewed` (158) — только не просмотренные получателем.
      */
-    listPayouts: (params?: { employeeId?: string; status?: SalaryPayoutStatus; monthYear?: string }) =>
-      api.get<SalaryPayout[]>('/salary/payouts', { params }),
+    listPayouts: (params?: {
+      employeeId?: string;
+      status?: SalaryPayoutStatus;
+      monthYear?: string;
+      unviewed?: boolean;
+    }) => api.get<SalaryPayout[]>('/salary/payouts', { params }),
 
     // ── Round 15 (153) — корректировки владельцем (salary_payouts_manage) ──
     /**
-     * Отмена выплаты (pending И accepted). У принятой — сторно зеркального
+     * Отмена выплаты (зафиксированной И легаси-pending). У зафиксированной — сторно зеркального
      * расхода («Зарплата» вне P&L: прибыль не меняется, касса/лента расходов —
      * да). Строка остаётся со status='cancelled' + причиной (UI зачёркивает).
      * `expenseCompensated=false` — расход ПРИНЯТОЙ выплаты не найден (удалён
@@ -1029,8 +1064,8 @@ export function createSalaryApi(api: HttpClient) {
     cancelPayout: (id: string, reason?: string) =>
       api.post<SalaryPayout & { expenseCompensated?: boolean }>(`/salary/payouts/${id}/cancel`, { reason }),
     /**
-     * Правка PENDING-выплаты (сумма/комментарий). Принятую сервер отклоняет —
-     * её отменяют (cancelPayout) и создают заново.
+     * Правка легаси-`pending` выплаты (сумма/комментарий). Зафиксированную
+     * сервер отклоняет — её отменяют (cancelPayout) и выдают заново.
      */
     updatePayout: (id: string, data: { amount?: number; comment?: string }) =>
       api.patch<SalaryPayout>(`/salary/payouts/${id}`, data),
@@ -2187,14 +2222,28 @@ export function createPurchaseOrdersApi(api: HttpClient) {
      * invoice total either becomes supplier DEBT (`'debt'` / «Без оплаты») or is
      * auto-paid (`'paid'` / «Оплатить сразу»). Omit `paymentMode` for the legacy
      * stock-only receive (no supply / debt / payment / cost-basis change).
+     *
+     * ДАТА ПОСТАВКИ (migration 159): `receivedAt` — 'YYYY-MM-DD' (календарный
+     * день по МСК) либо полный ISO. Ею датируются ВСЕ записи приёмки: движения
+     * склада, накладная, долг/авто-платёж и `receivedAt` заказа. Прошедшая дата
+     * разрешена; будущая и старше 3 лет — 400. Пусто ⇒ момент приёмки.
      */
     receive: (
       id: string,
       data?: {
         items?: Array<{ itemId: string; receivedQuantity: number; purchasePrice?: number }>;
         paymentMode?: 'debt' | 'paid';
+        receivedAt?: string;
       },
     ) => api.post<PurchaseOrder>(`/purchase-orders/${id}/receive`, data ?? {}),
+    /**
+     * Изменить дату УЖЕ ПРОВЕДЁННОЙ поставки задним числом (migration 159).
+     * Сервер в одной транзакции переносит на новую дату накладную поставки,
+     * авто-платёж по ней, движения склада и `receivedAt` заказа. Только статус
+     * 'received'; гейт — `suppliers_manage`.
+     */
+    changeDate: (id: string, receivedAt: string) =>
+      api.patch<PurchaseOrder>(`/purchase-orders/${id}/date`, { receivedAt }),
     /** Cancel (only if not yet received). */
     cancel: (id: string) => api.post<PurchaseOrder>(`/purchase-orders/${id}/cancel`, {}),
     /** Low-stock products grouped by preferred supplier — prefill a new order. */

@@ -7,6 +7,7 @@ import { PermissionsGuard, RequirePermission } from '../common/guards/permission
 import { AllowNoTenant } from '../common/decorators/allow-no-tenant.decorator';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 import { ExtendSubscriptionDto, AssignPlanDto, SuspendTenantDto } from './dto/subscription.dto';
+import { UpdateMyCompanyDto } from './dto/company.dto';
 
 // Superadmin manages ALL tenants here (by explicit :id), so these writes are
 // legitimately tenant-less — exempt from the tenant-less write block. The one
@@ -128,9 +129,13 @@ export class TenantsController {
     return this.tenantsService.getMyCompany(user.tenantID);
   }
 
+  // 157 — `any` заменён на UpdateMyCompanyDto: тело теперь валидируется
+  // (глобальный ValidationPipe), а `timezone` проверяется по белому списку
+  // поясов. DTO объявляет ВСЕ поля, которые понимает updateMyCompany, — иначе
+  // whitelist:true вырезал бы их из тела.
   @RequirePermission('company_manage')
   @Patch('my-company')
-  updateMyCompany(@CurrentUser() user: JwtPayload, @Body() dto: any) {
+  updateMyCompany(@CurrentUser() user: JwtPayload, @Body() dto: UpdateMyCompanyDto) {
     return this.tenantsService.updateMyCompany(user.tenantID, dto);
   }
 

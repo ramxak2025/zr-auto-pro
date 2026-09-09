@@ -459,8 +459,20 @@ export default function CheckCreateScreen() {
     [orderLocations],
   );
 
-  // Date with native picker
-  const [checkDate, setCheckDate] = useState(new Date());
+  // ── Дата и время чека: «ручная дата или ничего» ──────────────────────────
+  // Касса — центральный таб: экран смонтирован всё время работы приложения,
+  // поэтому фиксировать `new Date()` на монтаже нельзя (мастер пробивал чек
+  // вечером, а чек уезжал обеденным временем — время МОНТАЖА кассы).
+  // manualDate !== null ТОЛЬКО после явного выбора в пикере — тогда дата
+  // уходит в payload. null = пользователь дату не трогал → поле `date` не
+  // отправляем вовсе, и сервер штампует момент ПРОБИТИЯ (ChecksService:
+  // create → now(), активация черновика → момент активации).
+  const [manualDate, setManualDate] = useState<Date | null>(null);
+  // Персистентная дата открытого чека/черновика — нужна ТОЛЬКО для показа и
+  // как стартовое значение пикера. «Ручной» она НЕ считается: при активации
+  // черновика без правки даты чек датируется моментом пробития, а не тем
+  // временем, когда черновик когда-то завели.
+  const [loadedCheckDate, setLoadedCheckDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
 
@@ -1203,7 +1215,8 @@ export default function CheckCreateScreen() {
     // отправит их только после явной правки (см. proceed()).
     setAssigneeIds((c.assignees ?? []).map((a) => a.id));
     setOrderLocationId(c.locationId ?? null);
-    if (c.date) setCheckDate(new Date(c.date));
+    // Дата чека — только для показа/старта пикера, ручной её не считаем.
+    setLoadedCheckDate(c.date ? new Date(c.date) : null);
   }, [editId, editCheck, editCheckFresh, editCheckError]);
   useEffect(() => {
     if (!editCheckError) return;
@@ -1410,6 +1423,10 @@ export default function CheckCreateScreen() {
   // ОДНИМ пунктом в общей модалке выбора оплаты (PaymentMethodModal), рядом с
   // Наличные/Карта/Смешанная/По гарантии — отдельного тоггла больше нет.
   const canSellInstallment = hasPermission('sell_installment');
+  // «Меняет дату и время чека» — checks_change_datetime (тот же ключ проверяет
+  // сервер). Без права пикер даты/времени не показываем и поле `date` в
+  // payload не отправляем НИКОГДА — сервер всё равно молча заменил бы его.
+  const canEditCheckDate = hasPermission('checks_change_datetime');
   const isInstallment = paymentMethod === ('installment' as PaymentMethod);
   const canOfferInstallment = canSellInstallment && !editId;
   const { data: subInfo } = useQuery<SubscriptionInfo>({
@@ -1650,7 +1667,8 @@ export default function CheckCreateScreen() {
     setInstallmentNextDate(new Date(Date.now() + 30 * 86400000));
     setServiceLines([]);
     setProductLines([]);
-    setCheckDate(new Date());
+    setManualDate(null);
+    setLoadedCheckDate(null);
     setPendingPhotos([]);
     setExistingPhotos([]);
     setUploadingUris(new Set());
@@ -1913,8 +1931,16 @@ export default function CheckCreateScreen() {
    * (притворяться, что чек сохранён, нельзя).
    */
   const stashCheckOffline = async (payload: any, err: any) => {
+    // Время чека = момент ПРОБИТИЯ. Живой сабмит поля `date` не несёт и сервер
+    // штампует now() при приёме запроса — но офлайн-очередь может пролежать до
+    // возврата сети, и тогда now() был бы временем ДОСТАВКИ. Поэтому именно
+    // здесь дату проставляем явно: ручную, если её выбирали, иначе — «сейчас»,
+    // т.е. момент нажатия «Пробить». Сервер по-прежнему решает сам: у автора
+    // без checks_change_datetime дата не сегодняшняя (пролежало через полночь
+    // по МСК) молча заменится на время доставки — это штатная деградация.
+    const offlinePayload = { ...payload, date: payload.date ?? new Date().toISOString() };
     try {
-      await enqueueOfflineCheck(payload, {
+      await enqueueOfflineCheck(offlinePayload, {
         total,
         clientName: selectedClient?.fullName,
         carInfo: selectedCar
@@ -2226,7 +2252,10 @@ export default function CheckCreateScreen() {
         clientId: clientId || undefined,
         carId: carId || undefined,
         masterId: resolvedMasterId,
-        date: checkDate.toISOString(),
+        // Дата уходит ТОЛЬКО когда пользователь выбрал её руками (см.
+        // manualDate). Иначе поля нет вовсе и сервер ставит время ПРОБИТИЯ:
+        // create → now(), активация черновика → момент активации.
+        ...(manualDate && canEditCheckDate ? { date: manualDate.toISOString() } : {}),
         mileage: mileage ? parseMoneyInput(mileage) || undefined : undefined,
         comment: comment || undefined,
         // Метки (Round 12 #9). Create: поле уходит только при непустом выборе
@@ -2433,9 +2462,13 @@ export default function CheckCreateScreen() {
     proceedToSbp();
   };
 
-  // Date formatting
-  const dateStr = `${checkDate.getDate().toString().padStart(2, '0')}.${String(checkDate.getMonth() + 1).padStart(2, '0')}.${checkDate.getFullYear()}`;
-  const timeStr = `${String(checkDate.getHours()).padStart(2, '0')}:${String(checkDate.getMinutes()).padStart(2, '0')}`;
+  // Date formatting.
+  // Что показываем: выбранное вручную → дата открытого чека → «сейчас» как
+  // ПОДСКАЗКА. Последняя нигде не сохраняется и в payload не уходит, поэтому
+  // висящий часами экран кассы ничего не «залипает».
+  const displayDate = manualDate ?? loadedCheckDate ?? new Date();
+  const dateStr = `${displayDate.getDate().toString().padStart(2, '0')}.${String(displayDate.getMonth() + 1).padStart(2, '0')}.${displayDate.getFullYear()}`;
+  const timeStr = `${String(displayDate.getHours()).padStart(2, '0')}:${String(displayDate.getMinutes()).padStart(2, '0')}`;
 
   const getMasterName = (id?: string) => {
     if (!id) return 'Мастер...';
@@ -2598,16 +2631,20 @@ export default function CheckCreateScreen() {
             </View>
           )}
 
-          {/* Date/Time — only when editing an existing check.
-                For new checks the timestamp is set automatically on save
-                (checkDate stays as 'now'), so we hide the noisy picker
-                pair to keep the form focused on what really matters:
-                the client, the car, the line items, the payment. */}
+          {/* Date/Time — only when editing an existing check. For NEW checks
+                the timestamp is stamped by the SERVER at the moment «Пробить»
+                (the payload carries no `date` field at all), so we hide the
+                noisy picker pair and keep the form focused on what really
+                matters: the client, the car, the line items, the payment.
+                Без права checks_change_datetime (тот же ключ проверяет сервер)
+                карточка остаётся, но только как read-only витрина даты чека —
+                тапы не открывают пикер, как и карандаш на вебе. */}
           {editId && (
             <View style={styles.dateTimeCard}>
               <TouchableOpacity
                 style={[styles.dateBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
                 onPress={() => setShowDatePicker(true)}
+                disabled={!canEditCheckDate}
               >
                 <Ionicons name="calendar-outline" size={16} color={colors.blue[600]} />
                 <Text style={[styles.dateBtnText, { color: palette.text.primary }]}>{dateStr}</Text>
@@ -2615,6 +2652,7 @@ export default function CheckCreateScreen() {
               <TouchableOpacity
                 style={[styles.timeBtn, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}
                 onPress={() => setShowTimePicker(true)}
+                disabled={!canEditCheckDate}
               >
                 <Ionicons name="time-outline" size={16} color={colors.blue[600]} />
                 <Text style={[styles.timeBtnText, { color: palette.text.primary }]}>{timeStr}</Text>
@@ -2622,29 +2660,31 @@ export default function CheckCreateScreen() {
             </View>
           )}
 
-          {editId && (
+          {editId && canEditCheckDate && (
             <>
               <DateTimePickerModal
                 visible={showDatePicker}
-                value={checkDate}
+                value={displayDate}
                 mode="date"
                 onConfirm={(d) => {
                   setShowDatePicker(false);
-                  const u = new Date(checkDate);
+                  // Любое подтверждение пикера = дата стала РУЧНОЙ и поедет
+                  // в payload (даже если пользователь выбрал тот же день).
+                  const u = new Date(displayDate);
                   u.setFullYear(d.getFullYear(), d.getMonth(), d.getDate());
-                  setCheckDate(u);
+                  setManualDate(u);
                 }}
                 onCancel={() => setShowDatePicker(false)}
               />
               <DateTimePickerModal
                 visible={showTimePicker}
-                value={checkDate}
+                value={displayDate}
                 mode="time"
                 onConfirm={(d) => {
                   setShowTimePicker(false);
-                  const u = new Date(checkDate);
+                  const u = new Date(displayDate);
                   u.setHours(d.getHours(), d.getMinutes());
-                  setCheckDate(u);
+                  setManualDate(u);
                 }}
                 onCancel={() => setShowTimePicker(false)}
               />

@@ -1266,13 +1266,16 @@ export default function CheckCreatePage() {
     const isInstallment = paymentMethod === 'installment';
 
     // Дата: шлём ТОЛЬКО когда пользователь её менял (dateTouched).
-    // - create без правки → сервер ставит now() — полный timestamp вместо
-    //   yyyy-MM-dd → 00:00 (время в журнале, внутрисуточная сортировка);
+    // - create без правки → сервер ставит now() В МОМЕНТ ПРОБИТИЯ — полный
+    //   timestamp вместо yyyy-MM-dd → 00:00 (время в журнале, внутрисуточная
+    //   сортировка), и никакого времени открытия формы;
     // - edit без правки → сервер не трогает оригинальный timestamp чека;
     // - правка → полный ISO: выбранный день + текущее время (create) либо
     //   время оригинального чека (edit) — день меняется, порядок внутри дня жив.
     let dateIso: string | undefined;
-    if (dateTouched && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
+    // canEditDate — зеркало серверного checks_change_datetime: без права дата
+    // не отправляется НИКОГДА (сервер её всё равно молча заменил бы своей).
+    if (dateTouched && canEditDate && /^\d{4}-\d{2}-\d{2}$/.test(date)) {
       const [y, m, d] = date.split('-').map(Number);
       const timeSource = isEditMode && existingCheck?.date ? new Date(existingCheck.date) : new Date();
       dateIso = new Date(
@@ -1361,6 +1364,12 @@ export default function CheckCreatePage() {
 
   const itemCount = serviceLines.length + productLines.length;
 
+  // Дата в шапке чека. Пока её не трогали руками и это НЕ правка — показываем
+  // «сегодня» на момент рендера, а не значение, зафиксированное при
+  // монтировании формы: вкладка кассы может провисеть открытой до полуночи, а
+  // реальную дату всё равно ставит сервер в момент пробития.
+  const displayDate = dateTouched || isEditMode ? date : format(new Date(), 'yyyy-MM-dd');
+
   return (
     <div className="max-w-3xl mx-auto pb-8">
       {/* Header */}
@@ -1399,7 +1408,7 @@ export default function CheckCreatePage() {
                 {editingDate ? (
                   <input
                     type="date"
-                    value={date}
+                    value={displayDate}
                     onChange={(e) => {
                       setDate(e.target.value);
                       setDateTouched(true);
@@ -1411,7 +1420,9 @@ export default function CheckCreatePage() {
                 ) : (
                   <>
                     <CalendarDays className="h-3.5 w-3.5 text-gray-400" />
-                    <span className="text-gray-400 text-xs">{format(new Date(date + 'T00:00:00'), 'dd.MM.yyyy')}</span>
+                    <span className="text-gray-400 text-xs">
+                      {format(new Date(displayDate + 'T00:00:00'), 'dd.MM.yyyy')}
+                    </span>
                     {canEditDate && (
                       <button
                         type="button"

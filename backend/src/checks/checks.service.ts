@@ -2844,19 +2844,26 @@ export class ChecksService {
         cardLeg = round2(Math.min(cardLeg, Math.max(totalRevenue - cashLeg, 0)));
       }
 
-      // Parse date
+      // ── Дата чека ────────────────────────────────────────────────────────
+      // Контракт клиентов: `date` присылается ТОЛЬКО когда пользователь выбрал
+      // её руками. Поля нет → чек датируется моментом ПРОБИТИЯ (серверный
+      // now()), а не моментом открытия кассы: экран «Касса» — центральный таб
+      // и живёт смонтированным часами (жалоба владельца «пробил вечером —
+      // записалось обедом»).
       let checkDate = dto.date || new Date().toISOString();
 
       // «Меняет дату и время чека» (матрица v3): без `checks_change_datetime`
       // чек создаётся только сегодняшним днём — чужая дата молча заменяется
       // текущей (прежний хардкод userRole==='master'; сиды 1:1 — мастер false,
       // admin/director true, грант мастеру теперь реально работает).
+      // «Сегодня» считаем по БИЗНЕС-таймзоне (mskDayOf, Europe/Moscow), а НЕ
+      // через setHours(0,0,0,0) в TZ процесса: в контейнере это UTC, и с 00:00
+      // до 03:00 по МСК «сегодня» определялось предыдущими сутками — чек около
+      // полуночи молча переезжал на now(). Кривая дата (NaN) — как и раньше,
+      // заменяется текущей.
       if (dto.date && !userHasPermission(actor, 'checks_change_datetime')) {
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        const inputDate = new Date(dto.date);
-        inputDate.setHours(0, 0, 0, 0);
-        if (inputDate.getTime() !== today.getTime()) {
+        const inputTs = new Date(dto.date).getTime();
+        if (!Number.isFinite(inputTs) || mskDayOf(inputTs) !== mskDayOf(Date.now())) {
           checkDate = new Date().toISOString();
         }
       }
@@ -4061,10 +4068,16 @@ export class ChecksService {
       // authority = lockedIsActivating from the FOR UPDATE read) move the check's
       // date to the moment of activation (payment) — UNLESS the caller explicitly
       // picked a date (dto.date, «меняю дату продажи»): then that date wins.
-      // «Явно» = отличается от персистентной даты драфта: оба клиента эхом шлют
-      // date в КАЖДОМ payload (гидрированную из чека), и неизменённое эхо не
-      // должно ни задним числом датировать закрытие, ни падать валидацией на
-      // старом драфте. Обычная правка черновика тоже уважает явную dto.date.
+      // «Явно» = поле date вообще ПРИШЛО и отличается от персистентной даты
+      // драфта. Клиенты (mobile CheckCreateScreen, web CheckCreatePage) шлют
+      // date ТОЛЬКО после ручного выбора в пикере — гидрированная из чека дата
+      // черновика ручной не считается и в payload не попадает, поэтому
+      // активация без правки даты = момент активации, как и требует владелец
+      // («время чека = момент пробития»). Историческое эхо старых клиентов
+      // (та же дата в каждом payload) по-прежнему безопасно: resolveCheckDateEdit
+      // вернёт null и оно не датирует закрытие задним числом и не падает
+      // валидацией на драфте старше 5 лет.
+      // Обычная правка черновика тоже уважает явную dto.date.
       // Мастер, как и в create(), может ставить только сегодняшнюю дату — чужая
       // молча игнорируется (не 403: date есть в каждом клиентском payload).
       // created_at is left untouched (audit trail).

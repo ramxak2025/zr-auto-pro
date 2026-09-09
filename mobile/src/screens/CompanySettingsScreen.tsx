@@ -33,6 +33,7 @@ import type {
 } from '../../../shared/types';
 import { POS_SETTINGS_KEY } from '../hooks/usePosSettings';
 import { formatPhone } from '../../../shared/validation/phone';
+import { RU_TIMEZONES, DEFAULT_TIMEZONE, timezoneOption, formatDateTime } from '../../../shared/utils/formatters';
 import { haptic } from '../platform/haptics';
 
 interface CompanyForm {
@@ -49,6 +50,8 @@ interface CompanyForm {
   shiftsEnabled: boolean;
   /** 156 — мульти-точки: общая база клиентов всех точек (true, дефолт). */
   pointsSharedClients: boolean;
+  /** 157 — часовой пояс автосервиса (IANA-id). Дефолт — Москва. */
+  timezone: string;
 }
 
 export default function CompanySettingsScreen() {
@@ -92,8 +95,11 @@ export default function CompanySettingsScreen() {
     receiptFooter: '',
     shiftsEnabled: false,
     pointsSharedClients: true,
+    timezone: DEFAULT_TIMEZONE,
   });
   const [dirty, setDirty] = useState(false);
+  // 157 — шит выбора часового пояса (список из 11 российских зон).
+  const [tzPickerOpen, setTzPickerOpen] = useState(false);
 
   useEffect(() => {
     if (company) {
@@ -110,6 +116,7 @@ export default function CompanySettingsScreen() {
         receiptFooter: company.receiptFooter || '',
         shiftsEnabled: company.shiftsEnabled === true,
         pointsSharedClients: company.pointsSharedClients !== false,
+        timezone: company.timezone || DEFAULT_TIMEZONE,
       });
       setDirty(false);
     }
@@ -142,6 +149,9 @@ export default function CompanySettingsScreen() {
       kpp: form.kpp || undefined,
       ogrn: form.ogrn || undefined,
       receiptFooter: form.receiptFooter || undefined,
+      // 157 — пояс отправляем всегда: это обычное значение поля, а не тумблер,
+      // и сервер принимает только id из белого списка.
+      timezone: form.timezone || DEFAULT_TIMEZONE,
       // Boolean toggle — отправляем всегда (включая false), иначе выключить
       // фичу было бы невозможно (`undefined` бэкенд игнорирует).
       ...(canManageShifts ? { shiftsEnabled: form.shiftsEnabled } : null),
@@ -170,6 +180,15 @@ export default function CompanySettingsScreen() {
     { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle, color: palette.text.primary },
   ]);
   const placeholderColor = palette.text.tertiary;
+  // 157 — выбранный пояс; неизвестный/пустой id показываем как Москву (сервер
+  // тоже трактует его так).
+  const tzOption = timezoneOption(form.timezone);
+  // Поле-«кнопка» пояса повторяет геометрию input'ов карточки, но собрано
+  // отдельно: в стиль View нельзя класть текстовые свойства из inputStyle.
+  const tzFieldStyle = StyleSheet.flatten([
+    styles.tzField,
+    { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle },
+  ]);
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -236,6 +255,32 @@ export default function CompanySettingsScreen() {
                   placeholder="г. Москва, ул. Примерная, д. 1"
                   placeholderTextColor={placeholderColor}
                 />
+              </View>
+
+              {/* 157 — часовой пояс автосервиса. Оформлен как остальные поля
+                  карточки (тот же inputStyle), но открывает шит выбора: список
+                  фиксированный, свободный ввод сервер всё равно отклонит. */}
+              <View style={styles.field}>
+                <Text style={labelStyle}>Часовой пояс</Text>
+                <TouchableOpacity
+                  style={tzFieldStyle}
+                  onPress={() => {
+                    haptic('select');
+                    setTzPickerOpen(true);
+                  }}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel={`Часовой пояс: ${tzOption.label}, ${tzOption.utc}`}
+                >
+                  <Text style={[styles.tzFieldText, { color: palette.text.primary }]} numberOfLines={1}>
+                    {tzOption.label} · {tzOption.utc}
+                  </Text>
+                  <Ionicons name="chevron-down" size={16} color={palette.text.tertiary} />
+                </TouchableOpacity>
+                <Text style={[styles.hint, { color: palette.text.tertiary }]}>
+                  От пояса зависит, что считается «сегодня»: выручка за день, смены и отчёты. Сейчас в этом поясе:{' '}
+                  {formatDateTime(new Date().toISOString(), tzOption.id)}
+                </Text>
               </View>
 
               <View style={styles.field}>
@@ -423,6 +468,50 @@ export default function CompanySettingsScreen() {
           )}
         </ScrollView>
       </KeyboardAwareView>
+
+      {/* 157 — выбор часового пояса. Тот же общий Modal, что и у 409-конфликта
+          в секции кассового режима: список с радио-отметкой у текущего, тап =
+          выбор и закрытие. Сохраняется общей кнопкой «Сохранить настройки». */}
+      <Modal visible={tzPickerOpen} onClose={() => setTzPickerOpen(false)} title="Часовой пояс">
+        <Text style={[styles.conflictHint, { color: palette.text.secondary }]}>
+          Выберите пояс, в котором работает автосервис. От него зависят «сегодня», смены и отчёты.
+        </Text>
+        <View style={{ gap: 2 }}>
+          {RU_TIMEZONES.map((z) => {
+            const selected = z.id === tzOption.id;
+            return (
+              <TouchableOpacity
+                key={z.id}
+                style={styles.tzRow}
+                onPress={() => {
+                  haptic('select');
+                  if (z.id !== form.timezone) update({ timezone: z.id });
+                  setTzPickerOpen(false);
+                }}
+                activeOpacity={0.7}
+                accessibilityRole="radio"
+                accessibilityState={{ selected }}
+                accessibilityLabel={`${z.label}, ${z.utc}`}
+              >
+                <Ionicons
+                  name={selected ? 'radio-button-on' : 'radio-button-off'}
+                  size={22}
+                  color={selected ? colors.primary[600] : palette.text.tertiary}
+                />
+                <View style={{ flex: 1, minWidth: 0 }}>
+                  <Text style={[styles.tzRowLabel, { color: palette.text.primary }]} numberOfLines={1}>
+                    {z.label}
+                  </Text>
+                  <Text style={[styles.tzRowHint, { color: palette.text.tertiary }]} numberOfLines={1}>
+                    {z.hint}
+                  </Text>
+                </View>
+                <Text style={[styles.tzRowUtc, { color: palette.text.secondary }]}>{z.utc}</Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -977,6 +1066,31 @@ const styles = StyleSheet.create({
   toggleTextWrap: { flex: 1, minWidth: 0 },
   toggleLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   toggleSub: { fontSize: 12, lineHeight: 17, marginTop: 2 },
+  // 157 — часовой пояс: поле-«кнопка» в карточке и строки шита выбора.
+  tzField: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+    backgroundColor: colors.gray[50],
+    borderWidth: 1,
+    borderColor: colors.gray[200],
+    borderRadius: borderRadius.xl,
+    paddingHorizontal: spacing[4],
+    paddingVertical: spacing[2.5],
+    minHeight: 42,
+  },
+  tzFieldText: { flex: 1, minWidth: 0, fontSize: fontSize.sm },
+  tzRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[2.5],
+    paddingVertical: spacing[2],
+    minHeight: 44,
+  },
+  tzRowLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.medium },
+  tzRowHint: { fontSize: 11, marginTop: 1 },
+  tzRowUtc: { fontSize: fontSize.xs, fontWeight: fontWeight.medium, flexShrink: 0 },
   // 155 — «Кто принимает оплату»
   acceptorPlaque: {
     flexDirection: 'row',

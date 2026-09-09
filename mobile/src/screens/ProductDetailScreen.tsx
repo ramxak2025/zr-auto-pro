@@ -66,7 +66,9 @@ import ProductMovementHistoryModal, {
   formatMovementDateTime,
   formatQty,
 } from '../components/ProductMovementHistoryModal';
-import { DEFAULT_UNIT, UNIT_PRESETS, parseQtyInput, unitLabel } from '../utils/units';
+import { DEFAULT_UNIT, UNIT_PRESETS, unitLabel } from '../utils/units';
+import { readNumericField } from '../utils/numberInput';
+import { extractApiErrorMessage } from '../utils/apiError';
 import { Text } from '../platform/Typography';
 import { productsApi, stockMovementsApi, uploadsApi } from '../api/services';
 import { getImageUrl } from '../api/axios';
@@ -308,9 +310,11 @@ export default function ProductDetailScreen() {
       setEditing(false);
       setMoveOpen(false);
     },
-    onError: () => {
+    // Реальная причина отказа сервера вместо немого «Не удалось сохранить»:
+    // без неё владелец не видел, какое поле не приняли.
+    onError: (err: unknown) => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось сохранить изменения');
+      Alert.alert('Ошибка', extractApiErrorMessage(err, 'Не удалось сохранить изменения'));
     },
   });
 
@@ -389,20 +393,43 @@ export default function ProductDetailScreen() {
     } else {
       uploadedPhotoPath = photoUri;
     }
+    // Числа читаем через readNumericField: запятая с русской цифровой
+    // клавиатуры iOS — полноценный разделитель («1250,50» = 1250.5), тогда как
+    // прежний `Number(costPrice) || 0` молча превращал такой ввод в 0. Мусор
+    // (null) не отправляем нулём — показываем ошибку поля.
+    const parsedCost = readNumericField(costPrice, 'money');
+    const parsedSell = readNumericField(sellPrice, 'money');
+    const parsedStock = readNumericField(stock, 'qty');
+    const parsedMinStock = readNumericField(minStock, 'qty');
+    if (parsedCost === null || parsedSell === null || parsedStock === null || parsedMinStock === null) {
+      Alert.alert('Ошибка', 'Цены и остаток вводятся числом — проверьте заполнение.');
+      return;
+    }
+
     const payload: UpdateProductRequest = {
       name: name.trim(),
       category,
-      sellPrice: Number(sellPrice) || 0,
-      // 120: дробные остатки — запятая нормализуется, глубже 3 знаков не шлём.
-      stock: parseQtyInput(stock) ?? 0,
-      minStock: parseQtyInput(minStock) ?? 0,
       unit: unit.trim() || DEFAULT_UNIT,
-      warrantyDays: warranty.trim() === '' ? null : Math.max(0, Number(warranty) || 0),
+      // @IsInt на бэкенде: дробная гарантия отклонила бы весь PATCH.
+      warrantyDays: warranty.trim() === '' ? null : Math.max(0, Math.floor(Number(warranty) || 0)),
       barcode: barcode.trim(),
       photo: uploadedPhotoPath,
     };
+
+    // PATCH — ЧАСТИЧНЫЙ: числовое поле уходит на сервер, только если владелец
+    // его реально изменил.
+    //
+    // Именно из-за безусловной отправки `stock` не сохранялась себестоимость:
+    // товар, проданный «в минус» (оверселл разрешён продуктово, см.
+    // checks.service «сток уходит в МИНУС»), имеет stock < 0, а
+    // UpdateProductDto.stock объявлен @Min(0) — ValidationPipe отклонял ВЕСЬ
+    // PATCH с «stock must not be less than 0», и новая цена не доезжала.
+    // Заодно не плодим лишние записи в price_history / stock_movements.
     // Masters never see cost — don't let a hidden field zero it out.
-    if (canSeeCostPrice) payload.costPrice = Number(costPrice) || 0;
+    if (canSeeCostPrice && parsedCost !== product?.costPrice) payload.costPrice = parsedCost;
+    if (parsedSell !== product?.sellPrice) payload.sellPrice = parsedSell;
+    if (parsedStock !== product?.stock) payload.stock = parsedStock;
+    if (parsedMinStock !== product?.minStock) payload.minStock = parsedMinStock;
     saveMutation.mutate(payload);
   }, [
     name,
@@ -417,6 +444,7 @@ export default function ProductDetailScreen() {
     canSeeCostPrice,
     photoUri,
     saveMutation,
+    product,
   ]);
 
   // Folder move. In edit mode the picker only updates the category field (saved
@@ -628,7 +656,7 @@ export default function ProductDetailScreen() {
                     value={costPrice}
                     onChangeText={setCostPrice}
                     style={[styles.input, inputThemed]}
-                    keyboardType="numeric"
+                    keyboardType="decimal-pad"
                     placeholder="0"
                     placeholderTextColor={palette.text.tertiary}
                   />
@@ -639,7 +667,7 @@ export default function ProductDetailScreen() {
                   value={sellPrice}
                   onChangeText={setSellPrice}
                   style={[styles.input, inputThemed]}
-                  keyboardType="numeric"
+                  keyboardType="decimal-pad"
                   placeholder="0"
                   placeholderTextColor={palette.text.tertiary}
                 />

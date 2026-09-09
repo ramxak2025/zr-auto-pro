@@ -1,4 +1,4 @@
-import { IsArray, IsIn, IsNumber, IsOptional, IsUUID, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsDateString, IsIn, IsNumber, IsOptional, IsUUID, Min, ValidateNested } from 'class-validator';
 import { Type } from 'class-transformer';
 
 /** One line being received in a receive operation. */
@@ -42,6 +42,11 @@ export class ReceivePurchaseOrderItemDto {
  * (`'paid'` / «Оплатить сразу»). When `paymentMode` is omitted the endpoint
  * keeps its legacy behaviour: stock income only — no supply, debt, payment or
  * cost-basis change (backward compatible).
+ *
+ * `receivedAt` (159) — ДАТА ПОСТАВКИ, в том числе прошедшая: ею датируются ВСЕ
+ * записи приёмки (движения склада, накладная, долг/авто-платёж, received_at
+ * заказа). Пусто ⇒ «сейчас», как раньше. Будущее и даты старше 3 лет сервер
+ * отклоняет (400).
  */
 export class ReceivePurchaseOrderDto {
   @IsOptional()
@@ -53,4 +58,12 @@ export class ReceivePurchaseOrderDto {
   @IsOptional()
   @IsIn(['debt', 'paid'], { message: 'Некорректный режим оплаты' })
   paymentMode?: 'debt' | 'paid';
+
+  /**
+   * Дата поставки: 'YYYY-MM-DD' (календарный день по МСК — так шлют веб и
+   * мобилка) или полный ISO. Опущено ⇒ момент приёмки.
+   */
+  @IsOptional()
+  @IsDateString({}, { message: 'Некорректная дата поставки' })
+  receivedAt?: string;
 }

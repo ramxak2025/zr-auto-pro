@@ -20,9 +20,11 @@
  * Owner actions — два независимых серверных ключа (у системного «Администратора»
  * payouts=false, а premiums=true, поэтому один общий prop нельзя):
  *   • canManagePayouts (salary_payouts_manage): «Выдать зарплату» / «Аванс» →
- *     createPayout (starts pending; the employee accepts/rejects via the global
- *     SalaryReceivedModal) + «Добавить штраф» → createFine (comment MANDATORY —
- *     submit blocked while the reason is empty; fines listed with remove).
+ *     createPayout. Round 17 (158): выплата ФИКСИРУЕТСЯ СРАЗУ (расход пишется в
+ *     той же транзакции), подтверждения мастером нет — он лишь получает
+ *     уведомление (SalaryReceivedModal), а владелец видит «просмотрено / не
+ *     просмотрено». + «Штраф» → createFine (comment MANDATORY — submit blocked
+ *     while the reason is empty; fines listed with remove).
  *   • canManagePremiums (salary_premiums_manage): «Премия» → premiums.create
  *     (cash / +% к ставке) — preserved from the old popup.
  */
@@ -138,17 +140,34 @@ function payoutStatusMeta(status: SalaryPayoutStatus): {
   icon: React.ComponentProps<typeof Ionicons>['name'];
 } {
   switch (status) {
+    // Round 17 (158) — деньги фиксируются в момент выдачи, принимать нечего.
     case 'accepted':
-      return { label: 'Принято', tone: 'green', icon: 'checkmark-circle' };
+      return { label: 'Выдано', tone: 'green', icon: 'checkmark-circle' };
     case 'rejected':
       return { label: 'Отклонено', tone: 'red', icon: 'close-circle' };
     // Round 15 (153) — отменена владельцем: строка остаётся зачёркнутой.
     case 'cancelled':
       return { label: 'Отменена', tone: 'red', icon: 'ban-outline' };
+    // Round 17 (158) — ЛЕГАСИ-строка модели с подтверждением: расхода у неё
+    // нет, владелец её либо фиксирует, либо отменяет. Новые не создаются.
     case 'pending':
     default:
-      return { label: 'Ожидает', tone: 'amber', icon: 'time-outline' };
+      return { label: 'Не зафиксирована', tone: 'amber', icon: 'alert-circle-outline' };
   }
+}
+
+/**
+ * Round 17 (158) — «просмотрено сотрудником» вместо подтверждения. Показывается
+ * только у зафиксированных выплат: у легаси-pending и отменённых смысла нет.
+ */
+function viewedMeta(payout: SalaryPayout): {
+  label: string;
+  tone: Tone;
+  icon: React.ComponentProps<typeof Ionicons>['name'];
+} {
+  return payout.viewedAt
+    ? { label: 'Просмотрено', tone: 'muted', icon: 'eye-outline' }
+    : { label: 'Не просмотрено', tone: 'amber', icon: 'eye-off-outline' };
 }
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -285,7 +304,9 @@ export default function SalaryEmployeeCard({
     onSuccess: () => {
       setActiveForm(null);
       haptic('success');
-      invalidate();
+      // Round 17 (158) — выдача СРАЗУ пишет расход: устаревают не только
+      // зарплатные списки, но и касса/расходы/отчёты.
+      invalidateMoney();
     },
     onError: errorAlert('Не удалось создать выплату'),
   });
@@ -409,19 +430,47 @@ export default function SalaryEmployeeCard({
     onError: errorAlert('Не удалось изменить штраф'),
   });
 
-  // Меню строки выплаты (кнопка ⋯): pending — изменить/отменить; accepted —
-  // только отменить (правка принятой запрещена сервером: отменить и выдать
-  // заново). Alert как action-sheet — работает на iOS и Android одинаково.
-  const openPayoutMenu = useCallback((p: SalaryPayout) => {
-    haptic('tap');
-    const buttons: Array<{ text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }> = [];
-    if (p.status === 'pending') {
-      buttons.push({ text: 'Изменить сумму', onPress: () => setPayoutToEdit(p) });
-    }
-    buttons.push({ text: 'Отменить выплату', style: 'destructive', onPress: () => setPayoutToCancel(p) });
-    buttons.push({ text: 'Закрыть', style: 'cancel' });
-    Alert.alert(p.type === 'advance' ? 'Аванс' : 'Зарплата', formatMoney(p.amount), buttons);
-  }, []);
+  // Round 17 (158) — фиксация ЛЕГАСИ-выплаты (строка старой модели без
+  // расхода): создаёт зеркальный расход и переводит её в «Выдано». Деньги
+  // двигаются → invalidateMoney.
+  const settlePayoutMutation = useMutation({
+    mutationFn: (id: string) => salaryApi.settlePayout(id),
+    onSuccess: () => {
+      haptic('success');
+      invalidateMoney();
+    },
+    onError: errorAlert('Не удалось зафиксировать выплату'),
+  });
+
+  // Меню строки выплаты (кнопка ⋯): легаси-pending — зафиксировать / изменить /
+  // отменить; зафиксированная — только отменить (правку сервер запрещает:
+  // отменить и выдать заново). Alert как action-sheet — одинаково на iOS и
+  // Android.
+  const openPayoutMenu = useCallback(
+    (p: SalaryPayout) => {
+      haptic('tap');
+      const buttons: Array<{ text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }> = [];
+      if (p.status === 'pending') {
+        buttons.push({
+          text: 'Зафиксировать',
+          onPress: () =>
+            Alert.alert(
+              'Зафиксировать выплату?',
+              `${formatMoney(p.amount)} будет записана в расходы («Зарплата») сегодняшней датой и уменьшит остаток к выплате.`,
+              [
+                { text: 'Отмена', style: 'cancel' },
+                { text: 'Зафиксировать', onPress: () => settlePayoutMutation.mutate(p.id) },
+              ],
+            ),
+        });
+        buttons.push({ text: 'Изменить сумму', onPress: () => setPayoutToEdit(p) });
+      }
+      buttons.push({ text: 'Отменить выплату', style: 'destructive', onPress: () => setPayoutToCancel(p) });
+      buttons.push({ text: 'Закрыть', style: 'cancel' });
+      Alert.alert(p.type === 'advance' ? 'Аванс' : 'Зарплата', formatMoney(p.amount), buttons);
+    },
+    [settlePayoutMutation],
+  );
 
   const openPaymentMenu = useCallback((p: SalaryPayment) => {
     haptic('tap');
@@ -527,32 +576,40 @@ export default function SalaryEmployeeCard({
                         </LinearGradient>
                       </TouchableOpacity>
                     </View>
-                    <TouchableOpacity
-                      style={[styles.actionOutline, { borderColor: palette.border.strong }]}
-                      activeOpacity={0.8}
-                      onPress={() => {
-                        haptic('tap');
-                        setActiveForm('fine');
-                      }}
-                    >
-                      <Ionicons name="remove-circle-outline" size={18} color={colors.red[600]} />
-                      <Text style={[styles.actionOutlineText, { color: palette.text.primary }]}>Добавить штраф</Text>
-                    </TouchableOpacity>
                   </>
                 )}
-                {canManagePremiums && (
-                  <TouchableOpacity
-                    style={[styles.actionOutline, { borderColor: palette.border.strong }]}
-                    activeOpacity={0.8}
-                    onPress={() => {
-                      haptic('tap');
-                      setActiveForm('premium');
-                    }}
-                  >
-                    <Ionicons name="gift-outline" size={18} color={colors.rose[600]} />
-                    <Text style={[styles.actionOutlineText, { color: palette.text.primary }]}>Премия</Text>
-                  </TouchableOpacity>
-                )}
+                {/* Round 17 (в) — «Штраф» и «Премия» в ОДНОМ ряду: раньше это
+                    были две полноширинные кнопки подряд, лишняя прокрутка. */}
+                {canManagePayouts || canManagePremiums ? (
+                  <View style={styles.actionRow}>
+                    {canManagePayouts && (
+                      <TouchableOpacity
+                        style={[styles.actionOutline, { borderColor: palette.border.strong }]}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          haptic('tap');
+                          setActiveForm('fine');
+                        }}
+                      >
+                        <Ionicons name="remove-circle-outline" size={16} color={colors.red[600]} />
+                        <Text style={[styles.actionOutlineText, { color: palette.text.primary }]}>Штраф</Text>
+                      </TouchableOpacity>
+                    )}
+                    {canManagePremiums && (
+                      <TouchableOpacity
+                        style={[styles.actionOutline, { borderColor: palette.border.strong }]}
+                        activeOpacity={0.8}
+                        onPress={() => {
+                          haptic('tap');
+                          setActiveForm('premium');
+                        }}
+                      >
+                        <Ionicons name="gift-outline" size={16} color={colors.rose[600]} />
+                        <Text style={[styles.actionOutlineText, { color: palette.text.primary }]}>Премия</Text>
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ) : null}
               </View>
             ) : null}
             <PayoutsSection
@@ -650,7 +707,7 @@ export default function SalaryEmployeeCard({
         />
       ) : null}
 
-      {/* Round 15 (153) — отмена выплаты (payout, pending/accepted) */}
+      {/* Round 15 (153) — отмена выплаты (зафиксированной / легаси-pending) */}
       <Modal visible={payoutToCancel !== null} onClose={() => setPayoutToCancel(null)} title="Отменить выплату?">
         {payoutToCancel ? (
           <CancelReasonForm
@@ -659,7 +716,7 @@ export default function SalaryEmployeeCard({
               `${payoutToCancel.type === 'advance' ? 'Аванс' : 'Зарплата'} ${formatMoney(payoutToCancel.amount)}. ` +
               (payoutToCancel.status === 'accepted'
                 ? 'Связанный расход будет сторнирован: сумма вернётся в «К выплате», касса и лента расходов обновятся. Прибыль не изменится.'
-                : 'Сотрудник больше не увидит её в подтверждении.')
+                : 'Расход по ней не записан — отмена просто закроет строку, деньги никуда не двинутся.')
             }
             pending={cancelPayoutMutation.isPending}
             onSubmit={(reason) => cancelPayoutMutation.mutate({ id: payoutToCancel.id, reason })}
@@ -933,9 +990,14 @@ function PayoutRow({
   const tone = toneColors(meta.tone, palette);
   const typeLabel = payout.type === 'advance' ? 'Аванс' : 'Зарплата';
   const isCancelled = payout.status === 'cancelled';
-  // Round 15 (153): корректируется только живая выплата — pending (изменить/
-  // отменить) и accepted (отменить). rejected/cancelled — только история.
-  const showMenu = canManage && (payout.status === 'pending' || payout.status === 'accepted');
+  const isUnsettled = payout.status === 'pending';
+  // Round 15 (153): корректируется только живая выплата — легаси-pending
+  // (зафиксировать / изменить / отменить) и зафиксированная (отменить).
+  // rejected/cancelled — только история.
+  const showMenu = canManage && (isUnsettled || payout.status === 'accepted');
+  // Round 17 (158) — «просмотрено» вместо подтверждения (только у выданных).
+  const seen = payout.status === 'accepted' ? viewedMeta(payout) : null;
+  const seenTone = seen ? toneColors(seen.tone, palette) : null;
   return (
     <View style={[styles.listRow, { borderBottomColor: palette.border.subtle }]}>
       <View style={styles.flex}>
@@ -945,11 +1007,22 @@ function PayoutRow({
             <Ionicons name={meta.icon} size={11} color={tone.text} />
             <Text style={[styles.statusPillText, { color: tone.text }]}>{meta.label}</Text>
           </View>
+          {seen && seenTone ? (
+            <View style={[styles.statusPill, { backgroundColor: seenTone.bg }]}>
+              <Ionicons name={seen.icon} size={11} color={seenTone.text} />
+              <Text style={[styles.statusPillText, { color: seenTone.text }]}>{seen.label}</Text>
+            </View>
+          ) : null}
         </View>
         <Text style={[styles.listRowMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
           {formatDayMonth(payout.createdAt)}
           {payout.creatorName ? ` · от ${payout.creatorName}` : ''}
         </Text>
+        {isUnsettled ? (
+          <Text style={[styles.listRowComment, { color: colors.amber[700] }]} numberOfLines={2}>
+            Расход не записан — зафиксируйте или отмените
+          </Text>
+        ) : null}
         {payout.comment ? (
           <Text style={[styles.listRowComment, { color: palette.text.tertiary }]} numberOfLines={2}>
             «{payout.comment}»
@@ -1002,7 +1075,14 @@ function FinesSection({
   const list = Array.isArray(fines) ? fines : [];
   if (list.length === 0 && !canManage) return null;
   return (
-    <Section title="Штрафы" icon="remove-circle-outline" palette={palette} count={list.length}>
+    <Section
+      title="Штрафы"
+      icon="remove-circle-outline"
+      palette={palette}
+      count={list.length}
+      collapsible
+      defaultCollapsed={list.length > 0}
+    >
       {list.length === 0 ? (
         <Text style={[styles.emptyInline, { color: palette.text.tertiary }]}>Штрафов нет</Text>
       ) : (
@@ -1050,7 +1130,7 @@ function PremiumsSection({ premiums, palette }: { premiums: SalaryPremium[]; pal
   const list = Array.isArray(premiums) ? premiums : [];
   if (list.length === 0) return null;
   return (
-    <Section title="Премии" icon="gift-outline" palette={palette} count={list.length}>
+    <Section title="Премии" icon="gift-outline" palette={palette} count={list.length} collapsible defaultCollapsed>
       {list.map((p) => {
         const isCash = p.type === 'cash';
         const value = isCash ? formatMoney(p.amount || 0) : `+${p.bonusPercent || 0}% к ставке`;
@@ -1092,7 +1172,14 @@ function PaymentsSection({
   const list = Array.isArray(payments) ? payments : [];
   if (list.length === 0) return null;
   return (
-    <Section title="Прошлые выплаты" icon="time-outline" palette={palette} count={list.length}>
+    <Section
+      title="Прошлые выплаты"
+      icon="time-outline"
+      palette={palette}
+      count={list.length}
+      collapsible
+      defaultCollapsed
+    >
       {list.map((p) => {
         const label = p.type === 'advance' ? 'Аванс' : p.type === 'premium' ? 'Премия' : 'Зарплата';
         const isReversed = !!p.reversedAt;
@@ -1153,30 +1240,64 @@ function PaymentsSection({
 
 // ── Section wrapper ────────────────────────────────────────────────────────────
 
+/**
+ * Секция карточки. Round 17 (в) — второстепенные блоки (премии, прошлые
+ * выплаты) сворачиваются: владелец жаловался на бесконечную прокрутку. Свёрнутая
+ * секция — одна строка с иконкой, названием и счётчиком; тап раскрывает.
+ * Состояние локальное — открытое остаётся открытым при смене месяца (компонент
+ * не перемонтируется).
+ */
 function Section({
   title,
   icon,
   palette,
   count,
+  collapsible = false,
+  defaultCollapsed = false,
   children,
 }: {
   title: string;
   icon: React.ComponentProps<typeof Ionicons>['name'];
   palette: SemanticPalette;
   count?: number;
+  collapsible?: boolean;
+  defaultCollapsed?: boolean;
   children: React.ReactNode;
 }) {
+  const [collapsed, setCollapsed] = useState(collapsible && defaultCollapsed);
+  const isCollapsed = collapsible && collapsed;
+  const header = (
+    <View style={[styles.sectionHeader, isCollapsed ? styles.sectionHeaderCollapsed : null]}>
+      <Ionicons name={icon} size={15} color={palette.text.secondary} />
+      <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>{title}</Text>
+      <View style={styles.flex} />
+      {typeof count === 'number' && count > 0 ? (
+        <Text style={[styles.sectionCount, { color: palette.text.tertiary }]}>{count}</Text>
+      ) : null}
+      {collapsible ? (
+        <Ionicons name={isCollapsed ? 'chevron-down' : 'chevron-up'} size={14} color={palette.text.tertiary} />
+      ) : null}
+    </View>
+  );
   return (
     <View style={[styles.section, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
-      <View style={styles.sectionHeader}>
-        <Ionicons name={icon} size={15} color={palette.text.secondary} />
-        <Text style={[styles.sectionTitle, { color: palette.text.primary }]}>{title}</Text>
-        <View style={styles.flex} />
-        {typeof count === 'number' && count > 0 ? (
-          <Text style={[styles.sectionCount, { color: palette.text.tertiary }]}>{count}</Text>
-        ) : null}
-      </View>
-      <View style={styles.sectionBody}>{children}</View>
+      {collapsible ? (
+        <TouchableOpacity
+          activeOpacity={0.7}
+          onPress={() => {
+            haptic('select');
+            setCollapsed((c) => !c);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel={title}
+          accessibilityState={{ expanded: !isCollapsed }}
+        >
+          {header}
+        </TouchableOpacity>
+      ) : (
+        header
+      )}
+      {isCollapsed ? null : <View style={styles.sectionBody}>{children}</View>}
     </View>
   );
 }
@@ -1206,6 +1327,9 @@ export function PayoutForm({
   const [type, setType] = useState<'salary' | 'advance'>(initialType);
   const [amount, setAmount] = useState(suggestedAmount > 0 ? String(suggestedAmount) : '');
   const [comment, setComment] = useState('');
+  // Round 17 (в) — форма выдачи должна помещаться на один экран: комментарий
+  // нужен редко, поэтому он спрятан за ссылкой и не съедает высоту по умолчанию.
+  const [showComment, setShowComment] = useState(false);
 
   const submit = () => {
     const amt = parseAmount(amount);
@@ -1246,17 +1370,16 @@ export function PayoutForm({
       </FormField>
 
       <FormField label="Сумма" palette={palette}>
-        <View style={[styles.inputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          <Ionicons name="cash-outline" size={16} color={palette.text.tertiary} />
+        <View style={[styles.amountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
           <TextInput
-            style={[styles.input, { color: palette.text.primary }]}
+            style={[styles.amountInput, { color: palette.text.primary }]}
             value={amount}
             onChangeText={setAmount}
             keyboardType="numeric"
             placeholder="0"
             placeholderTextColor={palette.text.tertiary}
           />
-          <Text style={[styles.currency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
         </View>
         {/* Round 16 #1(а) — префилл видим явно: владелец понимает, что сумма
             уже = «К выплате», а после правки может вернуть её одним тапом. */}
@@ -1282,19 +1405,35 @@ export function PayoutForm({
         ) : null}
       </FormField>
 
-      <FormField label="Комментарий (необязательно)" palette={palette}>
-        <View style={[styles.inputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          <Ionicons name="chatbubble-outline" size={14} color={palette.text.tertiary} />
-          <TextInput
-            style={[styles.input, { color: palette.text.primary }]}
-            value={comment}
-            onChangeText={setComment}
-            placeholder="Добавить комментарий…"
-            placeholderTextColor={palette.text.tertiary}
-            multiline
-          />
-        </View>
-      </FormField>
+      {showComment ? (
+        <FormField label="Комментарий (необязательно)" palette={palette}>
+          <View style={[styles.inputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <Ionicons name="chatbubble-outline" size={14} color={palette.text.tertiary} />
+            <TextInput
+              style={[styles.input, { color: palette.text.primary }]}
+              value={comment}
+              onChangeText={setComment}
+              placeholder="Добавить комментарий…"
+              placeholderTextColor={palette.text.tertiary}
+              multiline
+            />
+          </View>
+        </FormField>
+      ) : (
+        <TouchableOpacity
+          style={styles.addCommentBtn}
+          activeOpacity={0.7}
+          onPress={() => {
+            haptic('tap');
+            setShowComment(true);
+          }}
+          accessibilityRole="button"
+          accessibilityLabel="Добавить комментарий к выплате"
+        >
+          <Ionicons name="add-circle-outline" size={15} color={colors.primary[600]} />
+          <Text style={styles.addCommentText}>Комментарий</Text>
+        </TouchableOpacity>
+      )}
 
       <FormActions
         palette={palette}
@@ -1345,17 +1484,16 @@ function FineForm({
   return (
     <>
       <FormField label="Сумма штрафа" palette={palette}>
-        <View style={[styles.inputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          <Ionicons name="cash-outline" size={16} color={palette.text.tertiary} />
+        <View style={[styles.amountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
           <TextInput
-            style={[styles.input, { color: palette.text.primary }]}
+            style={[styles.amountInput, { color: palette.text.primary }]}
             value={amount}
             onChangeText={setAmount}
             keyboardType="numeric"
             placeholder="0"
             placeholderTextColor={palette.text.tertiary}
           />
-          <Text style={[styles.currency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
         </View>
       </FormField>
 
@@ -1450,7 +1588,8 @@ function CancelReasonForm({
   );
 }
 
-/** Правка суммы PENDING-выплаты (принятую сервер не даёт менять — отмена+новая). */
+/** Правка суммы легаси-`pending` выплаты (зафиксированную сервер менять не даёт
+ *  — только отмена + новая выдача). */
 function EditAmountForm({
   palette,
   initialAmount,
@@ -1476,20 +1615,19 @@ function EditAmountForm({
   return (
     <>
       <FormField label="Новая сумма" palette={palette}>
-        <View style={[styles.inputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-          <Ionicons name="cash-outline" size={16} color={palette.text.tertiary} />
+        <View style={[styles.amountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+          <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
           <TextInput
-            style={[styles.input, { color: palette.text.primary }]}
+            style={[styles.amountInput, { color: palette.text.primary }]}
             value={amount}
             onChangeText={setAmount}
             keyboardType="numeric"
             placeholder="0"
             placeholderTextColor={palette.text.tertiary}
           />
-          <Text style={[styles.currency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
         </View>
         <Text style={[styles.helper, { color: palette.text.tertiary }]}>
-          Сотруднику придёт пуш с новой суммой — подтверждение остаётся за ним
+          Сотруднику придёт уведомление с новой суммой
         </Text>
       </FormField>
       <FormActions
@@ -1576,32 +1714,30 @@ function PremiumForm({
 
       {type === 'cash' ? (
         <FormField label="Сумма" palette={palette}>
-          <View style={[styles.inputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-            <Ionicons name="cash-outline" size={16} color={palette.text.tertiary} />
+          <View style={[styles.amountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
+            <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
             <TextInput
-              style={[styles.input, { color: palette.text.primary }]}
+              style={[styles.amountInput, { color: palette.text.primary }]}
               value={amount}
               onChangeText={setAmount}
               keyboardType="numeric"
               placeholder="0"
               placeholderTextColor={palette.text.tertiary}
             />
-            <Text style={[styles.currency, { color: palette.text.tertiary }]}>{RUBLE}</Text>
           </View>
         </FormField>
       ) : (
         <FormField label="Бонус-процент" palette={palette}>
-          <View style={[styles.inputRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
-            <Ionicons name="trending-up-outline" size={16} color={palette.text.tertiary} />
+          <View style={[styles.amountRow, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }]}>
             <TextInput
-              style={[styles.input, { color: palette.text.primary }]}
+              style={[styles.amountInput, { color: palette.text.primary }]}
               value={percent}
               onChangeText={setPercent}
               keyboardType="numeric"
               placeholder="0"
               placeholderTextColor={palette.text.tertiary}
             />
-            <Text style={[styles.currency, { color: palette.text.tertiary }]}>%</Text>
+            <Text style={[styles.amountCurrency, { color: palette.text.tertiary }]}>%</Text>
           </View>
           <Text style={[styles.helper, { color: palette.text.tertiary }]}>Добавится к проценту мастера на месяц</Text>
         </FormField>
@@ -1777,10 +1913,10 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius['2xl'],
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing[4],
-    paddingTop: spacing[3],
-    paddingBottom: spacing[4],
+    paddingTop: spacing[2.5],
+    paddingBottom: spacing[3],
     alignItems: 'center',
-    marginBottom: spacing[3],
+    marginBottom: spacing[2.5],
     ...CARD_SHADOW,
   },
   heroTopRow: {
@@ -1805,10 +1941,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.4,
   },
   heroAmount: {
-    fontSize: 38,
-    lineHeight: 46,
+    // lineHeight с запасом к кеглю (×1.29): при системном увеличенном шрифте
+    // глиф-бокс не выходит за строку и цифры не режутся сверху/снизу.
+    fontSize: 34,
+    lineHeight: 44,
     fontWeight: fontWeight.bold,
-    letterSpacing: -1,
+    letterSpacing: -0.8,
     includeFontPadding: false,
     paddingTop: 2,
   },
@@ -1825,12 +1963,12 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius['2xl'],
     borderWidth: StyleSheet.hairlineWidth,
     paddingHorizontal: spacing[3],
-    paddingVertical: spacing[2],
-    marginBottom: spacing[3],
+    paddingVertical: spacing[1],
+    marginBottom: spacing[2.5],
     ...CARD_SHADOW,
   },
   totalsRow: { flexDirection: 'row', alignItems: 'center' },
-  totalTile: { flex: 1, paddingVertical: spacing[2.5], paddingHorizontal: spacing[2], gap: 4 },
+  totalTile: { flex: 1, paddingVertical: spacing[2], paddingHorizontal: spacing[2], gap: 3 },
   totalLabel: { fontSize: 10, fontWeight: fontWeight.medium, textTransform: 'uppercase', letterSpacing: 0.4 },
   totalValue: {
     fontSize: fontSize.base,
@@ -1846,7 +1984,7 @@ const styles = StyleSheet.create({
   section: {
     borderRadius: borderRadius['2xl'],
     borderWidth: StyleSheet.hairlineWidth,
-    marginBottom: spacing[3],
+    marginBottom: spacing[2.5],
     overflow: 'hidden',
     ...CARD_SHADOW,
   },
@@ -1854,18 +1992,20 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: spacing[3.5],
-    paddingTop: spacing[3],
+    paddingTop: spacing[2.5],
     paddingBottom: spacing[1],
     gap: spacing[2],
   },
+  // Свёрнутая секция — одна строка: симметричный паддинг снизу.
+  sectionHeaderCollapsed: { paddingBottom: spacing[2.5] },
   sectionTitle: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, letterSpacing: -0.2 },
   sectionCount: { fontSize: fontSize.xs, fontWeight: fontWeight.medium },
-  sectionBody: { paddingHorizontal: spacing[3.5], paddingBottom: spacing[2] },
+  sectionBody: { paddingHorizontal: spacing[3.5], paddingBottom: spacing[1.5] },
   emptyInline: { fontSize: fontSize.xs, paddingVertical: spacing[2.5], textAlign: 'center' },
 
   // Breakdown rows
-  breakdownRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[2], gap: spacing[3] },
-  breakdownIcon: { width: 28, height: 28, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  breakdownRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: spacing[1.5], gap: spacing[2.5] },
+  breakdownIcon: { width: 26, height: 26, borderRadius: 13, alignItems: 'center', justifyContent: 'center' },
   breakdownLabel: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
   breakdownSub: { fontSize: 11, marginTop: 1 },
   breakdownValue: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
@@ -1875,7 +2015,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing[2],
-    paddingVertical: spacing[2.5],
+    paddingVertical: spacing[2],
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   listRowHead: { flexDirection: 'row', alignItems: 'center', gap: spacing[2], flexWrap: 'wrap' },
@@ -1895,7 +2035,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: spacing[2],
-    paddingVertical: spacing[3],
+    paddingVertical: spacing[2.5],
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: borderRadius['2xl'],
     marginBottom: spacing[3],
@@ -1928,7 +2068,7 @@ const styles = StyleSheet.create({
 
   // Owner actions — Round 16 #1(в): блок стоит между «Изменить процент» и
   // историей секций, поэтому отбивка снизу, а не сверху.
-  actions: { marginBottom: spacing[3], gap: spacing[2] },
+  actions: { marginBottom: spacing[2.5], gap: spacing[2] },
   actionRow: { flexDirection: 'row', gap: spacing[2] },
   actionPrimary: { flex: 2, borderRadius: borderRadius['2xl'], overflow: 'hidden' },
   actionSecondary: { flex: 1, borderRadius: borderRadius['2xl'], overflow: 'hidden' },
@@ -1936,23 +2076,24 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: spacing[3.5],
+    paddingVertical: spacing[3],
     gap: spacing[2],
   },
   actionPrimaryText: { fontSize: fontSize.sm, fontWeight: fontWeight.bold, color: colors.white, letterSpacing: -0.2 },
   actionOutline: {
+    flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing[2],
-    paddingVertical: spacing[3],
+    gap: spacing[1.5],
+    paddingVertical: spacing[2.5],
     borderWidth: StyleSheet.hairlineWidth,
     borderRadius: borderRadius['2xl'],
   },
   actionOutlineText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold },
 
   // Forms
-  formField: { marginBottom: spacing[4] },
+  formField: { marginBottom: spacing[3] },
   formLabel: {
     fontSize: fontSize.xs,
     fontWeight: fontWeight.semibold,
@@ -1969,8 +2110,30 @@ const styles = StyleSheet.create({
     paddingVertical: spacing[2.5],
     gap: spacing[2],
   },
-  input: { flex: 1, fontSize: fontSize.sm, padding: 0 },
+  // `padding: 0` на iOS обрезал глифы по вертикали (высота строки TextInput
+  // считается по fontSize без запаса) — держим реальный вертикальный паддинг,
+  // высоту не фиксируем: при увеличенном системном шрифте поле растёт.
+  input: { flex: 1, fontSize: fontSize.sm, paddingVertical: spacing[1], paddingHorizontal: 0 },
   currency: { fontSize: fontSize.sm, fontWeight: fontWeight.bold },
+  // Денежное поле — один в один с «Расходами» (ExpensesScreen.amountInput):
+  // крупная сумма, ₽ слева, вертикальный паддинг вместо нулевого. Цифры не
+  // режутся ни в светлой, ни в тёмной теме, ни при системном крупном шрифте.
+  amountRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: borderRadius.xl,
+    borderWidth: 1.5,
+    paddingHorizontal: spacing[4],
+    gap: spacing[2],
+  },
+  amountInput: {
+    flex: 1,
+    fontSize: fontSize['2xl'],
+    fontWeight: fontWeight.bold,
+    paddingVertical: spacing[2.5],
+    letterSpacing: -0.4,
+  },
+  amountCurrency: { fontSize: fontSize['2xl'], fontWeight: fontWeight.bold },
   helper: { fontSize: fontSize.xs, marginTop: spacing[1] },
   // Round 16 #1(а) — строка «К выплате — N ₽ · Подставить» под полем суммы.
   suggestRow: {
@@ -1985,6 +2148,16 @@ const styles = StyleSheet.create({
     fontWeight: fontWeight.semibold,
     color: colors.primary[600],
   },
+  // Round 17 (в) — «+ Комментарий» вместо всегда открытого поля.
+  addCommentBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    gap: spacing[1.5],
+    paddingVertical: spacing[2],
+    marginBottom: spacing[2],
+  },
+  addCommentText: { fontSize: fontSize.sm, fontWeight: fontWeight.semibold, color: colors.primary[600] },
   formActions: { flexDirection: 'row', gap: spacing[3], marginTop: spacing[2] },
   cancelBtn: {
     flex: 1,

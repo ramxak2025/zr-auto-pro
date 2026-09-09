@@ -10,9 +10,11 @@ import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { SuppliersService } from '../suppliers/suppliers.service';
+import { invalidateReportsForTenant } from '../common/reports-cache';
 import { CreatePurchaseOrderDto, PurchaseOrderItemInputDto } from './dto/create-purchase-order.dto';
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
 import { ReceivePurchaseOrderDto } from './dto/receive-purchase-order.dto';
+import { ChangePurchaseOrderDateDto } from './dto/change-purchase-order-date.dto';
 
 // Мусор от битых клиентов (' ', 'undefined', 'null') в query.supplierId раньше
 // уходил в uuid-колонку и падал в pg 22P02 «invalid input syntax for type
@@ -20,6 +22,69 @@ import { ReceivePurchaseOrderDto } from './dto/receive-purchase-order.dto';
 // Не-UUID трактуем как «фильтр не задан».
 const isUuid = (value: unknown): value is string =>
   typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
+
+// ── Дата поставки (159) ──────────────────────────────────────────────────────
+// Бизнес-таймзона продукта — Europe/Moscow (UTC+3, без переходов с 2014):
+// календарный «день поставки» считается по МСК, а не по TZ сервера. Идиома
+// один-в-один с checks.service.ts (правка даты продажи чека).
+const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Не глубже 3 лет — защита от опечатки года (2026 → 1026 и т.п.). */
+const SUPPLY_DATE_MAX_PAST_MS = 3 * 365 * DAY_MS;
+
+/** Календарный день (yyyy-MM-dd) момента `ts` в Europe/Moscow. */
+const mskDayOf = (ts: number): string => new Date(ts + MSK_OFFSET_MS).toISOString().slice(0, 10);
+
+/** UTC-timestamp начала МСК-дня `yyyy-MM-dd`. NaN на кривом дне. */
+const mskDayStartMs = (day: string): number => Date.parse(`${day}T00:00:00.000Z`) - MSK_OFFSET_MS;
+
+/**
+ * Нормализовать присланную дату поставки в ISO.
+ *   • пусто (undefined / null / '') → null — «датировать текущим моментом»
+ *     (поведение до 159, обратная совместимость);
+ *   • 'YYYY-MM-DD' (веб `input[type=date]` и мобильный пикер) → этот МСК-день
+ *     со ВРЕМЕНЕМ СУТОК от `anchorTs`: у приёмки это «сейчас» (сегодняшняя
+ *     дата ⇒ ровно текущий момент), у смены даты — время исходной приёмки,
+ *     чтобы позиция документа внутри дня не прыгала;
+ *   • полный ISO — как есть, по миллисекундам.
+ *
+ * Границы (требование владельца): будущее запрещено — потолок «конец сегодня»
+ * по МСК; глубже 3 лет — тоже 400, чтобы опечатка не улетела в 1970.
+ */
+function resolveSupplyDate(raw: unknown, anchorTs: number): string | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+
+  const rawStr = String(raw).trim();
+  let ts: number;
+  if (DATE_ONLY_RE.test(rawStr)) {
+    const dayStart = mskDayStartMs(rawStr);
+    if (!Number.isFinite(dayStart)) {
+      throw new BadRequestException({ message: 'Некорректная дата поставки' });
+    }
+    ts = dayStart + (anchorTs - mskDayStartMs(mskDayOf(anchorTs)));
+  } else {
+    ts = new Date(rawStr).getTime();
+  }
+  if (!Number.isFinite(ts)) {
+    throw new BadRequestException({ message: 'Некорректная дата поставки' });
+  }
+
+  const now = Date.now();
+  // Потолок — конец СЕГОДНЯШНЕГО дня по МСК: «сегодня» в любое время суток
+  // проходит, завтра и дальше — нет.
+  if (ts >= mskDayStartMs(mskDayOf(now)) + DAY_MS) {
+    throw new BadRequestException({ message: 'Дата поставки не может быть в будущем' });
+  }
+  if (ts < now - SUPPLY_DATE_MAX_PAST_MS) {
+    throw new BadRequestException({ message: 'Дата поставки не может быть старше 3 лет' });
+  }
+  return new Date(ts).toISOString();
+}
+
+/** Задним ли числом датирована поставка (день раньше сегодняшнего по МСК). */
+const isBackdated = (iso: string | null): boolean => !!iso && mskDayOf(new Date(iso).getTime()) < mskDayOf(Date.now());
 
 @Injectable()
 export class PurchaseOrdersService {
@@ -45,6 +110,9 @@ export class PurchaseOrdersService {
       createdByName: row.created_by_name ?? null,
       orderedAt: row.ordered_at ?? null,
       receivedAt: row.received_at ?? null,
+      // Смена даты проведённой поставки (159) — кто и когда её двигал.
+      dateCorrectedAt: row.date_corrected_at ?? null,
+      dateCorrectedByName: row.date_corrected_by_name ?? null,
       createdAt: row.created_at,
     };
   }
@@ -119,10 +187,12 @@ export class PurchaseOrdersService {
   /** Load a full order (header + items), tenant-scoped. Throws 404 if missing. */
   private async loadDetail(client: Pool | PoolClient, id: string, tenantID: string) {
     const { rows } = await client.query(
-      `SELECT po.*, s.name AS supplier_name, u.full_name AS created_by_name
+      `SELECT po.*, s.name AS supplier_name, u.full_name AS created_by_name,
+              uc.full_name AS date_corrected_by_name
          FROM purchase_orders po
          LEFT JOIN suppliers s ON s.id = po.supplier_id
          LEFT JOIN users u ON u.id = po.created_by
+         LEFT JOIN users uc ON uc.id = po.date_corrected_by
         WHERE po.id=$1 AND po.tenant_id=$2`,
       [id, tenantID],
     );
@@ -454,10 +524,23 @@ export class PurchaseOrdersService {
    * receipt.
    *
    * Status after receive:
-   *   • every line fully received → status='received', received_at=now().
+   *   • every line fully received → status='received', received_at=<дата поставки>.
    *   • otherwise (partial)       → status='ordered', received_at stays null.
+   *
+   * ДАТА ПОСТАВКИ (159): `receivedAt` (в т.ч. прошедшая) датирует ВСЕ записи
+   * приёмки одной меткой времени — движения склада (stock_movements.created_at),
+   * накладную (deliveries.date), авто-платёж (supplier_payments.date) и
+   * purchase_orders.received_at. Пусто ⇒ «сейчас», поведение до 159.
+   * Себестоимость товара при приёмке ЗАДНИМ ЧИСЛОМ не перезаписывается, если
+   * она уже известна: older-cost не должен затирать более свежий last-cost (то
+   * же правило, что у корректировки поставки — 154).
    */
   async receive(id: string, tenantID: string, userID: string | null, dto: ReceivePurchaseOrderDto) {
+    // Дата поставки — до транзакции: кривая/будущая/древняя дата обязана дать
+    // чистый 400, а не откат уже начатой приёмки. null ⇒ «сейчас».
+    const receivedAtIso = resolveSupplyDate(dto.receivedAt, Date.now());
+    const backdated = isBackdated(receivedAtIso);
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -555,6 +638,10 @@ export class PurchaseOrdersService {
           purchasePrice: effectivePrice,
           supplierId: po.supplier_id,
           reason: 'Приёмка заказа поставщику',
+          // 159: движение датируется датой поставки и привязывается к заказу —
+          // по этой связи смена даты проведённой поставки его перевезёт.
+          occurredAt: receivedAtIso,
+          purchaseOrderId: id,
         });
 
         if (paymentMode) {
@@ -564,11 +651,17 @@ export class PurchaseOrdersService {
           // `> 0` so an unpriced/zero line never clobbers a known cost. The
           // product row is already locked (applyIncomeTx did FOR UPDATE).
           if (effectivePrice > 0) {
-            await client.query('UPDATE products SET cost_price=$1 WHERE id=$2 AND tenant_id=$3', [
-              effectivePrice,
-              row.product_id,
-              tenantID,
-            ]);
+            // Приёмка ЗАДНИМ ЧИСЛОМ не двигает известную себестоимость: цена
+            // из прошлого не должна затирать более свежий last-cost (то же
+            // решение, что в updateDelivery, 154). Нулевую/неизвестную
+            // себестоимость back-date всё же заполняет — иначе продажа считала
+            // бы COGS=0 и тихо завышала прибыль.
+            await client.query(
+              backdated
+                ? 'UPDATE products SET cost_price=$1 WHERE id=$2 AND tenant_id=$3 AND COALESCE(cost_price,0)=0'
+                : 'UPDATE products SET cost_price=$1 WHERE id=$2 AND tenant_id=$3',
+              [effectivePrice, row.product_id, tenantID],
+            );
           }
           supplyLines.push({
             productId: row.product_id,
@@ -593,21 +686,27 @@ export class PurchaseOrdersService {
         (r) => (parseFloat(r.received_quantity) || 0) + 1e-9 >= (parseFloat(r.quantity) || 0),
       );
 
+      // Дата приёмки: выбранная владельцем (в т.ч. прошедшая) либо now().
+      // ordered_at при back-date КЛАМПИТСЯ к дате поставки (LEAST), иначе на
+      // карточке заказа «Заказан» оказался бы позже «Получен».
       if (fullyReceived) {
         // ordered_at backfilled when receiving straight from draft (skipped the
         // explicit "order" step) so the timeline isn't missing a milestone.
         await client.query(
           `UPDATE purchase_orders
-              SET status='received', received_at=now(), ordered_at=COALESCE(ordered_at, now())
+              SET status='received',
+                  received_at = COALESCE($3::timestamptz, now()),
+                  ordered_at = LEAST(COALESCE(ordered_at, COALESCE($3::timestamptz, now())), COALESCE($3::timestamptz, now()))
             WHERE id=$1 AND tenant_id=$2`,
-          [id, tenantID],
+          [id, tenantID, receivedAtIso],
         );
       } else {
         await client.query(
           `UPDATE purchase_orders
-              SET status='ordered', ordered_at=COALESCE(ordered_at, now())
+              SET ordered_at = LEAST(COALESCE(ordered_at, COALESCE($3::timestamptz, now())), COALESCE($3::timestamptz, now())),
+                  status='ordered'
             WHERE id=$1 AND tenant_id=$2`,
-          [id, tenantID],
+          [id, tenantID, receivedAtIso],
         );
       }
 
@@ -621,17 +720,141 @@ export class PurchaseOrdersService {
           purchaseOrderId: id,
           comment: 'Приёмка заказа поставщику',
           paymentMode,
+          // 159: накладная и авто-платёж датируются датой поставки.
+          occurredAt: receivedAtIso,
           lines: supplyLines,
         });
       }
 
       const detail = await this.loadDetail(client, id, tenantID);
       await client.query('COMMIT');
+      // Приёмка двигает деньги (долг/оплата поставщику) и склад — в т.ч. за
+      // ПРОШЛЫЙ период при back-date. Сбрасываем серверные кэши отчётов тем же
+      // способом, что checks/expenses (invalidateReportsForTenant).
+      invalidateReportsForTenant(tenantID);
       return detail;
     } catch (err) {
       await client.query('ROLLBACK');
       if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
       this.logger.error(`Purchase order receive error: ${err}`);
+      throw new InternalServerErrorException({ message: 'Ошибка сервера' });
+    } finally {
+      client.release();
+    }
+  }
+
+  // ── смена даты проведённой поставки (159) ────────────────────────────────
+  /**
+   * Изменить дату УЖЕ ПРОВЕДЁННОЙ поставки задним числом.
+   *
+   * Требование владельца: «дата поставки поставлена неверно — надо уметь
+   * поправить». Дата поставки живёт не в одной колонке, поэтому в ОДНОЙ
+   * транзакции переезжают ВСЕ записи приёмки этого заказа:
+   *   1. purchase_orders.received_at (+ ordered_at клампится к ней, чтобы
+   *      «Заказан» не оказался позже «Получен») + аудит date_corrected_at/by;
+   *   2. deliveries.date — накладные поставки, привязанные к заказу (098);
+   *      удалённые (soft-delete 154) не трогаем — они уже вне леджера;
+   *   3. supplier_payments.date — авто-платежи «Оплатить сразу» по этим
+   *      накладным (delivery_id), кроме сторнированных: ручные платежи
+   *      поставщику delivery_id не несут и остаются на своей дате;
+   *   4. stock_movements.created_at — приходы склада, связанные с заказом
+   *      (purchase_order_id, 159).
+   *
+   * Суммы, количества, остатки и баланс поставщика НЕ меняются — двигается
+   * только дата, поэтому пересчёт долга/склада здесь не нужен.
+   *
+   * Гейт — `suppliers_manage` (контроллер): тот же ключ, что у приёмки и у
+   * корректировки поставки PATCH /suppliers/deliveries/:id, которая уже умеет
+   * менять дату накладной. Отдельного права не заводим.
+   *
+   * Ограничение по статусу: только `received`. У черновика/отменённого даты
+   * поставки нет, а у частично принятого заказа приёмок может быть несколько
+   * (у каждой своя накладная и своя дата) — их правят точечно через
+   * «Поставки» (PATCH /suppliers/deliveries/:id).
+   */
+  async changeReceivedDate(id: string, tenantID: string, userID: string | null, dto: ChangePurchaseOrderDateDto) {
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      const { rows } = await client.query(
+        'SELECT status, received_at FROM purchase_orders WHERE id=$1 AND tenant_id=$2 FOR UPDATE',
+        [id, tenantID],
+      );
+      if (rows.length === 0) throw new NotFoundException({ message: 'Заказ не найден' });
+      if (rows[0].status !== 'received') {
+        throw new BadRequestException({ message: 'Дату можно изменить только у проведённой поставки' });
+      }
+
+      // Время суток берём у исходной приёмки: при выборе только дня документ
+      // не должен прыгать внутри дня относительно соседей.
+      const priorRaw = rows[0].received_at;
+      const priorTs = priorRaw instanceof Date ? priorRaw.getTime() : new Date(priorRaw).getTime();
+      const anchorTs = Number.isFinite(priorTs) ? priorTs : Date.now();
+      const newIso = resolveSupplyDate(dto.receivedAt, anchorTs);
+      if (!newIso) {
+        throw new BadRequestException({ message: 'Некорректная дата поставки' });
+      }
+
+      // Эхо той же даты — выходим без записей (клиенты шлют дату целиком).
+      if (Number.isFinite(priorTs) && new Date(newIso).getTime() === priorTs) {
+        const same = await this.loadDetail(client, id, tenantID);
+        await client.query('COMMIT');
+        return same;
+      }
+
+      // 1) Заказ: дата приёмки + клампованная дата оформления + аудит правки.
+      await client.query(
+        `UPDATE purchase_orders
+            SET received_at = $3::timestamptz,
+                ordered_at = LEAST(COALESCE(ordered_at, $3::timestamptz), $3::timestamptz),
+                date_corrected_at = now(),
+                date_corrected_by = $4
+          WHERE id = $1 AND tenant_id = $2`,
+        [id, tenantID, newIso, userID],
+      );
+
+      // 2) Накладные поставки этого заказа (живые). corrected_at/by — тот же
+      //    след правки, что оставляет корректировка поставки (154).
+      await client.query(
+        `UPDATE deliveries
+            SET date = $3::timestamptz,
+                corrected_at = now(),
+                corrected_by = $4
+          WHERE purchase_order_id = $1 AND tenant_id = $2 AND deleted_at IS NULL`,
+        [id, tenantID, newIso, userID],
+      );
+
+      // 3) Авто-платежи по этим накладным (кроме сторнированных).
+      await client.query(
+        `UPDATE supplier_payments sp
+            SET date = $3::timestamptz
+          WHERE sp.tenant_id = $2
+            AND sp.reversed_at IS NULL
+            AND sp.delivery_id IN (
+              SELECT d.id FROM deliveries d
+               WHERE d.purchase_order_id = $1 AND d.tenant_id = $2 AND d.deleted_at IS NULL
+            )`,
+        [id, tenantID, newIso],
+      );
+
+      // 4) Приходы склада по заказу (связь 159).
+      await client.query(
+        `UPDATE stock_movements
+            SET created_at = $3::timestamptz
+          WHERE purchase_order_id = $1 AND tenant_id = $2`,
+        [id, tenantID, newIso],
+      );
+
+      const detail = await this.loadDetail(client, id, tenantID);
+      await client.query('COMMIT');
+      // Деньги поставки переехали в другой период — гасим кэш отчётов.
+      invalidateReportsForTenant(tenantID);
+      return detail;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err instanceof BadRequestException || err instanceof NotFoundException) throw err;
+      this.logger.error(`Purchase order date change error: ${err}`);
       throw new InternalServerErrorException({ message: 'Ошибка сервера' });
     } finally {
       client.release();

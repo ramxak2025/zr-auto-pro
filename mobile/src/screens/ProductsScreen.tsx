@@ -49,6 +49,8 @@ import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
 import { DEFAULT_UNIT, UNIT_PRESETS, formatQty, parseQtyInput, unitLabel } from '../utils/units';
+import { parseMoneyInput, readNumericField } from '../utils/numberInput';
+import { extractApiErrorMessage } from '../utils/apiError';
 import type { Product, PaginatedResponse, StockMovement, Warehouse } from '../../../shared/types';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
@@ -686,12 +688,11 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       closeModal();
     },
-    onError: () => {
+    // Показываем ПРИЧИНУ отказа сервера, а не немое «Ошибка при создании»:
+    // без текста владелец не мог понять, какое поле не приняли.
+    onError: (err: unknown) => {
       haptic('error');
-      Alert.alert(
-        '\u041E\u0448\u0438\u0431\u043A\u0430',
-        '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u0441\u043E\u0437\u0434\u0430\u043D\u0438\u0438 \u0442\u043E\u0432\u0430\u0440\u0430',
-      );
+      Alert.alert('Ошибка', extractApiErrorMessage(err, 'Не удалось создать товар'));
     },
   });
 
@@ -703,12 +704,10 @@ export default function ProductsScreen() {
       queryClient.invalidateQueries({ queryKey: ['all-products-check'] });
       closeModal();
     },
-    onError: () => {
+    // Реальное сообщение сервера вместо немого «Ошибка при обновлении».
+    onError: (err: unknown) => {
       haptic('error');
-      Alert.alert(
-        '\u041E\u0448\u0438\u0431\u043A\u0430',
-        '\u041E\u0448\u0438\u0431\u043A\u0430 \u043F\u0440\u0438 \u043E\u0431\u043D\u043E\u0432\u043B\u0435\u043D\u0438\u0438',
-      );
+      Alert.alert('Ошибка', extractApiErrorMessage(err, 'Не удалось обновить товар'));
     },
   });
 
@@ -1392,10 +1391,12 @@ export default function ProductsScreen() {
     setEditingProduct(p);
     setName(p.name);
     setCategory(p.category || '');
-    setCostPrice(String(p.costPrice));
-    setSellPrice(String(p.sellPrice));
-    setStock(String(p.stock));
-    setMinStock(String(p.minStock));
+    // null-безопасно: у товара б/у-склада цена продажи может прийти пустой,
+    // а String(null) = 'null' сделал бы поле невалидным при сохранении.
+    setCostPrice(p.costPrice != null ? String(p.costPrice) : '');
+    setSellPrice(p.sellPrice != null ? String(p.sellPrice) : '');
+    setStock(p.stock != null ? String(p.stock) : '');
+    setMinStock(p.minStock != null ? String(p.minStock) : '');
     // Legacy-код ('pcs'→'шт') нормализуем сразу — чипсы подсветят значение.
     setUnit(unitLabel(p.unit));
     setFormBarcode(p.barcode || '');
@@ -1495,14 +1496,22 @@ export default function ProductsScreen() {
       uploadedPhotoPath = editingProduct ? null : undefined;
     }
 
-    const payload = {
+    // Числовые поля читаем через readNumericField: запятая с русской цифровой
+    // клавиатуры iOS — полноценный разделитель («1250,50» = 1250.5). Раньше
+    // здесь стоял `Number(costPrice) || 0`, и такой ввод молча превращался в 0.
+    // Мусор (null) НЕ отправляем нулём — показываем ошибку поля.
+    const parsedCost = readNumericField(costPrice, 'money');
+    const parsedSell = readNumericField(sellPrice, 'money');
+    const parsedStock = readNumericField(stock, 'qty');
+    const parsedMinStock = readNumericField(minStock, 'qty');
+    if (parsedCost === null || parsedSell === null || parsedStock === null || parsedMinStock === null) {
+      Alert.alert('Ошибка', 'Цены и остаток вводятся числом — проверьте заполнение.');
+      return;
+    }
+
+    const payload: Record<string, unknown> = {
       name,
       category: category || undefined,
-      costPrice: Number(costPrice) || 0,
-      sellPrice: Number(sellPrice) || 0,
-      // 120: дробные остатки — запятая нормализуется, глубже 3 знаков не шлём.
-      stock: parseQtyInput(stock) ?? 0,
-      minStock: parseQtyInput(minStock) ?? 0,
       unit: unit || DEFAULT_UNIT,
       // Round 12 #6б: у существующего товара '' ОЧИЩАЕТ штрихкод (PATCH сетит
       // поле только когда оно пришло); у нового пустое поле просто не шлём.
@@ -1513,9 +1522,27 @@ export default function ProductsScreen() {
       // done via dedicated transfer actions, not the edit form.
       ...(editingProduct ? {} : activeWarehouseId ? { warehouseId: activeWarehouseId } : {}),
     };
+
     if (editingProduct) {
+      // PATCH — ЧАСТИЧНЫЙ: числовое поле уходит на сервер, только если владелец
+      // его реально изменил.
+      //
+      // Именно из-за безусловной отправки `stock` не сохранялась себестоимость:
+      // товар, проданный «в минус» (оверселл разрешён продуктово, см.
+      // checks.service «сток уходит в МИНУС»), имеет stock < 0, а
+      // UpdateProductDto.stock объявлен @Min(0) — ValidationPipe отклонял ВЕСЬ
+      // PATCH с «stock must not be less than 0», и новая цена не доезжала.
+      // Заодно не плодим лишние записи в price_history / stock_movements.
+      if (canSeeCostPrice && parsedCost !== editingProduct.costPrice) payload.costPrice = parsedCost;
+      if (parsedSell !== editingProduct.sellPrice) payload.sellPrice = parsedSell;
+      if (parsedStock !== editingProduct.stock) payload.stock = parsedStock;
+      if (parsedMinStock !== editingProduct.minStock) payload.minStock = parsedMinStock;
       updateMutation.mutate({ id: editingProduct.id, data: payload });
     } else {
+      payload.costPrice = parsedCost;
+      payload.sellPrice = parsedSell;
+      payload.stock = parsedStock;
+      payload.minStock = parsedMinStock;
       createMutation.mutate(payload);
     }
   };
@@ -1781,7 +1808,8 @@ export default function ProductsScreen() {
 
   const handleSetSellPriceSubmit = () => {
     if (!sellPriceProduct) return;
-    const price = Number(sellPriceInput);
+    // Запятая с iOS-клавиатуры — валидный разделитель (parseMoneyInput).
+    const price = parseMoneyInput(sellPriceInput) ?? NaN;
     if (!isFinite(price) || price <= 0) {
       Alert.alert('Ошибка', 'Цена должна быть больше 0.');
       return;
@@ -2451,7 +2479,7 @@ export default function ProductsScreen() {
               value={costPrice}
               onChangeText={setCostPrice}
               style={[styles.formInput, formInputThemed]}
-              keyboardType="numeric"
+              keyboardType="decimal-pad"
               placeholder="0"
               placeholderTextColor={palette.text.tertiary}
             />
@@ -2464,7 +2492,7 @@ export default function ProductsScreen() {
               value={sellPrice}
               onChangeText={setSellPrice}
               style={[styles.formInput, formInputThemed]}
-              keyboardType="numeric"
+              keyboardType="decimal-pad"
               placeholder="0"
               placeholderTextColor={palette.text.tertiary}
             />
@@ -3938,7 +3966,7 @@ export default function ProductsScreen() {
                     color: palette.text.primary,
                   },
                 ]}
-                keyboardType="numeric"
+                keyboardType="decimal-pad"
                 placeholder="0"
                 placeholderTextColor={palette.text.tertiary}
                 autoFocus

@@ -81,6 +81,39 @@ export function formatPoDate(iso?: string | null): string {
   return `${d.getDate()} ${MONTHS_SHORT[d.getMonth()]} ${d.getFullYear()}`;
 }
 
+/**
+ * `Date` → `"YYYY-MM-DD"` БЕЗ UTC-сдвига (иначе на МСК дата уезжает на день
+ * назад). Ровно этот формат уходит на сервер в `receivedAt` — он трактует его
+ * как календарный день по МСК, как и веб (`input[type=date]`).
+ */
+export function toSupplyDateStr(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+/** `Date` → `"09.09.2026"` — подпись на кнопке выбора даты поставки. */
+export function formatSupplyDate(d: Date): string {
+  return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
+}
+
+/** Тот ли это календарный день (локальный), что и `b`. */
+export function isSameDay(a: Date, b: Date): boolean {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+}
+
+/**
+ * Дата поставки не может быть в будущем (сервер отвечает 400) — пикер обязан
+ * отсечь это раньше. Сравнение по календарному дню: «сегодня» разрешено.
+ */
+export function isFutureDay(d: Date): boolean {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const picked = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  return picked.getTime() > today.getTime();
+}
+
 /** Outstanding (not-yet-received) quantity for a line. Never negative. */
 export function outstandingQty(quantity: number, receivedQuantity: number): number {
   return Math.max(0, (quantity || 0) - (receivedQuantity || 0));

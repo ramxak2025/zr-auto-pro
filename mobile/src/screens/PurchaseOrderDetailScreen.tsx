@@ -8,7 +8,9 @@
  *   • ordered — «Принять поставку» (→ SupplyReceiveScreen: цена за строку,
  *     стоимость накладной, выбор «в долг / оплатить сразу») / «Изменить»
  *     (backend разрешает правку на ordered) / «Отменить»
- *   • received / cancelled — только чтение.
+ *   • received — «Изменить дату» (смена даты проведённой поставки задним
+ *     числом, миграция 159); остальное только чтение.
+ *   • cancelled — только чтение.
  *
  * Приёмка вынесена на отдельный экран SupplyReceiveScreen (поставка ↔ заказ ↔
  * долг ↔ платёж, миграция 098). Он инвалидирует ['products'] /
@@ -27,6 +29,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
 import ConfirmDialog from '../components/ConfirmDialog';
+import DateTimePickerModal from '../components/DateTimePickerModal';
 import { ListSkeleton } from '../components/Skeleton';
 import QueryErrorState from '../components/QueryErrorState';
 import SupplierRequestSheet from './purchaseOrders/SupplierRequestSheet';
@@ -38,7 +41,15 @@ import { iosSectionLabel } from '../platform/iosSurface';
 import { colors, borderRadius, spacing, getBadgeColors } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import type { PurchaseOrder, Supplier } from '../../../shared/types';
-import { getPoStatusMeta, formatMoney, formatPoDate, outstandingQty } from './purchaseOrders/purchaseOrderHelpers';
+import {
+  getPoStatusMeta,
+  formatMoney,
+  formatPoDate,
+  formatSupplyDate,
+  isFutureDay,
+  outstandingQty,
+  toSupplyDateStr,
+} from './purchaseOrders/purchaseOrderHelpers';
 
 export default function PurchaseOrderDetailScreen() {
   const navigation = useNavigation<any>();
@@ -56,6 +67,9 @@ export default function PurchaseOrderDetailScreen() {
 
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [showRequest, setShowRequest] = useState(false);
+  // Смена даты проведённой поставки (159): пикер → подтверждение → PATCH.
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [pendingDate, setPendingDate] = useState<Date | null>(null);
 
   const {
     data: po,
@@ -124,7 +138,50 @@ export default function PurchaseOrderDetailScreen() {
     },
   });
 
-  const busy = orderMutation.isPending || cancelMutation.isPending;
+  // Смена даты проведённой поставки (159). Сервер в одной транзакции переносит
+  // на новую дату накладную, авто-платёж, движения склада и received_at заказа
+  // — поэтому чистим те же кэши, что и приёмка (склад + леджер поставщика).
+  const changeDateMutation = useMutation({
+    mutationFn: (date: Date) => purchaseOrdersApi.changeDate(id, toSupplyDateStr(date)),
+    onSuccess: (res) => {
+      haptic('success');
+      applyUpdated(res.data);
+      queryClient.invalidateQueries({ queryKey: ['purchase-orders'] });
+      queryClient.invalidateQueries({ queryKey: ['stock-movements'] });
+      queryClient.invalidateQueries({ queryKey: ['journal-warehouse-docs'] });
+      queryClient.invalidateQueries({ queryKey: ['warehouse-analytics'] });
+      const supplierId = res.data.supplierId;
+      if (supplierId) {
+        queryClient.invalidateQueries({ queryKey: ['supplier', supplierId] });
+        queryClient.invalidateQueries({ queryKey: ['supplier-deliveries', supplierId] });
+        queryClient.invalidateQueries({ queryKey: ['supplier-payments', supplierId] });
+      }
+      queryClient.invalidateQueries({ queryKey: ['suppliers'] });
+      setPendingDate(null);
+      Alert.alert('Дата изменена', `Поставка перенесена на ${formatPoDate(res.data.receivedAt)}.`);
+    },
+    onError: (err: any) => {
+      haptic('error');
+      const raw = err?.response?.data?.message;
+      const msg = Array.isArray(raw) ? raw.join('\n') : raw || 'Не удалось изменить дату — нет связи с сервером';
+      setPendingDate(null);
+      Alert.alert('Ошибка', String(msg));
+    },
+  });
+
+  // Пикер даты: будущее не отдаём (сервер вернёт 400) — говорим сразу.
+  const applyPickedDate = useCallback((d: Date) => {
+    if (isFutureDay(d)) {
+      haptic('warning');
+      Alert.alert('Дата поставки', 'Дата поставки не может быть в будущем.');
+      return;
+    }
+    haptic('select');
+    setDatePickerOpen(false);
+    setPendingDate(d);
+  }, []);
+
+  const busy = orderMutation.isPending || cancelMutation.isPending || changeDateMutation.isPending;
 
   // Открыть экран приёмки поставки по этому заказу. Приёмка (цена за строку,
   // стоимость накладной, выбор «в долг / оплатить сразу») живёт на отдельном
@@ -154,7 +211,8 @@ export default function PurchaseOrderDetailScreen() {
 
   const isDraft = po.status === 'draft';
   const isOrdered = po.status === 'ordered';
-  const isTerminal = po.status === 'received' || po.status === 'cancelled';
+  const isReceived = po.status === 'received';
+  const isTerminal = isReceived || po.status === 'cancelled';
 
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
@@ -181,6 +239,13 @@ export default function PurchaseOrderDetailScreen() {
             {po.orderedAt ? <MetaRow label="Заказан" value={formatPoDate(po.orderedAt)} palette={palette} /> : null}
             {po.receivedAt ? <MetaRow label="Получен" value={formatPoDate(po.receivedAt)} palette={palette} /> : null}
             {po.createdByName ? <MetaRow label="Автор" value={po.createdByName} palette={palette} /> : null}
+            {po.dateCorrectedAt ? (
+              <MetaRow
+                label="Дата изменена"
+                value={`${formatPoDate(po.dateCorrectedAt)}${po.dateCorrectedByName ? ` · ${po.dateCorrectedByName}` : ''}`}
+                palette={palette}
+              />
+            ) : null}
           </View>
 
           {po.note ? (
@@ -292,14 +357,17 @@ export default function PurchaseOrderDetailScreen() {
               color={po.status === 'received' ? colors.green[600] : colors.red[500]}
             />
             <Text style={[styles.terminalHintText, { color: palette.text.tertiary }]}>
-              {po.status === 'received' ? 'Заказ получен, товар оприходован на склад' : 'Заказ отменён'}
+              {isReceived
+                ? `Поставка проведена${po.receivedAt ? ` ${formatPoDate(po.receivedAt)}` : ''} — товар оприходован на склад`
+                : 'Заказ отменён'}
             </Text>
           </View>
         ) : null}
       </ScrollView>
 
-      {/* ── Action bar (write-роль) ── */}
-      {canWrite && !isTerminal ? (
+      {/* ── Action bar (write-роль). Для received бар остаётся ради «Изменить
+          дату» — смены даты проведённой поставки задним числом (159). ── */}
+      {canWrite && (!isTerminal || isReceived) ? (
         <View
           style={[
             styles.actionBar,
@@ -383,6 +451,20 @@ export default function PurchaseOrderDetailScreen() {
                 </TouchableOpacity>
               </View>
             </View>
+          ) : isReceived ? (
+            // Проведённая поставка: единственное действие — поправить дату
+            // (сервер переносит склад + накладную + деньги на неё же).
+            <TouchableOpacity
+              style={[styles.secondaryBtn, styles.dateActionBtn, { borderColor: palette.border.strong }]}
+              onPress={() => {
+                haptic('tap');
+                setDatePickerOpen(true);
+              }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="calendar-outline" size={16} color={palette.text.secondary} />
+              <Text style={[styles.secondaryBtnText, { color: palette.text.secondary }]}>Изменить дату</Text>
+            </TouchableOpacity>
           ) : null}
         </View>
       ) : null}
@@ -395,6 +477,31 @@ export default function PurchaseOrderDetailScreen() {
         message="Заказ будет помечен как отменённый. Это действие нельзя вернуть."
         confirmText="Отменить заказ"
         variant="danger"
+      />
+
+      {/* ── Смена даты проведённой поставки (159) ── */}
+      <DateTimePickerModal
+        visible={datePickerOpen}
+        value={po.receivedAt ? new Date(po.receivedAt) : new Date()}
+        mode="date"
+        onConfirm={applyPickedDate}
+        onCancel={() => setDatePickerOpen(false)}
+      />
+
+      <ConfirmDialog
+        visible={pendingDate !== null}
+        onClose={() => setPendingDate(null)}
+        onConfirm={() => {
+          if (pendingDate) changeDateMutation.mutate(pendingDate);
+        }}
+        title="Изменить дату поставки?"
+        message={
+          pendingDate
+            ? `Поставка переедет на ${formatSupplyDate(pendingDate)}. На эту же дату перенесутся приход товара на склад, накладная и оплата поставщику.`
+            : ''
+        }
+        confirmText="Изменить дату"
+        variant="primary"
       />
 
       {/* ── Запрос поставщику (текст без цен → копировать / WhatsApp) ── */}
@@ -541,6 +648,9 @@ const styles = StyleSheet.create({
   secondaryBtnText: { fontSize: 15, fontWeight: '700', letterSpacing: -0.2 },
   // Equal-width row variant — [Изменить][Отменить] under «Принять поставку».
   secondaryBtnFlex: { flex: 1, flexDirection: 'row', gap: spacing[1.5] },
+  // Одиночная кнопка на всю ширину бара — «Изменить дату» у проведённой
+  // поставки (без flex: 1: в колоночном баре он тянул бы её по высоте).
+  dateActionBtn: { flexDirection: 'row', gap: spacing[1.5] },
   iconActionBtn: {
     width: 48,
     paddingVertical: spacing[3.5],

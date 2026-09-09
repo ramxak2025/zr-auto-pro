@@ -14,6 +14,12 @@ import { useClickableRow } from '../hooks/useClickableRow';
 import type { PurchaseOrder, PurchaseOrderStatus, PaginatedResponse, Supplier } from '../types';
 import { formatMoney, formatDateShort } from '../../../shared/utils/formatters';
 
+// У проведённой поставки ведущая дата — ДАТА ПОСТАВКИ (159): её можно выбрать
+// при приёмке задним числом и поправить потом. У остальных статусов даты
+// поставки ещё нет — показываем дату создания заказа.
+const poDate = (po: { status: string; receivedAt?: string | null; createdAt: string }): string =>
+  formatDateShort(po.status === 'received' && po.receivedAt ? po.receivedAt : po.createdAt);
+
 // `useClickableRow` returns a static prop bag (no React state) — aliasing lets
 // us call it per-row inside `.map` without tripping react-hooks/rules-of-hooks.
 const clickableRowProps = useClickableRow;
@@ -155,7 +161,7 @@ export default function PurchaseOrdersPage() {
               </div>
               <div className="flex items-center justify-between text-xs text-gray-500">
                 <span>
-                  {formatDateShort(po.createdAt)} · {po.itemCount ?? 0} поз.
+                  {poDate(po)} · {po.itemCount ?? 0} поз.
                 </span>
                 <span className="font-semibold text-gray-900 tabular-nums">{formatMoney(po.total)}</span>
               </div>
@@ -185,7 +191,7 @@ export default function PurchaseOrdersPage() {
                   })}
                 >
                   <td className="font-medium text-gray-900">{po.supplierName || 'Без поставщика'}</td>
-                  <td className="text-gray-600">{formatDateShort(po.createdAt)}</td>
+                  <td className="text-gray-600">{poDate(po)}</td>
                   <td className="text-center text-gray-600 tabular-nums">{po.itemCount ?? 0}</td>
                   <td>
                     <PurchaseOrderStatusBadge status={po.status} />
