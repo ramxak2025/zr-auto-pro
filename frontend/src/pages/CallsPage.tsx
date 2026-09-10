@@ -22,6 +22,9 @@ import {
 } from 'lucide-react';
 import { format, subDays, addDays } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { zoned } from '../utils/tenantTime';
+import { formatDayKey, formatTimeShort } from '../../../shared/utils/formatters';
 import { useAuth } from '../contexts/AuthContext';
 import { callsApi } from '../api/services';
 
@@ -238,18 +241,23 @@ function CallRow({
   canListen,
   activeRecording,
   onPlayRecording,
+  timeZone,
 }: {
   call: Call;
   canListen: boolean;
   activeRecording: string | null;
   onPlayRecording: (id: string | null) => void;
+  /**
+   * Пояс автосервиса (157): сервер режет ленту звонков по МЕСТНЫМ суткам
+   * тенанта, поэтому и время звонка на строке обязано быть местным — иначе
+   * звонок «в 23:40» лежит в дне, который на экране называется следующим.
+   */
+  timeZone: string;
 }) {
   const isMissed = call.direction === 'incoming' && (call.status === 'missed' || call.duration === 0);
   const isIncoming = call.direction === 'incoming';
   const displayPhone = isIncoming ? call.from : call.to;
-  const callTime = call.date
-    ? new Date(call.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-    : '';
+  const callTime = call.date ? formatTimeShort(call.date, timeZone) : '';
   const isPlaying = activeRecording === call.recordingUrl;
 
   return (
@@ -347,6 +355,9 @@ const filterTabs: { key: FilterTab; label: string; icon: typeof Phone }[] = [
 
 export default function CallsPage() {
   const { hasPermission } = useAuth();
+  // День ленты и время звонков — по календарю автосервиса, тому же, по которому
+  // сервер отбирает звонки за дату.
+  const timeZone = useTenantTimezone();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
   const [activeRecording, setActiveRecording] = useState<string | null>(null);
@@ -356,16 +367,16 @@ export default function CallsPage() {
   const canView = hasPermission('calls_view');
   const canListen = hasPermission('calls_listen');
 
-  const dateStr = format(selectedDate, 'yyyy-MM-dd');
+  const dateStr = formatDayKey(selectedDate, timeZone);
 
   const dateLabel = useMemo(() => {
     const today = new Date();
-    const todayStr = format(today, 'yyyy-MM-dd');
-    const yesterdayStr = format(subDays(today, 1), 'yyyy-MM-dd');
+    const todayStr = formatDayKey(today, timeZone);
+    const yesterdayStr = formatDayKey(subDays(today, 1), timeZone);
     if (dateStr === todayStr) return 'Сегодня';
     if (dateStr === yesterdayStr) return 'Вчера';
-    return format(selectedDate, 'd MMM, EEEEEE', { locale: ru });
-  }, [dateStr, selectedDate]);
+    return format(zoned(selectedDate, timeZone), 'd MMM, EEEEEE', { locale: ru });
+  }, [dateStr, selectedDate, timeZone]);
 
   const { data, isLoading, isError, isFetching, refetch } = useQuery({
     queryKey: ['calls', dateStr],
@@ -405,7 +416,7 @@ export default function CallsPage() {
       setActiveRecording(null);
     }
   };
-  const isToday = format(new Date(), 'yyyy-MM-dd') === dateStr;
+  const isToday = formatDayKey(new Date(), timeZone) === dateStr;
 
   if (!canView) {
     return (
@@ -551,6 +562,7 @@ export default function CallsPage() {
                 canListen={canListen}
                 activeRecording={activeRecording}
                 onPlayRecording={setActiveRecording}
+                timeZone={timeZone}
               />
             ))}
           </div>

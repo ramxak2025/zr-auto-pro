@@ -56,6 +56,7 @@ import { formatPhone } from '../../../shared/validation/phone';
 // Канонический словарь оплат (включая installment: «Рассрочка») — единый
 // для web и mobile; локальные копии словаря запрещены.
 import { paymentMethodLabels } from '../../../shared/utils/formatters';
+import { otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
 import { haptic } from '../platform/haptics';
 import { detectPlateMode } from '../utils/plateMask';
 import { pkpassBlobToBase64, presentPkpass } from '../utils/walletPass';
@@ -582,6 +583,17 @@ export default function ClientDetailScreen() {
             },
           },
         ]);
+        return;
+      }
+      // 161 — номер занят карточкой ДРУГОГО ФИЛИАЛА. Ни имени, ни id владельца
+      // сервер не отдаёт (чужая база), поэтому предлагать «Открыть его
+      // карточку» нельзя — она невидима и вернула бы 404. Показываем текст
+      // сервера: он говорит, что делать (перевести клиента или включить общую
+      // базу клиентов).
+      const otherPoint = otherPointPhoneConflictMessage(err);
+      if (otherPoint) {
+        haptic('warning');
+        Alert.alert('Номер занят другим филиалом', otherPoint);
         return;
       }
       haptic('error');

@@ -66,7 +66,8 @@ export class ExpensesController {
     if (!userHasPermission(user, 'can_add_expenses') && !userHasPermission(user, 'financial_reports')) {
       throw new ForbiddenException({ message: 'Недостаточно прав для этого действия' });
     }
-    return this.expensesService.getAll(user.tenantID, query);
+    // Актор целиком — сервису нужна его текущая точка (161).
+    return this.expensesService.getAll(user.tenantID, query, user);
   }
 
   @RequirePermission('can_add_expenses')
@@ -78,13 +79,13 @@ export class ExpensesController {
   @RequirePermission('financial_reports')
   @Patch(':id/approve')
   approve(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.expensesService.approve(id, user.tenantID);
+    return this.expensesService.approve(id, user.tenantID, user);
   }
 
   @RequirePermission('financial_reports')
   @Patch(':id/reject')
   reject(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.expensesService.reject(id, user.tenantID);
+    return this.expensesService.reject(id, user.tenantID, user);
   }
 
   @RequirePermission('financial_reports')

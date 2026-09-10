@@ -64,7 +64,7 @@ export class ChecksController {
   @RequirePermission('checks_view')
   @Get('ranking')
   getRanking(@CurrentUser() user: JwtPayload) {
-    return this.checksService.getRanking(user.tenantID);
+    return this.checksService.getRanking(user.tenantID, user);
   }
 
   /**
@@ -75,7 +75,7 @@ export class ChecksController {
   @RequirePermission('checks_view')
   @Get('last-visit')
   getLastVisit(@CurrentUser() user: JwtPayload, @Query('clientId') clientId?: string, @Query('carId') carId?: string) {
-    return this.checksService.getLastVisit(user.tenantID, { clientId, carId });
+    return this.checksService.getLastVisit(user.tenantID, { clientId, carId }, user);
   }
 
   /**
@@ -193,7 +193,9 @@ export class ChecksController {
   @RequirePermission('checks_delete')
   @Get('trash')
   listTrash(@CurrentUser() user: JwtPayload) {
-    return this.checksService.listTrash(user.tenantID);
+    // Актор целиком (а не только tenantID): корзина скоупится филиалом (161)
+    // так же, как журнал — восстановление из неё тоже филиальное.
+    return this.checksService.listTrash(user.tenantID, user);
   }
 
   // ── Метки чеков (Round 12 #9, миграция 140) ─────────────────────────────
@@ -299,8 +301,8 @@ export class ChecksController {
    * «Комментарий своего чека — день в день». ЛЮБОЙ авторизованный сотрудник —
    * намеренно БЕЗ @Roles и без edit-permission гейта — может изменить ТОЛЬКО
    * комментарий СВОЕГО чека (master_id = actor) и ТОЛЬКО в календарный день
-   * его создания (по Europe/Moscow — той же зоне, что и MSK-кроны продукта),
-   * включая уже проведённые чеки. Вчерашний чек так уже не правится. Полное
+   * его создания (по ПОЯСУ ТЕНАНТА, tenants.timezone), включая уже проведённые
+   * чеки. Вчерашний чек так уже не правится. Полное
    * редактирование остаётся за прежним permission-гейтом на @Patch(':id').
    * Всё принуждение (свой/сегодня/не в корзине) — в WHERE самого UPDATE в
    * сервисе. Объявлен ДО @Patch(':id'): двухсегментный литеральный путь
@@ -364,6 +366,8 @@ export class ChecksController {
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     // Корзина (106): now a reversible soft-delete. `user.userID` is recorded as
     // deleted_by so the trash list can show who moved it there.
-    return this.checksService.remove(id, user.tenantID, user.role, user.userID);
+    // Актор пятым аргументом — ради филиального гейта записи (161): удалить
+    // чек соседнего филиала нельзя, даже зная его id из истории клиента.
+    return this.checksService.remove(id, user.tenantID, user.role, user.userID, user);
   }
 }

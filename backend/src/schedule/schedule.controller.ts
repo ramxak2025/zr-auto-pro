@@ -19,13 +19,14 @@ export class ScheduleController {
   @RequirePermission('schedule_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.scheduleService.getAll(user.tenantID, query);
+    // Актор целиком — сервису нужна его текущая точка (161).
+    return this.scheduleService.getAll(user.tenantID, query, user);
   }
 
   @RequirePermission('schedule_view')
   @Get('today')
   getToday(@CurrentUser() user: JwtPayload) {
-    return this.scheduleService.getToday(user.tenantID);
+    return this.scheduleService.getToday(user.tenantID, user);
   }
 
   @Get('my-stats')

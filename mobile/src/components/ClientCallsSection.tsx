@@ -22,6 +22,7 @@ import { useAudioPlayer, useAudioPlayerStatus, setAudioModeAsync } from 'expo-au
 import { Text } from '../platform/Typography';
 import { callsApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { colors, spacing, borderRadius, getBadgeColors } from '../theme';
 
 interface Call {
@@ -44,11 +45,23 @@ function formatDuration(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-function formatCallDate(d: string): string {
+/**
+ * Дата+время звонка в поясе АВТОСЕРВИСА (tenants.timezone, 157): лента звонков
+ * на сервере режется по его суткам, и карточка клиента обязана показывать тот
+ * же день. Intl с чужим поясом на урезанной сборке Hermes может бросить —
+ * тогда падаем на время устройства (прежнее поведение).
+ */
+function formatCallDate(d: string, tz: string): string {
   const dt = new Date(d);
-  const time = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
-  const day = dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
-  return `${day} · ${time}`;
+  try {
+    const time = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+    const day = dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', timeZone: tz });
+    return `${day} · ${time}`;
+  } catch {
+    const time = dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    const day = dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit' });
+    return `${day} · ${time}`;
+  }
 }
 
 export default function ClientCallsSection({
@@ -155,6 +168,8 @@ function CallRow({
   playing: boolean;
   onTogglePlay: () => void;
 }) {
+  // Пояс автосервиса — только для подписи времени; строка, ререндеров не добавляет.
+  const tenantTz = useTenantTimezone();
   const isMissed = call.direction === 'incoming' && (call.status === 'missed' || call.duration === 0);
   const isIncoming = call.direction === 'incoming';
 
@@ -196,7 +211,7 @@ function CallRow({
             {isMissed ? ' · пропущен' : ''}
           </Text>
           <Text variant="caption" color={palette.text.tertiary}>
-            {formatCallDate(call.date)}
+            {formatCallDate(call.date, tenantTz)}
             {call.duration > 0 ? ` · ${formatDuration(call.duration)}` : ''}
           </Text>
         </View>

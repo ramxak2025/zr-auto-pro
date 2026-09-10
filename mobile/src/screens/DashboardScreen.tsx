@@ -44,7 +44,6 @@ import {
   myCompanyApi,
   installmentsApi,
   cashShiftsApi,
-  pointsApi,
 } from '../api/services';
 import { formatInstallmentMoney, dueLabel } from '../components/installments/installmentUi';
 import { getImageUrl } from '../api/axios';
@@ -56,6 +55,7 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import FreshnessBadge from '../components/FreshnessBadge';
+import PointSwitcher from '../components/PointSwitcher';
 import QueryErrorState from '../components/QueryErrorState';
 import type {
   SalarySummary,
@@ -70,7 +70,6 @@ import type {
   Tenant,
   InstallmentWidget,
   CashShiftReport,
-  PointsListResponse,
 } from '../../../shared/types';
 import { UserRole } from '../../../shared/types';
 import { usePreference, prefKey } from '../hooks/usePreference';
@@ -201,7 +200,13 @@ function getOffsetLabel(period: ChartPeriod, offset: number): string {
   }
 }
 
-function formatDeltaPct(curr: number, prev: number): { text: string; tone: 'up' | 'down' | 'flat' } {
+/**
+ * Дельта в процентах. `prev === null` — сравнивать НЕ С ЧЕМ (сервер не прислал
+ * окно сравнения или это старый бэкенд): показываем прочерк, а не «+∞». Врать
+ * ростом там, где базы нет, на денежном экране нельзя.
+ */
+function formatDeltaPct(curr: number, prev: number | null): { text: string; tone: 'up' | 'down' | 'flat' } {
+  if (prev === null) return { text: '—', tone: 'flat' };
   if (!isFinite(curr) || !isFinite(prev)) return { text: '—', tone: 'flat' };
   if (prev === 0 && curr === 0) return { text: '—', tone: 'flat' };
   if (prev === 0) return { text: curr > 0 ? '+∞' : '—', tone: curr > 0 ? 'up' : 'flat' };
@@ -397,16 +402,27 @@ function OwnerHero({ name }: { name: string }) {
 //   delta chip ↑/↓ %
 // Все 4 кликабельны → переход в соответствующий экран.
 //
-// Период — **текущий месяц** (month-to-date). Данные:
-//   • `dashboard-chart('month', 0)` — оборот, прибыль, чеки за этот месяц.
-//   • `dashboard-chart('month', -1)` — те же показатели за прошлый месяц,
-//     для дельты-чипа на каждом тайле.
+// Период — **текущий месяц** (month-to-date). Данные — ОДИН запрос
+// `dashboard-chart('month', 0)`: он же приносит блок `previous` — итоги
+// прошлого месяца НА ТУ ЖЕ ДАТУ (1–9 августа против 1–9 сентября) и готовую
+// подпись «к 9 августа».
+//
+// РАНЬШЕ дельту считала мобилка сама из второго запроса
+// `dashboard-chart('month', -1)` — то есть месяц-к-дате против ПОЛНОГО
+// прошлого месяца. В начале месяца это давало вечное «−70 %», которое ничего
+// не значит. Второй запрос сюда возвращать нельзя: сравнивать 9 дней с 31
+// днём — это не дельта.
 
 interface KpiTileSpec {
   key: 'revenue' | 'profit' | 'checks' | 'avg';
   title: string;
   format: 'money' | 'count';
   pickValue: (p: { revenue: number; profit: number; checkCount: number }) => number;
+  /**
+   * Итог периода. Принимает и текущий период, и блок `previous` — у них
+   * одинаковые три поля, поэтому один и тот же аккумулятор считает обе
+   * стороны дельты и они физически не могут разъехаться.
+   */
   total: (data: { totalRevenue: number; totalProfit: number; totalChecks: number }, avgValue: number) => number;
   navTo: () => { stack: string; screen?: string } | null;
 }
@@ -424,15 +440,12 @@ function KpiStrip() {
     staleTime: 60_000,
     placeholderData: (prev) => prev,
   });
-  const prevMonth = useQuery({
-    queryKey: ['dashboard-chart', 'month', -1],
-    queryFn: async () => (await checksApi.getDashboardChart('month', -1)).data,
-    staleTime: 60_000,
-    placeholderData: (prev) => prev,
-  });
 
   const c = month.data;
-  const p = prevMonth.data;
+  // Прошлый месяц на ту же дату — считает сервер в поясе автосервиса.
+  // `?? null` покрывает старый бэкенд без поля: дельта тогда честный прочерк,
+  // а не выдуманный процент.
+  const p = c?.previous ?? null;
   const avg = c && c.totalChecks > 0 ? c.totalRevenue / c.totalChecks : 0;
   const prevAvg = p && p.totalChecks > 0 ? p.totalRevenue / p.totalChecks : 0;
   const isLoading = c === undefined && month.isLoading;
@@ -497,12 +510,28 @@ function KpiStrip() {
     return `${months[now.getMonth()]} ${now.getFullYear()}`;
   }, []);
 
+  // Подпись чипов дельты — ЧЕСТНО с чем сравнили. Текст готовит сервер в поясе
+  // автосервиса («к 9 августа» / «к августу»), а не устройство: у владельца во
+  // Владивостоке, открывшего приложение в 01:00, местная дата уже другая.
+  const compareLabel = p?.label ?? null;
+
+  const header = (
+    <View style={styles.kpiHeaderRow}>
+      <Text style={[styles.sectionLabel, styles.kpiHeaderTitle, { color: palette.text.secondary }]}>{monthHeader}</Text>
+      {compareLabel && (
+        <Text style={[styles.kpiCompareCaption, { color: palette.text.tertiary }]} numberOfLines={1}>
+          {compareLabel}
+        </Text>
+      )}
+    </View>
+  );
+
   // M7: без кэша и с упавшим запросом KPI-тайлы рисовали нули — владелец
   // принимал бы «0 ₽ оборота» за правду. Показываем error-state с retry.
   if (month.isError && c === undefined) {
     return (
       <View>
-        <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>{monthHeader}</Text>
+        {header}
         <QueryErrorState description="Показатели месяца недоступны" onRetry={() => month.refetch()} />
       </View>
     );
@@ -510,7 +539,7 @@ function KpiStrip() {
 
   return (
     <View>
-      <Text style={[styles.sectionLabel, { color: palette.text.secondary }]}>{monthHeader}</Text>
+      {header}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
@@ -521,8 +550,7 @@ function KpiStrip() {
       >
         {tiles.map((spec, idx) => {
           const totalCurr = c ? spec.total(c, avg) : 0;
-          const totalPrev = p ? spec.total(p, prevAvg) : 0;
-          const delta = formatDeltaPct(totalCurr, totalPrev);
+          const delta = formatDeltaPct(totalCurr, p ? spec.total(p, prevAvg) : null);
           const series = points.map(spec.pickValue);
 
           const handlePress = () => {
@@ -3478,100 +3506,17 @@ function OwnerFreshnessBadge() {
 }
 
 /**
- * PointSwitcherChip — мульти-точки (156): компактный переключатель текущей
- * точки в шапке дашборда. Полностью скрыт при 0–1 живой точке — одноточечный
- * режим не показывает ничего нового.
+ * PointSwitcherChip — индикатор текущего филиала в шапке дашборда.
  *
- * Права:
- *   • user_management (владелец/админ) — видит все живые точки + «Все точки»
- *     (сброс выбора, currentPointId → null).
- *   • мастер — видит только точки, где он в `memberIds`. Если он не назначен
- *   ни на одну — «не ограничен» (см. shared/types TenantPoint): чип не
- *   показывается, переключать для него нечего.
+ * Вся логика (кто какие точки видит, что происходит при переключении, выбор
+ * через BottomSheet вместо Alert) живёт в общем компоненте
+ * `components/PointSwitcher` — тот же чип стоит в Журнале и на кассовой смене,
+ * а на Кассе он же в широком варианте. Локальная копия здесь была источником
+ * расхождения: она переключала точку, но инвалидировала лишь 8 ключей и
+ * оставляла на экранах деньги прошлого филиала.
  */
 function PointSwitcherChip({ style }: { style?: StyleProp<ViewStyle> }) {
-  const { user, hasPermission } = useAuth();
-  const palette = useColors();
-  const queryClient = useQueryClient();
-
-  const { data } = useQuery<PointsListResponse>({
-    queryKey: ['points'],
-    queryFn: async () => (await pointsApi.list()).data,
-    staleTime: 60_000,
-  });
-
-  const points = data?.points ?? [];
-  const canManage = hasPermission('user_management');
-  const assignedPoints = useMemo(
-    () => (user ? points.filter((p) => p.memberIds?.includes(user.id)) : []),
-    [points, user],
-  );
-  // Владелец/админ выбирает из всех точек. Мастер, назначенный хоть на одну
-  // точку, — только из своих (memberIds). Мастер БЕЗ явных назначений «не
-  // ограничен» (см. TenantPoint) — это про ДОСТУП, а не про то, что ему
-  // нечего переключать: он, как и владелец, видит полный список точек (но
-  // без пункта «Все точки» — сброс выбора остаётся только у user_management).
-  const selectable = canManage || assignedPoints.length === 0 ? points : assignedPoints;
-
-  const switchMutation = useMutation({
-    mutationFn: (pointId: string | null) => pointsApi.switch(pointId),
-    onSuccess: () => {
-      haptic('success');
-      queryClient.invalidateQueries({ queryKey: ['points'] });
-      // Точка меняет видимую базу клиентов (если pointsSharedClients=false) и
-      // авторство новых чеков — обновляем журнал/клиентов, чтобы список не
-      // показывал устаревшую выборку другой точки.
-      queryClient.invalidateQueries({ queryKey: ['clients'] });
-      queryClient.invalidateQueries({ queryKey: ['clients-infinite'] });
-      queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
-      queryClient.invalidateQueries({ queryKey: ['checks'] });
-      queryClient.invalidateQueries({ queryKey: ['checks-infinite'] });
-      queryClient.invalidateQueries({ queryKey: ['checks-dashboard'] });
-      queryClient.invalidateQueries({ queryKey: ['checks-trash'] });
-    },
-    onError: () => {
-      haptic('error');
-      Alert.alert('Ошибка', 'Не удалось переключить точку');
-    },
-  });
-
-  if (points.length <= 1) return null;
-
-  const current = points.find((p) => p.id === data?.currentPointId) ?? null;
-  const label = current ? current.name : canManage ? 'Все точки' : (selectable[0]?.name ?? 'Точка');
-
-  const openPicker = () => {
-    haptic('tap');
-    const options: Array<{ text: string; onPress?: () => void; style?: 'cancel' }> = selectable.map((p) => ({
-      text: p.id === data?.currentPointId ? `✓ ${p.name}` : p.name,
-      onPress: () => switchMutation.mutate(p.id),
-    }));
-    if (canManage) {
-      options.push({
-        text: data?.currentPointId == null ? '✓ Все точки' : 'Все точки',
-        onPress: () => switchMutation.mutate(null),
-      });
-    }
-    options.push({ text: 'Отмена', style: 'cancel' });
-    Alert.alert('Точка', 'Выберите точку', options);
-  };
-
-  return (
-    <TouchableOpacity
-      style={[styles.pointChip, { backgroundColor: palette.bg.muted, borderColor: palette.border.subtle }, style]}
-      onPress={openPicker}
-      activeOpacity={0.7}
-      disabled={switchMutation.isPending}
-      accessibilityRole="button"
-      accessibilityLabel={`Точка: ${label}. Нажмите, чтобы переключить`}
-    >
-      <Ionicons name="location-outline" size={13} color={palette.text.secondary} />
-      <Text style={[styles.pointChipText, { color: palette.text.secondary }]} numberOfLines={1}>
-        {label}
-      </Text>
-      <Ionicons name="chevron-down" size={12} color={palette.text.tertiary} />
-    </TouchableOpacity>
-  );
+  return <PointSwitcher variant="chip" style={style} />;
 }
 
 // ── Configurable owner widgets ───────────────────────────────────────────────
@@ -4703,19 +4648,9 @@ const styles = StyleSheet.create({
   headerSection: { marginBottom: spacing[1] },
   headerTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   headerSub: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
-  // 156 — мульти-точки: компактный переключатель точки в шапке.
-  pointChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: spacing[2.5],
-    paddingVertical: spacing[1],
-    borderRadius: borderRadius.full,
-    borderWidth: StyleSheet.hairlineWidth,
-    alignSelf: 'flex-start',
-  },
-  pointChipText: { fontSize: fontSize.xs, fontWeight: fontWeight.semibold, maxWidth: 130 },
-  pointChipUnderGreeting: { marginTop: spacing[1.5] },
+  // 156 — мульти-точки: отступ чипа филиала под приветствием мастера. Сам
+  // вид чипа живёт в components/PointSwitcher — один на все экраны.
+  pointChipUnderGreeting: { marginTop: spacing[1.5], alignSelf: 'flex-start' },
 
   // Legacy card (master path)
   card: {
@@ -4854,6 +4789,23 @@ const styles = StyleSheet.create({
   },
   funnelTileValue: { fontSize: 20, fontWeight: '700', letterSpacing: -0.5 },
   funnelTileLabel: { fontSize: 11, fontWeight: '500' },
+  kpiHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    gap: spacing[2],
+    // Отступ до тайлов переехал сюда с sectionLabel — см. kpiHeaderTitle.
+    marginBottom: spacing[2.5],
+  },
+  // Заголовок в строке с подписью сравнения: marginBottom живёт на строке,
+  // поэтому у самого текста его гасим (иначе базовые линии разъедутся).
+  kpiHeaderTitle: { marginBottom: 0, flexShrink: 1 },
+  kpiCompareCaption: {
+    fontSize: 11,
+    fontWeight: '600',
+    letterSpacing: 0.2,
+    flexShrink: 0,
+  },
   kpiScrollContent: {
     gap: spacing[3],
     paddingRight: spacing[4],

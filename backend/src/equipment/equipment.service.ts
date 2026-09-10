@@ -1,6 +1,7 @@
 import { Injectable, Inject, BadRequestException, NotFoundException, Logger } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { resolvePointForWrite } from '../common/point-scope';
 
 @Injectable()
 export class EquipmentService {
@@ -72,12 +73,36 @@ export class EquipmentService {
    * new item via `storage_item_id` (#14). Equipment + expense are written in
    * one transaction so they can never disagree.
    */
-  async createStorageItem(tenantId: string, createdBy: string | null, dto: any) {
+  /**
+   * 161 — `pointId` (текущий филиал автора) уходит в зеркальный расход
+   * «Покупка имущества»: оборудование покупается ДЛЯ конкретного филиала, и
+   * его стоимость обязана резать прибыль именно этого филиала.
+   */
+  async createStorageItem(tenantId: string, createdBy: string | null, dto: any, pointId: string | null = null) {
     const purchasePrice = parseFloat(String(dto.purchasePrice ?? 0)) || 0;
     // «Цена, ₽» is per-unit; quantity is a separate column. The cash outflow is
     // the full purchase, so the linked expense must be pricePerUnit × quantity.
     const qty = parseFloat(String(dto.quantity ?? 0)) || 0;
     const expenseAmount = purchasePrice * Math.max(qty, 1);
+
+    // ФИЛИАЛ ЗЕРКАЛЬНОГО РАСХОДА (волна 4). Раньше сюда приезжала сырая точка
+    // актора, и в режиме «Все точки» покупка имущества рождала расход с
+    // point_id = NULL: деньги ушли, а из прибыли и «Движения денег» КАЖДОГО
+    // филиала эта покупка выпадала. Общий резолв — своя точка, либо
+    // единственная доступная, либо 400 «Выберите филиал».
+    //
+    // Резолвим ТОЛЬКО когда расход реально родится (цена > 0): бесплатное
+    // имущество денег не двигает, и требовать под него филиал незачем.
+    // Резолв ДО pool.connect() — вторая коннекция под открытой транзакцией на
+    // исчерпанном пуле даёт взаимную блокировку.
+    const writePointId =
+      purchasePrice > 0
+        ? await resolvePointForWrite(
+            this.pool,
+            { tenantID: tenantId, userID: createdBy, currentPointId: pointId },
+            'чтобы записать покупку имущества',
+          )
+        : pointId;
 
     const client = await this.pool.connect();
     try {
@@ -111,9 +136,9 @@ export class EquipmentService {
         );
         if (dup.length === 0) {
           await client.query(
-            `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id, storage_item_id)
-             VALUES ($1, $2, $3, now(), $4, $4, 'owner', 'approved', $5, $6)`,
-            [categoryId, expenseAmount, `Покупка имущества: ${item.name}`, createdBy, tenantId, item.id],
+            `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id, storage_item_id, point_id)
+             VALUES ($1, $2, $3, now(), $4, $4, 'owner', 'approved', $5, $6, $7)`,
+            [categoryId, expenseAmount, `Покупка имущества: ${item.name}`, createdBy, tenantId, item.id, writePointId],
           );
         }
       }
@@ -157,7 +182,23 @@ export class EquipmentService {
     return existing[0].id as string;
   }
 
-  async updateStorageItem(id: string, tenantId: string, dto: any) {
+  /**
+   * 161 — `pointId` нужен ТОЛЬКО когда цена подняли с нуля и расход рождается
+   * впервые: у уже существующего расхода филиал не переписываем (расход
+   * принадлежит филиалу ПОКУПКИ, а правит карточку может кто угодно и откуда
+   * угодно — перенос сдвинул бы прибыль сразу двух филиалов задним числом).
+   *
+   * ВОЛНА 4 — сырая точка актора заменена общим резолвом
+   * (common/point-scope.resolvePointForWrite): в режиме «Все точки» расход
+   * рождался с point_id = NULL и не попадал ни в один филиальный срез.
+   */
+  async updateStorageItem(
+    id: string,
+    tenantId: string,
+    dto: any,
+    actorId: string | null = null,
+    pointId: string | null = null,
+  ) {
     const buildSets = () => {
       const sets: string[] = [];
       const vals: any[] = [];
@@ -251,6 +292,19 @@ export class EquipmentService {
       } else if (newPrice > 0) {
         // No linked expense yet (item created at price 0, now priced) → create it
         // via the same reserved-category path as createStorageItem.
+        //
+        // ФИЛИАЛ резолвится ИМЕННО ЗДЕСЬ, а не до транзакции: только в этой
+        // ветке расход действительно рождается. Резолв до pool.connect()
+        // потребовал бы гадать снаружи, есть ли уже связанный расход, и
+        // отвечал бы 400 «Выберите филиал» на безобидную правку цены у
+        // существующего расхода. Дедлока нет: резолв идёт по УЖЕ ВЗЯТОМУ
+        // клиенту транзакции, второй коннекции из пула не берётся (см.
+        // PointScopeQueryable — «подойдёт и пул, и клиент внутри транзакции»).
+        const writePointId = await resolvePointForWrite(
+          client,
+          { tenantID: tenantId, userID: actorId, currentPointId: pointId },
+          'чтобы записать покупку имущества',
+        );
         const categoryId = await this.getOrCreateEquipmentCategory(client, tenantId);
         const { rows: nameRows } = await client.query(
           'SELECT name FROM storage_items WHERE id = $1 AND tenant_id = $2 LIMIT 1',
@@ -258,9 +312,9 @@ export class EquipmentService {
         );
         const itemName = nameRows[0]?.name ?? '';
         await client.query(
-          `INSERT INTO expenses (category_id, amount, description, date, source, approval_status, tenant_id, storage_item_id)
-           VALUES ($1, $2, $3, now(), 'owner', 'approved', $4, $5)`,
-          [categoryId, expenseAmount, `Покупка имущества: ${itemName}`, tenantId, id],
+          `INSERT INTO expenses (category_id, amount, description, date, source, approval_status, tenant_id, storage_item_id, point_id)
+           VALUES ($1, $2, $3, now(), 'owner', 'approved', $4, $5, $6)`,
+          [categoryId, expenseAmount, `Покупка имущества: ${itemName}`, tenantId, id, writePointId],
         );
       }
 
@@ -268,6 +322,9 @@ export class EquipmentService {
       return { message: 'Обновлено' };
     } catch (err) {
       await client.query('ROLLBACK');
+      // 400 «Выберите филиал» — это диалог с пользователем, а не сбой сервера:
+      // в error-лог (и в Sentry) он попадать не должен.
+      if (err instanceof BadRequestException) throw err;
       this.logger.error(`updateStorageItem error: ${err}`);
       throw err;
     } finally {

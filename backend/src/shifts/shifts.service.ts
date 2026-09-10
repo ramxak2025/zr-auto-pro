@@ -4,6 +4,9 @@ import { PG_POOL } from '../database.module';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
 import { PushService } from '../push/push.service';
+import { getTenantTimezone, zonedDateKey, zonedTimeKey } from '../common/timezone';
+import { actorPointId, pointFilterSql, resolvePointForWrite } from '../common/point-scope';
+import { assignedToPointSql } from '../users/user-points-sql';
 
 @Injectable()
 export class ShiftsService {
@@ -38,6 +41,9 @@ export class ShiftsService {
       closedAt: row.closed_at,
       isAutoClosed: row.is_auto_closed,
       note: row.note,
+      // 161 — филиал, В КОТОРОМ смена была ОТКРЫТА. Переключение точки в
+      // середине дня смену не переносит: человек физически отработал здесь.
+      pointId: row.point_id ?? null,
     };
     if (row.user_full_name) {
       shift.user = {
@@ -50,13 +56,21 @@ export class ShiftsService {
     return shift;
   }
 
-  async getAll(tenantID: string) {
+  /**
+   * Лента смен команды. 161 — фильтр по филиалу: смена принадлежит той точке,
+   * на которой её ОТКРЫЛИ (shifts.point_id), поэтому лента филиала показывает
+   * ровно тех, кто работал здесь. Без выбранной точки («Все точки» /
+   * одноточечный тенант) запрос остаётся прежним.
+   */
+  async getAll(tenantID: string, actor?: JwtPayload) {
+    const params: unknown[] = [tenantID];
+    const pointFilter = pointFilterSql('s', actorPointId(actor), params);
     const { rows } = await this.pool.query(
       `SELECT s.*, u.full_name as user_full_name, u.role as user_role, u.avatar as user_avatar
        FROM shifts s JOIN users u ON u.id = s.user_id
-       WHERE s.tenant_id = $1
+       WHERE s.tenant_id = $1${pointFilter}
        ORDER BY s.opened_at DESC LIMIT 100`,
-      [tenantID],
+      params,
     );
     return rows.map(this.mapShift);
   }
@@ -73,8 +87,28 @@ export class ShiftsService {
     return rows.map(this.mapShift);
   }
 
-  async open(userID: string, tenantID: string) {
+  /**
+   * Открыть СВОЮ смену. 161 — смена штампуется филиалом В МОМЕНТ ОТКРЫТИЯ
+   * (решение владельца): переключивший филиал в середине дня остаётся в смене
+   * того филиала, где её открыл — иначе отработанный день молча переехал бы в
+   * чужую статистику и в чужой расчёт «ЗП за день».
+   */
+  async open(userID: string, tenantID: string, actor?: JwtPayload) {
     await this.ensureShiftsEnabled(tenantID);
+    // ВОЛНА 4 — смена штампуется РЕЗОЛВНУТЫМ филиалом, а не сырой точкой
+    // актора. Сырая точка в режиме «Все точки» рождала смену с point_id =
+    // NULL, а филиальные срезы фильтруют строгим равенством: такая смена не
+    // попадала ни в ленту смен филиала, ни в счётчик «мастеров на работе» на
+    // карточке «Филиалы» — человек на работе, а филиал показывает ноль.
+    // Резолв ДО pool.connect() (см. соседний комментарий про пояс).
+    const pointId = await resolvePointForWrite(
+      this.pool,
+      { tenantID, userID, currentPointId: actorPointId(actor) },
+      'чтобы открыть смену',
+    );
+    // Пояс тенанта — ДО транзакции: вторая коннекция из пула под уже открытой
+    // транзакцией на исчерпанном пуле даёт взаимную блокировку.
+    const tz = await getTenantTimezone(this.pool, tenantID);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -86,15 +120,15 @@ export class ShiftsService {
         [userID, tenantID],
       );
 
-      // Create new shift. Бизнес-дата «сегодня» — Europe/Moscow (UTC+3, без
-      // летнего времени), как в getToday / shift-auto-close: чистая UTC-дата
-      // (toISOString) с 00:00 до 03:00 МСК относила открытую смену на вчера.
-      const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
-      const today = new Date(Date.now() + MSK_OFFSET_MS).toISOString().split('T')[0];
+      // Create new shift. Бизнес-дата «сегодня» — календарный день В ПОЯСЕ
+      // ТЕНАНТА, как в shift-auto-close: чистая UTC-дата (toISOString) относила
+      // смену, открытую после местной полуночи, на вчера, а фиксированный
+      // московский сдвиг делал то же самое с любым тенантом восточнее Москвы.
+      const today = zonedDateKey(new Date(), tz);
       const { rows } = await client.query(
-        `INSERT INTO shifts (user_id, date, tenant_id) VALUES ($1, $2, $3)
+        `INSERT INTO shifts (user_id, date, tenant_id, point_id) VALUES ($1, $2, $3, $4)
          RETURNING *`,
-        [userID, today, tenantID],
+        [userID, today, tenantID, pointId],
       );
       const shift = rows[0];
 
@@ -137,7 +171,7 @@ export class ShiftsService {
          FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
         [shift.id],
       );
-      void this.fireAttendancePush(tenantID, userID, fullRows[0].user_full_name, 'arrived', late);
+      void this.fireAttendancePush(tenantID, userID, fullRows[0].user_full_name, 'arrived', late, pointId);
       return this.mapShift(fullRows[0]);
     } catch (err) {
       await client.query('ROLLBACK');
@@ -168,7 +202,18 @@ export class ShiftsService {
        FROM shifts s JOIN users u ON u.id = s.user_id WHERE s.id = $1`,
       [id],
     );
-    void this.fireAttendancePush(tenantID, fullRows[0].user_id, fullRows[0].user_full_name, 'left', null, actor.userID);
+    void this.fireAttendancePush(
+      tenantID,
+      fullRows[0].user_id,
+      fullRows[0].user_full_name,
+      'left',
+      null,
+      // Филиал берём У СМЕНЫ, а не у актора: закрыть смену может админ из
+      // другого филиала, и адресаты пуша обязаны определяться местом работы
+      // сотрудника, а не тем, кто нажал кнопку.
+      fullRows[0].point_id ?? null,
+      actor.userID,
+    );
     return this.mapShift(fullRows[0]);
   }
 
@@ -178,6 +223,14 @@ export class ShiftsService {
    * Best-effort после коммита — по паттерну пушей кассовой смены (155).
    * Сам сотрудник и актор (если чужую смену закрыл админ) пуш не получают.
    * Авто-закрытие крон-джобой пуш не шлёт — это не реальный уход.
+   *
+   * 161 — АДРЕСАТЫ РЕЖУТСЯ ФИЛИАЛОМ СМЕНЫ. Раньше «Иванов пришёл в 09:05»
+   * улетал каждому директору и админу тенанта: в сети из пяти автосервисов
+   * администратор точки А получал бы полсотни чужих уведомлений в день и
+   * выключил бы пуши целиком — вместе с теми, что ему нужны. Оставляем тех,
+   * кто реально отвечает за этот филиал: назначенных на него плюс тех, у кого
+   * назначений нет вовсе (безопасный дефолт 156 — владелец обычно именно
+   * такой и обязан видеть всё).
    */
   private async fireAttendancePush(
     tenantID: string,
@@ -185,20 +238,23 @@ export class ShiftsService {
     fullName: string,
     kind: 'arrived' | 'left',
     late: { minutes: number; status: string } | null,
+    pointId: string | null = null,
     actorID: string = shiftUserID,
   ): Promise<void> {
     try {
+      const params: unknown[] = [tenantID, shiftUserID, actorID];
+      const pointFilter = assignedToPointSql('u', '$1', pointId, params);
       const { rows } = await this.pool.query(
-        `SELECT id FROM users
-          WHERE tenant_id = $1 AND role IN ('director', 'admin')
-            AND is_active = true AND dismissed_at IS NULL AND purged_at IS NULL
-            AND id <> $2 AND id <> $3`,
-        [tenantID, shiftUserID, actorID],
+        `SELECT u.id FROM users u
+          WHERE u.tenant_id = $1 AND u.role IN ('director', 'admin')
+            AND u.is_active = true AND u.dismissed_at IS NULL AND u.purged_at IS NULL
+            AND u.id <> $2 AND u.id <> $3${pointFilter}`,
+        params,
       );
       if (rows.length === 0) return;
-      // Время в тексте — московское настенное, как бизнес-дата смен.
-      const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
-      const hhmm = new Date(Date.now() + MSK_OFFSET_MS).toISOString().slice(11, 16);
+      // Время в тексте — МЕСТНОЕ настенное время автосервиса, как бизнес-дата
+      // смен: владелец читает пуш «открыл смену в 09:05» своими часами.
+      const hhmm = zonedTimeKey(new Date(), await getTenantTimezone(this.pool, tenantID));
       const title = kind === 'arrived' ? 'Пришёл на работу' : 'Ушёл с работы';
       let body = kind === 'arrived' ? `${fullName} открыл(а) смену в ${hhmm}` : `${fullName} закрыл(а) смену в ${hhmm}`;
       if (kind === 'arrived' && late && late.status !== 'on_time') {

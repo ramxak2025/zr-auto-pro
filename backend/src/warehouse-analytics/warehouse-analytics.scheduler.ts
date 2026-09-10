@@ -8,9 +8,12 @@ import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
  *
  *   • Runs once on application start (delayed 30s so the migration runner
  *     has finished and the pool is warm).
- *   • Then every day at 03:30 Europe/Moscow — well after end-of-day owner
- *     activity so the snapshot reflects "yesterday's close" once owners
- *     wake up.
+ *   • Then every day at 03:30 Europe/Moscow — «тихий час» для тяжёлого
+ *     пересчёта, well after end-of-day owner activity. Час крона намеренно
+ *     остаётся общим: САМА ДАТА снапшота считается в поясе каждого тенанта
+ *     (WarehouseAnalyticsService.recomputeDailySnapshots), а в 03:30 МСК
+ *     (= 00:30 UTC) календарное число у всех российских поясов одно и то же —
+ *     будить джоб 24 раза в сутки ради полного пересчёта склада незачем.
  *
  * Idempotent — re-running the job on the same day overwrites the row (we
  * use ON CONFLICT DO UPDATE in the service so a manual re-run during the

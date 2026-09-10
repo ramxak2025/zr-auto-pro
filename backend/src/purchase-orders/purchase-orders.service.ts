@@ -15,6 +15,7 @@ import { CreatePurchaseOrderDto, PurchaseOrderItemInputDto } from './dto/create-
 import { UpdatePurchaseOrderDto } from './dto/update-purchase-order.dto';
 import { ReceivePurchaseOrderDto } from './dto/receive-purchase-order.dto';
 import { ChangePurchaseOrderDateDto } from './dto/change-purchase-order-date.dto';
+import { dayStartMsInZone, getTenantTimezone, zonedDateKey } from '../common/timezone';
 
 // Мусор от битых клиентов (' ', 'undefined', 'null') в query.supplierId раньше
 // уходил в uuid-колонку и падал в pg 22P02 «invalid input syntax for type
@@ -23,47 +24,51 @@ import { ChangePurchaseOrderDateDto } from './dto/change-purchase-order-date.dto
 const isUuid = (value: unknown): value is string =>
   typeof value === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value.trim());
 
-// ── Дата поставки (159) ──────────────────────────────────────────────────────
-// Бизнес-таймзона продукта — Europe/Moscow (UTC+3, без переходов с 2014):
-// календарный «день поставки» считается по МСК, а не по TZ сервера. Идиома
-// один-в-один с checks.service.ts (правка даты продажи чека).
-const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+// ── Дата поставки (159 + пояс тенанта 157) ───────────────────────────────────
+// Календарный «день поставки» считается в ПОЯСЕ АВТОСЕРВИСА (tenants.timezone),
+// а не по фиксированному московскому сдвигу, который стоял здесь раньше. Для
+// владивостокского сервиса «вчера» из пикера уезжало на сутки: с 00:00 до 09:00
+// по местному времени МСК-день ещё вчерашний, и «сегодня» отвергалось как
+// будущее. Идиома один-в-один с checks.service.ts (правка даты продажи чека):
+// пояс читается ОДИН раз на операцию (getTenantTimezone кеширует) и передаётся
+// вниз параметром, вся арифметика живёт в common/timezone.ts.
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 /** Не глубже 3 лет — защита от опечатки года (2026 → 1026 и т.п.). */
 const SUPPLY_DATE_MAX_PAST_MS = 3 * 365 * DAY_MS;
 
-/** Календарный день (yyyy-MM-dd) момента `ts` в Europe/Moscow. */
-const mskDayOf = (ts: number): string => new Date(ts + MSK_OFFSET_MS).toISOString().slice(0, 10);
+/** Календарный день (yyyy-MM-dd) момента `ts` в поясе тенанта. */
+const tenantDayOf = (ts: number, tz: string): string => zonedDateKey(new Date(ts), tz);
 
-/** UTC-timestamp начала МСК-дня `yyyy-MM-dd`. NaN на кривом дне. */
-const mskDayStartMs = (day: string): number => Date.parse(`${day}T00:00:00.000Z`) - MSK_OFFSET_MS;
+/** UTC-timestamp начала местного дня `yyyy-MM-dd`. NaN на кривом дне. */
+const tenantDayStartMs = (day: string, tz: string): number => dayStartMsInZone(tz, day);
 
 /**
  * Нормализовать присланную дату поставки в ISO.
  *   • пусто (undefined / null / '') → null — «датировать текущим моментом»
  *     (поведение до 159, обратная совместимость);
- *   • 'YYYY-MM-DD' (веб `input[type=date]` и мобильный пикер) → этот МСК-день
- *     со ВРЕМЕНЕМ СУТОК от `anchorTs`: у приёмки это «сейчас» (сегодняшняя
- *     дата ⇒ ровно текущий момент), у смены даты — время исходной приёмки,
- *     чтобы позиция документа внутри дня не прыгала;
+ *   • 'YYYY-MM-DD' (веб `input[type=date]` и мобильный пикер) → этот МЕСТНЫЙ
+ *     день со ВРЕМЕНЕМ СУТОК от `anchorTs`: у приёмки это «сейчас»
+ *     (сегодняшняя дата ⇒ ровно текущий момент), у смены даты — время
+ *     исходной приёмки, чтобы позиция документа внутри дня не прыгала;
  *   • полный ISO — как есть, по миллисекундам.
  *
  * Границы (требование владельца): будущее запрещено — потолок «конец сегодня»
- * по МСК; глубже 3 лет — тоже 400, чтобы опечатка не улетела в 1970.
+ * по МЕСТНОМУ времени; глубже 3 лет — тоже 400, чтобы опечатка не улетела в
+ * 1970.
  */
-function resolveSupplyDate(raw: unknown, anchorTs: number): string | null {
+function resolveSupplyDate(raw: unknown, anchorTs: number, tz: string): string | null {
   if (raw === undefined || raw === null || raw === '') return null;
 
   const rawStr = String(raw).trim();
   let ts: number;
   if (DATE_ONLY_RE.test(rawStr)) {
-    const dayStart = mskDayStartMs(rawStr);
+    const dayStart = tenantDayStartMs(rawStr, tz);
     if (!Number.isFinite(dayStart)) {
       throw new BadRequestException({ message: 'Некорректная дата поставки' });
     }
-    ts = dayStart + (anchorTs - mskDayStartMs(mskDayOf(anchorTs)));
+    ts = dayStart + (anchorTs - tenantDayStartMs(tenantDayOf(anchorTs, tz), tz));
   } else {
     ts = new Date(rawStr).getTime();
   }
@@ -72,9 +77,9 @@ function resolveSupplyDate(raw: unknown, anchorTs: number): string | null {
   }
 
   const now = Date.now();
-  // Потолок — конец СЕГОДНЯШНЕГО дня по МСК: «сегодня» в любое время суток
+  // Потолок — конец СЕГОДНЯШНЕГО местного дня: «сегодня» в любое время суток
   // проходит, завтра и дальше — нет.
-  if (ts >= mskDayStartMs(mskDayOf(now)) + DAY_MS) {
+  if (ts >= tenantDayStartMs(tenantDayOf(now, tz), tz) + DAY_MS) {
     throw new BadRequestException({ message: 'Дата поставки не может быть в будущем' });
   }
   if (ts < now - SUPPLY_DATE_MAX_PAST_MS) {
@@ -83,8 +88,9 @@ function resolveSupplyDate(raw: unknown, anchorTs: number): string | null {
   return new Date(ts).toISOString();
 }
 
-/** Задним ли числом датирована поставка (день раньше сегодняшнего по МСК). */
-const isBackdated = (iso: string | null): boolean => !!iso && mskDayOf(new Date(iso).getTime()) < mskDayOf(Date.now());
+/** Задним ли числом датирована поставка (день раньше сегодняшнего у тенанта). */
+const isBackdated = (iso: string | null, tz: string): boolean =>
+  !!iso && tenantDayOf(new Date(iso).getTime(), tz) < tenantDayOf(Date.now(), tz);
 
 @Injectable()
 export class PurchaseOrdersService {
@@ -538,8 +544,11 @@ export class PurchaseOrdersService {
   async receive(id: string, tenantID: string, userID: string | null, dto: ReceivePurchaseOrderDto) {
     // Дата поставки — до транзакции: кривая/будущая/древняя дата обязана дать
     // чистый 400, а не откат уже начатой приёмки. null ⇒ «сейчас».
-    const receivedAtIso = resolveSupplyDate(dto.receivedAt, Date.now());
-    const backdated = isBackdated(receivedAtIso);
+    // Пояс тенанта читаем ДО pool.connect(): вторая коннекция под первой на
+    // исчерпанном пуле — это дедлок (см. common/point-scope.ts).
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const receivedAtIso = resolveSupplyDate(dto.receivedAt, Date.now(), tz);
+    const backdated = isBackdated(receivedAtIso, tz);
 
     const client = await this.pool.connect();
     try {
@@ -773,6 +782,9 @@ export class PurchaseOrdersService {
    * «Поставки» (PATCH /suppliers/deliveries/:id).
    */
   async changeReceivedDate(id: string, tenantID: string, userID: string | null, dto: ChangePurchaseOrderDateDto) {
+    // Пояс — ДО pool.connect() (см. receive выше): иначе чтение пояса заняло бы
+    // вторую коннекцию, пока первая уже держит транзакцию.
+    const tz = await getTenantTimezone(this.pool, tenantID);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -791,7 +803,7 @@ export class PurchaseOrdersService {
       const priorRaw = rows[0].received_at;
       const priorTs = priorRaw instanceof Date ? priorRaw.getTime() : new Date(priorRaw).getTime();
       const anchorTs = Number.isFinite(priorTs) ? priorTs : Date.now();
-      const newIso = resolveSupplyDate(dto.receivedAt, anchorTs);
+      const newIso = resolveSupplyDate(dto.receivedAt, anchorTs, tz);
       if (!newIso) {
         throw new BadRequestException({ message: 'Некорректная дата поставки' });
       }

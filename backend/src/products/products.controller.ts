@@ -8,6 +8,7 @@ import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decor
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { StockUpdateDto } from './dto/stock-update.dto';
+import { actorPointId } from '../common/point-scope';
 import { BulkAdjustPriceDto } from './dto/bulk-adjust-price.dto';
 import { BulkDeleteDto } from './dto/bulk-delete.dto';
 import { BulkMoveDto } from './dto/bulk-move.dto';
@@ -187,6 +188,7 @@ export class ProductsController {
   @RequirePermission('warehouse_manage')
   @Post(':id/stock')
   updateStock(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: StockUpdateDto) {
-    return this.productsService.updateStock(id, user.tenantID, dto, user.userID);
+    // Филиал автора — для зеркального расхода списания (161).
+    return this.productsService.updateStock(id, user.tenantID, dto, user.userID, actorPointId(user));
   }
 }

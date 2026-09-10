@@ -65,6 +65,7 @@ import {
 } from '../components/installments/installmentUi';
 import { installmentsApi, checkPhotosApi, callsApi, subscriptionApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { useColors } from '../contexts/ThemeContext';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '../theme';
@@ -105,6 +106,8 @@ export default function InstallmentDetailScreen() {
   const tabBarHeight = useTabBarHeight();
   const queryClient = useQueryClient();
   const { user: authUser, hasPermission } = useAuth();
+  // Время звонков в карточке — в поясе автосервиса, как и на экране «Звонки».
+  const tenantTz = useTenantTimezone();
 
   const initialPlan: InstallmentPlan = route.params?.plan;
   const planId = initialPlan?.id;
@@ -969,6 +972,7 @@ export default function InstallmentDetailScreen() {
                     setPlayingId={setPlayingId}
                     canListen={canListen}
                     palette={palette}
+                    timeZone={tenantTz}
                   />
                 ))
               )}

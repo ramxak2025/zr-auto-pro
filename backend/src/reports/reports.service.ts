@@ -3,6 +3,17 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { ttlCache } from '../common/ttl-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import { actorPointId, pointCacheSegment, pointFilterSql } from '../common/point-scope';
+import { checkMoneyBaseWhere, checkProfitExpr, checkRevenueExpr } from '../common/check-money-sql';
+import {
+  getTenantTimezone,
+  getZonedParts,
+  startOfDayInZone,
+  startOfMonthInZone,
+  startOfMonthInZoneOffset,
+  zonedMonthKey,
+} from '../common/timezone';
+import { previousComparableWindow } from '../common/period-compare';
 import { CallsService } from '../calls/calls.service';
 
 /** Актор запроса «Движения денег» — источник охвата (свои / все) и атрибуции. */
@@ -11,6 +22,8 @@ interface CashFlowActor {
   tenantID: string;
   role?: string;
   permissions?: Record<string, boolean>;
+  /** Филиал актора (156/160), null = «Все точки». Разбор — actorPointId(). */
+  currentPointId?: string | null;
 }
 
 /**
@@ -35,12 +48,16 @@ export interface MarketingTrendPoint {
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const UUID_RE = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
 
-// Бизнес-таймзона продукта (UTC+3). Сервер и Postgres живут в UTC, но владелец
-// считает кассу по МОСКОВСКОМУ календарному дню: чек, пробитый 00:00–03:00 МСК,
-// обязан попадать в «сегодня», а не во «вчера». Все дневные группировки и границы
-// периодов в отчётах режутся полуинтервалом [from 00:00 МСК, to+1 00:00 МСК) —
-// синхронно с checks.service.ts / schedule.service.ts (AT TIME ZONE 'Europe/Moscow').
-const BUSINESS_TZ = 'Europe/Moscow';
+// Бизнес-таймзона БОЛЬШЕ НЕ КОНСТАНТА: она берётся из tenants.timezone
+// (миграция 157) один раз на запрос — getTenantTimezone кеширует значение на 5
+// минут. Сервер и Postgres живут в UTC, но владелец считает кассу по СВОЕМУ
+// календарному дню: чек, пробитый сразу после местной полуночи, обязан попадать
+// в «сегодня», а не во «вчера». Все дневные группировки и границы периодов в
+// отчётах режутся полуинтервалом [from 00:00, to+1 00:00) местного времени.
+//
+// В SQL пояс уходит ПАРАМЕТРОМ (`AT TIME ZONE $n::text`), а не склейкой строки:
+// значение приходит из БД и провалидировано белым списком, но параметризация —
+// единственная защита, которая не зависит от того, кто и как заполнил колонку.
 
 @Injectable()
 export class ReportsService {
@@ -74,9 +91,11 @@ export class ReportsService {
     return new Date().toISOString().split('T')[0];
   }
 
-  async getFinancial(tenantID: string, query: any) {
+  async getFinancial(tenantID: string, query: any, pointId: string | null = null) {
     const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
     const dateTo = this.safeDate(query?.dateTo, this.todayISO());
+    // Пояс тенанта — ОДИН раз на запрос, дальше уходит параметром в оба запроса.
+    const tz = await getTenantTimezone(this.pool, tenantID);
 
     // ITEM 2 — «по гарантии» = убыток, не выручка. Гарантийные чеки
     // (payment_method='warranty') ИСКЛЮЧАЮТСЯ из revenue / productCost /
@@ -90,7 +109,12 @@ export class ReportsService {
     // чека в netProfit = −(запчасти+зарплата), выручка = 0. Полностью derived
     // из колонок checks — ничего не материализуем, двойного счёта с
     // «Расходами» нет (см. expenses).
-    // Границы периода — московский полуинтервал [from, to+1) (BUSINESS_TZ).
+    // Границы периода — полуинтервал [from, to+1) в поясе тенанта ($4).
+    // ФИЛИАЛ (156/160): финотчёт филиала — деньги ТОЛЬКО этого филиала.
+    // Точки нет («Все точки» / одноточечный тенант) → фильтра нет, запрос
+    // дословно прежний.
+    const checkParams: any[] = [tenantID, dateFrom, dateTo, tz];
+    const checkPointFilter = pointFilterSql(null, pointId, checkParams);
     const { rows } = await this.pool.query(
       `SELECT
          COALESCE(SUM(total_revenue) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
@@ -100,11 +124,11 @@ export class ReportsService {
          COUNT(*) as check_count
        FROM checks
        WHERE tenant_id = $1
-         AND date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-         AND date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND date >= $2::date::timestamp AT TIME ZONE $4::text
+         AND date < ($3::date + 1)::timestamp AT TIME ZONE $4::text
          AND is_deferred = false
-         AND deleted_at IS NULL`,
-      [tenantID, dateFrom, dateTo],
+         AND deleted_at IS NULL${checkPointFilter}`,
+      checkParams,
     );
 
     const r = rows[0];
@@ -133,6 +157,16 @@ export class ReportsService {
     // байт-в-байт. Пример: выплата 5 августа «за июль» режет прибыль отчёта за
     // ВЕСЬ июль, не видна ни в одном августовском/недельном срезе; касса
     // (getCashFlow) видит её 5 августа — по дате факта, как и лента «Расходы».
+    // ФИЛИАЛ (161): у `expenses` теперь ЕСТЬ колонка точки, и расход принадлежит
+    // тому филиалу, на котором возник. Фильтр обязателен: выручка и
+    // себестоимость уже отрезаны точкой, а расходы вычитались по ВСЕЙ сети —
+    // филиал А с расходами 100 000 показывал чистую прибыль, уменьшенную ещё и
+    // на 400 000 филиала Б. Способ фильтрации — ТОТ ЖЕ pointFilterSql, что в
+    // ExpensesService.getAll, поэтому сумма отчёта сходится с лентой «Расходы».
+    // Плейсхолдер кладётся ПОСЛЕДНИМ в собственный массив ($5): у запроса выше
+    // своя нумерация, и общий массив на два разных запроса развалил бы оба.
+    const expParams: any[] = [tenantID, dateFrom, dateTo, tz];
+    const expPointFilter = pointFilterSql('e', pointId, expParams);
     const { rows: expRows } = await this.pool.query(
       `SELECT COALESCE(SUM(e.amount), 0) as total
          FROM expenses e
@@ -140,15 +174,15 @@ export class ReportsService {
         WHERE e.tenant_id = $1
           AND (
             (e.period_month IS NULL
-              AND e.date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-              AND e.date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}')
+              AND e.date >= $2::date::timestamp AT TIME ZONE $4::text
+              AND e.date < ($3::date + 1)::timestamp AT TIME ZONE $4::text)
             OR (e.period_month IS NOT NULL
               AND to_date(e.period_month || '-01', 'YYYY-MM-DD') >= $2::date
               AND (to_date(e.period_month || '-01', 'YYYY-MM-DD') + interval '1 month' - interval '1 day')::date <= $3::date)
           )
           AND COALESCE(e.approval_status, 'approved') = 'approved'
-          AND COALESCE(ec.name, '') <> 'Зарплата'`,
-      [tenantID, dateFrom, dateTo],
+          AND COALESCE(ec.name, '') <> 'Зарплата'${expPointFilter}`,
+      expParams,
     );
     const otherExpenses = parseFloat(expRows[0]?.total) || 0;
 
@@ -181,8 +215,8 @@ export class ReportsService {
    * КОНВЕНЦИЯ ПРИБЫЛИ — ЧЕКОВАЯ (per-check), та же, что в dashboardV2
    * (profit_today/profit_month) и в основе getFinancial:
    *   • только проведённые живые чеки: is_deferred=false AND deleted_at IS NULL;
-   *   • границы периода — московский полуинтервал [from, to+1) (BUSINESS_TZ),
-   *     зеркально getFinancial — «чеки за период» сходятся с журналом;
+   *   • границы периода — полуинтервал [from, to+1) в поясе тенанта, зеркально
+   *     getFinancial — «чеки за период» сходятся с журналом;
    *   • revenue = SUM(total_revenue) БЕЗ гарантийных чеков (warranty = убыток,
    *     не выручка — ITEM 2);
    *   • profit: для обычного чека — сохранённый checks.profit (выручка −
@@ -195,10 +229,14 @@ export class ReportsService {
    * Архивные метки в отчёт ВХОДЯТ, если их чеки попали в период (архив не
    * ломает историю). Метки без чеков за период не возвращаются вовсе.
    */
-  async getTagAnalytics(tenantID: string, query: any) {
+  async getTagAnalytics(tenantID: string, query: any, pointId: string | null = null) {
     const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
     const dateTo = this.safeDate(query?.dateTo, this.todayISO());
+    const tz = await getTenantTimezone(this.pool, tenantID);
 
+    // ФИЛИАЛ (156/160): отчёт по меткам — чеки текущего филиала, как журнал.
+    const tagParams: any[] = [tenantID, dateFrom, dateTo, tz];
+    const tagPointFilter = pointFilterSql('ch', pointId, tagParams);
     const { rows } = await this.pool.query(
       `SELECT d.id AS tag_id, d.name, d.color,
               COUNT(*) AS checks_count,
@@ -212,11 +250,11 @@ export class ReportsService {
         WHERE tl.tenant_id = $1
           AND ch.is_deferred = false
           AND ch.deleted_at IS NULL
-          AND ch.date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-          AND ch.date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+          AND ch.date >= $2::date::timestamp AT TIME ZONE $4::text
+          AND ch.date < ($3::date + 1)::timestamp AT TIME ZONE $4::text${tagPointFilter}
         GROUP BY d.id, d.name, d.color
         ORDER BY profit DESC, lower(d.name)`,
-      [tenantID, dateFrom, dateTo],
+      tagParams,
     );
 
     return rows.map((r) => ({
@@ -242,6 +280,7 @@ export class ReportsService {
   async getDefectWriteoffReport(tenantID: string, query: { from?: string; to?: string }) {
     const dateFrom = this.safeDate(query?.from, this.firstOfMonth());
     const dateTo = this.safeDate(query?.to, this.todayISO());
+    const tz = await getTenantTimezone(this.pool, tenantID);
 
     const { rows } = await this.pool.query(
       `SELECT
@@ -256,10 +295,10 @@ export class ReportsService {
        FROM stock_movements sm
        JOIN products p ON p.id = sm.product_id
        WHERE sm.tenant_id = $1
-         AND sm.created_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-         AND sm.created_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND sm.created_at >= $2::date::timestamp AT TIME ZONE $4::text
+         AND sm.created_at < ($3::date + 1)::timestamp AT TIME ZONE $4::text
          AND sm.type IN ('defect_transfer','writeoff','defect_return_to_supplier')`,
-      [tenantID, dateFrom, dateTo],
+      [tenantID, dateFrom, dateTo, tz],
     );
 
     const r = rows[0];
@@ -286,7 +325,7 @@ export class ReportsService {
    * For tenants without any SMS integration the query returns zeros — not an
    * error, just an empty funnel.
    */
-  async getCallFunnel(tenantID: string, query: { dateFrom?: string; dateTo?: string }) {
+  async getCallFunnel(tenantID: string, query: { dateFrom?: string; dateTo?: string }, pointId: string | null = null) {
     const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
     const dateTo = this.safeDate(query?.dateTo, this.todayISO());
 
@@ -302,6 +341,9 @@ export class ReportsService {
     );
 
     // Checks created for clients who appear in sms_history during the same period
+    // ФИЛИАЛ (156/160): «доехавшие» и их выручка — чеки ЭТОГО филиала.
+    const funnelParams: any[] = [tenantID, dateFrom, dateTo];
+    const funnelPointFilter = pointFilterSql('ch', pointId, funnelParams);
     const { rows: checkRows } = await this.pool.query(
       `SELECT
          COUNT(DISTINCT ch.client_id) AS arrived_clients,
@@ -317,22 +359,24 @@ export class ReportsService {
            SELECT DISTINCT phone FROM sms_history
            WHERE tenant_id = $1
              AND created_at::date BETWEEN $2::date AND $3::date
-         )`,
-      [tenantID, dateFrom, dateTo],
+         )${funnelPointFilter}`,
+      funnelParams,
     );
 
     // Repeat clients (clients with more than 1 check total for this tenant)
+    const repeatParams: any[] = [tenantID];
+    const repeatPointFilter = pointFilterSql(null, pointId, repeatParams);
     const { rows: repeatRows } = await this.pool.query(
       `SELECT COUNT(DISTINCT client_id) AS repeat_clients
        FROM (
          SELECT client_id, COUNT(*) AS check_count
          FROM checks
          WHERE tenant_id = $1 AND is_deferred = false AND client_id IS NOT NULL
-           AND deleted_at IS NULL
+           AND deleted_at IS NULL${repeatPointFilter}
          GROUP BY client_id
          HAVING COUNT(*) > 1
        ) sub`,
-      [tenantID],
+      repeatParams,
     );
 
     const c = contactRows[0];
@@ -365,6 +409,7 @@ export class ReportsService {
     const tenantID = actor.tenantID;
     const dateFrom = this.safeDate(query?.dateFrom, this.firstOfMonth());
     const dateTo = this.safeDate(query?.dateTo, this.todayISO());
+    const tz = await getTenantTimezone(this.pool, tenantID);
 
     // ITEM 6 — охват «Движение денег»: свои vs все.
     //   • cashflow_view_all (охват 'all', либо owner-class director/admin/superadmin
@@ -404,6 +449,33 @@ export class ReportsService {
     }
 
     const params: any[] = [tenantID, dateFrom, dateTo];
+    // Пояс тенанта кладём в params ПЕРВЫМ из опциональных: индекс $4 фиксирован
+    // для всех четырёх запросов ниже. Дальше по очереди ложатся точка и
+    // masterId — каждый адресуется через `$${params.length}` В МОМЕНТ своего
+    // push'а, поэтому порядок можно менять только вместе с этими выражениями.
+    // ВАЖНО: все три запроса ниже получают ОДИН И ТОТ ЖЕ массив params, а
+    // Postgres отвергает лишний параметр — значит каждый положенный параметр
+    // обязан быть УПОМЯНУТ в каждом из них (см. точку и мастера).
+    params.push(tz);
+    const tzIdx = params.length;
+
+    // ── ФИЛИАЛ (156/160) ─────────────────────────────────────────────────
+    // «Движение денег» ОБЯЗАНО фильтровать точку так же, как журнал
+    // (checks.getAll): раскрытие дня шлёт в журнал те же даты, и разъехавшиеся
+    // предикаты означали бы, что сумма дня не сходится со списком дня — для
+    // владельца это выглядит как пропавшие деньги. Точка кладётся в params
+    // СРАЗУ ПОСЛЕ пояса и ДО masterId, чтобы фиксированные индексы $1..$4
+    // остались на месте, а `$${params.length}` у мастера по-прежнему
+    // указывал на только что положенное значение.
+    const cashFlowPointId = actorPointId(actor);
+    const checkPointFilter = pointFilterSql(null, cashFlowPointId, params);
+    const refundPointFilter = cashFlowPointId ? ` AND ch.point_id = $${params.length}` : '';
+    // Погашения рассрочки атрибутируются филиалу ЧЕРЕЗ ЧЕК-ИСТОЧНИК (у самих
+    // installment_payments точки нет — модуль рассрочки правит следующая
+    // волна). LEFT JOIN + предикат по ch.point_id даёт ту же семантику, что и
+    // фильтр по мастеру ниже: платёж без живого чека-источника не
+    // атрибутируется никакому филиалу и в срез филиала не попадает.
+    const paidPointFilter = refundPointFilter;
     let masterFilter = '';
     let refundMasterFilter = '';
     if (masterId) {
@@ -446,13 +518,13 @@ export class ReportsService {
     // unallocated («Не разнесено»), supplierPayments/expensesOut (оттоки) и
     // netCash («Осталось в кассе») УБРАНЫ из ответа: закупки у поставщиков
     // теперь показываются в разделе «Расходы» отдельной секцией, а не тут.
-    // День = МОСКОВСКИЙ календарный день (BUSINESS_TZ), границы — полуинтервал
-    // [from 00:00 МСК, to+1 00:00 МСК): ночные чеки 00:00–03:00 МСК больше не
-    // падают во «вчера», а чек, датированный dateTo+1 (веб пишет голую дату =
-    // ровно полночь), в период НЕ попадает. День отдаётся строкой 'YYYY-MM-DD'
+    // День = календарный день В ПОЯСЕ ТЕНАНТА, границы — полуинтервал
+    // [from 00:00, to+1 00:00) местного времени: ночные чеки после местной
+    // полуночи больше не падают во «вчера», а чек, датированный dateTo+1 (веб
+    // пишет голую дату = ровно полночь), в период НЕ попадает. День отдаётся строкой 'YYYY-MM-DD'
     // (to_char), чтобы pg-драйвер не превращал DATE в JS Date с TZ-сдвигом.
     const { rows } = await this.pool.query(
-      `SELECT to_char((date AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
+      `SELECT to_char((date AT TIME ZONE $${tzIdx}::text)::date, 'YYYY-MM-DD') as day,
               COALESCE(SUM(cash_amount), 0) as cash,
               COALESCE(SUM(card_amount), 0) as card,
               COALESCE(SUM(CASE WHEN payment_method = 'warranty' THEN total_revenue ELSE 0 END), 0) as warranty,
@@ -461,10 +533,10 @@ export class ReportsService {
               COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0) as total
        FROM checks
        WHERE tenant_id = $1
-         AND date >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-         AND date < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         AND date >= $2::date::timestamp AT TIME ZONE $${tzIdx}::text
+         AND date < ($3::date + 1)::timestamp AT TIME ZONE $${tzIdx}::text
          AND is_deferred = false
-         AND deleted_at IS NULL${masterFilter}
+         AND deleted_at IS NULL${masterFilter}${checkPointFilter}
        GROUP BY 1
        ORDER BY 1`,
       params,
@@ -494,16 +566,16 @@ export class ReportsService {
     // paid_cash (строки до миграции считаются налом — решение владельца).
     // paid = paid_cash + paid_card — поле остаётся суммой для совместимости.
     const { rows: paidRows } = await this.pool.query(
-      `SELECT to_char((p.paid_at AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
+      `SELECT to_char((p.paid_at AT TIME ZONE $${tzIdx}::text)::date, 'YYYY-MM-DD') as day,
               COALESCE(SUM(p.amount), 0) as paid,
               COALESCE(SUM(CASE WHEN p.payment_method = 'card' THEN p.amount ELSE 0 END), 0) as paid_card,
               COALESCE(SUM(CASE WHEN COALESCE(p.payment_method, 'cash') <> 'card' THEN p.amount ELSE 0 END), 0) as paid_cash
        FROM installment_payments p
        JOIN installment_plans pl ON pl.id = p.plan_id AND pl.tenant_id = $1
-       ${masterId ? 'LEFT JOIN checks ch ON ch.id = pl.check_id AND ch.deleted_at IS NULL' : ''}
+       ${masterId || cashFlowPointId ? 'LEFT JOIN checks ch ON ch.id = pl.check_id AND ch.deleted_at IS NULL' : ''}
        WHERE p.tenant_id = $1
-         AND p.paid_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-         AND p.paid_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'${paidMasterFilter}
+         AND p.paid_at >= $2::date::timestamp AT TIME ZONE $${tzIdx}::text
+         AND p.paid_at < ($3::date + 1)::timestamp AT TIME ZONE $${tzIdx}::text${paidMasterFilter}${paidPointFilter}
        GROUP BY 1
        ORDER BY 1`,
       params,
@@ -518,13 +590,13 @@ export class ReportsService {
     // повторно: received уже уменьшен на возврат в дне ПРОДАЖИ. JOIN checks —
     // для симметрии с основной выборкой (deleted_at IS NULL) и фильтра по мастеру.
     const { rows: refundRows } = await this.pool.query(
-      `SELECT to_char((cr.created_at AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') as day,
+      `SELECT to_char((cr.created_at AT TIME ZONE $${tzIdx}::text)::date, 'YYYY-MM-DD') as day,
               COALESCE(SUM(cr.refund_amount), 0) as refunds
        FROM check_returns cr
        JOIN checks ch ON ch.id = cr.check_id AND ch.tenant_id = $1 AND ch.deleted_at IS NULL
        WHERE cr.tenant_id = $1
-         AND cr.created_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-         AND cr.created_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'${refundMasterFilter}
+         AND cr.created_at >= $2::date::timestamp AT TIME ZONE $${tzIdx}::text
+         AND cr.created_at < ($3::date + 1)::timestamp AT TIME ZONE $${tzIdx}::text${refundMasterFilter}${refundPointFilter}
        GROUP BY 1
        ORDER BY 1`,
       params,
@@ -533,23 +605,46 @@ export class ReportsService {
     // 155 — инкассации за период (справочная строка дня): из ЯЩИКА
     // (cash_collections) + из СЕЙФА (safe_transactions type='collection').
     // По сотруднику не атрибутируются — фильтр masterId на них не влияет.
+    //
+    // ФИЛИАЛ, ЯЩИК (161). Собственной колонки point_id у cash_collections нет
+    // и не будет: строка жёстко привязана к shift_id, а У КАССОВОЙ СМЕНЫ
+    // точка есть — филиал инкассации это филиал её смены. Раньше здесь стоял
+    // комментарий «у смен точки ещё нет», и строка считалась по ВСЕМУ
+    // тенанту: филиал А видел в своём «Движении денег» инкассации филиала Б и
+    // читал это как деньги, вынутые из ЕГО кассы.
+    // Инкассация без живой смены-источника (shift_id IS NULL) филиалу не
+    // атрибутируется — та же конвенция, что у погашений рассрочки без чека.
+    //
+    // ФИЛИАЛ, СЕЙФ — СОЗНАТЕЛЬНО НЕ РЕЖЕТСЯ, И ЭТО НЕ ЗАБЫТО. Сейф один на
+    // компанию (обоснование — в 161: баланс сейфа это running total, и точка
+    // у части строк ломает сходимость остатка). Поэтому в филиальном срезе
+    // сейфовая часть строки — СЕТЕВАЯ: каждый филиал видит инкассации из
+    // общего сейфа целиком. Строка справочная (в total/received не входит),
+    // так что «двойного счёта денег» это не создаёт, но при сравнении
+    // филиалов между собой сейфовую часть надо помнить.
+    const collectionParams: any[] = [tenantID, dateFrom, dateTo, tz];
+    const boxCollectionPointFilter = cashFlowPointId
+      ? ` AND EXISTS (SELECT 1 FROM cash_shifts cs
+                       WHERE cs.id = cc.shift_id AND cs.tenant_id = $1 AND cs.point_id = $5)`
+      : '';
+    if (cashFlowPointId) collectionParams.push(cashFlowPointId);
     const { rows: collectionRows } = await this.pool.query(
       `SELECT day, COALESCE(SUM(amount), 0) AS collections FROM (
-         SELECT to_char((collected_at AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') AS day, amount
-           FROM cash_collections
-          WHERE tenant_id = $1
-            AND collected_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-            AND collected_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+         SELECT to_char((cc.collected_at AT TIME ZONE $4::text)::date, 'YYYY-MM-DD') AS day, cc.amount
+           FROM cash_collections cc
+          WHERE cc.tenant_id = $1
+            AND cc.collected_at >= $2::date::timestamp AT TIME ZONE $4::text
+            AND cc.collected_at < ($3::date + 1)::timestamp AT TIME ZONE $4::text${boxCollectionPointFilter}
          UNION ALL
-         SELECT to_char((created_at AT TIME ZONE '${BUSINESS_TZ}')::date, 'YYYY-MM-DD') AS day, amount
+         SELECT to_char((created_at AT TIME ZONE $4::text)::date, 'YYYY-MM-DD') AS day, amount
            FROM safe_transactions
           WHERE tenant_id = $1 AND type = 'collection'
-            AND created_at >= $2::date::timestamp AT TIME ZONE '${BUSINESS_TZ}'
-            AND created_at < ($3::date + 1)::timestamp AT TIME ZONE '${BUSINESS_TZ}'
+            AND created_at >= $2::date::timestamp AT TIME ZONE $4::text
+            AND created_at < ($3::date + 1)::timestamp AT TIME ZONE $4::text
        ) c
        GROUP BY 1
        ORDER BY 1`,
-      [tenantID, dateFrom, dateTo],
+      collectionParams,
     );
 
     const dayKey = (d: any): string => (d instanceof Date ? d.toISOString().slice(0, 10) : String(d).slice(0, 10));
@@ -661,7 +756,8 @@ export class ReportsService {
     // 155 — текущие остатки «кошельков»: drawer — касса (живой expected
     // открытой смены либо размен последней закрытой), safe — сейф. Эндпоинт
     // и так под cashflow_view, поэтому отдаём всем, кто сюда дошёл.
-    const wallets = await this.getWallets(tenantID);
+    // ФИЛИАЛ (161): ящик у каждого филиала СВОЙ — точка уходит в getWallets.
+    const wallets = await this.getWallets(tenantID, cashFlowPointId);
 
     return { days, totals, wallets };
   }
@@ -672,8 +768,33 @@ export class ReportsService {
    * одобренные расходы окна − инкассации смены); без открытой — carryover
    * последней закрытой (до-миграционные закрытия оставляли всё в кассе →
    * fallback closing_amount). safe = Σ deposit + Σ adjustment − Σ collection.
+   *
+   * ФИЛИАЛ (161) — ЯЩИК У КАЖДОГО ФИЛИАЛА СВОЙ. До 161 «одна открытая смена»
+   * была ограничением ТЕНАНТА, и брать её первой попавшейся было безопасно.
+   * Теперь открытых смен ровно по одной НА ФИЛИАЛ, и прежний
+   * `ORDER BY opened_at DESC LIMIT 1` отдавал филиалу А ящик филиала Б —
+   * вместе с наличной выручкой и расходами ВСЕЙ сети. Три правила:
+   *   • смена выбирается по точке актора;
+   *   • выручка и расходы окна считаются по точке САМОЙ СМЕНЫ (а не читающего)
+   *     — тем же правилом, что Z-отчёт (cash-shifts.computeFigures);
+   *   • перенос размена берётся у последней закрытой смены ТОГО ЖЕ филиала
+   *     (зеркало cash-shifts.open: деньги, оставленные в ящике точки А, не
+   *     могут стать разменом точки Б).
+   *
+   * РЕЖИМ «ВСЕ ТОЧКИ» (точки нет) — СУММА ящиков всех филиалов, а не пустое
+   * значение: поле drawer у клиентов число, и «0» читалось бы как «касса
+   * пуста». Слот филиала даёт либо живой expected своей открытой смены, либо
+   * размен своей последней закрытой — то есть каждый рубль учтён РОВНО один
+   * раз. Одноточечный тенант (точек нет вовсе, у смен point_id IS NULL) даёт
+   * ровно один слот, поэтому его цифра БАЙТ-В-БАЙТ прежняя.
+   *
+   * СЕЙФ ОСТАЁТСЯ ОБЩИМ НА КОМПАНИЮ — и это не забытый фильтр, а решение
+   * миграции 161: у safe_transactions точки НЕТ СОЗНАТЕЛЬНО (депозит рождается
+   * при закрытии смены филиала, а инкассация из сейфа делается владельцем и
+   * точки может не иметь вовсе; подсумма по филиалу перестала бы сходиться с
+   * реальным остатком). Сейф физически один в кабинете — таким и показываем.
    */
-  private async getWallets(tenantID: string): Promise<{ drawer: number; safe: number }> {
+  private async getWallets(tenantID: string, pointId: string | null): Promise<{ drawer: number; safe: number }> {
     const { rows: safeRows } = await this.pool.query(
       `SELECT COALESCE(SUM(CASE WHEN type = 'collection' THEN -amount ELSE amount END), 0) AS balance
          FROM safe_transactions
@@ -682,47 +803,80 @@ export class ReportsService {
     );
     const safe = parseFloat(safeRows[0].balance) || 0;
 
+    // Открытые смены В СКОУПЕ: филиал → максимум одна (уникальный индекс
+    // uq_cash_shifts_one_open_per_point), «Все точки» → по одной на филиал.
+    const openParams: any[] = [tenantID];
+    const openPointFilter = pointFilterSql('cs', pointId, openParams);
     const { rows: openRows } = await this.pool.query(
-      `SELECT id, opened_at, opening_amount FROM cash_shifts
-        WHERE tenant_id = $1 AND status = 'open'
-        ORDER BY opened_at DESC
-        LIMIT 1`,
-      [tenantID],
+      `SELECT cs.id, cs.point_id, cs.opened_at, cs.opening_amount
+         FROM cash_shifts cs
+        WHERE cs.tenant_id = $1 AND cs.status = 'open'${openPointFilter}
+        ORDER BY cs.opened_at DESC`,
+      openParams,
     );
 
-    if (openRows.length === 0) {
-      const { rows: lastRows } = await this.pool.query(
-        `SELECT COALESCE(carryover_amount, closing_amount, 0) AS carryover
-           FROM cash_shifts
-          WHERE tenant_id = $1 AND status = 'closed'
-          ORDER BY closed_at DESC NULLS LAST
-          LIMIT 1`,
-        [tenantID],
+    let drawer = 0;
+    // Слоты, у которых ящик уже посчитан по ЖИВОЙ смене: переносить им размен
+    // прошлой закрытой смены нельзя — это был бы двойной счёт тех же денег.
+    // Ключ — точка (у одноточечного тенанта единственный слот с null).
+    const liveSlots = new Set<string | null>();
+    for (const shift of openRows) {
+      const shiftPoint: string | null = shift.point_id ?? null;
+      liveSlots.add(shiftPoint);
+      const figParams: any[] = [tenantID, shift.opened_at, shift.id];
+      // Точка — У СМЕНЫ. Обе подвыборки адресуют ОДИН плейсхолдер: имя колонки
+      // в них неквалифицированное, поэтому фрагмент подходит и checks, и
+      // expenses, а второй push дал бы Postgres лишний параметр.
+      const figPointFilter = pointFilterSql(null, shiftPoint, figParams);
+      const { rows: figRows } = await this.pool.query(
+        `SELECT
+           (SELECT COALESCE(SUM(cash_amount), 0) FROM checks
+             WHERE tenant_id = $1 AND is_deferred = false AND deleted_at IS NULL
+               AND date >= $2 AND date <= now()${figPointFilter})     AS cash_sales,
+           (SELECT COALESCE(SUM(amount), 0) FROM expenses
+             WHERE tenant_id = $1
+               AND COALESCE(approval_status, 'approved') = 'approved'
+               AND date >= $2 AND date <= now()${figPointFilter})     AS cash_expenses,
+           (SELECT COALESCE(SUM(amount), 0) FROM cash_collections
+             WHERE tenant_id = $1 AND shift_id = $3)                  AS collections`,
+        figParams,
       );
-      const drawer = lastRows.length > 0 ? parseFloat(lastRows[0].carryover) || 0 : 0;
-      return { drawer: Math.round(drawer * 100) / 100, safe: Math.round(safe * 100) / 100 };
+      const f = figRows[0];
+      drawer +=
+        (parseFloat(shift.opening_amount) || 0) +
+        (parseFloat(f.cash_sales) || 0) -
+        (parseFloat(f.cash_expenses) || 0) -
+        (parseFloat(f.collections) || 0);
     }
 
-    const shift = openRows[0];
-    const { rows: figRows } = await this.pool.query(
-      `SELECT
-         (SELECT COALESCE(SUM(cash_amount), 0) FROM checks
-           WHERE tenant_id = $1 AND is_deferred = false AND deleted_at IS NULL
-             AND date >= $2 AND date <= now())                       AS cash_sales,
-         (SELECT COALESCE(SUM(amount), 0) FROM expenses
-           WHERE tenant_id = $1
-             AND COALESCE(approval_status, 'approved') = 'approved'
-             AND date >= $2 AND date <= now())                       AS cash_expenses,
-         (SELECT COALESCE(SUM(amount), 0) FROM cash_collections
-           WHERE tenant_id = $1 AND shift_id = $3)                   AS collections`,
-      [tenantID, shift.opened_at, shift.id],
-    );
-    const f = figRows[0];
-    const drawer =
-      (parseFloat(shift.opening_amount) || 0) +
-      (parseFloat(f.cash_sales) || 0) -
-      (parseFloat(f.cash_expenses) || 0) -
-      (parseFloat(f.collections) || 0);
+    // Слоты без открытой смены — размен, оставленный их последней закрытой.
+    // DISTINCT ON по точке даёт ровно одну строку на филиал; в Postgres
+    // DISTINCT считает NULL'ы равными, поэтому одноточечный тенант (point_id
+    // IS NULL у всех смен) сворачивается в один слот, как и до 161.
+    //
+    // В скоупе ОДНОГО филиала с уже открытой сменой переносить нечего — весь
+    // результат этого запроса всё равно отсеял бы liveSlots. Пропускаем его,
+    // чтобы горячий путь «Движения денег» остался в те же три запроса, что до
+    // волны (в режиме «Все точки» состав слотов заранее неизвестен — там
+    // запрос нужен всегда).
+    if (!pointId || openRows.length === 0) {
+      const carryParams: any[] = [tenantID];
+      const carryPointFilter = pointFilterSql('cs', pointId, carryParams);
+      const { rows: carryRows } = await this.pool.query(
+        `SELECT DISTINCT ON (cs.point_id)
+                cs.point_id,
+                COALESCE(cs.carryover_amount, cs.closing_amount, 0) AS carryover
+           FROM cash_shifts cs
+          WHERE cs.tenant_id = $1 AND cs.status = 'closed'${carryPointFilter}
+          ORDER BY cs.point_id, cs.closed_at DESC NULLS LAST`,
+        carryParams,
+      );
+      for (const row of carryRows) {
+        if (liveSlots.has(row.point_id ?? null)) continue;
+        drawer += parseFloat(row.carryover) || 0;
+      }
+    }
+
     return { drawer: Math.round(drawer * 100) / 100, safe: Math.round(safe * 100) / 100 };
   }
 
@@ -732,28 +886,63 @@ export class ReportsService {
   //  Cached 30s per tenant.
   // ──────────────────────────────────────────────────────────────────────
 
-  async dashboardV2(tenantID: string, period: 'today' | 'week' | 'month' | 'year' = 'month') {
-    return ttlCache.wrap(`reports:dashboard-v2:${tenantID}:${period}`, 30_000, () =>
-      this.computeDashboardV2(tenantID, period),
+  async dashboardV2(
+    tenantID: string,
+    period: 'today' | 'week' | 'month' | 'year' = 'month',
+    pointId: string | null = null,
+  ) {
+    // ФИЛИАЛ (156/160): сегмент точки — ОБЯЗАТЕЛЬНАЯ часть ключа и стоит СРАЗУ
+    // ПОСЛЕ tenantID. Без него первый же запрос филиала А раздал бы свои цифры
+    // филиалу Б (кеш общий на тенанта); перед tenantID — ключ ушёл бы
+    // из-под префиксной инвалидации reports-cache и залипал на 30 секунд после
+    // каждой продажи.
+    return ttlCache.wrap(`reports:dashboard-v2:${tenantID}:${pointCacheSegment(pointId)}:${period}`, 30_000, () =>
+      this.computeDashboardV2(tenantID, period, pointId),
     );
   }
 
-  private async computeDashboardV2(tenantID: string, period: 'today' | 'week' | 'month' | 'year') {
-    // E-7 — границы дня/месяца в БИЗНЕС-таймзоне (Europe/Moscow, UTC+3 без
-    // летнего времени), как getFinancial/getCashFlow и shifts/salary. Раньше
-    // границы строились от контейнерного (UTC) настенного времени, поэтому в
-    // 00:00–02:59 МСК чек попадал в «сегодня/этот месяц» на дашборде иначе, чем
-    // на экранах денег, и «Финансы» расходились с «Движением денег». Считаем
-    // компоненты московского «сейчас» (UTC-геттеры от сдвинутого времени) и
-    // отдаём границы как UTC-инстанты московской полуночи (паттерн salary).
-    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
-    const mskNow = new Date(Date.now() + MSK_OFFSET_MS);
-    const mskY = mskNow.getUTCFullYear();
-    const mskM = mskNow.getUTCMonth();
-    const mskD = mskNow.getUTCDate();
-    const todayStart = new Date(Date.UTC(mskY, mskM, mskD) - MSK_OFFSET_MS).toISOString();
-    const monthStart = new Date(Date.UTC(mskY, mskM, 1) - MSK_OFFSET_MS).toISOString();
-    const prevMonthStart = new Date(Date.UTC(mskY, mskM - 1, 1) - MSK_OFFSET_MS).toISOString();
+  private async computeDashboardV2(
+    tenantID: string,
+    period: 'today' | 'week' | 'month' | 'year',
+    pointId: string | null = null,
+  ) {
+    // E-7 — границы дня/месяца в ПОЯСЕ ТЕНАНТА (tenants.timezone, миграция
+    // 157), как getFinancial/getCashFlow и shifts/salary. Раньше здесь был
+    // фиксированный сдвиг +3ч: автосервису во Владивостоке «сегодня» начиналось
+    // в 09:00 по местному времени, и дашборд расходился с его же кассой.
+    // Границы отдаём как UTC-инстанты МЕСТНОЙ полуночи — форма не изменилась,
+    // изменился только источник сдвига. Кеш dashboardV2 ключуется тенантом,
+    // поэтому пояс в ключ добавлять не нужно.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const now = new Date();
+    const localNow = getZonedParts(now, tz);
+    const locY = localNow.year;
+    const locM = localNow.month - 1; // 0-based, как у Date.UTC
+    const locD = localNow.day;
+    const prevMonthStartDate = startOfMonthInZoneOffset(tz, -1, now);
+    const monthStartDate = startOfMonthInZone(tz, now);
+    const todayStart = startOfDayInZone(tz, now).toISOString();
+    const monthStart = monthStartDate.toISOString();
+
+    // Окно сравнения с прошлым месяцем — «НА ТУ ЖЕ ДАТУ» (единый хелпер с
+    // графиком дашборда). Раньше месяц-к-дате (1–9 сентября) сравнивался с
+    // ПОЛНЫМ августом: маржа прошлого месяца считалась по 31 дню расходов
+    // против 9 дней текущего, и marginPctChange в начале месяца врал.
+    // Верхняя граница текущего месяца — секунда до 1-го числа следующего, та же
+    // форма, что у dashboard-chart.
+    const monthEndDate = new Date(startOfMonthInZoneOffset(tz, 1, now).getTime() - 1000);
+    const prevWindow = previousComparableWindow({
+      tz,
+      period: 'month',
+      currentFrom: monthStartDate,
+      currentTo: monthEndDate,
+      now,
+    });
+    // now всегда внутри текущего месяца, поэтому окно есть; fallback на полный
+    // прошлый месяц оставлен как безопасное поведение по умолчанию, а не как
+    // рабочая ветка.
+    const prevWindowStart = (prevWindow?.from ?? prevMonthStartDate).toISOString();
+    const prevWindowEnd = (prevWindow?.to ?? new Date(monthStartDate.getTime() - 1000)).toISOString();
 
     // Existing dashboard numbers (preserve compatibility — caller sees them too).
     // ITEM 2 — гарантия ИСКЛЮЧЕНА из выручки; в прибыли заменена на убыток.
@@ -767,21 +956,28 @@ export class ReportsService {
     //     чистую прибыль.
     //   • warranty_today (справочно) — «отпускная» сумма гарантийных работ.
     //   • warranty_loss_today (НОВОЕ) — тот же убыток за сегодня для cashPosition.
+    // Формулы выручки/прибыли — из общего common/check-money-sql.ts (тот же
+    // текст SQL в checks.getDashboard и в сводке по филиалам): три экрана не
+    // могут разъехаться, потому что формула физически одна.
+    const revenueExpr = checkRevenueExpr();
+    const profitExpr = checkProfitExpr();
+    const baseParams: any[] = [tenantID, todayStart, monthStart];
+    const basePointFilter = pointFilterSql(null, pointId, baseParams);
     const { rows: baseRows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) AS revenue_today,
+         COALESCE(SUM(CASE WHEN date >= $2 THEN (${revenueExpr}) END), 0) AS revenue_today,
          COALESCE(COUNT(CASE WHEN date >= $2 THEN 1 END), 0) AS checks_today,
-         COALESCE(SUM(CASE WHEN date >= $3 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) AS revenue_month,
-         COALESCE(SUM(CASE WHEN date >= $2 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) END), 0) AS profit_today,
-         COALESCE(SUM(CASE WHEN date >= $3 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) END), 0) AS profit_month,
+         COALESCE(SUM(CASE WHEN date >= $3 THEN (${revenueExpr}) END), 0) AS revenue_month,
+         COALESCE(SUM(CASE WHEN date >= $2 THEN (${profitExpr}) END), 0) AS profit_today,
+         COALESCE(SUM(CASE WHEN date >= $3 THEN (${profitExpr}) END), 0) AS profit_month,
          COALESCE(SUM(CASE WHEN date >= $2 THEN cash_amount END), 0) AS cash_today,
          COALESCE(SUM(CASE WHEN date >= $2 THEN card_amount END), 0) AS card_today,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN total_revenue END), 0) AS warranty_today,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='warranty' THEN product_cost_total + service_salary_total + COALESCE(product_salary_total, 0) END), 0) AS warranty_loss_today,
          COALESCE(SUM(CASE WHEN date >= $2 AND payment_method='installment' THEN GREATEST(total_revenue - cash_amount - card_amount, 0) END), 0) AS installment_debt_today
        FROM checks
-       WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL`,
-      [tenantID, todayStart, monthStart],
+       WHERE tenant_id=$1 AND ${checkMoneyBaseWhere()}${basePointFilter}`,
+      baseParams,
     );
     const base = baseRows[0];
 
@@ -805,7 +1001,7 @@ export class ReportsService {
     // never budgeted in fixed_costs (see reconciliation below).
     //
     // Round 14 (149) — «за какой месяц»: месячные агрегаты относят расход по
-    // effective-месяцу COALESCE(e.period_month, месяц e.date МСК), а не по
+    // effective-месяцу COALESCE(e.period_month, месяц e.date в поясе тенанта), а не по
     // дате факта. Равенство месяца здесь = «диапазон покрывает месяц целиком»
     // из getFinancial (агрегат всегда ровно один календарный месяц), поэтому
     // задвоения под-диапазонов, исправленного в getFinancial, тут нет by
@@ -816,23 +1012,57 @@ export class ReportsService {
     // доводка: равенство месяца (вместо date >= monthStart без верхней
     // границы) перестало затягивать расходы, датированные БУДУЩИМИ месяцами,
     // в текущий месяц — согласовано с period-семантикой.
-    const mskCurYm = `${mskY}-${String(mskM + 1).padStart(2, '0')}`;
-    const mskPrevDate = new Date(Date.UTC(mskY, mskM - 1, 1));
-    const mskPrevYm = `${mskPrevDate.getUTCFullYear()}-${String(mskPrevDate.getUTCMonth() + 1).padStart(2, '0')}`;
-    const effMonth = `COALESCE(e.period_month, to_char(e.date AT TIME ZONE '${BUSINESS_TZ}', 'YYYY-MM'))`;
+    const curYm = zonedMonthKey(now, tz);
+    const prevYm = zonedMonthKey(prevMonthStartDate, tz);
+    // Пояс уходит параметром $5 — в SQL его нельзя склеивать строкой.
+    // ФИЛИАЛ (161): расход принадлежит филиалу, на котором возник
+    // (expenses.point_id), поэтому netProfitToday / netProfitMonth филиала
+    // вычитают ТОЛЬКО его расходы — тем же pointFilterSql, что ExpensesService
+    // .getAll и getFinancial. Без фильтра «Прибыль за месяц» на главной
+    // занижалась на постоянку соседнего филиала.
+    // ЧЕСТНОЕ ОГРАНИЧЕНИЕ: ПЛАНОВАЯ постоянка блока netProfitAccrual ниже
+    // (fixed_costs / employee_compensation) точки не имеет — это конфиг
+    // тенанта, а не денежная строка. В филиальном срезе она вычитается
+    // целиком, то есть accrual-прибыль филиала занижена, а не завышена. Так
+    // безопаснее: завышенная прибыль — это решение потратить деньги, которых
+    // нет. Кассовые netProfitToday/netProfitMonth фильтруются точно.
+    // exp_prev_month РЕЖЕТСЯ ОКНОМ СРАВНЕНИЯ ЦЕЛИКОМ — обеими границами
+    // ($7 = начало окна, $6 = конец), ровно как прибыль прошлого месяца
+    // (prevRows ниже берёт чеки `date >= prevWindowStart AND date <= prevWindowEnd`).
+    //
+    // ПОЧЕМУ ПОЯВИЛАСЬ НИЖНЯЯ ГРАНИЦА. Раньше стояла только верхняя, а состав
+    // задавался отнесением по месяцу (effMonth). Расход, отнесённый к прошлому
+    // месяцу, но ДАТИРОВАННЫЙ раньше окна — предоплаченная в июле аренда за
+    // август — проходил оба условия и падал в срез «август по 9-е» ЦЕЛЫМ
+    // месяцем. Прибыль в этом окне при этом всего за девять дней, и
+    // prevMarginPct получался бессмысленным: маржа прошлого месяца уезжала в
+    // минус, а marginPctChange показывал владельцу фантомный рост.
+    //
+    // ПОЧЕМУ effMonth ПРИ ЭТОМ ОСТАЁТСЯ. Отнесение — это ответ на вопрос «за
+    // какой месяц расход», и он симметричен текущей стороне сравнения
+    // (exp_month тоже собирается по effMonth). Аренда за август, оплаченная
+    // 5 сентября, в срез «август по 9-е» не попадает и по нижней границе, и
+    // по верхней: на 9 августа её ещё не существовало. Итог — обе ноги
+    // сравнения обрезаны ОДНИМ окном по дате факта, а состав расходов
+    // остаётся месячно-отнесённым, как на текущей стороне.
+    const effMonth = `COALESCE(e.period_month, to_char(e.date AT TIME ZONE $5::text, 'YYYY-MM'))`;
+    // Фиксированные $1..$7 остаются на местах, точка кладётся ВОСЬМОЙ — иначе
+    // разъехались бы все ${effMonth}-выражения выше, собранные вокруг $5.
+    const expenseParams: any[] = [tenantID, todayStart, curYm, prevYm, tz, prevWindowEnd, prevWindowStart];
+    const expensePointFilter = pointFilterSql('e', pointId, expenseParams);
     const { rows: expenseRows } = await this.pool.query(
       `SELECT
          COALESCE(SUM(CASE WHEN e.date >= $2 AND ${effMonth} = $3 THEN e.amount END), 0) AS exp_today,
          COALESCE(SUM(CASE WHEN ${effMonth} = $3 THEN e.amount END), 0) AS exp_month,
-         COALESCE(SUM(CASE WHEN ${effMonth} = $4 THEN e.amount END), 0) AS exp_prev_month,
+         COALESCE(SUM(CASE WHEN ${effMonth} = $4 AND e.date >= $7 AND e.date <= $6 THEN e.amount END), 0) AS exp_prev_month,
          COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND COALESCE(ec.is_recurring, false) = false THEN e.amount END), 0) AS exp_month_oneoff,
          COALESCE(SUM(CASE WHEN ${effMonth} = $3 AND COALESCE(ec.is_recurring, false) = true THEN e.amount END), 0) AS exp_month_recurring
        FROM expenses e
        LEFT JOIN expense_categories ec ON ec.id = e.category_id
        WHERE e.tenant_id=$1
          AND COALESCE(e.approval_status, 'approved') = 'approved'
-         AND COALESCE(ec.name, '') <> 'Зарплата'`,
-      [tenantID, todayStart, mskCurYm, mskPrevYm],
+         AND COALESCE(ec.name, '') <> 'Зарплата'${expensePointFilter}`,
+      expenseParams,
     );
     const expToday = parseFloat(expenseRows[0]?.exp_today) || 0;
     const expMonth = parseFloat(expenseRows[0]?.exp_month) || 0;
@@ -854,20 +1084,29 @@ export class ReportsService {
     const netProfitToday = profitToday - expToday;
     const netProfitMonth = profitMonth - expMonth;
 
-    // Previous-period net profit (last month) for marginPctChange.
+    // Previous-period net profit for marginPctChange — прошлый месяц НА ТУ ЖЕ
+    // ДАТУ (1–9 августа против 1–9 сентября), а не целиком.
     // Гарантия исключена из выручки и заменена на убыток в прибыли — та же
     // семантика, что в baseRows, чтобы marginPctChange считался консистентно.
+    // Граница ВКЛЮЧИТЕЛЬНАЯ (`<= $3`): prevWindowEnd — секунда до следующей
+    // местной полуночи, ровно как верхние границы в dashboard-chart.
+    const prevParams: any[] = [tenantID, prevWindowStart, prevWindowEnd];
+    const prevPointFilter = pointFilterSql(null, pointId, prevParams);
     const { rows: prevRows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END), 0) AS revenue,
-         COALESCE(SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END), 0) AS profit
+         COALESCE(SUM(${revenueExpr}), 0) AS revenue,
+         COALESCE(SUM(${profitExpr}), 0) AS profit
          FROM checks
-        WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
-          AND date >= $2 AND date < $3`,
-      [tenantID, prevMonthStart, monthStart],
+        WHERE tenant_id=$1 AND ${checkMoneyBaseWhere()}
+          AND date >= $2 AND date <= $3${prevPointFilter}`,
+      prevParams,
     );
     const prevRevenue = parseFloat(prevRows[0]?.revenue) || 0;
     const prevProfit = parseFloat(prevRows[0]?.profit) || 0;
+    // Обе стороны — за ОДНО И ТО ЖЕ окно: prevProfit по чекам 1–9 августа,
+    // expPrevMonth по расходам, отнесённым к августу И датированным теми же
+    // 1–9 августа (см. $7/$6 выше). Одна и та же обрезка с двух сторон — иначе
+    // процент маржи прошлого месяца сравнивать не с чем.
     const prevNet = prevProfit - expPrevMonth;
     const marginPct = revenueMonth > 0 ? (netProfitMonth / revenueMonth) * 100 : 0;
     const prevMarginPct = prevRevenue > 0 ? (prevNet / prevRevenue) * 100 : 0;
@@ -876,6 +1115,15 @@ export class ReportsService {
     // Spark line: 30-day net profit per day. СОЗНАТЕЛЬНО по дате факта (149):
     // period_month — месячная грануляция, дневному тренду отнесение «за месяц»
     // неприменимо; спарк остаётся кассовой дневной картинкой.
+    // ФИЛИАЛ (161): у ОБЕИХ ног спарклайна — и прибыли по чекам, и расходов —
+    // один и тот же филиал. Раньше из прибыли филиала вычитались расходы всей
+    // сети, и линия тренда уходила в минус тем глубже, чем больше филиалов.
+    // Точка кладётся ОДИН раз, оба фрагмента адресуют ОДИН плейсхолдер: второй
+    // push дал бы Postgres лишний параметр, а разные значения в одном запросе
+    // означали бы разные филиалы у прибыли и у расхода.
+    const sparkParams: any[] = [tenantID];
+    const sparkPointFilter = pointFilterSql(null, pointId, sparkParams);
+    const sparkExpPointFilter = pointId ? ` AND e.point_id = $${sparkParams.length}` : '';
     const { rows: sparkRows } = await this.pool.query(
       `SELECT day, COALESCE(profit, 0) AS profit, COALESCE(exp, 0) AS expense
          FROM (
@@ -883,10 +1131,10 @@ export class ReportsService {
          ) d
          LEFT JOIN (
            SELECT date::date AS day,
-                  SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) AS profit
+                  SUM(${profitExpr}) AS profit
              FROM checks
-            WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
-              AND date >= now() - interval '30 days'
+            WHERE tenant_id=$1 AND ${checkMoneyBaseWhere()}
+              AND date >= now() - interval '30 days'${sparkPointFilter}
             GROUP BY day
          ) ch USING (day)
          LEFT JOIN (
@@ -895,11 +1143,11 @@ export class ReportsService {
              LEFT JOIN expense_categories ec ON ec.id = e.category_id
             WHERE e.tenant_id=$1 AND e.date >= now() - interval '30 days'
               AND COALESCE(e.approval_status, 'approved') = 'approved'
-              AND COALESCE(ec.name, '') <> 'Зарплата'
+              AND COALESCE(ec.name, '') <> 'Зарплата'${sparkExpPointFilter}
             GROUP BY day
          ) ex USING (day)
          ORDER BY day`,
-      [tenantID],
+      sparkParams,
     );
     const marginSpark = sparkRows.map((r) => (parseFloat(r.profit) || 0) - (parseFloat(r.expense) || 0));
 
@@ -909,13 +1157,28 @@ export class ReportsService {
     // (до-миграционные строки считаются налом — решение владельца).
     // paid = paid_cash + paid_card; installmentPaid остаётся суммой для
     // совместимости со старыми клиентами.
+    // ФИЛИАЛ (156/160): у самих installment_payments точки нет (модуль
+    // рассрочки правит следующая волна), поэтому филиал определяем по
+    // ЧЕКУ-ИСТОЧНИКУ плана — та же атрибуция, что в getCashFlow. EXISTS, а не
+    // JOIN: соединение внесло бы неоднозначность колонок amount/payment_method
+    // в уже существующем запросе. Без выбранной точки предикат не добавляется.
+    const instParams: any[] = [tenantID, todayStart];
+    let instPointFilter = '';
+    if (pointId) {
+      instParams.push(pointId);
+      instPointFilter = ` AND EXISTS (
+           SELECT 1 FROM installment_plans pl
+             JOIN checks ch ON ch.id = pl.check_id AND ch.deleted_at IS NULL
+            WHERE pl.id = installment_payments.plan_id AND ch.point_id = $${instParams.length}
+         )`;
+    }
     const { rows: instPaidRows } = await this.pool.query(
       `SELECT COALESCE(SUM(amount), 0) AS paid,
               COALESCE(SUM(CASE WHEN payment_method = 'card' THEN amount ELSE 0 END), 0) AS paid_card,
               COALESCE(SUM(CASE WHEN COALESCE(payment_method, 'cash') <> 'card' THEN amount ELSE 0 END), 0) AS paid_cash
          FROM installment_payments
-        WHERE tenant_id=$1 AND paid_at >= $2`,
-      [tenantID, todayStart],
+        WHERE tenant_id=$1 AND paid_at >= $2${instPointFilter}`,
+      instParams,
     );
     const installmentPaidToday = parseFloat(instPaidRows[0]?.paid) || 0;
     const installmentPaidCashToday = parseFloat(instPaidRows[0]?.paid_cash) || 0;
@@ -941,10 +1204,13 @@ export class ReportsService {
     };
 
     // Deferred sum: open drafts (is_deferred=true) totals.
+    // ФИЛИАЛ: незакрытые заказы — свои у каждого филиала.
+    const defParams: any[] = [tenantID];
+    const defPointFilter = pointFilterSql(null, pointId, defParams);
     const { rows: defRows } = await this.pool.query(
       `SELECT COUNT(*) AS cnt, COALESCE(SUM(total_revenue), 0) AS sum
-         FROM checks WHERE tenant_id=$1 AND is_deferred=true AND deleted_at IS NULL`,
-      [tenantID],
+         FROM checks WHERE tenant_id=$1 AND is_deferred=true AND deleted_at IS NULL${defPointFilter}`,
+      defParams,
     );
     const deferredSum = {
       count: parseInt(defRows[0]?.cnt) || 0,
@@ -953,17 +1219,23 @@ export class ReportsService {
 
     // Personal record: best day + best month all time. Гарантия исключена из
     // выручки (ITEM 2), поэтому рекорд считается по реальной выручке.
+    // ФИЛИАЛ: рекорд — рекорд ЭТОГО автосервиса, иначе маленький филиал вечно
+    // смотрел бы на недостижимую планку соседа.
+    const bestDayParams: any[] = [tenantID];
+    const bestDayPointFilter = pointFilterSql(null, pointId, bestDayParams);
     const { rows: bestDayRows } = await this.pool.query(
-      `SELECT date::date AS day, SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END) AS revenue
-         FROM checks WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
+      `SELECT date::date AS day, SUM(${revenueExpr}) AS revenue
+         FROM checks WHERE tenant_id=$1 AND ${checkMoneyBaseWhere()}${bestDayPointFilter}
          GROUP BY day ORDER BY revenue DESC LIMIT 1`,
-      [tenantID],
+      bestDayParams,
     );
+    const bestMonthParams: any[] = [tenantID];
+    const bestMonthPointFilter = pointFilterSql(null, pointId, bestMonthParams);
     const { rows: bestMonthRows } = await this.pool.query(
-      `SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS ym, SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' THEN total_revenue ELSE 0 END) AS revenue
-         FROM checks WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
+      `SELECT to_char(date_trunc('month', date), 'YYYY-MM') AS ym, SUM(${revenueExpr}) AS revenue
+         FROM checks WHERE tenant_id=$1 AND ${checkMoneyBaseWhere()}${bestMonthPointFilter}
          GROUP BY ym ORDER BY revenue DESC LIMIT 1`,
-      [tenantID],
+      bestMonthParams,
     );
     const personalRecord = {
       bestDay: bestDayRows[0]
@@ -987,8 +1259,8 @@ export class ReportsService {
     // Дни месяца/день месяца — в московской бизнес-таймзоне (E-7), чтобы
     // амортизация постоянки и прогноз считались от того же «сегодня», что и
     // MTD-агрегаты выше (иначе в 00:00–02:59 МСК dayOfMonth отставал на сутки).
-    const daysInMonth = new Date(Date.UTC(mskY, mskM + 1, 0)).getUTCDate();
-    const dayOfMonth = Math.max(mskD, 1);
+    const daysInMonth = new Date(Date.UTC(locY, locM + 1, 0)).getUTCDate();
+    const dayOfMonth = Math.max(locD, 1);
     const monthForecast = (revenueMonth / dayOfMonth) * daysInMonth;
 
     // ── v3.0.1 ФИЧА 1 — ЧИСТАЯ ПРИБЫЛЬ ПО НАЧИСЛЕНИЮ (accrual) ────────────────
@@ -1197,7 +1469,7 @@ export class ReportsService {
    *   returningRevenue= выручка чеков в периоде у клиентов, заведённых раньше.
    * `basis` явно фиксирует базу расчёта, чтобы UI не гадал. Tenant-scoped.
    */
-  async clientsNewVsReturning(tenantID: string, params: { from: string; to: string }) {
+  async clientsNewVsReturning(tenantID: string, params: { from: string; to: string }, pointId: string | null = null) {
     const from = this.safeDate(params?.from, '');
     const to = this.safeDate(params?.to, '');
     if (!from || !to) {
@@ -1211,6 +1483,13 @@ export class ReportsService {
       };
     }
     params = { from, to };
+    // ФИЛИАЛ (156/160): когорта «новые / вернувшиеся» считается по ЧЕКАМ этого
+    // филиала. Сам СОСТАВ базы клиентов точкой здесь не режется — это
+    // маркетинговый счётчик заведённых записей, а база клиентов по решению
+    // владельца общая (её раздельный режим живёт в ClientsService и
+    // управляется tenants.points_shared_clients).
+    const cohortParams: any[] = [tenantID, params.from, params.to];
+    const cohortPointFilter = pointFilterSql('ch', pointId, cohortParams);
     const { rows } = await this.pool.query(
       `WITH window_checks AS (
          -- Чеки периода + дата ЗАВЕДЕНИЯ клиента (created_at) для когорты.
@@ -1220,7 +1499,7 @@ export class ReportsService {
           WHERE ch.tenant_id=$1 AND ch.is_deferred=false
             AND ch.deleted_at IS NULL
             AND ch.client_id IS NOT NULL
-            AND ch.date::date BETWEEN $2::date AND $3::date
+            AND ch.date::date BETWEEN $2::date AND $3::date${cohortPointFilter}
        )
        SELECT
          -- НОВЫЕ = все записи клиентов, созданные в периоде (даже без чека).
@@ -1238,7 +1517,7 @@ export class ReportsService {
          COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' AND client_created_at::date BETWEEN $2::date AND $3::date THEN total_revenue END), 0) AS new_revenue,
          COALESCE(SUM(CASE WHEN payment_method IS DISTINCT FROM 'warranty' AND (client_created_at IS NULL OR client_created_at::date < $2::date) THEN total_revenue END), 0) AS returning_revenue
        FROM window_checks`,
-      [tenantID, params.from, params.to],
+      cohortParams,
     );
     const r = rows[0];
     return {
@@ -1257,11 +1536,16 @@ export class ReportsService {
    * reviews, open warranty claims, late masters today, recent returns.
    * Order: crit → warn → info, then by recency. Cached 30s per tenant.
    */
-  async alerts(tenantID: string) {
-    return ttlCache.wrap(`reports:alerts:${tenantID}`, 30_000, () => this.computeAlerts(tenantID));
+  async alerts(tenantID: string, pointId: string | null = null) {
+    // ФИЛИАЛ (156/160): сегмент точки сразу после tenantID — иначе алерты
+    // одного филиала раздались бы всем (кеш общий на тенанта), а сегмент перед
+    // тенантом вывел бы ключ из-под префиксной инвалидации.
+    return ttlCache.wrap(`reports:alerts:${tenantID}:${pointCacheSegment(pointId)}`, 30_000, () =>
+      this.computeAlerts(tenantID, pointId),
+    );
   }
 
-  private async computeAlerts(tenantID: string) {
+  private async computeAlerts(tenantID: string, pointId: string | null = null) {
     const out: Array<{
       type: 'low_stock' | 'low_review' | 'warranty' | 'late_master' | 'pending_return';
       severity: 'info' | 'warn' | 'crit';
@@ -1326,15 +1610,18 @@ export class ReportsService {
       });
     }
 
-    // Late masters today (schedule_entries with late_status = late_major today)
+    // Late masters today (schedule_entries with late_status = late_major today).
+    // «Сегодня» — календарный день В ПОЯСЕ ТЕНАНТА: иначе владивостокскому
+    // автосервису опоздания подсвечивались бы по московскому дню и до 09:00
+    // местного времени показывались вчерашние.
     const { rows: lateMasters } = await this.pool.query(
       `SELECT u.full_name FROM schedule_entries se
         JOIN users u ON u.id = se.user_id
        WHERE se.tenant_id=$1
-         AND se.date = (now() AT TIME ZONE 'Europe/Moscow')::date
+         AND se.date = (now() AT TIME ZONE $2::text)::date
          AND se.late_status = 'late_major'
        LIMIT 5`,
-      [tenantID],
+      [tenantID, await getTenantTimezone(this.pool, tenantID)],
     );
     for (const m of lateMasters) {
       out.push({
@@ -1346,13 +1633,19 @@ export class ReportsService {
     }
 
     // Recent returns (last 24h)
+    // ФИЛИАЛ: возврат относится к филиалу СВОЕГО чека (у check_returns точки
+    // нет — модуль возвратов правит следующая волна, атрибуция через ch).
+    // Остальные алерты (склад, отзывы, гарантии, опоздания) точки в своих
+    // таблицах пока не имеют и остаются сетевыми — это осознанно, а не забыто.
+    const retParams: any[] = [tenantID];
+    const retPointFilter = pointFilterSql('ch', pointId, retParams);
     const { rows: rets } = await this.pool.query(
       `SELECT cr.id, ch.number AS check_number, cr.created_at
          FROM check_returns cr
          JOIN checks ch ON ch.id = cr.check_id
-        WHERE cr.tenant_id=$1 AND cr.created_at >= now() - interval '1 day'
+        WHERE cr.tenant_id=$1 AND cr.created_at >= now() - interval '1 day'${retPointFilter}
         ORDER BY cr.created_at DESC LIMIT 5`,
-      [tenantID],
+      retParams,
     );
     for (const r of rets) {
       out.push({
@@ -1370,23 +1663,26 @@ export class ReportsService {
   }
 
   /** Aggregate revenue by weekday for the period. */
-  async bestDayOfWeek(tenantID: string, params: { from: string; to: string }) {
+  async bestDayOfWeek(tenantID: string, params: { from: string; to: string }, pointId: string | null = null) {
     const from = this.safeDate(params?.from, '');
     const to = this.safeDate(params?.to, '');
     if (!from || !to) {
       return { days: [], best: 0, worst: 0 };
     }
     params = { from, to };
+    // ФИЛИАЛ: «лучший день недели» — про загрузку ЭТОГО автосервиса.
+    const dowParams: any[] = [tenantID, params.from, params.to];
+    const dowPointFilter = pointFilterSql(null, pointId, dowParams);
     const { rows } = await this.pool.query(
       `SELECT EXTRACT(DOW FROM date)::int AS weekday,
               COALESCE(SUM(total_revenue), 0) AS revenue,
               COUNT(*) AS cnt
          FROM checks
         WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
-          AND date::date BETWEEN $2::date AND $3::date
+          AND date::date BETWEEN $2::date AND $3::date${dowPointFilter}
         GROUP BY weekday
         ORDER BY weekday`,
-      [tenantID, params.from, params.to],
+      dowParams,
     );
     const map: Record<number, { weekday: number; revenue: number; count: number }> = {};
     for (let i = 0; i <= 6; i++) map[i] = { weekday: i, revenue: 0, count: 0 };
@@ -1441,15 +1737,21 @@ export class ReportsService {
    * Returns the share of returning clients (i.e. clients who had any earlier
    * check before this window) and average LTV / days between visits.
    */
-  async retention(tenantID: string, period: 'week' | 'month' | 'year' = 'month') {
+  async retention(tenantID: string, period: 'week' | 'month' | 'year' = 'month', pointId: string | null = null) {
     const interval = period === 'week' ? '7 days' : period === 'year' ? '365 days' : '30 days';
+    // ФИЛИАЛ (156/160): удержание считается по чекам ЭТОГО филиала — и окно
+    // активности, и пожизненные визиты. Иначе филиал с одним клиентом получал
+    // бы «возвращаемость» соседа. Фильтр уходит В ОБА CTE: разные базы
+    // визитов дали бы долю returning > 100 %.
+    const retParams: any[] = [tenantID];
+    const retPointFilter = pointFilterSql(null, pointId, retParams);
     const { rows } = await this.pool.query(
       `WITH visits AS (
          SELECT client_id, COUNT(*) AS visit_count, SUM(total_revenue) AS ltv,
                 MIN(date) AS first_date, MAX(date) AS last_date
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
-            AND deleted_at IS NULL
+            AND deleted_at IS NULL${retPointFilter}
           GROUP BY client_id
        ),
        window_clients AS (
@@ -1458,7 +1760,7 @@ export class ReportsService {
           WHERE tenant_id=$1 AND is_deferred=false
             AND deleted_at IS NULL
             AND date >= now() - interval '${interval}'
-            AND client_id IS NOT NULL
+            AND client_id IS NOT NULL${retPointFilter}
        )
        SELECT
          COUNT(*) AS total_in_window,
@@ -1467,7 +1769,7 @@ export class ReportsService {
          COALESCE(AVG(EXTRACT(EPOCH FROM (v.last_date - v.first_date)) / 86400 / NULLIF(v.visit_count - 1, 0)), 0) AS avg_days_between
        FROM window_clients wc
        JOIN visits v ON v.client_id = wc.client_id`,
-      [tenantID],
+      retParams,
     );
     const r = rows[0];
     const total = parseInt(r?.total_in_window) || 0;
@@ -1566,18 +1868,22 @@ export class ReportsService {
     monthly: [] as MarketingTrendPoint[],
   };
 
-  async getMarketingReport(tenantID: string, query: { from?: string; to?: string }) {
+  async getMarketingReport(tenantID: string, query: { from?: string; to?: string }, pointId: string | null = null) {
     const from = this.safeDate(query?.from, this.firstOfMonth());
     const to = this.safeDate(query?.to, this.todayISO());
 
+    // ФИЛИАЛ (156/160): всё, что считается ПО ЧЕКАМ (привлечение, удержание,
+    // выручка, тренды, воронка звонков), режется точкой. Отзывы и лояльность
+    // своей точки в таблицах ещё не имеют и остаются сетевыми — отмечено
+    // явно, чтобы не приняли за забытый фильтр.
     const [acquisition, retention, calls, reviews, loyalty, revenue, trends] = await Promise.all([
-      this.marketingAcquisition(tenantID, from, to).catch(() => ReportsService.EMPTY_ACQUISITION),
-      this.retentionForWindow(tenantID, from, to).catch(() => ReportsService.EMPTY_RETENTION),
-      this.marketingCalls(tenantID, from, to).catch(() => ReportsService.EMPTY_CALLS),
+      this.marketingAcquisition(tenantID, from, to, pointId).catch(() => ReportsService.EMPTY_ACQUISITION),
+      this.retentionForWindow(tenantID, from, to, pointId).catch(() => ReportsService.EMPTY_RETENTION),
+      this.marketingCalls(tenantID, from, to, pointId).catch(() => ReportsService.EMPTY_CALLS),
       this.periodReviews(tenantID, from, to).catch(() => ReportsService.EMPTY_REVIEWS),
       this.marketingLoyalty(tenantID, from, to).catch(() => ReportsService.EMPTY_LOYALTY),
-      this.marketingRevenue(tenantID, from, to).catch(() => ReportsService.EMPTY_REVENUE),
-      this.marketingTrends(tenantID, from, to).catch(() => ReportsService.EMPTY_TRENDS),
+      this.marketingRevenue(tenantID, from, to, pointId).catch(() => ReportsService.EMPTY_REVENUE),
+      this.marketingTrends(tenantID, from, to, pointId).catch(() => ReportsService.EMPTY_TRENDS),
     ]);
 
     return { period: { from, to }, acquisition, retention, calls, reviews, loyalty, revenue, trends };
@@ -1593,9 +1899,15 @@ export class ReportsService {
    * чтобы весь раздел «Отчёты → привлечение» был консистентен. null/empty source
    * → «Без источника». Per-source revenue = Σ чеков этих клиентов в периоде.
    */
-  private async marketingAcquisition(tenantID: string, from: string, to: string) {
-    const base = await this.clientsNewVsReturning(tenantID, { from, to });
+  private async marketingAcquisition(tenantID: string, from: string, to: string, pointId: string | null = null) {
+    const base = await this.clientsNewVsReturning(tenantID, { from, to }, pointId);
 
+    // ФИЛИАЛ: выручка по источникам — по чекам ЭТОГО филиала. Сам список
+    // новых клиентов точкой не режется (база клиентов общая, см.
+    // clientsNewVsReturning): клиент, заведённый на филиале А, остаётся
+    // «новым за период» и для сети, а денег без чека он и так не приносит.
+    const srcParams: any[] = [tenantID, from, to];
+    const srcPointFilter = pointFilterSql('ch', pointId, srcParams);
     const { rows } = await this.pool.query(
       `WITH new_clients AS (
          -- НОВЫЕ = записи клиентов, заведённые в периоде (определение владельца).
@@ -1617,10 +1929,10 @@ export class ReportsService {
         AND ch.is_deferred = false
         AND ch.deleted_at IS NULL
         AND ch.payment_method IS DISTINCT FROM 'warranty'
-        AND ch.date::date BETWEEN $2::date AND $3::date
+        AND ch.date::date BETWEEN $2::date AND $3::date${srcPointFilter}
        GROUP BY COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника')
        ORDER BY count DESC, revenue DESC`,
-      [tenantID, from, to],
+      srcParams,
     );
 
     // Cohort of NEW clients bucketed by the ISO WEEK they were ADDED TO THE BASE
@@ -1628,6 +1940,8 @@ export class ReportsService {
     // revenue of their in-window checks. Lets the client draw "how many new
     // clients were added each week and what they spent". date_trunc('week') →
     // Monday-start ISO weeks.
+    const cohParams: any[] = [tenantID, from, to];
+    const cohPointFilter = pointFilterSql('ch', pointId, cohParams);
     const { rows: cohortRows } = await this.pool.query(
       `WITH new_clients AS (
          SELECT id AS client_id, created_at AS created_date
@@ -1644,10 +1958,10 @@ export class ReportsService {
         AND ch.tenant_id = $1
         AND ch.is_deferred = false
         AND ch.deleted_at IS NULL
-        AND ch.date::date BETWEEN $2::date AND $3::date
+        AND ch.date::date BETWEEN $2::date AND $3::date${cohPointFilter}
        GROUP BY date_trunc('week', nc.created_date)
        ORDER BY date_trunc('week', nc.created_date)`,
-      [tenantID, from, to],
+      cohParams,
     );
 
     return {
@@ -1675,14 +1989,18 @@ export class ReportsService {
    * first/last date) stay ALL-TIME, so returningRate/avgLtv/avgDaysBetween
    * describe the lifetime behaviour of clients who were active in the window.
    */
-  private async retentionForWindow(tenantID: string, from: string, to: string) {
+  private async retentionForWindow(tenantID: string, from: string, to: string, pointId: string | null = null) {
+    // ФИЛИАЛ (156/160): фильтр уходит В ОБА CTE — разные базы визитов дали бы
+    // долю returning больше 100 %.
+    const winParams: any[] = [tenantID, from, to];
+    const winPointFilter = pointFilterSql(null, pointId, winParams);
     const { rows } = await this.pool.query(
       `WITH visits AS (
          SELECT client_id, COUNT(*) AS visit_count, SUM(total_revenue) AS ltv,
                 MIN(date) AS first_date, MAX(date) AS last_date
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
-            AND deleted_at IS NULL
+            AND deleted_at IS NULL${winPointFilter}
           GROUP BY client_id
        ),
        window_clients AS (
@@ -1691,7 +2009,7 @@ export class ReportsService {
           WHERE tenant_id=$1 AND is_deferred=false
             AND deleted_at IS NULL
             AND date::date BETWEEN $2::date AND $3::date
-            AND client_id IS NOT NULL
+            AND client_id IS NOT NULL${winPointFilter}
        )
        SELECT
          COUNT(*) AS total_in_window,
@@ -1700,7 +2018,7 @@ export class ReportsService {
          COALESCE(AVG(EXTRACT(EPOCH FROM (v.last_date - v.first_date)) / 86400 / NULLIF(v.visit_count - 1, 0)), 0) AS avg_days_between
        FROM window_clients wc
        JOIN visits v ON v.client_id = wc.client_id`,
-      [tenantID, from, to],
+      winParams,
     );
     const r = rows[0];
     const total = parseInt(r?.total_in_window) || 0;
@@ -1710,12 +2028,14 @@ export class ReportsService {
     // have made 1 / 2 / 3 / 4 / 5+ lifetime (non-deferred) visits. Fixed bucket
     // labels ('1'..'4','5+') so the client can render a stable histogram; an
     // empty bucket is simply absent from the array.
+    const distParams: any[] = [tenantID, from, to];
+    const distPointFilter = pointFilterSql(null, pointId, distParams);
     const { rows: distRows } = await this.pool.query(
       `WITH visits AS (
          SELECT client_id, COUNT(*) AS visit_count
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL
-            AND deleted_at IS NULL
+            AND deleted_at IS NULL${distPointFilter}
           GROUP BY client_id
        ),
        window_clients AS (
@@ -1724,7 +2044,7 @@ export class ReportsService {
           WHERE tenant_id=$1 AND is_deferred=false
             AND deleted_at IS NULL
             AND date::date BETWEEN $2::date AND $3::date
-            AND client_id IS NOT NULL
+            AND client_id IS NOT NULL${distPointFilter}
        )
        SELECT
          CASE WHEN v.visit_count >= 5 THEN '5+' ELSE v.visit_count::text END AS bucket,
@@ -1733,7 +2053,7 @@ export class ReportsService {
        JOIN visits v ON v.client_id = wc.client_id
        GROUP BY CASE WHEN v.visit_count >= 5 THEN '5+' ELSE v.visit_count::text END
        ORDER BY MIN(v.visit_count)`,
-      [tenantID, from, to],
+      distParams,
     );
 
     return {
@@ -1754,8 +2074,8 @@ export class ReportsService {
    * is caught here and degraded to zero counts (the funnel still returns from
    * sms_history). answerRate = answered / total, answered = total − missed.
    */
-  private async marketingCalls(tenantID: string, from: string, to: string) {
-    const funnel = await this.getCallFunnel(tenantID, { dateFrom: from, dateTo: to });
+  private async marketingCalls(tenantID: string, from: string, to: string, pointId: string | null = null) {
+    const funnel = await this.getCallFunnel(tenantID, { dateFrom: from, dateTo: to }, pointId);
 
     let summary = { total: 0, incoming: 0, outgoing: 0, missed: 0, notCalledBack: 0 };
     try {
@@ -1909,7 +2229,11 @@ export class ReportsService {
    * Both EXCLUDE warranty checks (payment_method='warranty' = loss, not revenue).
    * Tenant-scoped, non-deferred, not deleted.
    */
-  private async marketingRevenue(tenantID: string, from: string, to: string) {
+  private async marketingRevenue(tenantID: string, from: string, to: string, pointId: string | null = null) {
+    // ФИЛИАЛ (156/160): выручка по источникам и по мастерам — деньги ЭТОГО
+    // филиала, иначе разрез «по мастеру» показал бы чужих сотрудников.
+    const srcParams: any[] = [tenantID, from, to];
+    const srcPointFilter = pointFilterSql('ch', pointId, srcParams);
     const { rows: bySourceRows } = await this.pool.query(
       `SELECT
          COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника') AS source,
@@ -1919,12 +2243,14 @@ export class ReportsService {
        LEFT JOIN clients cl ON cl.id = ch.client_id AND cl.tenant_id = $1
       WHERE ch.tenant_id=$1 AND ch.is_deferred=false AND ch.deleted_at IS NULL
         AND ch.payment_method IS DISTINCT FROM 'warranty'
-        AND ch.date::date BETWEEN $2::date AND $3::date
+        AND ch.date::date BETWEEN $2::date AND $3::date${srcPointFilter}
       GROUP BY COALESCE(NULLIF(btrim(cl.source), ''), 'Без источника')
       ORDER BY revenue DESC`,
-      [tenantID, from, to],
+      srcParams,
     );
 
+    const mstParams: any[] = [tenantID, from, to];
+    const mstPointFilter = pointFilterSql('ch', pointId, mstParams);
     const { rows: byMasterRows } = await this.pool.query(
       `SELECT
          ch.master_id                          AS master_id,
@@ -1935,10 +2261,10 @@ export class ReportsService {
        LEFT JOIN users u ON u.id = ch.master_id AND u.tenant_id = $1
       WHERE ch.tenant_id=$1 AND ch.is_deferred=false AND ch.deleted_at IS NULL
         AND ch.payment_method IS DISTINCT FROM 'warranty'
-        AND ch.date::date BETWEEN $2::date AND $3::date
+        AND ch.date::date BETWEEN $2::date AND $3::date${mstPointFilter}
       GROUP BY ch.master_id, u.full_name
       ORDER BY revenue DESC`,
-      [tenantID, from, to],
+      mstParams,
     );
 
     return {
@@ -1971,7 +2297,23 @@ export class ReportsService {
     from: string,
     to: string,
     granularity: 'week' | 'month',
+    pointId: string | null = null,
   ): Promise<MarketingTrendPoint[]> {
+    // ФИЛИАЛ (156/160): все чековые CTE (пожизненные визиты, выручка,
+    // возвращаемость) режутся точкой одним и тем же предикатом — иначе
+    // возвращаемость филиала считалась бы от сетевой базы визитов. Звонки и
+    // отзывы своей точки в таблицах ещё не имеют и остаются сетевыми.
+    const trendParams: any[] = [tenantID, from, to, granularity];
+    // Один и тот же параметр в двух написаниях: часть CTE читает checks без
+    // алиаса, часть — под алиасом ch. Плейсхолдер общий, значение кладётся
+    // ровно один раз.
+    let trendPointFilter = '';
+    let trendPointFilterCh = '';
+    if (pointId) {
+      trendParams.push(pointId);
+      trendPointFilter = ` AND point_id = $${trendParams.length}`;
+      trendPointFilterCh = ` AND ch.point_id = $${trendParams.length}`;
+    }
     const { rows } = await this.pool.query(
       `WITH buckets AS (
          SELECT generate_series(
@@ -1983,7 +2325,7 @@ export class ReportsService {
        lifetime_visits AS (
          SELECT client_id, COUNT(*) AS visit_count
            FROM checks
-          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL AND deleted_at IS NULL
+          WHERE tenant_id=$1 AND is_deferred=false AND client_id IS NOT NULL AND deleted_at IS NULL${trendPointFilter}
           GROUP BY client_id
        ),
        -- New clients per bucket: client ADDED TO BASE (clients.created_at) in the
@@ -2002,7 +2344,7 @@ export class ReportsService {
            FROM checks
           WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL
             AND payment_method IS DISTINCT FROM 'warranty'
-            AND date::date BETWEEN $2::date AND $3::date
+            AND date::date BETWEEN $2::date AND $3::date${trendPointFilter}
           GROUP BY date_trunc($4, date)
        ),
        -- Returning rate per bucket: of the DISTINCT clients active in the bucket,
@@ -2015,7 +2357,7 @@ export class ReportsService {
                JOIN lifetime_visits lv ON lv.client_id = ch.client_id
               WHERE ch.tenant_id=$1 AND ch.is_deferred=false AND ch.deleted_at IS NULL
                 AND ch.client_id IS NOT NULL
-                AND ch.date::date BETWEEN $2::date AND $3::date
+                AND ch.date::date BETWEEN $2::date AND $3::date${trendPointFilterCh}
            ) d
           GROUP BY b
        ),
@@ -2049,7 +2391,7 @@ export class ReportsService {
        LEFT JOIN calls_by_bucket   cb  ON cb.b  = bk.b
        LEFT JOIN reviews_by_bucket rvb ON rvb.b = bk.b
        ORDER BY bk.b`,
-      [tenantID, from, to, granularity],
+      trendParams,
     );
 
     return rows.map((r) => ({
@@ -2062,21 +2404,34 @@ export class ReportsService {
     }));
   }
 
-  private async marketingTrends(tenantID: string, from: string, to: string) {
+  private async marketingTrends(tenantID: string, from: string, to: string, pointId: string | null = null) {
     const [weekly, monthly] = await Promise.all([
-      this.marketingTrendSeries(tenantID, from, to, 'week'),
-      this.marketingTrendSeries(tenantID, from, to, 'month'),
+      this.marketingTrendSeries(tenantID, from, to, 'week', pointId),
+      this.marketingTrendSeries(tenantID, from, to, 'month', pointId),
     ]);
     return { weekly, monthly };
   }
 
-  async returnsSummaryForDashboard(tenantID: string) {
+  async returnsSummaryForDashboard(tenantID: string, pointId: string | null = null) {
     const todayStart = new Date(new Date().getFullYear(), new Date().getMonth(), new Date().getDate()).toISOString();
+    // ФИЛИАЛ (156/160): у check_returns своей точки нет — филиал берём с
+    // ЧЕКА-ИСТОЧНИКА (та же атрибуция, что в getCashFlow и алертах). EXISTS,
+    // а не JOIN: запрос агрегирует по одной таблице, соединение зря
+    // размножило бы строки при возможных множественных возвратах.
+    const retParams: any[] = [tenantID, todayStart];
+    let retPointFilter = '';
+    if (pointId) {
+      retParams.push(pointId);
+      retPointFilter = ` AND EXISTS (
+           SELECT 1 FROM checks ch
+            WHERE ch.id = check_returns.check_id AND ch.point_id = $${retParams.length}
+         )`;
+    }
     const { rows } = await this.pool.query(
       `SELECT COUNT(*) AS cnt, COALESCE(SUM(refund_amount), 0) AS sum
          FROM check_returns
-        WHERE tenant_id=$1 AND created_at >= $2`,
-      [tenantID, todayStart],
+        WHERE tenant_id=$1 AND created_at >= $2${retPointFilter}`,
+      retParams,
     );
     return {
       returnsToday: parseInt(rows[0]?.cnt) || 0,

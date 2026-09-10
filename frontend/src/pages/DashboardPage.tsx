@@ -520,10 +520,16 @@ function RevenueChart() {
   const revenueValues = data?.points?.map((p: { revenue: number }) => p.revenue) ?? [];
   const profitValues = data?.points?.map((p: { profit: number }) => p.profit) ?? [];
 
-  // Calculate change percentages
-  const prevRevenue = revenueValues.length > 1 ? revenueValues[revenueValues.length - 2] : 0;
-  const lastRevenue = revenueValues.length > 0 ? revenueValues[revenueValues.length - 1] : 0;
-  const revChange = prevRevenue > 0 ? Math.round(((lastRevenue - prevRevenue) / prevRevenue) * 100) : 0;
+  // Дельта периода. Раньше здесь сравнивались ДВЕ ПОСЛЕДНИЕ ТОЧКИ оси (вчера
+  // против позавчера), а подпись обещала «к пред. периоду» — цифра и подпись
+  // говорили о разном. Теперь окно сравнения считает сервер (`previous`) в
+  // поясе автосервиса и присылает готовую подпись: месяц-к-дате сравнивается с
+  // прошлым месяцем НА ТУ ЖЕ ДАТУ («к 9 августа»), неделя/год — равными
+  // отрезками. Старый бэкенд поля не шлёт → строку просто не показываем.
+  const compare = data?.previous ?? null;
+  const compareBase = compare?.totalRevenue ?? 0;
+  const revChange =
+    compare && compareBase > 0 ? Math.round((((data?.totalRevenue ?? 0) - compareBase) / compareBase) * 100) : 0;
 
   return (
     <div className="rounded-3xl bg-gradient-to-br from-blue-950 via-slate-900 to-blue-950 overflow-hidden shadow-xl ring-1 ring-white/5 transition-shadow hover:shadow-2xl">
@@ -544,10 +550,10 @@ function RevenueChart() {
             </button>
           ))}
         </div>
-        {data && revChange !== 0 && (
+        {compare && revChange !== 0 && (
           <p className={`text-xs font-medium text-center ${revChange > 0 ? 'text-cyan-400' : 'text-red-400'}`}>
             {revChange > 0 ? '+' : ''}
-            {revChange}% к пред. периоду
+            {revChange}% {compare.label}
           </p>
         )}
 

@@ -19,18 +19,45 @@ import { WarrantyService } from '../warranty/warranty.service';
 import { PushService } from '../push/push.service';
 import { MarketingService } from '../marketing/marketing.service';
 import { InstallmentsService } from '../installments/installments.service';
+import { ClientsService } from '../clients/clients.service';
 import { AuditService } from '../tenants/audit.service';
 import { parseFields, filterShape } from '../common/field-filter';
 import { capLimit } from '../common/cap-limit';
 import { ttlCache } from '../common/ttl-cache';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 import { userHasPermission } from '../common/guards/permissions.guard';
+import {
+  actorPointId,
+  assertRowPointForWrite,
+  pointCacheSegment,
+  pointFilterSql,
+  resolvePointForWrite,
+} from '../common/point-scope';
+import { checkMoneyBaseWhere, checkProfitExpr, checkRevenueExpr } from '../common/check-money-sql';
+import {
+  dayStartMsInZone,
+  getTenantTimezone,
+  getZonedParts,
+  startOfDayInZone,
+  startOfMonthInZone,
+  startOfWeekInZone,
+  zonedDateKey,
+  zonedIsoWeekday,
+  zonedMidnight,
+} from '../common/timezone';
+import { ComparePeriod, previousComparableWindow } from '../common/period-compare';
 
 /** Actor context for visibility decisions (checks_view_all). */
 interface ChecksActor {
   userID: string;
   role: string;
   permissions?: Record<string, boolean>;
+  /**
+   * Филиал (156/160): текущая точка актора из JWT. null/undefined = «Все
+   * точки» — фильтра нет, поведение одноточечного тенанта прежнее. Единый
+   * разбор — actorPointId() из common/point-scope.
+   */
+  currentPointId?: string | null;
 }
 
 /**
@@ -113,10 +140,12 @@ function round2(value: number): number {
 }
 
 /**
- * Бизнес-таймзона продукта — Europe/Moscow (UTC+3, без переходов с 2014):
- * календарный «день продажи» везде ниже считается по МСК, а не по TZ сервера.
+ * Бизнес-таймзона — ПОЯС ТЕНАНТА (tenants.timezone, миграция 157): календарный
+ * «день продажи» считается по местному времени автосервиса, а не по TZ сервера
+ * и не по фиксированному московскому сдвигу, который стоял тут раньше. Пояс
+ * читается один раз на операцию (getTenantTimezone кеширует) и передаётся вниз
+ * параметром — арифметика живёт в common/timezone.ts.
  */
-const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -126,14 +155,14 @@ const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
  */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Календарный день (yyyy-MM-dd) момента `ts` в Europe/Moscow. */
-function mskDayOf(ts: number): string {
-  return new Date(ts + MSK_OFFSET_MS).toISOString().slice(0, 10);
+/** Календарный день (yyyy-MM-dd) момента `ts` в поясе тенанта. */
+function tenantDayOf(ts: number, tz: string): string {
+  return zonedDateKey(new Date(ts), tz);
 }
 
-/** UTC-timestamp начала МСК-дня `yyyy-MM-dd`. NaN на кривом дне. */
-function mskDayStartMs(day: string): number {
-  return Date.parse(`${day}T00:00:00.000Z`) - MSK_OFFSET_MS;
+/** UTC-timestamp начала местного дня `yyyy-MM-dd`. NaN на кривом дне. */
+function tenantDayStartMs(day: string, tz: string): number {
+  return dayStartMsInZone(tz, day);
 }
 
 /** Не старше ~5 лет — защита от опечатки года (2925 → 2025 и т.п.). */
@@ -142,17 +171,17 @@ const CHECK_DATE_MAX_PAST_MS = 5 * 365 * DAY_MS;
 /**
  * Пределы для ЯВНОЙ правки даты продажи чека (жалоба владельца «меняю дату —
  * ничего не происходит»): задним числом можно (до 5 лет), вперёд — не дальше
- * чем «завтра» по МСК. Возвращает нормализованный ISO — его и пишем в
- * checks.date (и переиспользуем для warranty.started_at).
+ * чем «завтра» по МЕСТНОМУ времени тенанта. Возвращает нормализованный ISO —
+ * его и пишем в checks.date (и переиспользуем для warranty.started_at).
  */
-function parseCheckDateEdit(raw: unknown): string {
+function parseCheckDateEdit(raw: unknown, tz: string): string {
   const ts = new Date(String(raw)).getTime();
   if (!Number.isFinite(ts)) {
     throw new BadRequestException({ message: 'Дата продажи: некорректное значение' });
   }
   const now = Date.now();
-  // Конец «завтра» по МСК: сегодня(МСК) 00:00 + 2 суток.
-  const maxTs = mskDayStartMs(mskDayOf(now)) + 2 * DAY_MS;
+  // Конец «завтра» по местному времени: сегодня 00:00 + 2 суток.
+  const maxTs = tenantDayStartMs(tenantDayOf(now, tz), tz) + 2 * DAY_MS;
   if (ts >= maxTs) {
     throw new BadRequestException({ message: 'Дата продажи не может быть дальше завтрашнего дня' });
   }
@@ -167,27 +196,28 @@ function parseCheckDateEdit(raw: unknown): string {
  * Возвращает null, если менять нечего (эхо той же даты: оба клиента шлют date
  * в КАЖДОМ edit-payload, гидрированную из чека), иначе — валидированный ISO.
  *   • web шлёт date-only ('yyyy-MM-dd' — календарный день, как его видит
- *     владелец, т.е. МСК): тот же МСК-день, что у чека → эхо (время суток не
- *     затираем); другой день → новый МСК-день с ПРЕЖНИМ временем суток
- *     (позиция в журнале внутри дня и почасовой график не ломаются);
+ *     владелец, т.е. в ПОЯСЕ ЕГО АВТОСЕРВИСА): тот же местный день, что у чека
+ *     → эхо (время суток не затираем); другой день → новый местный день с
+ *     ПРЕЖНИМ временем суток (позиция в журнале внутри дня и почасовой график
+ *     не ломаются);
  *   • mobile шлёт полный ISO: сравнение и запись точные, по миллисекундам.
  */
-function resolveCheckDateEdit(raw: unknown, priorTs: number): string | null {
+function resolveCheckDateEdit(raw: unknown, priorTs: number, tz: string): string | null {
   if (raw === undefined || raw === null || raw === '') return null;
   const rawStr = String(raw);
   if (DATE_ONLY_RE.test(rawStr)) {
-    const priorDay = mskDayOf(priorTs);
+    const priorDay = tenantDayOf(priorTs, tz);
     if (rawStr === priorDay) return null;
-    const requestedDayStart = mskDayStartMs(rawStr);
+    const requestedDayStart = tenantDayStartMs(rawStr, tz);
     if (!Number.isFinite(requestedDayStart)) {
       throw new BadRequestException({ message: 'Дата продажи: некорректное значение' });
     }
-    const timeOfDay = priorTs - mskDayStartMs(priorDay);
-    return parseCheckDateEdit(new Date(requestedDayStart + timeOfDay).toISOString());
+    const timeOfDay = priorTs - tenantDayStartMs(priorDay, tz);
+    return parseCheckDateEdit(new Date(requestedDayStart + timeOfDay).toISOString(), tz);
   }
   const ts = new Date(rawStr).getTime();
   if (Number.isFinite(ts) && ts === priorTs) return null;
-  return parseCheckDateEdit(rawStr);
+  return parseCheckDateEdit(rawStr, tz);
 }
 
 /**
@@ -240,6 +270,20 @@ export class ChecksService {
   constructor(
     @Inject(PG_POOL) private pool: Pool,
     private warranty: WarrantyService,
+    // Раздельная база клиентов (161): «виден ли мне этот клиент» обязано
+    // решаться ОДНИМ кодом на весь репозиторий — ClientsService
+    // .separatePointFor / .separatePointWhere. Третья копия предиката
+    // разъехалась бы, и журнал отдавал бы историю клиента, которого база
+    // клиентов уже прячет.
+    //
+    // ОБЯЗАТЕЛЬНАЯ (не @Optional) зависимость СОЗНАТЕЛЬНО: без неё гейт
+    // видимости пришлось бы либо молча пропускать (дыра возвращается), либо
+    // молча отказывать (история клиента ломается у всех). Требование
+    // провайдера роняет приложение НА СТАРТЕ, если ClientsModule забыли
+    // импортировать, — это единственный вариант, который нельзя не заметить.
+    // Стоит ДО @Optional-инъекций: обязательный параметр не может следовать за
+    // необязательным (TS1016).
+    private clients: ClientsService,
     @Optional() private pushService?: PushService,
     // Reused for the «машина готова» auto-notification (fire-and-forget from
     // setWorkStatus). @Optional so a missing provider can never break check
@@ -325,6 +369,107 @@ export class ChecksService {
    *   - warranty_claims are skipped entirely if this check already has ANY
    *     claim row, so a re-run can never duplicate guarantees.
    */
+  /**
+   * ФИЛИАЛ (156/160/161) — ГЕЙТ ДЕНЕЖНОЙ ЗАПИСИ ПО ЧУЖОМУ ЧЕКУ.
+   *
+   * ПОЧЕМУ ОН НУЖЕН ИМЕННО ОТДЕЛЬНО ОТ ЧТЕНИЯ. Деталь чека читается МЕЖДУ
+   * филиалами сознательно (история клиента общая на всю сеть — см. докблок
+   * getByIdForActor), поэтому id чека филиала Б штатно оказывается на экране у
+   * мастера филиала А. Пока запись гейта не имела, этого было достаточно, чтобы
+   * УДАЛИТЬ или ПЕРЕПИСАТЬ чужой чек: удаление реверсирует склад и деньги,
+   * правка меняет выручку филиала, к которому актор отношения не имеет.
+   * Правило волны: ЧИТАЕМ ШИРОКО, ПИШЕМ ТОЛЬКО В СВОЙ ФИЛИАЛ.
+   *
+   * Возвращает 404 «Заказ-наряд не найден» — тот же текст, что у чужого и у
+   * несуществующего чека: существование чеков соседнего филиала не
+   * подсвечиваем (зеркало ветки видимости в getByIdForActor).
+   *
+   * ГОНОК НЕТ, поэтому гейт стоит ДО транзакции, а не внутри неё: point_id
+   * чека НЕИЗМЕНЯЕМ после создания — активация драфта его сознательно не
+   * трогает (тест points-scoping «активация отложенного заказа не переписывает
+   * point_id»), и ни один UPDATE в этом сервисе колонку не пишет. Проверить
+   * раньше = не занимать соединение пула на время проверки.
+   *
+   * Точки нет («Все точки» либо одноточечный тенант) → гейта нет, поведение
+   * дословно прежнее.
+   */
+  private assertCheckPointForWrite(id: string, tenantID: string, actor?: ChecksActor): Promise<void> {
+    // Предикат — общий (common/point-scope.assertRowPointForWrite): то же
+    // правило теперь стоит у зарплаты и расходов, и три копии одного SQL
+    // разъехались бы ровно так же, как разъезжались фильтры чтения.
+    return assertRowPointForWrite(this.pool, 'checks', id, tenantID, actorPointId(actor), 'Заказ-наряд не найден');
+  }
+
+  /**
+   * ФИЛИАЛ (161) — ВИДИМОСТЬ КЛИЕНТА/АВТО ПЕРЕД СНЯТИЕМ ФИЛЬТРА ФИЛИАЛА.
+   *
+   * checks.getAll при ?clientId / ?carId СОЗНАТЕЛЬНО снимает фильтр филиала:
+   * история клиента общая на всю сеть (требование владельца). Но снималась она
+   * БЕЗ проверки, что клиент вообще видим актору, — и в раздельном режиме
+   * (tenants.points_shared_clients=false), где все остальные двери к чужой базе
+   * закрыты (список, карточка, поиск по телефону, поиск по госномеру, экспорт),
+   * эта оставалась открытой: перебором id можно было получить ФИО и телефон
+   * клиента чужого филиала прямо из журнала.
+   *
+   * Предикат НЕ переписывается здесь заново: берём ClientsService
+   * .separatePointFor + .separatePointWhere — те же, что режут саму базу
+   * клиентов и гараж (CarsService). Машина своей точки не имеет и иметь не
+   * будет: она принадлежит филиалу своего ВЛАДЕЛЬЦА, а машина без владельца
+   * видна везде (та же конвенция, что в CarsService.ownerVisibleSql).
+   *
+   * Ответ на невидимого — 404 с текстом самого объекта («Клиент не найден» /
+   * «Машина не найдена»), как в ClientsService/CarsService: существование
+   * чужой карточки не подтверждаем.
+   *
+   * ОБЩАЯ БАЗА (дефолт) → separatePointFor вернёт null, проверок нет, запрос
+   * дословно прежний.
+   */
+  private async assertClientHistoryVisible(
+    tenantID: string,
+    clientId: unknown,
+    carId: unknown,
+    actor?: ChecksActor,
+  ): Promise<void> {
+    const viewerPoint = await this.clients.separatePointFor(tenantID, actor?.userID);
+    if (!viewerPoint) return;
+
+    // Не-uuid до сравнения не доводим: `id = $1` дал бы 22P02 → 500. Такой
+    // фильтр всё равно не может ничего отдать (основной запрос ниже упрётся в
+    // тот же каст), поэтому просто не проверяем — поведение прежнее.
+    const client = typeof clientId === 'string' && UUID_RE.test(clientId) ? clientId : null;
+    const car = typeof carId === 'string' && UUID_RE.test(carId) ? carId : null;
+
+    if (client) {
+      const params: unknown[] = [client, tenantID];
+      const where = this.clients.separatePointWhere(null, viewerPoint, params);
+      const { rows } = await this.pool.query(
+        `SELECT 1 FROM clients WHERE id = $1 AND tenant_id = $2${where} LIMIT 1`,
+        params,
+      );
+      if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
+    }
+
+    if (car) {
+      const { rows: carRows } = await this.pool.query(
+        `SELECT client_id FROM cars WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+        [car, tenantID],
+      );
+      if (carRows.length === 0) throw new NotFoundException({ message: 'Машина не найдена' });
+      const ownerId: string | null = carRows[0].client_id ?? null;
+      // Машина без владельца — общая: приписать её некуда, а спрятать значило
+      // бы потерять её из всех списков сразу (конвенция CarsService).
+      if (ownerId) {
+        const params: unknown[] = [ownerId, tenantID];
+        const where = this.clients.separatePointWhere(null, viewerPoint, params);
+        const { rows } = await this.pool.query(
+          `SELECT 1 FROM clients WHERE id = $1 AND tenant_id = $2${where} LIMIT 1`,
+          params,
+        );
+        if (rows.length === 0) throw new NotFoundException({ message: 'Машина не найдена' });
+      }
+    }
+  }
+
   private async applyDeferredActivation(
     client: PoolClient,
     tenantID: string,
@@ -1017,18 +1162,53 @@ export class ChecksService {
       where += ` AND ch.car_id = $${idx++}`;
       params.push(query.carId);
     }
-    // Границы периода — МОСКОВСКИЙ полуинтервал [from 00:00 МСК, to+1 00:00 МСК),
-    // зеркально reports.service (BUSINESS_TZ): журнал и drill-down дня из cash
-    // flow видят ровно один и тот же набор чеков. Раньше правый край клеился
-    // как UTC ('T23:59:59Z') — чек, пробитый после 02:59:59 МСК следующего
-    // дня по UTC-краю, выпадал из «своего» московского дня.
-    if (query.dateFrom) {
-      where += ` AND ch.date >= $${idx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`;
-      params.push(query.dateFrom);
+
+    // ── ФИЛИАЛ (156/160) ─────────────────────────────────────────────────
+    // Журнал показывает чеки ТОЛЬКО текущего филиала: «зайдя в филиал, вижу
+    // его чеки и его деньги» (требование владельца). Точка приезжает в акторе
+    // из JWT — ноль обращений к БД. Точки нет («Все точки» у владельца либо
+    // одноточечный тенант) → фильтра нет, запрос дословно прежний.
+    //
+    // ИСКЛЮЧЕНИЕ — ИСТОРИЯ КЛИЕНТА И АВТО. НЕ «ЧИНИТЬ»: при явном ?clientId
+    // или ?carId фильтр по филиалу НЕ применяется СОЗНАТЕЛЬНО. Это выборка
+    // «история этого клиента / этой машины», а база клиентов и их история —
+    // единственное, что владелец оставил общим на всю сеть. Клиент
+    // обслуживался на филиале А и приехал на Б — мастер обязан увидеть, что с
+    // машиной делали. Отдельная настройка «своя база клиентов у каждой точки»
+    // (tenants.points_shared_clients) режет СОСТАВ базы в ClientsService, а не
+    // историю уже найденного клиента.
+    //
+    // СНИМАЕМ ФИЛЬТР ТОЛЬКО ПОСЛЕ ПРОВЕРКИ ВИДИМОСТИ (161). Само исключение
+    // выше — про ИСТОРИЮ УЖЕ ВИДИМОГО клиента. Без проверки оно превращалось в
+    // обходной путь к чужой базе: в раздельном режиме перебор ?clientId отдавал
+    // ФИО и телефон клиента соседнего филиала, пока все остальные ручки его
+    // прятали. Предикат — общий с ClientsService/CarsService, не третья копия.
+    if (query.clientId || query.carId) {
+      await this.assertClientHistoryVisible(tenantID, query.clientId, query.carId, actor);
     }
-    if (query.dateTo) {
-      where += ` AND ch.date < ($${idx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`;
-      params.push(query.dateTo);
+
+    // Фильтр кладём ПОСЛЕ остальных push'ей и синхронизируем idx с params:
+    // ниже нумерация продолжается от него (курсор, meId, limit).
+    const journalPointId = query.clientId || query.carId ? null : actorPointId(actor);
+    where += pointFilterSql('ch', journalPointId, params);
+    idx = params.length + 1;
+    // Границы периода — полуинтервал [from 00:00, to+1 00:00) В ПОЯСЕ ТЕНАНТА,
+    // зеркально reports.service: журнал и drill-down дня из cash flow видят
+    // ровно один и тот же набор чеков. Раньше правый край клеился как UTC
+    // ('T23:59:59Z') — чек, пробитый после полуночи по UTC-краю, выпадал из
+    // «своего» местного дня. Пояс уходит ПАРАМЕТРОМ: склейка строки в SQL —
+    // инъекция, даже когда значение пришло из собственной таблицы.
+    if (query.dateFrom || query.dateTo) {
+      const tzParam = `$${idx++}::text`;
+      params.push(await getTenantTimezone(this.pool, tenantID));
+      if (query.dateFrom) {
+        where += ` AND ch.date >= $${idx++}::date::timestamp AT TIME ZONE ${tzParam}`;
+        params.push(query.dateFrom);
+      }
+      if (query.dateTo) {
+        where += ` AND ch.date < ($${idx++}::date + 1)::timestamp AT TIME ZONE ${tzParam}`;
+        params.push(query.dateTo);
+      }
     }
     if (query.retail === 'true') {
       where += ` AND ch.client_id IS NULL`;
@@ -1242,23 +1422,52 @@ export class ChecksService {
    * его касса обязана вернуть).
    */
   async getByIdForActor(id: string, tenantID: string, actor: ChecksActor) {
+    const params: any[] = [id, tenantID];
+    let where = 'ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL';
+    let needsScopeCheck = false;
+
     if (actor && !userHasPermission(actor, 'checks_view_all')) {
       // Round 14: третье плечо — ИСПОЛНИТЕЛЬ заказа (check_assignees). Доска
       // показывает restricted-мастеру назначенные ему заказы (см. getBoard) —
       // деталь обязана открываться с той же видимостью, иначе карточка доски
       // ведёт в 404.
-      const { rows: scopeRows } = await this.pool.query(
-        `SELECT 1 FROM checks ch
-          WHERE ch.id=$1 AND ch.tenant_id=$2 AND ch.deleted_at IS NULL
-            AND (ch.master_id = $3 OR EXISTS (
+      params.push(actor.userID);
+      const u = `$${params.length}`;
+      where += ` AND (ch.master_id = ${u} OR EXISTS (
               SELECT 1 FROM check_service_lines sl
-               WHERE sl.check_id = ch.id AND sl.master_id = $3
+               WHERE sl.check_id = ch.id AND sl.master_id = ${u}
             ) OR EXISTS (
               SELECT 1 FROM check_assignees cas
-               WHERE cas.check_id = ch.id AND cas.user_id = $3
-            ))`,
-        [id, tenantID, actor.userID],
-      );
+               WHERE cas.check_id = ch.id AND cas.user_id = ${u}
+            ))`;
+      needsScopeCheck = true;
+    }
+
+    // ── ФИЛИАЛ (156/160/161) — ЧТЕНИЕ ДЕТАЛИ МЕЖФИЛИАЛЬНОЕ. НЕ «ЧИНИТЬ» ──
+    // Здесь СОЗНАТЕЛЬНО НЕТ фильтра по точке, и вернуть его нельзя.
+    //
+    // История клиента и его авто — единственное, что владелец оставил общим на
+    // всю сеть: списки checks.getAll?clientId / ClientsService.getChecksByCar /
+    // CarsService.getChecks намеренно показывают чеки ВСЕХ филиалов, потому что
+    // мастер обязан видеть, что уже делали с машиной (иначе он повторит работу
+    // или пропустит гарантийный случай). Пока деталь резалась точкой, тап по
+    // такой строке давал «Заказ-наряд не найден»: история была видна и
+    // неоткрываема одновременно — разорванный экран, а не защита.
+    //
+    // ПРАВИЛО ВОЛНЫ, которое это заменяет: ЧИТАЕМ ШИРОКО, ПИШЕМ ТОЛЬКО В СВОЙ
+    // ФИЛИАЛ. Опасны были не глаза, а руки: чек чужого филиала можно было
+    // удалить (реверс склада и денег) и переписать (чужая выручка). Это
+    // закрыто гейтом записи assertCheckPointForWrite, который стоит во ВСЕХ
+    // путях мутации чека (update / acceptPayment / setWorkStatus /
+    // updateOwnComment / remove / restore). Убрать гейт и вернуть фильтр сюда
+    // = снова разорвать историю клиента, ничего не выиграв.
+    //
+    // Что видно в межфилиальной детали: те же поля, что и в общей истории
+    // клиента, включая прибыль — но ТОЛЬКО держателю profit_view
+    // (mapCheck(row, canSeeProfit)), как и на всех остальных экранах.
+
+    if (needsScopeCheck) {
+      const { rows: scopeRows } = await this.pool.query(`SELECT 1 FROM checks ch WHERE ${where}`, params);
       if (scopeRows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
     }
     return this.getById(id, tenantID, actor);
@@ -1381,6 +1590,10 @@ export class ChecksService {
     if (typeof workStatus !== 'string' || workStatus.length === 0) {
       throw new BadRequestException({ message: 'Не указан статус доски' });
     }
+    // ФИЛИАЛ (161): доска — рабочий процесс КОНКРЕТНОГО автосервиса. Статус
+    // чужого чека двигает чужую доску и, через колонку 'delivered', ставит
+    // отметку выдачи машины, которую этот филиал не отдавал.
+    await this.assertCheckPointForWrite(id, tenantID, actor);
     // Validate against the tenant's ACTIVE board columns (091) instead of a
     // hard-coded enum. ensureBoardColumnsDefaults guarantees the legacy four
     // exist for tenants that never customised the board. The matched column also
@@ -1462,8 +1675,8 @@ export class ChecksService {
    * «Комментарий своего чека — день в день» (round 7, item 10). ЛЮБОЙ сотрудник
    * (без edit_closed_check / checks_edit) меняет ТОЛЬКО комментарий ТОЛЬКО
    * своего чека (master_id = actor) и ТОЛЬКО в календарный день его создания —
-   * по Europe/Moscow, той же зоне, что и MSK-кроны продукта. `date` — это
-   * бизнес-дата чека, которую показывает и сортирует журнал (ORDER BY ch.date).
+   * по ПОЯСУ ТЕНАНТА (tenants.timezone). `date` — это бизнес-дата чека, которую
+   * показывает и сортирует журнал (ORDER BY ch.date).
    *
    * ВСЁ принуждение сидит в WHERE одного UPDATE — «свой», «сегодня», «не в
    * корзине» и tenant-изоляция проверяются атомарно с самой записью, гонок с
@@ -1478,6 +1691,10 @@ export class ChecksService {
    * но не сегодняшний → 403 с человеческим сообщением.
    */
   async updateOwnComment(id: string, tenantID: string, actorUserId: string, comment: string, actor?: ChecksActor) {
+    // ФИЛИАЛ (161): комментарий денег не двигает, но это ЗАПИСЬ в документ
+    // соседнего филиала — правило волны одно на все пути мутации, исключений
+    // «тут не страшно» не заводим (они и превращаются в следующую дыру).
+    await this.assertCheckPointForWrite(id, tenantID, actor);
     const normalized = comment.trim().length === 0 ? null : comment;
 
     // 155 — комментарий с доски: держатель ЭФФЕКТИВНОГО `checks_edit`
@@ -1510,6 +1727,9 @@ export class ChecksService {
       return this.getById(id, tenantID, actor);
     }
 
+    // «Сегодня» — местный календарный день автосервиса: один и тот же чек не
+    // должен быть «сегодняшним» для сервера и «вчерашним» для владельца.
+    const tz = await getTenantTimezone(this.pool, tenantID);
     const { rowCount } = await this.pool.query(
       `UPDATE checks
           SET comment = $1
@@ -1517,17 +1737,17 @@ export class ChecksService {
           AND tenant_id = $3
           AND deleted_at IS NULL
           AND master_id = $4
-          AND (date AT TIME ZONE 'Europe/Moscow')::date = (now() AT TIME ZONE 'Europe/Moscow')::date`,
-      [normalized, id, tenantID, actorUserId],
+          AND (date AT TIME ZONE $5::text)::date = (now() AT TIME ZONE $5::text)::date`,
+      [normalized, id, tenantID, actorUserId, tz],
     );
 
     if (!rowCount) {
       const { rows } = await this.pool.query(
         `SELECT master_id, deleted_at,
-                ((date AT TIME ZONE 'Europe/Moscow')::date = (now() AT TIME ZONE 'Europe/Moscow')::date) AS is_today
+                ((date AT TIME ZONE $3::text)::date = (now() AT TIME ZONE $3::text)::date) AS is_today
            FROM checks
           WHERE id = $1 AND tenant_id = $2`,
-        [id, tenantID],
+        [id, tenantID, tz],
       );
       const row = rows[0];
       // Несуществующий, чужой или лежащий в корзине чек неразличимы снаружи —
@@ -1535,7 +1755,7 @@ export class ChecksService {
       if (!row || row.deleted_at !== null || row.master_id !== actorUserId) {
         throw new NotFoundException({ message: 'Заказ-наряд не найден' });
       }
-      // Свой живой чек, но бизнес-дата уже не сегодняшняя (по МСК).
+      // Свой живой чек, но бизнес-дата уже не сегодняшняя (по поясу тенанта).
       throw new ForbiddenException({ message: 'Комментарий можно изменить только в день создания чека' });
     }
 
@@ -1847,6 +2067,14 @@ export class ChecksService {
       idx++;
       params.push(aid);
     }
+
+    // ФИЛИАЛ (156/160): доска-конвейер — это «какие машины сейчас в РАБОТЕ у
+    // ЭТОГО автосервиса». Заказ соседнего филиала на ней означал бы, что
+    // мастер тянет чужую машину в свою колонку. Скоуп тот же, что у журнала;
+    // без выбранной точки предикат не добавляется. idx синхронизируем с
+    // params — ниже по нему адресуется perColumn.
+    where += pointFilterSql('ch', actorPointId(actor), params);
+    idx = params.length + 1;
 
     params.push(perColumn);
     const { rows } = await this.pool.query(
@@ -2600,6 +2828,71 @@ export class ChecksService {
       }
     }
 
+    // Пояс тенанта — ДО открытия транзакции: тянуть вторую коннекцию из пула,
+    // уже держа одну, значит рисковать взаимной блокировкой на исчерпанном пуле.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+
+    // ── Филиал заказа (156/160) ───────────────────────────────────────────
+    // ПО УМОЛЧАНИЮ — точка АВТОРА из JWT-актора (его текущий выбор в
+    // переключателе). Раньше её перечитывал отдельный SELECT внутри КАЖДОЙ
+    // транзакции создания чека; теперь она приезжает в акторе (jwt.strategy)
+    // и стоит ноль обращений к БД.
+    //
+    // ЯВНЫЙ dto.pointId — только для ОФЛАЙН-ОЧЕРЕДИ. Мастер набил чек на
+    // филиале А без сети, доехал до Б и переключился — досылка без явной
+    // точки записала бы выручку филиалу Б. Поэтому очередь кладёт точку в
+    // payload в момент нажатия «Пробить» (mobile/src/utils/offlineCheckQueue).
+    // Доверяем ей ТОЛЬКО после проверки доступа: точка обязана быть живой,
+    // своего тенанта, и автор должен иметь на неё право (user_management —
+    // свободно, иначе только назначенные точки; без назначений — не
+    // ограничен, конвенция 156). Не прошла проверку — молча берём текущую:
+    // подставленный чужой id не должен ни «переехать» деньгами в другой
+    // филиал, ни уронить досылку 400-й (чек тогда завис бы в очереди навсегда).
+    // Резолв выполняется ДО pool.connect() по той же причине, что и пояс.
+    let authorPointId: string | null = actorPointId(actor);
+    const requestedPointId = typeof dto.pointId === 'string' ? dto.pointId.trim().toLowerCase() : '';
+    if (requestedPointId && requestedPointId !== authorPointId && UUID_RE.test(requestedPointId)) {
+      const { rows: allowed } = await this.pool.query(
+        `SELECT p.id
+           FROM tenant_points p
+          WHERE p.id = $1 AND p.tenant_id = $2 AND p.is_active = true
+            AND (
+              $4::boolean
+              OR NOT EXISTS (SELECT 1 FROM user_points up WHERE up.user_id = $3 AND up.tenant_id = $2)
+              OR EXISTS (SELECT 1 FROM user_points up2
+                          WHERE up2.user_id = $3 AND up2.tenant_id = $2 AND up2.point_id = p.id)
+            )`,
+        [requestedPointId, tenantID, userID, userHasPermission(actor, 'user_management')],
+      );
+      if (allowed.length > 0) authorPointId = requestedPointId;
+    }
+
+    // ВОЛНА 4 — «НИЧЬИХ» ЧЕКОВ НЕ БЫВАЕТ. Чек с point_id = NULL не видел НИ
+    // ОДИН филиал: он выпадал из журнала филиала, из его Z-отчёта, из карточки
+    // «Филиалы» и из зарплатных начислений мастера — выручка существовала
+    // только в сетевом срезе. Общий резолв всех денежных путей
+    // (common/point-scope.resolvePointForWrite): своя точка → единственная
+    // доступная → 400 «Выберите филиал, чтобы пробить чек». У тенанта без
+    // точек — по-прежнему NULL, одноточечный автосервис изменений не заметит.
+    //
+    // Про офлайн-очередь: она штампует точку в момент нажатия «Пробить», и
+    // валидная точка из payload сюда уже не доходит (ветка выше). Если же чек
+    // был набит В РЕЖИМЕ «Все точки» на тенанте с несколькими филиалами —
+    // досылка честно упрётся в 400. Это правильно: угадать, чья это выручка,
+    // нельзя, а «ничей» чек — потерянные для филиала деньги.
+    //
+    // Резолв выполняется ДО pool.connect() по той же причине, что и пояс.
+    if (!authorPointId) {
+      // Актора собираем из параметров метода: ChecksActor тенанта не носит (он
+      // приходит отдельным аргументом), а единственный внешний вызов — из
+      // контроллера, где это один и тот же человек.
+      authorPointId = await resolvePointForWrite(
+        this.pool,
+        { tenantID, userID, currentPointId: actorPointId(actor) },
+        'чтобы пробить чек',
+      );
+    }
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -2856,14 +3149,14 @@ export class ChecksService {
       // чек создаётся только сегодняшним днём — чужая дата молча заменяется
       // текущей (прежний хардкод userRole==='master'; сиды 1:1 — мастер false,
       // admin/director true, грант мастеру теперь реально работает).
-      // «Сегодня» считаем по БИЗНЕС-таймзоне (mskDayOf, Europe/Moscow), а НЕ
-      // через setHours(0,0,0,0) в TZ процесса: в контейнере это UTC, и с 00:00
-      // до 03:00 по МСК «сегодня» определялось предыдущими сутками — чек около
+      // «Сегодня» считаем по БИЗНЕС-таймзоне тенанта, а НЕ через
+      // setHours(0,0,0,0) в TZ процесса: в контейнере это UTC, и после местной
+      // полуночи «сегодня» определялось предыдущими сутками — чек около
       // полуночи молча переезжал на now(). Кривая дата (NaN) — как и раньше,
       // заменяется текущей.
       if (dto.date && !userHasPermission(actor, 'checks_change_datetime')) {
         const inputTs = new Date(dto.date).getTime();
-        if (!Number.isFinite(inputTs) || mskDayOf(inputTs) !== mskDayOf(Date.now())) {
+        if (!Number.isFinite(inputTs) || tenantDayOf(inputTs, tz) !== tenantDayOf(Date.now(), tz)) {
           checkDate = new Date().toISOString();
         }
       }
@@ -2893,15 +3186,10 @@ export class ChecksService {
         initialWorkStatus = firstCol[0]?.key ?? null;
       }
 
-      // 156 — мульти-точки: штампуем точку АВТОРА заказа (его текущий выбор в
-      // переключателе). NULL у одноточечных тенантов / без выбора — колонка
-      // остаётся пустой, поведение прежнее.
-      const { rows: authorPointRows } = await client.query(
-        `SELECT current_point_id FROM users WHERE id=$1 AND tenant_id=$2`,
-        [userID, tenantID],
-      );
-      const authorPointId = authorPointRows[0]?.current_point_id ?? null;
-
+      // 156/160 — мульти-точки: точка заказа резолвлена ДО транзакции
+      // (authorPointId выше — актор из JWT либо явная точка офлайн-очереди).
+      // NULL у одноточечных тенантов / у актора в режиме «Все точки» —
+      // колонка остаётся пустой, поведение прежнее.
       const { rows: checkRows } = await client.query(
         `INSERT INTO checks (number, date, master_id, client_id, car_id, mileage, comment, discount,
          is_deferred, payment_method, cash_amount, card_amount,
@@ -3202,6 +3490,14 @@ export class ChecksService {
     actorUserId: string | null = null,
     actor?: ChecksActor,
   ) {
+    // ФИЛИАЛ (161) — ПЕРВЫМ ДЕЙСТВИЕМ, ДО ЛЮБОЙ ВЕТКИ. Отсюда расходятся ВСЕ
+    // пути правки: fullUpdate → editClosedCheck (правка денег проведённого
+    // чека), activateDeferred (проведение драфта: списание склада, гарантии,
+    // зарплата) и плоский PATCH (способ оплаты, ноги, дата, метки,
+    // исполнители). Гейт наверху — единственное место, где их всех накрывает
+    // одна проверка; в каждой ветке по копии она рано или поздно разъедется.
+    await this.assertCheckPointForWrite(id, tenantID, actor);
+
     // ── Метки (Round 12 #9): tagIds перезаписывают связки чека ────────────
     // Только при ЯВНОМ поле (undefined = «не трогали» — старые клиенты и
     // частичные PATCH'и не стирают метки). Синк выполняется ПОСЛЕ успеха
@@ -3513,6 +3809,11 @@ export class ChecksService {
     actorUserId: string | null,
     actor?: ChecksActor,
   ) {
+    // ФИЛИАЛ (161): приём оплаты — самая денежная запись из всех. Кассир
+    // филиала А не принимает деньги за заказ филиала Б: выручка легла бы не в
+    // тот Z-отчёт и не в ту кассовую смену. acceptPayment идёт в
+    // activateDeferred НАПРЯМУЮ, мимо update, поэтому гейт нужен и здесь.
+    await this.assertCheckPointForWrite(id, tenantID, actor);
     // 155: @RequirePermission('accept_payment') снят с контроллера —
     // эффективного кассира (allowlist владельца, иначе право по матрице)
     // резолвит сервис. Owner-class проходит всегда.
@@ -3766,6 +4067,15 @@ export class ChecksService {
       // ONE timestamp, parameterised — reused for the warranty below so
       // checks.date and warranty.started_at are byte-identical (no now()-vs-JS skew).
       const activationDate = new Date().toISOString();
+      // ФИЛИАЛ ПРИ АКТИВАЦИИ (156/160) — РЕШЕНИЕ ВЛАДЕЛЬЦА, НЕ «ЧИНИТЬ».
+      // Активация переписывает дату (деньги рождаются сейчас) и accepted_by
+      // (принял тот, кто закрыл), но point_id НЕ ТРОГАЕТ СОЗНАТЕЛЬНО: заказ
+      // остаётся за филиалом, где его ПРИНЯЛИ и выполнили. Иначе кассир,
+      // закрывающий драфт с другой точки (подмена, вечерняя пересменка,
+      // владелец в режиме «Все точки»), молча переносил бы чужую выручку в
+      // свой филиал — а это и есть та самая потеря денег у соседа. Ниже в
+      // `sets` point_id отсутствует ровно поэтому; тест
+      // points-scoping.test.cjs следит, чтобы его туда не добавили.
       if (isActivating) {
         sets.push(`date=$${ui++}`);
         vals.push(activationDate);
@@ -4003,6 +4313,10 @@ export class ChecksService {
       }
     }
 
+    // Пояс тенанта — ДО транзакции (см. create): вторая коннекция из пула под
+    // уже открытой транзакцией — путь к взаимной блокировке.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -4087,22 +4401,24 @@ export class ChecksService {
       // line DELETE/INSERTs between the UPDATE and the warranty call).
       const priorDraftDateTs =
         checkRows[0].date instanceof Date ? checkRows[0].date.getTime() : new Date(checkRows[0].date).getTime();
-      let requestedDateIso = resolveCheckDateEdit(dto.date, priorDraftDateTs);
+      let requestedDateIso = resolveCheckDateEdit(dto.date, priorDraftDateTs, tz);
       if (requestedDateIso !== null && !userHasPermission(actor, 'checks_change_datetime')) {
-        // Без «Меняет дату и время чека» — только сегодняшний день (МСК),
-        // зеркально create(). Сиды 1:1: мастер false (прежний кламп), admin/
-        // director true (клампа не было).
-        if (mskDayOf(new Date(requestedDateIso).getTime()) !== mskDayOf(Date.now())) requestedDateIso = null;
+        // Без «Меняет дату и время чека» — только сегодняшний день по местному
+        // времени, зеркально create(). Сиды 1:1: мастер false (прежний кламп),
+        // admin/director true (клампа не было).
+        if (tenantDayOf(new Date(requestedDateIso).getTime(), tz) !== tenantDayOf(Date.now(), tz)) {
+          requestedDateIso = null;
+        }
       }
       const activationDate = requestedDateIso ?? new Date().toISOString();
-      // Дата, которой чек будет обладать ПОСЛЕ этого апдейта, и её МСК-месяц —
-      // источник effective-ставок запекания.
+      // Дата, которой чек будет обладать ПОСЛЕ этого апдейта, и её МЕСТНЫЙ
+      // месяц — источник effective-ставок запекания.
       const finalCheckDateTs = lockedIsActivating
         ? new Date(activationDate).getTime()
         : requestedDateIso !== null
           ? new Date(requestedDateIso).getTime()
           : priorDraftDateTs;
-      const rateMonth = mskDayOf(finalCheckDateTs).slice(0, 7); // 'YYYY-MM' МСК
+      const rateMonth = tenantDayOf(finalCheckDateTs, tz).slice(0, 7); // 'YYYY-MM' местный
 
       // Calculate service totals and salary
       let serviceTotal = 0;
@@ -4783,6 +5099,8 @@ export class ChecksService {
     actorUserId: string | null,
     actor?: ChecksActor,
   ) {
+    // Пояс тенанта — ДО транзакции (см. create).
+    const tz = await getTenantTimezone(this.pool, tenantID);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -4909,7 +5227,7 @@ export class ChecksService {
       // переезжает между днями сам, пересчитывать нечего.
       const priorDateTs = prior.date instanceof Date ? prior.date.getTime() : new Date(prior.date).getTime();
       const priorDateIso = new Date(priorDateTs).toISOString();
-      let newDateIso = resolveCheckDateEdit(dto.date, priorDateTs);
+      let newDateIso = resolveCheckDateEdit(dto.date, priorDateTs, tz);
       if (newDateIso !== null && !userHasPermission(actor, 'checks_change_datetime')) {
         newDateIso = null;
       }
@@ -4946,10 +5264,10 @@ export class ChecksService {
       );
 
       // Recompute lines + money from the edit DTO (same math as close).
-      // Round 14 review MEDIUM-4: ставки — за МСК-месяц ИТОГОВОЙ даты чека
+      // Round 14 review MEDIUM-4: ставки — за МЕСТНЫЙ месяц ИТОГОВОЙ даты чека
       // (newDateIso, если владелец сменил дату продажи, иначе прежняя дата) —
       // правка июльского чека в августе перепекается по июльской ставке.
-      const rateMonth = mskDayOf(newDateIso !== null ? new Date(newDateIso).getTime() : priorDateTs).slice(0, 7);
+      const rateMonth = tenantDayOf(newDateIso !== null ? new Date(newDateIso).getTime() : priorDateTs, tz).slice(0, 7);
       const c = await this.recomputeClosedCheckLines(client, tenantID, dto, prior, rateMonth);
 
       // NEW-4 (антидедлок): реверс СТАРОГО и списание НОВОГО стока лочат строки
@@ -5353,7 +5671,16 @@ export class ChecksService {
    * РАССРОЧКУ (installment ledger). The caller (controller) gates the role to
    * owner-class exactly as the old delete did.
    */
-  async remove(id: string, tenantID: string, userRole: string, actorUserId: string | null = null) {
+  async remove(id: string, tenantID: string, userRole: string, actorUserId: string | null = null, actor?: ChecksActor) {
+    // ФИЛИАЛ (161) — САМЫЙ ДОРОГОЙ ИЗ ПУТЕЙ ЗАПИСИ. Удаление реверсирует склад,
+    // снимает мотивационные начисления и убирает выручку из отчётов; сделанное
+    // по чужому чеку, оно меняет деньги филиала, к которому актор отношения не
+    // имеет. Фильтр вшит В САМ ЛОК строки (а не отдельной проверкой перед
+    // транзакцией): проверка и захват — один оператор, гонок нет по построению.
+    // Точки нет («Все точки» / одноточечный тенант) → фрагмент пустой, запрос
+    // дословно прежний.
+    const removeParams: any[] = [id, tenantID];
+    const removePointFilter = pointFilterSql(null, actorPointId(actor), removeParams);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -5361,8 +5688,8 @@ export class ChecksService {
       // edit/return/restore can't race the footprint reverse below. A row that is
       // already in the trash is excluded → a double-delete is a clean 404 no-op.
       const { rows } = await client.query(
-        'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL FOR UPDATE',
-        [id, tenantID],
+        `SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NULL${removePointFilter} FOR UPDATE`,
+        removeParams,
       );
       if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден' });
       const prior = rows[0];
@@ -5564,14 +5891,19 @@ export class ChecksService {
    * re-deduct. Idempotent: a check that is NOT in the trash is a clean 404 no-op.
    */
   async restore(id: string, tenantID: string, actor?: ChecksActor) {
+    // ФИЛИАЛ (161): восстановление — зеркало удаления, значит и гейт зеркальный.
+    // Оно заново списывает склад и возвращает выручку в отчёты филиала, где чек
+    // был пробит; делать это из соседнего филиала нельзя. Фильтр — в самом локе.
+    const restoreParams: any[] = [id, tenantID];
+    const restorePointFilter = pointFilterSql(null, actorPointId(actor), restoreParams);
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
       // Lock the TRASHED row (deleted_at IS NOT NULL). A live check → 404 no-op,
       // so a double-restore can never re-apply the footprint twice.
       const { rows } = await client.query(
-        'SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NOT NULL FOR UPDATE',
-        [id, tenantID],
+        `SELECT * FROM checks WHERE id=$1 AND tenant_id=$2 AND deleted_at IS NOT NULL${restorePointFilter} FOR UPDATE`,
+        restoreParams,
       );
       if (rows.length === 0) throw new NotFoundException({ message: 'Заказ-наряд не найден в корзине' });
       const prior = rows[0];
@@ -5608,7 +5940,14 @@ export class ChecksService {
    * trashed checks are hidden here (they are purged by purgeExpiredTrash). Slim
    * summary: number / date / client name / total / deleted_at / deleted_by(name).
    */
-  async listTrash(tenantID: string) {
+  async listTrash(tenantID: string, actor?: ChecksActor) {
+    // ФИЛИАЛ (161): корзина — СВОЯ у каждого филиала, ровно как журнал. Она не
+    // история клиента, а рабочий список «что мы тут удалили», и восстановление
+    // из неё теперь гейтится филиалом (restore). Сетевая корзина при
+    // филиальном restore означала бы строку, которую видно и нельзя вернуть, —
+    // ту же разорванность, из-за которой деталь чека сделали межфилиальной.
+    const trashParams: any[] = [tenantID];
+    const trashPointFilter = pointFilterSql('ch', actorPointId(actor), trashParams);
     const { rows } = await this.pool.query(
       `SELECT ch.id, ch.number, ch.date, ch.total_revenue, ch.is_deferred,
               ch.deleted_at, ch.deleted_by,
@@ -5619,9 +5958,9 @@ export class ChecksService {
          LEFT JOIN users du ON du.id = ch.deleted_by AND du.tenant_id = ch.tenant_id
         WHERE ch.tenant_id = $1
           AND ch.deleted_at IS NOT NULL
-          AND ch.deleted_at > now() - interval '30 days'
+          AND ch.deleted_at > now() - interval '30 days'${trashPointFilter}
         ORDER BY ch.deleted_at DESC`,
-      [tenantID],
+      trashParams,
     );
     return rows.map((r) => ({
       id: r.id as string,
@@ -5644,6 +5983,10 @@ export class ChecksService {
    * on RUN_BACKGROUND_JOBS so it fires on exactly one replica (mirrors
    * AuthService.cleanExpiredTokens). Never throws into the scheduler.
    */
+  // Пояс крона здесь — просто «тихий час» для тяжёлого DELETE, а НЕ бизнес-
+  // граница суток: условие ретенции сформулировано как `now() - interval`, оно
+  // одинаково для тенанта в Калининграде и на Камчатке. Поэтому на пояс тенанта
+  // этот джоб не переводится — переводить нечего.
   @Cron('23 3 * * *', { timeZone: 'Europe/Moscow' })
   async purgeExpiredTrash(): Promise<void> {
     if (!RUN_BACKGROUND_JOBS) return;
@@ -5674,6 +6017,8 @@ export class ChecksService {
    * replica), per-table try/catch so a missing table (fresh install mid-
    * migration) or one failure never blocks the others or the scheduler.
    */
+  // Как и purgeExpiredTrash: «тихий час», а не бизнес-сутки — ретенция
+  // считается интервалом от now(), без календарного дня тенанта.
   @Cron('41 3 * * *', { timeZone: 'Europe/Moscow' })
   async purgeOldLogRows(): Promise<void> {
     if (!RUN_BACKGROUND_JOBS) return;
@@ -5704,38 +6049,42 @@ export class ChecksService {
   }
 
   async getDashboard(tenantID: string, actor?: ChecksActor) {
-    // E-7 — границы дня/недели/месяца в БИЗНЕС-таймзоне (Europe/Moscow, UTC+3):
-    // единое определение «сегодня/этот месяц», как reports.getFinancial/
-    // getCashFlow/dashboardV2. Раньше — от контейнерного (UTC) времени, из-за
-    // чего в 00:00–02:59 МСК дашборд и «Движение денег» показывали разные суммы.
-    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
-    const mskNow = new Date(Date.now() + MSK_OFFSET_MS);
-    const mskY = mskNow.getUTCFullYear();
-    const mskM = mskNow.getUTCMonth();
-    const mskD = mskNow.getUTCDate();
-    const todayStart = new Date(Date.UTC(mskY, mskM, mskD) - MSK_OFFSET_MS).toISOString();
-    // Вс: getUTCDay()=0 — «date − day + 1» дал бы ПОНЕДЕЛЬНИК СЛЕДУЮЩЕЙ недели
-    // (weekRevenue = 0 весь день). ISO-неделя: Вс = 7-й день — та же формула,
-    // что в computeDashboardChart.
-    const dow = mskNow.getUTCDay() === 0 ? 7 : mskNow.getUTCDay();
-    const weekStart = new Date(Date.UTC(mskY, mskM, mskD - dow + 1) - MSK_OFFSET_MS).toISOString();
-    const monthStart = new Date(Date.UTC(mskY, mskM, 1) - MSK_OFFSET_MS).toISOString();
+    // E-7 — границы дня/недели/месяца в БИЗНЕС-таймзоне ТЕНАНТА: единое
+    // определение «сегодня/этот месяц», как reports.getFinancial/getCashFlow/
+    // dashboardV2. Раньше — фиксированный московский сдвиг, из-за чего у
+    // автосервиса восточнее Москвы сутки на дашборде начинались посреди
+    // рабочего дня. Воскресенье: ISO-неделя (Вс = 7-й день) — иначе «день − dow
+    // + 1» уводил бы на понедельник СЛЕДУЮЩЕЙ недели и weekRevenue весь
+    // воскресный день был бы нулём; zonedIsoWeekday это уже учитывает.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const now = new Date();
+    const todayStart = startOfDayInZone(tz, now).toISOString();
+    const weekStart = startOfWeekInZone(tz, now).toISOString();
+    const monthStart = startOfMonthInZone(tz, now).toISOString();
 
     // Гарантия (ITEM-2, зеркально reports dashboardV2/getFinancial): warranty —
     // не выручка, а в прибыли вместо сохранённого (положительного) profit —
     // реальный убыток −(запчасти + выплата мастеру). Кол-во чеков считает все
     // визиты, включая гарантийные (как checks_today в dashboardV2).
+    // Формулы выручки/прибыли — из общего common/check-money-sql.ts: тот же
+    // текст SQL используют dashboard-v2 и сводка по филиалам, поэтому цифры
+    // трёх экранов не могут разъехаться.
+    // ФИЛИАЛ (156/160): дашборд — это «сколько заработал ЭТОТ автосервис».
+    const revenue = checkRevenueExpr();
+    const profit = checkProfitExpr();
+    const params: any[] = [tenantID, todayStart, weekStart, monthStart];
+    const pointFilter = pointFilterSql(null, actorPointId(actor), params);
     const { rows } = await this.pool.query(
       `SELECT
-         COALESCE(SUM(CASE WHEN date >= $2 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) as today_revenue,
+         COALESCE(SUM(CASE WHEN date >= $2 THEN (${revenue}) END), 0) as today_revenue,
          COALESCE(COUNT(CASE WHEN date >= $2 THEN 1 END), 0) as today_checks,
-         COALESCE(SUM(CASE WHEN date >= $3 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) as week_revenue,
-         COALESCE(SUM(CASE WHEN date >= $4 AND payment_method IS DISTINCT FROM 'warranty' THEN total_revenue END), 0) as month_revenue,
-         COALESCE(SUM(CASE WHEN date >= $2 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) END), 0) as today_profit,
-         COALESCE(SUM(CASE WHEN date >= $4 THEN (CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END) END), 0) as month_profit
+         COALESCE(SUM(CASE WHEN date >= $3 THEN (${revenue}) END), 0) as week_revenue,
+         COALESCE(SUM(CASE WHEN date >= $4 THEN (${revenue}) END), 0) as month_revenue,
+         COALESCE(SUM(CASE WHEN date >= $2 THEN (${profit}) END), 0) as today_profit,
+         COALESCE(SUM(CASE WHEN date >= $4 THEN (${profit}) END), 0) as month_profit
        FROM checks
-       WHERE tenant_id=$1 AND is_deferred=false AND deleted_at IS NULL`,
-      [tenantID, todayStart, weekStart, monthStart],
+       WHERE tenant_id=$1 AND ${checkMoneyBaseWhere()}${pointFilter}`,
+      params,
     );
 
     const r = rows[0];
@@ -5773,6 +6122,10 @@ export class ChecksService {
       params.push(actor.userID);
       ownFilter = ` AND ch.master_id = $${params.length}`;
     }
+    // ФИЛИАЛ (156/160): напоминание «отложенные заказы» на главной обязано
+    // жить в скоупе журнала — иначе владелец на филиале А получает карточку
+    // с драфтами филиала Б и приходит их закрывать не туда.
+    ownFilter += pointFilterSql('ch', actorPointId(actor), params);
     const { rows } = await this.pool.query(
       `SELECT ch.id, ch.number, ch.date, ch.total_revenue,
               cl.full_name AS client_name, ca.plate_number, m.full_name AS master_name
@@ -5806,93 +6159,171 @@ export class ChecksService {
     // 30s cache, in-flight de-duplicated (see TtlCache.wrap). Invalidated on
     // any check create/update/delete via `reports:<tenant>` prefix purge, so a
     // sale shows up immediately rather than up to 30s late.
-    const data = await ttlCache.wrap(`reports:dashboard-chart:${tenantID}:${period}:${safeOffset}`, 30_000, () =>
-      this.computeDashboardChart(tenantID, period, safeOffset),
+    // ФИЛИАЛ (156/160): точка — ОБЯЗАТЕЛЬНАЯ часть ключа и стоит СРАЗУ ПОСЛЕ
+    // tenantID. Без неё филиал Б получил бы из кеша график филиала А (данные
+    // чужого автосервиса под своим заголовком); перед tenantID — ключ вышел бы
+    // из-под префиксной инвалидации reports-cache и залипал на 30 секунд.
+    const pointId = actorPointId(actor);
+    // `v2` — версия ФОРМЫ ответа (добавлен блок `previous`). Ключ живёт в
+    // TtlCache процесса и переживает hot-reload в dev: без версии клиент после
+    // обновления кода ещё 30 секунд получал бы старый ответ без сравнения и
+    // рисовал прочерк. Сегмент стоит ПОСЛЕ точки — префикс
+    // `reports:dashboard-chart:<tenant>` остаётся тем же, инвалидация цела.
+    const data = await ttlCache.wrap(
+      `reports:dashboard-chart:${tenantID}:${pointCacheSegment(pointId)}:v2:${period}:${safeOffset}`,
+      30_000,
+      () => this.computeDashboardChart(tenantID, period, safeOffset, pointId),
     );
     if (this.canSeeProfit(actor)) return data;
     // R7 profit_view: линия прибыли зануляется для не-держателей. Кэш общий на
     // тенанта — стрипаем КОПИЮ, не мутируя закэшированный объект (иначе следом
     // пришедший владелец получил бы обнулённые данные из того же кэша).
+    // Прибыль прошлого периода зануляется ТЕМ ЖЕ правилом: иначе дельта по
+    // прибыли восстанавливала бы скрытое число (текущее = 0, прошлое реальное).
     return {
       ...data,
       totalProfit: 0,
       points: data.points.map((p) => ({ ...p, profit: 0 })),
+      previous: data.previous ? { ...data.previous, totalProfit: 0 } : null,
     };
   }
 
-  private async computeDashboardChart(tenantID: string, period: string, offset: number = 0) {
+  private async computeDashboardChart(
+    tenantID: string,
+    period: string,
+    offset: number = 0,
+    pointId: string | null = null,
+  ) {
     let dateFrom: Date;
     let dateTo: Date;
-    // E-9 — окно графика в МОСКОВСКОМ настенном времени (Europe/Moscow), тем же
-    // паттерном MSK_OFFSET, что getDashboard/getMasterRanking. Границы окна ОБЯЗАНЫ
-    // совпадать с дневными корзинами (GROUP BY (date AT TIME ZONE 'Europe/Moscow')
-    // ::date ниже). Раньше окно строилось в контейнерном (UTC) времени
-    // (new Date(now.getFullYear(), …)), и на границе месяца в ночном окне
-    // 00:00–02:59 МСК крайние корзины промахивались.
-    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
-    const mskNow = new Date(Date.now() + MSK_OFFSET_MS);
-    const mskY = mskNow.getUTCFullYear();
-    const mskM = mskNow.getUTCMonth();
-    const mskD = mskNow.getUTCDate();
-    // UTC-инстант московской настенной полуночи дня (y, m, d); переполнение
-    // дня/месяца/года нормализует Date.UTC.
-    const mskMidnight = (y: number, m: number, d: number) => new Date(Date.UTC(y, m, d) - MSK_OFFSET_MS);
-    // Верхняя ВКЛЮЧИТЕЛЬНАЯ граница = за секунду до следующей МСК-полуночи
+    // E-9 — окно графика в МЕСТНОМ настенном времени тенанта. Границы окна
+    // ОБЯЗАНЫ совпадать с дневными корзинами (GROUP BY (date AT TIME ZONE
+    // $tz)::date ниже) — иначе крайние корзины промахиваются на границе месяца.
+    // Раньше здесь стоял фиксированный московский сдвиг.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const now = new Date();
+    const nowParts = getZonedParts(now, tz);
+    const locY = nowParts.year;
+    const locM = nowParts.month - 1; // 0-based, как у Date.UTC
+    const locD = nowParts.day;
+    // UTC-инстант местной настенной полуночи дня (y, m, d); переполнение
+    // дня/месяца/года нормализует та же арифметика, что у Date.UTC.
+    const midnight = (y: number, m: number, d: number) => zonedMidnight(tz, y, m, d);
+    // Верхняя ВКЛЮЧИТЕЛЬНАЯ граница = за секунду до следующей местной полуночи
     // (сохраняет `date <= dateTo` из SQL ниже).
-    const mskEndOfDay = (y: number, m: number, d: number) => new Date(mskMidnight(y, m, d + 1).getTime() - 1000);
-    // Год оси (для year-периода) — в МСК-настенном времени.
-    let axisYear = mskY;
+    const endOfDay = (y: number, m: number, d: number) => new Date(midnight(y, m, d + 1).getTime() - 1000);
+    // Год оси (для year-периода) — в местном настенном времени.
+    let axisYear = locY;
+    // Неизвестное значение period падает в ветку default (неделя) — сравнение
+    // обязано трактовать его так же, иначе подпись обещала бы одно окно, а
+    // цифры пришли бы из другого.
+    const comparePeriod: ComparePeriod =
+      period === 'today' || period === 'month' || period === 'year' ? period : 'week';
 
     switch (period) {
       case 'today': {
-        dateFrom = mskMidnight(mskY, mskM, mskD + offset);
-        dateTo = mskEndOfDay(mskY, mskM, mskD + offset);
+        dateFrom = midnight(locY, locM, locD + offset);
+        dateTo = endOfDay(locY, locM, locD + offset);
         break;
       }
       case 'week': {
-        const dow = mskNow.getUTCDay() === 0 ? 7 : mskNow.getUTCDay();
-        const monday = mskD + (1 - dow) + offset * 7;
-        dateFrom = mskMidnight(mskY, mskM, monday);
-        dateTo = mskEndOfDay(mskY, mskM, monday + 6);
+        const monday = locD + (1 - zonedIsoWeekday(now, tz)) + offset * 7;
+        dateFrom = midnight(locY, locM, monday);
+        dateTo = endOfDay(locY, locM, monday + 6);
         break;
       }
       case 'month': {
-        dateFrom = mskMidnight(mskY, mskM + offset, 1);
+        dateFrom = midnight(locY, locM + offset, 1);
         // Верхняя граница = последний день месяца: секунда до 1-го следующего.
-        dateTo = new Date(mskMidnight(mskY, mskM + offset + 1, 1).getTime() - 1000);
+        dateTo = new Date(midnight(locY, locM + offset + 1, 1).getTime() - 1000);
         break;
       }
       case 'year': {
-        axisYear = mskY + offset;
-        dateFrom = mskMidnight(axisYear, 0, 1);
-        dateTo = new Date(mskMidnight(axisYear + 1, 0, 1).getTime() - 1000);
+        axisYear = locY + offset;
+        dateFrom = midnight(axisYear, 0, 1);
+        dateTo = new Date(midnight(axisYear + 1, 0, 1).getTime() - 1000);
         break;
       }
       default: {
-        const dow = mskNow.getUTCDay() === 0 ? 7 : mskNow.getUTCDay();
-        const monday = mskD + (1 - dow) + offset * 7;
-        dateFrom = mskMidnight(mskY, mskM, monday);
-        dateTo = mskEndOfDay(mskY, mskM, monday + 6);
+        const monday = locD + (1 - zonedIsoWeekday(now, tz)) + offset * 7;
+        dateFrom = midnight(locY, locM, monday);
+        dateTo = endOfDay(locY, locM, monday + 6);
       }
     }
 
     // Гарантия (ITEM-2, зеркально dashboardV2): не выручка; в прибыли — убыток
     // −(запчасти + выплата мастеру) вместо сохранённого положительного profit.
-    // E-7 — дневные корзины по МОСКОВСКОМУ календарю (Europe/Moscow), единое
-    // бизнес-определение дня с getFinancial/getCashFlow. E-8 — гарантийный
+    // E-7 — дневные корзины по МЕСТНОМУ календарю тенанта, единое
+    // бизнес-определение дня с getFinancial/getCashFlow. День отдаётся СТРОКОЙ
+    // (to_char), как в reports.getCashFlow: колонку типа DATE pg-драйвер
+    // превращает в JS Date по ЛОКАЛЬНОЙ таймзоне процесса, и на сервере
+    // восточнее UTC ключ `toISOString().slice(0,10)` съезжал на день назад —
+    // корзина графика не совпадала с журналом. В проде (контейнер в UTC) это
+    // не всплывало, но зависеть от локали процесса здесь нельзя. E-8 — гарантийный
     // убыток включает товарную комиссию мастера (+ product_salary_total),
     // синхронно с reports.service (иначе прибыль на дашборде завышена).
+    // ФИЛИАЛ (156/160): график — деньги ТЕКУЩЕЙ точки; ключ кеша уже несёт её
+    // сегмент (см. getDashboardChart), поэтому корзины разных филиалов не
+    // перемешиваются.
+    const dayParams: any[] = [tenantID, dateFrom.toISOString(), dateTo.toISOString(), tz];
+    const dayPointFilter = pointFilterSql(null, pointId, dayParams);
     const { rows } = await this.pool.query(
-      `SELECT (date AT TIME ZONE 'Europe/Moscow')::date as day,
-              COALESCE(SUM(total_revenue) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
-              COALESCE(SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END), 0) as profit,
+      `SELECT to_char((date AT TIME ZONE $4::text)::date, 'YYYY-MM-DD') as day,
+              COALESCE(SUM(${checkRevenueExpr()}), 0) as revenue,
+              COALESCE(SUM(${checkProfitExpr()}), 0) as profit,
               COUNT(*) as check_count
        FROM checks
-       WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false AND deleted_at IS NULL
-       GROUP BY (date AT TIME ZONE 'Europe/Moscow')::date
+       WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND ${checkMoneyBaseWhere()}${dayPointFilter}
+       GROUP BY (date AT TIME ZONE $4::text)::date
        ORDER BY day`,
-      [tenantID, dateFrom.toISOString(), dateTo.toISOString()],
+      dayParams,
     );
+
+    // ── Прошлый период «на ту же дату» ───────────────────────────────────────
+    // Раньше дельту считал клиент из двух запросов графика: месяц-к-дате
+    // (1–9 сентября) против ПОЛНОГО прошлого месяца (1–31 августа). В начале
+    // месяца это всегда «−70 %» и не значит ничего. Теперь окно сравнения
+    // считает сервер в поясе тенанта и обрезает по тому же дню месяца
+    // (previousComparableWindow) — 1–9 сентября против 1–9 августа.
+    // Отдельный запрос, а не расширение дневного: у него ДРУГИЕ границы, и
+    // складывать их в один GROUP BY значит рисовать чужие дни на оси графика.
+    const compare = previousComparableWindow({
+      tz,
+      period: comparePeriod,
+      currentFrom: dateFrom,
+      currentTo: dateTo,
+      now,
+    });
+    let previous: {
+      totalRevenue: number;
+      totalProfit: number;
+      totalChecks: number;
+      from: string;
+      to: string;
+      truncated: boolean;
+      label: string;
+    } | null = null;
+    if (compare) {
+      const prevParams: any[] = [tenantID, compare.from.toISOString(), compare.to.toISOString()];
+      const prevPointFilter = pointFilterSql(null, pointId, prevParams);
+      const { rows: prevRows } = await this.pool.query(
+        `SELECT COALESCE(SUM(${checkRevenueExpr()}), 0) as revenue,
+                COALESCE(SUM(${checkProfitExpr()}), 0) as profit,
+                COUNT(*) as check_count
+         FROM checks
+         WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND ${checkMoneyBaseWhere()}${prevPointFilter}`,
+        prevParams,
+      );
+      previous = {
+        totalRevenue: parseFloat(prevRows[0]?.revenue) || 0,
+        totalProfit: parseFloat(prevRows[0]?.profit) || 0,
+        totalChecks: parseInt(prevRows[0]?.check_count) || 0,
+        from: compare.fromKey,
+        to: compare.toKey,
+        truncated: compare.truncated,
+        label: compare.label,
+      };
+    }
 
     // Build lookup from query results
     const dataMap: Record<string, { revenue: number; profit: number; checkCount: number }> = {};
@@ -5915,22 +6346,25 @@ export class ChecksService {
 
     if (period === 'today') {
       for (let h = 0; h < 24; h++) {
-        // Час h МСК-дня = dateFrom (МСК-полночь) + h часов, как UTC-инстант —
-        // согласовано с почасовой выборкой EXTRACT(HOUR … AT TIME ZONE 'Europe/Moscow').
+        // Час h местного дня = dateFrom (местная полночь) + h часов, как
+        // UTC-инстант — согласовано с почасовой выборкой
+        // EXTRACT(HOUR … AT TIME ZONE $tz).
         const d = new Date(dateFrom.getTime() + h * 60 * 60 * 1000);
         points.push({ date: d.toISOString(), revenue: 0, profit: 0, checkCount: 0 });
       }
       // Overlay actual hourly data from a separate query
+      const hourParams: any[] = [tenantID, dateFrom.toISOString(), dateTo.toISOString(), tz];
+      const hourPointFilter = pointFilterSql(null, pointId, hourParams);
       const { rows: hourlyRows } = await this.pool.query(
-        `SELECT EXTRACT(HOUR FROM (date AT TIME ZONE 'Europe/Moscow')) as hour,
-                COALESCE(SUM(total_revenue) FILTER (WHERE payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
-                COALESCE(SUM(CASE WHEN payment_method='warranty' THEN -(product_cost_total + service_salary_total + COALESCE(product_salary_total, 0)) ELSE profit END), 0) as profit,
+        `SELECT EXTRACT(HOUR FROM (date AT TIME ZONE $4::text)) as hour,
+                COALESCE(SUM(${checkRevenueExpr()}), 0) as revenue,
+                COALESCE(SUM(${checkProfitExpr()}), 0) as profit,
                 COUNT(*) as check_count
          FROM checks
-         WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND is_deferred=false AND deleted_at IS NULL
-         GROUP BY EXTRACT(HOUR FROM (date AT TIME ZONE 'Europe/Moscow'))
+         WHERE tenant_id=$1 AND date >= $2 AND date <= $3 AND ${checkMoneyBaseWhere()}${hourPointFilter}
+         GROUP BY EXTRACT(HOUR FROM (date AT TIME ZONE $4::text))
          ORDER BY hour`,
-        [tenantID, dateFrom.toISOString(), dateTo.toISOString()],
+        hourParams,
       );
       for (const hr of hourlyRows) {
         const idx = parseInt(hr.hour);
@@ -5942,8 +6376,8 @@ export class ChecksService {
       }
     } else if (period === 'year') {
       for (let m = 0; m < 12; m++) {
-        // Ключ месяца 'YYYY-MM' в МСК-настенном году (axisYear) — dataMap-ключи
-        // это МСК-даты 'YYYY-MM-DD', поэтому startsWith сходится.
+        // Ключ месяца 'YYYY-MM' в местном настенном году (axisYear) —
+        // dataMap-ключи это местные даты 'YYYY-MM-DD', поэтому startsWith сходится.
         const key = `${axisYear}-${String(m + 1).padStart(2, '0')}`; // yyyy-MM
         // Sum all matching days in this month
         let rev = 0,
@@ -5964,20 +6398,23 @@ export class ChecksService {
         });
       }
     } else {
-      // week / month — заполняем каждый МСК-день. Курсор идёт в МСК-настенном
-      // времени (dateFrom/dateTo — UTC-инстанты МСК-границ): ключ 'YYYY-MM-DD'
-      // совпадает с ключами dataMap (тоже МСК-даты).
-      const wallCursor = new Date(dateFrom.getTime() + MSK_OFFSET_MS);
-      const wallEnd = new Date(dateTo.getTime() + MSK_OFFSET_MS);
-      while (wallCursor <= wallEnd) {
-        const key = wallCursor.toISOString().slice(0, 10);
+      // week / month — заполняем каждый МЕСТНЫЙ день. Курсор шагает по
+      // календарным дням в поясе тенанта, ключ 'YYYY-MM-DD' совпадает с ключами
+      // dataMap (они тоже местные даты). Сравнение ключей строковое — для
+      // 'YYYY-MM-DD' лексикографический порядок совпадает с хронологическим.
+      const endKey = zonedDateKey(dateTo, tz);
+      let cursor = startOfDayInZone(tz, dateFrom);
+      let key = zonedDateKey(cursor, tz);
+      while (key <= endKey) {
         const d = dataMap[key] || { revenue: 0, profit: 0, checkCount: 0 };
         points.push({ date: key, ...d });
-        wallCursor.setUTCDate(wallCursor.getUTCDate() + 1);
+        const c = getZonedParts(cursor, tz);
+        cursor = zonedMidnight(tz, c.year, c.month - 1, c.day + 1);
+        key = zonedDateKey(cursor, tz);
       }
     }
 
-    return { points, totalRevenue, totalProfit, totalChecks };
+    return { points, totalRevenue, totalProfit, totalChecks, previous };
   }
 
   /**
@@ -5988,6 +6425,7 @@ export class ChecksService {
   async getLastVisit(
     tenantID: string,
     filters: { clientId?: string; carId?: string },
+    actor?: ChecksActor,
   ): Promise<{
     id: string;
     date: string;
@@ -6010,6 +6448,16 @@ export class ChecksService {
     }
     if (!filters.clientId && !filters.carId) {
       return null;
+    }
+    // ФИЛИАЛ (156/160): «Последний визит» на кассе — витрина ЭТОГО
+    // автосервиса, а не сети: филиал показывает, когда машина была У НЕГО.
+    // Сознательно НЕ попадает под исключение «история клиента»: история — это
+    // список визитов в карточке клиента/авто (getAll с ?clientId/?carId), а
+    // здесь одна строка поверх кассового экрана конкретной точки.
+    const lastVisitPointId = actorPointId(actor);
+    if (lastVisitPointId) {
+      params.push(lastVisitPointId);
+      conds.push(`ch.point_id = $${params.length}`);
     }
 
     const { rows } = await this.pool.query(
@@ -6040,46 +6488,45 @@ export class ChecksService {
     };
   }
 
-  async getRanking(tenantID: string) {
+  async getRanking(tenantID: string, actor?: ChecksActor) {
     // Same 30s cache + in-flight de-dup + write-side invalidation as the chart.
-    return ttlCache.wrap(`reports:ranking:${tenantID}`, 30_000, () => this.computeRanking(tenantID));
+    // ФИЛИАЛ (156/160): рейтинг мастеров — это рейтинг внутри СВОЕГО
+    // автосервиса. Точка обязана быть в ключе кеша и стоять сразу после
+    // tenantID: иначе первый же запрос одного филиала «застолбил» бы рейтинг
+    // для всех остальных, а сегмент перед тенантом вывел бы ключ из-под
+    // префиксной инвалидации.
+    const pointId = actorPointId(actor);
+    return ttlCache.wrap(`reports:ranking:${tenantID}:${pointCacheSegment(pointId)}`, 30_000, () =>
+      this.computeRanking(tenantID, pointId),
+    );
   }
 
-  private async computeRanking(tenantID: string) {
-    // E-7 — границы дня/месяца в бизнес-таймзоне (Europe/Moscow, UTC+3), единое
-    // определение «сегодня/этот месяц» с остальными дашбордами и «Движением
-    // денег».
-    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
-    const mskNow = new Date(Date.now() + MSK_OFFSET_MS);
-    const mskY = mskNow.getUTCFullYear();
-    const mskM = mskNow.getUTCMonth();
-    const mskD = mskNow.getUTCDate();
-    const todayStart = new Date(Date.UTC(mskY, mskM, mskD) - MSK_OFFSET_MS).toISOString();
-    const monthStart = new Date(Date.UTC(mskY, mskM, 1) - MSK_OFFSET_MS).toISOString();
+  private async computeRanking(tenantID: string, pointId: string | null = null) {
+    // E-7 — границы дня/месяца в бизнес-таймзоне ТЕНАНТА, единое определение
+    // «сегодня/этот месяц» с остальными дашбордами и «Движением денег».
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const now = new Date();
+    const todayStart = startOfDayInZone(tz, now).toISOString();
+    const monthStart = startOfMonthInZone(tz, now).toISOString();
 
     // Гарантия (ITEM-2, зеркально dashboardV2): warranty — не выручка мастера;
     // визит в счётчике чеков остаётся.
-    const { rows: todayRows } = await this.pool.query(
+    const rankingSql = (pointFilter: string) =>
       `SELECT ch.master_id, u.full_name as master_name,
-              COALESCE(SUM(ch.total_revenue) FILTER (WHERE ch.payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
+              COALESCE(SUM(${checkRevenueExpr('ch')}), 0) as revenue,
               COUNT(*) as check_count
        FROM checks ch JOIN users u ON u.id = ch.master_id
-       WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false AND ch.deleted_at IS NULL
+       WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ${checkMoneyBaseWhere('ch')}${pointFilter}
        GROUP BY ch.master_id, u.full_name
-       ORDER BY revenue DESC`,
-      [tenantID, todayStart],
-    );
+       ORDER BY revenue DESC`;
 
-    const { rows: monthRows } = await this.pool.query(
-      `SELECT ch.master_id, u.full_name as master_name,
-              COALESCE(SUM(ch.total_revenue) FILTER (WHERE ch.payment_method IS DISTINCT FROM 'warranty'), 0) as revenue,
-              COUNT(*) as check_count
-       FROM checks ch JOIN users u ON u.id = ch.master_id
-       WHERE ch.tenant_id=$1 AND ch.date >= $2 AND ch.is_deferred=false AND ch.deleted_at IS NULL
-       GROUP BY ch.master_id, u.full_name
-       ORDER BY revenue DESC`,
-      [tenantID, monthStart],
-    );
+    const todayParams: any[] = [tenantID, todayStart];
+    const todaySql = rankingSql(pointFilterSql('ch', pointId, todayParams));
+    const { rows: todayRows } = await this.pool.query(todaySql, todayParams);
+
+    const monthParams: any[] = [tenantID, monthStart];
+    const monthSql = rankingSql(pointFilterSql('ch', pointId, monthParams));
+    const { rows: monthRows } = await this.pool.query(monthSql, monthParams);
 
     return {
       today: todayRows.map((r) => ({

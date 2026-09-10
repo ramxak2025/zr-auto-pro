@@ -34,6 +34,7 @@ import { formatQty, formatQtyUnit } from '../utils/units';
 import { resolveCheckDetailState } from './checkDetailViewState';
 import { openClient, openCarOwner, openEmployee } from '../navigation/entityLinks';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import EmptyState from '../components/EmptyState';
 import QueryErrorState from '../components/QueryErrorState';
@@ -74,18 +75,25 @@ function formatMoney(v: number) {
   );
 }
 
-function formatDate(d: string) {
-  return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: 'long', year: 'numeric' });
-}
-function formatDateTime(d: string) {
+// Дата и время чека — в поясе АВТОСЕРВИСА (tenants.timezone, 157), а не по
+// часам телефона: сервер относит чек к бизнес-суткам тенанта, и деталка обязана
+// показывать тот же день и то же время. Intl с чужим поясом на урезанной сборке
+// Hermes может бросить — тогда падаем на время устройства (прежнее поведение).
+function formatShortDate(d: string, tz: string) {
   const dt = new Date(d);
-  return formatDate(d) + ', ' + dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  try {
+    return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: tz });
+  } catch {
+    return dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  }
 }
-function formatShortDate(d: string) {
-  return new Date(d).toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric' });
-}
-function formatTime(d: string) {
-  return new Date(d).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+function formatTime(d: string, tz: string) {
+  const dt = new Date(d);
+  try {
+    return dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: tz });
+  } catch {
+    return dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  }
 }
 
 /**
@@ -125,6 +133,8 @@ export default function CheckDetailScreen() {
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
   const palette = useColors();
+  // Дата/время чека — в поясе автосервиса, как их считает сервер.
+  const tenantTz = useTenantTimezone();
   // Round 14, режим «Кассир»: при включённом режиме кассовой смены кнопка
   // «Принять оплату» ведёт в единый флоу AcceptPayment и гейтится правом
   // «Приём оплаты» (сервер при активации требует его же). OFF/loading →
@@ -891,7 +901,9 @@ export default function CheckDetailScreen() {
               </View>
             )}
           </View>
-          <Text style={[styles.headerDate, { color: palette.text.tertiary }]}>{formatShortDate(check.date)}</Text>
+          <Text style={[styles.headerDate, { color: palette.text.tertiary }]}>
+            {formatShortDate(check.date, tenantTz)}
+          </Text>
         </View>
         <View style={styles.headerActions}>
           <TouchableOpacity
@@ -1038,7 +1050,7 @@ export default function CheckDetailScreen() {
               </Text>
             </View>
           )}
-          <Text style={[styles.timeChip, { color: palette.text.tertiary }]}>{formatTime(check.date)}</Text>
+          <Text style={[styles.timeChip, { color: palette.text.tertiary }]}>{formatTime(check.date, tenantTz)}</Text>
         </View>
 
         {/* Метки чека (Round 12 #9) — компактные чипы отдельной строкой в мете.

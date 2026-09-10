@@ -22,6 +22,20 @@ export class PointsController {
   }
 
   /**
+   * Сводка по филиалам для карточек раздела «Филиалы»: оборот дня/месяца,
+   * прибыль месяца, число чеков, мастеров на работе — на каждую живую точку.
+   *
+   * Гейт — `financial_reports` (перекрывает классовое «читает любой»): это
+   * выручка и прибыль всей сети, мастеру их видеть нельзя. Прибыль внутри
+   * дополнительно закрыта `profit_view` — см. PointsService.summaryForTenant.
+   */
+  @RequirePermission('financial_reports')
+  @Get('summary')
+  summary(@CurrentUser() user: JwtPayload) {
+    return this.pointsService.summaryForTenant(user);
+  }
+
+  /**
    * Переключить СВОЮ текущую точку (pointId: null = сбросить). Мастера —
    * только на назначенные им точки; проверка в сервисе.
    */

@@ -26,6 +26,8 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { zoned } from '../utils/tenantTime';
 import toast from 'react-hot-toast';
 import { checksApi, myCompanyApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -37,7 +39,7 @@ import type { Check, Tenant, WorkBoardColumn } from '../types';
 import { generateReceiptPdf } from '../utils/generateReceiptPdf';
 import { formatQty, formatQtyUnit } from '../utils/units';
 import { generateOrderPdf } from '../utils/generateOrderPdf';
-import { formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
+import { formatDayKey, formatMoney, paymentMethodLabels } from '../../../shared/utils/formatters';
 import { formatPhone } from '../../../shared/validation/phone';
 
 const paymentMethodIcons: Record<string, typeof Banknote> = {
@@ -89,6 +91,8 @@ export default function CheckDetailPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
+  // Дата/время чека и гейт «комментарий день в день» — в поясе автосервиса.
+  const timeZone = useTenantTimezone();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [servicesOpen, setServicesOpen] = useState(true);
   const [productsOpen, setProductsOpen] = useState(true);
@@ -275,16 +279,13 @@ export default function CheckDetailPage() {
 
   const PaymentIcon = paymentMethodIcons[check.paymentMethod] ?? CreditCard;
 
-  // Гейт карандаша комментария: свой чек + сегодня (по локальному календарю —
-  // сервер проверяет по МСК и на пограничных случаях вежливо откажет своим
-  // 403-текстом) + не возвращённый. Права редактирования НЕ требуются.
+  // Гейт карандаша комментария: свой чек + сегодня + не возвращённый. Права
+  // редактирования НЕ требуются. «Сегодня» считаем по КАЛЕНДАРЮ АВТОСЕРВИСА —
+  // ровно тем же, каким сервер проверяет это в WHERE своего UPDATE. Раньше
+  // сравнение шло по календарю браузера, и у бухгалтера из другого региона
+  // карандаш то появлялся на вчерашнем чеке, то исчезал на сегодняшнем.
   const isOwnCheck = !!user?.id && check.masterId === user.id;
-  const checkDay = new Date(check.date);
-  const today = new Date();
-  const isCheckToday =
-    checkDay.getFullYear() === today.getFullYear() &&
-    checkDay.getMonth() === today.getMonth() &&
-    checkDay.getDate() === today.getDate();
+  const isCheckToday = formatDayKey(check.date, timeZone) === formatDayKey(new Date(), timeZone);
   const canQuickEditComment = isOwnCheck && isCheckToday && !check.isReturned;
 
   // Живой пересчёт формы приёма оплаты (скидка — только на товары, как в
@@ -321,10 +322,10 @@ export default function CheckDetailPage() {
             </div>
             <div className="flex items-center gap-2 text-sm text-gray-400 mt-0.5">
               <Calendar className="w-3.5 h-3.5" />
-              <span>{format(new Date(check.date), 'd MMMM yyyy', { locale: ru })}</span>
+              <span>{format(zoned(check.date, timeZone), 'd MMMM yyyy', { locale: ru })}</span>
               <span className="text-gray-300">·</span>
               <Clock className="w-3.5 h-3.5" />
-              <span>{format(new Date(check.date), 'HH:mm', { locale: ru })}</span>
+              <span>{format(zoned(check.date, timeZone), 'HH:mm', { locale: ru })}</span>
             </div>
           </div>
         </div>

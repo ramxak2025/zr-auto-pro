@@ -8,6 +8,8 @@ import { PushService } from '../push/push.service';
 import { CreateBookingDto } from './dto/create-booking.dto';
 import { UpdateBookingDto } from './dto/update-booking.dto';
 import { UpdateBookingSettingsDto } from './dto/update-booking-settings.dto';
+import { getTenantTimezone } from '../common/timezone';
+import { actorPointId } from '../common/point-scope';
 
 /**
  * Owner-class roles see ALL bookings in the tenant and may edit/cancel any.
@@ -72,6 +74,15 @@ export class BookingsService {
       LEFT JOIN checks ch ON ch.id = b.check_id`;
 
   // ─── List ──────────────────────────────────────────────────────────
+  /**
+   * 161 — ЗАПИСИ ФИЛИАЛА. Собственной колонки у брони нет и не заводим:
+   * запись — это ещё не сделка (чека нет, денег нет), а «где обслужат» задаёт
+   * назначенный мастер. Поэтому филиал резолвится через НАЗНАЧЕНИЯ мастера
+   * (user_points) — тем же предикатом, что график и пикер мастеров.
+   *
+   * Бронь БЕЗ мастера видна на всех филиалах: приписать её некуда, а спрятать
+   * значило бы потерять запись клиента — худший исход из возможных.
+   */
   async list(user: JwtPayload, query: { scope?: string; from?: string; to?: string }) {
     const tenantId = user.tenantID;
     const params: any[] = [tenantId];
@@ -82,6 +93,18 @@ export class BookingsService {
     if (!isOwnerClass(user)) {
       sql += ` AND b.master_id = $${idx++}`;
       params.push(user.userID);
+    }
+
+    const bookingPointId = actorPointId(user);
+    if (bookingPointId) {
+      params.push(bookingPointId);
+      const pointPh = `$${idx++}`;
+      sql +=
+        ` AND (b.master_id IS NULL` +
+        ` OR NOT EXISTS (SELECT 1 FROM user_points up_none` +
+        ` WHERE up_none.user_id = b.master_id AND up_none.tenant_id = $1)` +
+        ` OR EXISTS (SELECT 1 FROM user_points up_at` +
+        ` WHERE up_at.user_id = b.master_id AND up_at.tenant_id = $1 AND up_at.point_id = ${pointPh}))`;
     }
 
     const scope = query.scope;
@@ -194,7 +217,7 @@ export class BookingsService {
       const settings = await this.getSettings(tenantId);
       if (settings.notifyClientOnCreate) {
         const phone = clientRows[0].phone;
-        const message = `Вы записаны на ${this.formatWhen(dto.scheduledAt)}. Ждём вас!`;
+        const message = `Вы записаны на ${this.formatWhen(dto.scheduledAt, await getTenantTimezone(this.pool, tenantId))}. Ждём вас!`;
         // Fire-and-forget — never block the API response on a messaging provider.
         void this.marketingService
           .sendClientMessage(tenantId, phone, message, {
@@ -429,15 +452,19 @@ export class BookingsService {
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────
-  /** Human-friendly RU date+time for client messages, in Moscow time. */
-  private formatWhen(iso: string): string {
+  /**
+   * Дата+время записи для SMS клиенту — в поясе АВТОСЕРВИСА. Клиент приезжает
+   * по местным часам, и раньше жителю Владивостока приходило «запись на 05:00»
+   * вместо 12:00.
+   */
+  private formatWhen(iso: string, tz: string): string {
     try {
       return new Date(iso).toLocaleString('ru-RU', {
         day: '2-digit',
         month: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
-        timeZone: 'Europe/Moscow',
+        timeZone: tz,
       });
     } catch {
       return iso;

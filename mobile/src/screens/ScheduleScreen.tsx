@@ -34,11 +34,14 @@ import { useNavigation } from '@react-navigation/native';
 import { openEmployee } from '../navigation/entityLinks';
 import { scheduleApi, scheduleSettingsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
+import { formatDayKey } from '../../../shared/utils/formatters';
 import { useColors } from '../contexts/ThemeContext';
 import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import IosScreenHeader from '../components/IosScreenHeader';
+import PointSwitcher from '../components/PointSwitcher';
 import AnimatedCard from '../components/AnimatedCard';
 import QueryErrorState from '../components/QueryErrorState';
 import EmptyState from '../components/EmptyState';
@@ -659,6 +662,9 @@ function GridTab() {
   const navigation = useNavigation<any>();
   const { user, hasPermission } = useAuth();
   const palette = useColors();
+  // «Сегодня» в графике — по календарю АВТОСЕРВИСА: тем же поясом сервер решает,
+  // какие дни уже отработаны (salary.workedShiftsByUser).
+  const tenantTz = useTenantTimezone();
   const dark = palette.mode === 'dark';
   // Мутации расписания — ключ schedule_manage (сервер: POST/PATCH/DELETE
   // /schedule → тот же ключ; «права как в Битрикс24», 2026-07: admin живёт по
@@ -1009,11 +1015,13 @@ function GridTab() {
       return dt.toISOString();
     };
 
-    // Бизнес-«сегодня» продукта — Europe/Moscow (UTC+3, без летнего времени).
-    // Будущий день — это ПЛАН: факт прихода (actualArrival) ему не пришиваем,
-    // иначе зарплата считала смену раньше, чем она отработана.
-    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
-    const isFutureDay = date > new Date(Date.now() + MSK_OFFSET_MS).toISOString().slice(0, 10);
+    // Бизнес-«сегодня» — календарный день В ПОЯСЕ АВТОСЕРВИСА (tenants.timezone,
+    // 157), тот же, по которому сервер считает отработанные смены. Будущий день
+    // — это ПЛАН: факт прихода (actualArrival) ему не пришиваем, иначе зарплата
+    // считала бы смену раньше, чем она отработана. Раньше здесь стоял
+    // фиксированный московский сдвиг, и у автосервиса восточнее Москвы
+    // «сегодня» на несколько часов считалось будущим.
+    const isFutureDay = date > formatDayKey(new Date(), tenantTz);
 
     if (type === 'shift') {
       base.shiftStart = shiftStartStr;
@@ -3160,6 +3168,14 @@ export default function ScheduleScreen() {
         {/* Unified iOS header — same component used across screens. */}
         <IosScreenHeader title="Расписание" onBack={() => navigation.goBack()} trailing={trailingMonthStepper} />
 
+        {/* Филиал расписания (161): у смен появился филиал, и график/«Смены»
+            показывают ТЕКУЩИЙ филиал. Значит человек обязан видеть, чьи смены
+            он читает, — иначе решит, что мастер не вышел, хотя тот работает на
+            другой точке. Чип прячет себя сам при одном доступном филиале.
+            Отдельной строкой, а не в trailing: там уже стоит переключатель
+            месяца. */}
+        <PointSwitcher variant="chip" style={styles.pointChipRow} />
+
         {/* Tab bar */}
         <View
           style={[styles.tabBar, { backgroundColor: palette.bg.elevated, borderBottomColor: palette.border.subtle }]}
@@ -3276,6 +3292,7 @@ const styles = StyleSheet.create({
   },
 
   // ── Tab Bar ──
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   tabBar: {
     backgroundColor: colors.white,
     paddingHorizontal: spacing[3],

@@ -19,6 +19,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { clientsApi } from '../api/services';
 import { BottomSheet } from './BottomSheet';
 import { formatPhone } from '../../../shared/validation/phone';
+import { otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
 import { haptic } from '../platform/haptics';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -108,6 +109,15 @@ export default function ClientPhonePickerSheet({
           (d?.client && typeof d.client.fullName === 'string' && d.client.fullName) || newName.trim();
         haptic('success');
         onPicked(String(d.clientId), existingName);
+        return;
+      }
+      // 161 — номер занят карточкой ДРУГОГО ФИЛИАЛА: сервер намеренно не даёт
+      // ни имени, ни id (это чужая база), поэтому подставить владельца в чек
+      // нельзя, а «Перейти к клиенту» привело бы в 404. Показываем текст
+      // сервера — он объясняет, что делать.
+      const otherPoint = otherPointPhoneConflictMessage(err);
+      if (otherPoint) {
+        Alert.alert('Номер занят другим филиалом', otherPoint);
         return;
       }
       const friendly =

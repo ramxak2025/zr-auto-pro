@@ -50,6 +50,7 @@
  */
 import { useSyncExternalStore } from 'react';
 
+import { AUTH_SESSION_ENVELOPE_KEY, parseAuthSessionEnvelope } from '../contexts/authSessionStorage';
 import { extractApiErrorMessage } from './apiError';
 
 // ── Типы ────────────────────────────────────────────────────────────────────
@@ -103,6 +104,14 @@ export type SendQueuedCheck = (payload: QueuedCheckPayload) => Promise<unknown>;
 export interface OfflineCheckQueueCoreDeps {
   storage: QueueStorage;
   now?: () => number;
+  /**
+   * Текущий филиал пользователя (мульти-точки, 156/160) на момент постановки
+   * чека в очередь. Синглтон читает его из сохранённой сессии авторизации;
+   * тесты подставляют своё. Отсутствие точки = null; УПАВШИЙ резолвер тоже
+   * трактуется как null (enqueue ловит отказ сам) — очередь важнее точности
+   * штампа, терять офлайн-чек из-за сбоя вспомогательного чтения нельзя.
+   */
+  resolvePointId?: () => Promise<string | null>;
 }
 
 // ── Константы ───────────────────────────────────────────────────────────────
@@ -298,6 +307,8 @@ export interface OfflineCheckQueueCore {
 
 export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): OfflineCheckQueueCore {
   const now = deps.now ?? (() => Date.now());
+  // Без инжекта точка не штампуется вовсе — payload остаётся прежним.
+  const resolvePointId = deps.resolvePointId ?? (async () => null);
 
   let entries: readonly QueuedCheck[] = [];
   let loaded = false;
@@ -399,9 +410,37 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     if (!storageBoundaryReady) throw new Error('Хранилище офлайн-очереди не готово после смены сессии');
     const existing = entries.find((e) => e.clientRequestId === payload.clientRequestId);
     if (existing) return existing;
+
+    // ── ФИЛИАЛ ЧЕКА (мульти-точки 156/160) ──────────────────────────────
+    // Та же болезнь, что была у ДАТЫ: сервер штампует точку в момент, когда
+    // получил запрос. Живому сабмиту это подходит (запрос = нажатие
+    // «Пробить»), а вот запись из очереди может пролежать до возврата сети —
+    // мастер набил чек на филиале А, доехал до Б, переключил точку, и выручка
+    // ушла бы филиалу Б. Поэтому точку фиксируем ЗДЕСЬ: постановка в очередь
+    // происходит ровно в момент нажатия «Пробить».
+    //
+    // Точки нет (одноточечный тенант / владелец в режиме «Все точки») —
+    // поля в payload НЕ появляется вовсе, и он остаётся байт-в-байт прежним.
+    // Явный pointId в payload не перетираем: если экран когда-нибудь начнёт
+    // присылать точку сам, его выбор важнее нашего резолва.
+    // Сервер всё равно проверит доступ автора к этой точке и при неудаче
+    // молча возьмёт текущую — досылка не может ни упасть, ни увести деньги.
+    //
+    // ОЧЕРЕДЬ ВАЖНЕЕ ШТАМПА. Резолвер лезет в AsyncStorage (сохранённая
+    // сессия), и его падение раньше пробрасывалось наружу — то есть чек,
+    // набитый в офлайне, просто ТЕРЯЛСЯ из-за сбоя вспомогательного чтения.
+    // Хуже поведения придумать нельзя: филиал сервер при досылке подставит
+    // сам, а потерянный заказ-наряд не восстановит никто. Поэтому ошибка
+    // резолвера = «точки нет»: чек встаёт в очередь без поля pointId.
+    let stamped = payload;
+    if (payload.pointId === undefined) {
+      const pointId = await resolvePointId().catch(() => null);
+      if (pointId) stamped = { ...payload, pointId };
+    }
+
     const entry: QueuedCheck = {
-      clientRequestId: payload.clientRequestId,
-      payload,
+      clientRequestId: stamped.clientRequestId,
+      payload: stamped,
       createdAt: now(),
       attempts: 0,
       status: 'pending',
@@ -599,6 +638,25 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
 
 let singleton: OfflineCheckQueueCore | null = null;
 
+/**
+ * Живой филиал пользователя, если экран переключателя сообщил его напрямую.
+ * Приоритетнее сохранённой сессии: переключение точки (POST /points/switch)
+ * применяется мгновенно, не дожидаясь, пока обновлённый `user` доедет до
+ * AsyncStorage. null = «Все точки» ЯВНО, undefined = «никто не сообщал»
+ * (тогда читаем сессию). Сбрасывается на logout вместе с очередью — точка
+ * прошлого пользователя не должна пережить смену аккаунта.
+ */
+let liveCurrentPointId: string | null | undefined;
+
+/**
+ * Сообщить очереди текущий филиал (вызывать после успешного
+ * POST /points/switch и при загрузке точки на старте). Необязательно: без
+ * вызова очередь читает точку из сохранённой сессии авторизации.
+ */
+export function setOfflineCheckQueuePointId(pointId: string | null): void {
+  liveCurrentPointId = pointId;
+}
+
 function getQueue(): OfflineCheckQueueCore {
   if (!singleton) {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -608,6 +666,25 @@ function getQueue(): OfflineCheckQueueCore {
       storage: {
         getItem: (key) => AsyncStorage.getItem(key),
         setItem: (key, value) => AsyncStorage.setItem(key, value),
+      },
+      // Филиал берём из СОХРАНЁННОЙ сессии авторизации, а не из React-стейта:
+      // очередь — модуль без провайдеров, и любой её вызов (в том числе из
+      // фонового flush-триггера) обязан работать без смонтированного дерева.
+      // Это тот же конверт, который читает холодный старт axios, поэтому
+      // значение всегда согласовано с текущим пользователем — включая
+      // переключение филиала (AuthContext перезаписывает user после
+      // POST /points/switch → GET /auth/me).
+      // Любая ошибка чтения/разбора = null: чек важнее штампа точки, сервер
+      // тогда просто возьмёт текущую точку автора, как делал раньше.
+      resolvePointId: async () => {
+        if (liveCurrentPointId !== undefined) return liveCurrentPointId;
+        try {
+          const parsed = parseAuthSessionEnvelope(await AsyncStorage.getItem(AUTH_SESSION_ENVELOPE_KEY));
+          const pointId = (parsed?.user as { currentPointId?: unknown } | null | undefined)?.currentPointId;
+          return typeof pointId === 'string' && pointId.length > 0 ? pointId : null;
+        } catch {
+          return null;
+        }
       },
     });
   }
@@ -626,6 +703,9 @@ export function flushOfflineCheckQueue(): Promise<FlushResult> {
 
 /** Полная очистка очереди — вызывается из logout (см. clearAll в core). */
 export function clearOfflineCheckQueue(): Promise<void> {
+  // Филиал прошлого пользователя не должен пережить смену аккаунта: следующий
+  // вошедший начал бы штамповать чеки чужой точкой.
+  liveCurrentPointId = undefined;
   return getQueue().clearAll();
 }
 

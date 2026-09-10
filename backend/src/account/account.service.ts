@@ -305,6 +305,9 @@ export class AccountService {
    * no duplicated DELETE order. Gated by RUN_BACKGROUND_JOBS so only the leader
    * replica runs it. Best-effort per tenant: one failure never blocks the rest.
    */
+  // Пояс крона — «тихий час», а НЕ бизнес-граница суток: grace-период меряется
+  // интервалом от deletion_requested_at, календарный день тенанта в нём не
+  // участвует. Переводить джоб на пояс тенанта нечего.
   @Cron('41 4 * * *', { timeZone: 'Europe/Moscow' })
   async purgeExpiredDeletions(): Promise<void> {
     if (!RUN_BACKGROUND_JOBS) return;

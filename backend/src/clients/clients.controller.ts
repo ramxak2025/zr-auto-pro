@@ -33,7 +33,8 @@ export class ClientsController {
   @RequirePermission('export_data')
   @Get('export-csv')
   async exportCsv(@CurrentUser() user: JwtPayload, @Res() res: Response) {
-    const csv = await this.clientsService.exportCsv(user.tenantID);
+    // Выгрузка = ровно та база, которую видит человек (161).
+    const csv = await this.clientsService.exportCsv(user.tenantID, user.userID);
     res.setHeader('Content-Type', 'text/csv; charset=utf-8');
     res.setHeader('Content-Disposition', 'attachment; filename="clients.csv"');
     // Add BOM for Excel
@@ -48,13 +49,13 @@ export class ClientsController {
   @RequirePermission('clients_view')
   @Get('lookup-by-phone')
   lookupByPhone(@CurrentUser() user: JwtPayload, @Query('phone') phone: string) {
-    return this.clientsService.findByPhone(user.tenantID, phone || '');
+    return this.clientsService.findByPhone(user.tenantID, phone || '', user.userID);
   }
 
   @RequirePermission('clients_view')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.clientsService.getById(id, user.tenantID);
+    return this.clientsService.getById(id, user.tenantID, user.userID);
   }
 
   /**
@@ -70,10 +71,15 @@ export class ClientsController {
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
-    return this.clientsService.getChecksByCar(id, user.tenantID, {
-      limit: limit !== undefined ? parseInt(limit, 10) : undefined,
-      offset: offset !== undefined ? parseInt(offset, 10) : undefined,
-    });
+    return this.clientsService.getChecksByCar(
+      id,
+      user.tenantID,
+      {
+        limit: limit !== undefined ? parseInt(limit, 10) : undefined,
+        offset: offset !== undefined ? parseInt(offset, 10) : undefined,
+      },
+      user.userID,
+    );
   }
 
   @Post()
@@ -87,7 +93,7 @@ export class ClientsController {
   @RequirePermission('clients_edit')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.clientsService.update(id, user.tenantID, dto);
+    return this.clientsService.update(id, user.tenantID, dto, user.userID);
   }
 
   /**
@@ -98,7 +104,7 @@ export class ClientsController {
   @RequirePermission('clients_edit')
   @Patch(':id/source')
   updateSource(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { source: string | null }) {
-    return this.clientsService.updateSource(id, user.tenantID, dto?.source ?? null);
+    return this.clientsService.updateSource(id, user.tenantID, dto?.source ?? null, user.userID);
   }
 
   /**
@@ -108,7 +114,7 @@ export class ClientsController {
   @RequirePermission('clients_edit')
   @Patch(':id/notes')
   updateNotes(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: { notes: string | null }) {
-    return this.clientsService.updateNotes(id, user.tenantID, dto?.notes ?? null);
+    return this.clientsService.updateNotes(id, user.tenantID, dto?.notes ?? null, user.userID);
   }
 
   // Удаление клиента — 'clients_delete' (clients.delete, миграция 136);
@@ -116,6 +122,6 @@ export class ClientsController {
   @RequirePermission('clients_delete')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.clientsService.remove(id, user.tenantID);
+    return this.clientsService.remove(id, user.tenantID, user.userID);
   }
 }

@@ -46,8 +46,8 @@ test('premiumMonthExpr: period_month_year с формат-guard, fallback create
   );
   assert.match(
     service,
-    /premiumMonthExpr[\s\S]{0,600}?created_at AT TIME ZONE '\$\{SalaryService\.BUSINESS_TZ\}', 'YYYY-MM'/,
-    'fallback — месяц created_at в БИЗНЕС-таймзоне (МСК), как у выплат (149)',
+    /premiumMonthExpr[\s\S]{0,600}?created_at AT TIME ZONE \$\{tzPh\}, 'YYYY-MM'/,
+    'fallback — месяц created_at в бизнес-таймзоне ТЕНАНТА (пояс параметром, не склейкой), как у выплат (149)',
   );
 });
 
@@ -71,8 +71,8 @@ test('getEmployeeMonth: премии месяца — по назначенно�
   const block = slice('Premiums ASSIGNED to the month', 'Fines (штрафы');
   assert.match(
     block,
-    /premiumMonthExpr\('sp'\)\} = \$3/,
-    'карточка месяца должна фильтровать премии через premiumMonthExpr = месяц',
+    /premiumMonthExpr\('sp', '\$4::text'\)\} = \$3/,
+    'карточка месяца должна фильтровать премии через premiumMonthExpr = месяц (пояс тенанта — параметр $4)',
   );
   assert.doesNotMatch(
     block,
@@ -85,7 +85,7 @@ test('listPremiums: фильтр monthYear — та же атрибуция (NUL
   const block = slice('async listPremiums', 'async removePremium');
   assert.match(
     block,
-    /premiumMonthExpr\('sp'\)\}=\$/,
+    /premiumMonthExpr\('sp', tzPh\)\}=\$/,
     'список премий обязан фильтровать месяц тем же выражением, что getAll/карточка',
   );
 });
@@ -104,7 +104,7 @@ test('getAll: процент резолвится из master_rate_history (LATE
   const block = slice('async getAll', 'async getPayments');
   assert.match(
     block,
-    /LEFT JOIN LATERAL \(\s*SELECT mrh\.salary_percent, mrh\.product_salary_percent\s*FROM master_rate_history mrh\s*WHERE mrh\.tenant_id = u\.tenant_id AND mrh\.user_id = u\.id AND mrh\.month <= \$4\s*ORDER BY mrh\.month DESC\s*LIMIT 1\s*\) h ON true/,
+    /LEFT JOIN LATERAL \(\s*SELECT mrh\.salary_percent, mrh\.product_salary_percent\s*FROM master_rate_history mrh\s*WHERE mrh\.tenant_id = u\.tenant_id AND mrh\.user_id = u\.id AND mrh\.month <= \$5\s*ORDER BY mrh\.month DESC\s*LIMIT 1\s*\) h ON true/,
     'effective-ставка месяца — последняя строка истории с month <= rateMonth',
   );
   assert.match(
@@ -112,14 +112,11 @@ test('getAll: процент резолвится из master_rate_history (LATE
     /COALESCE\(h\.salary_percent, u\.salary_percent, 0\) as salary_percent/,
     'NULL-колонка истории / отсутствие строк → fallback текущих users.* (семантика 150)',
   );
+  assert.match(block, /COALESCE\(h\.product_salary_percent, u\.product_salary_percent, 0\) as product_salary_percent/);
   assert.match(
     block,
-    /COALESCE\(h\.product_salary_percent, u\.product_salary_percent, 0\) as product_salary_percent/,
-  );
-  assert.match(
-    block,
-    /\[tenantID, dateFrom, dateTo, rateMonth\]/,
-    'rateMonth обязан уходить параметром $4 в основной запрос',
+    /\[tenantID, dateFrom, dateTo, tz, rateMonth\]/,
+    'пояс тенанта — $4, rateMonth — $5 в основном запросе',
   );
 });
 

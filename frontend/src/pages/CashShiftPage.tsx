@@ -19,6 +19,8 @@ import toast from 'react-hot-toast';
 
 import { cashShiftsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 
 import type { CashShift, CashShiftReport, SafeTransaction } from '../../../shared/types';
 import { formatMoney, formatDateTime } from '../../../shared/utils/formatters';
@@ -42,6 +44,9 @@ function diffMeta(diff: number) {
 
 /** Printable-friendly full Z-report document. Reused for history + post-close. */
 function ZReportDocument({ report }: { report: CashShiftReport }) {
+  // Время смены — в поясе автосервиса: смена открывается и закрывается по его
+  // календарным суткам (shifts.service), Z-отчёт обязан показывать то же время.
+  const timeZone = useTenantTimezone();
   const s = report.shift;
   const closed = s.status === 'closed';
   const Row = ({ label, value, strong, color }: { label: string; value: string; strong?: boolean; color?: string }) => (
@@ -59,7 +64,8 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
       <div className="text-center pb-2">
         <h3 className="text-lg font-bold text-gray-900">Z-отчёт по кассовой смене</h3>
         <p className="text-xs text-gray-500 mt-1">
-          {formatDateTime(report.windowStart)} — {closed && s.closedAt ? formatDateTime(s.closedAt) : 'смена открыта'}
+          {formatDateTime(report.windowStart, timeZone)} —{' '}
+          {closed && s.closedAt ? formatDateTime(s.closedAt, timeZone) : 'смена открыта'}
         </p>
         <span
           className={`inline-flex items-center gap-1 mt-2 rounded-full px-2.5 py-0.5 text-xs font-medium ${
@@ -76,7 +82,7 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
         <div className="flex justify-between">
           <span>Открыл</span>
           <span className="font-medium text-gray-800">
-            {s.openedByName || '—'} · {formatDateTime(s.openedAt)}
+            {s.openedByName || '—'} · {formatDateTime(s.openedAt, timeZone)}
           </span>
         </div>
         {closed && (
@@ -84,7 +90,7 @@ function ZReportDocument({ report }: { report: CashShiftReport }) {
             <span>Закрыл</span>
             <span className="font-medium text-gray-800">
               {s.closedByName || '—'}
-              {s.closedAt ? ` · ${formatDateTime(s.closedAt)}` : ''}
+              {s.closedAt ? ` · ${formatDateTime(s.closedAt, timeZone)}` : ''}
             </span>
           </div>
         )}
@@ -241,6 +247,8 @@ function StatCard({
 export default function CashShiftPage() {
   const { hasPermission } = useAuth();
   const queryClient = useQueryClient();
+  // Время открытия/закрытия смен — в поясе автосервиса (см. ZReportDocument).
+  const timeZone = useTenantTimezone();
   // Открытие/закрытие/инкассация кассовой смены — ключ cash_shifts_manage
   // (backend POST /cash-shifts/*, волна Битрикс24). Просмотр статуса — всем.
   const canManage = hasPermission('cash_shifts_manage');
@@ -319,7 +327,11 @@ export default function CashShiftPage() {
       setNoteInput('');
       refresh();
     },
-    onError: () => toast.error('Не удалось открыть смену'),
+    // 160/161: у тенанта с филиалами смену нельзя открыть «на всю сеть» —
+    // деньги смены принадлежат конкретной точке. Сервер отвечает 400
+    // «Выберите филиал, чтобы открыть кассовую смену»: показываем ЕГО текст
+    // (он говорит, что делать), переключатель филиала — в шапке страницы.
+    onError: (err: any) => toast.error(apiErrorMessage(err) ?? 'Не удалось открыть смену', { duration: 8000 }),
   });
 
   const collectMutation = useMutation({
@@ -487,7 +499,7 @@ export default function CashShiftPage() {
                 </span>
                 <span className="text-sm text-gray-500">
                   {shift?.openedByName ? `${shift.openedByName} · ` : ''}
-                  {shift ? formatDateTime(shift.openedAt) : ''}
+                  {shift ? formatDateTime(shift.openedAt, timeZone) : ''}
                 </span>
               </div>
               <button onClick={() => setReportShiftId(currentReport.shift.id)} className="btn-ghost btn-sm">
@@ -715,8 +727,8 @@ export default function CashShiftPage() {
                     </div>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-semibold text-gray-900 truncate">
-                        {formatDateTime(s.openedAt)}
-                        {closed && s.closedAt ? ` — ${formatDateTime(s.closedAt)}` : ''}
+                        {formatDateTime(s.openedAt, timeZone)}
+                        {closed && s.closedAt ? ` — ${formatDateTime(s.closedAt, timeZone)}` : ''}
                       </p>
                       <p className="text-xs text-gray-500 truncate">
                         {s.openedByName || '—'} · Разменная {formatMoney(s.openingAmount)}

@@ -2,6 +2,10 @@ import { Injectable, Inject, NotFoundException, BadRequestException } from '@nes
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { NO_TENANT_ID } from '../common/auth-cache';
+import { getTenantTimezone } from '../common/timezone';
+import { JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
+import { assignedToPointSql } from '../users/user-points-sql';
 
 // Valid statuses for the schedule_settings.shift_statuses array.
 // Anything outside this set is ignored on write so a manipulated DTO can't
@@ -185,7 +189,14 @@ export class ScheduleService {
     return entry;
   }
 
-  async getAll(tenantID: string, query: any) {
+  /**
+   * Сетка графика за месяц. 161 — филиал режет СОСТАВ КОМАНДЫ, а не строки:
+   * у schedule_entries точки нет и не будет (решение владельца), поэтому
+   * график филиала — это график сотрудников, НАЗНАЧЕННЫХ на филиал
+   * (user_points). Сотрудник без назначений виден везде — безопасный дефолт
+   * 156, менять нельзя: пустые user_points у всех = поведение прежнее.
+   */
+  async getAll(tenantID: string, query: any, actor?: JwtPayload) {
     const dateFrom = query?.dateFrom;
     const dateTo = query?.dateTo;
 
@@ -195,32 +206,46 @@ export class ScheduleService {
       return [];
     }
 
+    const params: unknown[] = [tenantID, dateFrom, dateTo];
+    const pointFilter = assignedToPointSql('u', '$1', actorPointId(actor), params);
     const { rows } = await this.pool.query(
       `SELECT se.*, u.full_name as user_full_name, u.role as user_role, u.is_active as user_is_active
        FROM schedule_entries se
        JOIN users u ON u.id = se.user_id
-       WHERE se.tenant_id = $1 AND se.date >= $2 AND se.date <= $3
+       WHERE se.tenant_id = $1 AND se.date >= $2 AND se.date <= $3${pointFilter}
        ORDER BY u.full_name, se.date
        LIMIT 5000`,
-      [tenantID, dateFrom, dateTo],
+      params,
     );
     return rows.map(this.mapEntry);
   }
 
-  async getToday(tenantID: string) {
+  /**
+   * «Кто сейчас на работе». ЕДИНСТВЕННОЕ место, где считается этот факт, —
+   * его же переиспользует карточка филиала (points.summaryForTenant считает то
+   * же самое из shifts). 161 — состав режется назначениями (user_points), как
+   * и сетка графика: в карточке филиала А нельзя показывать людей филиала Б.
+   */
+  async getToday(tenantID: string, actor?: JwtPayload) {
+    // Пояс тенанта — один раз на запрос, для обоих запросов ниже.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+
     // Safety net: if the nightly cron didn't run, sweep any stale open shifts
-    // (date earlier than "today" in Moscow) before we render today's status.
-    // Idempotent and cheap — only updates rows that actually need closing.
+    // (date earlier than "today" в поясе тенанта) before we render today's
+    // status. Idempotent and cheap — only updates rows that actually need
+    // closing.
     await this.pool.query(
       `UPDATE shifts SET closed_at = now(), is_auto_closed = true
        WHERE tenant_id = $1 AND closed_at IS NULL
-         AND date < (now() AT TIME ZONE 'Europe/Moscow')::date`,
-      [tenantID],
+         AND date < (now() AT TIME ZONE $2::text)::date`,
+      [tenantID, tz],
     );
 
-    // "Today" is computed in Moscow time inside Postgres, not the container's
-    // locale. Previously used UTC date which caused 3-hour window every day
-    // where Moscow shifts wouldn't match.
+    // «Сегодня» считает Postgres в ПОЯСЕ ТЕНАНТА, а не в локали контейнера и не
+    // по фиксированному московскому сдвигу: иначе у автосервиса восточнее
+    // Москвы утренние смены каждый день не совпадали бы с графиком.
+    const todayParams: unknown[] = [tenantID, tz];
+    const todayPointFilter = assignedToPointSql('u', '$1', actorPointId(actor), todayParams);
     const { rows } = await this.pool.query(
       `SELECT DISTINCT ON (u.id) u.id as user_id, u.full_name, u.role, u.avatar,
               se.is_day_off, se.shift_start, se.shift_end,
@@ -230,19 +255,19 @@ export class ScheduleService {
        FROM users u
        LEFT JOIN schedule_entries se
               ON se.user_id = u.id
-             AND se.date = (now() AT TIME ZONE 'Europe/Moscow')::date
+             AND se.date = (now() AT TIME ZONE $2::text)::date
              AND se.tenant_id = $1
        LEFT JOIN shifts s
               ON s.user_id = u.id
-             AND s.date = (now() AT TIME ZONE 'Europe/Moscow')::date
+             AND s.date = (now() AT TIME ZONE $2::text)::date
              AND s.tenant_id = $1
              AND s.closed_at IS NULL
        WHERE u.tenant_id = $1 AND u.is_active = true AND u.role IN ('master', 'admin')
          AND u.dismissed_at IS NULL AND u.purged_at IS NULL
          AND COALESCE(u.hidden_from_schedule, false) = false
-         AND COALESCE(u.hidden_everywhere, false) = false
+         AND COALESCE(u.hidden_everywhere, false) = false${todayPointFilter}
        ORDER BY u.id, u.full_name`,
-      [tenantID],
+      todayParams,
     );
 
     return rows.map((r) => ({
@@ -282,12 +307,12 @@ export class ScheduleService {
          -- «Рабочих дней» = ТО ЖЕ worked-определение, что у зарплаты
          -- (buildShiftFilter 'worked'): факт прихода, НЕ late_major, не
          -- выходной/больничный/прогул (точный лейбл quick-action, не подстрока)
-         -- и только прошедшие дни (бизнес-«сегодня» — Europe/Moscow).
+         -- и только прошедшие дни (бизнес-«сегодня» — в поясе тенанта).
          COUNT(CASE WHEN actual_arrival IS NOT NULL
                      AND COALESCE(late_status, '') <> 'late_major'
                      AND is_day_off = false
                      AND COALESCE(note, '') NOT IN ('Больничный', 'Прогул')
-                     AND date <= (now() AT TIME ZONE 'Europe/Moscow')::date
+                     AND date <= (now() AT TIME ZONE $5::text)::date
                 THEN 1 END) as total_worked,
          COUNT(CASE WHEN late_status IN ('late_minor','late_major') THEN 1 END) as total_late,
          COUNT(CASE WHEN late_status = 'late_minor' THEN 1 END) as total_late_minor,
@@ -297,7 +322,7 @@ export class ScheduleService {
          COALESCE(AVG(CASE WHEN late_minutes > 0 THEN late_minutes END), 0) as avg_late_minutes
        FROM schedule_entries
        WHERE user_id = $1 AND tenant_id = $2 AND date >= $3 AND date <= $4`,
-      [userID, tenantID, monthStart, monthEnd],
+      [userID, tenantID, monthStart, monthEnd, await getTenantTimezone(this.pool, tenantID)],
     );
 
     const r = rows[0];

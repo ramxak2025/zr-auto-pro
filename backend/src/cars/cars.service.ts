@@ -3,16 +3,75 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { normalizePlate } from '../imports/normalize-plate';
+import { ClientsService } from '../clients/clients.service';
 
+/**
+ * ФИЛИАЛЫ (156/161). Своей точки у машины НЕТ и не будет: машина — это гараж
+ * КЛИЕНТА, и принадлежит она тому филиалу, которому принадлежит владелец.
+ * Поэтому в раздельном режиме (tenants.points_shared_clients=false) гараж
+ * режется через clients.point_id — ТЕМ ЖЕ предикатом, что база клиентов
+ * (ClientsService.separatePointWhere), а не второй копией правила.
+ *
+ * Машина БЕЗ владельца (client_id IS NULL) видна везде: приписать её некуда, а
+ * спрятать значило бы потерять её из всех списков сразу.
+ */
 @Injectable()
 export class CarsService {
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    private clients: ClientsService,
+  ) {}
 
-  private async assertClientInTenant(clientId: string, tenantID: string): Promise<void> {
-    const { rows } = await this.pool.query('SELECT 1 FROM clients WHERE id = $1 AND tenant_id = $2 LIMIT 1', [
-      clientId,
-      tenantID,
-    ]);
+  /**
+   * Фрагмент « AND (владелец виден на моём филиале ИЛИ владельца нет)» для УЖЕ
+   * известной точки. Пустая строка при общей базе клиентов (дефолт) — запрос
+   * дословно прежний.
+   *
+   * Отдельно от `ownerVisibleSql` ради запросов, которые режут ОДНУ И ТУ ЖЕ
+   * машину несколько раз (update: предварительная выборка владельца + сам
+   * UPDATE): точка резолвится один раз, поэтому оба фрагмента гарантированно
+   * про один филиал, даже если между запросами актор переключил точку.
+   */
+  private ownerVisibleSqlFor(alias: string, point: string | null, params: unknown[]): string {
+    if (!point) return '';
+    params.push(point);
+    return (
+      ` AND (${alias}.client_id IS NULL OR EXISTS (SELECT 1 FROM clients ocl` +
+      ` WHERE ocl.id = ${alias}.client_id AND ocl.tenant_id = ${alias}.tenant_id` +
+      ` AND (ocl.point_id = $${params.length} OR ocl.point_id IS NULL)))`
+    );
+  }
+
+  /**
+   * То же, но точка резолвится внутри — для запросов, которым нужен ровно один
+   * фрагмент.
+   */
+  private async ownerVisibleSql(
+    alias: string,
+    tenantID: string,
+    actorUserID: string | undefined,
+    params: unknown[],
+  ): Promise<string> {
+    return this.ownerVisibleSqlFor(alias, await this.clients.separatePointFor(tenantID, actorUserID), params);
+  }
+
+  /**
+   * 161 — «клиент моего тенанта» превратилось в «клиент, ВИДИМЫЙ мне»: в
+   * раздельном режиме привязать машину к клиенту чужого филиала нельзя. Это
+   * закрывает самый тихий обходной путь — узнать чужого клиента можно было,
+   * просто привязав к нему авто и открыв карточку машины.
+   */
+  private async assertClientInTenant(clientId: string, tenantID: string, actorUserID?: string): Promise<void> {
+    const params: unknown[] = [clientId, tenantID];
+    const pointWhere = this.clients.separatePointWhere(
+      null,
+      await this.clients.separatePointFor(tenantID, actorUserID),
+      params,
+    );
+    const { rows } = await this.pool.query(
+      `SELECT 1 FROM clients WHERE id = $1 AND tenant_id = $2${pointWhere} LIMIT 1`,
+      params,
+    );
     if (rows.length === 0) {
       throw new BadRequestException({ message: 'Клиент не найден' });
     }
@@ -24,18 +83,23 @@ export class CarsService {
    * Cyrillic look-alikes transliterated, so "Р 332 РА 05" and "P332PA05"
    * resolve to the same record. Used by the UI duplicate-warning popup.
    */
-  async findByPlate(tenantID: string, plate: string) {
+  async findByPlate(tenantID: string, plate: string, actorUserID?: string) {
     const norm = normalizePlate(plate || '');
     if (!norm.key) return null;
+    // 161 — САМАЯ ЗАМЕТНАЯ УТЕЧКА раздельного режима: по одному госномеру
+    // ручка отдавала ФИО и телефон владельца чужого филиала любому мастеру.
+    // Теперь поиск по номеру подчиняется тем же границам, что база клиентов.
+    const params: unknown[] = [tenantID, norm.key];
+    const ownerWhere = await this.ownerVisibleSql('ca', tenantID, actorUserID, params);
     const { rows } = await this.pool.query(
       `SELECT ca.id, ca.plate_number, ca.make_model, ca.client_id, ca.created_at,
               cl.full_name AS client_full_name, cl.phone AS client_phone
        FROM cars ca
        LEFT JOIN clients cl ON cl.id = ca.client_id
        WHERE ca.tenant_id = $1
-         AND REPLACE(REPLACE(REPLACE(UPPER(ca.plate_number), ' ', ''), '-', ''), '/', '') = $2
+         AND REPLACE(REPLACE(REPLACE(UPPER(ca.plate_number), ' ', ''), '-', ''), '/', '') = $2${ownerWhere}
        ORDER BY ca.created_at LIMIT 1`,
-      [tenantID, norm.key],
+      params,
     );
     if (rows.length === 0) return null;
     const r = rows[0];
@@ -76,7 +140,7 @@ export class CarsService {
     return car;
   }
 
-  async getAll(tenantID: string, query: any) {
+  async getAll(tenantID: string, query: any, actorUserID?: string) {
     const page = parseInt(query.page) || 1;
     const limit = capLimit(query.limit, 50, 1000);
     const offset = (page - 1) * limit;
@@ -106,9 +170,14 @@ export class CarsService {
       where += ` AND (ca.no_plate = true OR ca.plate_number = '')`;
     }
 
+    // Филиал — последним фильтром: дальше локальный idx для WHERE не растёт,
+    // а LIMIT/OFFSET нумеруются от актуальной длины params.
+    where += await this.ownerVisibleSql('ca', tenantID, actorUserID, params);
+
     const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM cars ca WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
 
+    idx = params.length + 1;
     params.push(limit, offset);
     const { rows } = await this.pool.query(
       `SELECT ca.*, cl.full_name as client_full_name, cl.phone as client_phone
@@ -120,12 +189,14 @@ export class CarsService {
     return { data: rows.map(this.mapCar), total, page, limit };
   }
 
-  async getById(id: string, tenantID: string) {
+  async getById(id: string, tenantID: string, actorUserID?: string) {
+    const params: unknown[] = [id, tenantID];
+    const ownerWhere = await this.ownerVisibleSql('ca', tenantID, actorUserID, params);
     const { rows } = await this.pool.query(
       `SELECT ca.*, cl.full_name as client_full_name, cl.phone as client_phone
        FROM cars ca LEFT JOIN clients cl ON cl.id = ca.client_id
-       WHERE ca.id=$1 AND ca.tenant_id=$2`,
-      [id, tenantID],
+       WHERE ca.id=$1 AND ca.tenant_id=$2${ownerWhere}`,
+      params,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Машина не найдена' });
     return this.mapCar(rows[0]);
@@ -152,11 +223,13 @@ export class CarsService {
     return rows.length > 0 ? this.mapCar(rows[0]) : null;
   }
 
-  async create(tenantID: string, dto: any) {
+  async create(tenantID: string, dto: any, actorUserID?: string) {
     // If linked to a client, the client must live in the same tenant.
     // Without this a director could attach a car to another tenant's client.
+    // 161 — и быть ВИДИМЫМ автору: в раздельном режиме привязка к клиенту
+    // чужого филиала запрещена (см. assertClientInTenant).
     if (dto.clientId) {
-      await this.assertClientInTenant(dto.clientId, tenantID);
+      await this.assertClientInTenant(dto.clientId, tenantID, actorUserID);
     }
     // "Без номера" cars store an empty plate; the duplicate-plate lookup (run
     // by the FE before create) is meaningless for them and is skipped. Foreign
@@ -190,9 +263,13 @@ export class CarsService {
     return this.mapCar(rows[0]);
   }
 
-  async update(id: string, tenantID: string, dto: any) {
+  async update(id: string, tenantID: string, dto: any, actorUserID?: string) {
+    // Точка автора — ОДИН раз на весь метод: и предварительная выборка
+    // владельца, и финальный UPDATE обязаны резать один и тот же филиал.
+    const viewerPoint = await this.clients.separatePointFor(tenantID, actorUserID);
+
     if (dto.clientId !== undefined && dto.clientId !== null) {
-      await this.assertClientInTenant(dto.clientId, tenantID);
+      await this.assertClientInTenant(dto.clientId, tenantID, actorUserID);
     }
 
     // Reassigning a car to a different owner (feature #9): guard against
@@ -203,9 +280,15 @@ export class CarsService {
     // («без номера») normalize to empty and are skipped — an empty plate is not
     // a stable identity.
     if (dto.clientId !== undefined && dto.clientId !== null) {
+      // 161 — предварительная выборка текущего владельца тем же предикатом
+      // видимости, что и сам UPDATE ниже. Без него машина чужого филиала
+      // отдавала бы своего владельца (client_id) и его госномер автору,
+      // которому этот гараж не виден, — тихая утечка через дедуп-проверку.
+      const currentParams: unknown[] = [id, tenantID];
+      const currentOwnerWhere = this.ownerVisibleSqlFor('cars', viewerPoint, currentParams);
       const { rows: currentRows } = await this.pool.query(
-        'SELECT client_id, plate_number FROM cars WHERE id=$1 AND tenant_id=$2 LIMIT 1',
-        [id, tenantID],
+        `SELECT client_id, plate_number FROM cars WHERE id=$1 AND tenant_id=$2${currentOwnerWhere} LIMIT 1`,
+        currentParams,
       );
       if (currentRows.length > 0 && currentRows[0].client_id !== dto.clientId) {
         // Plate to check is the one the car will have after this update:
@@ -257,19 +340,30 @@ export class CarsService {
       vals.push(dto.clientId);
     }
 
-    if (sets.length === 0) return this.getById(id, tenantID);
+    if (sets.length === 0) return this.getById(id, tenantID, actorUserID);
 
     vals.push(id, tenantID);
+    // 161 — ЕДИНСТВЕННЫЙ путь записи машины, у которого предиката видимости не
+    // было: в раздельном режиме мастер чужого филиала мог перепривязать чужую
+    // машину к СВОЕМУ клиенту (`clientId` проверялся только на «виден мне»,
+    // а сама машина — нет) и вместе с ней увести историю чеков. Предикат тот
+    // же, что в remove/getById; строка ownerWhere собирается ДО шаблона, её
+    // плейсхолдер идёт после id и tenant_id (params.length уже вырос на два).
+    const ownerWhere = this.ownerVisibleSqlFor('cars', viewerPoint, vals);
     const { rows } = await this.pool.query(
-      `UPDATE cars SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+      `UPDATE cars SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx}${ownerWhere} RETURNING *`,
       vals,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Машина не найдена' });
     return this.mapCar(rows[0]);
   }
 
-  async remove(id: string, tenantID: string) {
-    await this.pool.query('DELETE FROM cars WHERE id=$1 AND tenant_id=$2', [id, tenantID]);
+  async remove(id: string, tenantID: string, actorUserID?: string) {
+    // 161 — удалить машину клиента чужого филиала нельзя: тот же предикат
+    // видимости, что и в чтении (иначе гараж филиала Б чистился бы из А).
+    const params: unknown[] = [id, tenantID];
+    const ownerWhere = await this.ownerVisibleSql('cars', tenantID, actorUserID, params);
+    await this.pool.query(`DELETE FROM cars WHERE id=$1 AND tenant_id=$2${ownerWhere}`, params);
     return { message: 'Удалено' };
   }
 
@@ -298,21 +392,32 @@ export class CarsService {
    * Loyalty & debts are PERSONAL to the client, not attached to the car — same
    * precedent as checks.service.ts editClosedCheck, which leaves them untouched.
    */
-  async transferOwner(carId: string, tenantID: string, newClientId: string, moveHistory: boolean) {
+  async transferOwner(
+    carId: string,
+    tenantID: string,
+    newClientId: string,
+    moveHistory: boolean,
+    actorUserID?: string,
+  ) {
     // 1) Target client must exist in the tenant.
-    await this.assertClientInTenant(newClientId, tenantID);
+    // 161 — и быть ВИДИМЫМ автору. Перенос владельца на клиента чужого филиала
+    // в раздельном режиме запрещён: вместе с машиной уехала бы вся история
+    // чеков и рассрочка, то есть деньги сменили бы филиал незаметно для обоих.
+    await this.assertClientInTenant(newClientId, tenantID, actorUserID);
 
     // 2) Load the car (tenant-scoped) → current owner + plate.
+    const carParams: unknown[] = [carId, tenantID];
+    const carOwnerWhere = await this.ownerVisibleSql('cars', tenantID, actorUserID, carParams);
     const { rows: carRows } = await this.pool.query(
-      'SELECT id, client_id, plate_number, no_plate FROM cars WHERE id=$1 AND tenant_id=$2 LIMIT 1',
-      [carId, tenantID],
+      `SELECT id, client_id, plate_number, no_plate FROM cars WHERE id=$1 AND tenant_id=$2${carOwnerWhere} LIMIT 1`,
+      carParams,
     );
     if (carRows.length === 0) throw new NotFoundException({ message: 'Машина не найдена' });
     const current = carRows[0];
 
     // Idempotent no-op: already owned by the target client.
     if (current.client_id === newClientId) {
-      return { car: await this.getById(carId, tenantID), movedChecks: 0 };
+      return { car: await this.getById(carId, tenantID, actorUserID), movedChecks: 0 };
     }
 
     // 3) Dedup guard: the target must not already own a car with this plate.
@@ -380,7 +485,7 @@ export class CarsService {
       client.release();
     }
 
-    return { car: await this.getById(carId, tenantID), movedChecks };
+    return { car: await this.getById(carId, tenantID, actorUserID), movedChecks };
   }
 
   /**
@@ -388,13 +493,30 @@ export class CarsService {
    * enforced via the WHERE clause; foreign cars yield an empty list rather
    * than 404 to keep the FE simple (an empty list is a valid history).
    */
-  async getChecks(id: string, tenantID: string, limit: number) {
+  /**
+   * ФИЛИАЛЫ (156/160) — ИСКЛЮЧЕНИЕ, НЕ «ЧИНИТЬ». Эта выборка СОЗНАТЕЛЬНО НЕ
+   * фильтруется по точке (checks.point_id). Продуктовое требование владельца:
+   * филиал видит только свои чеки, деньги, смены и отчёты, но база клиентов и
+   * ИХ ИСТОРИЯ — единственное общее на всю сеть. Клиент обслуживался на
+   * филиале А и приехал на Б: мастер обязан увидеть, что с машиной уже
+   * делали, иначе он повторит работу или пропустит гарантийный случай.
+   * Раздельный режим (tenants.points_shared_clients=false) режет СОСТАВ базы
+   * клиентов в ClientsService.getAll, а не историю уже открытого клиента.
+   * Зеркальные исключения: checks.getAll при ?clientId/?carId и
+   * ClientsService.getChecksByCar.
+   */
+  async getChecks(id: string, tenantID: string, limit: number, actorUserID?: string) {
     // Verify car belongs to tenant — without this the foreign-id path
     // returns an empty array instead of a 404, which masks bugs.
-    const { rows: carRows } = await this.pool.query('SELECT 1 FROM cars WHERE id=$1 AND tenant_id=$2 LIMIT 1', [
-      id,
-      tenantID,
-    ]);
+    // 161 — скоупится ДОСТУП К МАШИНЕ (чужой гараж не открывается), но НЕ сами
+    // чеки ниже: история открытой машины общая на всю сеть, см. блок
+    // «ИСКЛЮЧЕНИЕ, НЕ ЧИНИТЬ» в доке метода.
+    const carParams: unknown[] = [id, tenantID];
+    const carOwnerWhere = await this.ownerVisibleSql('cars', tenantID, actorUserID, carParams);
+    const { rows: carRows } = await this.pool.query(
+      `SELECT 1 FROM cars WHERE id=$1 AND tenant_id=$2${carOwnerWhere} LIMIT 1`,
+      carParams,
+    );
     if (carRows.length === 0) throw new NotFoundException({ message: 'Машина не найдена' });
 
     const { rows } = await this.pool.query(

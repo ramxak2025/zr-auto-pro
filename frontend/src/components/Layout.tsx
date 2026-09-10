@@ -2,6 +2,7 @@ import { memo, useEffect, useMemo } from 'react';
 import { NavLink, useLocation, Outlet } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import PageTransition from './PageTransition';
+import PointSwitcher from './PointSwitcher';
 import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
@@ -306,10 +307,14 @@ interface MobileHeaderProps {
 const MobileHeader = memo(function MobileHeader({ userAvatar, userInitial }: MobileHeaderProps) {
   return (
     <header className="md:hidden sticky top-0 z-20 flex h-14 items-center justify-between border-b border-gray-200 bg-white px-4">
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
         <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 items-center gap-2">
+        {/* Филиал (156/160): текущая точка хранится на сервере, поэтому веб и
+            так работает «внутри» филиала — человек обязан это видеть. Сам
+            компонент прячется, когда доступен один филиал. */}
+        <PointSwitcher />
         {userAvatar ? (
           <img src={userAvatar} alt="" className="h-7 w-7 rounded-full object-cover" />
         ) : (
@@ -457,6 +462,8 @@ export default function Layout() {
             ))}
           </div>
           <div className="flex items-center gap-4">
+            {/* Филиал (156/160) — см. комментарий в MobileHeader. */}
+            <PointSwitcher />
             <div className="flex items-center gap-2.5">
               <span className="text-sm font-medium text-gray-700">{userName}</span>
               <span

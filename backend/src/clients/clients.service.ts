@@ -19,7 +19,7 @@ export class ClientsService {
    * Used by the UI to warn the user before creating a duplicate.
    * Returns at most one match (the first by created_at).
    */
-  async findByPhone(tenantID: string, phone: string) {
+  async findByPhone(tenantID: string, phone: string, actorUserID?: string) {
     // Match on the normalized core so a client saved as «+7 (988) 444-44-85»
     // is found when the user types «89884444485» or «9884444485» (#64). The
     // previous exact `phone = '+7…'` compare missed every non-canonical row,
@@ -27,11 +27,16 @@ export class ClientsService {
     // screen created a second client (#57 BUG B).
     const key = phoneSearchKey(phone || '');
     if (!key) return null;
+    // 161 — в РАЗДЕЛЬНОМ режиме поиск по телефону обязан подчиняться тем же
+    // границам, что и список: иначе одна ручка отдавала бы ФИО и телефон
+    // клиента чужого филиала любому, кто просто наберёт номер.
+    const params: unknown[] = [tenantID, key];
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), params);
     const { rows } = await this.pool.query(
       `SELECT id, full_name, phone, created_at
-       FROM clients WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2
+       FROM clients WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2${pointWhere}
        ORDER BY created_at LIMIT 1`,
-      [tenantID, key],
+      params,
     );
     if (rows.length === 0) return null;
     const client = {
@@ -89,7 +94,7 @@ export class ClientsService {
    * тенант выбрал points_shared_clients=false И точка у сотрудника выбрана;
    * иначе null (общая база — дефолт, поведение прежнее).
    */
-  private async separatePointFor(tenantID: string, userID?: string): Promise<string | null> {
+  async separatePointFor(tenantID: string, userID?: string): Promise<string | null> {
     if (!userID) return null;
     const { rows } = await this.pool.query(
       `SELECT t.points_shared_clients AS shared, u.current_point_id AS point
@@ -99,6 +104,29 @@ export class ClientsService {
     );
     if (rows.length === 0) return null;
     return rows[0].shared === false && rows[0].point ? rows[0].point : null;
+  }
+
+  /**
+   * SQL-фрагмент «клиент виден на этой точке» + push параметра в `params`.
+   * Пустая строка при общей базе (дефолт) — запрос остаётся дословно прежним.
+   *
+   * ПОЧЕМУ `OR point_id IS NULL`, а не строгое равенство (в отличие от денег,
+   * common/point-scope.ts): клиент без точки — ОБЩИЙ (розничный покупатель и
+   * вся история до внедрения точек). Спрятать его от филиала значило бы
+   * оставить кассу без покупателя по умолчанию. Задвоения денег тут нет:
+   * клиент — не сумма, его «двойная видимость» ничего не складывает.
+   *
+   * ОДИН ИСТОЧНИК НА ВСЕ РУЧКИ. До 161 предикат жил только в getAll, и любой
+   * другой запрос был обходным путём: по /clients/:id, lookup-by-phone,
+   * export-csv и PATCH карточка чужого филиала открывалась целиком. Метод
+   * ПУБЛИЧНЫЙ ровно поэтому: CarsService режет гараж тем же предикатом через
+   * clients.point_id, а не собственной копией правила.
+   */
+  separatePointWhere(alias: string | null, point: string | null, params: unknown[]): string {
+    if (!point) return '';
+    params.push(point);
+    const prefix = alias ? `${alias}.` : '';
+    return ` AND (${prefix}point_id = $${params.length} OR ${prefix}point_id IS NULL)`;
   }
 
   async getAll(tenantID: string, query: any, actorUserID?: string) {
@@ -166,11 +194,7 @@ export class ClientsService {
     // 156 — раздельная база клиентов по точкам: клиенты СВОЕЙ точки + общие/
     // исторические (point_id IS NULL, в т.ч. розничный покупатель). Общая
     // база (дефолт) — фильтра нет, поведение прежнее.
-    const separatePoint = await this.separatePointFor(tenantID, actorUserID);
-    if (separatePoint) {
-      params.push(separatePoint);
-      where += ` AND (c.point_id = $${params.length} OR c.point_id IS NULL)`;
-    }
+    where += this.separatePointWhere('c', await this.separatePointFor(tenantID, actorUserID), params);
 
     const countResult = await this.pool.query(`SELECT COUNT(*) as total FROM clients c WHERE ${where}`, params);
     const total = parseInt(countResult.rows[0].total);
@@ -209,7 +233,11 @@ export class ClientsService {
     return { data: clients, total, page, limit };
   }
 
-  async getById(id: string, tenantID: string) {
+  async getById(id: string, tenantID: string, actorUserID?: string) {
+    // 161 — карточка клиента чужого филиала в раздельном режиме не должна
+    // открываться по прямой ссылке (её id легко узнать из истории авто).
+    const params: unknown[] = [id, tenantID];
+    const pointWhere = this.separatePointWhere('c', await this.separatePointFor(tenantID, actorUserID), params);
     // Last loyalty rating is computed in the query (not denormalized) — the
     // most recent review_responses row for this client (007_marketing_reviews).
     const { rows } = await this.pool.query(
@@ -224,8 +252,8 @@ export class ClientsService {
          ORDER BY created_at DESC
          LIMIT 1
        ) rr ON true
-       WHERE c.id=$1 AND c.tenant_id=$2`,
-      [id, tenantID],
+       WHERE c.id=$1 AND c.tenant_id=$2${pointWhere}`,
+      params,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
 
@@ -260,31 +288,22 @@ export class ClientsService {
     // («Клиент с этим номером уже добавлен → Перейти к клиенту»). There is no
     // DB unique constraint on phone (numbers are stored in many formats and the
     // retail client has ''), so this is the authoritative dedup.
+    // 156 — при раздельной базе новый клиент рождается НА точке автора;
+    // при общей базе (дефолт) point_id остаётся NULL — виден всем.
+    const creationPoint = await this.separatePointFor(tenantID, actorUserID);
+
     const key = phoneSearchKey(phone);
     if (key) {
       const { rows: dupe } = await this.pool.query(
-        `SELECT id, full_name, phone FROM clients
+        `SELECT id, full_name, phone, point_id FROM clients
           WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2
           ORDER BY created_at LIMIT 1`,
         [tenantID, key],
       );
       if (dupe.length > 0) {
-        throw new ConflictException({
-          message: 'Клиент с этим номером уже добавлен',
-          code: 'CLIENT_PHONE_EXISTS',
-          clientId: dupe[0].id as string,
-          client: {
-            id: dupe[0].id as string,
-            fullName: dupe[0].full_name as string,
-            phone: dupe[0].phone as string,
-          },
-        });
+        throw this.phoneConflict(dupe[0], creationPoint);
       }
     }
-
-    // 156 — при раздельной базе новый клиент рождается НА точке автора;
-    // при общей базе (дефолт) point_id остаётся NULL — виден всем.
-    const creationPoint = await this.separatePointFor(tenantID, actorUserID);
 
     try {
       const { rows } = await this.pool.query(
@@ -301,7 +320,7 @@ export class ClientsService {
       // uq_clients_tenant_phone_key rejected the second row. Map it to the SAME
       // 409 CLIENT_PHONE_EXISTS contract the friendly path returns, so the UI
       // shows its normal «Перейти к клиенту» flow instead of a raw 500.
-      throw (await this.mapPhoneUniqueViolation(err, tenantID, phone)) ?? err;
+      throw (await this.mapPhoneUniqueViolation(err, tenantID, phone, creationPoint)) ?? err;
     }
   }
 
@@ -311,31 +330,68 @@ export class ClientsService {
    * ConflictException (`CLIENT_PHONE_EXISTS` + existing client payload).
    * Returns null for any other error so the caller rethrows it untouched.
    */
-  private async mapPhoneUniqueViolation(err: unknown, tenantID: string, phone: string) {
+  private async mapPhoneUniqueViolation(err: unknown, tenantID: string, phone: string, viewerPoint: string | null) {
     const e = err as { code?: string; constraint?: string } | null;
     if (!e || e.code !== '23505' || e.constraint !== 'uq_clients_tenant_phone_key') return null;
     const key = phoneSearchKey(phone || '');
     if (!key) return null;
     const { rows } = await this.pool.query(
-      `SELECT id, full_name, phone FROM clients
+      `SELECT id, full_name, phone, point_id FROM clients
         WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2
         ORDER BY created_at LIMIT 1`,
       [tenantID, key],
     );
     if (rows.length === 0) return null; // winner vanished — let the raw error surface
+    return this.phoneConflict(rows[0], viewerPoint);
+  }
+
+  /**
+   * 409 «номер занят» — ОДНА точка сборки для обоих путей дедупа (пре-проверка
+   * в create и гонка на уникальном индексе 108).
+   *
+   * ФИЛИАЛЫ (161). Уникальный индекс uq_clients_tenant_phone_key построен по
+   * ТЕНАНТУ и точки не знает, поэтому в раздельном режиме дубль возможен с
+   * карточкой ЧУЖОГО филиала. Индекс мы намеренно НЕ переделываем: разрешить
+   * один номер на нескольких филиалах значит завести двух «одинаковых»
+   * клиентов, которых потом никто не сведёт, — их долги, бонусы и рассрочки
+   * разъедутся по разным карточкам, а это уже деньги. Ограничение остаётся
+   * тенантным, меняется только ОТВЕТ:
+   *   • номер занят видимой карточкой → прежний контракт CLIENT_PHONE_EXISTS
+   *     с id и данными («Перейти к клиенту») — поведение 1:1;
+   *   • номер занят карточкой другого филиала → НЕЙТРАЛЬНЫЙ текст без имени и
+   *     без id. Иначе мастер филиала А узнавал бы ФИО клиента филиала Б,
+   *     просто пытаясь его завести, а «Перейти к клиенту» вело бы в 404 —
+   *     тупик, из которого нельзя выйти. Вместо этого говорим, ЧТО делать.
+   */
+  private phoneConflict(
+    existing: { id: string; full_name: string; phone: string; point_id: string | null },
+    viewerPoint: string | null,
+  ) {
+    const visible = !viewerPoint || existing.point_id === null || existing.point_id === viewerPoint;
+    if (!visible) {
+      return new ConflictException({
+        message:
+          'Этот номер уже занят карточкой другого филиала. Попросите владельца перевести клиента на ваш филиал ' +
+          'или включить общую базу клиентов.',
+        code: 'CLIENT_PHONE_EXISTS_OTHER_POINT',
+      });
+    }
     return new ConflictException({
       message: 'Клиент с этим номером уже добавлен',
       code: 'CLIENT_PHONE_EXISTS',
-      clientId: rows[0].id as string,
+      clientId: existing.id,
       client: {
-        id: rows[0].id as string,
-        fullName: rows[0].full_name as string,
-        phone: rows[0].phone as string,
+        id: existing.id,
+        fullName: existing.full_name,
+        phone: existing.phone,
       },
     });
   }
 
-  async update(id: string, tenantID: string, dto: any) {
+  async update(id: string, tenantID: string, dto: any, actorUserID?: string) {
+    // 161 — правка чужого филиала невозможна: тот же предикат видимости, что и
+    // в списке, уходит в WHERE — чужая карточка просто «не найдена».
+    const viewerPoint = await this.separatePointFor(tenantID, actorUserID);
     const sets: string[] = [];
     const vals: any[] = [];
     let idx = 1;
@@ -361,12 +417,14 @@ export class ClientsService {
       vals.push(dto.ownerNotes === '' ? null : dto.ownerNotes);
     }
 
-    if (sets.length === 0) return this.getById(id, tenantID);
+    if (sets.length === 0) return this.getById(id, tenantID, actorUserID);
 
     vals.push(id, tenantID);
+    idx += 1; // теперь idx указывает на плейсхолдер tenant_id
+    const pointWhere = this.separatePointWhere(null, viewerPoint, vals);
     try {
       const { rows } = await this.pool.query(
-        `UPDATE clients SET ${sets.join(', ')} WHERE id=$${idx++} AND tenant_id=$${idx} RETURNING *`,
+        `UPDATE clients SET ${sets.join(', ')} WHERE id=$${idx - 1} AND tenant_id=$${idx}${pointWhere} RETURNING *`,
         vals,
       );
       if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
@@ -374,28 +432,46 @@ export class ClientsService {
     } catch (err) {
       // Editing a phone into one another client already owns hits the same
       // unique index (108) — surface the same 409 contract as create().
-      throw (await this.mapPhoneUniqueViolation(err, tenantID, typeof dto.phone === 'string' ? dto.phone : '')) ?? err;
+      throw (
+        (await this.mapPhoneUniqueViolation(
+          err,
+          tenantID,
+          typeof dto.phone === 'string' ? dto.phone : '',
+          viewerPoint,
+        )) ?? err
+      );
     }
   }
 
-  async exportCsv(tenantID: string) {
+  async exportCsv(tenantID: string, actorUserID?: string) {
+    // 161 — выгрузка обязана отдавать РОВНО ту базу, которую человек видит на
+    // экране: иначе экспорт становился бы самым простым способом получить
+    // клиентов чужого филиала одним файлом.
+    const params: unknown[] = [tenantID];
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), params);
     const { rows } = await this.pool.query(
-      `SELECT full_name, phone FROM clients WHERE tenant_id = $1 ORDER BY full_name`,
-      [tenantID],
+      `SELECT full_name, phone FROM clients WHERE tenant_id = $1${pointWhere} ORDER BY full_name`,
+      params,
     );
     const header = 'Имя;Телефон';
     const lines = rows.map((r) => `${r.full_name};${r.phone}`);
     return [header, ...lines].join('\n');
   }
 
-  async remove(id: string, tenantID: string) {
+  async remove(id: string, tenantID: string, actorUserID?: string) {
+    // 161 — удалить клиента чужого филиала нельзя: он «не найден». Проверка
+    // стоит ПЕРВОЙ, до чтения обязательств, чтобы наружу не утекал даже факт
+    // существования карточки.
+    const checkParams: unknown[] = [id, tenantID];
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), checkParams);
     // Refuse to delete the pinned retail client — it's a system row that
     // /cash relies on. Without this guard the cash screen would silently
     // lose its default buyer.
-    const { rows: check } = await this.pool.query('SELECT is_retail FROM clients WHERE id=$1 AND tenant_id=$2', [
-      id,
-      tenantID,
-    ]);
+    const { rows: check } = await this.pool.query(
+      `SELECT is_retail FROM clients WHERE id=$1 AND tenant_id=$2${pointWhere}`,
+      checkParams,
+    );
+    if (check.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
     if (check.length > 0 && check[0].is_retail) {
       throw new NotFoundException({ message: 'Нельзя удалить розничного покупателя' });
     }
@@ -431,13 +507,15 @@ export class ClientsService {
    * Update just the `source` tag on a client. Trimmed and stored verbatim;
    * empty string normalised to NULL so the FE renders "Без источника".
    */
-  async updateSource(id: string, tenantID: string, source: string | null) {
+  async updateSource(id: string, tenantID: string, source: string | null, actorUserID?: string) {
     const normalized = typeof source === 'string' ? source.trim().slice(0, 100) : null;
-    const { rows } = await this.pool.query(`UPDATE clients SET source=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *`, [
-      normalized && normalized.length > 0 ? normalized : null,
-      id,
-      tenantID,
-    ]);
+    // 161 — тот же предикат видимости, что и в update(): чужая карточка «не найдена».
+    const params: unknown[] = [normalized && normalized.length > 0 ? normalized : null, id, tenantID];
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), params);
+    const { rows } = await this.pool.query(
+      `UPDATE clients SET source=$1 WHERE id=$2 AND tenant_id=$3${pointWhere} RETURNING *`,
+      params,
+    );
     if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
     return this.mapClient(rows[0]);
   }
@@ -446,11 +524,13 @@ export class ClientsService {
    * Update just the `owner_notes` field. Free-form text — capped at 4000
    * chars so a runaway client can't blow up the table.
    */
-  async updateNotes(id: string, tenantID: string, notes: string | null) {
+  async updateNotes(id: string, tenantID: string, notes: string | null, actorUserID?: string) {
     const normalized = typeof notes === 'string' ? notes.slice(0, 4000) : null;
+    const params: unknown[] = [normalized && normalized.length > 0 ? normalized : null, id, tenantID];
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), params);
     const { rows } = await this.pool.query(
-      `UPDATE clients SET owner_notes=$1 WHERE id=$2 AND tenant_id=$3 RETURNING *`,
-      [normalized && normalized.length > 0 ? normalized : null, id, tenantID],
+      `UPDATE clients SET owner_notes=$1 WHERE id=$2 AND tenant_id=$3${pointWhere} RETURNING *`,
+      params,
     );
     if (rows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
     return this.mapClient(rows[0]);
@@ -461,11 +541,33 @@ export class ClientsService {
    * panel inside ClientDetail. Cars with zero checks still appear so the FE
    * doesn't have to do its own merge.
    */
-  async getChecksByCar(id: string, tenantID: string, opts: { limit?: number; offset?: number } = {}) {
-    const { rows: clientRows } = await this.pool.query('SELECT 1 FROM clients WHERE id=$1 AND tenant_id=$2', [
-      id,
-      tenantID,
-    ]);
+  /**
+   * ФИЛИАЛЫ (156/160) — ИСКЛЮЧЕНИЕ, НЕ «ЧИНИТЬ». Эта выборка СОЗНАТЕЛЬНО НЕ
+   * фильтруется по точке (checks.point_id). Продуктовое требование владельца:
+   * филиал видит только свои чеки, деньги, смены и отчёты, но база клиентов и
+   * ИХ ИСТОРИЯ — единственное общее на всю сеть. Клиент обслуживался на
+   * филиале А и приехал на Б: мастер обязан увидеть, что с машиной уже
+   * делали, иначе он повторит работу или пропустит гарантийный случай.
+   * Раздельный режим (tenants.points_shared_clients=false) режет СОСТАВ базы
+   * клиентов в ClientsService.getAll, а не историю уже открытого клиента.
+   * Зеркальные исключения: checks.getAll при ?clientId/?carId и
+   * CarsService.getChecks.
+   */
+  async getChecksByCar(
+    id: string,
+    tenantID: string,
+    opts: { limit?: number; offset?: number } = {},
+    actorUserID?: string,
+  ) {
+    // 161 — скоупится ДОСТУП К КЛИЕНТУ (карточка чужого филиала не открывается),
+    // но НЕ сами чеки ниже: открытая история клиента общая на всю сеть — см.
+    // блок «ИСКЛЮЧЕНИЕ, НЕ ЧИНИТЬ» выше.
+    const clientParams: unknown[] = [id, tenantID];
+    const pointWhere = this.separatePointWhere(null, await this.separatePointFor(tenantID, actorUserID), clientParams);
+    const { rows: clientRows } = await this.pool.query(
+      `SELECT 1 FROM clients WHERE id=$1 AND tenant_id=$2${pointWhere}`,
+      clientParams,
+    );
     if (clientRows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
 
     const { rows: carRows } = await this.pool.query(

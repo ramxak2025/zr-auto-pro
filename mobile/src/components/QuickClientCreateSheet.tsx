@@ -33,6 +33,7 @@ import RussianPlateInput from './RussianPlateInput';
 import PlateModeSwitcher, { type PlateMode } from './PlateModeSwitcher';
 import DuplicateWarningDialog from './DuplicateWarningDialog';
 import { formatPhone } from '../../../shared/validation/phone';
+import { otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
 import { haptic } from '../platform/haptics';
 import { useColors } from '../contexts/ThemeContext';
 import { colors, fontSize, fontWeight, borderRadius, spacing } from '../theme';
@@ -222,6 +223,16 @@ export default function QuickClientCreateSheet({
             { text: 'Перейти к клиенту', onPress: () => onSelectExisting(existingId) },
           ],
         );
+        return;
+      }
+      // 161 — номер занят карточкой ДРУГОГО ФИЛИАЛА: ни имени, ни id владельца
+      // сервер не отдаёт (и правильно — это чужая база), поэтому навигировать
+      // некуда: «Перейти к клиенту» привело бы в 404. Показываем текст сервера
+      // отдельным заголовком, он объясняет, что делать дальше.
+      const otherPoint = otherPointPhoneConflictMessage(err);
+      if (otherPoint) {
+        haptic('warning');
+        Alert.alert('Номер занят другим филиалом', otherPoint);
         return;
       }
       // Дружелюбный 400 (пустое имя) и любой другой сбой — показываем реальную

@@ -10,6 +10,7 @@
  */
 import { Ionicons } from '@expo/vector-icons';
 import { colors, getBadgeColors } from '../../theme';
+import { formatDayKey } from '../../../../shared/utils/formatters';
 import type { PurchaseOrderStatus } from '../../../../shared/types';
 
 export interface PoStatusMeta {
@@ -82,9 +83,10 @@ export function formatPoDate(iso?: string | null): string {
 }
 
 /**
- * `Date` → `"YYYY-MM-DD"` БЕЗ UTC-сдвига (иначе на МСК дата уезжает на день
- * назад). Ровно этот формат уходит на сервер в `receivedAt` — он трактует его
- * как календарный день по МСК, как и веб (`input[type=date]`).
+ * `Date` → `"YYYY-MM-DD"` БЕЗ UTC-сдвига (иначе дата уезжает на день назад).
+ * Ровно этот формат уходит на сервер в `receivedAt`: это КАЛЕНДАРНЫЙ ДЕНЬ,
+ * который пользователь выбрал в пикере, а сервер трактует его в ПОЯСЕ
+ * АВТОСЕРВИСА (tenants.timezone, миграция 157) — как и веб (`input[type=date]`).
  */
 export function toSupplyDateStr(d: Date): string {
   const y = d.getFullYear();
@@ -104,14 +106,28 @@ export function isSameDay(a: Date, b: Date): boolean {
 }
 
 /**
- * Дата поставки не может быть в будущем (сервер отвечает 400) — пикер обязан
- * отсечь это раньше. Сравнение по календарному дню: «сегодня» разрешено.
+ * Датирована ли поставка ЗАДНИМ ЧИСЛОМ с точки зрения СЕРВЕРА.
+ *
+ * Сравнивать надо не «дату устройства с датой устройства», а выбранный
+ * календарный день с «сегодня» У АВТОСЕРВИСА (tenants.timezone, 157): владелец
+ * из Владивостока, открывший приложение в Москве, иначе видел бы «задним
+ * числом» у сегодняшней поставки и наоборот. Без пояса (`timeZone` не передан)
+ * поведение прежнее — по времени устройства.
  */
-export function isFutureDay(d: Date): boolean {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  const picked = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-  return picked.getTime() > today.getTime();
+export function isBackdatedSupply(d: Date, timeZone?: string | null): boolean {
+  return toSupplyDateStr(d) !== formatDayKey(new Date(), timeZone);
+}
+
+/**
+ * Дата поставки не может быть в будущем (сервер отвечает 400) — пикер обязан
+ * отсечь это раньше. Сравнение по КАЛЕНДАРНОМУ ДНЮ, и «сегодня» — это сегодня
+ * У АВТОСЕРВИСА: сервер считает потолок в поясе тенанта, и клиент, меривший
+ * будущее по устройству, отвергал бы у владивостокского сервиса его же
+ * сегодняшний день (или, наоборот, пропускал завтрашний). Ключи формата
+ * 'YYYY-MM-DD' сравниваются лексикографически = хронологически.
+ */
+export function isFutureDay(d: Date, timeZone?: string | null): boolean {
+  return toSupplyDateStr(d) > formatDayKey(new Date(), timeZone);
 }
 
 /** Outstanding (not-yet-received) quantity for a line. Never negative. */

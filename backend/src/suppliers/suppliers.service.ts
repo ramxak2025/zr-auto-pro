@@ -12,12 +12,12 @@ import { PG_POOL } from '../database.module';
 import { capLimit } from '../common/cap-limit';
 import { StockMovementsService } from '../stock-movements/stock-movements.service';
 import { WarehousesService } from '../warehouses/warehouses.service';
+import { getTenantTimezone } from '../common/timezone';
 
-// Бизнес-таймзона (Europe/Moscow, UTC+3 без летнего времени) — та же, что в
-// reports.service: период задаётся московским полуинтервалом [from 00:00 МСК,
-// to+1 00:00 МСК), чтобы «Закупка товара» в разделе «Расходы» совпадала по
-// дням с «Движением денег».
-const SUPPLIERS_BUSINESS_TZ = 'Europe/Moscow';
+// Бизнес-таймзона — ПОЯС ТЕНАНТА (tenants.timezone), та же конвенция, что в
+// reports.service: период задаётся местным полуинтервалом [from 00:00,
+// to+1 00:00), чтобы «Закупка товара» в разделе «Расходы» совпадала по дням с
+// «Движением денег». В SQL пояс уходит параметром, не склейкой строки.
 const SUPPLIERS_ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 @Injectable()
@@ -1016,15 +1016,15 @@ export class SuppliersService {
           AND sp.reversed_at IS NULL
           AND (
             (sp.period_month IS NULL
-              AND sp.date >= $2::date::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}'
-              AND sp.date < ($3::date + 1)::timestamp AT TIME ZONE '${SUPPLIERS_BUSINESS_TZ}')
+              AND sp.date >= $2::date::timestamp AT TIME ZONE $4::text
+              AND sp.date < ($3::date + 1)::timestamp AT TIME ZONE $4::text)
             OR (sp.period_month IS NOT NULL
               AND to_date(sp.period_month || '-01', 'YYYY-MM-DD') >= $2::date
               AND (to_date(sp.period_month || '-01', 'YYYY-MM-DD') + interval '1 month' - interval '1 day')::date <= $3::date)
           )
         ORDER BY sp.date DESC
         LIMIT 500`,
-      [tenantID, dateFrom, dateTo],
+      [tenantID, dateFrom, dateTo, await getTenantTimezone(this.pool, tenantID)],
     );
 
     const items = rows.map((r) => ({

@@ -35,14 +35,14 @@ export class InstallmentsController {
   /** «Рассрочка» list. ?status=open|closed|overdue|all (default open). */
   @Get()
   list(@CurrentUser() user: JwtPayload, @Query() query: { status?: string }) {
-    return this.installments.list(user.tenantID, query);
+    return this.installments.list(user.tenantID, query, user);
   }
 
   /** Главная widget: due-soon (next N days) + overdue. 'debts_manage' only. */
   @RequirePermission('debts_manage')
   @Get('widget')
   widget(@CurrentUser() user: JwtPayload, @Query('days') days?: string) {
-    return this.installments.widget(user.tenantID, days !== undefined ? parseInt(days, 10) : 3);
+    return this.installments.widget(user.tenantID, days !== undefined ? parseInt(days, 10) : 3, user);
   }
 
   // ─── Reminder settings ('debts_manage') ──────────────────────────────────

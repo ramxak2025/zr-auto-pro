@@ -23,6 +23,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, fontSize, fontWeight, softTint } from '../../theme';
 import { callsApi } from '../../api/services';
 import type { useColors } from '../../contexts/ThemeContext';
+import { formatTimeShort } from '../../../../shared/utils/formatters';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -88,6 +89,7 @@ export const CallRow = React.memo(function CallRow({
   setPlayingId,
   canListen,
   palette,
+  timeZone,
 }: {
   call: Call;
   navigation: any;
@@ -96,13 +98,19 @@ export const CallRow = React.memo(function CallRow({
   /** ROLE-ONLY: прослушивание записей — только с calls_listen (список гейтится calls_view в меню). */
   canListen: boolean;
   palette: ReturnType<typeof useColors>;
+  /**
+   * Пояс автосервиса (tenants.timezone, 157). Сервер режет ленту звонков по
+   * МЕСТНЫМ суткам тенанта, поэтому и время звонка на карточке обязано быть
+   * местным — иначе звонок «в 23:40» лежит в дне, который на экране называется
+   * следующим. Как и остальные props, приходит от экрана-хоста: файл намеренно
+   * self-contained, без контекста.
+   */
+  timeZone: string;
 }) {
   const isMissed = call.direction === 'incoming' && (call.status === 'missed' || call.duration === 0);
   const isIncoming = call.direction === 'incoming';
   const displayPhone = isIncoming ? call.from : call.to;
-  const callTime = call.date
-    ? new Date(call.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-    : '';
+  const callTime = call.date ? formatTimeShort(call.date, timeZone) : '';
 
   const iconName =
     isMissed && call.calledBack

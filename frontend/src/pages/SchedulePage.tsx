@@ -39,6 +39,8 @@ import { calculateAttendanceStats, attendanceScore, emptyBreakdown } from '../..
 import { scheduleApi, usersApi } from '../api/services';
 import { ScheduleEntry, TodayEmployeeStatus, User } from '../types';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { formatDayKey } from '../../../shared/utils/formatters';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import InlineLoader from '../components/InlineLoader';
@@ -284,6 +286,9 @@ function AttendanceRatingTab({
 export default function SchedulePage() {
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
+  // «Сегодня» в графике — по календарю АВТОСЕРВИСА: тем же поясом сервер решает,
+  // какие дни уже отработаны (salary.workedShiftsByUser).
+  const timeZone = useTenantTimezone();
   // Мутации расписания/режимов работы — ключ schedule_manage (backend
   // POST/PATCH/DELETE /schedule*; волна Битрикс24). Просмотр — schedule_view.
   const canEdit = hasPermission('schedule_manage');
@@ -682,11 +687,13 @@ export default function SchedulePage() {
     const isDayOff = status === 'dayoff' || status === 'sick';
     const note = status === 'sick' ? 'Больничный' : status === 'absent' ? 'Прогул' : '';
 
-    // Бизнес-«сегодня» продукта — Europe/Moscow (UTC+3, без летнего времени).
-    // Будущий день — это ПЛАН: факт прихода (actualArrival) и статус «вовремя»
-    // ему не пришиваем, иначе зарплата считала смену раньше, чем она отработана.
-    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
-    const isFutureDay = date > new Date(Date.now() + MSK_OFFSET_MS).toISOString().slice(0, 10);
+    // Бизнес-«сегодня» — календарный день В ПОЯСЕ АВТОСЕРВИСА (tenants.timezone,
+    // 157), тот же, каким сервер считает отработанные смены. Будущий день — это
+    // ПЛАН: факт прихода (actualArrival) и статус «вовремя» ему не пришиваем,
+    // иначе зарплата считала бы смену раньше, чем она отработана. Раньше здесь
+    // стоял фиксированный московский сдвиг — у автосервиса восточнее Москвы
+    // «сегодня» на несколько часов считалось будущим.
+    const isFutureDay = date > formatDayKey(new Date(), timeZone);
 
     const lateStatus =
       status === 'late_minor'

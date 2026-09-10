@@ -38,11 +38,16 @@ const mskDay = (ts) => new Date(ts + MSK_OFFSET_MS).toISOString().slice(0, 10);
  * Фейковый pg.Pool: отвечает по СОВПАДЕНИЮ SQL (порядок запросов внутри
  * сервиса не зашит в тест) + журнал всех запросов, включая BEGIN/COMMIT.
  */
-function makePool(handler) {
+function makePool(handler, timezone) {
   const log = [];
   const query = async (sql, params) => {
     const flat = String(sql).replace(/\s+/g, ' ').trim();
     log.push({ sql: flat, params });
+    // Пояс тенанта (157): сервис читает его перед КАЖДОЙ операцией с датой.
+    // Отдаём то, что просил тест; по умолчанию — Москва (дефолт миграции).
+    if (flat.startsWith('SELECT timezone FROM tenants')) {
+      return { rows: [{ timezone: timezone || 'Europe/Moscow' }], rowCount: 1 };
+    }
     return { rows: handler(flat, params) || [], rowCount: 0 };
   };
   return {
@@ -52,6 +57,9 @@ function makePool(handler) {
     find: (needle) => log.filter((e) => e.sql.includes(needle)),
     // Только настоящие записи: `SELECT ... FOR UPDATE` — это чтение под локом.
     writes: () => log.filter((e) => /^(UPDATE|INSERT|DELETE)\b/.test(e.sql)),
+    // Всё, кроме служебного чтения пояса тенанта: им меряем «сервис не полез в
+    // заказ», не завися от того, попал пояс в кеш или нет.
+    business: () => log.filter((e) => !e.sql.startsWith('SELECT timezone FROM tenants')),
   };
 }
 
@@ -66,7 +74,7 @@ const itemRow = () => ({
 });
 
 /** Пул для receive(): ordered-заказ с одной позицией, полностью принимаемой. */
-function receivePool() {
+function receivePool(timezone) {
   return makePool((sql) => {
     if (sql.startsWith('SELECT id, status, supplier_id FROM purchase_orders')) {
       return [{ id: ORDER, status: 'ordered', supplier_id: 'supplier-1' }];
@@ -82,7 +90,7 @@ function receivePool() {
     }
     if (sql.startsWith('SELECT * FROM purchase_order_items')) return [];
     return [];
-  });
+  }, timezone);
 }
 
 function makeService(pool) {
@@ -120,8 +128,9 @@ test('приёмка с датой в будущем отклоняется и �
       return true;
     },
   );
-  // Валидация до транзакции: ни BEGIN, ни единого запроса.
-  assert.equal(pool.log.length, 0);
+  // Валидация до транзакции: ни BEGIN, ни единого запроса по заказу (чтение
+  // пояса тенанта не в счёт — оно не меняет данных и кешируется).
+  assert.equal(pool.business().length, 0);
 });
 
 // ── 2. Слишком старая дата ──────────────────────────────────────────────────
@@ -137,7 +146,7 @@ test('приёмка с датой старше 3 лет отклоняется'
       return true;
     },
   );
-  assert.equal(pool.log.length, 0);
+  assert.equal(pool.business().length, 0);
 });
 
 // ── 3. Одна дата на все записи приёмки ──────────────────────────────────────
@@ -265,4 +274,67 @@ test('смена даты на ту же самую не пишет ничего
     receivedAt: mskDay(new Date(priorIso).getTime()),
   });
   assert.equal(pool.writes().length, 0);
+});
+
+// ── 8. Пояс тенанта (157): «сегодня» считается по МЕСТНОМУ дню ───────────────
+// РЕГРЕССИЯ, из-за которой правка и заводилась: даты поставки жили на жёстком
+// московском сдвиге. У владивостокского сервиса (UTC+10) с 00:00 до 06:59 по
+// местному времени московский день ещё вчерашний, поэтому «сегодня» из пикера
+// отвергалось как будущее, а «вчера» уезжало на сутки. Тест не зависит от
+// того, который сейчас час: он всегда спрашивает МЕСТНЫЙ день тенанта.
+//
+// ВАЖНО: у пояса свой tenantID — getTenantTimezone кеширует значение на 5 минут
+// по тенанту, и переиспользование 'tenant-1' подсунуло бы Москву.
+const { zonedDateKey } = require('../dist/common/timezone');
+const TENANT_VLAD = 'tenant-vladivostok';
+const VLAD = 'Asia/Vladivostok';
+
+test('приёмка «сегодня» по местному дню тенанта проходит и датируется этим днём', async () => {
+  const pool = receivePool(VLAD);
+  const { service, stockCalls } = makeService(pool);
+  const localToday = zonedDateKey(new Date(), VLAD);
+
+  await service.receive(ORDER, TENANT_VLAD, USER, { paymentMode: 'debt', receivedAt: localToday });
+
+  assert.equal(stockCalls.length, 1);
+  assert.equal(zonedDateKey(new Date(stockCalls[0].occurredAt), VLAD), localToday);
+});
+
+test('приёмка «завтра» по местному дню тенанта отклоняется', async () => {
+  const pool = receivePool(VLAD);
+  const { service } = makeService(pool);
+  const localTomorrow = zonedDateKey(new Date(Date.now() + DAY_MS), VLAD);
+
+  await assert.rejects(
+    () => service.receive(ORDER, TENANT_VLAD, USER, { paymentMode: 'debt', receivedAt: localTomorrow }),
+    (err) => {
+      assert.equal(err.getResponse().message, 'Дата поставки не может быть в будущем');
+      return true;
+    },
+  );
+  assert.equal(pool.business().length, 0);
+});
+
+test('смена даты сохраняет время суток и кладёт документ в местный день тенанта', async () => {
+  const priorIso = '2026-09-01T12:20:00.000Z';
+  const pool = makePool((sql) => {
+    if (sql.startsWith('SELECT status, received_at FROM purchase_orders')) {
+      return [{ status: 'received', received_at: new Date(priorIso) }];
+    }
+    if (sql.startsWith('SELECT po.*')) {
+      return [{ id: ORDER, status: 'received', total: '500', created_at: '2026-09-01T00:00:00.000Z' }];
+    }
+    return [];
+  }, VLAD);
+  const { service } = makeService(pool);
+
+  const target = zonedDateKey(new Date(new Date(priorIso).getTime() - 5 * DAY_MS), VLAD);
+  await service.changeReceivedDate(ORDER, TENANT_VLAD, USER, { receivedAt: target });
+
+  const poUpdate = pool.find('UPDATE purchase_orders SET received_at')[0];
+  const newIso = poUpdate.params[2];
+  // Документ лёг в ЗАПРОШЕННЫЙ местный день, а не в московский.
+  assert.equal(zonedDateKey(new Date(newIso), VLAD), target);
+  // Время суток исходной приёмки сохранено (позиция внутри дня не прыгает).
+  assert.equal(new Date(newIso).getTime() % DAY_MS, new Date(priorIso).getTime() % DAY_MS);
 });

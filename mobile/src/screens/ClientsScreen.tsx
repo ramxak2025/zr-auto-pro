@@ -18,6 +18,7 @@ import { useQuery, useInfiniteQuery, useMutation, useQueryClient, onlineManager 
 import { useNavigation } from '@react-navigation/native';
 import { clientsApi, carsApi, checksApi } from '../api/services';
 import { formatPhone } from '../../../shared/validation/phone';
+import { apiErrorMessage, otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
 import { normalizePlateQuery, looksLikePlateQuery, plateMatches } from '../utils/plateNormalize';
 import { normalizePlateForSearch } from '../utils/plateMask';
 import { useAuth } from '../contexts/AuthContext';
@@ -217,6 +218,24 @@ export default function ClientsScreen() {
     placeholderData: (prev) => prev,
   });
 
+  /**
+   * Единая реакция на отказ записи клиента.
+   *   • 409 «номер занят карточкой другого филиала» (161) — сервер намеренно
+   *     не отдаёт ни имени, ни id владельца, поэтому «перейти к клиенту»
+   *     невозможно: показываем его текст, он объясняет, что делать;
+   *   • остальное — текст сервера как есть (400 про пустое имя, 409 про
+   *     существующего клиента), а fallback только если сервер промолчал.
+   */
+  const clientWriteError = useCallback((err: unknown, fallback: string) => {
+    haptic('error');
+    const otherPoint = otherPointPhoneConflictMessage(err);
+    if (otherPoint) {
+      Alert.alert('Номер занят другим филиалом', otherPoint);
+      return;
+    }
+    Alert.alert('Ошибка', apiErrorMessage(err) ?? fallback);
+  }, []);
+
   // Client+optional-car create. Mirror the previous behaviour but with
   // `source` baked into the create payload. The inline car still flows
   // through `carsApi.create` only after the client succeeds.
@@ -260,7 +279,12 @@ export default function ClientsScreen() {
       haptic('success');
       closeModal();
     },
-    onError: () => Alert.alert('Ошибка', 'Ошибка при создании клиента'),
+    // Раньше здесь стоял глухой текст, и владелец не видел НИ ОДНОЙ реальной
+    // причины отказа — в том числе 409 «номер уже занят». Показываем сообщение
+    // сервера; отдельная ветка — номер, занятый карточкой другого филиала
+    // (161): туда навигировать некуда, карточка невидима, поэтому просто
+    // объясняем, что делать.
+    onError: (err) => clientWriteError(err, 'Ошибка при создании клиента'),
   });
 
   const updateMutation = useMutation({
@@ -277,7 +301,7 @@ export default function ClientsScreen() {
       queryClient.invalidateQueries({ queryKey: ['clients-plate'] });
       closeModal();
     },
-    onError: () => Alert.alert('Ошибка', 'Ошибка при обновлении клиента'),
+    onError: (err) => clientWriteError(err, 'Ошибка при обновлении клиента'),
   });
 
   const deleteMutation = useMutation({

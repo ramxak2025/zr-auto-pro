@@ -14,7 +14,8 @@ export class ShiftsController {
   @RequirePermission('schedule_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload) {
-    return this.shiftsService.getAll(user.tenantID);
+    // Актор целиком — сервису нужна его текущая точка (161).
+    return this.shiftsService.getAll(user.tenantID, user);
   }
 
   // Self-роуты: свои смены и открытие СВОЕЙ смены — без permission-гейта
@@ -26,7 +27,8 @@ export class ShiftsController {
 
   @Post('open')
   open(@CurrentUser() user: JwtPayload) {
-    return this.shiftsService.open(user.userID, user.tenantID);
+    // Смена штампуется текущим филиалом открывающего (161).
+    return this.shiftsService.open(user.userID, user.tenantID, user);
   }
 
   // Открытый роут: свою смену закрывает любой; ЧУЖУЮ — только держатель

@@ -12,6 +12,8 @@ import { invalidateReportsForTenant } from '../common/reports-cache';
 import { PushService } from '../push/push.service';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
+import { getTenantTimezone } from '../common/timezone';
+import { actorPointId, assertRowPointForWrite, pointFilterSql, resolvePointForWrite } from '../common/point-scope';
 
 // «Привилегированный» здесь — про СЕМАНТИКУ записи (source='owner', без дневного
 // лимита и очереди утверждения), НЕ про доступ. Право вносить расходы решает
@@ -114,7 +116,15 @@ export class ExpensesService {
 
   // --- Expenses ---
 
-  async getAll(tenantID: string, query: any) {
+  /**
+   * Список расходов за период. 161 — филиальный скоуп: расход принадлежит той
+   * точке, на которой он возник (expenses.point_id — филиал автора у ручных,
+   * филиал связанной операции у автоматических), поэтому «Расходы» филиала А
+   * больше не показывают траты филиала Б. Синтетические строки «Гарантия
+   * (убыток)» режутся точкой ЧЕКА — они и есть чеки.
+   */
+  async getAll(tenantID: string, query: any, actor?: JwtPayload) {
+    const pointId = actorPointId(actor);
     // Safety net (audit round 7, item 8): both web (ExpensesPage) and mobile
     // (ExpensesScreen) always send an explicit dateFrom/dateTo — but a bare
     // call without any range used to scan the tenant's ENTIRE expense history
@@ -131,17 +141,21 @@ export class ExpensesService {
     const params: any[] = [tenantID];
     let idx = 2;
 
-    // Границы периода — МОСКОВСКИЙ полуинтервал [from 00:00 МСК, to+1 00:00 МСК),
-    // зеркально reports.service (BUSINESS_TZ). Раньше правый край
-    // «<= (to+1)::timestamptz» резался по TZ сервера и ВКЛЮЧАЛ ровно полночь
-    // следующего дня — расход в 00:00 попадал в оба соседних периода.
+    // Пояс тенанта — один раз на запрос: используется и основным списком, и
+    // синтетическими строками «Гарантия (убыток)» ниже.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+
+    // Границы периода — полуинтервал [from 00:00, to+1 00:00) В ПОЯСЕ ТЕНАНТА,
+    // зеркально reports.service. Раньше правый край «<= (to+1)::timestamptz»
+    // резался по TZ сервера и ВКЛЮЧАЛ ровно полночь следующего дня — расход в
+    // 00:00 попадал в оба соседних периода. Пояс уходит параметром, не склейкой.
     if (dateFrom) {
-      where += ` AND e.date >= $${idx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`;
-      params.push(dateFrom);
+      where += ` AND e.date >= $${idx++}::date::timestamp AT TIME ZONE $${idx++}::text`;
+      params.push(dateFrom, tz);
     }
     if (dateTo) {
-      where += ` AND e.date < ($${idx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`;
-      params.push(dateTo);
+      where += ` AND e.date < ($${idx++}::date + 1)::timestamp AT TIME ZONE $${idx++}::text`;
+      params.push(dateTo, tz);
     }
     if (query.createdBy) {
       where += ` AND e.created_by = $${idx++}`;
@@ -151,6 +165,10 @@ export class ExpensesService {
       where += ` AND e.approval_status = $${idx++}`;
       params.push(query.approvalStatus);
     }
+    // Фильтр филиала — ПОСЛЕДНИМ: pointFilterSql сам кладёт значение в params и
+    // нумерует плейсхолдер по params.length, поэтому дальше локальный idx уже
+    // не используется и рассинхрона счётчиков быть не может.
+    where += pointFilterSql('e', pointId, params);
 
     const { rows } = await this.pool.query(
       `SELECT e.*, ec.name as category_name,
@@ -222,15 +240,19 @@ export class ExpensesService {
         `ch.tenant_id = $1 AND ch.payment_method = 'warranty' AND ch.is_deferred = false ` +
         `AND ch.deleted_at IS NULL AND (ch.product_cost_total + ch.service_salary_total) > 0`;
       let wIdx = 2;
-      // Тот же московский полуинтервал, что и у основного списка расходов выше.
+      // Тот же местный полуинтервал, что и у основного списка расходов выше.
       if (dateFrom) {
-        wWhere += ` AND ch.date >= $${wIdx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`;
-        wParams.push(dateFrom);
+        wWhere += ` AND ch.date >= $${wIdx++}::date::timestamp AT TIME ZONE $${wIdx++}::text`;
+        wParams.push(dateFrom, tz);
       }
       if (dateTo) {
-        wWhere += ` AND ch.date < ($${wIdx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`;
-        wParams.push(dateTo);
+        wWhere += ` AND ch.date < ($${wIdx++}::date + 1)::timestamp AT TIME ZONE $${wIdx++}::text`;
+        wParams.push(dateTo, tz);
       }
+      // Убыток по гарантии — это чек, поэтому режется точкой ЧЕКА (та же
+      // колонка, что в журнале и на дашборде): иначе филиал А увидел бы у себя
+      // в расходах гарантийные убытки филиала Б.
+      wWhere += pointFilterSql('ch', pointId, wParams);
       const { rows: wRows } = await this.pool.query(
         `SELECT ch.id, ch.number, ch.date, ch.created_at, ch.master_id,
                 (ch.product_cost_total + ch.service_salary_total) AS loss,
@@ -351,10 +373,32 @@ export class ExpensesService {
       }
     }
 
+    // 161 — ручной расход рождается НА ТЕКУЩЕМ ФИЛИАЛЕ АВТОРА (решение
+    // владельца).
+    //
+    // ВОЛНА 4 — ФИЛИАЛ ОБЯЗАТЕЛЕН. Расход с point_id = NULL не видел НИ ОДИН
+    // филиальный срез: он выпадал из «Движения денег» филиала, из его прибыли
+    // и из наличного расхода в окне кассовой смены (Z-отчёт филиала сходился
+    // бы на эту сумму лишними деньгами в ящике). Общий резолв: своя точка →
+    // единственная доступная → 400 «Выберите филиал». Точек у тенанта нет
+    // вовсе → NULL, как было: одноточечный автосервис изменений не заметит.
+    const pointId = await resolvePointForWrite(this.pool, actor, 'чтобы записать расход');
+
     const { rows } = await this.pool.query(
-      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-      [dto.categoryId || null, amount, dto.description || null, date, userID, userID, source, approvalStatus, tenantID],
+      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, tenant_id, point_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *`,
+      [
+        dto.categoryId || null,
+        amount,
+        dto.description || null,
+        date,
+        userID,
+        userID,
+        source,
+        approvalStatus,
+        tenantID,
+        pointId,
+      ],
     );
     const r = rows[0];
     // A new (approved) expense changes cash-position / profit tiles — drop the
@@ -385,12 +429,28 @@ export class ExpensesService {
   }
 
   /**
+   * ГЕЙТ РЕШЕНИЯ ПО РАСХОДУ (волна 4). Очередь согласования читается уже с
+   * фильтром филиала, но approve/reject адресуются по id и фильтра не имели —
+   * та же асимметрия «читаем узко, пишем широко», что закрыта у чеков и
+   * зарплаты. Утверждение чужого расхода мгновенно уменьшает прибыль и кассу
+   * ФИЛИАЛА-ВЛАДЕЛЬЦА строки, а у актора в его срезе ничего не меняется, то
+   * есть последствий он не видит вовсе.
+   *
+   * Предикат общий (common/point-scope.assertRowPointForWrite). Точки нет
+   * («Все точки» / одноточечный тенант) — гейта нет, поведение прежнее.
+   */
+  private assertOwnPoint(id: string, tenantID: string, actor?: JwtPayload): Promise<void> {
+    return assertRowPointForWrite(this.pool, 'expenses', id, tenantID, actorPointId(actor), 'Расход не найден');
+  }
+
+  /**
    * Owner approves a pending expense. Sets approval_status='approved' and
    * returns the updated row. Idempotent — re-approving an approved row is
    * a no-op and returns the existing record.
    */
-  async approve(id: string, tenantID: string) {
+  async approve(id: string, tenantID: string, actor?: JwtPayload) {
     if (!UUID_RE.test(id)) throw new NotFoundException({ message: 'Расход не найден' });
+    await this.assertOwnPoint(id, tenantID, actor);
     const { rows } = await this.pool.query(
       `UPDATE expenses SET approval_status='approved' WHERE id=$1 AND tenant_id=$2 RETURNING *`,
       [id, tenantID],
@@ -400,8 +460,9 @@ export class ExpensesService {
     return rows[0];
   }
 
-  async reject(id: string, tenantID: string) {
+  async reject(id: string, tenantID: string, actor?: JwtPayload) {
     if (!UUID_RE.test(id)) throw new NotFoundException({ message: 'Расход не найден' });
+    await this.assertOwnPoint(id, tenantID, actor);
     const { rows } = await this.pool.query(
       `UPDATE expenses SET approval_status='rejected' WHERE id=$1 AND tenant_id=$2 RETURNING *`,
       [id, tenantID],
@@ -448,6 +509,13 @@ export class ExpensesService {
       date: string | Date;
       createdBy: string | null;
       /**
+       * 161 — филиал СВЯЗАННОЙ ОПЕРАЦИИ (выплаты), а не «текущий филиал
+       * автора»: выплату за июль по филиалу А владелец может провести, уже
+       * переключившись на Б, и зеркальный расход обязан лечь туда же, где
+       * начислялась зарплата — иначе прибыль филиала Б просядет на чужую ЗП.
+       */
+      pointId?: string | null;
+      /**
        * 149 — «за какой месяц» ('YYYY-MM'). Проброс периода выплаты
        * (salary_payouts.period_month) в расход, чтобы P&L отнёс его к нужному
        * месяцу. NULL = месяц даты факта (прежнее поведение). Для категории
@@ -463,10 +531,19 @@ export class ExpensesService {
     const categoryId = await this.findOrCreateCategory(tenantID, 'Зарплата', executor);
 
     const { rows } = await executor.query(
-      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, period_month, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $5, 'owner', 'approved', $6, $7)
+      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, period_month, tenant_id, point_id)
+       VALUES ($1, $2, $3, $4, $5, $5, 'owner', 'approved', $6, $7, $8)
        RETURNING id, amount, date`,
-      [categoryId, data.amount, data.description, data.date, data.createdBy, data.periodMonth ?? null, tenantID],
+      [
+        categoryId,
+        data.amount,
+        data.description,
+        data.date,
+        data.createdBy,
+        data.periodMonth ?? null,
+        tenantID,
+        data.pointId ?? null,
+      ],
     );
     return { id: rows[0].id, amount: parseFloat(rows[0].amount) || 0, date: rows[0].date };
   }
@@ -512,13 +589,15 @@ export class ExpensesService {
       comment?: string | null;
       date?: string | Date | null;
       createdBy: string | null;
+      /** 161 — филиал, за счёт которого сделана выплата (текущая точка автора). */
+      pointId?: string | null;
     },
   ) {
     const categoryId = await this.findOrCreateCategory(tenantID, 'Выплаты вне программы');
 
     const { rows } = await this.pool.query(
-      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, period_month, recipient_name, tenant_id)
-       VALUES ($1, $2, $3, $4, $5, $5, 'owner', 'approved', $6, $7, $8)
+      `INSERT INTO expenses (category_id, amount, description, date, user_id, created_by, source, approval_status, period_month, recipient_name, tenant_id, point_id)
+       VALUES ($1, $2, $3, $4, $5, $5, 'owner', 'approved', $6, $7, $8, $9)
        RETURNING *`,
       [
         categoryId,
@@ -529,6 +608,7 @@ export class ExpensesService {
         data.periodMonth,
         data.recipientName.trim(),
         tenantID,
+        data.pointId ?? null,
       ],
     );
     const r = rows[0];
@@ -558,15 +638,15 @@ export class ExpensesService {
   }
 
   async getTotalForPeriod(tenantID: string, dateFrom: string, dateTo: string) {
-    // Московский полуинтервал [from 00:00 МСК, to+1 00:00 МСК) — зеркально
-    // getAll выше и reports.service (BUSINESS_TZ).
+    // Местный полуинтервал [from 00:00, to+1 00:00) — зеркально getAll выше и
+    // reports.service.
     const { rows } = await this.pool.query(
       `SELECT COALESCE(SUM(amount), 0) as total
        FROM expenses
        WHERE tenant_id = $1
-         AND date >= $2::date::timestamp AT TIME ZONE 'Europe/Moscow'
-         AND date < ($3::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`,
-      [tenantID, dateFrom, dateTo],
+         AND date >= $2::date::timestamp AT TIME ZONE $4::text
+         AND date < ($3::date + 1)::timestamp AT TIME ZONE $4::text`,
+      [tenantID, dateFrom, dateTo, await getTenantTimezone(this.pool, tenantID)],
     );
     return parseFloat(rows[0].total) || 0;
   }

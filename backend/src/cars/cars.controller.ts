@@ -27,7 +27,7 @@ export class CarsController {
   @RequirePermission('clients_view')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.carsService.getAll(user.tenantID, query);
+    return this.carsService.getAll(user.tenantID, query, user.userID);
   }
 
   /**
@@ -37,13 +37,13 @@ export class CarsController {
   @RequirePermission('clients_view')
   @Get('lookup-by-plate')
   lookupByPlate(@CurrentUser() user: JwtPayload, @Query('plate') plate: string) {
-    return this.carsService.findByPlate(user.tenantID, plate || '');
+    return this.carsService.findByPlate(user.tenantID, plate || '', user.userID);
   }
 
   @RequirePermission('clients_view')
   @Get(':id')
   getById(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.carsService.getById(id, user.tenantID);
+    return this.carsService.getById(id, user.tenantID, user.userID);
   }
 
   /**
@@ -54,24 +54,24 @@ export class CarsController {
   @Get(':id/checks')
   getChecks(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Query('limit') limit?: string) {
     const numericLimit = parseInt(String(limit ?? '50'), 10);
-    return this.carsService.getChecks(id, user.tenantID, Math.min(Math.max(numericLimit || 50, 1), 200));
+    return this.carsService.getChecks(id, user.tenantID, Math.min(Math.max(numericLimit || 50, 1), 200), user.userID);
   }
 
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.carsService.create(user.tenantID, dto);
+    return this.carsService.create(user.tenantID, dto, user.userID);
   }
 
   @RequirePermission('clients_edit')
   @Patch(':id')
   update(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.carsService.update(id, user.tenantID, dto);
+    return this.carsService.update(id, user.tenantID, dto, user.userID);
   }
 
   @RequirePermission('clients_delete')
   @Delete(':id')
   remove(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.carsService.remove(id, user.tenantID);
+    return this.carsService.remove(id, user.tenantID, user.userID);
   }
 
   /**
@@ -83,6 +83,6 @@ export class CarsController {
   @RequirePermission('clients_edit')
   @Post(':id/transfer-owner')
   transferOwner(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: TransferOwnerDto) {
-    return this.carsService.transferOwner(id, user.tenantID, dto.clientId, dto.moveHistory !== false);
+    return this.carsService.transferOwner(id, user.tenantID, dto.clientId, dto.moveHistory !== false, user.userID);
   }
 }

@@ -6,6 +6,9 @@ import { ExpensesService } from '../expenses/expenses.service';
 import { ScheduleService } from '../schedule/schedule.service';
 import { AuditService } from '../tenants/audit.service';
 import { invalidateReportsForTenant } from '../common/reports-cache';
+import { getTenantTimezone, zonedMidnight } from '../common/timezone';
+import { assertRowPointForWrite, pointFilterSql, resolvePointForWrite } from '../common/point-scope';
+import { assignedToPointSql } from '../users/user-points-sql';
 
 interface PremiumDto {
   userId: string;
@@ -67,45 +70,56 @@ export class SalaryService {
     if (!filter) return new Map();
     // Верхняя отсечка LEAST(dateTo, сегодня): будущие размеченные дни месяца
     // сменами НЕ считаются (клиенты шлют полный календарный месяц). Бизнес-
-    // «сегодня» — Europe/Moscow, как в getToday / shift-auto-close.
+    // «сегодня» — ПОЯС ТЕНАНТА, как в getToday / shift-auto-close.
     const { rows } = await this.pool.query(
       `SELECT user_id, COUNT(*)::int AS worked
          FROM schedule_entries
         WHERE tenant_id = $1 AND date >= $2::date
-          AND date <= LEAST($3::date, (now() AT TIME ZONE 'Europe/Moscow')::date)
+          AND date <= LEAST($3::date, (now() AT TIME ZONE $4::text)::date)
           AND ${filter.sql}
         GROUP BY user_id`,
-      [tenantID, dateFrom, dateTo],
+      [tenantID, dateFrom, dateTo, await getTenantTimezone(this.pool, tenantID)],
     );
     const map = new Map<string, number>();
     for (const r of rows) map.set(r.user_id as string, parseInt(r.worked, 10) || 0);
     return map;
   }
 
-  /** Бизнес-таймзона продукта (UTC+3, без летнего времени) — как BUSINESS_TZ
-   *  в reports.service. */
-  private static readonly BUSINESS_TZ = 'Europe/Moscow';
+  /**
+   * Бизнес-таймзона — ПОЯС ТЕНАНТА (tenants.timezone). Хелперы ниже собирают
+   * SQL-фрагменты, поэтому пояс приходит к ним не значением, а ГОТОВЫМ
+   * ПЛЕЙСХОЛДЕРОМ ('$4::text') — само значение вызывающий кладёт в params.
+   * Склеивать пояс в текст запроса нельзя даже из своей таблицы: параметр —
+   * единственная защита, не зависящая от того, кто заполнил колонку.
+   */
   private static readonly DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
 
   /**
    * SQL-предикат зарплатного периода [dateFrom..dateTo] для timestamptz-колонки
-   * `col` (значения — параметры $2/$3). Строка `YYYY-MM-DD` трактуется как
-   * МОСКОВСКИЙ календарный день: полуинтервал [from 00:00 МСК, to+1 00:00 МСК)
-   * — паттерн reports.service (BUSINESS_TZ). Раньше границы строились кастом
-   * `::date + 1` в СЕРВЕРНОЙ TZ (UTC в контейнере) с ВКЛЮЧЁННОЙ верхней
-   * полуночью: чеки/начисления 00:00–03:00 МСК первого дня уезжали в соседний
-   * период, а момент ровно to+1 00:00 попадал в оба смежных периода. Полный
-   * timestamp в параметре — прежняя семантика 1:1 (guard, чтобы не менять
-   * поведение нестандартных клиентов).
+   * `col` (значения — параметры $2/$3, пояс — `tzPh`). Строка `YYYY-MM-DD`
+   * трактуется как МЕСТНЫЙ календарный день тенанта: полуинтервал
+   * [from 00:00, to+1 00:00) — паттерн reports.service. Раньше границы
+   * строились кастом `::date + 1` в СЕРВЕРНОЙ TZ (UTC в контейнере) с
+   * ВКЛЮЧЁННОЙ верхней полуночью: начисления первых часов дня уезжали в
+   * соседний период, а момент ровно to+1 00:00 попадал в оба смежных периода.
+   * Полный timestamp в параметре — прежняя семантика 1:1 (guard, чтобы не
+   * менять поведение нестандартных клиентов).
    */
-  private static periodPredicate(col: string, dateFrom: string, dateTo: string): string {
-    const lower = SalaryService.DATE_ONLY_RE.test(dateFrom)
-      ? `${col} >= $2::date::timestamp AT TIME ZONE '${SalaryService.BUSINESS_TZ}'`
-      : `${col} >= $2`;
-    const upper = SalaryService.DATE_ONLY_RE.test(dateTo)
-      ? `${col} < ($3::date + 1)::timestamp AT TIME ZONE '${SalaryService.BUSINESS_TZ}'`
+  private static periodPredicate(col: string, dateFrom: string, dateTo: string, tzPh: string): string {
+    const lowerIsDay = SalaryService.DATE_ONLY_RE.test(dateFrom);
+    const upperIsDay = SalaryService.DATE_ONLY_RE.test(dateTo);
+    const lower = lowerIsDay ? `${col} >= $2::date::timestamp AT TIME ZONE ${tzPh}` : `${col} >= $2`;
+    const upper = upperIsDay
+      ? `${col} < ($3::date + 1)::timestamp AT TIME ZONE ${tzPh}`
       : `${col} <= ($3::date + 1)::timestamptz`;
-    return `${lower} AND ${upper}`;
+    if (lowerIsDay || upperIsDay) return `${lower} AND ${upper}`;
+    // Обе границы пришли полным timestamp'ом (guard для нестандартных клиентов)
+    // — AT TIME ZONE не нужен, но параметр пояса УЖЕ передан в запрос, а
+    // Postgres отвергает и лишний параметр («bind message supplies N
+    // parameters, but prepared statement requires M»), и дырку в нумерации.
+    // Якорь тождественно истинен (пояс — непустая строка) и схлопывается
+    // планировщиком; он лишь гарантирует ссылку на плейсхолдер.
+    return `${lower} AND ${upper} AND ${tzPh} IS NOT NULL`;
   }
 
   /**
@@ -118,10 +132,10 @@ export class SalaryService {
    * (легаси/чужой клиент, колонка TEXT без CHECK) падает в fallback по
    * created_at, а не выпадает из ВСЕХ месяцев разом.
    */
-  private static premiumMonthExpr(alias: string): string {
+  private static premiumMonthExpr(alias: string, tzPh: string): string {
     return (
       `COALESCE(CASE WHEN ${alias}.period_month_year ~ '^\\d{4}-\\d{2}$' THEN ${alias}.period_month_year END, ` +
-      `to_char(${alias}.created_at AT TIME ZONE '${SalaryService.BUSINESS_TZ}', 'YYYY-MM'))`
+      `to_char(${alias}.created_at AT TIME ZONE ${tzPh}, 'YYYY-MM'))`
     );
   }
 
@@ -167,18 +181,23 @@ export class SalaryService {
    * period_month_year — TEXT без CHECK, мусор → to_date(NULL) → рукав assigned
    * гаснет, строка уходит в fallback по дате факта (а не роняет запрос).
    */
-  private static periodMonthMembership(periodCol: string, factCol: string, dateFrom: string, dateTo: string): string {
-    const tz = SalaryService.BUSINESS_TZ;
+  private static periodMonthMembership(
+    periodCol: string,
+    factCol: string,
+    dateFrom: string,
+    dateTo: string,
+    tzPh: string,
+  ): string {
     const validPeriod = `${periodCol} ~ '^\\d{4}-\\d{2}$'`;
     const mfirst = `to_date(CASE WHEN ${validPeriod} THEN ${periodCol} || '-01' END, 'YYYY-MM-DD')`;
     const mlast = `(${mfirst} + interval '1 month' - interval '1 day')::date`;
-    const today = `(now() AT TIME ZONE '${tz}')::date`;
+    const today = `(now() AT TIME ZONE ${tzPh})::date`;
     const assigned =
       `${validPeriod} AND $2::date <= ${mfirst} AND ${mfirst} <= ${today} ` +
       `AND $3::date >= LEAST(${mlast}, ${today})`;
     const byFact =
       `(${periodCol} IS NULL OR ${periodCol} !~ '^\\d{4}-\\d{2}$') ` +
-      `AND ${SalaryService.periodPredicate(factCol, dateFrom, dateTo)}`;
+      `AND ${SalaryService.periodPredicate(factCol, dateFrom, dateTo, tzPh)}`;
     return `((${assigned}) OR (${byFact}))`;
   }
 
@@ -197,18 +216,95 @@ export class SalaryService {
     'Декабрь',
   ];
 
-  async getAll(tenantID: string, query: any) {
+  /**
+   * Зарплатный лист команды за период.
+   *
+   * 161 — ФИЛИАЛЬНЫЙ СКОУП, И ОН ОБЯЗАН БЫТЬ ПОЛНЫМ. Начисления берутся через
+   * точку ЧЕКА (checks.point_id), а выплаты / премии / штрафы — через
+   * собственную точку строки. Половинчатый вариант («скоупим только
+   * начисления») арифметически НЕВЕРЕН: каждый филиал вычел бы из своей доли
+   * начислений ПОЛНУЮ сумму выплат сети, и «к выплате» ушло бы в минус на
+   * одном филиале и завысилось на другом. Проверка на бумаге:
+   *   начислено A=100, B=60; выдано A=70, B=40.
+   *   верно:      A: 100−70=30, B: 60−40=20, сумма 50 = 160−110.
+   *   половинчато: A: 100−110=−10, B: 60−110=−50 — деньги «исчезли».
+   * Инвариант, который держит тест salary-points-scoping: сумма филиальных
+   * остатков равна сетевому остатку (режим «Все точки» — фильтра нет).
+   *
+   * Состав СПИСКА режется филиалом ПО ДВУМ основаниям сразу: есть денежные
+   * строки этого филиала в периоде ИЛИ сотрудник на филиал назначен
+   * (user_points, безопасный дефолт: без назначений сотрудник виден везде —
+   * тот же предикат, что у графика). Одних назначений НЕДОСТАТОЧНО: мастер,
+   * подменявший коллегу на другом филиале, выпадал из обоих листов вместе со
+   * своим заработком. Подробности — у сборки `touched` ниже.
+   */
+  /**
+   * ФИЛИАЛ ДЛЯ ДЕНЕЖНОЙ ЗАПИСИ — единый резолв на все зарплатные пути
+   * (выплата, премия, штраф, легаси-выплата, внепрограммная выплата).
+   *
+   * `pointId` сюда приезжает из контроллера как ТЕКУЩАЯ точка актора
+   * (actorPointId), а `actorID` — это createdBy/awardedBy, то есть тот же
+   * человек: из этих двух полей и собирается актор для общего хелпера. Сам
+   * хелпер решает одинаково для всех денег в системе — своя точка, либо
+   * единственная доступная, либо 400 «Выберите филиал, …»; у тенанта без
+   * точек — null, как было (см. common/point-scope.resolvePointForWrite).
+   *
+   * ЗАЧЕМ ЭТО ЗДЕСЬ ЖИЗНЕННО ВАЖНО: выплата с point_id = NULL не вычиталась из
+   * «к выплате» НИ В ОДНОМ филиале — владелец, глядя на филиальный экран,
+   * выдавал зарплату второй раз. Это прямая потеря денег, а не отображение.
+   */
+  private writePoint(
+    tenantID: string,
+    actorID: string,
+    pointId: string | null,
+    purpose: string,
+  ): Promise<string | null> {
+    return resolvePointForWrite(this.pool, { tenantID, userID: actorID, currentPointId: pointId }, purpose);
+  }
+
+  /**
+   * ВТОРАЯ ПОЛОВИНА ТОГО ЖЕ ПРАВИЛА — ГЕЙТ ИЗМЕНЕНИЯ ЧУЖОЙ СТРОКИ.
+   *
+   * writePoint выше решает, ЧЬИМИ станут новые деньги. Но зарплатные строки
+   * ещё и правят по id: отмена выплаты, сторно легаси-выплаты, удаление
+   * премии, правка/удаление штрафа. Скоуп резал только ЧТЕНИЕ, поэтому
+   * оставалась асимметрия «читаем узко — пишем широко»: держатель права из
+   * филиала А, зная id, отменял выплату филиала Б — у себя он изменения даже
+   * не увидит, а «к выплате» чужого филиала уже поехало, и человеку выдадут
+   * зарплату второй раз.
+   *
+   * Предикат НЕ переписывается заново: это тот же общий
+   * common/point-scope.assertRowPointForWrite, что стоит у чеков. Вызывать
+   * ДО pool.connect() — гейт делает свой запрос, а вторая коннекция под
+   * открытой транзакцией на исчерпанном пуле даёт взаимную блокировку.
+   */
+  private assertOwnPoint(
+    table: 'salary_payouts' | 'salary_premiums' | 'salary_penalties' | 'salary_payments',
+    id: string,
+    tenantID: string,
+    pointId: string | null,
+    notFoundMessage: string,
+  ): Promise<void> {
+    return assertRowPointForWrite(this.pool, table, id, tenantID, pointId, notFoundMessage);
+  }
+
+  async getAll(tenantID: string, query: any, pointId: string | null = null) {
     const dateFrom =
       query.dateFrom || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const dateTo = query.dateTo || new Date().toISOString().split('T')[0];
+    // Пояс тенанта — ОДИН раз на весь getAll; во ВСЕХ семи запросах ниже он
+    // сидит на фиксированном $4, поэтому фрагменты period()/monthMember()
+    // переиспользуются между ними без пересчёта индексов.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const TZ_PH = '$4::text';
     // Единые границы периода для ВСЕХ компонент зарплаты (чеки / премии /
-    // штрафы / мотивация) — московский полуинтервал, см. periodPredicate.
-    const period = (col: string) => SalaryService.periodPredicate(col, dateFrom, dateTo);
+    // штрафы / мотивация) — местный полуинтервал, см. periodPredicate.
+    const period = (col: string) => SalaryService.periodPredicate(col, dateFrom, dateTo, TZ_PH);
     // Помесячно-относимые компоненты (payments / premiums / принятые payouts)
     // выбираются через periodMonthMembership (полный месяц-к-дате включает,
     // узкий срез — нет), а не разворотом диапазона в целые месяцы.
     const monthMember = (periodCol: string, factCol: string) =>
-      SalaryService.periodMonthMembership(periodCol, factCol, dateFrom, dateTo);
+      SalaryService.periodMonthMembership(periodCol, factCol, dateFrom, dateTo, TZ_PH);
 
     // Round 16 (баг 3) — месяц, на который резолвится ОТОБРАЖАЕМЫЙ процент:
     // последний месяц запрошенного периода (клиенты шлют календарный месяц —
@@ -216,6 +312,70 @@ export class SalaryService {
     const rateMonth = /^\d{4}-\d{2}/.test(dateTo)
       ? dateTo.slice(0, 7)
       : `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
+
+    // Плейсхолдер точки для ВСЕХ CTE главного запроса: значение кладём в
+    // params один раз, номер переиспользуем — параметр упомянут многократно,
+    // что Postgres разрешает (запрещено обратное: положить и не упомянуть).
+    const mainParams: unknown[] = [tenantID, dateFrom, dateTo, tz, rateMonth];
+    let checkPoint = '';
+    let pointPh = '';
+    if (pointId) {
+      mainParams.push(pointId);
+      pointPh = `$${mainParams.length}`;
+      checkPoint = ` AND ch.point_id = $${mainParams.length}`;
+    }
+
+    // ── Состав листа филиала (волна 4) ────────────────────────────────────
+    // РАНЬШЕ лист резался ТОЛЬКО назначениями (user_points), а начисления —
+    // точкой чека. Это два РАЗНЫХ определения «сотрудник филиала», и на их
+    // расхождении терялись деньги: мастер филиала А, подменивший коллегу на
+    // филиале Б, в лист Б не попадал (не назначен) — его заработок по чекам Б
+    // исчезал из листа Б; в листе А его тоже не было (там нет чеков Б). Сумма
+    // по филиалам переставала сходиться с сетевой, а мастер не получал денег.
+    //
+    // ТЕПЕРЬ предикат один и он ОБЪЕДИНЯЕТ оба определения: в лист филиала
+    // попадает каждый, у кого в периоде есть ЛЮБАЯ денежная строка этого
+    // филиала (начисления по чекам, легаси-выплаты, премии, штрафы, принятые
+    // выплаты, мотивация), ЛИБО кто на филиал назначен (тогда он виден с
+    // нулями — так владелец видит всю свою команду, даже если она ничего не
+    // заработала). Условия внутри `touched` — ДОСЛОВНАЯ копия периодов и
+    // фильтров тех самых шести запросов ниже, которые эти суммы и считают:
+    // разъехавшись, они снова начали бы прятать деньги.
+    //
+    // В режиме «Все точки» (pointId = null) фрагмент пустой — запрос остаётся
+    // прежним дословно, и лист по-прежнему содержит ВСЮ команду тенанта.
+    let touchedCte = '';
+    let memberWhere = '';
+    if (pointId) {
+      touchedCte = `,
+       touched AS (
+         SELECT earner_id AS user_id FROM svc
+         UNION SELECT earner_id FROM prod
+         UNION SELECT sp.user_id FROM salary_payments sp
+          WHERE sp.tenant_id = $1 AND sp.reversed_at IS NULL
+            AND ${monthMember('sp.month_year', 'sp.date')} AND sp.point_id = ${pointPh}
+         UNION SELECT pr.user_id FROM salary_premiums pr
+          WHERE pr.tenant_id = $1
+            AND ${monthMember('pr.period_month_year', 'pr.created_at')} AND pr.point_id = ${pointPh}
+         UNION SELECT pen.user_id FROM salary_penalties pen
+          WHERE pen.tenant_id = $1 AND ${period('pen.date')} AND pen.point_id = ${pointPh}
+         UNION SELECT p.employee_id FROM salary_payouts p
+          WHERE p.tenant_id = $1 AND p.status = 'accepted'
+            AND ${monthMember('p.period_month', 'p.created_at')} AND p.point_id = ${pointPh}
+         UNION SELECT ma.employee_id FROM motivation_accruals ma
+          WHERE ma.tenant_id = $1 AND ma.employee_id IS NOT NULL
+            AND ${period('ma.accrued_at')}
+            AND EXISTS (SELECT 1 FROM checks ch WHERE ch.id = ma.check_id
+                         AND ch.tenant_id = $1 AND ch.point_id = ${pointPh})
+       )`;
+      // Назначения — ТЕМ ЖЕ общим предикатом, что график и пикер мастеров
+      // (user-points-sql): он возвращает фрагмент с ведущим ` AND `, поэтому
+      // как OR-слагаемое используем его внутри EXISTS по той же строке users.
+      memberWhere =
+        ` AND (EXISTS (SELECT 1 FROM touched t WHERE t.user_id = u.id)` +
+        ` OR EXISTS (SELECT 1 FROM users ua WHERE ua.id = u.id AND ua.tenant_id = $1` +
+        `${assignedToPointSql('ua', '$1', pointId, mainParams)}))`;
+    }
 
     const { rows } = await this.pool.query(
       `WITH svc AS (
@@ -228,7 +388,7 @@ export class SalaryService {
            FROM checks ch
            JOIN check_service_lines sl ON sl.check_id = ch.id
           WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
-            AND ${period('ch.date')}
+            AND ${period('ch.date')}${checkPoint}
           GROUP BY COALESCE(sl.master_id, ch.master_id)
        ),
        prod AS (
@@ -240,9 +400,9 @@ export class SalaryService {
                 COUNT(ch.id) AS check_count
            FROM checks ch
           WHERE ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
-            AND ${period('ch.date')}
+            AND ${period('ch.date')}${checkPoint}
           GROUP BY ch.master_id
-       )
+       )${touchedCte}
        SELECT u.id as master_id, u.full_name as master_name,
               COALESCE(h.salary_percent, u.salary_percent, 0) as salary_percent,
               COALESCE(h.product_salary_percent, u.product_salary_percent, 0) as product_salary_percent,
@@ -263,15 +423,15 @@ export class SalaryService {
          LEFT JOIN LATERAL (
            SELECT mrh.salary_percent, mrh.product_salary_percent
              FROM master_rate_history mrh
-            WHERE mrh.tenant_id = u.tenant_id AND mrh.user_id = u.id AND mrh.month <= $4
+            WHERE mrh.tenant_id = u.tenant_id AND mrh.user_id = u.id AND mrh.month <= $5
             ORDER BY mrh.month DESC
             LIMIT 1
          ) h ON true
          LEFT JOIN svc ON svc.earner_id = u.id
          LEFT JOIN prod ON prod.earner_id = u.id
-        WHERE u.tenant_id = $1 AND u.role IN ('master', 'admin')
+        WHERE u.tenant_id = $1 AND u.role IN ('master', 'admin')${memberWhere}
         ORDER BY total_earnings DESC`,
-      [tenantID, dateFrom, dateTo, rateMonth],
+      mainParams,
     );
 
     // Query payments for all masters in the period.
@@ -291,6 +451,8 @@ export class SalaryService {
     // задевший границу месяца, тянул выплаты ЦЕЛЫХ месяцев — веб-суммы за
     // неделю/день задваивались. Полный месяц (и месяц-к-дате) по-прежнему
     // включает выплаты этого месяца — до копейки как getEmployeeMonth.
+    const paymentParams: unknown[] = [tenantID, dateFrom, dateTo, tz];
+    const paymentPoint = pointFilterSql('sp', pointId, paymentParams);
     const { rows: paymentRows } = await this.pool.query(
       `SELECT sp.*, u.full_name as user_name, c.full_name as creator_name,
               spc.confirmed_at
@@ -299,9 +461,9 @@ export class SalaryService {
        LEFT JOIN users c ON c.id = sp.created_by
        LEFT JOIN salary_payment_confirmations spc ON spc.payment_id = sp.id AND spc.user_id = sp.user_id
        WHERE sp.tenant_id = $1 AND sp.reversed_at IS NULL
-         AND ${monthMember('sp.month_year', 'sp.date')}
+         AND ${monthMember('sp.month_year', 'sp.date')}${paymentPoint}
        ORDER BY sp.date DESC LIMIT 500`,
-      [tenantID, dateFrom, dateTo],
+      paymentParams,
     );
 
     // Group payments by user_id
@@ -340,14 +502,16 @@ export class SalaryService {
     // месяцев (баг MEDIUM). Полный месяц (и месяц-к-дате) по-прежнему включает
     // премию этого месяца — до копейки как getEmployeeMonth (премия «за июль»,
     // выданная в августе, живёт в июле; в августовском/недельном срезе её нет).
+    const premiumParams: unknown[] = [tenantID, dateFrom, dateTo, tz];
+    const premiumPoint = pointFilterSql('sp', pointId, premiumParams);
     const { rows: premRows } = await this.pool.query(
       `SELECT sp.*, u.full_name as user_name, a.full_name as awarder_name
        FROM salary_premiums sp
        LEFT JOIN users u ON u.id = sp.user_id
        LEFT JOIN users a ON a.id = sp.awarded_by
        WHERE sp.tenant_id = $1
-         AND ${monthMember('sp.period_month_year', 'sp.created_at')}`,
-      [tenantID, dateFrom, dateTo],
+         AND ${monthMember('sp.period_month_year', 'sp.created_at')}${premiumPoint}`,
+      premiumParams,
     );
     const premiumsByUser: Record<string, any[]> = {};
     for (const p of premRows) {
@@ -370,14 +534,16 @@ export class SalaryService {
 
     // Penalties for the same period (056_salary_penalties) — subtracted from
     // the employee's remaining owed amount.
+    const penaltyParams: unknown[] = [tenantID, dateFrom, dateTo, tz];
+    const penaltyPoint = pointFilterSql('pen', pointId, penaltyParams);
     const { rows: penRows } = await this.pool.query(
       `SELECT pen.*, u.full_name as user_name, c.full_name as creator_name
        FROM salary_penalties pen
        LEFT JOIN users u ON u.id = pen.user_id
        LEFT JOIN users c ON c.id = pen.created_by
        WHERE pen.tenant_id = $1
-         AND ${period('pen.date')}`,
-      [tenantID, dateFrom, dateTo],
+         AND ${period('pen.date')}${penaltyPoint}`,
+      penaltyParams,
     );
     const penaltiesByUser: Record<string, any[]> = {};
     for (const p of penRows) {
@@ -392,14 +558,26 @@ export class SalaryService {
     // convention as the checks / premiums queries above (periodPredicate —
     // московский полуинтервал). Attributed by employee_id = the credited
     // master, mirroring how product revenue is attributed to checks.master_id.
+    // 161 — у мотивации своей точки нет и не нужно: строка рождается из
+    // ТОВАРА В ЧЕКЕ, поэтому филиал берём у чека (motivation_accruals.check_id
+    // — NOT NULL, миграция 095). EXISTS, а не JOIN: без выбранной точки запрос
+    // остаётся дословно прежним.
+    const motivationParams: unknown[] = [tenantID, dateFrom, dateTo, tz];
+    let motivationPoint = '';
+    if (pointId) {
+      motivationParams.push(pointId);
+      motivationPoint =
+        ` AND EXISTS (SELECT 1 FROM checks ch WHERE ch.id = ma.check_id` +
+        ` AND ch.tenant_id = $1 AND ch.point_id = $${motivationParams.length})`;
+    }
     const { rows: motivationRows } = await this.pool.query(
-      `SELECT employee_id, COALESCE(SUM(amount), 0) AS amount
-         FROM motivation_accruals
-        WHERE tenant_id = $1
-          AND employee_id IS NOT NULL
-          AND ${period('accrued_at')}
-        GROUP BY employee_id`,
-      [tenantID, dateFrom, dateTo],
+      `SELECT ma.employee_id, COALESCE(SUM(ma.amount), 0) AS amount
+         FROM motivation_accruals ma
+        WHERE ma.tenant_id = $1
+          AND ma.employee_id IS NOT NULL
+          AND ${period('ma.accrued_at')}${motivationPoint}
+        GROUP BY ma.employee_id`,
+      motivationParams,
     );
     const motivationByUser: Record<string, number> = {};
     for (const m of motivationRows) {
@@ -418,14 +596,16 @@ export class SalaryService {
     // periodMonthMembership(period_month, created_at): выплата «за июль»,
     // принятая в августе, списывает остаток ИЮЛЯ (как в карточке), а не августа;
     // полный месяц-к-дате списывает, узкий срез — нет.
+    const payoutParams: unknown[] = [tenantID, dateFrom, dateTo, tz];
+    const payoutPoint = pointFilterSql('p', pointId, payoutParams);
     const { rows: acceptedPayoutRows } = await this.pool.query(
       `SELECT p.employee_id, COALESCE(SUM(p.amount), 0) AS accepted_amount
          FROM salary_payouts p
         WHERE p.tenant_id = $1
           AND p.status = 'accepted'
-          AND ${monthMember('p.period_month', 'p.created_at')}
+          AND ${monthMember('p.period_month', 'p.created_at')}${payoutPoint}
         GROUP BY p.employee_id`,
-      [tenantID, dateFrom, dateTo],
+      payoutParams,
     );
     const acceptedPayoutsByUser: Record<string, number> = {};
     for (const r of acceptedPayoutRows) {
@@ -435,6 +615,11 @@ export class SalaryService {
     // v3.0.1 ФИЧА 4 — отработанные смены за тот же период (по настройкам
     // расписания). perDay = totalEarnings / workedShifts; смен 0 → perDay = null
     // (не делим). Один запрос на всех сотрудников.
+    //
+    // 161 — БЕЗ фильтра по точке СОЗНАТЕЛЬНО: «отработанные смены» считаются по
+    // ГРАФИКУ (schedule_entries), у которого точки нет и не будет — филиал у
+    // графика выражается составом команды, а он уже отфильтрован выше. Строки
+    // достаются только тем, кто попал в список, поэтому чужие сюда не приедут.
     const shiftsByUser = await this.workedShiftsByUser(tenantID, dateFrom, dateTo);
 
     return rows.map((r) => {
@@ -490,7 +675,8 @@ export class SalaryService {
     });
   }
 
-  async getPayments(tenantID: string, params: any) {
+  /** История легаси-выплат. 161 — фильтр по филиалу выплаты. */
+  async getPayments(tenantID: string, params: any, pointId: string | null = null) {
     let where = 'sp.tenant_id = $1';
     const queryParams: any[] = [tenantID];
     let idx = 2;
@@ -503,6 +689,9 @@ export class SalaryService {
       where += ` AND sp.month_year = $${idx++}`;
       queryParams.push(params.monthYear);
     }
+    // Точка — последним фильтром: дальше локальный idx не используется, поэтому
+    // нумерация pointFilterSql по queryParams.length не может разъехаться.
+    where += pointFilterSql('sp', pointId, queryParams);
 
     const { rows } = await this.pool.query(
       `SELECT sp.*, u.full_name as user_name, c.full_name as creator_name,
@@ -535,7 +724,12 @@ export class SalaryService {
     }));
   }
 
-  async createPayment(tenantID: string, createdBy: string, dto: any) {
+  /**
+   * ЛЕГАСИ-путь выплаты (012). 161 — выплата и её зеркальный расход штампуются
+   * ТЕКУЩИМ ФИЛИАЛОМ ВЛАДЕЛЬЦА: без этого филиал вычитал бы из своей доли
+   * начислений выплаты всей сети (см. арифметику в getAll).
+   */
+  async createPayment(tenantID: string, createdBy: string, dto: any, pointId: string | null = null) {
     // Verify the target user belongs to the caller's tenant. Without this
     // a director from tenant A could mint a "salary payment" against a
     // user in tenant B — corrupting B's salary history with a foreign
@@ -549,6 +743,11 @@ export class SalaryService {
     }
     const userName = userTenantRows[0].full_name || 'Сотрудник';
 
+    // Волна 4 — филиал обязателен ровно по той же причине, что у createPayout:
+    // «ничья» выплата не уменьшает «к выплате» ни в одном филиале. Резолвим до
+    // открытия транзакции.
+    const writePointId = await this.writePoint(tenantID, createdBy, pointId, 'чтобы выдать зарплату');
+
     // Денежный путь: выплата и её зеркальный расход пишутся АТОМАРНО — одна
     // транзакция, как в новом flow decidePayout. Раньше два независимых INSERT
     // на this.pool: падение между ними оставляло выплату без расхода — долг
@@ -560,10 +759,19 @@ export class SalaryService {
 
       // 1. Insert salary payment
       const { rows: paymentRows } = await client.query(
-        `INSERT INTO salary_payments (tenant_id, user_id, amount, month_year, type, comment, created_by, date)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+        `INSERT INTO salary_payments (tenant_id, user_id, amount, month_year, type, comment, created_by, date, point_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, now(), $8)
          RETURNING *`,
-        [tenantID, dto.userId, dto.amount, dto.monthYear, dto.type || 'salary', dto.comment || null, createdBy],
+        [
+          tenantID,
+          dto.userId,
+          dto.amount,
+          dto.monthYear,
+          dto.type || 'salary',
+          dto.comment || null,
+          createdBy,
+          writePointId,
+        ],
       );
       payment = paymentRows[0];
 
@@ -592,10 +800,10 @@ export class SalaryService {
       //    сторно (reversePayment) компенсирует расход по expense_id, а не
       //    best-effort-матчем. Обе строки — в одной транзакции.
       const { rows: expRows } = await client.query(
-        `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id)
-         VALUES ($1, $2, $3, $4, $5, $6)
+        `INSERT INTO expenses (category_id, amount, description, date, user_id, tenant_id, point_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)
          RETURNING id`,
-        [categoryId, dto.amount, description, payment.date, createdBy, tenantID],
+        [categoryId, dto.amount, description, payment.date, createdBy, tenantID, writePointId],
       );
       await client.query(`UPDATE salary_payments SET expense_id = $1 WHERE id = $2`, [expRows[0].id, payment.id]);
 
@@ -652,7 +860,7 @@ export class SalaryService {
    * {cash, rate_bonus}; here we additionally enforce that the matching
    * monetary field is filled.
    */
-  async createPremium(tenantID: string, awardedBy: string, dto: PremiumDto) {
+  async createPremium(tenantID: string, awardedBy: string, dto: PremiumDto, pointId: string | null = null) {
     if (!dto || !dto.userId || !dto.type || !dto.reason) {
       throw new BadRequestException({ message: 'userId, type и reason обязательны' });
     }
@@ -669,10 +877,18 @@ export class SalaryService {
     ]);
     if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
 
+    // Волна 4 — филиал обязателен: премия входит в «начислено», и «ничья»
+    // премия не попадает ни в один филиальный лист, зато видна в сетевом —
+    // суммы по филиалам перестают сходиться с общей.
+    const writePointId = await this.writePoint(tenantID, awardedBy, pointId, 'чтобы начислить премию');
+
     const { rows } = await this.pool.query(
+      // 161 — премия принадлежит филиалу, за счёт которого выдана (текущая
+      // точка выдающего): она входит в totalEarnings, и без точки филиал А
+      // получил бы в «начислено» премии филиала Б.
       `INSERT INTO salary_premiums (
-         tenant_id, user_id, type, amount, bonus_percent, reason, period_month_year, awarded_by
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         tenant_id, user_id, type, amount, bonus_percent, reason, period_month_year, awarded_by, point_id
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
        RETURNING *`,
       [
         tenantID,
@@ -683,6 +899,7 @@ export class SalaryService {
         dto.reason,
         dto.periodMonthYear ?? null,
         awardedBy,
+        writePointId,
       ],
     );
     const p = rows[0];
@@ -700,7 +917,7 @@ export class SalaryService {
     return this.mapPremium(p);
   }
 
-  async listPremiums(tenantID: string, query: { userId?: string; monthYear?: string }) {
+  async listPremiums(tenantID: string, query: { userId?: string; monthYear?: string }, pointId: string | null = null) {
     const conds: string[] = ['sp.tenant_id=$1'];
     const params: any[] = [tenantID];
     let idx = 2;
@@ -710,25 +927,32 @@ export class SalaryService {
     }
     if (query.monthYear) {
       // Round 16 (баг 2) — тот же месяц-отнесения, что в getAll /
-      // getEmployeeMonth (period_month_year, fallback created_at МСК): раньше
-      // строгое равенство period_month_year теряло премии без периода
-      // (легаси-строки NULL не попадали ни в один месяц).
-      conds.push(`${SalaryService.premiumMonthExpr('sp')}=$${idx++}`);
+      // getEmployeeMonth (period_month_year, fallback месяц created_at в поясе
+      // тенанта): раньше строгое равенство period_month_year теряло премии без
+      // периода (легаси-строки NULL не попадали ни в один месяц).
+      const tzPh = `$${idx++}::text`;
+      params.push(await getTenantTimezone(this.pool, tenantID));
+      conds.push(`${SalaryService.premiumMonthExpr('sp', tzPh)}=$${idx++}`);
       params.push(query.monthYear);
     }
+    // Точка — последним фильтром: фрагмент уже начинается с ' AND ', поэтому
+    // прицепляется к готовому WHERE (дальше локальный idx не используется, и
+    // нумерация по params.length разъехаться не может).
+    const premiumPoint = pointFilterSql('sp', pointId, params);
     const { rows } = await this.pool.query(
       `SELECT sp.*, u.full_name as user_name, a.full_name as awarder_name
        FROM salary_premiums sp
        LEFT JOIN users u ON u.id = sp.user_id
        LEFT JOIN users a ON a.id = sp.awarded_by
-       WHERE ${conds.join(' AND ')}
+       WHERE ${conds.join(' AND ')}${premiumPoint}
        ORDER BY sp.created_at DESC`,
       params,
     );
     return rows.map((r) => this.mapPremium(r));
   }
 
-  async removePremium(id: string, tenantID: string) {
+  async removePremium(id: string, tenantID: string, pointId: string | null = null) {
+    await this.assertOwnPoint('salary_premiums', id, tenantID, pointId, 'Премия не найдена');
     const { rowCount } = await this.pool.query('DELETE FROM salary_premiums WHERE id=$1 AND tenant_id=$2', [
       id,
       tenantID,
@@ -765,6 +989,7 @@ export class SalaryService {
     tenantID: string,
     createdBy: string,
     dto: { userId: string; amount: number; description?: string; date?: string },
+    pointId: string | null = null,
   ) {
     if (!dto || !dto.userId) {
       throw new BadRequestException({ message: 'userId обязателен' });
@@ -790,11 +1015,17 @@ export class SalaryService {
     ]);
     if (userRows.length === 0) throw new NotFoundException({ message: 'Сотрудник не найден' });
 
+    // Волна 4 — филиал обязателен: штраф вычитается из «к выплате», и «ничий»
+    // штраф не уменьшает долг ни в одном филиале (сотруднику переплатят).
+    const writePointId = await this.writePoint(tenantID, createdBy, pointId, 'чтобы наложить штраф');
+
     const { rows } = await this.pool.query(
-      `INSERT INTO salary_penalties (tenant_id, user_id, amount, description, date, created_by)
-       VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6)
+      // 161 — штраф режет «к выплате» ТОГО филиала, в котором наложен
+      // (текущая точка налагающего). Иначе филиал А вычел бы штрафы филиала Б.
+      `INSERT INTO salary_penalties (tenant_id, user_id, amount, description, date, created_by, point_id)
+       VALUES ($1, $2, $3, $4, COALESCE($5::timestamptz, now()), $6, $7)
        RETURNING *`,
-      [tenantID, dto.userId, amount, comment, dto.date ?? null, createdBy],
+      [tenantID, dto.userId, amount, comment, dto.date ?? null, createdBy, writePointId],
     );
     const p = rows[0];
     p.user_name = userRows[0].full_name;
@@ -809,7 +1040,7 @@ export class SalaryService {
     return this.mapPenalty(p);
   }
 
-  async listPenalties(tenantID: string, query: { userId?: string }) {
+  async listPenalties(tenantID: string, query: { userId?: string }, pointId: string | null = null) {
     const conds: string[] = ['pen.tenant_id=$1'];
     const params: any[] = [tenantID];
     let idx = 2;
@@ -817,12 +1048,13 @@ export class SalaryService {
       conds.push(`pen.user_id=$${idx++}`);
       params.push(query.userId);
     }
+    const penaltyPoint = pointFilterSql('pen', pointId, params);
     const { rows } = await this.pool.query(
       `SELECT pen.*, u.full_name as user_name, c.full_name as creator_name
        FROM salary_penalties pen
        LEFT JOIN users u ON u.id = pen.user_id
        LEFT JOIN users c ON c.id = pen.created_by
-       WHERE ${conds.join(' AND ')}
+       WHERE ${conds.join(' AND ')}${penaltyPoint}
        ORDER BY pen.date DESC`,
       params,
     );
@@ -835,7 +1067,8 @@ export class SalaryService {
    * исчезает из следующей выборки. Round 15 (153): + транзакционный аудит со
    * снапшотом (кто/когда/что было) — паттерн editClosedCheck.
    */
-  async deletePenalty(id: string, tenantID: string, actorId: string | null = null) {
+  async deletePenalty(id: string, tenantID: string, actorId: string | null = null, pointId: string | null = null) {
+    await this.assertOwnPoint('salary_penalties', id, tenantID, pointId, 'Штраф не найден');
     const client = await this.pool.connect();
     let employeeId: string | null = null;
     let amountLabel = '';
@@ -975,6 +1208,18 @@ export class SalaryService {
     throw new BadRequestException({ message: 'Выплата отменена владельцем' });
   }
 
+  /**
+   * «Моя зарплата» на главной у самого сотрудника.
+   *
+   * 161 — ФИЛИАЛОМ НЕ РЕЖЕТСЯ, И ЭТО СОЗНАТЕЛЬНО (исключение того же рода, что
+   * история клиента). Здесь показаны СОБСТВЕННЫЕ деньги человека, а не отчёт
+   * филиала: мастер, отработавший утро на А и вечер на Б, обязан видеть всё,
+   * что заработал. Филиальный скоуп заставил бы его заработок ПАДАТЬ при
+   * переключении точки — владелец и сотрудник прочитали бы это как потерю
+   * денег. Расчёта «начислено − выплачено» здесь нет вовсе (getMy ничего не
+   * вычитает), поэтому и разъехаться с филиальной арифметикой нечему —
+   * settlement-цифру даёт getEmployeeMonth, и она скоупится.
+   */
   async getMy(tenantID: string, userID: string) {
     const now = new Date();
     const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
@@ -1160,6 +1405,7 @@ export class SalaryService {
     tenantID: string,
     createdBy: string,
     dto: { employeeId: string; type: 'salary' | 'advance'; amount: number; comment?: string; periodMonth?: string },
+    pointId: string | null = null,
   ) {
     if (!dto || !dto.employeeId) {
       throw new BadRequestException({ message: 'employeeId обязателен' });
@@ -1186,6 +1432,12 @@ export class SalaryService {
     const note = comment ? ` — ${comment}` : '';
     const description = `${typeLabel}: ${employeeName}${note}`;
 
+    // Волна 4 — филиал обязателен: «ничья» выплата не вычитается из «к выплате»
+    // ни в одном филиале и приводит к ПОВТОРНОЙ выдаче. Резолвим ДО открытия
+    // транзакции: тянуть вторую коннекцию, уже держа одну, значит рисковать
+    // взаимной блокировкой на исчерпанном пуле.
+    const writePointId = await this.writePoint(tenantID, createdBy, pointId, 'чтобы выдать зарплату');
+
     // Выплата и её зеркальный расход — ОДНА транзакция (паттерн createPayment):
     // падение между ними оставило бы деньги без расхода, а долг сотруднику —
     // уменьшённым.
@@ -1193,12 +1445,15 @@ export class SalaryService {
     let p: any;
     try {
       await client.query('BEGIN');
+      // 161 — выплата штампуется ТЕКУЩИМ ФИЛИАЛОМ ВЛАДЕЛЬЦА, и ровно та же
+      // точка уходит в зеркальный расход: выплата и её расход обязаны жить в
+      // одном филиале, иначе «к выплате» и «Движение денег» разъедутся.
       const { rows } = await client.query(
         `INSERT INTO salary_payouts
-           (tenant_id, employee_id, type, amount, status, comment, created_by, period_month, decided_at)
-         VALUES ($1, $2, $3, $4, 'accepted', $5, $6, $7, now())
+           (tenant_id, employee_id, type, amount, status, comment, created_by, period_month, decided_at, point_id)
+         VALUES ($1, $2, $3, $4, 'accepted', $5, $6, $7, now(), $8)
          RETURNING *`,
-        [tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth],
+        [tenantID, dto.employeeId, type, amount, comment, createdBy, periodMonth, writePointId],
       );
       p = rows[0];
       // 149 — период выплаты («за какой месяц») пробрасывается в расход.
@@ -1210,6 +1465,7 @@ export class SalaryService {
           date: new Date().toISOString(),
           createdBy,
           periodMonth,
+          pointId: writePointId,
         },
         client,
       );
@@ -1342,6 +1598,10 @@ export class SalaryService {
             date: new Date().toISOString(),
             createdBy: payout.created_by ?? null,
             periodMonth: (payout.period_month as string | null) ?? null,
+            // 161 — филиал берём У ВЫПЛАТЫ, а не у актора: решение принимает
+            // ПОЛУЧАТЕЛЬ, и его текущий филиал к источнику денег отношения не
+            // имеет. Расход обязан лечь туда, где выплату выписали.
+            pointId: (payout.point_id as string | null) ?? null,
           },
           client,
         );
@@ -1455,7 +1715,8 @@ export class SalaryService {
    * (cancelPayout). Транзакция и лок — как в accept-ветке decidePayout, так что
    * расход не может записаться дважды.
    */
-  async settlePayout(payoutId: string, tenantID: string, actorId: string) {
+  async settlePayout(payoutId: string, tenantID: string, actorId: string, pointId: string | null = null) {
+    await this.assertOwnPoint('salary_payouts', payoutId, tenantID, pointId, 'Выплата не найдена');
     const client = await this.pool.connect();
     let result: any;
     let employeeName = 'Сотрудник';
@@ -1498,6 +1759,9 @@ export class SalaryService {
           date: new Date().toISOString(),
           createdBy: payout.created_by ?? actorId,
           periodMonth: (payout.period_month as string | null) ?? null,
+          // 161 — филиал ВЫПЛАТЫ (см. decidePayout): фиксацию легаси-строки
+          // может делать другой человек и из другого филиала.
+          pointId: (payout.point_id as string | null) ?? null,
         },
         client,
       );
@@ -1584,6 +1848,7 @@ export class SalaryService {
       monthYear?: string;
       unviewed?: boolean | string;
     },
+    pointId: string | null = null,
   ) {
     const conds: string[] = ['p.tenant_id = $1'];
     const params: any[] = [tenantID];
@@ -1601,17 +1866,18 @@ export class SalaryService {
       conds.push('p.viewed_at IS NULL');
     }
     if (query.monthYear) {
-      conds.push(
-        `COALESCE(p.period_month, to_char(p.created_at AT TIME ZONE '${SalaryService.BUSINESS_TZ}', 'YYYY-MM')) = $${idx++}`,
-      );
+      const tzPh = `$${idx++}::text`;
+      params.push(await getTenantTimezone(this.pool, tenantID));
+      conds.push(`COALESCE(p.period_month, to_char(p.created_at AT TIME ZONE ${tzPh}, 'YYYY-MM')) = $${idx++}`);
       params.push(query.monthYear);
     }
+    const payoutPoint = pointFilterSql('p', pointId, params);
     const { rows } = await this.pool.query(
       `SELECT p.*, u.full_name AS user_name, c.full_name AS creator_name
          FROM salary_payouts p
          LEFT JOIN users u ON u.id = p.employee_id
          LEFT JOIN users c ON c.id = p.created_by
-        WHERE ${conds.join(' AND ')}
+        WHERE ${conds.join(' AND ')}${payoutPoint}
         ORDER BY p.created_at DESC`,
       params,
     );
@@ -1638,7 +1904,16 @@ export class SalaryService {
    * status='accepted'. FK salary_payouts.expense_id ON DELETE SET NULL —
    * порядок (сначала DELETE расхода, потом UPDATE статуса) безопасен.
    */
-  async cancelPayout(payoutId: string, tenantID: string, actorId: string, reason?: string) {
+  async cancelPayout(
+    payoutId: string,
+    tenantID: string,
+    actorId: string,
+    reason?: string,
+    pointId: string | null = null,
+  ) {
+    // Гейт стоит ОДИН раз здесь, а не в ...Attempt: авторетрай по 40P01
+    // переспрашивать филиал не должен — point_id строки неизменяем.
+    await this.assertOwnPoint('salary_payouts', payoutId, tenantID, pointId, 'Выплата не найдена');
     try {
       return await this.cancelPayoutAttempt(payoutId, tenantID, actorId, reason);
     } catch (err: any) {
@@ -1818,7 +2093,9 @@ export class SalaryService {
     tenantID: string,
     actorId: string,
     dto: { amount?: number; comment?: string },
+    pointId: string | null = null,
   ) {
+    await this.assertOwnPoint('salary_payouts', payoutId, tenantID, pointId, 'Выплата не найдена');
     const hasAmount = dto.amount !== undefined;
     const hasComment = dto.comment !== undefined;
     if (!hasAmount && !hasComment) {
@@ -1956,7 +2233,15 @@ export class SalaryService {
    * Прибыль не меняется (категория «Зарплата» вне P&L) — меняются касса и
    * лента расходов.
    */
-  async reversePayment(paymentId: string, tenantID: string, actorId: string, reason?: string) {
+  async reversePayment(
+    paymentId: string,
+    tenantID: string,
+    actorId: string,
+    reason?: string,
+    pointId: string | null = null,
+  ) {
+    // Как и в cancelPayout: гейт до авторетрая, филиал строки не меняется.
+    await this.assertOwnPoint('salary_payments', paymentId, tenantID, pointId, 'Выплата не найдена');
     try {
       return await this.reversePaymentAttempt(paymentId, tenantID, actorId, reason);
     } catch (err: any) {
@@ -2152,7 +2437,14 @@ export class SalaryService {
    * (getAll / getEmployeeMonth), поэтому правка не требует никакого пересчёта:
    * следующая выборка отдаёт новые суммы. Семантика вычета сохранена 1:1.
    */
-  async updatePenalty(id: string, tenantID: string, actorId: string, dto: { amount?: number; reason?: string }) {
+  async updatePenalty(
+    id: string,
+    tenantID: string,
+    actorId: string,
+    dto: { amount?: number; reason?: string },
+    pointId: string | null = null,
+  ) {
+    await this.assertOwnPoint('salary_penalties', id, tenantID, pointId, 'Штраф не найден');
     const hasAmount = dto.amount !== undefined;
     const hasReason = dto.reason !== undefined;
     if (!hasAmount && !hasReason) {
@@ -2272,6 +2564,8 @@ export class SalaryService {
       createdAt: r.created_at,
       decidedAt: r.decided_at ?? null,
       expenseId: r.expense_id ?? null,
+      // 161 — филиал, за счёт которого выплата сделана.
+      pointId: r.point_id ?? null,
       // 149 — «за какой месяц» ('YYYY-MM'); null = месяц выписки (МСК).
       periodMonth: (r.period_month as string | null) ?? null,
       // 153 — отмена владельцем: строка остаётся (UI зачёркивает с причиной),
@@ -2297,6 +2591,7 @@ export class SalaryService {
     tenantID: string,
     createdBy: string,
     dto: { recipientName: string; amount: number; periodMonth: string; comment?: string; date?: string },
+    pointId: string | null = null,
   ) {
     const recipientName = (dto.recipientName ?? '').trim();
     if (!recipientName) throw new BadRequestException({ message: 'Имя получателя обязательно' });
@@ -2308,6 +2603,10 @@ export class SalaryService {
     if (!/^\d{4}-\d{2}$/.test(dto.periodMonth ?? '')) {
       throw new BadRequestException({ message: 'Месяц отнесения обязателен (формат YYYY-MM)' });
     }
+    // Волна 4 — филиал обязателен: это расход, и без точки он выпадает из
+    // «Движения денег» и прибыли КАЖДОГО филиала.
+    const writePointId = await this.writePoint(tenantID, createdBy, pointId, 'чтобы провести выплату');
+
     return this.expenses.recordOutsideProgramPayout(tenantID, {
       recipientName,
       amount,
@@ -2315,6 +2614,9 @@ export class SalaryService {
       comment: dto.comment ?? null,
       date: dto.date ?? null,
       createdBy,
+      // 161 — внепрограммная выплата режет прибыль ТОГО филиала, за счёт
+      // которого сделана (текущая точка выдающего).
+      pointId: writePointId,
     });
   }
 
@@ -2327,20 +2629,27 @@ export class SalaryService {
   // + premiums + motivation; remaining subtracts fines) and additionally counts
   // accepted payouts (+ legacy salary_payments) as paid.
 
-  async getEmployeeMonth(tenantID: string, employeeId: string, month?: string) {
+  /**
+   * Карточка месяца одного сотрудника. 161 — тот же ПОЛНЫЙ филиальный скоуп,
+   * что и в getAll: начисления через точку чека, премии / штрафы / выплаты —
+   * через свою точку. Половинчатый скоуп здесь опаснее всего: именно эту
+   * цифру владелец выдаёт на руки, и «к выплате» филиала обязано совпадать со
+   * строкой того же сотрудника в getAll до копейки.
+   */
+  async getEmployeeMonth(tenantID: string, employeeId: string, month?: string, pointId: string | null = null) {
     const monthYear = /^\d{4}-\d{2}$/.test(month ?? '')
       ? (month as string)
       : `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}`;
     const [yearStr, monStr] = monthYear.split('-');
     const year = parseInt(yearStr, 10);
     const mon = parseInt(monStr, 10); // 1-12
-    // Half-open [monthStart, nextMonthStart) по бизнес-таймзоне продукта —
-    // Europe/Moscow (UTC+3, без летнего времени). Раньше границы строились в
-    // чистом UTC: чеки/начисления 00:00–03:00 МСК первого числа уезжали в
-    // соседний месяц относительно остальных зарплатных экранов.
-    const MSK_OFFSET_MS = 3 * 60 * 60 * 1000; // Europe/Moscow = UTC+3
-    const monthStart = new Date(Date.UTC(year, mon - 1, 1) - MSK_OFFSET_MS).toISOString();
-    const nextMonthStart = new Date(Date.UTC(year, mon, 1) - MSK_OFFSET_MS).toISOString();
+    // Half-open [monthStart, nextMonthStart) по бизнес-таймзоне ТЕНАНТА.
+    // Раньше границы строились фиксированным московским сдвигом: у автосервиса
+    // восточнее Москвы начисления первых часов месяца уезжали в соседний месяц
+    // относительно остальных зарплатных экранов.
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const monthStart = zonedMidnight(tz, year, mon - 1, 1).toISOString();
+    const nextMonthStart = zonedMidnight(tz, year, mon, 1).toISOString();
 
     const { rows: userRows } = await this.pool.query(
       `SELECT full_name, COALESCE(salary_percent, 0) AS salary_percent,
@@ -2375,6 +2684,8 @@ export class SalaryService {
 
     // Product salary, revenue and check-count from this master's own (created)
     // non-deferred checks in the month — attribution unchanged.
+    const earnParams: unknown[] = [employeeId, tenantID, monthStart, nextMonthStart];
+    const earnPoint = pointFilterSql(null, pointId, earnParams);
     const { rows: earnRows } = await this.pool.query(
       `SELECT COALESCE(SUM(COALESCE(product_salary_total, 0)), 0) AS product_earnings,
               COALESCE(SUM(total_revenue), 0) AS total_revenue,
@@ -2382,31 +2693,42 @@ export class SalaryService {
          FROM checks
         WHERE master_id = $1 AND tenant_id = $2 AND is_deferred = false
           AND deleted_at IS NULL
-          AND date >= $3 AND date < $4`,
-      [employeeId, tenantID, monthStart, nextMonthStart],
+          AND date >= $3 AND date < $4${earnPoint}`,
+      earnParams,
     );
     const e = earnRows[0];
     // #56: service salary this employee earned as the LINE executor (their own
     // service lines on ANY check in the month, not only checks they created).
+    const svcParams: unknown[] = [employeeId, tenantID, monthStart, nextMonthStart];
+    const svcPoint = pointFilterSql('ch', pointId, svcParams);
     const { rows: svcEarnRows } = await this.pool.query(
       `SELECT COALESCE(SUM(COALESCE(sl.salary_amount, 0)), 0) AS service_earnings
          FROM checks ch
          JOIN check_service_lines sl ON sl.check_id = ch.id
         WHERE COALESCE(sl.master_id, ch.master_id) = $1 AND ch.tenant_id = $2 AND ch.is_deferred = false
           AND ch.deleted_at IS NULL
-          AND ch.date >= $3 AND ch.date < $4`,
-      [employeeId, tenantID, monthStart, nextMonthStart],
+          AND ch.date >= $3 AND ch.date < $4${svcPoint}`,
+      svcParams,
     );
     const serviceEarnings = parseFloat(svcEarnRows[0].service_earnings) || 0;
     const productEarnings = parseFloat(e.product_earnings) || 0;
 
     // «Мотивация» (095): promo-product bonus accrued in the month.
+    // Филиал мотивации — у ЧЕКА (см. getAll): своей точки у строки нет.
+    const motParams: unknown[] = [tenantID, employeeId, monthStart, nextMonthStart];
+    let motPoint = '';
+    if (pointId) {
+      motParams.push(pointId);
+      motPoint =
+        ` AND EXISTS (SELECT 1 FROM checks ch WHERE ch.id = ma.check_id` +
+        ` AND ch.tenant_id = $1 AND ch.point_id = $${motParams.length})`;
+    }
     const { rows: motRows } = await this.pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS amount
-         FROM motivation_accruals
-        WHERE tenant_id = $1 AND employee_id = $2
-          AND accrued_at >= $3 AND accrued_at < $4`,
-      [tenantID, employeeId, monthStart, nextMonthStart],
+      `SELECT COALESCE(SUM(ma.amount), 0) AS amount
+         FROM motivation_accruals ma
+        WHERE ma.tenant_id = $1 AND ma.employee_id = $2
+          AND ma.accrued_at >= $3 AND ma.accrued_at < $4${motPoint}`,
+      motParams,
     );
     const motivationAmount = parseFloat(motRows[0].amount) || 0;
 
@@ -2415,29 +2737,33 @@ export class SalaryService {
     // fallback месяц created_at МСК) — зеркало payouts ниже (149). Раньше —
     // по created_at: премия «за июль», выданная 3 августа, жила в августовской
     // карточке, а июльская её не видела.
+    const premParams: unknown[] = [tenantID, employeeId, monthYear, tz];
+    const premPoint = pointFilterSql('sp', pointId, premParams);
     const { rows: premRows } = await this.pool.query(
       `SELECT sp.*, u.full_name AS user_name, a.full_name AS awarder_name
          FROM salary_premiums sp
          LEFT JOIN users u ON u.id = sp.user_id
          LEFT JOIN users a ON a.id = sp.awarded_by
         WHERE sp.tenant_id = $1 AND sp.user_id = $2
-          AND ${SalaryService.premiumMonthExpr('sp')} = $3
+          AND ${SalaryService.premiumMonthExpr('sp', '$4::text')} = $3${premPoint}
         ORDER BY sp.created_at DESC`,
-      [tenantID, employeeId, monthYear],
+      premParams,
     );
     const premiums = premRows.map((r) => this.mapPremium(r));
     const premiumsAmount = premiums.reduce((sum, p) => sum + (p.type === 'cash' ? p.amount || 0 : 0), 0);
 
     // Fines (штрафы, 056) applied in the month — deducted from «к выплате».
+    const fineParams: unknown[] = [tenantID, employeeId, monthStart, nextMonthStart];
+    const finePoint = pointFilterSql('pen', pointId, fineParams);
     const { rows: fineRows } = await this.pool.query(
       `SELECT pen.*, u.full_name AS user_name, c.full_name AS creator_name
          FROM salary_penalties pen
          LEFT JOIN users u ON u.id = pen.user_id
          LEFT JOIN users c ON c.id = pen.created_by
         WHERE pen.tenant_id = $1 AND pen.user_id = $2
-          AND pen.date >= $3 AND pen.date < $4
+          AND pen.date >= $3 AND pen.date < $4${finePoint}
         ORDER BY pen.date DESC`,
-      [tenantID, employeeId, monthStart, nextMonthStart],
+      fineParams,
     );
     const fines = fineRows.map((r) => this.mapPenalty(r));
     const finesAmount = fines.reduce((sum, f) => sum + (f.amount || 0), 0);
@@ -2446,29 +2772,33 @@ export class SalaryService {
     // 149 — отнесение по COALESCE(period_month, месяц created_at МСК): выплата
     // «за июль», выписанная 5 августа, живёт в июльской карточке (и вычитается
     // из июльского «к выплате»), а не в августовской.
+    const payoutParams: unknown[] = [tenantID, employeeId, monthYear, tz];
+    const payoutPoint = pointFilterSql('p', pointId, payoutParams);
     const { rows: payoutRows } = await this.pool.query(
       `SELECT p.*, u.full_name AS user_name, c.full_name AS creator_name
          FROM salary_payouts p
          LEFT JOIN users u ON u.id = p.employee_id
          LEFT JOIN users c ON c.id = p.created_by
         WHERE p.tenant_id = $1 AND p.employee_id = $2
-          AND COALESCE(p.period_month, to_char(p.created_at AT TIME ZONE '${SalaryService.BUSINESS_TZ}', 'YYYY-MM')) = $3
+          AND COALESCE(p.period_month, to_char(p.created_at AT TIME ZONE $4::text, 'YYYY-MM')) = $3${payoutPoint}
         ORDER BY p.created_at DESC`,
-      [tenantID, employeeId, monthYear],
+      payoutParams,
     );
     const payouts = payoutRows.map((r) => this.mapPayout(r));
     const acceptedPayoutsAmount = payouts.reduce((sum, p) => sum + (p.status === 'accepted' ? p.amount || 0 : 0), 0);
 
     // Legacy salary_payments for the month (old immediate-expense flow) — also
     // money paid; included so the card never hides a recorded payment.
+    const legacyParams: unknown[] = [tenantID, employeeId, monthYear];
+    const legacyPoint = pointFilterSql('sp', pointId, legacyParams);
     const { rows: paymentRows } = await this.pool.query(
       `SELECT sp.*, u.full_name AS user_name, c.full_name AS creator_name
          FROM salary_payments sp
          LEFT JOIN users u ON u.id = sp.user_id
          LEFT JOIN users c ON c.id = sp.created_by
-        WHERE sp.tenant_id = $1 AND sp.user_id = $2 AND sp.month_year = $3
+        WHERE sp.tenant_id = $1 AND sp.user_id = $2 AND sp.month_year = $3${legacyPoint}
         ORDER BY sp.date DESC`,
-      [tenantID, employeeId, monthYear],
+      legacyParams,
     );
     const payments = paymentRows.map((p) => ({
       id: p.id,

@@ -28,6 +28,7 @@ import QueryState from '../components/QueryState';
 import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import RateByMonthModal from '../components/RateByMonthModal';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 import { UserRole, MasterSalary, SalarySummary, SalaryPayment, SalaryPayout, SalaryFine } from '../types';
 
 /** Current month in 'yyyy-MM' format */
@@ -630,7 +631,11 @@ function AdminSalaryView() {
       setPayModalOpen(false);
       setPayForm(emptyPaymentForm);
     },
-    onError: () => toast.error('Ошибка при проведении выплаты'),
+    // 160/161: выплата без филиала не вычлась бы из «к выплате» НИ В ОДНОМ
+    // филиале, и владелец, глядя на филиальный экран, выдал бы её второй раз.
+    // Сервер отвечает 400 «Выберите филиал…» — показываем его текст, а не
+    // глухую «Ошибку»; переключатель филиала живёт в шапке страницы.
+    onError: (err: any) => toast.error(apiErrorMessage(err) ?? 'Ошибка при проведении выплаты', { duration: 8000 }),
   });
 
   // 149 — «Выплата вне программы» → approved-расход категории «Выплаты вне
@@ -673,8 +678,7 @@ function AdminSalaryView() {
   }
 
   const correctionError = (fallback: string) => (err: any) => {
-    const msg = err?.response?.data?.message;
-    toast.error(typeof msg === 'string' ? msg : fallback);
+    toast.error(apiErrorMessage(err) ?? fallback, { duration: 8000 });
   };
 
   const cancelPayoutMutation = useMutation({

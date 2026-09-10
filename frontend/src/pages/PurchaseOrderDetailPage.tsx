@@ -14,18 +14,10 @@ import Modal from '../components/Modal';
 import PurchaseOrderStatusBadge from '../components/PurchaseOrderStatusBadge';
 
 import type { PurchaseOrder, PurchaseOrderItem } from '../types';
-import { formatMoney, formatDateTime, formatDateShort } from '../../../shared/utils/formatters';
+import { formatMoney, formatDateTime, formatDateShort, formatDayKey } from '../../../shared/utils/formatters';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
 
 const outstanding = (it: PurchaseOrderItem) => Math.max(0, it.quantity - it.receivedQuantity);
-
-// «YYYY-MM-DD» локального дня — формат, который понимает и <input type="date">,
-// и сервер (он трактует его как календарный день по МСК). toISOString() здесь
-// нельзя: на МСК он уводит дату на день назад.
-const toDateInput = (d: Date): string =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-
-/** Дата поставки не может быть в будущем — потолок для `max` у input и проверки. */
-const todayInput = (): string => toDateInput(new Date());
 
 // Закупочная цена из free-text поля («12,5» → 12.5); мусор/отрицательное → 0.
 const parsePrice = (t: string): number => {
@@ -43,6 +35,12 @@ export default function PurchaseOrderDetailPage() {
   const { hasPermission } = useAuth();
   // Мутации заказа (приёмка/отмена/правка) — suppliers_manage (волна Битрикс24).
   const canWrite = hasPermission('suppliers_manage');
+  // «Сегодня» календарём АВТОСЕРВИСА, а не браузера (157). Потолок даты
+  // поставки сервер считает в поясе тенанта: бухгалтер, открывший админку из
+  // другого региона, иначе либо не мог выбрать сегодняшний день, либо получал
+  // 400 на дате, которую ему разрешил выбрать `max` у input.
+  const tenantTz = useTenantTimezone();
+  const today = formatDayKey(new Date(), tenantTz);
 
   const [receiveMode, setReceiveMode] = useState(false);
   const [deltas, setDeltas] = useState<Record<string, number>>({});
@@ -55,7 +53,7 @@ export default function PurchaseOrderDetailPage() {
   const [cancelOpen, setCancelOpen] = useState(false);
   // Дата поставки (159): при приёмке — выбирается (в т.ч. прошедшая), у
   // проведённой поставки — меняется задним числом через модалку.
-  const [receiveDate, setReceiveDate] = useState<string>(() => todayInput());
+  const [receiveDate, setReceiveDate] = useState<string>(() => today);
   const [dateModalOpen, setDateModalOpen] = useState(false);
   const [newDate, setNewDate] = useState<string>('');
 
@@ -134,7 +132,7 @@ export default function PurchaseOrderDetailPage() {
       setPrices({});
       const total = vars.items.reduce((s, l) => s + l.receivedQuantity * l.purchasePrice, 0);
       const dateSuffix = vars.receivedAt ? ` (дата поставки ${vars.receivedAt.split('-').reverse().join('.')})` : '';
-      setReceiveDate(todayInput());
+      setReceiveDate(today);
       toast.success(
         (vars.paymentMode === 'paid'
           ? `Поставка на ${formatMoney(total)} принята и оплачена`
@@ -179,7 +177,7 @@ export default function PurchaseOrderDetailPage() {
     }
     setDeltas(initDeltas);
     setPrices(initPrices);
-    setReceiveDate(todayInput());
+    setReceiveDate(today);
     setReceiveMode(true);
   };
 
@@ -219,20 +217,22 @@ export default function PurchaseOrderDetailPage() {
       toast.error('Укажите количество для приёмки');
       return;
     }
-    if (receiveDate > todayInput()) {
+    if (receiveDate > today) {
       toast.error('Дата поставки не может быть в будущем');
       return;
     }
     receiveMutation.mutate({
       items: payloadItems,
       paymentMode: pendingMode,
-      receivedAt: receiveDate !== todayInput() ? receiveDate : undefined,
+      receivedAt: receiveDate !== today ? receiveDate : undefined,
     });
   };
 
   const openDateModal = () => {
     // Предзаполняем текущей датой поставки — владелец правит, а не вводит с нуля.
-    setNewDate(po?.receivedAt ? toDateInput(new Date(po.receivedAt)) : todayInput());
+    // День проведённой поставки — тоже календарём автосервиса: иначе модалка
+    // предлагала бы изменить дату на соседний день просто из-за пояса браузера.
+    setNewDate(po?.receivedAt ? formatDayKey(new Date(po.receivedAt), tenantTz) : today);
     setDateModalOpen(true);
   };
 
@@ -241,7 +241,7 @@ export default function PurchaseOrderDetailPage() {
       toast.error('Выберите дату поставки');
       return;
     }
-    if (newDate > todayInput()) {
+    if (newDate > today) {
       toast.error('Дата поставки не может быть в будущем');
       return;
     }
@@ -342,7 +342,7 @@ export default function PurchaseOrderDetailPage() {
           <input
             id="po-receive-date"
             type="date"
-            max={todayInput()}
+            max={today}
             className="input w-44"
             value={receiveDate}
             onChange={(e) => setReceiveDate(e.target.value)}
@@ -526,7 +526,7 @@ export default function PurchaseOrderDetailPage() {
           (pendingMode === 'paid'
             ? `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад, а платёж на эту сумму создастся автоматически.`
             : `Поставка на ${formatMoney(invoiceTotal)} будет принята на склад. Сумма добавится в долг поставщику — погасите позже через «Новая оплата».`) +
-          (receiveDate !== todayInput()
+          (receiveDate !== today
             ? ` Дата поставки — ${receiveDate.split('-').reverse().join('.')}: ею будут записаны склад, накладная и деньги.`
             : '')
         }
@@ -544,7 +544,7 @@ export default function PurchaseOrderDetailPage() {
             <input
               id="po-new-date"
               type="date"
-              max={todayInput()}
+              max={today}
               className="input"
               value={newDate}
               onChange={(e) => setNewDate(e.target.value)}

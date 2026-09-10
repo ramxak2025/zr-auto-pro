@@ -50,6 +50,7 @@ import {
   outstandingQty,
   toSupplyDateStr,
 } from './purchaseOrders/purchaseOrderHelpers';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 
 export default function PurchaseOrderDetailScreen() {
   const navigation = useNavigation<any>();
@@ -61,6 +62,8 @@ export default function PurchaseOrderDetailScreen() {
   // purchase-orders → тот же ключ; admin живёт по матрице из /auth/me).
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('suppliers_manage');
+  // Пояс автосервиса: «сегодня» для даты поставки считает сервер в нём же (157).
+  const tenantTz = useTenantTimezone();
 
   const id: string = route.params?.id;
   const seedPo: PurchaseOrder | undefined = route.params?.po;
@@ -170,16 +173,22 @@ export default function PurchaseOrderDetailScreen() {
   });
 
   // Пикер даты: будущее не отдаём (сервер вернёт 400) — говорим сразу.
-  const applyPickedDate = useCallback((d: Date) => {
-    if (isFutureDay(d)) {
-      haptic('warning');
-      Alert.alert('Дата поставки', 'Дата поставки не может быть в будущем.');
-      return;
-    }
-    haptic('select');
-    setDatePickerOpen(false);
-    setPendingDate(d);
-  }, []);
+  const applyPickedDate = useCallback(
+    (d: Date) => {
+      // «Будущее» — по календарю АВТОСЕРВИСА (пояс тенанта, 157): именно так
+      // считает потолок сервер, и проверка по устройству отвергала бы у
+      // владивостокского сервиса его же сегодняшний день.
+      if (isFutureDay(d, tenantTz)) {
+        haptic('warning');
+        Alert.alert('Дата поставки', 'Дата поставки не может быть в будущем.');
+        return;
+      }
+      haptic('select');
+      setDatePickerOpen(false);
+      setPendingDate(d);
+    },
+    [tenantTz],
+  );
 
   const busy = orderMutation.isPending || cancelMutation.isPending || changeDateMutation.isPending;
 

@@ -18,13 +18,20 @@ import {
   Clock,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
-import { myCompanyApi, loyaltyApi, checksApi } from '../api/services';
+import { myCompanyApi, loyaltyApi, checksApi, pointsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import Switch from '../components/Switch';
 import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 
-import type { Tenant, LoyaltySettings, PaymentAcceptorInfo, PosSettings, PosSettingsConflict } from '../types';
+import type {
+  Tenant,
+  LoyaltySettings,
+  PaymentAcceptorInfo,
+  PosSettings,
+  PosSettingsConflict,
+  PointsListResponse,
+} from '../types';
 import {
   formatMoney,
   formatDateTime,
@@ -46,6 +53,12 @@ interface CompanyForm {
   receiptFooter: string;
   /** 157 — часовой пояс автосервиса (IANA-id). Дефолт — Москва. */
   timezone: string;
+  /**
+   * 156 — общая база клиентов всех филиалов. Выкл: у каждой точки свой список
+   * клиентов. Дефолт true (`!== false`): у одноточечных тенантов поведение не
+   * меняется, а сервер и так возвращает поле только в этом смысле.
+   */
+  pointsSharedClients: boolean;
 }
 
 // ---- POS «Кассовая смена + роли» ----
@@ -539,9 +552,20 @@ export default function CompanySettingsPage() {
     ogrn: '',
     receiptFooter: '',
     timezone: DEFAULT_TIMEZONE,
+    pointsSharedClients: true,
   });
 
   const [dirty, setDirty] = useState(false);
+
+  // 156 — тумблер «Общая база клиентов» виден только когда есть что разделять
+  // (живых точек больше одной). Тот же ключ ['points'], что у индикатора
+  // филиала в шапке, — лишнего запроса нет.
+  const { data: pointsData } = useQuery<PointsListResponse>({
+    queryKey: ['points'],
+    queryFn: async () => (await pointsApi.list()).data,
+    staleTime: 60_000,
+  });
+  const pointsCount = pointsData?.points.length ?? 0;
 
   useEffect(() => {
     if (company) {
@@ -557,6 +581,7 @@ export default function CompanySettingsPage() {
         ogrn: company.ogrn || '',
         receiptFooter: company.receiptFooter || '',
         timezone: company.timezone || DEFAULT_TIMEZONE,
+        pointsSharedClients: company.pointsSharedClients !== false,
       });
       setDirty(false);
     }
@@ -592,6 +617,10 @@ export default function CompanySettingsPage() {
       // 157 — пояс отправляем всегда: это значение поля, а не тумблер, и
       // сервер принимает только id из белого списка.
       timezone: form.timezone || DEFAULT_TIMEZONE,
+      // 156 — булев тумблер шлём ЦЕЛИКОМ (включая false), иначе выключить
+      // общую базу было бы невозможно: undefined бэкенд игнорирует. И только
+      // когда есть что разделять — у одноточечного тенанта поле не трогаем.
+      ...(pointsCount > 1 ? { pointsSharedClients: form.pointsSharedClients } : null),
     });
   };
 
@@ -796,6 +825,30 @@ export default function CompanySettingsPage() {
               <p className="text-xs text-gray-500 mt-1">Этот текст будет печататься внизу каждого чека</p>
             </div>
           </div>
+
+          {/* 156 — мульти-точки: общая или раздельная база клиентов. Карточка
+              видна только при >1 живой точке (0–1 = одноточечный режим,
+              ничего нового не показываем) и под тем же company_manage, что и
+              остальные реквизиты. Зеркало мобильных настроек компании. */}
+          {pointsCount > 1 && (
+            <div className="card p-5 space-y-4">
+              <div className="flex items-center gap-2 mb-1">
+                <Building2 className="h-4 w-4 text-gray-500" />
+                <h2 className="text-sm font-semibold text-gray-900">Филиалы</h2>
+              </div>
+              <div className="flex items-start justify-between gap-4">
+                <div className="min-w-0">
+                  <p className="text-sm font-medium text-gray-900">Общая база клиентов всех филиалов</p>
+                  <p className="mt-0.5 text-xs text-gray-500">Выкл: у каждого филиала свой список клиентов.</p>
+                </div>
+                <Switch
+                  checked={form.pointsSharedClients}
+                  onChange={(v) => update({ pointsSharedClients: v })}
+                  label="Общая база клиентов всех филиалов"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Cash-shift mode + cashier roles (owner-class) */}
           <ShiftModeSection />

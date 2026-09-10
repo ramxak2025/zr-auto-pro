@@ -34,6 +34,7 @@ import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import FreshnessBadge from '../components/FreshnessBadge';
+import PointSwitcher from '../components/PointSwitcher';
 import {
   colors,
   fontSize,
@@ -58,7 +59,8 @@ import type { Check, PaginatedResponse, User, JournalDoc } from '../../../shared
 // Канонический словарь оплат (включая installment: «Рассрочка») — единый
 // для web и mobile. Локальные копии словаря запрещены: они отстают от
 // новых способов оплаты и журнал показывает сырой англ. ключ.
-import { paymentMethodLabels } from '../../../shared/utils/formatters';
+import { formatDateShort, paymentMethodLabels } from '../../../shared/utils/formatters';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 function formatMoney(v: number) {
   return (
     Math.round(v)
@@ -75,22 +77,54 @@ function formatMileage(v: number) {
       .replace(/\B(?=(\d{3})+(?!\d))/g, ' ') + ' км'
   );
 }
-function formatDate(d: string) {
-  const dt = new Date(d);
-  return (
-    dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) +
-    ' ' +
-    dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
-  );
+// ── Время и календарь журнала — в поясе АВТОСЕРВИСА ────────────────────────
+// Сервер режет журнал по бизнес-суткам тенанта (tenants.timezone, 157). Если
+// клиент рисует время и разделители дней по часам ТЕЛЕФОНА, владелец в поездке
+// видит чек «вчера», хотя сервер посчитал его сегодняшним. Все функции ниже
+// принимают пояс явным аргументом — забыть его нельзя, TS не даст.
+//
+// Все Intl-вызовы обёрнуты (или используют обёрнутый formatDateShort): на
+// урезанной сборке Hermes без нужного пояса форматтер бросает, и тогда мы молча
+// падаем на время устройства — прежнее поведение, а не пустой экран.
+
+/** Ключ календарного дня в поясе тенанта ('DD.MM.YYYY') — только для сравнения. */
+function tenantDayKey(d: string | Date, tz: string): string {
+  return formatDateShort(typeof d === 'string' ? d : d.toISOString(), tz);
 }
-function formatDateGroup(d: string) {
+
+function formatDate(d: string, tz: string) {
   const dt = new Date(d);
-  const today = new Date();
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
-  if (dt.toDateString() === today.toDateString()) return 'Сегодня';
-  if (dt.toDateString() === yesterday.toDateString()) return 'Вчера';
-  return dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  try {
+    return (
+      dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: tz }) +
+      ' ' +
+      dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone: tz })
+    );
+  } catch {
+    return (
+      dt.toLocaleDateString('ru-RU', { day: '2-digit', month: '2-digit', year: '2-digit' }) +
+      ' ' +
+      dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+    );
+  }
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function formatDateGroup(d: string, tz: string) {
+  const dt = new Date(d);
+  const now = new Date();
+  const key = tenantDayKey(dt, tz);
+  if (key === tenantDayKey(now, tz)) return 'Сегодня';
+  // «Вчера» = минус сутки. Для российских поясов перевода часов нет с 2014
+  // года, поэтому вычитание 24 часов всегда попадает в предыдущий календарный
+  // день — ровно как делал прежний код в часах устройства.
+  if (key === tenantDayKey(new Date(now.getTime() - DAY_MS), tz)) return 'Вчера';
+  try {
+    return dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long', timeZone: tz });
+  } catch {
+    return dt.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' });
+  }
 }
 
 const paymentStatusLabels: Record<string, string> = { paid: 'Оплачено', partial: 'Частично', unpaid: 'Не оплачено' };
@@ -233,6 +267,8 @@ interface CheckRowProps {
   check: Check;
   showDateHeader: boolean;
   dateGroupLabel: string;
+  /** Пояс автосервиса. Строка — стабильная ссылка, React.memo не ломается. */
+  timeZone: string;
   canDelete: boolean;
   canViewProfit: boolean;
   onOpen: (checkId: string) => void;
@@ -255,6 +291,7 @@ interface CheckRowProps {
 }
 const CheckRow = React.memo(function CheckRow({
   check,
+  timeZone,
   showDateHeader,
   dateGroupLabel,
   canDelete,
@@ -289,7 +326,14 @@ const CheckRow = React.memo(function CheckRow({
   // Time string — computed once per row mount; row is memoised, so the
   // `new Date(...).toLocaleTimeString(...)` no longer runs on every
   // parent re-render of the screen.
-  const timeLabel = new Date(check.date).toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  const timeLabel = (() => {
+    const dt = new Date(check.date);
+    try {
+      return dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit', timeZone });
+    } catch {
+      return dt.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+    }
+  })();
 
   return (
     <View>
@@ -573,6 +617,8 @@ const CheckRow = React.memo(function CheckRow({
 // `onSelect` setter from `useState` is stable across renders.
 interface WarehouseDocRowProps {
   item: JournalDoc;
+  /** Пояс автосервиса — см. CheckRowProps.timeZone. */
+  timeZone: string;
   // Date-group divider above this row (rendered on the first row of each
   // calendar day). Mirrors CheckRow's `showDateHeader` / `dateGroupLabel`
   // contract so both Journal tabs render identical «Сегодня / Вчера / 5 июня»
@@ -584,6 +630,7 @@ interface WarehouseDocRowProps {
 }
 const WarehouseDocRow = React.memo(function WarehouseDocRow({
   item,
+  timeZone,
   showDateHeader,
   dateGroupLabel,
   onSelect,
@@ -655,7 +702,7 @@ const WarehouseDocRow = React.memo(function WarehouseDocRow({
                 {formatMoney(Math.abs(item.amount))}
               </Text>
               <Text style={[styles.warehouseDate, { color: palette.text.tertiary }]}>
-                {formatDate(item.occurredAt)}
+                {formatDate(item.occurredAt, timeZone)}
               </Text>
             </View>
           </View>
@@ -716,6 +763,10 @@ export default function ChecksScreen() {
   const tabBarHeight = useTabBarHeight();
   const palette = useColors();
   const { hasPermission } = useAuth();
+  // Время и разделители дней журнала — по календарю АВТОСЕРВИСА, тем же, по
+  // которому сервер режет период (иначе «Сегодня» на экране и «сегодня» в
+  // фильтре — разные дни).
+  const tenantTz = useTenantTimezone();
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
   // 155: режим кассовой смены — журнал тонирует карточки по статусу оплаты
@@ -1044,14 +1095,14 @@ export default function ChecksScreen() {
     const flags: boolean[] = new Array(warehouseDocs.length).fill(false);
     let prev = '';
     for (let i = 0; i < warehouseDocs.length; i++) {
-      const grp = formatDateGroup(warehouseDocs[i].occurredAt);
+      const grp = formatDateGroup(warehouseDocs[i].occurredAt, tenantTz);
       if (grp !== prev) {
         flags[i] = true;
         prev = grp;
       }
     }
     return flags;
-  }, [warehouseDocs]);
+  }, [warehouseDocs, tenantTz]);
 
   // Optimistic delete — UX feels instant because the row disappears
   // BEFORE the server confirms. The rollback path restores the cache
@@ -1167,14 +1218,14 @@ export default function ChecksScreen() {
     const flags: boolean[] = new Array(checks.length).fill(false);
     let prev = '';
     for (let i = 0; i < checks.length; i++) {
-      const grp = formatDateGroup(checks[i].date);
+      const grp = formatDateGroup(checks[i].date, tenantTz);
       if (grp !== prev) {
         flags[i] = true;
         prev = grp;
       }
     }
     return flags;
-  }, [checks]);
+  }, [checks, tenantTz]);
 
   // Любая смена фильтра/поиска возвращает список наверх (без анимации).
   // Без этого пользователь, наскролливший вглубь, при смене фильтра
@@ -1240,8 +1291,9 @@ export default function ChecksScreen() {
     ({ item: check, index }: { item: Check; index: number }) => (
       <CheckRow
         check={check}
+        timeZone={tenantTz}
         showDateHeader={dateHeaderByIndex[index] === true}
-        dateGroupLabel={formatDateGroup(check.date)}
+        dateGroupLabel={formatDateGroup(check.date, tenantTz)}
         canDelete={canDelete}
         canViewProfit={canViewProfit}
         onOpen={openCheckDetail}
@@ -1253,6 +1305,7 @@ export default function ChecksScreen() {
     ),
     [
       dateHeaderByIndex,
+      tenantTz,
       canDelete,
       canViewProfit,
       openCheckDetail,
@@ -1267,13 +1320,14 @@ export default function ChecksScreen() {
     ({ item, index }: { item: JournalDoc; index: number }) => (
       <WarehouseDocRow
         item={item}
+        timeZone={tenantTz}
         showDateHeader={warehouseDateHeaderByIndex[index] === true}
-        dateGroupLabel={formatDateGroup(item.occurredAt)}
+        dateGroupLabel={formatDateGroup(item.occurredAt, tenantTz)}
         onSelect={setSelectedDoc}
         palette={palette}
       />
     ),
-    [warehouseDateHeaderByIndex, palette],
+    [warehouseDateHeaderByIndex, tenantTz, palette],
   );
 
   const isWarehouseLoading = warehouseLoading;
@@ -1287,6 +1341,11 @@ export default function ChecksScreen() {
       {/* Header removed per owner — the screen reads as Журнал from the
           tab-bar label already, and the count duplicates info shown at
           the bottom of the list (pagination). Less chrome → more list. */}
+
+      {/* Филиал журнала (156/160) — Журнал показывает чеки ТЕКУЩЕГО филиала,
+          поэтому человек обязан видеть, чью выручку он сейчас читает, и уметь
+          переключиться отсюда же. Скрыт при одном доступном филиале. */}
+      <PointSwitcher variant="chip" style={styles.pointChipRow} />
 
       {/* Freshness pill — HYBRID-perf plan. ChecksScreen renders from
           persistent cache instantly on cold start, so we expose the
@@ -2212,7 +2271,7 @@ export default function ChecksScreen() {
                 <View style={styles.docDetailRow}>
                   <Text style={[styles.docDetailLabel, { color: palette.text.secondary }]}>Дата</Text>
                   <Text style={[styles.docDetailValue, { color: palette.text.primary }]}>
-                    {formatDate(doc.occurredAt)}
+                    {formatDate(doc.occurredAt, tenantTz)}
                   </Text>
                 </View>
               </View>
@@ -2244,7 +2303,7 @@ export default function ChecksScreen() {
                     {typeof entry.meta?.total === 'number' ? formatMoney(entry.meta.total) : 'Чек'}
                   </Text>
                   <Text style={[styles.queueEntryTime, { color: palette.text.tertiary }]}>
-                    {formatDate(new Date(entry.createdAt).toISOString())}
+                    {formatDate(new Date(entry.createdAt).toISOString(), tenantTz)}
                   </Text>
                   <TouchableOpacity
                     onPress={() => confirmDeleteQueued(entry)}
@@ -2336,6 +2395,9 @@ const styles = StyleSheet.create({
   // «Доска» entry (left) + FreshnessBadge (right) — single row above search.
   // (Bespoke title-header styles removed — the header itself was removed
   // per owner brief, tab bar already names the screen «Журнал».)
+  // Чип филиала — своя строка над «Доской»: в одну строку с ней и бейджем
+  // свежести он бы сжал названия до многоточия.
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   freshnessRow: {
     flexDirection: 'row',
     alignItems: 'center',

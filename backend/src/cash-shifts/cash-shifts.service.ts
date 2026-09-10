@@ -14,6 +14,8 @@ import { PushService } from '../push/push.service';
 import { OpenShiftDto } from './dto/open-shift.dto';
 import { CloseShiftDto } from './dto/close-shift.dto';
 import { CollectCashDto } from './dto/collect-cash.dto';
+import { actorPointId, pointFilterSql, resolvePointForWrite } from '../common/point-scope';
+import { assignedToPointSql } from '../users/user-points-sql';
 
 /** Any pg connection we can run a query on — the Pool or a checked-out client. */
 type Queryable = Pick<Pool, 'query'> | Pick<PoolClient, 'query'>;
@@ -71,6 +73,29 @@ export interface AcceptorTotal {
  *
  *   expected = opening + cashSales − cashExpenses − collectionsTotal
  *   difference = closing (фактический нал) − expected   (>0 излишек, <0 недостача)
+ *
+ * ФИЛИАЛЫ (161). Кассовая смена — СВОЯ у каждого филиала (решение владельца):
+ * у каждой точки свой денежный ящик, и Z-отчёт обязан сходиться по ящику, а не
+ * по сети. Поэтому:
+ *   • cash_shifts.point_id — филиал, на котором смену ОТКРЫЛИ;
+ *   • окно Z-отчёта (продажи + наличные расходы) режется точкой САМОЙ СМЕНЫ,
+ *     а не текущей точкой читающего: Z-отчёт — исторический документ, он не
+ *     имеет права меняться от того, кто и откуда его открыл;
+ *   • «одна открытая смена» стала «одна открытая НА ФИЛИАЛ» — частичный
+ *     уникальный индекс переехал на (tenant_id, COALESCE(point_id, нулевой
+ *     uuid)) в миграции 161 (см. её комментарий: NULL сам с собой не
+ *     конфликтует, поэтому одноточечный тенант без суррогата потерял бы
+ *     защиту);
+ *   • размен переносится ВНУТРИ филиала: следующая смена точки А стартует с
+ *     остатка предыдущей смены точки А.
+ *
+ * СЕЙФ ОСТАЁТСЯ ОДИН НА КОМПАНИЮ — сознательно. Баланс сейфа считается как
+ * Σdeposit + Σadjustment − Σcollection по insert-only ленте: депозит рождается
+ * при закрытии смены (филиал известен), а инкассация ИЗ сейфа делается
+ * владельцем и точки может не иметь вовсе (режим «Все точки»). Точка у ЧАСТИ
+ * строк означала бы, что подсуммы по филиалам не сходятся с реальным
+ * остатком, — а это либо запрет законной инкассации, либо «лишние» деньги в
+ * филиале. Один сейф на кабинет — и физически так, и арифметически безопасно.
  */
 @Injectable()
 export class CashShiftsService {
@@ -99,6 +124,8 @@ export class CashShiftsService {
       status: r.status,
       note: r.note ?? null,
       createdAt: r.created_at,
+      // 161 — филиал, на котором смену открыли (null у одноточечного тенанта).
+      pointId: r.point_id ?? null,
       // 155 — пересменка: null на сменах, закрытых до миграции.
       toSafeAmount: r.to_safe_amount === null || r.to_safe_amount === undefined ? null : num(r.to_safe_amount),
       carryoverAmount: r.carryover_amount === null || r.carryover_amount === undefined ? null : num(r.carryover_amount),
@@ -133,14 +160,21 @@ export class CashShiftsService {
   }
 
   // ─── Single-row fetch with opener/closer names ─────────────────────────
-  private async fetchShiftRow(db: Queryable, tenantID: string, id: string): Promise<any | null> {
+  private async fetchShiftRow(
+    db: Queryable,
+    tenantID: string,
+    id: string,
+    pointId: string | null = null,
+  ): Promise<any | null> {
+    const params: unknown[] = [id, tenantID];
+    const pointFilter = pointFilterSql('cs', pointId, params);
     const { rows } = await db.query(
       `SELECT cs.*, ob.full_name AS opened_by_name, cb.full_name AS closed_by_name
          FROM cash_shifts cs
          LEFT JOIN users ob ON ob.id = cs.opened_by AND ob.tenant_id = cs.tenant_id
          LEFT JOIN users cb ON cb.id = cs.closed_by AND cb.tenant_id = cs.tenant_id
-        WHERE cs.id = $1 AND cs.tenant_id = $2`,
-      [id, tenantID],
+        WHERE cs.id = $1 AND cs.tenant_id = $2${pointFilter}`,
+      params,
     );
     return rows[0] ?? null;
   }
@@ -149,12 +183,18 @@ export class CashShiftsService {
    * Live aggregation over the shift window. `windowEnd` is the closed_at of a
    * closed shift or now() for an open one. Tenant-scoped on every query.
    */
+  /**
+   * 161 — `pointId` приходит ОТ СМЕНЫ (cash_shifts.point_id), а не от актора:
+   * Z-отчёт филиала А обязан считать только чеки и расходы филиала А, и обязан
+   * считать их одинаково у кассира, у владельца и через месяц в истории.
+   */
   private async computeFigures(
     db: Queryable,
     tenantID: string,
     shiftId: string,
     openedAt: string,
     windowEnd: string,
+    pointId: string | null,
   ): Promise<{
     cashSales: number;
     cardSales: number;
@@ -169,6 +209,8 @@ export class CashShiftsService {
     // an inclusive timestamptz range on checks.date (the field getCashFlow and
     // the dashboard report on; a draft closed mid-shift has its date rewritten
     // to the activation moment, so it lands in the right window).
+    const salesParams: unknown[] = [tenantID, openedAt, windowEnd];
+    const salesPoint = pointFilterSql(null, pointId, salesParams);
     const { rows: salesRows } = await db.query(
       `SELECT COALESCE(SUM(cash_amount), 0)    AS cash_sales,
               COALESCE(SUM(card_amount), 0)    AS card_sales,
@@ -176,20 +218,22 @@ export class CashShiftsService {
               COUNT(*)                         AS checks_count
          FROM checks
         WHERE tenant_id = $1 AND is_deferred = false AND deleted_at IS NULL
-          AND date >= $2 AND date <= $3`,
-      [tenantID, openedAt, windowEnd],
+          AND date >= $2 AND date <= $3${salesPoint}`,
+      salesParams,
     );
 
     // Cash expenses — every APPROVED expense in the window is treated as cash
     // out of the drawer (expenses carry no tender flag). NULL approval_status
     // is legacy-approved.
+    const expParams: unknown[] = [tenantID, openedAt, windowEnd];
+    const expPoint = pointFilterSql(null, pointId, expParams);
     const { rows: expRows } = await db.query(
       `SELECT COALESCE(SUM(amount), 0) AS cash_expenses
          FROM expenses
         WHERE tenant_id = $1
           AND COALESCE(approval_status, 'approved') = 'approved'
-          AND date >= $2 AND date <= $3`,
-      [tenantID, openedAt, windowEnd],
+          AND date >= $2 AND date <= $3${expPoint}`,
+      expParams,
     );
 
     // Инкассация — keyed by shift_id (always created during this shift).
@@ -203,6 +247,8 @@ export class CashShiftsService {
     // 155 — разбивка «по принявшим оплату»: accepted_by с fallback на
     // master_id (чеки до миграции). Оба NULL → строка userId=null
     // («Не распределено»).
+    const accParams: unknown[] = [tenantID, openedAt, windowEnd];
+    const accPoint = pointFilterSql('c', pointId, accParams);
     const { rows: accRows } = await db.query(
       `SELECT COALESCE(c.accepted_by, c.master_id)     AS user_id,
               u.full_name                              AS name,
@@ -212,10 +258,10 @@ export class CashShiftsService {
          FROM checks c
          LEFT JOIN users u ON u.id = COALESCE(c.accepted_by, c.master_id) AND u.tenant_id = c.tenant_id
         WHERE c.tenant_id = $1 AND c.is_deferred = false AND c.deleted_at IS NULL
-          AND c.date >= $2 AND c.date <= $3
+          AND c.date >= $2 AND c.date <= $3${accPoint}
         GROUP BY 1, 2
         ORDER BY cash_sales DESC, name ASC NULLS LAST`,
-      [tenantID, openedAt, windowEnd],
+      accParams,
     );
 
     return {
@@ -248,7 +294,16 @@ export class CashShiftsService {
       isClosed && shiftRow.closed_at ? new Date(shiftRow.closed_at).toISOString() : new Date().toISOString();
     const openedAt = new Date(shiftRow.opened_at).toISOString();
 
-    const figures = await this.computeFigures(db, tenantID, shiftRow.id, openedAt, windowEnd);
+    // Точка — У СМЕНЫ: Z-отчёт не зависит от того, кто и из какого филиала
+    // его открыл.
+    const figures = await this.computeFigures(
+      db,
+      tenantID,
+      shiftRow.id,
+      openedAt,
+      windowEnd,
+      shiftRow.point_id ?? null,
+    );
 
     const { rows: colRows } = await db.query(
       `SELECT cc.*, u.full_name AS collected_by_name
@@ -322,7 +377,11 @@ export class CashShiftsService {
     };
   }
 
-  /** 155 — баланс сейфа: Σ deposit + Σ adjustment − Σ collection. */
+  /**
+   * 155 — баланс сейфа: Σ deposit + Σ adjustment − Σ collection.
+   * 161 — ОСТАЁТСЯ ТЕНАНТНЫМ (обоснование — в шапке файла): сейф один на
+   * компанию, а частичная точка у insert-only ленты ломает арифметику остатка.
+   */
   private async safeBalance(tenantID: string, db: Queryable = this.pool): Promise<number> {
     const { rows } = await db.query(
       `SELECT COALESCE(SUM(CASE WHEN type = 'collection' THEN -amount ELSE amount END), 0) AS balance
@@ -335,11 +394,27 @@ export class CashShiftsService {
 
   // ─── Open ──────────────────────────────────────────────────────────────
   async open(user: JwtPayload, dto: OpenShiftDto) {
-    // App-level guard (fast, friendly error). The partial unique index
-    // uq_cash_shifts_one_open_per_tenant is the race-proof backstop below.
+    // «НИЧЬИХ» КАССОВЫХ СМЕН НЕ БЫВАЕТ. Смена без филиала считала бы Z-отчёт по
+    // чекам ВСЕЙ сети — и те же чеки попали бы во второй раз в Z-отчёт филиала,
+    // где они и были пробиты. Двойной пересчёт денежного ящика недопустим.
+    //
+    // Волна 4: собственная проверка заменена ОБЩИМ резолвом всех денежных путей
+    // (common/point-scope.resolvePointForWrite) — текст ошибки и её форма (400 +
+    // { message }) прежние, но теперь ровно то же правило действует у чека,
+    // расхода и зарплатных операций, а не только здесь. Бонусом появилась
+    // подстановка единственной доступной точки: кассир одного филиала больше не
+    // видит вопроса вообще. Одноточечный тенант (точек нет вовсе) под гейт не
+    // попадает никогда — его поведение прежнее.
+    const pointId = await resolvePointForWrite(this.pool, user, 'чтобы открыть кассовую смену');
+
+    // App-level guard (fast, friendly error). Партиальный уникальный индекс
+    // uq_cash_shifts_one_open_per_point — race-proof backstop ниже. Проверка
+    // НА ФИЛИАЛ: смена филиала Б больше не мешает открыть смену филиала А.
+    const existingParams: unknown[] = [user.tenantID];
+    const existingPoint = pointFilterSql(null, pointId, existingParams);
     const { rows: existing } = await this.pool.query(
-      `SELECT id FROM cash_shifts WHERE tenant_id = $1 AND status = 'open' LIMIT 1`,
-      [user.tenantID],
+      `SELECT id FROM cash_shifts WHERE tenant_id = $1 AND status = 'open'${existingPoint} LIMIT 1`,
+      existingParams,
     );
     if (existing.length > 0) {
       throw new ConflictException({ message: 'Смена уже открыта' });
@@ -350,13 +425,17 @@ export class CashShiftsService {
     // оставляли ВСЁ в кассе → fallback closing_amount; смен не было → 0.
     let opening: number;
     if (dto.openingAmount === undefined || dto.openingAmount === null) {
+      // 161 — размен переносится ВНУТРИ филиала: деньги, оставленные в ящике
+      // точки А, не могут стать разменом точки Б.
+      const lastParams: unknown[] = [user.tenantID];
+      const lastPoint = pointFilterSql(null, pointId, lastParams);
       const { rows: lastRows } = await this.pool.query(
         `SELECT COALESCE(carryover_amount, closing_amount, 0) AS carryover
            FROM cash_shifts
-          WHERE tenant_id = $1 AND status = 'closed'
+          WHERE tenant_id = $1 AND status = 'closed'${lastPoint}
           ORDER BY closed_at DESC NULLS LAST
           LIMIT 1`,
-        [user.tenantID],
+        lastParams,
       );
       opening = round2(num(lastRows[0]?.carryover));
     } else {
@@ -364,10 +443,10 @@ export class CashShiftsService {
     }
     try {
       const { rows } = await this.pool.query(
-        `INSERT INTO cash_shifts (tenant_id, opened_by, opening_amount, status, note)
-         VALUES ($1, $2, $3, 'open', $4)
+        `INSERT INTO cash_shifts (tenant_id, opened_by, opening_amount, status, note, point_id)
+         VALUES ($1, $2, $3, 'open', $4, $5)
          RETURNING id`,
-        [user.tenantID, user.userID, opening, dto.note ?? null],
+        [user.tenantID, user.userID, opening, dto.note ?? null, pointId],
       );
       const row = await this.fetchShiftRow(this.pool, user.tenantID, rows[0].id);
       return this.assembleReport(this.pool, user.tenantID, row);
@@ -395,10 +474,15 @@ export class CashShiftsService {
     try {
       await client.query('BEGIN');
       // Lock the row so two concurrent closes can't both compute & write.
-      const { rows } = await client.query(`SELECT * FROM cash_shifts WHERE id = $1 AND tenant_id = $2 FOR UPDATE`, [
-        id,
-        user.tenantID,
-      ]);
+      // 161 — плюс фильтр филиала: кассир точки А не должен закрыть смену
+      // точки Б по прямому обращению к API (id смены он мог увидеть раньше,
+      // до перевода на другой филиал). В режиме «Все точки» фильтра нет.
+      const lockParams: unknown[] = [id, user.tenantID];
+      const lockPoint = pointFilterSql(null, actorPointId(user), lockParams);
+      const { rows } = await client.query(
+        `SELECT * FROM cash_shifts WHERE id = $1 AND tenant_id = $2${lockPoint} FOR UPDATE`,
+        lockParams,
+      );
       if (rows.length === 0) {
         await client.query('ROLLBACK');
         throw new NotFoundException({ message: 'Смена не найдена' });
@@ -411,7 +495,7 @@ export class CashShiftsService {
 
       const closedAt = new Date().toISOString();
       const openedAt = new Date(shift.opened_at).toISOString();
-      const figures = await this.computeFigures(client, user.tenantID, id, openedAt, closedAt);
+      const figures = await this.computeFigures(client, user.tenantID, id, openedAt, closedAt, shift.point_id ?? null);
 
       const opening = num(shift.opening_amount);
       const expected = round2(opening + figures.cashSales - figures.cashExpenses - figures.collectionsTotal);
@@ -506,49 +590,65 @@ export class CashShiftsService {
   }
 
   // ─── Current open shift (or null) with live Z-report ───────────────────
-  async current(tenantID: string) {
+  /** Открытая смена МОЕГО филиала (или null). «Все точки» — любая открытая. */
+  async current(tenantID: string, actor?: JwtPayload) {
+    const params: unknown[] = [tenantID];
+    const pointFilter = pointFilterSql('cs', actorPointId(actor), params);
     const { rows } = await this.pool.query(
       `SELECT cs.*, ob.full_name AS opened_by_name, cb.full_name AS closed_by_name
          FROM cash_shifts cs
          LEFT JOIN users ob ON ob.id = cs.opened_by AND ob.tenant_id = cs.tenant_id
          LEFT JOIN users cb ON cb.id = cs.closed_by AND cb.tenant_id = cs.tenant_id
-        WHERE cs.tenant_id = $1 AND cs.status = 'open'
+        WHERE cs.tenant_id = $1 AND cs.status = 'open'${pointFilter}
         ORDER BY cs.opened_at DESC
         LIMIT 1`,
-      [tenantID],
+      params,
     );
     if (rows.length === 0) return null;
     return this.assembleReport(this.pool, tenantID, rows[0]);
   }
 
   // ─── Z-report for a specific shift ─────────────────────────────────────
-  async report(tenantID: string, id: string) {
-    const row = await this.fetchShiftRow(this.pool, tenantID, id);
+  /**
+   * Z-отчёт конкретной смены. 161 — читать можно только смены СВОЕГО филиала
+   * (в режиме «Все точки» — любые): id смены чужого филиала не должен отдавать
+   * его выручку по прямому обращению к API в обход списка.
+   */
+  async report(tenantID: string, id: string, actor?: JwtPayload) {
+    const row = await this.fetchShiftRow(this.pool, tenantID, id, actorPointId(actor));
     if (!row) throw new NotFoundException({ message: 'Смена не найдена' });
     return this.assembleReport(this.pool, tenantID, row);
   }
 
   // ─── Paginated list, newest first ──────────────────────────────────────
-  async list(tenantID: string, query: any) {
+  /** История смен МОЕГО филиала. 161 — total и страница режутся одинаково. */
+  async list(tenantID: string, query: any, actor?: JwtPayload) {
     const page = Math.max(parseInt(query?.page, 10) || 1, 1);
     const limit = Math.min(Math.max(parseInt(query?.limit, 10) || 20, 1), 100);
     const offset = (page - 1) * limit;
+    const pointId = actorPointId(actor);
 
+    const countParams: unknown[] = [tenantID];
+    const countPoint = pointFilterSql('cs', pointId, countParams);
     const { rows: countRows } = await this.pool.query(
-      `SELECT COUNT(*) AS total FROM cash_shifts WHERE tenant_id = $1`,
-      [tenantID],
+      `SELECT COUNT(*) AS total FROM cash_shifts cs WHERE cs.tenant_id = $1${countPoint}`,
+      countParams,
     );
     const total = parseInt(countRows[0].total, 10) || 0;
 
+    const listParams: unknown[] = [tenantID];
+    const listPoint = pointFilterSql('cs', pointId, listParams);
+    const limitIdx = listParams.length + 1;
+    listParams.push(limit, offset);
     const { rows } = await this.pool.query(
       `SELECT cs.*, ob.full_name AS opened_by_name, cb.full_name AS closed_by_name
          FROM cash_shifts cs
          LEFT JOIN users ob ON ob.id = cs.opened_by AND ob.tenant_id = cs.tenant_id
          LEFT JOIN users cb ON cb.id = cs.closed_by AND cb.tenant_id = cs.tenant_id
-        WHERE cs.tenant_id = $1
+        WHERE cs.tenant_id = $1${listPoint}
         ORDER BY cs.opened_at DESC
-        LIMIT $2 OFFSET $3`,
-      [tenantID, limit, offset],
+        LIMIT $${limitIdx} OFFSET $${limitIdx + 1}`,
+      listParams,
     );
 
     return { data: rows.map((r) => this.mapShift(r)), total, page, limit };
@@ -556,12 +656,16 @@ export class CashShiftsService {
 
   // ─── Инкассация ────────────────────────────────────────────────────────
   async collect(user: JwtPayload, id: string, dto: CollectCashDto) {
+    let shiftPointId: string | null = null;
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
+      // Фильтр филиала — как в close(): инкассировать чужой ящик нельзя.
+      const lockParams: unknown[] = [id, user.tenantID];
+      const lockPoint = pointFilterSql(null, actorPointId(user), lockParams);
       const { rows } = await client.query(
-        `SELECT status FROM cash_shifts WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
-        [id, user.tenantID],
+        `SELECT status, point_id FROM cash_shifts WHERE id = $1 AND tenant_id = $2${lockPoint} FOR UPDATE`,
+        lockParams,
       );
       if (rows.length === 0) {
         await client.query('ROLLBACK');
@@ -571,6 +675,9 @@ export class CashShiftsService {
         await client.query('ROLLBACK');
         throw new BadRequestException({ message: 'Инкассация возможна только при открытой смене' });
       }
+      // Филиал события = филиал СМЕНЫ (см. fireCollectionPush): читаем его тем
+      // же локирующим SELECT, чтобы не ходить в базу второй раз после коммита.
+      shiftPointId = (rows[0].point_id as string | null) ?? null;
 
       const amount = round2(num(dto.amount));
       if (!(amount > 0)) {
@@ -600,9 +707,9 @@ export class CashShiftsService {
 
     // Echo the refreshed Z-report so the UI sees the new collections total +
     // recomputed expected balance immediately.
-    const report = await this.report(user.tenantID, id);
+    const report = await this.report(user.tenantID, id, user);
     // 'cash_collection' кассирам: сколько забрали из ящика и что осталось.
-    void this.fireCollectionPush(user, round2(num(dto.amount)), 'кассы', report.expectedAmount);
+    void this.fireCollectionPush(user, round2(num(dto.amount)), 'кассы', report.expectedAmount, shiftPointId);
     return report;
   }
 
@@ -702,15 +809,28 @@ export class CashShiftsService {
     }
   }
 
-  /** 'cash_collection' — эффективным кассирам тенанта, кроме актора. */
+  /**
+   * 'cash_collection' — эффективным кассирам, кроме актора.
+   *
+   * ВОЛНА 4 — ПОЛУЧАТЕЛИ РЕЖУТСЯ ФИЛИАЛОМ СОБЫТИЯ. Пуш несёт сумму изъятия и
+   * ОСТАТОК ДЕНЕЖНОГО ЯЩИКА: в сети из пяти автосервисов кассир точки А читал
+   * чужие остатки как свои и сверял ящик по чужой цифре. Филиал берём У СМЕНЫ,
+   * а не у актора: инкассировать может владелец, сидящий в другом филиале или
+   * в режиме «Все точки» — адресаты определяются местом, откуда ушли деньги.
+   *
+   * Инкассация ИЗ СЕЙФА приходит с pointId = null сознательно: сейф один на
+   * компанию (обоснование — в шапке файла и в миграции 161), его остаток
+   * общий, и получатели остаются тенантными, как было.
+   */
   private async fireCollectionPush(
     actor: JwtPayload,
     amount: number,
     source: 'кассы' | 'сейфа',
     rest: number,
+    pointId: string | null = null,
   ): Promise<void> {
     try {
-      const cashierIds = await this.getCashierUserIds(actor.tenantID);
+      const cashierIds = await this.getCashierUserIds(actor.tenantID, pointId);
       const body = `Инкассация ${fmtMoney(amount)} ₽ из ${source}. Остаток: ${fmtMoney(rest)} ₽`;
       await Promise.all(
         cashierIds
@@ -731,23 +851,32 @@ export class CashShiftsService {
    * allowlist tenants.payment_acceptors (155): непустой список = принимают
    * ТОЛЬКО перечисленные (+ owner-class всегда); NULL/пустой = по матрице
    * роли (accept_payment). Дублируется локально, чтобы не тянуть ChecksService.
+   *
+   * `pointId` (волна 4) режет получателей филиалом ТЕМ ЖЕ предикатом
+   * назначений, что график и пуш «пришёл/ушёл» (assignedToPointSql): без
+   * назначений сотрудник считается работающим везде — безопасный дефолт 156.
+   * null = филиала у события нет (сейф один на компанию) → тенант целиком.
    */
-  private async getCashierUserIds(tenantID: string): Promise<string[]> {
+  private async getCashierUserIds(tenantID: string, pointId: string | null = null): Promise<string[]> {
     const { rows: tRows } = await this.pool.query(`SELECT payment_acceptors FROM tenants WHERE id = $1`, [tenantID]);
     const raw = tRows[0]?.payment_acceptors;
     const acceptors = Array.isArray(raw) ? raw.filter((v: unknown): v is string => typeof v === 'string') : [];
 
     if (acceptors.length > 0) {
+      const params: unknown[] = [tenantID, acceptors];
+      const pointFilter = assignedToPointSql('u', '$1', pointId, params);
       const { rows } = await this.pool.query(
         `SELECT u.id FROM users u
           WHERE u.tenant_id = $1
             AND u.is_active = true AND u.dismissed_at IS NULL AND u.purged_at IS NULL
-            AND (u.id::text = ANY($2::text[]) OR u.role IN ('director', 'superadmin'))`,
-        [tenantID, acceptors],
+            AND (u.id::text = ANY($2::text[]) OR u.role IN ('director', 'superadmin'))${pointFilter}`,
+        params,
       );
       return rows.map((r: { id: string }) => String(r.id));
     }
 
+    const params: unknown[] = [tenantID];
+    const pointFilter = assignedToPointSql('u', '$1', pointId, params);
     const { rows } = await this.pool.query(
       `SELECT u.id
          FROM users u
@@ -760,8 +889,8 @@ export class CashShiftsService {
             u.role IN ('director', 'superadmin')
             OR (r.matrix IS NOT NULL AND (r.matrix->'checks'->>'acceptPayment')::boolean IS TRUE)
             OR (r.matrix IS NULL AND u.role = 'admin')
-          )`,
-      [tenantID],
+          )${pointFilter}`,
+      params,
     );
     return rows.map((r: { id: string }) => String(r.id));
   }

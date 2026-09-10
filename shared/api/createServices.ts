@@ -46,6 +46,7 @@ import type {
   MotivationPromo,
   MotivationAccrual,
   FinancialReport,
+  DashboardChartResponse,
   DashboardStats,
   EmployeeRanking,
   Shift,
@@ -58,6 +59,7 @@ import type {
   TenantCabinet,
   TenantPoint,
   PointsListResponse,
+  PointsSummaryResponse,
   PlatformStats,
   MrrTrendPoint,
   SubscriptionRevenue,
@@ -193,6 +195,7 @@ import type {
   DeleteAccountRequest,
   DeleteAccountResponse,
   PaginationParams,
+  UsersQuery,
   ChecksParams,
   CarsQuery,
   DateRangeParams,
@@ -326,8 +329,15 @@ export function createProfileApi(api: HttpClient) {
 
 export function createUsersApi(api: HttpClient) {
   return {
-    getAll: (params?: PaginationParams) => api.get<User[]>('/users', { params }),
-    getMasters: (params?: PaginationParams) => api.get<User[]>('/users/masters', { params }),
+    /**
+     * Сотрудники тенанта. `{ scope: 'point' }` (161) — только назначенные на
+     * ТЕКУЩИЙ филиал; без параметра — весь тенант, как раньше (см. UsersQuery:
+     * этим же списком резолвятся имена в журнале/зарплате и назначаются люди
+     * на точки, поэтому филиальный срез включается явно и только там, где
+     * чужой сотрудник ведёт к неверным деньгам — в пикере мастера в Кассе).
+     */
+    getAll: (params?: UsersQuery) => api.get<User[]>('/users', { params }),
+    getMasters: (params?: UsersQuery) => api.get<User[]>('/users/masters', { params }),
     getById: (id: string) => api.get<User>(`/users/${id}`),
     create: (data: CreateUserRequest) => api.post<User>('/users', data),
     update: (id: string, data: UpdateUserRequest) => api.patch<User>(`/users/${id}`, data),
@@ -414,6 +424,14 @@ export function createTenantsApi(api: HttpClient) {
 export function createPointsApi(api: HttpClient) {
   return {
     list: () => api.get<PointsListResponse>('/points'),
+    /**
+     * Сводка для карточек раздела «Филиалы»: оборот дня/месяца, прибыль
+     * месяца, число чеков, мастеров на работе — на каждую живую точку.
+     * Гейт `financial_reports`; прибыль дополнительно закрыта `profit_view`
+     * (без права приходит 0). Деньги считаются теми же правилами, что на
+     * главной и в dashboard-v2 (см. PointSummary).
+     */
+    summary: () => api.get<PointsSummaryResponse>('/points/summary'),
     /** pointId: null = сбросить выбор («все точки»). */
     switch: (pointId: string | null) =>
       api.post<{ currentPointId: string | null }>('/points/switch', { pointId }),
@@ -670,13 +688,15 @@ export function createChecksApi(api: HttpClient) {
      * (авторские). Newest-first. Пустой список → карточку не показываем.
      */
     deferredReminders: () => api.get<DeferredCheckReminder[]>('/checks/deferred-reminders'),
+    /**
+     * Точки оси + итоги периода И итоги ПРОШЛОГО периода (`previous`) для
+     * дельты. Прошлый месяц сервер обрезает по тому же дню («1–9 августа»
+     * против «1–9 сентября»), поэтому второй запрос с offset −1 ради дельты
+     * больше не нужен — и не должен появляться снова: он сравнивал бы отрезки
+     * разной длины.
+     */
     getDashboardChart: (period: string, offset?: number) =>
-      api.get<{
-        points: Array<{ date: string; revenue: number; profit: number; checkCount: number }>;
-        totalRevenue: number;
-        totalProfit: number;
-        totalChecks: number;
-      }>('/checks/dashboard/chart', { params: { period, offset: offset ?? 0 } }),
+      api.get<DashboardChartResponse>('/checks/dashboard/chart', { params: { period, offset: offset ?? 0 } }),
     getRanking: () => api.get<EmployeeRanking>('/checks/ranking'),
     /**
      * Returns the most recent (non-deferred) check for the given client and/or
@@ -2224,9 +2244,11 @@ export function createPurchaseOrdersApi(api: HttpClient) {
      * stock-only receive (no supply / debt / payment / cost-basis change).
      *
      * ДАТА ПОСТАВКИ (migration 159): `receivedAt` — 'YYYY-MM-DD' (календарный
-     * день по МСК) либо полный ISO. Ею датируются ВСЕ записи приёмки: движения
-     * склада, накладная, долг/авто-платёж и `receivedAt` заказа. Прошедшая дата
-     * разрешена; будущая и старше 3 лет — 400. Пусто ⇒ момент приёмки.
+     * день в ПОЯСЕ АВТОСЕРВИСА, tenants.timezone / миграция 157) либо полный
+     * ISO. Ею датируются ВСЕ записи приёмки: движения склада, накладная,
+     * долг/авто-платёж и `receivedAt` заказа. Прошедшая дата разрешена; будущая
+     * (по МЕСТНОМУ календарю тенанта) и старше 3 лет — 400. Пусто ⇒ момент
+     * приёмки.
      */
     receive: (
       id: string,
@@ -2241,6 +2263,10 @@ export function createPurchaseOrdersApi(api: HttpClient) {
      * Сервер в одной транзакции переносит на новую дату накладную поставки,
      * авто-платёж по ней, движения склада и `receivedAt` заказа. Только статус
      * 'received'; гейт — `suppliers_manage`.
+     *
+     * `receivedAt` — 'YYYY-MM-DD' (календарный день в ПОЯСЕ АВТОСЕРВИСА, 157)
+     * либо полный ISO. Время суток исходной приёмки сохраняется, чтобы документ
+     * не прыгал внутри дня относительно соседей.
      */
     changeDate: (id: string, receivedAt: string) =>
       api.patch<PurchaseOrder>(`/purchase-orders/${id}/date`, { receivedAt }),

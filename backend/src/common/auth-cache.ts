@@ -85,6 +85,16 @@ export interface ValidatedUser {
    * the 30s TTL is the only staleness window — identical to role/is_active.
    */
   permissions: Record<string, boolean>;
+  /**
+   * Филиал (мульти-точки, 156/160): users.current_point_id актора.
+   * null = «Все точки» — сводка по сети у владельца либо одноточечный тенант.
+   *
+   * Читается тем же SELECT'ом, что роль и матрица (нулевой доп. DB-hop), и
+   * живёт в этом же 30-секундном кеше. ПЕРЕКЛЮЧЕНИЕ ФИЛИАЛА ОБЯЗАНО звать
+   * invalidateAuthUser — иначе до 30 секунд после смены точки сервер
+   * фильтровал бы деньги по СТАРОМУ филиалу (см. PointsService.switchPoint).
+   */
+  currentPointId: string | null;
   jti: string | undefined;
 }
 

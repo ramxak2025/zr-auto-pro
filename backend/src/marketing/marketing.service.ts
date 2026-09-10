@@ -13,6 +13,8 @@ import { PG_POOL } from '../database.module';
 import { isTenantLess } from '../common/auth-cache';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { phoneSearchKey } from '../common/normalize-phone';
+import { getTenantTimezone } from '../common/timezone';
+import { ClientsService } from '../clients/clients.service';
 
 // ─── Messaging Provider Strategy Pattern ─────────────────────────────
 interface MessagingProviderAdapter {
@@ -308,7 +310,27 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   private jobInterval: ReturnType<typeof setInterval> | null = null;
   private scanInterval: ReturnType<typeof setInterval> | null = null;
 
-  constructor(@Inject(PG_POOL) private pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private pool: Pool,
+    // 161 — «на каком филиале виден клиент» решает ОДИН источник
+    // (ClientsService.separatePointFor / separatePointWhere): рассылка обязана
+    // подчиняться тем же границам, что база клиентов, иначе SMS — самый
+    // дешёвый способ дотянуться до чужой базы.
+    private clients: ClientsService,
+  ) {}
+
+  /**
+   * Филиал актора для рассылок, либо null (общая база / точка не выбрана).
+   * Тонкая обёртка ради читаемости вызовов ниже.
+   */
+  private async segmentPoint(tenantId: string, actorUserID?: string): Promise<string | null> {
+    return this.clients.separatePointFor(tenantId, actorUserID);
+  }
+
+  /** Публичный доступ к тому же резолву — нужен контроллеру и ReminderService. */
+  async pointForActor(tenantId: string, actorUserID?: string): Promise<string | null> {
+    return this.segmentPoint(tenantId, actorUserID);
+  }
 
   onModuleInit() {
     if (!RUN_BACKGROUND_JOBS) {
@@ -1200,8 +1222,14 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   async getWinbackSegment(
     tenantId: string,
     days?: number,
+    /** 161 — филиал отправителя (раздельный режим); null = общая база. */
+    point: string | null = null,
   ): Promise<Array<{ clientId: string; name: string; phone: string; lastVisit: string | null; totalChecks: number }>> {
     const n = this.normalizeWinbackDays(days);
+    // Раздельный режим: филиал А не рассылает SMS клиентам филиала Б. Общие
+    // (point_id IS NULL) остаются у всех — предикат тот же, что в списке.
+    const params: unknown[] = [tenantId, n, MarketingService.WINBACK_MAX_ROWS];
+    const pointWhere = this.clients.separatePointWhere('cl', point, params);
     const { rows } = await this.pool.query(
       `SELECT cl.id, cl.full_name, cl.phone,
               MAX(ch.date) AS last_visit,
@@ -1215,13 +1243,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
        WHERE cl.tenant_id = $1
          AND cl.is_retail = false
          AND cl.phone IS NOT NULL
-         AND btrim(cl.phone) <> ''
+         AND btrim(cl.phone) <> ''${pointWhere}
        GROUP BY cl.id, cl.full_name, cl.phone
        HAVING MAX(ch.date) IS NULL
            OR MAX(ch.date) <= now() - ($2 * interval '1 day')
        ORDER BY MAX(ch.date) ASC NULLS FIRST
        LIMIT $3`,
-      [tenantId, n, MarketingService.WINBACK_MAX_ROWS],
+      params,
     );
     return rows.map((r) => ({
       clientId: r.id,
@@ -1244,11 +1272,12 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     tenantId: string,
     days: number,
     message: string,
+    actorUserID?: string,
   ): Promise<{ sent: number; failed: number; skippedDedup: number; total: number }> {
     const text = (message || '').trim();
     if (!text) throw new BadRequestException({ message: 'Сообщение не может быть пустым' });
 
-    const segment = await this.getWinbackSegment(tenantId, days);
+    const segment = await this.getWinbackSegment(tenantId, days, await this.segmentPoint(tenantId, actorUserID));
     const total = segment.length;
     const dayStamp = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
     let sent = 0;
@@ -1297,6 +1326,8 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   private async resolveSegment(
     tenantId: string,
     segment: { lastVisitDays?: number; source?: string; hasDebt?: boolean; clientIds?: string[] },
+    /** 161 — филиал отправителя (раздельный режим); null = общая база. */
+    point: string | null = null,
   ): Promise<Array<{ clientId: string; phone: string }>> {
     const params: unknown[] = [tenantId];
     let idx = 2;
@@ -1335,6 +1366,13 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       idx++;
     }
 
+    // Филиал — последним условием: фрагмент нумеруется по params.length, а
+    // локальный idx дальше не используется (инвариант idx === params.length+1
+    // сохраняется). Ручной сегмент по clientIds тоже режется: клиент чужого
+    // филиала не должен получить SMS даже по прямому указанию его id.
+    const pointWhere = this.clients.separatePointWhere('cl', point, params);
+    if (pointWhere) where.push(pointWhere.replace(/^ AND /, ''));
+
     const sql = `
       SELECT cl.id, cl.phone
         FROM clients cl
@@ -1372,6 +1410,8 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
   ): Promise<{ sent: number; skippedDedup: number; failed: number; total: number }> {
     const text = (dto.message || '').trim();
     if (!text) throw new BadRequestException({ message: 'Сообщение не может быть пустым' });
+    // 161 — сегмент режется филиалом отправителя (createdBy — он же актор).
+    const point = await this.segmentPoint(tenantId, createdBy ?? undefined);
 
     // Resolve the channel ONCE and fail fast if nothing is connected.
     const adapterRow = await this.getAdapterRowFor(tenantId, {
@@ -1384,7 +1424,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
     const adapter = this.createAdapter(adapterRow);
     const providerType = adapterRow.provider_type;
 
-    const recipients = await this.resolveSegment(tenantId, dto.segment || {});
+    const recipients = await this.resolveSegment(tenantId, dto.segment || {}, point);
     const contentHash = this.contentHash(text);
     const runKey =
       dto.idempotencyKey && dto.idempotencyKey.trim()
@@ -1509,15 +1549,19 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       where += ` AND sm.client_id = $${idx++}`;
       params.push(query.clientId);
     }
-    // Московский полуинтервал [from 00:00 МСК, to+1 00:00 МСК) — зеркально
+    // Полуинтервал [from 00:00, to+1 00:00) В ПОЯСЕ ТЕНАНТА — зеркально
     // журналу чеков, чтобы «за сегодня» означало один и тот же день.
-    if (query.dateFrom) {
-      where += ` AND sm.sent_at >= $${idx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`;
-      params.push(query.dateFrom);
-    }
-    if (query.dateTo) {
-      where += ` AND sm.sent_at < ($${idx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`;
-      params.push(query.dateTo);
+    if (query.dateFrom || query.dateTo) {
+      const tzPh = `$${idx++}::text`;
+      params.push(await getTenantTimezone(this.pool, tenantId));
+      if (query.dateFrom) {
+        where += ` AND sm.sent_at >= $${idx++}::date::timestamp AT TIME ZONE ${tzPh}`;
+        params.push(query.dateFrom);
+      }
+      if (query.dateTo) {
+        where += ` AND sm.sent_at < ($${idx++}::date + 1)::timestamp AT TIME ZONE ${tzPh}`;
+        params.push(query.dateTo);
+      }
     }
 
     const cursor = this.parseSentCursor(query.cursor);
@@ -1591,6 +1635,7 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       integrationId?: string | null;
       providerType?: string | null;
     },
+    actorUserID?: string,
   ): Promise<{
     recipientsCount: number;
     sample: Array<{ name: string; phone: string }>;
@@ -1605,7 +1650,9 @@ export class MarketingService implements OnModuleInit, OnModuleDestroy {
       providerType: dto.providerType ?? null,
     });
 
-    const recipients = await this.resolveSegment(tenantId, dto.segment || {});
+    // Предпросмотр обязан считать РОВНО тот же сегмент, что уйдёт в отправку.
+    const previewPoint = await this.segmentPoint(tenantId, actorUserID);
+    const recipients = await this.resolveSegment(tenantId, dto.segment || {}, previewPoint);
 
     // Имена для первых 5 — образец «кому именно уйдёт».
     const sampleIds = recipients.slice(0, 5).map((r) => r.clientId);

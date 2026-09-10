@@ -16,6 +16,7 @@ import PhoneInput from '../components/PhoneInput';
 import { useClickableRow } from '../hooks/useClickableRow';
 import { Client, PaginatedResponse } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { apiErrorMessage, otherPointPhoneConflictMessage } from '../../../shared/utils/apiError';
 
 // `useClickableRow` returns a static prop bag (no React state) — aliasing lets
 // us call it per-row inside `.map` without tripping react-hooks/rules-of-hooks.
@@ -89,6 +90,25 @@ export default function ClientsPage() {
     },
   });
 
+  /**
+   * Единая реакция на отказ записи клиента.
+   *
+   * Раньше здесь стоял глухой текст, и владелец не видел НИ ОДНОЙ реальной
+   * причины: ни 409 «клиент с этим номером уже добавлен», ни 400 про пустое
+   * имя. Отдельная ветка — 161: номер занят карточкой ДРУГОГО ФИЛИАЛА. Там
+   * сервер намеренно не отдаёт ни имени, ни id владельца (чужая база), поэтому
+   * ссылку «перейти к клиенту» показывать нельзя — она вела бы в 404. Текст
+   * сервера объясняет, что делать, и живёт на экране дольше обычного тоста.
+   */
+  const clientWriteError = (err: unknown, fallback: string) => {
+    const otherPoint = otherPointPhoneConflictMessage(err);
+    if (otherPoint) {
+      toast.error(otherPoint, { duration: 8000 });
+      return;
+    }
+    toast.error(apiErrorMessage(err) ?? fallback);
+  };
+
   // Mutations
   const createMutation = useMutation({
     mutationFn: (data: { fullName: string; phone: string; comment?: string }) => clientsApi.create(data),
@@ -104,9 +124,7 @@ export default function ClientsPage() {
       toast.success('Клиент создан');
       closeModal();
     },
-    onError: () => {
-      toast.error('Ошибка при создании клиента');
-    },
+    onError: (err) => clientWriteError(err, 'Ошибка при создании клиента'),
   });
 
   const updateMutation = useMutation({
@@ -122,9 +140,7 @@ export default function ClientsPage() {
       toast.success('Клиент обновлён');
       closeModal();
     },
-    onError: () => {
-      toast.error('Ошибка при обновлении клиента');
-    },
+    onError: (err) => clientWriteError(err, 'Ошибка при обновлении клиента'),
   });
 
   const deleteMutation = useMutation({

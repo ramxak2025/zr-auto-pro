@@ -23,9 +23,13 @@ import { ttlCache } from './ttl-cache';
  * инстанта: это работает и для поясов с летним временем (если список когда-то
  * пополнится не-российскими).
  *
- * ВНИМАНИЕ. Этот файл НИЧЕГО не переписывает в существующих сервисах — они
- * по-прежнему считают по Москве. Перевод бизнес-логики на пояс тенанта —
- * отдельная волна; здесь только инфраструктура и настройка.
+ * ВНИМАНИЕ. Этот файл — ЕДИНСТВЕННЫЙ источник границ бизнес-суток. Сервисы
+ * (checks / reports / salary / expenses / shifts / schedule / calls /
+ * installments / suppliers / marketing / returns) читают пояс тенанта один раз
+ * на запрос и передают его сюда либо параметром `$n::text` в SQL. Своих
+ * `MSK_OFFSET_MS` и литералов `AT TIME ZONE 'Europe/Moscow'` в бизнес-логике
+ * больше нет — иначе один и тот же чек попадал бы в разные сутки на разных
+ * экранах.
  */
 
 /** Пояс по умолчанию — ровно текущее поведение кода (MSK, UTC+3). */
@@ -325,4 +329,104 @@ export function zonedDateKey(instant: Date, tz: string): string {
   const mm = String(p.month).padStart(2, '0');
   const dd = String(p.day).padStart(2, '0');
   return `${p.year}-${mm}-${dd}`;
+}
+
+/**
+ * Настенная полночь календарного дня (year, monthIndex, day) в поясе как
+ * UTC-инстант. `monthIndex` — 0-based, как у `Date.UTC`, и переполнение
+ * дня/месяца нормализуется тем же способом: `zonedMidnight(tz, 2026, 0, 32)`
+ * это 1 февраля, `day - 1` — последний день предыдущего месяца.
+ *
+ * Прямая замена локальным хелперам вида
+ * `const mskMidnight = (y, m, d) => new Date(Date.UTC(y, m, d) - MSK_OFFSET_MS)`,
+ * которые были продублированы в дашбордах чеков и отчётов.
+ */
+export function zonedMidnight(tz: string, year: number, monthIndex: number, day: number): Date {
+  return zonedWallClockToInstant(resolveZone(tz), year, monthIndex, day);
+}
+
+/**
+ * День недели календарной даты инстанта в поясе, по ISO: Пн=1 … Вс=7.
+ *
+ * ПОЧЕМУ ISO, А НЕ getUTCDay(). Формула начала недели «день − dow + 1» с
+ * воскресеньем как 0 уводила бы на понедельник СЛЕДУЮЩЕЙ недели (весь
+ * воскресный день выручка недели показывалась нулём). Возвращаем сразу 7,
+ * чтобы вызывающему не приходилось помнить про эту поправку.
+ */
+export function zonedIsoWeekday(instant: Date, tz: string): number {
+  const p = getZonedParts(instant, tz);
+  // getUTCDay от «настенной даты, разложенной как UTC» — это день недели именно
+  // местного календарного дня, а не UTC-дня того же инстанта.
+  const dow = new Date(Date.UTC(p.year, p.month - 1, p.day)).getUTCDay();
+  return dow === 0 ? 7 : dow;
+}
+
+/** Начало ISO-недели (понедельник, 00:00 по местному) как UTC-инстант. */
+export function startOfWeekInZone(tz: string, ref: Date = new Date()): Date {
+  const zone = resolveZone(tz);
+  const p = getZonedParts(ref, zone);
+  return zonedMidnight(zone, p.year, p.month - 1, p.day - zonedIsoWeekday(ref, zone) + 1);
+}
+
+/** Час (0–23) настенного времени в поясе — «который сейчас час у тенанта». */
+export function zonedHour(instant: Date, tz: string): number {
+  return getZonedParts(instant, tz).hour;
+}
+
+/** Настенное время в поясе как 'HH:MM' — метка времени операции для UI/логов. */
+export function zonedTimeKey(instant: Date, tz: string): string {
+  const p = getZonedParts(instant, tz);
+  return `${String(p.hour).padStart(2, '0')}:${String(p.minute).padStart(2, '0')}`;
+}
+
+/** Календарный месяц инстанта в поясе как 'YYYY-MM' — ключ периода зарплаты. */
+export function zonedMonthKey(instant: Date, tz: string): string {
+  const p = getZonedParts(instant, tz);
+  return `${p.year}-${String(p.month).padStart(2, '0')}`;
+}
+
+/** Один ли это календарный день в поясе. Аргументы — инстанты или epoch-мс. */
+export function isSameZonedDay(a: Date | number, b: Date | number, tz: string): boolean {
+  const zone = resolveZone(tz);
+  const toDate = (v: Date | number): Date => (v instanceof Date ? v : new Date(v));
+  return zonedDateKey(toDate(a), zone) === zonedDateKey(toDate(b), zone);
+}
+
+/** 'YYYY-MM-DD' — единственный принимаемый формат календарного ключа дня. */
+const DAY_KEY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+/**
+ * epoch-мс начала суток `day` ('YYYY-MM-DD') в поясе. `NaN` на кривом дне —
+ * ровно там же, где его давал прежний `Date.parse(day + 'T00:00:00.000Z')`.
+ *
+ * ПОЧЕМУ ГРАНИЦЫ ИМЕННО 01–12 / 01–31. Это ПОБИТОВО поведение V8-парсера,
+ * который стоял здесь раньше: месяц вне 01–12 и день вне 01–31 он отвергает,
+ * а переполнение внутри месяца (2026-02-30) молча сворачивает вперёд (2 марта).
+ * Ужесточать до «дня, который реально существует» нельзя: это поменяло бы
+ * ответ API для московских тенантов, а вся правка обязана быть для них
+ * нейтральной. Клиентские date-picker'ы таких дат не присылают.
+ */
+export function dayStartMsInZone(tz: string, day: string): number {
+  const m = DAY_KEY_RE.exec(day);
+  if (!m) return NaN;
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const dayOfMonth = Number(m[3]);
+  if (month < 1 || month > 12 || dayOfMonth < 1 || dayOfMonth > 31) return NaN;
+  return zonedMidnight(resolveZone(tz), year, month - 1, dayOfMonth).getTime();
+}
+
+/**
+ * Пояса всех тенантов одним запросом — для фоновых заданий, которые обходят
+ * тенантов пачкой. Гонять getTenantTimezone в цикле по сотням тенантов значит
+ * сделать сотни запросов; здесь один. Значение нормализуется тем же
+ * normalizeTimezone, поэтому мусор в колонке = Москва.
+ */
+export async function listTenantTimezones(pool: Pool): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const { rows } = await pool.query('SELECT id, timezone FROM tenants');
+  for (const row of rows as Array<{ id: string; timezone: unknown }>) {
+    map.set(String(row.id), normalizeTimezone(row.timezone));
+  }
+  return map;
 }

@@ -20,12 +20,14 @@ export class ReturnsController {
   @RequirePermission('checks_view_all')
   @Get()
   list(@CurrentUser() user: JwtPayload, @Query() query: { from?: string; to?: string }) {
-    return this.returnsService.list(user.tenantID, query);
+    return this.returnsService.list(user.tenantID, query, user);
   }
 
   @RequirePermission('payment_edit')
   @Post(':checkId')
   create(@Param('checkId') checkId: string, @CurrentUser() user: JwtPayload, @Body() dto: CreateReturnDto) {
-    return this.returnsService.createReturn(user.tenantID, user.userID, checkId, dto);
+    // Актор передаётся целиком: возврат — это ЗАПИСЬ по чеку, и он режется
+    // филиалом актора (161), как и остальные пути записи по чеку.
+    return this.returnsService.createReturn(user.tenantID, user.userID, checkId, dto, user);
   }
 }

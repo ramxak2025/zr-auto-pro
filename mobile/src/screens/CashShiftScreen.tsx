@@ -24,7 +24,7 @@
  * Android-совместимо: ввод сумм идёт через собственную Modal + TextInput
  * (Alert.prompt — iOS-only), все API platform-agnostic.
  */
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   View,
   Text,
@@ -41,10 +41,12 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
+import PointSwitcher, { type PointSwitcherHandle } from '../components/PointSwitcher';
 import Modal from '../components/Modal';
 import EmptyState from '../components/EmptyState';
 import { ListSkeleton } from '../components/Skeleton';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { useColors } from '../contexts/ThemeContext';
 import type { SemanticPalette } from '../theme/palette';
 import { cashShiftsApi } from '../api/services';
@@ -61,6 +63,7 @@ import type {
   SafeState,
   SafeTransaction,
 } from '../../../shared/types';
+import { choosePointMessage } from '../../../shared/utils/apiError';
 
 // ────────────────────────────────────────────────────────────────────────
 //  Formatting helpers
@@ -77,16 +80,27 @@ function formatMoney(v: number): string {
   );
 }
 
-function formatDateTime(iso?: string | null): string {
+/**
+ * Дата+время кассовой смены — в поясе АВТОСЕРВИСА (tenants.timezone, 157).
+ * Смена открывается и закрывается по местным суткам (shifts.service считает
+ * бизнес-дату тем же поясом), поэтому «Открыта 09:05» обязано быть местным
+ * временем, а не временем телефона кассира. Сбой Intl → время устройства.
+ */
+function formatDateTime(iso: string | null | undefined, tz: string): string {
   if (!iso) return '—';
   const d = new Date(iso);
-  return d.toLocaleString('ru-RU', {
+  const opts: Intl.DateTimeFormatOptions = {
     day: '2-digit',
     month: '2-digit',
     year: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  });
+  };
+  try {
+    return d.toLocaleString('ru-RU', { ...opts, timeZone: tz });
+  } catch {
+    return d.toLocaleString('ru-RU', opts);
+  }
 }
 
 /** Парсит пользовательский ввод суммы: пробелы как разделители тысяч,
@@ -248,6 +262,10 @@ export default function CashShiftScreen() {
     setToSafeInput('');
   }, []);
 
+  // Ссылка на шторку выбора филиала: сервер отказывает открыть смену в режиме
+  // «Все точки», и правильный ответ на этот отказ — сразу предложить выбор.
+  const pointSwitcherRef = useRef<PointSwitcherHandle>(null);
+
   const openMutation = useMutation({
     // 155 — openingAmount опционален: без него сервер сам подставляет размен
     // прошлой смены (carryoverAmount последней закрытой).
@@ -272,6 +290,27 @@ export default function CashShiftScreen() {
     },
     onError: (err) => {
       haptic('error');
+      // 160/161: у тенанта с филиалами смену нельзя открыть «на всю сеть» —
+      // деньги смены должны принадлежать конкретной точке. Сервер отвечает
+      // человеческим текстом; мы не пересказываем его, а даём кнопку, которая
+      // решает проблему на месте. Распознаём отказ ОБЩИМ хелпером
+      // (shared/utils/apiError), а не «есть ли в тексте слово филиал»: под
+      // ту проверку попал бы любой другой отказ, где это слово встретилось.
+      const pointMessage = choosePointMessage(err);
+      if (pointMessage) {
+        // Форма ввода размена — RN `<Modal>`, шторка выбора филиала тоже.
+        // Презентация одной в тот же кадр, когда другая ещё уходит, на iOS
+        // съедает верхнюю, поэтому сначала закрываем форму, потом (через
+        // анимацию) спрашиваем: смена всё равно не откроется без филиала.
+        closeInputModal();
+        setTimeout(() => {
+          Alert.alert('Выберите филиал', pointMessage, [
+            { text: 'Отмена', style: 'cancel' },
+            { text: 'Выбрать филиал', onPress: () => pointSwitcherRef.current?.open() },
+          ]);
+        }, 250);
+        return;
+      }
       Alert.alert('Ошибка', serverMessage(err) ?? 'Не удалось открыть смену. Возможно, смена уже открыта.');
     },
   });
@@ -564,6 +603,13 @@ export default function CashShiftScreen() {
         subtitle="Z-отчёт и инкассация"
         onBack={isTabRoot ? undefined : () => navigation.goBack()}
       />
+
+      {/* Филиал смены (156/161): GET /cash-shifts/current отдаёт смену ТЕКУЩЕГО
+          филиала, а открыть смену в режиме «Все точки» сервер не даёт вовсе —
+          деньги смены обязаны принадлежать конкретной точке. Отдельной строкой,
+          а не в trailing шапки: длинное название филиала обрезало бы заголовок.
+          Чип скрывает себя сам, когда доступен один филиал. */}
+      <PointSwitcher ref={pointSwitcherRef} variant="chip" style={styles.pointChipRow} />
 
       {loadingFirst ? (
         <View style={styles.loadingWrap}>
@@ -891,6 +937,8 @@ function safeTxTint(tx: SafeTransaction, palette: SemanticPalette): string {
 }
 
 function SafeHistoryDetail({ state, palette }: { state: SafeState; palette: SemanticPalette }) {
+  // Время смены/операций — в поясе автосервиса (см. formatDateTime).
+  const tenantTz = useTenantTimezone();
   return (
     <View>
       <View style={styles.reportHeader}>
@@ -914,7 +962,7 @@ function SafeHistoryDetail({ state, palette }: { state: SafeState; palette: Sema
             <View style={{ flex: 1, minWidth: 0, gap: 2 }}>
               <Text style={[styles.safeTxType, { color: palette.text.primary }]}>{SAFE_TX_LABELS[tx.type]}</Text>
               <Text style={[styles.safeTxMeta, { color: palette.text.tertiary }]} numberOfLines={2}>
-                {formatDateTime(tx.createdAt)}
+                {formatDateTime(tx.createdAt, tenantTz)}
                 {tx.actorName ? ` · ${tx.actorName}` : ''}
                 {tx.note ? ` · ${tx.note}` : ''}
               </Text>
@@ -940,6 +988,8 @@ interface OpenShiftViewProps {
 }
 
 function OpenShiftView({ report, isOwner, palette, onCollect, onClose }: OpenShiftViewProps) {
+  // Время смены/операций — в поясе автосервиса (см. formatDateTime).
+  const tenantTz = useTenantTimezone();
   return (
     <View>
       {/* Статус */}
@@ -953,7 +1003,7 @@ function OpenShiftView({ report, isOwner, palette, onCollect, onClose }: OpenShi
           </View>
         </View>
         <Text style={[styles.statusMeta, { color: palette.text.secondary }]}>
-          Открыта {formatDateTime(report.shift.openedAt)}
+          Открыта {formatDateTime(report.shift.openedAt, tenantTz)}
           {report.shift.openedByName ? ` · ${report.shift.openedByName}` : ''}
         </Text>
       </View>
@@ -1044,7 +1094,7 @@ function OpenShiftView({ report, isOwner, palette, onCollect, onClose }: OpenShi
               <View style={styles.collectionLeft}>
                 <Text style={[styles.collectionAmount, { color: palette.text.primary }]}>{formatMoney(c.amount)}</Text>
                 <Text style={[styles.collectionMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
-                  {formatDateTime(c.collectedAt)}
+                  {formatDateTime(c.collectedAt, tenantTz)}
                   {c.collectedByName ? ` · ${c.collectedByName}` : ''}
                   {c.note ? ` · ${c.note}` : ''}
                 </Text>
@@ -1125,6 +1175,8 @@ interface HistoryRowProps {
 }
 
 const HistoryRow = React.memo(function HistoryRow({ shift, showDivider, palette, onPress }: HistoryRowProps) {
+  // Время смены/операций — в поясе автосервиса (см. formatDateTime).
+  const tenantTz = useTenantTimezone();
   const diff = shift.difference ?? 0;
   const diffTint = diff > 0 ? colors.green[600] : diff < 0 ? colors.rose[600] : palette.text.tertiary;
   const diffLabel = diff > 0 ? 'Излишек' : diff < 0 ? 'Недостача' : 'Сходится';
@@ -1133,9 +1185,11 @@ const HistoryRow = React.memo(function HistoryRow({ shift, showDivider, palette,
     <>
       <TouchableOpacity style={styles.historyRow} onPress={onPress} activeOpacity={0.6}>
         <View style={styles.historyLeft}>
-          <Text style={[styles.historyDate, { color: palette.text.primary }]}>{formatDateTime(shift.closedAt)}</Text>
+          <Text style={[styles.historyDate, { color: palette.text.primary }]}>
+            {formatDateTime(shift.closedAt, tenantTz)}
+          </Text>
           <Text style={[styles.historyMeta, { color: palette.text.tertiary }]} numberOfLines={1}>
-            Открыта {formatDateTime(shift.openedAt)}
+            Открыта {formatDateTime(shift.openedAt, tenantTz)}
             {shift.closedByName ? ` · ${shift.closedByName}` : ''}
           </Text>
         </View>
@@ -1163,6 +1217,8 @@ interface ReportDetailProps {
 }
 
 function ReportDetail({ report, palette }: ReportDetailProps) {
+  // Время смены/операций — в поясе автосервиса (см. formatDateTime).
+  const tenantTz = useTenantTimezone();
   const closed = report.shift.status === 'closed';
   const diff = report.difference ?? 0;
   const diffTint = diff > 0 ? colors.green[600] : diff < 0 ? colors.rose[600] : palette.text.secondary;
@@ -1195,7 +1251,8 @@ function ReportDetail({ report, palette }: ReportDetailProps) {
           {closed ? 'Z-отчёт по смене' : 'Текущий Z-отчёт'}
         </Text>
         <Text style={[styles.reportPeriod, { color: palette.text.tertiary }]}>
-          {formatDateTime(report.shift.openedAt)} → {formatDateTime(report.shift.closedAt ?? report.windowEnd)}
+          {formatDateTime(report.shift.openedAt, tenantTz)} →{' '}
+          {formatDateTime(report.shift.closedAt ?? report.windowEnd, tenantTz)}
         </Text>
         {safeParts.length > 0 && (
           <Text style={[styles.reportSafeLine, { color: palette.text.secondary }]}>{safeParts.join(' · ')}</Text>
@@ -1291,6 +1348,7 @@ function ReportDetail({ report, palette }: ReportDetailProps) {
 const styles = StyleSheet.create({
   safe: { flex: 1 },
   loadingWrap: { paddingHorizontal: spacing[4], paddingTop: spacing[2] },
+  pointChipRow: { marginHorizontal: spacing[4], marginBottom: spacing[2], alignSelf: 'flex-start' },
   scrollContent: { paddingHorizontal: spacing[4], paddingTop: spacing[2], gap: spacing[3] },
 
   // Status

@@ -1,6 +1,7 @@
 import { Injectable, Inject, Logger, BadRequestException } from '@nestjs/common';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { listTenantTimezones, zonedDateKey } from '../common/timezone';
 
 export type Period = 'week' | 'month' | 'quarter' | 'year';
 export type Urgency = 'critical' | 'now' | 'soon' | 'overstocked';
@@ -112,51 +113,72 @@ export class WarehouseAnalyticsService {
    * tenant-wide aggregate row (warehouse_id IS NULL). Idempotent via the
    * unique index uniq_stock_snapshot_per_day, so re-running the same day
    * is a no-op.
+   *
+   * `snapshot_date` — календарный день В ПОЯСЕ ТЕНАНТА, а не CURRENT_DATE
+   * сессии Postgres (контейнер живёт в UTC). Для российских поясов в штатный
+   * час крона (03:30 МСК = 00:30 UTC) это одна и та же дата, поэтому цифры не
+   * поедут; разница видна на внеплановом прогоне (снапшот при старте после
+   * деплоя вечером), где UTC-дата уже «завтрашняя» для востока или ещё
+   * «вчерашняя» для запада. Тенанты сгруппированы по получившейся дате —
+   * запросов столько, сколько РАЗНЫХ дат (обычно один), а не сколько тенантов.
    */
   async recomputeDailySnapshots(): Promise<{ written: number }> {
     let written = 0;
     try {
-      // Per-warehouse snapshot
-      const perWarehouse = await this.pool.query(
-        `INSERT INTO stock_value_snapshots (tenant_id, warehouse_id, snapshot_date, total_cost_value, total_sell_value, items_count)
+      const now = new Date();
+      const tenantsByDay = new Map<string, string[]>();
+      for (const [tenantID, tz] of await listTenantTimezones(this.pool)) {
+        const day = zonedDateKey(now, tz);
+        const bucket = tenantsByDay.get(day);
+        if (bucket) bucket.push(tenantID);
+        else tenantsByDay.set(day, [tenantID]);
+      }
+
+      for (const [day, tenantIds] of tenantsByDay) {
+        // Per-warehouse snapshot
+        const perWarehouse = await this.pool.query(
+          `INSERT INTO stock_value_snapshots (tenant_id, warehouse_id, snapshot_date, total_cost_value, total_sell_value, items_count)
          SELECT
            p.tenant_id,
            p.warehouse_id,
-           CURRENT_DATE,
+           $1::date,
            COALESCE(SUM(p.cost_price * p.stock), 0),
            COALESCE(SUM(p.sell_price * p.stock), 0),
            COUNT(*)
          FROM products p
-         WHERE p.deleted_at IS NULL
+         WHERE p.deleted_at IS NULL AND p.tenant_id = ANY($2::uuid[])
          GROUP BY p.tenant_id, p.warehouse_id
          ON CONFLICT (tenant_id, COALESCE(warehouse_id, '00000000-0000-0000-0000-000000000000'::uuid), snapshot_date)
          DO UPDATE SET
            total_cost_value = EXCLUDED.total_cost_value,
            total_sell_value = EXCLUDED.total_sell_value,
            items_count = EXCLUDED.items_count`,
-      );
-      written += perWarehouse.rowCount ?? 0;
+          [day, tenantIds],
+        );
+        written += perWarehouse.rowCount ?? 0;
 
-      // Tenant aggregate (warehouse_id NULL)
-      const aggregate = await this.pool.query(
-        `INSERT INTO stock_value_snapshots (tenant_id, warehouse_id, snapshot_date, total_cost_value, total_sell_value, items_count)
+        // Tenant aggregate (warehouse_id NULL)
+        const aggregate = await this.pool.query(
+          `INSERT INTO stock_value_snapshots (tenant_id, warehouse_id, snapshot_date, total_cost_value, total_sell_value, items_count)
          SELECT
            p.tenant_id,
            NULL,
-           CURRENT_DATE,
+           $1::date,
            COALESCE(SUM(p.cost_price * p.stock), 0),
            COALESCE(SUM(p.sell_price * p.stock), 0),
            COUNT(*)
          FROM products p
-         WHERE p.deleted_at IS NULL
+         WHERE p.deleted_at IS NULL AND p.tenant_id = ANY($2::uuid[])
          GROUP BY p.tenant_id
          ON CONFLICT (tenant_id, COALESCE(warehouse_id, '00000000-0000-0000-0000-000000000000'::uuid), snapshot_date)
          DO UPDATE SET
            total_cost_value = EXCLUDED.total_cost_value,
            total_sell_value = EXCLUDED.total_sell_value,
            items_count = EXCLUDED.items_count`,
-      );
-      written += aggregate.rowCount ?? 0;
+          [day, tenantIds],
+        );
+        written += aggregate.rowCount ?? 0;
+      }
     } catch (err) {
       this.logger.error(`recomputeDailySnapshots failed: ${err}`);
     }

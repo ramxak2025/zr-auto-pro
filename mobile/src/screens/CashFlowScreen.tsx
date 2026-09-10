@@ -20,6 +20,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { checksApi, reportsApi, usersApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { useColors } from '../contexts/ThemeContext';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
@@ -86,17 +87,45 @@ function parseISO(s: string): Date {
   return new Date(y, (m || 1) - 1, d || 1);
 }
 
-// Бизнес-таймзона продукта — Europe/Moscow (UTC+3, без переходов на летнее
-// время с 2014). /reports/cashflow группирует дни по календарным суткам МСК,
-// поэтому drill-down дня обязан запрашивать ровно тот же полуинтервал
-// [D 00:00 МСК, D+1 00:00 МСК), сконвертированный в UTC-инстанты (cashflow C3).
-const MSK_UTC_OFFSET = '+03:00';
-function mskDayStartUtc(day: string): Date {
-  return new Date(`${day}T00:00:00${MSK_UTC_OFFSET}`);
+// Бизнес-таймзона — ПОЯС АВТОСЕРВИСА (tenants.timezone, 157). /reports/cashflow
+// группирует дни по календарным суткам ТЕНАНТА, поэтому drill-down дня обязан
+// резать ровно тот же полуинтервал [D 00:00, D+1 00:00) местного времени
+// (cashflow C3). Раньше здесь был зашит московский '+03:00': у автосервиса в
+// другом поясе раскрытый день показывал чужие чеки на краях суток.
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** UTC-инстант местной полуночи дня 'YYYY-MM-DD' в поясе `tz`. */
+function tenantDayStartUtc(day: string, tz: string): Date {
+  // Смещение пояса на этот момент спрашиваем у Intl: зашивать таблицу сдвигов
+  // руками — значит ошибиться на следующем изменении закона о часовых зонах.
+  // Любой сбой Intl → полночь по часам устройства (прежнее поведение экрана).
+  const naiveUtc = Date.parse(`${day}T00:00:00.000Z`);
+  if (!Number.isFinite(naiveUtc)) return new Date(NaN);
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date(naiveUtc));
+    const get = (type: string) => {
+      const p = parts.find((x) => x.type === type);
+      return p ? parseInt(p.value, 10) : NaN;
+    };
+    const asIfUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'));
+    if (!Number.isFinite(asIfUtc)) return new Date(naiveUtc);
+    return new Date(naiveUtc - (asIfUtc - naiveUtc));
+  } catch {
+    const [y, m, d] = day.split('-').map((v) => parseInt(v, 10));
+    return new Date(y, (m || 1) - 1, d || 1);
+  }
 }
-function mskDayEndUtc(day: string): Date {
-  // Эксклюзивная верхняя граница суток МСК (полночь следующего дня).
-  return new Date(mskDayStartUtc(day).getTime() + 24 * 60 * 60 * 1000);
+function tenantDayEndUtc(day: string, tz: string): Date {
+  // Эксклюзивная верхняя граница местных суток (полночь следующего дня).
+  return new Date(tenantDayStartUtc(day, tz).getTime() + DAY_MS);
 }
 
 function addDays(d: Date, n: number): Date {
@@ -319,6 +348,9 @@ export default function CashFlowScreen() {
   const queryClient = useQueryClient();
   const { hasPermission, user } = useAuth();
   const palette = useColors();
+  // Сутки дня в раскрытии — по календарю АВТОСЕРВИСА, тому же, по которому
+  // сервер сложил карточку дня.
+  const tenantTz = useTenantTimezone();
   // «Движение денег» — теперь НЕ только owner-class. Волна 3 (миграция 121):
   // сервер гейтит `/reports/cashflow` через @RequirePermission('cashflow_view')
   // и сам скоупит выдачу (own-vs-all), поэтому экран доступен и обычной роли с
@@ -487,14 +519,14 @@ export default function CashFlowScreen() {
     queryKey: ['cashflow-day-checks', expandedDay, drillDownMasterId],
     queryFn: async () => {
       if (!expandedDay) return { data: [] };
-      // Окно дня — ровно одни московские сутки [D 00:00 МСК, D+1 00:00 МСК).
+      // Окно дня — ровно одни МЕСТНЫЕ сутки автосервиса [D 00:00, D+1 00:00).
       // Бэк (checks.getAll) кастует обе границы как
-      // `$::date::timestamp AT TIME ZONE 'Europe/Moscow'`, поэтому дату
+      // `$::date::timestamp AT TIME ZONE $tz` (пояс тенанта, 157), поэтому дату
       // передаём ГОЛОЙ строкой 'YYYY-MM-DD' — ровно как соседний
       // expenses-запрос ниже. Полный ISO-инстант в dateFrom ломал границу:
-      // text→date каст отбрасывает tz, и московская полночь '…T21:00:00Z'
-      // схлопывалась в предыдущий день → окно расползалось на ДВОЕ суток
-      // (список выглядел корректно лишь из-за клиентского среза ниже).
+      // text→date каст отбрасывает tz, и местная полночь схлопывалась в
+      // предыдущий день → окно расползалось на ДВОЕ суток (список выглядел
+      // корректно лишь из-за клиентского среза ниже).
       // isDeferred:false (C4): сумма дня считается только по ПРОВЕДЁННЫМ
       // чекам (reports: is_deferred = false) — открытые драфты в списке
       // выглядели как деньги, которых в итоге дня нет.
@@ -526,8 +558,8 @@ export default function CashFlowScreen() {
   const expandedDayRows = useMemo(() => {
     const rows: any[] = Array.isArray(expandedChecks?.data) ? expandedChecks.data : [];
     if (!expandedDay) return { included: [] as any[], warranty: [] as any[] };
-    const start = mskDayStartUtc(expandedDay).getTime();
-    const end = mskDayEndUtc(expandedDay).getTime();
+    const start = tenantDayStartUtc(expandedDay, tenantTz).getTime();
+    const end = tenantDayEndUtc(expandedDay, tenantTz).getTime();
     const inDay = rows.filter((c) => {
       const t = new Date(c?.date).getTime();
       return Number.isFinite(t) && t >= start && t < end;
@@ -536,7 +568,7 @@ export default function CashFlowScreen() {
       included: inDay.filter((c) => c?.paymentMethod !== 'warranty'),
       warranty: inDay.filter((c) => c?.paymentMethod === 'warranty'),
     };
-  }, [expandedChecks, expandedDay]);
+  }, [expandedChecks, expandedDay, tenantTz]);
 
   // ── Handlers ─────────────────────────────────────────────────────────
   const onRefresh = async () => {

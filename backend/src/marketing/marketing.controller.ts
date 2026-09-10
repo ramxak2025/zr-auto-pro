@@ -161,7 +161,8 @@ export class MarketingController {
   @RequirePermission('marketing_manage')
   @Post('reminders/send')
   sendReminders(@CurrentUser() user: JwtPayload) {
-    return this.reminderService.sendForTenant(user.tenantID);
+    // Ручной запуск — от лица актора: рассылка режется его филиалом (161).
+    return this.reminderService.sendForTenant(user.tenantID, user.userID);
   }
 
   // ─── Win-back («давно не приезжал») ──────────────────────────────
@@ -172,16 +173,21 @@ export class MarketingController {
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission('marketing_access')
   @Get('winback')
-  getWinback(@CurrentUser() user: JwtPayload, @Query('days') days?: string) {
+  async getWinback(@CurrentUser() user: JwtPayload, @Query('days') days?: string) {
     const parsed = days ? parseInt(days, 10) : undefined;
-    return this.marketingService.getWinbackSegment(user.tenantID, parsed);
+    // Сегмент режется филиалом читающего (161) — тем же, что и отправка.
+    return this.marketingService.getWinbackSegment(
+      user.tenantID,
+      parsed,
+      await this.marketingService.pointForActor(user.tenantID, user.userID),
+    );
   }
 
   @UseGuards(JwtAuthGuard, PermissionsGuard)
   @RequirePermission('marketing_manage')
   @Post('winback/send')
   winbackSend(@CurrentUser() user: JwtPayload, @Body() dto: WinbackSendDto) {
-    return this.marketingService.winbackSend(user.tenantID, dto.days, dto.message);
+    return this.marketingService.winbackSend(user.tenantID, dto.days, dto.message, user.userID);
   }
 
   // ─── Manual segment broadcast («Рассылки») ───────────────────────
@@ -214,11 +220,16 @@ export class MarketingController {
   @RequirePermission('marketing_manage')
   @Post('broadcast/preview')
   previewSegmentBroadcast(@CurrentUser() user: JwtPayload, @Body() dto: BroadcastPreviewDto) {
-    return this.marketingService.previewSegmentBroadcast(user.tenantID, {
-      segment: dto.segment,
-      integrationId: dto.integrationId ?? null,
-      providerType: dto.providerType ?? null,
-    });
+    return this.marketingService.previewSegmentBroadcast(
+      user.tenantID,
+      {
+        segment: dto.segment,
+        integrationId: dto.integrationId ?? null,
+        providerType: dto.providerType ?? null,
+      },
+      // Предпросмотр обязан совпадать с отправкой, в т.ч. по филиалу (161).
+      user.userID,
+    );
   }
 
   // ─── Журнал отправок (marketing_access) ──────────────────────────

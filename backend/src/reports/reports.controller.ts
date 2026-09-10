@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 // Financial aggregates (revenue, profit, salary totals, expenses) must never
 // be visible to a regular master — they would expose how much the tenant
@@ -24,6 +25,19 @@ export class ReportsController {
   constructor(private reportsService: ReportsService) {}
 
   /**
+   * ФИЛИАЛ (156/160): все отчёты считаются В СКОУПЕ ТЕКУЩЕЙ ТОЧКИ актора —
+   * «зайдя в филиал, вижу его деньги и его отчёты». Точка приезжает в JWT
+   * (JwtStrategy.validate), поэтому её разбор бесплатен; null («Все точки» у
+   * владельца либо одноточечный тенант) означает отсутствие фильтра, и тогда
+   * каждый отчёт возвращает ровно то же, что до внедрения филиалов.
+   * Единая точка разбора здесь, а не в каждом методе, — чтобы ни один отчёт
+   * не оказался забыт при добавлении следующего.
+   */
+  private point(user: JwtPayload): string | null {
+    return actorPointId(user);
+  }
+
+  /**
    * Финотчёт за период. Канон — `dateFrom`/`dateTo`; `from`/`to` принимаются
    * как АЛИАСЫ.
    *
@@ -39,11 +53,15 @@ export class ReportsController {
    */
   @Get('financial')
   getFinancial(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.reportsService.getFinancial(user.tenantID, {
-      ...query,
-      dateFrom: query?.dateFrom ?? query?.from,
-      dateTo: query?.dateTo ?? query?.to,
-    });
+    return this.reportsService.getFinancial(
+      user.tenantID,
+      {
+        ...query,
+        dateFrom: query?.dateFrom ?? query?.from,
+        dateTo: query?.dateTo ?? query?.to,
+      },
+      this.point(user),
+    );
   }
 
   /**
@@ -54,7 +72,7 @@ export class ReportsController {
    */
   @Get('tags')
   getTagAnalytics(@CurrentUser() user: JwtPayload, @Query() query: { dateFrom?: string; dateTo?: string }) {
-    return this.reportsService.getTagAnalytics(user.tenantID, query);
+    return this.reportsService.getTagAnalytics(user.tenantID, query, this.point(user));
   }
 
   // «Движение денег» (ITEM 6) — доступ по ROLE-разрешению cashflow_view (НЕ по
@@ -79,7 +97,7 @@ export class ReportsController {
 
   @Get('call-funnel')
   getCallFunnel(@CurrentUser() user: JwtPayload, @Query() query: { dateFrom?: string; dateTo?: string }) {
-    return this.reportsService.getCallFunnel(user.tenantID, query);
+    return this.reportsService.getCallFunnel(user.tenantID, query, this.point(user));
   }
 
   // ── Owner dashboard v2 ───────────────────────────────────────────────
@@ -88,26 +106,27 @@ export class ReportsController {
   @Get('dashboard-v2')
   async dashboardV2(@CurrentUser() user: JwtPayload, @Query() query: { period?: 'today' | 'week' | 'month' | 'year' }) {
     const period = (query?.period ?? 'month') as 'today' | 'week' | 'month' | 'year';
+    const pointId = this.point(user);
     const [base, returns] = await Promise.all([
-      this.reportsService.dashboardV2(user.tenantID, period),
-      this.reportsService.returnsSummaryForDashboard(user.tenantID),
+      this.reportsService.dashboardV2(user.tenantID, period, pointId),
+      this.reportsService.returnsSummaryForDashboard(user.tenantID, pointId),
     ]);
     return { ...base, ...returns };
   }
 
   @Get('clients-new-vs-returning')
   clientsNewVsReturning(@CurrentUser() user: JwtPayload, @Query() query: { from: string; to: string }) {
-    return this.reportsService.clientsNewVsReturning(user.tenantID, query);
+    return this.reportsService.clientsNewVsReturning(user.tenantID, query, this.point(user));
   }
 
   @Get('alerts')
   alerts(@CurrentUser() user: JwtPayload) {
-    return this.reportsService.alerts(user.tenantID);
+    return this.reportsService.alerts(user.tenantID, this.point(user));
   }
 
   @Get('best-day-of-week')
   bestDayOfWeek(@CurrentUser() user: JwtPayload, @Query() query: { from: string; to: string }) {
-    return this.reportsService.bestDayOfWeek(user.tenantID, query);
+    return this.reportsService.bestDayOfWeek(user.tenantID, query, this.point(user));
   }
 
   @Get('recent-reviews')
@@ -117,7 +136,7 @@ export class ReportsController {
 
   @Get('retention')
   retention(@CurrentUser() user: JwtPayload, @Query() query: { period?: 'week' | 'month' | 'year' }) {
-    return this.reportsService.retention(user.tenantID, query?.period ?? 'month');
+    return this.reportsService.retention(user.tenantID, query?.period ?? 'month', this.point(user));
   }
 
   // ── Consolidated «Маркетинговые отчёты» ──────────────────────────────
@@ -131,6 +150,6 @@ export class ReportsController {
   @Get('marketing')
   @RequirePermission('marketing_access')
   getMarketingReport(@CurrentUser() user: JwtPayload, @Query() query: { from?: string; to?: string }) {
-    return this.reportsService.getMarketingReport(user.tenantID, query);
+    return this.reportsService.getMarketingReport(user.tenantID, query, this.point(user));
   }
 }

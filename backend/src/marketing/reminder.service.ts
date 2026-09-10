@@ -38,7 +38,7 @@ export class ReminderService implements OnModuleInit, OnModuleDestroy {
       );
       for (const row of rows) {
         try {
-          await this.sendForTenant(row.tenant_id);
+          await this.sendScheduledForTenant(row.tenant_id);
         } catch (err) {
           this.logger.error(`Reminder send failed for tenant ${row.tenant_id}: ${err}`);
         }
@@ -46,6 +46,31 @@ export class ReminderService implements OnModuleInit, OnModuleDestroy {
     } catch (err) {
       this.logger.error(`Reminder scheduler error: ${err}`);
     }
+  }
+
+  /**
+   * Фоновый прогон одного тенанта. У джоба нет «текущего филиала», поэтому в
+   * РАЗДЕЛЬНОМ режиме он идёт по точкам: строгий проход на каждый живой филиал
+   * плюс проход по клиентам без филиала. Общая база (дефолт) и тенант без
+   * точек — ровно один прежний проход по всему тенанту.
+   */
+  private async sendScheduledForTenant(tenantId: string): Promise<void> {
+    const { rows } = await this.pool.query(
+      `SELECT p.id
+         FROM tenant_points p
+         JOIN tenants t ON t.id = p.tenant_id
+        WHERE p.tenant_id = $1 AND p.is_active = true AND t.points_shared_clients = false
+        ORDER BY p.sort_order ASC, p.created_at ASC, p.id ASC`,
+      [tenantId],
+    );
+    if (rows.length === 0) {
+      await this.sendPass(tenantId, { kind: 'all' });
+      return;
+    }
+    for (const r of rows) {
+      await this.sendPass(tenantId, { kind: 'point', pointId: r.id as string });
+    }
+    await this.sendPass(tenantId, { kind: 'orphan' });
   }
 
   async getSettings(tenantId: string) {
@@ -107,7 +132,45 @@ export class ReminderService implements OnModuleInit, OnModuleDestroy {
     return this.getSettings(tenantId);
   }
 
-  async sendForTenant(tenantId: string): Promise<{ sent: number; errors: number; message?: string }> {
+  /**
+   * «Давно не обслуживались» для одного тенанта.
+   *
+   * ФИЛИАЛЫ (161). В раздельном режиме (tenants.points_shared_clients=false)
+   * филиал А не имеет права слать SMS клиентам филиала Б, поэтому:
+   *   • РУЧНОЙ запуск («отправить сейчас») идёт от лица актора — его филиал и
+   *     режет выборку, ровно как список клиентов у него на экране;
+   *   • ФОНОВЫЙ прогон актора не имеет вовсе (см. runScheduledSends): он
+   *     ИТЕРИРУЕТСЯ ПО ТОЧКАМ — по проходу на каждый живой филиал плюс один
+   *     проход по «ничьим» клиентам (point_id IS NULL, общие и исторические).
+   *     Разбиение СТРОГОЕ и без пересечений, поэтому одному человеку не может
+   *     уйти два сообщения. Второй рубеж всё равно стоит: анти-спам-ключ
+   *     `service_reminder:<clientId>:<YYYY-MM>` — не больше одного напоминания
+   *     на клиента в календарный месяц.
+   *     Отдельный проход на филиал нужен ещё и ради потолка LIMIT 100: один
+   *     общий лимит на тенанта означал бы, что клиенты первого филиала
+   *     съедают всю квоту, а остальные филиалы не рассылают никогда.
+   */
+  async sendForTenant(
+    tenantId: string,
+    actorUserID?: string,
+  ): Promise<{ sent: number; errors: number; message?: string }> {
+    const point = await this.marketingService.pointForActor(tenantId, actorUserID);
+    return this.sendPass(tenantId, point ? { kind: 'point', pointId: point } : { kind: 'all' });
+  }
+
+  /**
+   * Один проход рассылки. `scope`:
+   *   • 'all'    — весь тенант (общая база клиентов / одноточечный тенант);
+   *   • 'point'  — СТРОГО клиенты этого филиала;
+   *   • 'orphan' — клиенты без филиала (общие и исторические).
+   * Строгое разбиение (а не «точка ИЛИ NULL») выбрано сознательно: у фонового
+   * прогона проходов несколько, и пересекающиеся выборки означали бы попытку
+   * второй отправки тому же человеку.
+   */
+  private async sendPass(
+    tenantId: string,
+    scope: { kind: 'all' } | { kind: 'point'; pointId: string } | { kind: 'orphan' },
+  ): Promise<{ sent: number; errors: number; message?: string }> {
     // Fetch settings
     const settings = await this.getSettings(tenantId);
     const monthsInterval = settings.monthsInterval;
@@ -119,6 +182,15 @@ export class ReminderService implements OnModuleInit, OnModuleDestroy {
       return { sent: 0, errors: 0, message: 'No SMS provider configured' };
     }
 
+    const params: unknown[] = [tenantId, monthsInterval];
+    let pointWhere = '';
+    if (scope.kind === 'point') {
+      params.push(scope.pointId);
+      pointWhere = ` AND cl.point_id = $${params.length}`;
+    } else if (scope.kind === 'orphan') {
+      pointWhere = ' AND cl.point_id IS NULL';
+    }
+
     // Find clients whose last check was >= months_interval months ago, capped at 100
     const { rows: clients } = await this.pool.query(
       `SELECT cl.id, cl.full_name, cl.phone,
@@ -127,12 +199,12 @@ export class ReminderService implements OnModuleInit, OnModuleDestroy {
                 EXTRACT(YEAR FROM AGE(now(), MAX(ch.date))) * 12 AS months_ago
        FROM clients cl
        JOIN checks ch ON ch.client_id = cl.id AND ch.tenant_id = $1 AND ch.is_deferred = false AND ch.deleted_at IS NULL
-       WHERE cl.tenant_id = $1 AND cl.phone IS NOT NULL AND cl.phone != ''
+       WHERE cl.tenant_id = $1 AND cl.phone IS NOT NULL AND cl.phone != ''${pointWhere}
        GROUP BY cl.id, cl.full_name, cl.phone
        HAVING MAX(ch.date) <= now() - ($2 * interval '1 month')
        ORDER BY MAX(ch.date) ASC
        LIMIT 100`,
-      [tenantId, monthsInterval],
+      params,
     );
 
     let sent = 0;

@@ -9,9 +9,16 @@ export function formatMoney(value: number): string {
 
 // ── Часовой пояс автосервиса (157) ─────────────────────────────────────────
 // Владелец выбирает пояс в «Настройках компании» (tenants.timezone, PATCH
-// /my-company). Форматтеры ниже принимают его ОПЦИОНАЛЬНЫМ последним
-// аргументом: без него поведение прежнее — время устройства. Так экраны
-// переводятся на пояс тенанта по одному, а не все разом.
+// /my-company), и по нему сервер считает бизнес-сутки. Форматтеры ниже
+// принимают его ОПЦИОНАЛЬНЫМ последним аргументом: без него поведение прежнее
+// — время устройства.
+//
+// Пояс на клиенте берут хуки useTenantTimezone (mobile/src/contexts,
+// frontend/src/hooks) из `user.tenant.timezone`. Экраны с ВРЕМЕНЕМ ОПЕРАЦИИ
+// (журнал чеков, деталка чека, кассовая смена, движение денег, звонки, смены)
+// обязаны его передавать: иначе экран покажет одно время, а сервер отнесёт
+// операцию к другим суткам. Опциональность оставлена для экранов, где времени
+// операции нет вовсе.
 
 /** Пояс по умолчанию — совпадает с DEFAULT_TIMEZONE на бэкенде. */
 export const DEFAULT_TIMEZONE = 'Europe/Moscow';
@@ -147,6 +154,24 @@ export function formatDateTime(dateStr: string, timeZone?: string | null): strin
   const hours = String(p ? p.hour : d.getHours()).padStart(2, '0');
   const minutes = String(p ? p.minute : d.getMinutes()).padStart(2, '0');
   return `${day}.${month}.${year} ${hours}:${minutes}`;
+}
+
+/**
+ * Календарный день как 'YYYY-MM-DD' — КЛЮЧ ДЛЯ СРАВНЕНИЯ дат: «сегодня/вчера»
+ * в журнале, «этот день уже прошёл» в графике смен. Формат специально
+ * сортируемый лексикографически, поэтому `a > b` — это «позже».
+ *
+ * `timeZone` (157) — пояс автосервиса. Без него — день по часам устройства,
+ * как было. С ним клиентский «сегодня» совпадает с серверным: бэкенд режет
+ * бизнес-сутки по тому же поясу (common/timezone.ts).
+ */
+export function formatDayKey(dateStr: string | Date, timeZone?: string | null): string {
+  const d = dateStr instanceof Date ? dateStr : new Date(dateStr);
+  const p = timeZone ? zonedParts(d, timeZone) : null;
+  const year = p ? p.year : d.getFullYear();
+  const month = p ? p.month : d.getMonth() + 1;
+  const day = p ? p.day : d.getDate();
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 /**

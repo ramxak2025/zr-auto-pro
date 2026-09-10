@@ -10,6 +10,8 @@ import { colors, spacing, fontSize, fontWeight, borderRadius, softTint } from '.
 import { callsApi } from '../api/services';
 import { useColors } from '../contexts/ThemeContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
+import { formatDayKey } from '../../../shared/utils/formatters';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
 // CallRow + встроенный плеер записей извлечены в переиспользуемый компонент
@@ -55,6 +57,10 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
   // байпасятся внутри hasPermission. Без права — кнопка play не показывается
   // (бэкенд закрывает signed-URL 403 → не будет мёртвой кнопки).
   const canListen = hasPermission('calls_listen');
+  // День ленты звонков — календарный день АВТОСЕРВИСА: сервер режет звонки по
+  // его суткам (calls.service), и «Сегодня» на экране обязано означать тот же
+  // день, что «сегодня» в запросе.
+  const tenantTz = useTenantTimezone();
   const tabBarHeight = useTabBarHeight();
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<FilterTab>('all');
@@ -79,23 +85,22 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
     };
   }, []);
 
-  const dateStr = useMemo(() => {
-    const y = selectedDate.getFullYear();
-    const m = String(selectedDate.getMonth() + 1).padStart(2, '0');
-    const d = String(selectedDate.getDate()).padStart(2, '0');
-    return `${y}-${m}-${d}`;
-  }, [selectedDate]);
+  const dateStr = useMemo(() => formatDayKey(selectedDate, tenantTz), [selectedDate, tenantTz]);
 
   const dateLabel = useMemo(() => {
-    const today = new Date();
-    const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = `${yesterday.getFullYear()}-${String(yesterday.getMonth() + 1).padStart(2, '0')}-${String(yesterday.getDate()).padStart(2, '0')}`;
+    const now = new Date();
+    const todayStr = formatDayKey(now, tenantTz);
+    // «Вчера» = минус сутки: в российских поясах перевода часов нет, поэтому
+    // −24 часа всегда попадают в предыдущий календарный день.
+    const yesterdayStr = formatDayKey(new Date(now.getTime() - 24 * 60 * 60 * 1000), tenantTz);
     if (dateStr === todayStr) return 'Сегодня';
     if (dateStr === yesterdayStr) return 'Вчера';
-    return selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
-  }, [dateStr, selectedDate]);
+    try {
+      return selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short', timeZone: tenantTz });
+    } catch {
+      return selectedDate.toLocaleDateString('ru-RU', { day: 'numeric', month: 'short' });
+    }
+  }, [dateStr, selectedDate, tenantTz]);
 
   // Pause the 60-second poll when this screen is not focused. CallsScreen
   // sits inside MoreStack — when the user is on another tab/screen the
@@ -164,9 +169,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
     haptic('tap');
     setDatePickerOpen(true);
   };
-  const isToday =
-    dateStr ===
-    `${new Date().getFullYear()}-${String(new Date().getMonth() + 1).padStart(2, '0')}-${String(new Date().getDate()).padStart(2, '0')}`;
+  const isToday = dateStr === formatDayKey(new Date(), tenantTz);
 
   // Memoised so the .map() in JSX doesn't allocate a fresh array of 4
   // objects on every render (every keystroke, every tab switch, every
@@ -340,6 +343,7 @@ export default function CallsScreen({ navigation }: { navigation: any }) {
               setPlayingId={setPlayingId}
               canListen={canListen}
               palette={palette}
+              timeZone={tenantTz}
             />
           ))
         )}

@@ -101,6 +101,9 @@ import { formatPhone, phoneSearchKey, phoneSearchVariants } from '../../../share
 import LastVisitBadge from '../components/LastVisitBadge';
 import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 import VoiceCommentSheet from '../components/VoiceCommentSheet';
+import PointSwitcher from '../components/PointSwitcher';
+import { usePointRequiredPrompt } from '../components/PointRequiredPrompt';
+import { usePointAccess } from '../hooks/usePoints';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -768,10 +771,25 @@ export default function CheckCreateScreen() {
   });
   const clientCars = clientData?.cars;
 
+  // Пикер мастера в Кассе — ЕДИНСТВЕННОЕ место, где список сотрудников обязан
+  // быть по ТЕКУЩЕМУ филиалу (161, `?scope=point`): чужой мастер в чеке = его
+  // зарплата и рейтинг уезжают не в тот филиал. Везде остальное (имена в
+  // журнале, расходах, зарплате, назначение людей на точки) по-прежнему читает
+  // весь тенант.
+  //
+  // У одноточечного тенанта параметр не ставим намеренно: ответ был бы тот же,
+  // но ушёл бы в отдельный слот кеша мимо прогретого логином ['all-users'] —
+  // лишний запрос на самом частом экране. Список точек к этому моменту почти
+  // всегда уже в кеше (персистится и греется «Ещё»/дашбордом).
+  const { points: tenantPoints, needsPointForWrite } = usePointAccess();
+  // Отказ сервера «Выберите филиал» и предупреждение ДО отправки — один и тот
+  // же диалог с кнопкой, открывающей шторку выбора (см. PointRequiredPrompt).
+  const pointPrompt = usePointRequiredPrompt();
+  const scopeMastersToPoint = tenantPoints.length > 1;
   const { data: allUsers } = useQuery<User[]>({
-    queryKey: ['all-users'],
+    queryKey: scopeMastersToPoint ? ['all-users', 'point'] : ['all-users'],
     queryFn: async () => {
-      const res = await usersApi.getAll();
+      const res = await usersApi.getAll(scopeMastersToPoint ? { scope: 'point' } : undefined);
       return res.data;
     },
   });
@@ -1910,6 +1928,9 @@ export default function CheckCreateScreen() {
   const showSubmitError = (err: any) => {
     // eslint-disable-next-line no-console
     console.error('[CheckCreate] submit error', err?.response?.status, err?.response?.data, err?.message);
+    // 400 «Выберите филиал, чтобы пробить чек» — не обычная ошибка: у неё есть
+    // ровно одно осмысленное действие, и мы даём его прямо в диалоге.
+    if (pointPrompt.handleApiError(err)) return;
     const status = err?.response?.status;
     const data = err?.response?.data;
     const friendly =
@@ -2323,6 +2344,22 @@ export default function CheckCreateScreen() {
       createMutation.mutate(payload);
     };
 
+    // ── Филиал заказ-наряда ──────────────────────────────────────────
+    // Сервер откажет (400 «Выберите филиал, чтобы пробить чек»), если филиал
+    // не выбран, а подставить его молча нельзя (доступных больше одного).
+    // Спрашиваем ДО отправки: иначе кассир жмёт «Пробить», получает ошибку и
+    // (в офлайне) чек ещё и уходит в очередь, чтобы упасть тем же 400 позже.
+    // Ветку СБП (`preValidated`) не трогаем НИКОГДА: деньги там уже приняты
+    // эквайрингом, и блокировать запись чека нельзя — её место в очереди.
+    // Правка существующего чека филиал не переставляет, поэтому только create.
+    if (!editId && !opts?.preValidated && needsPointForWrite) {
+      pointPrompt.show(
+        'Филиал не выбран — заказ-наряд не попадёт ни в один филиал: ни в его журнал, ни в выручку, ни в зарплату ' +
+          'мастера. Выберите филиал, чтобы пробить чек.',
+      );
+      return;
+    }
+
     // ── Round 12 #7: наджим «забыли клиента» ─────────────────────────
     // Новый ЖИВОЙ чек без клиента (не правка, не отложенный, не
     // заказ-наряд) → мягкое подтверждение перед пробитием. «Пробить»
@@ -2581,6 +2618,18 @@ export default function CheckCreateScreen() {
         ]}
         reserveTabBar={openedFromTab}
       >
+        {/* ═══ ФИЛИАЛ ЗАКАЗ-НАРЯДА (156/160) ═══
+            Главный страх владельца: «чтобы чек не туда случайно не пробил».
+            Один и тот же мастер работает на нескольких точках, поэтому филиал
+            обязан быть виден ДО нажатия «Пробить», и сменить его можно прямо
+            отсюда. Скрыт, когда доступен ровно один филиал — там подставлять
+            нечего. В push-режиме (правка чека из Журнала) слева висит
+            плавающая стрелка «назад», поэтому сдвигаем строку правее, чтобы
+            она не уезжала под кнопку. */}
+        <PointSwitcher variant="banner" style={isStackScreen ? styles.pointBannerStacked : undefined} />
+        {/* Невидимая шторка выбора: её открывает кнопка в диалоге отказа. */}
+        {pointPrompt.element}
+
         {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
         <View style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>
           <View style={styles.sectionHeader}>
@@ -4898,6 +4947,9 @@ const styles = StyleSheet.create({
   headerTitle: { fontSize: fontSize.lg, fontWeight: fontWeight.bold, color: colors.gray[900] },
   scroll: { flex: 1 },
   scrollContent: { padding: spacing[3], gap: spacing[2.5], paddingBottom: spacing[12] },
+  // Правка чека из Журнала: плавающая стрелка «назад» занимает левый край,
+  // строка филиала обязана начинаться после неё.
+  pointBannerStacked: { marginLeft: 40 },
 
   // ═══ Section containers with distinct backgrounds ═══
   sectionClient: {

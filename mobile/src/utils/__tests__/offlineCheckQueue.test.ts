@@ -573,3 +573,75 @@ describe('ядро очереди', () => {
     expect(core.getSnapshot()).toHaveLength(1);
   });
 });
+
+/**
+ * Филиал чека в офлайн-очереди (мульти-точки 156/160).
+ *
+ * ПОЧЕМУ ЭТО ВАЖНО: сервер штампует точку в момент ПРИЁМА запроса. Живому
+ * сабмиту это подходит, а запись из очереди может пролежать до возврата сети —
+ * мастер набил чек на филиале А, доехал до Б, переключил точку, и выручка ушла
+ * бы соседнему автосервису. Поэтому точка фиксируется в момент постановки в
+ * очередь («Пробить») и уезжает в payload вместе с чеком.
+ */
+describe('offlineCheckQueue — филиал (pointId) фиксируется на «Пробить»', () => {
+  const POINT_A = '11111111-1111-4111-8111-111111111111';
+  const POINT_B = '22222222-2222-4222-8222-222222222222';
+
+  it('штампует текущую точку в payload при постановке в очередь', async () => {
+    const { storage } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => POINT_A });
+    const entry = await core.enqueue(payloadOf(ID_A));
+    expect(entry.payload.pointId).toBe(POINT_A);
+  });
+
+  it('точка НЕ меняется после переключения филиала — досылка уходит филиалу создания', async () => {
+    const { storage } = createMemoryStorage();
+    let current = POINT_A;
+    const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => current });
+    await core.enqueue(payloadOf(ID_A));
+    // Мастер доехал до другого филиала и переключился ДО возврата сети.
+    current = POINT_B;
+    const sent: QueuedCheckPayload[] = [];
+    core.setSender(async (payload) => {
+      sent.push(payload);
+      return {};
+    });
+    await core.flush();
+    expect(sent).toHaveLength(1);
+    expect(sent[0].pointId).toBe(POINT_A);
+  });
+
+  it('точки нет (одноточечный тенант / «Все точки») — payload байт-в-байт прежний', async () => {
+    const { storage } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => null });
+    const entry = await core.enqueue(payloadOf(ID_A));
+    expect('pointId' in entry.payload).toBe(false);
+  });
+
+  it('явный pointId в payload не перетирается резолвом', async () => {
+    const { storage } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => POINT_A });
+    const entry = await core.enqueue(payloadOf(ID_A, { pointId: POINT_B }));
+    expect(entry.payload.pointId).toBe(POINT_B);
+  });
+
+  it('резолвер без инжекта и упавший резолвер не мешают чеку встать в очередь', async () => {
+    const { storage } = createMemoryStorage();
+    const bare = createOfflineCheckQueueCore({ storage });
+    expect('pointId' in (await bare.enqueue(payloadOf(ID_A))).payload).toBe(false);
+
+    // Падение резолвера филиала НЕ ИМЕЕТ ПРАВА терять чек: филиал сервер
+    // подставит сам при досылке, а потерянный заказ-наряд не восстановит
+    // никто. Ошибка трактуется как «точки нет».
+    const { storage: storage2 } = createMemoryStorage();
+    const throwing = createOfflineCheckQueueCore({
+      storage: storage2,
+      resolvePointId: async () => {
+        throw new Error('storage down');
+      },
+    });
+    const entry = await throwing.enqueue(payloadOf(ID_A));
+    expect('pointId' in entry.payload).toBe(false);
+    expect(throwing.getSnapshot()).toHaveLength(1);
+  });
+});

@@ -25,6 +25,8 @@ import {
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru } from 'date-fns/locale';
+import { useTenantTimezone } from '../hooks/useTenantTimezone';
+import { zoned } from '../utils/tenantTime';
 import toast from 'react-hot-toast';
 import { checksApi, usersApi, productsApi } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
@@ -130,12 +132,15 @@ const MobileCheckCard = memo(function MobileCheckCard({
   canViewProfit,
   onNavigate,
   onDelete,
+  timeZone,
 }: {
   check: Check;
   canDelete: boolean;
   canViewProfit: boolean;
   onNavigate: (id: string) => void;
   onDelete: (e: React.MouseEvent, id: string, number: number) => void;
+  /** Пояс автосервиса — время чека показываем так, как его видит владелец. */
+  timeZone: string;
 }) {
   return (
     <div
@@ -230,7 +235,7 @@ const MobileCheckCard = memo(function MobileCheckCard({
         <div className="flex items-center gap-3 text-xs text-gray-400 min-w-0">
           <div className="flex items-center gap-1">
             <Clock className="w-3 h-3" />
-            <span>{format(new Date(check.date), 'dd.MM.yy HH:mm', { locale: ru })}</span>
+            <span>{format(zoned(check.date, timeZone), 'dd.MM.yy HH:mm', { locale: ru })}</span>
           </div>
           {check.master && <span className="truncate">{check.master.fullName}</span>}
         </div>
@@ -296,6 +301,7 @@ function TrashSection({
   onRetry,
   onRestore,
   restoringId,
+  timeZone,
 }: {
   items: TrashedCheck[];
   isLoading: boolean;
@@ -303,6 +309,8 @@ function TrashSection({
   onRetry: () => void;
   onRestore: (id: string, number: number) => void;
   restoringId: string | null;
+  /** Пояс автосервиса — см. MobileCheckCard. */
+  timeZone: string;
 }) {
   if (isLoading) return <InlineLoader minHeight="min-h-[40vh]" />;
 
@@ -350,10 +358,10 @@ function TrashSection({
               </div>
               <p className="text-sm font-medium text-gray-800 truncate">{c.clientName ?? 'Розничный покупатель'}</p>
               <p className="text-xs text-gray-400 mt-0.5">
-                Чек от {format(new Date(c.date), 'dd.MM.yyyy', { locale: ru })}
+                Чек от {format(zoned(c.date, timeZone), 'dd.MM.yyyy', { locale: ru })}
               </p>
               <p className="text-xs text-gray-400 mt-0.5">
-                Удалён {format(new Date(c.deletedAt), 'dd.MM.yyyy HH:mm', { locale: ru })}
+                Удалён {format(zoned(c.deletedAt, timeZone), 'dd.MM.yyyy HH:mm', { locale: ru })}
                 {c.deletedByName ? ` · ${c.deletedByName}` : ''}
               </p>
               <div className="flex items-center justify-between mt-2.5 pt-2.5 border-t border-gray-50">
@@ -402,11 +410,13 @@ function TrashSection({
                       </span>
                     )}
                   </td>
-                  <td className="text-sm">{format(new Date(c.date), 'dd.MM.yyyy', { locale: ru })}</td>
+                  <td className="text-sm">{format(zoned(c.date, timeZone), 'dd.MM.yyyy', { locale: ru })}</td>
                   <td className="text-sm font-medium">{c.clientName ?? 'Розничный покупатель'}</td>
                   <td className="font-semibold tabular-nums">{formatMoney(c.totalRevenue)}</td>
                   <td>
-                    <div className="text-sm">{format(new Date(c.deletedAt), 'dd.MM.yyyy HH:mm', { locale: ru })}</div>
+                    <div className="text-sm">
+                      {format(zoned(c.deletedAt, timeZone), 'dd.MM.yyyy HH:mm', { locale: ru })}
+                    </div>
                     {c.deletedByName && <div className="text-xs text-gray-400">{c.deletedByName}</div>}
                   </td>
                   <td>
@@ -439,6 +449,9 @@ export default function ChecksPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { hasPermission } = useAuth();
+  // Время чека — в поясе автосервиса: сервер тем же поясом решает, в какой день
+  // попал чек, поэтому журнал обязан показывать то же самое время.
+  const timeZone = useTenantTimezone();
   const canDelete = hasPermission('checks_delete');
   const canViewProfit = hasPermission('profit_view');
   // Корзина (106) — часть цикла удаления: тот же ключ checks_delete, что сервер
@@ -701,7 +714,7 @@ export default function ChecksPage() {
                     {m.reason ? ` · ${m.reason}` : ''}
                     {m.user?.fullName ? ` · ${m.user.fullName}` : ''}
                     {' · '}
-                    {format(new Date(m.createdAt), 'dd.MM HH:mm', { locale: ru })}
+                    {format(zoned(m.createdAt, timeZone), 'dd.MM HH:mm', { locale: ru })}
                   </p>
                 </div>
               </div>
@@ -751,6 +764,7 @@ export default function ChecksPage() {
           isError={trashIsError}
           onRetry={() => refetchTrash()}
           onRestore={handleRestore}
+          timeZone={timeZone}
           restoringId={restoreMutation.isPending ? (restoreMutation.variables ?? null) : null}
         />
       ) : showWarehouseDocs ? (
@@ -785,6 +799,7 @@ export default function ChecksPage() {
                   canViewProfit={canViewProfit}
                   onNavigate={(id) => navigate(`/checks/${id}`)}
                   onDelete={handleDelete}
+                  timeZone={timeZone}
                 />
               ))}
             </div>
@@ -836,9 +851,11 @@ export default function ChecksPage() {
                         )}
                       </td>
                       <td>
-                        <div className="text-sm">{format(new Date(check.date), 'dd.MM.yyyy', { locale: ru })}</div>
+                        <div className="text-sm">
+                          {format(zoned(check.date, timeZone), 'dd.MM.yyyy', { locale: ru })}
+                        </div>
                         <div className="text-xs text-gray-400">
-                          {format(new Date(check.date), 'HH:mm', { locale: ru })}
+                          {format(zoned(check.date, timeZone), 'HH:mm', { locale: ru })}
                         </div>
                       </td>
                       <td>

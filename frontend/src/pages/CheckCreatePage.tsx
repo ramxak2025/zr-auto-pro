@@ -29,6 +29,7 @@ import {
   BookmarkPlus,
   Tag,
   Check as CheckIcon,
+  AlertTriangle,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { ru as ruLocale } from 'date-fns/locale';
@@ -42,6 +43,7 @@ import {
   productsApi,
   warrantyApi,
   warehousesApi,
+  pointsApi,
 } from '../api/services';
 import { useAuth } from '../contexts/AuthContext';
 import type {
@@ -59,6 +61,7 @@ import type {
   PosSettings,
   TenantLocation,
   CheckAssignee,
+  PointsListResponse,
 } from '../types';
 
 import { formatPhone } from '../../../shared/validation/phone';
@@ -621,11 +624,41 @@ export default function CheckCreatePage() {
     };
   }, [serviceLines.length, productLines.length]);
 
-  // Fetch masters (cached 60s — staff rarely changes)
+  // 156/161 — мульти-точки: список точек тенанта решает, скоупить ли пикер
+  // мастера филиалом. Тот же ключ ['points'], что у индикатора филиала в шапке.
+  const { data: pointsData } = useQuery<PointsListResponse>({
+    queryKey: ['points'],
+    queryFn: async () => (await pointsApi.list()).data,
+    staleTime: 60_000,
+  });
+  // Пикер мастера — ЕДИНСТВЕННОЕ место, где список обязан быть по ТЕКУЩЕМУ
+  // филиалу (`?scope=point`): чужой мастер в чеке уводит его зарплату и рейтинг
+  // в другой филиал. Журнал, расходы и зарплата по-прежнему читают весь тенант
+  // — им нужны имена всех сотрудников. У одноточечного тенанта параметр не
+  // ставим: ответ тот же, но ушёл бы мимо общего прогретого слота ['masters'].
+  const scopeMastersToPoint = (pointsData?.points.length ?? 0) > 1;
+  /**
+   * Уйдёт ли чек в отказ 400 «Выберите филиал, чтобы пробить чек».
+   *
+   * Зеркало серверного resolvePointForWrite (backend/src/common/point-scope.ts):
+   * есть назначения на живые точки — доступны только они; нет назначений — все
+   * живые точки тенанта. Ровно одна доступная точка сервер подставит молча,
+   * поэтому предупреждать не о чем. Право user_management здесь ни при чём:
+   * сервер про него не знает.
+   *
+   * Проверяем ДО отправки: чек в режиме «Все точки» не попал бы ни в один
+   * филиал — ни в его журнал, ни в выручку, ни в зарплату мастера.
+   */
+  const needsPointForWrite = useMemo(() => {
+    const points = pointsData?.points ?? [];
+    if (!pointsData || pointsData.currentPointId) return false;
+    const assigned = user ? points.filter((p) => p.memberIds?.includes(user.id)) : [];
+    return (assigned.length > 0 ? assigned.length : points.length) > 1;
+  }, [pointsData, user]);
   const { data: masters } = useQuery<User[]>({
-    queryKey: ['masters'],
+    queryKey: scopeMastersToPoint ? ['masters', 'point'] : ['masters'],
     queryFn: async () => {
-      const res = await usersApi.getMasters();
+      const res = await usersApi.getMasters(scopeMastersToPoint ? { scope: 'point' } : undefined);
       return res.data;
     },
     staleTime: 60_000,
@@ -1352,6 +1385,15 @@ export default function CheckCreatePage() {
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
 
+    // Филиал заказ-наряда (160/161). Сервер откажет, если филиал не выбран, а
+    // подставить его молча нельзя. Ловим здесь, чтобы кассир не жал «Пробить»
+    // в ошибку: филиал переключается в шапке, тост говорит именно это.
+    // Правка существующего чека филиал не переставляет — только создание.
+    if (!isEditMode && needsPointForWrite) {
+      toast.error('Выберите филиал в шапке — иначе заказ-наряд не попадёт ни в один филиал.', { duration: 8000 });
+      return;
+    }
+
     // Round 12 #7: новый ЖИВОЙ чек без клиента (не правка, не отложенный) —
     // мягкое подтверждение перед пробитием, чтобы кассир не забыл привязку.
     if (!isEditMode && !isDeferred && !selectedClient) {
@@ -1396,6 +1438,19 @@ export default function CheckCreatePage() {
       </div>
 
       <form onSubmit={handleSubmit}>
+        {/* Филиал не выбран (160/161) — предупреждение ДО нажатия «Пробить»:
+            в режиме «Все точки» сервер откажет, а сам заказ-наряд без филиала
+            не попал бы ни в один из них. Переключатель живёт в шапке страницы,
+            поэтому здесь только объяснение. */}
+        {!isEditMode && needsPointForWrite && (
+          <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0" />
+            <span>
+              Филиал не выбран. Выберите его в шапке — иначе заказ-наряд не попадёт ни в журнал филиала, ни в его
+              выручку, ни в зарплату мастера.
+            </span>
+          </div>
+        )}
         {/* ===== Receipt-style container ===== */}
         <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden">
           {/* Receipt header with editable date */}

@@ -71,6 +71,8 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, softTint } from '.
 import { iosCard, iosSectionLabel } from '../platform/iosSurface';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
 import { haptic } from '../platform/haptics';
+import { usePointRequiredPrompt } from '../components/PointRequiredPrompt';
+import { apiErrorMessage, choosePointMessage } from '../../../shared/utils/apiError';
 import type { User } from '../../../shared/types';
 
 // ────────────────────────────────────────────────────────────────────────
@@ -553,6 +555,8 @@ export default function ExpensesScreen() {
   const isOwnerRole = hasPermission('financial_reports');
   const canCreate = hasPermission('can_add_expenses');
   const tabBarHeight = useTabBarHeight();
+  // Отказ «Выберите филиал» → диалог с кнопкой, открывающей шторку выбора.
+  const pointPrompt = usePointRequiredPrompt();
 
   // ── State ────────────────────────────────────────────────────────────
   const [refreshing, setRefreshing] = useState(false);
@@ -722,7 +726,22 @@ export default function ExpensesScreen() {
       resetForm();
       haptic('success');
     },
-    onError: () => Alert.alert('Ошибка', 'Ошибка при создании расхода'),
+    // 160/161: расход в режиме «Все точки» не попал бы ни в один филиал — ни в
+    // его отчёт, ни в чистую прибыль. Сервер отвечает 400 «Выберите филиал…»;
+    // показываем его текст и сразу даём выбор, а не глухое «Ошибка».
+    onError: (err) => {
+      const pointMessage = choosePointMessage(err);
+      if (pointMessage) {
+        // Форма расхода — RN `<Modal>`, шторка выбора филиала тоже. Презентация
+        // одной в тот же кадр, когда другая ещё уходит, на iOS съедает верхнюю,
+        // поэтому сначала закрываем форму, потом (через анимацию) спрашиваем.
+        // Расход всё равно не пройдёт, пока филиал не выбран.
+        setModalOpen(false);
+        setTimeout(() => pointPrompt.show(pointMessage), 250);
+        return;
+      }
+      Alert.alert('Ошибка', apiErrorMessage(err) ?? 'Ошибка при создании расхода');
+    },
   });
 
   // Бэкенд не отдаёт PATCH /expenses/:id (см. expenses.controller — есть
@@ -1566,6 +1585,9 @@ export default function ExpensesScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Расходы" onBack={() => navigation.goBack()} trailing={trailing} />
+      {/* Невидимая шторка выбора филиала — её открывает кнопка в диалоге
+          отказа «Выберите филиал». Ничего не рисует, пока её не позвали. */}
+      {pointPrompt.element}
 
       {expensesQuery.isLoading && expenses.length === 0 ? (
         <View style={styles.loadingWrap}>

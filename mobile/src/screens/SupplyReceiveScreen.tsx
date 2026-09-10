@@ -53,11 +53,12 @@ import {
   formatMoney,
   formatPoDate,
   formatSupplyDate,
+  isBackdatedSupply,
   isFutureDay,
-  isSameDay,
   outstandingQty,
   toSupplyDateStr,
 } from './purchaseOrders/purchaseOrderHelpers';
+import { useTenantTimezone } from '../contexts/TenantTimezoneContext';
 import { roundQty } from '../utils/units';
 
 type PayMode = 'debt' | 'paid';
@@ -95,6 +96,9 @@ export default function SupplyReceiveScreen() {
   // purchase-orders → тот же ключ; admin живёт по матрице из /auth/me).
   const { hasPermission } = useAuth();
   const canWrite = hasPermission('suppliers_manage');
+  // Пояс автосервиса: им меряются «сегодня» и «задним числом» для даты поставки
+  // (сервер считает границы суток в нём же — миграция 157).
+  const tenantTz = useTenantTimezone();
 
   const dark = palette.mode === 'dark';
   const orderId: string = route.params?.orderId;
@@ -123,7 +127,10 @@ export default function SupplyReceiveScreen() {
   // Дата поставки (159) — по умолчанию сегодня; прошедшая разрешена.
   const [supplyDate, setSupplyDate] = useState<Date>(() => new Date());
   const [datePickerOpen, setDatePickerOpen] = useState(false);
-  const backdated = !isSameDay(supplyDate, new Date());
+  // «Задним числом» — относительно СЕГОДНЯ У АВТОСЕРВИСА (пояс тенанта, 157),
+  // а не устройства: сервер решает это по своему поясу, и расхождение вешало бы
+  // на сегодняшнюю поставку плашку «задним числом» (и наоборот).
+  const backdated = isBackdatedSupply(supplyDate, tenantTz);
 
   useEffect(() => {
     if (seeded || items.length === 0) return;
@@ -283,7 +290,7 @@ export default function SupplyReceiveScreen() {
 
   // Пикер даты: будущее не принимаем (сервер вернёт 400) — честно говорим сразу.
   const applyPickedDate = (d: Date) => {
-    if (isFutureDay(d)) {
+    if (isFutureDay(d, tenantTz)) {
       haptic('warning');
       Alert.alert('Дата поставки', 'Дата поставки не может быть в будущем.');
       return;

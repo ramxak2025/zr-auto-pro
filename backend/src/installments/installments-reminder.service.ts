@@ -4,12 +4,19 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { InstallmentsService } from './installments.service';
+import { listTenantTimezones, zonedHour } from '../common/timezone';
 
 /**
  * Daily installment-reminder cron. For every tenant whose
  * installment_reminder_settings.mode = 'auto' (and not already run in the last
  * 24h), sends the templated reminder for plans due in `days_before` days / due
  * today / overdue, via the shared messaging adapter.
+ *
+ * КОГДА. В 10:00 ПО МЕСТНОМУ ВРЕМЕНИ ТЕНАНТА. Раньше — 10:00 МСК для всех:
+ * клиент владивостокского автосервиса получал «утреннее» напоминание в 17:00,
+ * а калининградского — в 09:00. Cron будится каждый час в :00 и берёт только
+ * тех тенантов, у которых сейчас местный час равен 10. Для московского тенанта
+ * это ровно 10:00 МСК — поведение не изменилось.
  *
  * Gated on RUN_BACKGROUND_JOBS so it fires on exactly ONE replica (the HTTP-only
  * `backend2` sets it false), exactly like the review / shift-auto-close jobs —
@@ -31,21 +38,39 @@ export class InstallmentsReminderService implements OnModuleInit {
     }
   }
 
-  // 10:00 Moscow every day — a sane "morning reminder" hour.
-  @Cron('0 10 * * *', { timeZone: 'Europe/Moscow' })
+  // Каждый час в :00; тенант обрабатывается только в свой местный 10-й час,
+  // поэтому фактическая частота на тенанта — по-прежнему раз в сутки (плюс
+  // страховка last_run_at < now() - 20h ниже).
+  @Cron('0 * * * *', { timeZone: 'UTC' })
   async handleDailyReminders() {
     if (!RUN_BACKGROUND_JOBS) return;
-    await this.runDailySweep();
+    await this.runDailySweep(true);
   }
 
-  async runDailySweep() {
+  /** Местный час, в который тенанту уходят напоминания по рассрочке. */
+  private static readonly REMINDER_HOUR = 10;
+
+  /**
+   * `onlyAtLocalHour` = true (путь крона) — берём только тенантов, у которых
+   * сейчас местные 10 утра. Ручной триггер зовёт со значением false и метёт
+   * всех, как раньше.
+   */
+  async runDailySweep(onlyAtLocalHour = false) {
     try {
       const { rows } = await this.pool.query(
         `SELECT tenant_id FROM installment_reminder_settings
           WHERE mode = 'auto'
             AND (last_run_at IS NULL OR last_run_at < now() - interval '20 hours')`,
       );
+      const now = new Date();
+      const tzByTenant = onlyAtLocalHour ? await listTenantTimezones(this.pool) : null;
       for (const row of rows) {
+        if (tzByTenant) {
+          const tz = tzByTenant.get(row.tenant_id);
+          // Пояса нет (тенант удалён между запросами) — пропускаем: слать
+          // напоминания несуществующему автосервису не нужно.
+          if (!tz || zonedHour(now, tz) !== InstallmentsReminderService.REMINDER_HOUR) continue;
+        }
         try {
           const result = await this.installments.sendRemindersForTenant(row.tenant_id);
           if (result.total > 0) {

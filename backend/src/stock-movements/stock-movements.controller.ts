@@ -5,6 +5,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 const TYPES: StockMovementType[] = [
   'inventory',
@@ -87,7 +88,8 @@ export class StockMovementsController {
   @RequirePermission('warehouse_manage')
   @Post()
   create(@CurrentUser() user: JwtPayload, @Body() dto: CreateStockMovementDto) {
-    return this.movementsService.create(user.tenantID, user.userID, dto);
+    // Филиал автора — для зеркального расхода списания (161).
+    return this.movementsService.create(user.tenantID, user.userID, dto, actorPointId(user));
   }
 
   // Convenience: ergonomic shortcut for "transfer to defect" so the FE

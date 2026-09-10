@@ -27,7 +27,7 @@ export class CashShiftsController {
   // ─── Reads (literal routes first so 'current' isn't captured as :id) ───
   @Get('current')
   current(@CurrentUser() user: JwtPayload) {
-    return this.cashShifts.current(user.tenantID);
+    return this.cashShifts.current(user.tenantID, user);
   }
 
   // ─── Сейф (155). Литеральные 'safe'/'safe/collect' объявлены ДО любых
@@ -46,12 +46,12 @@ export class CashShiftsController {
 
   @Get()
   list(@CurrentUser() user: JwtPayload, @Query() query: { page?: string; limit?: string }) {
-    return this.cashShifts.list(user.tenantID, query);
+    return this.cashShifts.list(user.tenantID, query, user);
   }
 
   @Get(':id/report')
   report(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
-    return this.cashShifts.report(user.tenantID, id);
+    return this.cashShifts.report(user.tenantID, id, user);
   }
 
   // ─── Mutations ('cash_shifts_manage') ──────────────────────────────────

@@ -6,6 +6,7 @@ import { PushModule } from '../push/push.module';
 import { MarketingModule } from '../marketing/marketing.module';
 import { InstallmentsModule } from '../installments/installments.module';
 import { TenantsModule } from '../tenants/tenants.module';
+import { ClientsModule } from '../clients/clients.module';
 
 @Module({
   // MarketingModule exports MarketingService — reused (not reimplemented) for the
@@ -21,7 +22,13 @@ import { TenantsModule } from '../tenants/tenants.module';
   // NotificationsModule) so the closed-check money edit (#61) appends a
   // transactional row to admin_audit_log. No cycle: TenantsModule imports only
   // AuthModule and does NOT import ChecksModule.
-  imports: [WarrantyModule, PushModule, MarketingModule, InstallmentsModule, TenantsModule],
+  //
+  // ClientsModule exports ClientsService — переиспользуется (не переписывается)
+  // предикат «клиент виден на моём филиале» (161): журнал при ?clientId/?carId
+  // снимает фильтр филиала ради истории клиента и обязан спрашивать о
+  // видимости ТЕМ ЖЕ кодом, что список клиентов и гараж. Цикла нет:
+  // ClientsModule не импортирует ничего.
+  imports: [WarrantyModule, PushModule, MarketingModule, InstallmentsModule, TenantsModule, ClientsModule],
   controllers: [ChecksController],
   providers: [ChecksService],
 })

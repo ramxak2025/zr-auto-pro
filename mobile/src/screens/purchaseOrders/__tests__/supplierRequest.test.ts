@@ -2,10 +2,12 @@ import {
   buildSupplierRequestText,
   buildWhatsappLink,
   formatSupplyDate,
+  isBackdatedSupply,
   isFutureDay,
   isSameDay,
   toSupplyDateStr,
 } from '../purchaseOrderHelpers';
+import { formatDayKey } from '../../../../../shared/utils/formatters';
 
 describe('buildSupplierRequestText', () => {
   it('lists each line as «• <name> — <qty> шт» without prices or totals', () => {
@@ -76,5 +78,27 @@ describe('supply date helpers', () => {
   it('isSameDay сравнивает календарный день, а не миллисекунды', () => {
     expect(isSameDay(new Date(2026, 8, 9, 1, 0), new Date(2026, 8, 9, 23, 0))).toBe(true);
     expect(isSameDay(new Date(2026, 8, 9), new Date(2026, 8, 10))).toBe(false);
+  });
+
+  // ── Пояс автосервиса (157) ───────────────────────────────────────────────
+  // Сервер считает «сегодня» в поясе тенанта. Клиент, меривший будущее по
+  // устройству, у владивостокского сервиса отвергал бы его же сегодняшний день
+  // (или, наоборот, пропускал бы завтрашний у калининградского).
+  it('isFutureDay меряет «сегодня» по поясу автосервиса, а не устройства', () => {
+    for (const tz of ['Asia/Vladivostok', 'Europe/Kaliningrad', 'Europe/Moscow']) {
+      const todayKey = formatDayKey(new Date(), tz);
+      const [y, m, d] = todayKey.split('-').map(Number);
+      // Локальные Date ровно тех календарных дней, что видит автосервис.
+      const localToday = new Date(y, m - 1, d);
+      const localTomorrow = new Date(y, m - 1, d + 1);
+      const localYesterday = new Date(y, m - 1, d - 1);
+      expect(isFutureDay(localToday, tz)).toBe(false);
+      expect(isFutureDay(localTomorrow, tz)).toBe(true);
+      expect(isFutureDay(localYesterday, tz)).toBe(false);
+      // «Задним числом» — то же правило: сегодняшний день автосервиса не
+      // считается back-date, вчерашний считается.
+      expect(isBackdatedSupply(localToday, tz)).toBe(false);
+      expect(isBackdatedSupply(localYesterday, tz)).toBe(true);
+    }
   });
 });

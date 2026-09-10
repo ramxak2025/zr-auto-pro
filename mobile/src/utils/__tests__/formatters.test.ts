@@ -9,6 +9,8 @@ import {
   formatMoney,
   formatDateShort,
   formatDateTime,
+  formatDayKey,
+  formatTimeShort,
   getGreeting,
   paymentMethodLabels,
   roleLabels,
@@ -51,6 +53,52 @@ describe('formatDateTime', () => {
     // Use a fixed instant in local time to avoid TZ flakiness in CI.
     const out = formatDateTime('2026-05-19T10:00:00');
     expect(out).toMatch(/^\d{2}\.\d{2}\.\d{2} \d{2}:\d{2}$/);
+  });
+});
+
+/**
+ * Часовой пояс автосервиса (157). Экраны с ВРЕМЕНЕМ операции (журнал, деталка
+ * чека, кассовая смена, движение денег, звонки, смены) обязаны показывать тот
+ * же день и то же время, по которым сервер отнёс операцию к бизнес-суткам.
+ * Проверяем ровно тот инстант, на котором московский и владивостокский тенант
+ * расходятся календарным днём.
+ */
+describe('пояс автосервиса в форматтерах', () => {
+  // 2026-09-09T15:00Z = 18:00 девятого в Москве и 01:00 ДЕСЯТОГО во Владивостоке.
+  const INSTANT = '2026-09-09T15:00:00.000Z';
+
+  it('formatDayKey отдаёт календарный день ПОЯСА, а не устройства', () => {
+    expect(formatDayKey(INSTANT, 'Europe/Moscow')).toBe('2026-09-09');
+    expect(formatDayKey(INSTANT, 'Asia/Vladivostok')).toBe('2026-09-10');
+    expect(formatDayKey(INSTANT, 'Europe/Kaliningrad')).toBe('2026-09-09');
+  });
+
+  it('formatTimeShort отдаёт настенное время пояса', () => {
+    expect(formatTimeShort(INSTANT, 'Europe/Moscow')).toBe('18:00');
+    expect(formatTimeShort(INSTANT, 'Asia/Vladivostok')).toBe('01:00');
+  });
+
+  it('formatDateShort и formatDateTime уважают пояс', () => {
+    expect(formatDateShort(INSTANT, 'Asia/Vladivostok')).toBe('10.09.2026');
+    expect(formatDateTime(INSTANT, 'Asia/Vladivostok')).toBe('10.09.26 01:00');
+  });
+
+  it('полночь пояса не превращается в 24:00 и не уводит день', () => {
+    // 2026-09-09T14:00Z = ровно 00:00 десятого во Владивостоке.
+    const midnight = '2026-09-09T14:00:00.000Z';
+    expect(formatTimeShort(midnight, 'Asia/Vladivostok')).toBe('00:00');
+    expect(formatDayKey(midnight, 'Asia/Vladivostok')).toBe('2026-09-10');
+  });
+
+  it('без пояса поведение прежнее — время устройства', () => {
+    const d = new Date(INSTANT);
+    const expected = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    expect(formatDayKey(INSTANT)).toBe(expected);
+  });
+
+  it('мусорный пояс не роняет форматтер — падаем на устройство', () => {
+    expect(formatDayKey(INSTANT, 'Mars/Olympus')).toBe(formatDayKey(INSTANT));
+    expect(formatTimeShort(INSTANT, '')).toBe(formatTimeShort(INSTANT));
   });
 });
 

@@ -2,12 +2,13 @@ import { Injectable, Inject, BadRequestException, Logger } from '@nestjs/common'
 import { createHash } from 'crypto';
 import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
+import { dayStartMsInZone, getTenantTimezone, zonedDateKey } from '../common/timezone';
 
-// Бизнес-таймзона продукта: границы «дня» в звонках считаются по Москве
-// (UTC+3, без DST), а не по TZ сервера (Docker = UTC) — иначе звонки
-// 00:00–03:00 МСК попадали в соседние сутки.
-const BUSINESS_TZ = 'Europe/Moscow';
-const BUSINESS_TZ_OFFSET = '+03:00';
+// Бизнес-таймзона — ПОЯС ТЕНАНТА (tenants.timezone): границы «дня» в звонках
+// считаются по местному времени автосервиса, а не по TZ сервера (Docker = UTC)
+// и не по фиксированному московскому сдвигу — иначе ночные звонки попадали в
+// соседние сутки, а у тенанта восточнее Москвы «сегодня» начиналось днём.
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 @Injectable()
 export class CallsService {
@@ -15,10 +16,9 @@ export class CallsService {
 
   constructor(@Inject(PG_POOL) private pool: Pool) {}
 
-  /** YYYY-MM-DD «сегодня» в бизнес-таймзоне (Europe/Moscow), не в TZ сервера. */
-  private todayInBusinessTz(): string {
-    // en-CA даёт формат YYYY-MM-DD.
-    return new Intl.DateTimeFormat('en-CA', { timeZone: BUSINESS_TZ }).format(new Date());
+  /** YYYY-MM-DD «сегодня» в поясе тенанта, не в TZ сервера. */
+  private todayInTenantTz(tz: string): string {
+    return zonedDateKey(new Date(), tz);
   }
 
   private async getMoiZvonkiConfig(tenantId: string) {
@@ -64,13 +64,16 @@ export class CallsService {
 
     const apiUrl = `https://${config.domain}.moizvonki.ru/api/v1`;
 
-    const today = this.todayInBusinessTz();
+    const tz = await getTenantTimezone(this.pool, tenantId);
+    const today = this.todayInTenantTz(tz);
     const dateFrom = query.dateFrom || query.date || today;
     const dateTo = query.dateTo || query.date || today;
 
-    // Явный оффсет БИЗНЕС-таймзоны: без него строка парсится в TZ процесса (UTC).
-    const fromTimestamp = Math.floor(new Date(`${dateFrom}T00:00:00${BUSINESS_TZ_OFFSET}`).getTime() / 1000);
-    const toTimestamp = Math.floor(new Date(`${dateTo}T23:59:59${BUSINESS_TZ_OFFSET}`).getTime() / 1000);
+    // Границы суток считаем в поясе тенанта: без этого строка парсилась бы в TZ
+    // процесса (UTC) и запрос к МоиЗвонки уезжал на три часа. Верхняя граница —
+    // 23:59:59 МЕСТНОГО времени, ровно как было (сутки минус секунда).
+    const fromTimestamp = Math.floor(dayStartMsInZone(tz, dateFrom) / 1000);
+    const toTimestamp = Math.floor((dayStartMsInZone(tz, dateTo) + DAY_MS - 1000) / 1000);
 
     const requestData = JSON.stringify({
       user_name: config.userName,
@@ -322,13 +325,14 @@ export class CallsService {
    * the existing CallsController / CallsScreen render Mango calls with no change.
    */
   private async getStoredCalls(tenantId: string, query: { date?: string; dateFrom?: string; dateTo?: string }) {
-    const today = this.todayInBusinessTz();
+    const tz = await getTenantTimezone(this.pool, tenantId);
+    const today = this.todayInTenantTz(tz);
     const dateFrom = query.dateFrom || query.date || today;
     const dateTo = query.dateTo || query.date || today;
 
-    // Границы суток — в бизнес-таймзоне (BUSINESS_TZ = Europe/Moscow): naive
-    // midnight каст к timestamptz через AT TIME ZONE, иначе $2::date давал
-    // полночь UTC и звонки 00:00–03:00 МСК уезжали в соседние сутки.
+    // Границы суток — в поясе тенанта (параметр $4, не склейка): naive midnight
+    // каст к timestamptz через AT TIME ZONE, иначе $2::date давал полночь UTC и
+    // ночные звонки уезжали в соседние сутки.
     // LIMIT 1000 — потолок против «dateFrom=2025-01-01&dateTo=2026-12-31»,
     // тянувшего все звонки тенанта без пагинации (класс limit-500).
     const { rows } = await this.pool.query(
@@ -338,11 +342,11 @@ export class CallsService {
          FROM calls c
          LEFT JOIN clients cl ON cl.id = c.client_id AND cl.tenant_id = c.tenant_id
         WHERE c.tenant_id = $1
-          AND c.started_at >= ($2::date::timestamp AT TIME ZONE 'Europe/Moscow')
-          AND c.started_at < (($3::date + INTERVAL '1 day') AT TIME ZONE 'Europe/Moscow')
+          AND c.started_at >= ($2::date::timestamp AT TIME ZONE $4::text)
+          AND c.started_at < (($3::date + INTERVAL '1 day') AT TIME ZONE $4::text)
         ORDER BY c.started_at DESC
         LIMIT 1000`,
-      [tenantId, dateFrom, dateTo],
+      [tenantId, dateFrom, dateTo, tz],
     );
 
     // Cars for matched clients (same enrichment МоиЗвонки does), tenant-scoped.

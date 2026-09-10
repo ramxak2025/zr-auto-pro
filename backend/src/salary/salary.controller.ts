@@ -3,6 +3,7 @@ import { SalaryService } from './salary.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { PermissionsGuard, RequirePermission, userHasPermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 import { CreateSalaryPaymentDto } from './dto/create-payment.dto';
 import { CreatePremiumDto } from './dto/create-premium.dto';
 import { CreatePenaltyDto } from './dto/create-penalty.dto';
@@ -28,6 +29,16 @@ function canViewAllSalary(user: JwtPayload): boolean {
   return userHasPermission(user, 'salary_view_all');
 }
 
+/**
+ * 161 — текущий филиал актора для зарплатных экранов. null = «Все точки»
+ * (сводка по сети) — фильтра нет, поведение одноточечного тенанта прежнее.
+ * Резолвим ЗДЕСЬ, а не в сервисе: сервис не должен знать про JWT-актора, и
+ * ровно один источник точки исключает расхождение чтения и записи.
+ */
+function point(user: JwtPayload): string | null {
+  return actorPointId(user);
+}
+
 @UseGuards(JwtAuthGuard, PermissionsGuard)
 @Controller('salary')
 export class SalaryController {
@@ -40,7 +51,7 @@ export class SalaryController {
   @RequirePermission('salary_view_all')
   @Get()
   getAll(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.salaryService.getAll(user.tenantID, query);
+    return this.salaryService.getAll(user.tenantID, query, point(user));
   }
 
   // `getMy` filters by the JWT subject inside the service — every authenticated
@@ -55,13 +66,13 @@ export class SalaryController {
   @RequirePermission('salary_view_all')
   @Get('payments')
   getPayments(@CurrentUser() user: JwtPayload, @Query() query: any) {
-    return this.salaryService.getPayments(user.tenantID, query);
+    return this.salaryService.getPayments(user.tenantID, query, point(user));
   }
 
   @RequirePermission('salary_payouts_manage')
   @Post('payments')
   createPayment(@CurrentUser() user: JwtPayload, @Body() dto: CreateSalaryPaymentDto) {
-    return this.salaryService.createPayment(user.tenantID, user.userID, dto);
+    return this.salaryService.createPayment(user.tenantID, user.userID, dto, point(user));
   }
 
   // Employee confirms receipt of a payment. The service rejects calls from
@@ -80,7 +91,7 @@ export class SalaryController {
   @RequirePermission('salary_payouts_manage')
   @Post('payouts')
   createPayout(@CurrentUser() user: JwtPayload, @Body() dto: CreatePayoutDto) {
-    return this.salaryService.createPayout(user.tenantID, user.userID, dto);
+    return this.salaryService.createPayout(user.tenantID, user.userID, dto, point(user));
   }
 
   // Round 14 (149) — «Выплата вне программы»: получатель БЕЗ аккаунта
@@ -90,7 +101,7 @@ export class SalaryController {
   @RequirePermission('salary_payouts_manage')
   @Post('outside-payouts')
   createOutsidePayout(@CurrentUser() user: JwtPayload, @Body() dto: CreateOutsidePayoutDto) {
-    return this.salaryService.createOutsidePayout(user.tenantID, user.userID, dto);
+    return this.salaryService.createOutsidePayout(user.tenantID, user.userID, dto, point(user));
   }
 
   // ── Round 15 (153) — корректировки владельцем ────────────────────────────
@@ -101,7 +112,7 @@ export class SalaryController {
   @RequirePermission('salary_payouts_manage')
   @Post('payouts/:id/cancel')
   cancelPayout(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: CancelPayoutDto) {
-    return this.salaryService.cancelPayout(id, user.tenantID, user.userID, dto?.reason);
+    return this.salaryService.cancelPayout(id, user.tenantID, user.userID, dto?.reason, point(user));
   }
 
   // Правка НЕЗАФИКСИРОВАННОЙ (легаси-pending) выплаты — сумма/комментарий.
@@ -109,7 +120,7 @@ export class SalaryController {
   @RequirePermission('salary_payouts_manage')
   @Patch('payouts/:id')
   updatePayout(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdatePayoutDto) {
-    return this.salaryService.updatePendingPayout(id, user.tenantID, user.userID, dto || {});
+    return this.salaryService.updatePendingPayout(id, user.tenantID, user.userID, dto || {}, point(user));
   }
 
   // Сторно LEGACY-выплаты (salary_payments): строка остаётся с reversed_at,
@@ -119,7 +130,7 @@ export class SalaryController {
   @RequirePermission('salary_payouts_manage')
   @Delete('payments/:id')
   reversePayment(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Query('reason') reason?: string) {
-    return this.salaryService.reversePayment(id, user.tenantID, user.userID, reason);
+    return this.salaryService.reversePayment(id, user.tenantID, user.userID, reason, point(user));
   }
 
   // ЛЕГАСИ-ручка решения по выплате (Round 17 / 158: подтверждения больше нет).
@@ -147,7 +158,7 @@ export class SalaryController {
   @RequirePermission('salary_payouts_manage')
   @Post('payouts/:id/settle')
   settlePayout(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.salaryService.settlePayout(id, user.tenantID, user.userID);
+    return this.salaryService.settlePayout(id, user.tenantID, user.userID, point(user));
   }
 
   // List payouts + statuses. Owner (director/superadmin) sees the whole tenant;
@@ -170,7 +181,7 @@ export class SalaryController {
     const privileged = canViewAllSalary(user);
     const q = { ...(query || {}) };
     if (!privileged) q.employeeId = user.userID;
-    return this.salaryService.listPayouts(user.tenantID, q);
+    return this.salaryService.listPayouts(user.tenantID, q, point(user));
   }
 
   // Per-employee monthly salary detail (the full-screen card pages months).
@@ -184,7 +195,7 @@ export class SalaryController {
     // «Все» → 'salary_view_all' может смотреть любого; иначе — только себя.
     const privileged = canViewAllSalary(user);
     const target = privileged ? employeeId : user.userID;
-    return this.salaryService.getEmployeeMonth(user.tenantID, target, month);
+    return this.salaryService.getEmployeeMonth(user.tenantID, target, month, point(user));
   }
 
   // ── Premiums ───────────────────────────────────────────────────────────
@@ -192,7 +203,7 @@ export class SalaryController {
   @RequirePermission('salary_premiums_manage')
   @Post('premiums')
   createPremium(@CurrentUser() user: JwtPayload, @Body() dto: CreatePremiumDto) {
-    return this.salaryService.createPremium(user.tenantID, user.userID, dto);
+    return this.salaryService.createPremium(user.tenantID, user.userID, dto, point(user));
   }
 
   /**
@@ -209,13 +220,13 @@ export class SalaryController {
     const privileged = canViewAllSalary(user);
     const q = { ...(query || {}) };
     if (!privileged) q.userId = user.userID;
-    return this.salaryService.listPremiums(user.tenantID, q);
+    return this.salaryService.listPremiums(user.tenantID, q, point(user));
   }
 
   @RequirePermission('salary_premiums_manage')
   @Delete('premiums/:id')
   removePremium(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.salaryService.removePremium(id, user.tenantID);
+    return this.salaryService.removePremium(id, user.tenantID, point(user));
   }
 
   // ── Fines / penalties (штрафы, 056_salary_penalties) ─────────────────────
@@ -227,7 +238,7 @@ export class SalaryController {
   @RequirePermission('salary_payouts_manage')
   @Post('penalties')
   createPenalty(@CurrentUser() user: JwtPayload, @Body() dto: CreatePenaltyDto) {
-    return this.salaryService.createPenalty(user.tenantID, user.userID, dto);
+    return this.salaryService.createPenalty(user.tenantID, user.userID, dto, point(user));
   }
 
   /**
@@ -238,7 +249,7 @@ export class SalaryController {
   @RequirePermission('salary_payouts_manage')
   @Get('penalties')
   listPenalties(@CurrentUser() user: JwtPayload, @Query() query: { userId?: string }) {
-    return this.salaryService.listPenalties(user.tenantID, query || {});
+    return this.salaryService.listPenalties(user.tenantID, query || {}, point(user));
   }
 
   // Round 15 (153) — правка штрафа (сумма/причина) с аудитом before/after.
@@ -246,12 +257,12 @@ export class SalaryController {
   @RequirePermission('salary_payouts_manage')
   @Patch('penalties/:id')
   updatePenalty(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: UpdatePenaltyDto) {
-    return this.salaryService.updatePenalty(id, user.tenantID, user.userID, dto || {});
+    return this.salaryService.updatePenalty(id, user.tenantID, user.userID, dto || {}, point(user));
   }
 
   @RequirePermission('salary_payouts_manage')
   @Delete('penalties/:id')
   deletePenalty(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.salaryService.deletePenalty(id, user.tenantID, user.userID);
+    return this.salaryService.deletePenalty(id, user.tenantID, user.userID, point(user));
   }
 }

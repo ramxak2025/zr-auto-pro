@@ -10,6 +10,9 @@ import { Pool } from 'pg';
 import { PG_POOL } from '../database.module';
 import { WarehousesService } from '../warehouses/warehouses.service';
 import { invalidateReportsForTenant } from '../common/reports-cache';
+import { getTenantTimezone } from '../common/timezone';
+import { JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId, pointFilterSql } from '../common/point-scope';
 
 export type ReturnDestination = 'warehouse' | 'defect';
 export type ReturnScope = 'full' | 'partial';
@@ -64,7 +67,7 @@ export class ReturnsService {
    *      брак and available for defect_return_to_supplier. Main stock is NOT
    *      touched (the units came back from the client, not from the shelf).
    */
-  async createReturn(tenantID: string, userID: string, checkId: string, dto: CreateReturnDto) {
+  async createReturn(tenantID: string, userID: string, checkId: string, dto: CreateReturnDto, actor?: JwtPayload) {
     if (!dto || !dto.destination || !dto.scope) {
       throw new BadRequestException({ message: 'destination и scope обязательны' });
     }
@@ -94,9 +97,19 @@ export class ReturnsService {
       // both add the stock back / reverse the money twice. The second
       // transaction blocks here until the first commits, then re-reads the row
       // with is_returned=true and takes the clean «уже возвращён» exit below.
+      //
+      // ФИЛИАЛ (161) — «читаем широко, пишем только в свой филиал». Возврат
+      // РЕВЕРСИРУЕТ выручку и склад, то есть это запись, и она обязана быть
+      // не слабее чтения журнала. Без этого фильтра мастер филиала А, зная id
+      // чека филиала Б (деталь чека читается межфилиально СОЗНАТЕЛЬНО — это
+      // история клиента), оформлял бы возврат по чужой продаже. Фильтр стоит
+      // ПРЯМО В ЛОКЕ, а не отдельным гейтом: у возврата своя транзакция, и
+      // лишний SELECT до неё был бы вторым источником правды.
+      const lockParams: unknown[] = [checkId, tenantID];
+      const lockPointFilter = pointFilterSql(null, actorPointId(actor), lockParams);
       const { rows: checkRows } = await client.query(
-        `SELECT id, total_revenue, is_returned FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL LIMIT 1 FOR UPDATE`,
-        [checkId, tenantID],
+        `SELECT id, total_revenue, is_returned FROM checks WHERE id = $1 AND tenant_id = $2 AND deleted_at IS NULL${lockPointFilter} LIMIT 1 FOR UPDATE`,
+        lockParams,
       );
       if (checkRows.length === 0) {
         throw new NotFoundException({ message: 'Заказ-наряд не найден' });
@@ -523,20 +536,34 @@ export class ReturnsService {
    * List returns for the journal. Joined with checks for number / total / client
    * name. Default window: last 90 days unless explicit from/to are provided.
    */
-  async list(tenantID: string, query: { from?: string; to?: string }) {
+  /**
+   * 161 — журнал возвратов ФИЛИАЛА. Своей колонки у возврата нет и не нужно:
+   * возврат неотделим от чека, поэтому филиал берём у чека — тем же
+   * предикатом, что журнал и деньги. JOIN checks здесь ВНУТРЕННИЙ, поэтому
+   * условие уходит прямо в WHERE.
+   */
+  async list(tenantID: string, query: { from?: string; to?: string }, actor?: JwtPayload) {
     const conds: string[] = ['cr.tenant_id = $1'];
     const params: unknown[] = [tenantID];
     let idx = 2;
-    // Границы окна: строка YYYY-MM-DD трактуется как МОСКОВСКИЙ календарный
-    // день — полуинтервал [from 00:00 МСК, to+1 00:00 МСК), паттерн
-    // reports.service (BUSINESS_TZ). Раньше касты шли в СЕРВЕРНОЙ TZ (UTC) с
-    // включённой верхней полуночью — возвраты 00:00–03:00 МСК граничного дня
-    // уезжали в соседнее окно. Полный timestamp — прежняя семантика 1:1.
+    // Границы окна: строка YYYY-MM-DD трактуется как МЕСТНЫЙ календарный день
+    // тенанта — полуинтервал [from 00:00, to+1 00:00), паттерн reports.service.
+    // Раньше касты шли в СЕРВЕРНОЙ TZ (UTC) с включённой верхней полуночью —
+    // ночные возвраты граничного дня уезжали в соседнее окно. Полный timestamp
+    // — прежняя семантика 1:1.
     const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+    const needsTz = (query.from && DATE_ONLY_RE.test(query.from)) || (query.to && DATE_ONLY_RE.test(query.to));
+    // Пояс кладём в params ОДИН раз и только когда он реально нужен запросу:
+    // лишний плейсхолдер без использования Postgres не примет.
+    let tzPh = '';
+    if (needsTz) {
+      tzPh = `$${idx++}::text`;
+      params.push(await getTenantTimezone(this.pool, tenantID));
+    }
     if (query.from) {
       conds.push(
         DATE_ONLY_RE.test(query.from)
-          ? `cr.created_at >= $${idx++}::date::timestamp AT TIME ZONE 'Europe/Moscow'`
+          ? `cr.created_at >= $${idx++}::date::timestamp AT TIME ZONE ${tzPh}`
           : `cr.created_at >= $${idx++}`,
       );
       params.push(query.from);
@@ -544,11 +571,13 @@ export class ReturnsService {
     if (query.to) {
       conds.push(
         DATE_ONLY_RE.test(query.to)
-          ? `cr.created_at < ($${idx++}::date + 1)::timestamp AT TIME ZONE 'Europe/Moscow'`
+          ? `cr.created_at < ($${idx++}::date + 1)::timestamp AT TIME ZONE ${tzPh}`
           : `cr.created_at <= ($${idx++}::date + 1)::timestamptz`,
       );
       params.push(query.to);
     }
+    // Точка — последним условием: дальше локальный idx не используется.
+    const pointFilter = pointFilterSql('ch', actorPointId(actor), params);
 
     const { rows } = await this.pool.query(
       `SELECT cr.id, cr.check_id, cr.destination, cr.reason, cr.refund_amount,
@@ -558,7 +587,7 @@ export class ReturnsService {
          FROM check_returns cr
          JOIN checks ch ON ch.id = cr.check_id
          LEFT JOIN clients cl ON cl.id = ch.client_id
-        WHERE ${conds.join(' AND ')}
+        WHERE ${conds.join(' AND ')}${pointFilter}
         ORDER BY cr.created_at DESC
         LIMIT 500`,
       params,

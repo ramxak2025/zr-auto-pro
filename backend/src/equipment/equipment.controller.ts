@@ -4,6 +4,7 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 
 // ROLE-ONLY (консолидация 2026-07). Enforcement на сервере:
 //   • view   — просмотр справочника имущества (категории, склад, кому выдано,
@@ -46,13 +47,16 @@ export class EquipmentController {
   @RequirePermission('equipment_manage')
   @Post('storage')
   createStorageItem(@CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.service.createStorageItem(user.tenantID, user.userID, dto);
+    // Филиал автора — для зеркального расхода «Покупка имущества» (161).
+    return this.service.createStorageItem(user.tenantID, user.userID, dto, actorPointId(user));
   }
 
   @RequirePermission('equipment_manage')
   @Patch('storage/:id')
   updateStorageItem(@Param('id') id: string, @CurrentUser() user: JwtPayload, @Body() dto: any) {
-    return this.service.updateStorageItem(id, user.tenantID, dto);
+    // Автор + его филиал: резолв филиала для нового зеркального расхода
+    // считает доступные точки по назначениям ИМЕННО этого пользователя (161).
+    return this.service.updateStorageItem(id, user.tenantID, dto, user.userID, actorPointId(user));
   }
 
   // `reverseExpense=true` → also delete the linked «Имущество» expense

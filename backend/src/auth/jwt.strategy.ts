@@ -79,8 +79,15 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // роли — единственный источник прав; users.permissions больше не читаются.
     // role_id NULL (аномалия после cutover-миграции 126) → role_matrix NULL →
     // deny-by-default для мастера падает на MASTER_PERMISSION_DEFAULTS в guard.
+    // 156/160 — филиал актора (users.current_point_id) забираем ЭТИМ ЖЕ
+    // запросом: он и так выполняется на каждом холодном хопе и кешируется на
+    // 30 секунд, поэтому точка обходится в НОЛЬ дополнительных обращений к БД.
+    // Раньше её перечитывал каждый create() чека отдельным SELECT'ом.
+    // ::text — чтобы значение приезжало строкой, как tenant_id (сравнения и
+    // ключи кеша строковые).
     const { rows } = await this.pool.query(
       `SELECT u.is_active, u.tenant_id::text as tenant_id, u.role, u.dismissed_at, u.purged_at,
+              u.current_point_id::text as current_point_id,
               r.matrix as role_matrix
        FROM users u
        LEFT JOIN roles r ON r.id = u.role_id
@@ -130,6 +137,11 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
       tenantID: rows[0].tenant_id ?? NO_TENANT_ID,
       role: rows[0].role,
       permissions,
+      // Текущий филиал: null = «Все точки» (одноточечный тенант / сводка по
+      // сети у владельца). Инвалидация — PointsService.switchPoint и
+      // adminArchive: без неё после переключения филиала до 30 секунд
+      // отдавались бы данные СТАРОЙ точки.
+      currentPointId: rows[0].current_point_id ?? null,
       jti,
     };
   }

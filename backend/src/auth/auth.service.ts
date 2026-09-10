@@ -38,6 +38,11 @@ const USER_WITH_TENANT_COLUMNS = `
       'phone',COALESCE(t.phone,''),'address',COALESCE(t.address,''),
       'email',COALESCE(t.email,''),'isActive',t.is_active,
       'maxUsers',t.max_users,
+      -- 157 — часовой пояс автосервиса едет вместе с профилем: иначе КАЖДОМУ
+      -- клиенту пришлось бы дёргать GET /my-company, который закрыт ключом
+      -- company_manage (мастер получил бы 403 и остался без пояса). Поле
+      -- аддитивное — старые сборки его просто игнорируют.
+      'timezone',COALESCE(NULLIF(btrim(t.timezone),''),'Europe/Moscow'),
       'subscriptionEnd',t.subscription_end,
       'subscriptionNote',COALESCE(t.subscription_note,''),
       'createdAt',t.created_at,'updatedAt',t.updated_at)::text
@@ -326,6 +331,10 @@ export class AuthService {
    * this as a daily cron keeps the table from growing forever in a
    * tenant with churny logins.
    */
+  // Пояс крона — «тихий час», а НЕ бизнес-граница суток: строки отбираются по
+  // `expires_at < now()`, это одно и то же для тенанта в Калининграде и на
+  // Камчатке. Переводить джоб на пояс тенанта нечего — календарного дня в нём
+  // нет.
   @Cron('17 3 * * *', { timeZone: 'Europe/Moscow' })
   async cleanExpiredTokens(): Promise<void> {
     if (!RUN_BACKGROUND_JOBS) return;

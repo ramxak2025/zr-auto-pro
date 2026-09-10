@@ -12,6 +12,7 @@ import QueryState from '../components/QueryState';
 import Modal from '../components/Modal';
 import ConfirmDialog from '../components/ConfirmDialog';
 import Switch from '../components/Switch';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 
 const formatCurrency = (value: number) =>
   Math.round(value)
@@ -95,7 +96,12 @@ export default function ExpensesPage() {
       setModalOpen(false);
       setForm({ categoryId: '', amount: '', description: '', date: today });
     },
-    onError: () => toast.error('Ошибка при добавлении расхода'),
+    // 160/161: расход, записанный в режиме «Все точки», не попал бы ни в один
+    // филиал — ни в его отчёт, ни в чистую прибыль. Сервер отвечает 400
+    // «Выберите филиал, чтобы записать расход»; показываем ЕГО текст (там
+    // сказано, что делать), а не глухое «Ошибка при добавлении расхода».
+    // Переключатель филиала живёт в шапке страницы.
+    onError: (err) => toast.error(apiErrorMessage(err) ?? 'Ошибка при добавлении расхода', { duration: 8000 }),
   });
 
   const deleteMutation = useMutation({

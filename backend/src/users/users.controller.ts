@@ -1,9 +1,10 @@
-import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, Query, UseGuards } from '@nestjs/common';
 import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
 import { PermissionsGuard, RequirePermission } from '../common/guards/permissions.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { SetRateDto } from './dto/set-rate.dto';
@@ -22,14 +23,19 @@ import { SetRateDto } from './dto/set-rate.dto';
 export class UsersController {
   constructor(private usersService: UsersService) {}
 
+  // 161 — `?scope=point` ЯВНО просит список сотрудников ТЕКУЩЕГО филиала (по
+  // назначениям user_points). Без параметра список прежний, на весь тенант:
+  // им резолвятся имена в журнале / расходах / зарплате и им же владелец
+  // назначает людей на точки. Скоуп просит ровно тот экран, где чужой
+  // сотрудник означает неверные деньги, — пикер мастера в Кассе.
   @Get()
-  getAll(@CurrentUser() user: JwtPayload) {
-    return this.usersService.getAll(user.tenantID);
+  getAll(@CurrentUser() user: JwtPayload, @Query('scope') scope?: string) {
+    return this.usersService.getAll(user.tenantID, scope === 'point' ? actorPointId(user) : null);
   }
 
   @Get('masters')
-  getMasters(@CurrentUser() user: JwtPayload) {
-    return this.usersService.getMasters(user.tenantID);
+  getMasters(@CurrentUser() user: JwtPayload, @Query('scope') scope?: string) {
+    return this.usersService.getMasters(user.tenantID, scope === 'point' ? actorPointId(user) : null);
   }
 
   // ─── «Уволенные» (dismissed recycle bin) ────────────────────────────

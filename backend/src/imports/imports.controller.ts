@@ -29,7 +29,7 @@ export class ImportsController {
   @Post('clients-cars/preview')
   preview(@CurrentUser() user: JwtPayload, @Body() body: ImportPreviewDto) {
     const allowForeignPlates = body.options?.allowForeignPlates !== false; // default ON
-    return this.imports.preview(user.tenantID, body.rows, { allowForeignPlates });
+    return this.imports.preview(user.tenantID, body.rows, { allowForeignPlates }, user.userID);
   }
 
   @RequirePermission('clients_edit')

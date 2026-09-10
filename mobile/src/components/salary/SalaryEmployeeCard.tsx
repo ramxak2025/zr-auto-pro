@@ -49,8 +49,12 @@ import IosScreenHeader from '../IosScreenHeader';
 import LoadingSpinner from '../LoadingSpinner';
 import QueryErrorState from '../QueryErrorState';
 import Modal from '../Modal';
+import ConfirmDialog from '../ConfirmDialog';
+import { BottomSheet } from '../BottomSheet';
+import { usePointRequiredPrompt } from '../PointRequiredPrompt';
 import RateByMonthSheet from '../employee/RateByMonthSheet';
 import { salaryApi } from '../../api/services';
+import { choosePointMessage } from '../../../../shared/utils/apiError';
 import { useColors } from '../../contexts/ThemeContext';
 import { useTabBarHeight } from '../../hooks/useTabBarHeight';
 import { Text } from '../../platform/Typography';
@@ -201,6 +205,10 @@ export default function SalaryEmployeeCard({
   const [rateSheetOpen, setRateSheetOpen] = useState(false);
   const [payoutToCancel, setPayoutToCancel] = useState<SalaryPayout | null>(null);
   const [payoutToEdit, setPayoutToEdit] = useState<SalaryPayout | null>(null);
+  // Меню строки выплаты (⋯) — шторка, а не Alert: см. openPayoutMenu ниже.
+  const [payoutMenu, setPayoutMenu] = useState<SalaryPayout | null>(null);
+  // Подтверждение фиксации легаси-выплаты — отдельным шагом ПОСЛЕ шторки.
+  const [payoutToSettle, setPayoutToSettle] = useState<SalaryPayout | null>(null);
   const [paymentToReverse, setPaymentToReverse] = useState<SalaryPayment | null>(null);
   const [fineToEdit, setFineToEdit] = useState<SalaryFine | null>(null);
 
@@ -273,13 +281,41 @@ export default function SalaryEmployeeCard({
     }
   }, [invalidate, queryClient]);
 
+  // 160/161: выплата / премия / штраф без филиала не вычлась бы из «к выплате»
+  // НИ В ОДНОМ филиале — владелец, глядя на филиальный экран, выдал бы деньги
+  // второй раз. Сервер отвечает 400 «Выберите филиал…»; вместо глухой «Ошибки»
+  // показываем его текст и сразу даём выбрать филиал.
+  const pointPrompt = usePointRequiredPrompt();
+
+  /** Закрыть любую открытую форму/подтверждение карточки (все они — RN Modal). */
+  const closeAllForms = useCallback(() => {
+    setActiveForm(null);
+    setPayoutMenu(null);
+    setPayoutToSettle(null);
+    setPayoutToCancel(null);
+    setPayoutToEdit(null);
+    setPaymentToReverse(null);
+    setFineToEdit(null);
+  }, []);
+
   const errorAlert = useCallback(
     (fallback: string) => (err: any) => {
+      const pointMessage = choosePointMessage(err);
+      if (pointMessage) {
+        // Операция не пройдёт, пока филиал не выбран, поэтому открытую форму
+        // закрываем: она всё равно упрётся в тот же отказ. И это обязательно
+        // технически — шторка выбора филиала и форма оба RN `<Modal>`, а
+        // презентация одного в тот же кадр, когда другой ещё уходит, на iOS
+        // съедает верхний (та же пауза 250 мс, что в afterMenuClosed).
+        closeAllForms();
+        setTimeout(() => pointPrompt.show(pointMessage), 250);
+        return;
+      }
       haptic('error');
       const friendly = err?.response?.data?.message || err?.response?.data?.error || err?.message || fallback;
       Alert.alert('Ошибка', String(Array.isArray(friendly) ? friendly.join('\n') : friendly));
     },
-    [],
+    [closeAllForms, pointPrompt],
   );
 
   const payoutMutation = useMutation({
@@ -444,33 +480,34 @@ export default function SalaryEmployeeCard({
 
   // Меню строки выплаты (кнопка ⋯): легаси-pending — зафиксировать / изменить /
   // отменить; зафиксированная — только отменить (правку сервер запрещает:
-  // отменить и выдать заново). Alert как action-sheet — одинаково на iOS и
-  // Android.
-  const openPayoutMenu = useCallback(
-    (p: SalaryPayout) => {
-      haptic('tap');
-      const buttons: Array<{ text: string; style?: 'cancel' | 'destructive'; onPress?: () => void }> = [];
-      if (p.status === 'pending') {
-        buttons.push({
-          text: 'Зафиксировать',
-          onPress: () =>
-            Alert.alert(
-              'Зафиксировать выплату?',
-              `${formatMoney(p.amount)} будет записана в расходы («Зарплата») сегодняшней датой и уменьшит остаток к выплате.`,
-              [
-                { text: 'Отмена', style: 'cancel' },
-                { text: 'Зафиксировать', onPress: () => settlePayoutMutation.mutate(p.id) },
-              ],
-            ),
-        });
-        buttons.push({ text: 'Изменить сумму', onPress: () => setPayoutToEdit(p) });
-      }
-      buttons.push({ text: 'Отменить выплату', style: 'destructive', onPress: () => setPayoutToCancel(p) });
-      buttons.push({ text: 'Закрыть', style: 'cancel' });
-      Alert.alert(p.type === 'advance' ? 'Аванс' : 'Зарплата', formatMoney(p.amount), buttons);
-    },
-    [settlePayoutMutation],
-  );
+  // отменить и выдать заново).
+  //
+  // ПОЧЕМУ ШТОРКА, А НЕ Alert.alert. У легаси-pending выплаты пунктов ЧЕТЫРЕ,
+  // а RN Alert на Android отдаёт нативному AlertDialog максимум три кнопки
+  // (positive / negative / neutral) и делает диалог неотменяемым. Лишней
+  // оказывалась именно последняя — «Закрыть»: владелец попадал в диалог, из
+  // которого нельзя выйти иначе как совершить денежное действие. Шторка
+  // работает одинаково на обеих платформах, числом строк не ограничена и
+  // всегда закрывается (крестик, свайп, тап по фону).
+  const openPayoutMenu = useCallback((p: SalaryPayout) => {
+    haptic('tap');
+    setPayoutMenu(p);
+  }, []);
+
+  /**
+   * Закрыть шторку и ТОЛЬКО ПОТОМ открыть следующий диалог.
+   *
+   * Шторка и формы-подтверждения — оба RN `<Modal>`. Презентация одного
+   * нативного модала в тот же кадр, когда другой ещё уходит, на iOS
+   * периодически съедает второй: владелец жмёт «Отменить выплату» и не видит
+   * НИЧЕГО. Пауза чуть больше анимации закрытия шторки (220 мс) —
+   * та же идиома, что в ProductsScreen.handleInventoryPickerClose и
+   * SupplierDetailScreen.onPickDefectProduct.
+   */
+  const afterMenuClosed = useCallback((open: () => void) => {
+    setPayoutMenu(null);
+    setTimeout(open, 250);
+  }, []);
 
   const openPaymentMenu = useCallback((p: SalaryPayment) => {
     haptic('tap');
@@ -706,6 +743,79 @@ export default function SalaryEmployeeCard({
           fixedMonth={monthKey}
         />
       ) : null}
+
+      {/* Меню строки выплаты. Заменило четырёхкнопочный Alert (Android резал
+          список до трёх кнопок и выбрасывал «Закрыть», запирая владельца в
+          диалоге без выхода без денежного действия). */}
+      <BottomSheet
+        visible={payoutMenu !== null}
+        onClose={() => setPayoutMenu(null)}
+        title={payoutMenu?.type === 'advance' ? 'Аванс' : 'Зарплата'}
+        heightRatio={0.5}
+      >
+        {payoutMenu ? (
+          <View>
+            <Text style={[styles.menuAmount, { color: palette.text.primary }]}>{formatMoney(payoutMenu.amount)}</Text>
+            {payoutMenu.status === 'pending' ? (
+              <>
+                <MenuAction
+                  palette={palette}
+                  icon="checkmark-circle-outline"
+                  label="Зафиксировать"
+                  hint="Запишет расход «Зарплата» сегодняшней датой"
+                  onPress={() => {
+                    const target = payoutMenu;
+                    afterMenuClosed(() => setPayoutToSettle(target));
+                  }}
+                />
+                <MenuAction
+                  palette={palette}
+                  icon="create-outline"
+                  label="Изменить сумму"
+                  onPress={() => {
+                    const target = payoutMenu;
+                    afterMenuClosed(() => setPayoutToEdit(target));
+                  }}
+                />
+              </>
+            ) : null}
+            <MenuAction
+              palette={palette}
+              icon="close-circle-outline"
+              label="Отменить выплату"
+              destructive
+              onPress={() => {
+                const target = payoutMenu;
+                afterMenuClosed(() => setPayoutToCancel(target));
+              }}
+            />
+          </View>
+        ) : null}
+      </BottomSheet>
+
+      {/* Подтверждение фиксации легаси-выплаты (158). Обычный ConfirmDialog, а
+          не Alert: он открывается ПОСЛЕ закрытия шторки, а нативный Alert,
+          показанный в момент дисмисса RN-модалки, на iOS теряется. */}
+      <ConfirmDialog
+        visible={payoutToSettle !== null}
+        onClose={() => setPayoutToSettle(null)}
+        onConfirm={() => {
+          const target = payoutToSettle;
+          setPayoutToSettle(null);
+          if (target) settlePayoutMutation.mutate(target.id);
+        }}
+        title="Зафиксировать выплату?"
+        message={
+          payoutToSettle
+            ? `${formatMoney(payoutToSettle.amount)} будет записана в расходы («Зарплата») сегодняшней датой и уменьшит остаток к выплате.`
+            : ''
+        }
+        confirmText="Зафиксировать"
+      />
+
+      {/* Невидимая шторка выбора филиала — её открывает кнопка в диалоге
+          отказа «Выберите филиал» (см. errorAlert). */}
+      {pointPrompt.element}
 
       {/* Round 15 (153) — отмена выплаты (зафиксированной / легаси-pending) */}
       <Modal visible={payoutToCancel !== null} onClose={() => setPayoutToCancel(null)} title="Отменить выплату?">
@@ -1536,6 +1646,45 @@ function FineForm({
   );
 }
 
+/**
+ * Строка меню в шторке действий над выплатой. Заменила кнопку Alert'а: у
+ * Android-диалога их не больше трёх, а нам нужно до четырёх пунктов вместе с
+ * выходом (см. openPayoutMenu). Высота 52 — та же, что у PickerRow в выборе
+ * филиала, чтобы шторки действий выглядели одинаково по всему приложению.
+ */
+function MenuAction({
+  palette,
+  icon,
+  label,
+  hint,
+  destructive,
+  onPress,
+}: {
+  palette: SemanticPalette;
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  hint?: string;
+  destructive?: boolean;
+  onPress: () => void;
+}) {
+  const tint = destructive ? colors.red[600] : palette.text.primary;
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.7}
+      style={[styles.menuRow, { borderBottomColor: palette.border.subtle }]}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+    >
+      <Ionicons name={icon} size={20} color={destructive ? colors.red[600] : palette.text.secondary} />
+      <View style={{ flex: 1 }}>
+        <Text style={[styles.menuLabel, { color: tint }]}>{label}</Text>
+        {hint ? <Text style={[styles.menuHint, { color: palette.text.tertiary }]}>{hint}</Text> : null}
+      </View>
+    </TouchableOpacity>
+  );
+}
+
 // ── Round 15 (153) — корректировочные формы ────────────────────────────────────
 
 /**
@@ -1889,6 +2038,23 @@ const CARD_SHADOW = {
 } as const;
 
 const styles = StyleSheet.create({
+  // Шторка действий над выплатой (заменила четырёхкнопочный Alert).
+  menuAmount: {
+    fontSize: fontSize['2xl'],
+    fontWeight: fontWeight.bold,
+    marginBottom: spacing[3],
+  },
+  menuRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing[3],
+    paddingVertical: spacing[3],
+    paddingHorizontal: spacing[1],
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    minHeight: 52,
+  },
+  menuLabel: { fontSize: fontSize.base, fontWeight: fontWeight.semibold },
+  menuHint: { fontSize: fontSize.xs, marginTop: 2 },
   flex: { flex: 1 },
 
   // Header month chip

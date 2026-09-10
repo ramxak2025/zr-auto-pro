@@ -7,7 +7,7 @@ import { useNavigation } from '@react-navigation/native';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '../contexts/AuthContext';
 import { useColors } from '../contexts/ThemeContext';
-import { subscriptionApi, knowledgeApi, bookingsApi, pointsApi } from '../api/services';
+import { subscriptionApi, knowledgeApi, bookingsApi } from '../api/services';
 import { countUpcoming } from './bookings/bookingHelpers';
 import type { Booking } from '../../../shared/types';
 import { getImageUrl } from '../api/axios';
@@ -15,7 +15,8 @@ import { colors, fontSize, fontWeight, borderRadius, spacing, getBadgeColors, so
 import { iosCard, iosSectionLabel, useShadow } from '../platform/iosSurface';
 import { haptic } from '../platform/haptics';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import type { UserPermissions, SubscriptionInfo, PointsListResponse } from '../../../shared/types';
+import { usePointAccess } from '../hooks/usePoints';
+import type { UserPermissions, SubscriptionInfo } from '../../../shared/types';
 
 const roleLabels: Record<string, string> = {
   superadmin: 'Суперадмин',
@@ -368,14 +369,15 @@ const menuSections: MenuSection[] = [
         iconColor: colors.indigo[600],
       },
       {
-        // Точки (156, мульти-точки) — назначение сотрудников на филиалы.
-        // Дополнительно к permission-гейту скрыта при 0–1 живой точке (см.
-        // filterItem — точка не входит в статичную роль-only модель выше).
-        label: 'Точки',
-        description: 'Автосервисы-филиалы и сотрудники',
+        // Филиалы (156/160/161, мульти-точки) — оборот по точкам и переход в
+        // филиал. Права здесь НЕТ сознательно: переключаться обязан и мастер,
+        // работающий на двух точках, иначе он пробьёт заказ-наряд не туда.
+        // Видимость решает filterItem по числу ДОСТУПНЫХ пользователю точек
+        // (ровно одна = одноточечный режим, филиал подставляется молча).
+        label: 'Филиалы',
+        description: 'Оборот по точкам и переход в филиал',
         screen: 'Points',
-        permission: 'user_management',
-        icon: 'location-outline',
+        icon: 'business-outline',
         iconBg: colors.orange[50],
         iconColor: colors.orange[600],
       },
@@ -525,17 +527,16 @@ export default function MoreScreen() {
   });
   const upcomingBookingsCount = countUpcoming(upcomingBookings);
 
-  // 156 — мульти-точки: строка «Точки» видна только когда живых точек > 1
-  // (0–1 = одноточечный режим, ничего нового не показываем). Дешёвый запрос,
-  // тот же ключ ['points'], что и переключатель точки на дашборде.
-  const canSeePoints = hasPermission('user_management');
-  const { data: pointsData } = useQuery<PointsListResponse>({
-    queryKey: ['points'],
-    queryFn: async () => (await pointsApi.list()).data,
-    enabled: canSeePoints,
-    staleTime: 60 * 1000,
-  });
-  const pointsCount = pointsData?.points.length ?? 0;
+  // 156/160/161 — мульти-точки: строка «Филиалы» видна тому, у кого доступ
+  // БОЛЬШЕ ЧЕМ К ОДНОМУ филиалу (включая мастера, назначенного на две точки:
+  // раньше тут стоял гейт user_management, и он физически не мог переключиться,
+  // хотя именно он пробивает заказ-наряды), А ТАКЖЕ держателю user_management,
+  // когда у тенанта есть хотя бы один филиал — у него два режима даже с
+  // единственной точкой («филиал» и «Все точки»), и без этого пункта он не мог
+  // ни назначить туда сотрудников, ни выйти из «Всех точек». Доступ считает
+  // usePointAccess (одно правило на всё приложение), запрос — тот же ключ
+  // ['points'], что и у индикатора филиала, поэтому лишней сети нет.
+  const { multiPoint } = usePointAccess();
 
   // Lock badges mirror FeatureGate exactly: gate on the server-resolved
   // `sub.features` (authoritative, keyed by planId) — NOT the fragile
@@ -559,8 +560,10 @@ export default function MoreScreen() {
     // по ним; superadmin/director байпасятся внутри самого hasPermission.
     if (item.permission && !hasPermission(item.permission)) return false;
     if (item.roles && user?.role && !item.roles.includes(user.role)) return false;
-    // 156 — «Точки» дополнительно скрыта при 0–1 живой точке.
-    if (item.screen === 'Points' && pointsCount <= 1) return false;
+    // 156/160/161 — «Филиалы» скрыты, только когда показывать нечего: у
+    // тенанта нет филиалов вовсе либо сотруднику доступен ровно один и режима
+    // «Все точки» у него нет (см. multiPoint в usePoints).
+    if (item.screen === 'Points' && !multiPoint) return false;
     return true;
   };
 

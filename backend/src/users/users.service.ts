@@ -14,9 +14,17 @@ import { PG_POOL } from '../database.module';
 import { PushService } from '../push/push.service';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthUser, NO_TENANT_ID } from '../common/auth-cache';
+import { assignedToPointSql } from './user-points-sql';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { assertRoleAssignable } from '../roles/privilege-ceiling';
+import {
+  DEFAULT_TIMEZONE,
+  getTenantTimezone,
+  listTenantTimezones,
+  zonedMidnight,
+  zonedMonthKey,
+} from '../common/timezone';
 import { invalidateReportsForTenant } from '../common/reports-cache';
 
 // Roles that may be assigned through this service. Anything outside this set
@@ -191,7 +199,26 @@ export class UsersService {
     };
   }
 
-  async getAll(tenantID: string) {
+  /**
+   * Сотрудники тенанта.
+   *
+   * 161 — ФИЛИАЛЬНЫЙ СКОУП ОПЦИОНАЛЕН И ВКЛЮЧАЕТСЯ ЯВНО (`?scope=point`), а не
+   * применяется ко всем вызовам. Причина: этим же списком питаются экраны, где
+   * филиальный срез был бы вреден или прямо опасен —
+   *   • справочник «Сотрудники» и назначение людей на точки (иначе владелец
+   *     не смог бы назначить на филиал того, кто на нём ещё не работает);
+   *   • резолв ИМЁН в журнале, расходах, зарплате и истории (автор чека с
+   *     другого филиала превратился бы в «—»).
+   * Явно скоупится ровно то, где чужой сотрудник ведёт к неверным ДЕНЬГАМ:
+   * пикер мастера в Кассе — заказ-наряд филиала А не должен оформляться на
+   * мастера филиала Б.
+   *
+   * Предикат — общий с графиком (user_points): сотрудник без назначений виден
+   * везде (безопасный дефолт 156).
+   */
+  async getAll(tenantID: string, pointId: string | null = null) {
+    const params: unknown[] = [tenantID];
+    const pointFilter = assignedToPointSql('u', '$1', pointId, params);
     const { rows } = await this.pool.query(
       `SELECT id, phone, full_name, username, avatar, role,
               COALESCE(salary_percent, 0) as salary_percent,
@@ -206,10 +233,10 @@ export class UsersService {
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
               dismissed_at, purged_at, role_id,
               tenant_id, created_at
-       FROM users
-       WHERE tenant_id = $1 AND dismissed_at IS NULL AND purged_at IS NULL
+       FROM users u
+       WHERE tenant_id = $1 AND dismissed_at IS NULL AND purged_at IS NULL${pointFilter}
        ORDER BY sort_order, created_at`,
-      [tenantID],
+      params,
     );
     return rows.map(this.mapUser);
   }
@@ -226,7 +253,10 @@ export class UsersService {
     return { message: 'Порядок обновлён' };
   }
 
-  async getMasters(tenantID: string) {
+  /** Мастера и админы. `pointId` — тот же опциональный скоуп, что в getAll (161). */
+  async getMasters(tenantID: string, pointId: string | null = null) {
+    const params: unknown[] = [tenantID];
+    const pointFilter = assignedToPointSql('u', '$1', pointId, params);
     const { rows } = await this.pool.query(
       `SELECT id, phone, full_name, username, avatar, role,
               COALESCE(salary_percent, 0) as salary_percent,
@@ -240,11 +270,11 @@ export class UsersService {
               COALESCE(hidden_everywhere, false) as hidden_everywhere,
               dismissed_at, purged_at, role_id,
               tenant_id, created_at
-       FROM users
+       FROM users u
        WHERE tenant_id = $1 AND is_active = true AND role IN ('master','admin')
-         AND dismissed_at IS NULL AND purged_at IS NULL
+         AND dismissed_at IS NULL AND purged_at IS NULL${pointFilter}
        ORDER BY full_name`,
-      [tenantID],
+      params,
     );
     return rows.map(this.mapUser);
   }
@@ -563,6 +593,9 @@ export class UsersService {
 
     let updatedRow: any;
     if (pctChanged) {
+      // Пояс тенанта — ДО открытия транзакции: брать вторую коннекцию из пула,
+      // уже держа одну, значит рисковать взаимной блокировкой.
+      const tz = await getTenantTimezone(this.pool, tenantID);
       // Persist the new percent AND re-bake the current month's checks in ONE
       // transaction so the percent and the recomputed salary commit atomically.
       const client = await this.pool.connect();
@@ -577,16 +610,24 @@ export class UsersService {
         // Round 14 (150): обычная смена ставки в карточке = ставка «с текущего
         // месяца» — автоматически фиксируем полный снапшот в истории ставок
         // (история копится сама, без отдельного действия владельца).
-        const currentMonth = this.mskCurrentMonth();
+        const currentMonth = zonedMonthKey(new Date(), tz);
         const newServicePct = servicePctChanged ? Number(dto.salaryPercent) || 0 : oldSalaryPercent;
         const newProductPct = productPctChanged ? Number(dto.productSalaryPercent) || 0 : oldProductSalaryPercent;
         await this.upsertRateHistory(client, tenantID, id, currentMonth, newServicePct, newProductPct, actorID);
         // Пересчёт ТЕКУЩЕГО месяца новой ставкой — прежнее поведение #62,
-        // теперь через обобщённый recomputeMonthSalary (МСК-границы месяца).
-        await this.recomputeMonthSalary(client, tenantID, id, currentMonth, {
-          servicePct: servicePctChanged ? newServicePct : undefined,
-          productPct: productPctChanged ? newProductPct : undefined,
-        });
+        // теперь через обобщённый recomputeMonthSalary (границы месяца в поясе
+        // тенанта).
+        await this.recomputeMonthSalary(
+          client,
+          tenantID,
+          id,
+          currentMonth,
+          {
+            servicePct: servicePctChanged ? newServicePct : undefined,
+            productPct: productPctChanged ? newProductPct : undefined,
+          },
+          tz,
+        );
         await client.query('COMMIT');
       } catch (err) {
         try {
@@ -646,16 +687,7 @@ export class UsersService {
     return this.mapUser(updatedRow);
   }
 
-  /** Бизнес-таймзона продукта (UTC+3, без летнего времени) — как BUSINESS_TZ
-   *  в reports/salary. */
-  private static readonly MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
   private static readonly MONTH_RE = /^\d{4}-\d{2}$/;
-
-  /** Текущий календарный месяц МОСКВЫ ('YYYY-MM'). */
-  private mskCurrentMonth(): string {
-    const msk = new Date(Date.now() + UsersService.MSK_OFFSET_MS);
-    return `${msk.getUTCFullYear()}-${String(msk.getUTCMonth() + 1).padStart(2, '0')}`;
-  }
 
   /** Следующий календарный месяц после 'YYYY-MM' (с переходом через год). */
   private static nextMonthKey(month: string): string {
@@ -665,18 +697,17 @@ export class UsersService {
   }
 
   /**
-   * Полуинтервал [monthStart, nextMonthStart) месяца 'YYYY-MM' в МОСКОВСКОЙ
-   * бизнес-таймзоне, ISO-инстантами. СОЗНАТЕЛЬНАЯ смена конвенции (Round 14):
-   * раньше пересчёт #62 строил границы в чистом UTC, тогда как зарплатные
-   * экраны (SalaryService.getEmployeeMonth / periodPredicate) — в МСК: чеки
-   * 00:00–03:00 МСК первого числа пересчитывались в «чужой» месяц относительно
-   * карточки. Теперь границы совпадают с getEmployeeMonth 1:1.
+   * Полуинтервал [monthStart, nextMonthStart) месяца 'YYYY-MM' в бизнес-
+   * таймзоне ТЕНАНТА, ISO-инстантами. Конвенция обязана совпадать с
+   * SalaryService.getEmployeeMonth / periodPredicate до миллисекунды: иначе
+   * чеки первых часов месяца пересчитываются в «чужой» месяц относительно
+   * карточки зарплаты.
    */
-  private static monthBoundsMsk(month: string): { monthStart: string; nextMonthStart: string } {
+  private static monthBoundsInZone(month: string, tz: string): { monthStart: string; nextMonthStart: string } {
     const [y, m] = month.split('-').map((v) => parseInt(v, 10));
     return {
-      monthStart: new Date(Date.UTC(y, m - 1, 1) - UsersService.MSK_OFFSET_MS).toISOString(),
-      nextMonthStart: new Date(Date.UTC(y, m, 1) - UsersService.MSK_OFFSET_MS).toISOString(),
+      monthStart: zonedMidnight(tz, y, m - 1, 1).toISOString(),
+      nextMonthStart: zonedMidnight(tz, y, m, 1).toISOString(),
     };
   }
 
@@ -746,7 +777,7 @@ export class UsersService {
 
   /**
    * #62, обобщённый Round 14 (150) — re-bake ОДНОГО календарного месяца
-   * (`month`, 'YYYY-MM', МОСКОВСКИЕ границы — см. monthBoundsMsk) для `userId`
+   * (`month`, 'YYYY-MM', границы в поясе тенанта — см. monthBoundsInZone) для `userId`
    * с ЯВНО переданными процентами, so the chosen month reflects the new percent
    * while OTHER months keep their historical (already-baked) percent.
    * Runs INSIDE the caller's transaction (same one that persisted the percent),
@@ -768,10 +799,11 @@ export class UsersService {
     userId: string,
     month: string,
     pct: { servicePct?: number; productPct?: number },
+    tz: string,
   ): Promise<void> {
     if (pct.servicePct === undefined && pct.productPct === undefined) return;
 
-    const { monthStart, nextMonthStart } = UsersService.monthBoundsMsk(month);
+    const { monthStart, nextMonthStart } = UsersService.monthBoundsInZone(month, tz);
 
     if (pct.servicePct !== undefined) {
       // 1) Re-bake per-line salary for the lines THIS user executes (no override).
@@ -889,7 +921,9 @@ export class UsersService {
       throw new BadRequestException({ message: 'Укажите хотя бы один процент' });
     }
     const month = dto.month;
-    const currentMonth = this.mskCurrentMonth();
+    // Пояс тенанта — ДО транзакции (см. update).
+    const tz = await getTenantTimezone(this.pool, tenantID);
+    const currentMonth = zonedMonthKey(new Date(), tz);
 
     const client = await this.pool.connect();
     let result: { salaryPercent: number; productSalaryPercent: number };
@@ -941,10 +975,17 @@ export class UsersService {
 
       // Пересчитываем ТОЛЬКО затронутые компоненты месяца X (приоритеты
       // services.master_percent / product_commissions сохраняются внутри).
-      await this.recomputeMonthSalary(client, tenantID, id, month, {
-        servicePct: dto.salaryPercent !== undefined ? newService : undefined,
-        productPct: dto.productSalaryPercent !== undefined ? newProduct : undefined,
-      });
+      await this.recomputeMonthSalary(
+        client,
+        tenantID,
+        id,
+        month,
+        {
+          servicePct: dto.salaryPercent !== undefined ? newService : undefined,
+          productPct: dto.productSalaryPercent !== undefined ? newProduct : undefined,
+        },
+        tz,
+      );
 
       await client.query('COMMIT');
       result = { salaryPercent: newService, productSalaryPercent: newProduct };
@@ -987,29 +1028,56 @@ export class UsersService {
    * это и есть заявленная семантика «действует с X».
    */
   async rollForwardDueRates(): Promise<number> {
-    const currentMonth = this.mskCurrentMonth();
-    const { rows } = await this.pool.query(
-      `SELECT h.tenant_id, h.user_id,
-              h.salary_percent AS eff_service, h.product_salary_percent AS eff_product,
-              COALESCE(u.salary_percent, 0) AS cur_service,
-              COALESCE(u.product_salary_percent, 0) AS cur_product
-         FROM (
-           SELECT DISTINCT ON (tenant_id, user_id)
-                  tenant_id, user_id, salary_percent, product_salary_percent
-             FROM master_rate_history
-            WHERE month <= $1
-            ORDER BY tenant_id, user_id, month DESC
-         ) h
-         JOIN users u ON u.id = h.user_id AND u.tenant_id = h.tenant_id
-        WHERE (h.salary_percent IS NOT NULL
-               AND h.salary_percent IS DISTINCT FROM COALESCE(u.salary_percent, 0))
-           OR (h.product_salary_percent IS NOT NULL
-               AND h.product_salary_percent IS DISTINCT FROM COALESCE(u.product_salary_percent, 0))`,
-      [currentMonth],
-    );
+    // Свип идёт по ВСЕМ тенантам сразу, а «текущий месяц» у каждого свой:
+    // назначение «с сентября» обязано включаться по календарю АВТОСЕРВИСА.
+    // Группируем тенантов по их местному месяцу — у российских поясов групп
+    // почти всегда одна, поэтому это один-два запроса, а не запрос на тенанта.
+    const now = new Date();
+    const tzByTenant = await listTenantTimezones(this.pool);
+    const tenantsByMonth = new Map<string, string[]>();
+    for (const [tenantID, tz] of tzByTenant) {
+      const month = zonedMonthKey(now, tz);
+      const bucket = tenantsByMonth.get(month);
+      if (bucket) bucket.push(tenantID);
+      else tenantsByMonth.set(month, [tenantID]);
+    }
+
+    const rows: Array<{
+      tenant_id: string;
+      user_id: string;
+      eff_service: string | null;
+      eff_product: string | null;
+      cur_service: string;
+      cur_product: string;
+      current_month: string;
+    }> = [];
+    for (const [currentMonth, tenantIds] of tenantsByMonth) {
+      const { rows: monthRows } = await this.pool.query(
+        `SELECT h.tenant_id, h.user_id,
+                h.salary_percent AS eff_service, h.product_salary_percent AS eff_product,
+                COALESCE(u.salary_percent, 0) AS cur_service,
+                COALESCE(u.product_salary_percent, 0) AS cur_product
+           FROM (
+             SELECT DISTINCT ON (tenant_id, user_id)
+                    tenant_id, user_id, salary_percent, product_salary_percent
+               FROM master_rate_history
+              WHERE month <= $1 AND tenant_id = ANY($2::uuid[])
+              ORDER BY tenant_id, user_id, month DESC
+           ) h
+           JOIN users u ON u.id = h.user_id AND u.tenant_id = h.tenant_id
+          WHERE (h.salary_percent IS NOT NULL
+                 AND h.salary_percent IS DISTINCT FROM COALESCE(u.salary_percent, 0))
+             OR (h.product_salary_percent IS NOT NULL
+                 AND h.product_salary_percent IS DISTINCT FROM COALESCE(u.product_salary_percent, 0))`,
+        [currentMonth, tenantIds],
+      );
+      for (const r of monthRows) rows.push({ ...r, current_month: currentMonth });
+    }
 
     let applied = 0;
     for (const r of rows) {
+      const currentMonth = r.current_month;
+      const tz = tzByTenant.get(r.tenant_id) ?? DEFAULT_TIMEZONE;
       const effService = r.eff_service === null ? null : parseFloat(r.eff_service) || 0;
       const effProduct = r.eff_product === null ? null : parseFloat(r.eff_product) || 0;
       const serviceDiffers = effService !== null && effService !== (parseFloat(r.cur_service) || 0);
@@ -1035,10 +1103,17 @@ export class UsersService {
           `UPDATE users SET ${sets.join(', ')}, updated_at=now() WHERE id=$${i++} AND tenant_id=$${i}`,
           vals,
         );
-        await this.recomputeMonthSalary(client, r.tenant_id, r.user_id, currentMonth, {
-          servicePct: serviceDiffers ? (effService as number) : undefined,
-          productPct: productDiffers ? (effProduct as number) : undefined,
-        });
+        await this.recomputeMonthSalary(
+          client,
+          r.tenant_id,
+          r.user_id,
+          currentMonth,
+          {
+            servicePct: serviceDiffers ? (effService as number) : undefined,
+            productPct: productDiffers ? (effProduct as number) : undefined,
+          },
+          tz,
+        );
         await client.query('COMMIT');
         applied += 1;
         invalidateReportsForTenant(r.tenant_id);
@@ -1333,6 +1408,9 @@ export class UsersService {
       }
     }
 
+    // Пояс тенанта — ДО транзакции (см. update).
+    const tz = await getTenantTimezone(this.pool, tenantID);
+
     const client = await this.pool.connect();
     try {
       await client.query('BEGIN');
@@ -1366,9 +1444,9 @@ export class UsersService {
       // same transaction so config + recompute commit atomically.
       // Round 14 (150): снапшот в историю ставок за текущий месяц (товарный
       // процент сменился этим экраном; сервисный — текущий users.*), затем
-      // обобщённый пересчёт МСК-месяца новым процентом. Per-product overrides
-      // (product_commissions) по-прежнему в приоритете внутри пересчёта.
-      const currentMonth = this.mskCurrentMonth();
+      // обобщённый пересчёт МЕСТНОГО месяца новым процентом. Per-product
+      // overrides (product_commissions) по-прежнему в приоритете внутри пересчёта.
+      const currentMonth = zonedMonthKey(new Date(), tz);
       const newProductPct = dto.productSalaryPercent || 0;
       await this.upsertRateHistory(
         client,
@@ -1379,7 +1457,7 @@ export class UsersService {
         newProductPct,
         null,
       );
-      await this.recomputeMonthSalary(client, tenantID, userId, currentMonth, { productPct: newProductPct });
+      await this.recomputeMonthSalary(client, tenantID, userId, currentMonth, { productPct: newProductPct }, tz);
 
       await client.query('COMMIT');
       // Current-month product salary / profit moved — drop cached aggregates

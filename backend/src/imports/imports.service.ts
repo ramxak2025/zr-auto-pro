@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, BadRequestException, InternalServerErrorException } from '@nestjs/common';
 import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
+import { ClientsService } from '../clients/clients.service';
 import { normalizePhone, phoneSearchKey } from '../common/normalize-phone';
 import { normalizePlate } from './normalize-plate';
 import { ImportRowInputDto } from './dto/import-clients-cars.dto';
@@ -196,7 +197,12 @@ function canonicalStoredPhone(raw: string): string {
 export class ImportsService {
   private readonly logger = new Logger('ImportsService');
 
-  constructor(@Inject(PG_POOL) private readonly pool: Pool) {}
+  constructor(
+    @Inject(PG_POOL) private readonly pool: Pool,
+    // 161 — «на каком филиале виден клиент» решает ОДИН источник
+    // (ClientsService.separatePointFor), а не копия правила в импорте.
+    private readonly clients: ClientsService,
+  ) {}
 
   // ─── Template ─────────────────────────────────────────────────────────────
   getClientsCarsTemplate(): string {
@@ -245,11 +251,12 @@ export class ImportsService {
     tenantID: string,
     rows: ImportRowInputDto[],
     options: { allowForeignPlates: boolean },
+    actorUserID?: string,
   ): Promise<PlanResult> {
     if (!Array.isArray(rows) || rows.length === 0) {
       throw new BadRequestException({ message: 'Нет строк для импорта' });
     }
-    return this.planImport(tenantID, rows, options);
+    return this.planImport(tenantID, rows, options, await this.clients.separatePointFor(tenantID, actorUserID));
   }
 
   // ─── Confirm ──────────────────────────────────────────────────────────────
@@ -264,8 +271,12 @@ export class ImportsService {
       throw new BadRequestException({ message: 'Нет строк для импорта' });
     }
 
+    // 161 — филиал автора: новые клиенты рождаются на нём, а карточки чужих
+    // филиалов не должны попадать ни в переиспользование, ни в сообщения.
+    const separatePoint = await this.clients.separatePointFor(tenantID, userId);
+
     // Re-plan from scratch — never trust client-side preview.
-    const plan = await this.planImport(tenantID, rows, options);
+    const plan = await this.planImport(tenantID, rows, options, separatePoint);
 
     // Duplicate handling mode:
     //  - legacy (no decisions at all): old behaviour — reuse the existing
@@ -340,10 +351,15 @@ export class ImportsService {
           // Re-check inside the transaction — concurrent inserts could exist.
           // Key-based (mig 104/108): a client stored as «+7 (988) 444-44-85»
           // must be found for the file's «89884444485».
+          // 161 — перепроверка тем же предикатом видимости, что и планирование:
+          // клиент, появившийся во время импорта НА ЧУЖОМ филиале, не должен
+          // быть переиспользован (машины уехали бы в невидимую карточку).
+          const existingParams: unknown[] = [tenantID, group.phoneKey];
+          const existingPointWhere = this.clients.separatePointWhere(null, separatePoint, existingParams);
           const { rows: existing } = await dbClient.query(
             `SELECT id, full_name, phone FROM clients
-             WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2 LIMIT 1`,
-            [tenantID, group.phoneKey],
+             WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = $2${existingPointWhere} LIMIT 1`,
+            existingParams,
           );
           if (existing.length > 0) {
             // Appeared after the dry-run — the user never reviewed this
@@ -365,6 +381,7 @@ export class ImportsService {
               fullName: group.fullName || 'Клиент',
               phone: group.phoneDisplay,
               comment: group.fileComment,
+              pointId: separatePoint,
             });
             if (!inserted) {
               // Race between dry-run and apply: uq_clients_tenant_phone_key
@@ -532,14 +549,21 @@ export class ImportsService {
    */
   private async insertClientWithSavepoint(
     db: PoolClient,
-    params: { tenantID: string; fullName: string; phone: string; comment: string | null },
+    params: {
+      tenantID: string;
+      fullName: string;
+      phone: string;
+      comment: string | null;
+      /** 161 — филиал автора импорта (раздельный режим); null = общая база. */
+      pointId: string | null;
+    },
   ): Promise<string | null> {
     await db.query('SAVEPOINT sp_import_client');
     try {
       const { rows } = await db.query(
-        `INSERT INTO clients (full_name, phone, comment, tenant_id)
-         VALUES ($1, $2, $3, $4) RETURNING id`,
-        [params.fullName, params.phone, params.comment, params.tenantID],
+        `INSERT INTO clients (full_name, phone, comment, tenant_id, point_id)
+         VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+        [params.fullName, params.phone, params.comment, params.tenantID, params.pointId],
       );
       await db.query('RELEASE SAVEPOINT sp_import_client');
       return rows[0].id as string;
@@ -558,6 +582,7 @@ export class ImportsService {
     tenantID: string,
     rows: ImportRowInputDto[],
     options: { allowForeignPlates: boolean },
+    separatePoint: string | null = null,
   ): Promise<PlanResult> {
     const issues: RowIssue[] = [];
     const skippedRows: SkippedRow[] = [];
@@ -730,13 +755,26 @@ export class ImportsService {
       full_name: string;
       phone: string;
       key: string;
+      point_id: string | null;
     }>(
-      `SELECT id, full_name, phone, ${PHONE_KEY_SQL} AS key
+      `SELECT id, full_name, phone, point_id, ${PHONE_KEY_SQL} AS key
        FROM clients WHERE tenant_id = $1 AND ${PHONE_KEY_SQL} = ANY($2::text[])`,
       [tenantID, phoneKeys],
     );
     const existingClientByPhone = new Map<string, { id: string; fullName: string; phone: string }>();
+    // 161 — телефоны, занятые карточками ЧУЖОГО филиала (раздельный режим).
+    // Уникальный индекс uq_clients_tenant_phone_key тенантный, поэтому такой
+    // клиент физически существует, но импортирующему НЕ ВИДЕН. Нельзя ни
+    // переиспользовать его (машины уехали бы в невидимую карточку), ни назвать
+    // по имени (это и есть утечка чужой базы). Строку честно пропускаем с
+    // нейтральным текстом — молчаливое «создано 0» было бы хуже.
+    const blockedPhoneKeys = new Set<string>();
     for (const ec of existingClients) {
+      const visible = !separatePoint || ec.point_id === null || ec.point_id === separatePoint;
+      if (!visible) {
+        blockedPhoneKeys.add(ec.key);
+        continue;
+      }
       existingClientByPhone.set(ec.key, { id: ec.id, fullName: ec.full_name, phone: ec.phone });
     }
 
@@ -751,10 +789,11 @@ export class ImportsService {
         id: string;
         client_id: string;
         client_name: string | null;
+        owner_point_id: string | null;
         plate_number: string;
         key: string;
       }>(
-        `SELECT ca.id, ca.client_id, cl.full_name AS client_name, ca.plate_number,
+        `SELECT ca.id, ca.client_id, cl.full_name AS client_name, cl.point_id AS owner_point_id, ca.plate_number,
                 REPLACE(REPLACE(REPLACE(UPPER(ca.plate_number), ' ', ''), '-', ''), '/', '') AS key
          FROM cars ca
          LEFT JOIN clients cl ON cl.id = ca.client_id
@@ -765,7 +804,18 @@ export class ImportsService {
       existingCarsByPlateKey = new Map(
         existingCars.map((r) => [
           r.key,
-          { id: r.id, clientId: r.client_id, clientName: r.client_name || '', plateNumber: r.plate_number },
+          {
+            id: r.id,
+            clientId: r.client_id,
+            // 161 — владелец с чужого филиала остаётся БЕЗ ИМЕНИ: сообщение
+            // «номер уже привязан к клиенту …» иначе выдавало бы ФИО чужой
+            // базы любому, кто загрузит файл с этим госномером.
+            clientName:
+              !separatePoint || r.owner_point_id === null || r.owner_point_id === separatePoint
+                ? r.client_name || ''
+                : '',
+            plateNumber: r.plate_number,
+          },
         ]),
       );
     }
@@ -779,6 +829,21 @@ export class ImportsService {
     const seenPlatesInFile = new Map<string, { sourceRow: number; phoneKey: string }>();
 
     for (const [phoneKey, rowsForPhone] of byPhone) {
+      // 161 — номер занят карточкой другого филиала: ни создать (уникальный
+      // индекс тенантный), ни переиспользовать (карточка невидима). Честный
+      // пропуск с текстом, который объясняет владельцу, что делать.
+      if (blockedPhoneKeys.has(phoneKey)) {
+        for (const r of rowsForPhone) {
+          skippedRows.push({
+            sourceRow: r.sourceRow,
+            reason: 'duplicate_phone',
+            message:
+              `Телефон ${r.phoneCanonical} уже занят карточкой другого филиала — строка пропущена. ` +
+              'Попросите владельца перевести клиента на ваш филиал или включить общую базу клиентов.',
+          });
+        }
+        continue;
+      }
       const allNames = rowsForPhone.map((r) => r.clientName).filter(Boolean);
       const { name: pickedName, multiple } = pickClientName(allNames);
       const existing = existingClientByPhone.get(phoneKey);
@@ -860,7 +925,11 @@ export class ImportsService {
             issues.push({
               sourceRow: r.sourceRow,
               kind: 'plate_belongs_to_other_client',
-              message: `Госномер ${r.plate.display} уже привязан к клиенту "${existingCar.clientName || ''}" — пропущен`,
+              // Пустое clientName = владелец с чужого филиала (161): имя не
+              // раскрываем, текст остаётся понятным.
+              message: existingCar.clientName
+                ? `Госномер ${r.plate.display} уже привязан к клиенту "${existingCar.clientName}" — пропущен`
+                : `Госномер ${r.plate.display} уже привязан к клиенту другого филиала — пропущен`,
               existing: {
                 clientId: existingCar.clientId,
                 clientName: existingCar.clientName,

@@ -4,6 +4,7 @@ import { PG_POOL } from '../database.module';
 import { MarketingService } from '../marketing/marketing.service';
 import { PushService } from '../push/push.service';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
+import { getTenantTimezone } from '../common/timezone';
 
 /**
  * BookingReminderService
@@ -109,7 +110,10 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
             // forever for a client with no number.
             continue;
           }
-          const message = `Вы записаны на ${this.formatWhen(row.scheduled_at)}. Если передумали — позвоните, чтобы отменить.`;
+          // Пояс берём НА КАЖДОГО тенанта в его итерации: свип идёт сразу по
+          // всем автосервисам, а время записи клиент читает по своим часам.
+          const tz = await getTenantTimezone(this.pool, row.tenant_id);
+          const message = `Вы записаны на ${this.formatWhen(row.scheduled_at, tz)}. Если передумали — позвоните, чтобы отменить.`;
           const result = await this.marketingService.sendClientMessage(row.tenant_id, phone, message, {
             clientId: row.client_id ?? null,
             messageType: 'booking',
@@ -155,7 +159,8 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
             AND dismissed_at IS NULL`,
         [row.tenant_id, row.master_id ?? null],
       );
-      const body = `SMS-напоминание не отправлено (SMS отключены): ${clientName}, запись на ${this.formatWhen(row.scheduled_at)}`;
+      const tz = await getTenantTimezone(this.pool, row.tenant_id);
+      const body = `SMS-напоминание не отправлено (SMS отключены): ${clientName}, запись на ${this.formatWhen(row.scheduled_at, tz)}`;
       await Promise.all(
         staff.map((s: { id: string }) =>
           this.pushService.sendToUserCategory(s.id, 'booking_reminder', 'Напоминание о записи', body, {
@@ -169,7 +174,8 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private formatWhen(value: Date | string): string {
+  /** Время записи в поясе АВТОСЕРВИСА — и в SMS клиенту, и в пуше сотруднику. */
+  private formatWhen(value: Date | string, tz: string): string {
     try {
       const d = value instanceof Date ? value : new Date(value);
       return d.toLocaleString('ru-RU', {
@@ -177,7 +183,7 @@ export class BookingReminderService implements OnModuleInit, OnModuleDestroy {
         month: '2-digit',
         hour: '2-digit',
         minute: '2-digit',
-        timeZone: 'Europe/Moscow',
+        timeZone: tz,
       });
     } catch {
       return String(value);

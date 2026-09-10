@@ -3,10 +3,12 @@ import { Pool, PoolClient } from 'pg';
 import { PG_POOL } from '../database.module';
 import { isTenantLess } from '../common/auth-cache';
 import { JwtPayload } from '../common/decorators/current-user.decorator';
+import { actorPointId } from '../common/point-scope';
 import { MarketingService } from '../marketing/marketing.service';
 import { PayInstallmentDto } from './dto/pay-installment.dto';
 import { UpdateInstallmentDto } from './dto/update-installment.dto';
 import { UpdateInstallmentReminderSettingsDto } from './dto/update-reminder-settings.dto';
+import { getTenantTimezone } from '../common/timezone';
 
 /** Parse a NUMERIC/text money value to a JS number (NULL/garbage → 0). */
 function num(v: unknown): number {
@@ -107,22 +109,33 @@ export class InstallmentsService {
     };
   }
 
-  // Shared SELECT projection: plan + denormalised client / check / car / author
-  // + computed overdue / due_in_days (Moscow date, consistent with shift cron).
-  private static readonly PLAN_SELECT = `
+  /**
+   * Shared SELECT projection: plan + denormalised client / check / car / author
+   * + computed overdue / due_in_days. «Сегодня» — календарный день В ПОЯСЕ
+   * ТЕНАНТА: просрочка обязана наступать по календарю автосервиса, иначе
+   * владивостокскому должнику план подсвечивается просроченным на семь часов
+   * позже, чем у него наступило это число.
+   *
+   * Пояс приходит ПЛЕЙСХОЛДЕРОМ (`$3::text`), а не значением: проекция —
+   * SQL-текст, и склеивать в него что-либо из БД нельзя. Номер плейсхолдера
+   * задаёт вызывающий — у каждого запроса своё число собственных параметров.
+   */
+  private static planSelect(tzPh: string): string {
+    return `
     SELECT p.*,
            cl.full_name AS client_name, cl.phone AS client_phone,
            ch.number AS check_number,
            car.id AS car_id, car.plate_number AS car_plate, car.make_model AS car_make_model,
            u.full_name AS created_by_name,
            (p.status = 'open' AND p.next_payment_date IS NOT NULL
-              AND p.next_payment_date < (now() AT TIME ZONE 'Europe/Moscow')::date) AS overdue,
-           (p.next_payment_date - (now() AT TIME ZONE 'Europe/Moscow')::date) AS due_in_days
+              AND p.next_payment_date < (now() AT TIME ZONE ${tzPh})::date) AS overdue,
+           (p.next_payment_date - (now() AT TIME ZONE ${tzPh})::date) AS due_in_days
       FROM installment_plans p
       LEFT JOIN clients cl ON cl.id = p.client_id AND cl.tenant_id = p.tenant_id
       LEFT JOIN checks ch ON ch.id = p.check_id AND ch.tenant_id = p.tenant_id
       LEFT JOIN cars car ON car.id = ch.car_id AND car.tenant_id = ch.tenant_id
       LEFT JOIN users u ON u.id = p.created_by AND u.tenant_id = p.tenant_id`;
+  }
 
   private mapGuarantor(r: any) {
     return {
@@ -204,10 +217,10 @@ export class InstallmentsService {
    * the client always gets the fresh detail shape.
    */
   private async getPlanOrThrow(tenantID: string, planId: string) {
-    const { rows } = await this.pool.query(`${InstallmentsService.PLAN_SELECT} WHERE p.id = $1 AND p.tenant_id = $2`, [
-      planId,
-      tenantID,
-    ]);
+    const { rows } = await this.pool.query(
+      `${InstallmentsService.planSelect('$3::text')} WHERE p.id = $1 AND p.tenant_id = $2`,
+      [planId, tenantID, await getTenantTimezone(this.pool, tenantID)],
+    );
     if (rows.length === 0) throw new NotFoundException({ message: 'Рассрочка не найдена' });
     const plan = this.mapPlan(rows[0]);
     await this.attachPlanExtras(tenantID, [plan]);
@@ -627,7 +640,16 @@ export class InstallmentsService {
    * open plans, overdue first, then by soonest next date, then newest. Filter:
    *   ?status=open|closed|overdue|all  (default 'open')
    */
-  async list(tenantID: string, query: { status?: string }) {
+  /**
+   * 161 — список рассрочек ФИЛИАЛА. Своей колонки у плана нет и не нужно:
+   * рассрочка рождается из ЧЕКА (installment_plans.check_id), поэтому филиал
+   * берём у чека — той же колонкой, что журнал и деньги.
+   *
+   * EXISTS, а не условие на LEFT JOIN из planSelect: предикат в ON у внешнего
+   * соединения не фильтрует строки, а только обнуляет поля — план чужого
+   * филиала остался бы в списке, просто без номера чека.
+   */
+  async list(tenantID: string, query: { status?: string }, actor?: JwtPayload) {
     const status = (query?.status || 'open').toLowerCase();
     let where = 'p.tenant_id = $1';
     if (status === 'open') {
@@ -636,18 +658,26 @@ export class InstallmentsService {
       where += ` AND p.status = 'closed'`;
     } else if (status === 'overdue') {
       where += ` AND p.status = 'open' AND p.next_payment_date IS NOT NULL
-                 AND p.next_payment_date < (now() AT TIME ZONE 'Europe/Moscow')::date`;
+                 AND p.next_payment_date < (now() AT TIME ZONE $2::text)::date`;
     }
     // 'all' → no extra filter.
 
+    const listParams: unknown[] = [tenantID, await getTenantTimezone(this.pool, tenantID)];
+    const listPointId = actorPointId(actor);
+    if (listPointId) {
+      listParams.push(listPointId);
+      where += ` AND EXISTS (SELECT 1 FROM checks pc WHERE pc.id = p.check_id
+                 AND pc.tenant_id = p.tenant_id AND pc.point_id = $${listParams.length})`;
+    }
+
     const { rows } = await this.pool.query(
-      `${InstallmentsService.PLAN_SELECT}
+      `${InstallmentsService.planSelect('$2::text')}
         WHERE ${where}
         ORDER BY (p.status = 'closed') ASC,
                  overdue DESC,
                  p.next_payment_date ASC NULLS LAST,
                  p.created_at DESC`,
-      [tenantID],
+      listParams,
     );
     return rows.map((r) => this.mapPlan(r));
   }
@@ -655,6 +685,14 @@ export class InstallmentsService {
   /**
    * One client's plans + flat payment ledger — for the client card section.
    * Tenant-scoped on both queries.
+   *
+   * ФИЛИАЛЫ (161) — ИСКЛЮЧЕНИЕ, НЕ «ЧИНИТЬ». Карточка клиента филиалом НЕ
+   * режется сознательно, и здесь у этого есть отдельная денежная причина:
+   * рассрочка — это ДОЛГ. Спрятав от филиала А открытый долг, набранный на
+   * филиале Б, мы дали бы продать этому же человеку в рассрочку ещё раз.
+   * Скоуп филиала режет СПИСОК рассрочек (list) и виджет главной, а не долги
+   * уже открытого клиента. Зеркальные исключения: checks.getAll при
+   * ?clientId/?carId, ClientsService.getChecksByCar, CarsService.getChecks.
    */
   async clientLedger(tenantID: string, clientId: string) {
     const { rows: clientRows } = await this.pool.query(
@@ -664,10 +702,10 @@ export class InstallmentsService {
     if (clientRows.length === 0) throw new NotFoundException({ message: 'Клиент не найден' });
 
     const { rows: planRows } = await this.pool.query(
-      `${InstallmentsService.PLAN_SELECT}
+      `${InstallmentsService.planSelect('$3::text')}
         WHERE p.tenant_id = $1 AND p.client_id = $2
         ORDER BY (p.status = 'closed') ASC, p.created_at DESC`,
-      [tenantID, clientId],
+      [tenantID, clientId, await getTenantTimezone(this.pool, tenantID)],
     );
 
     const { rows: payRows } = await this.pool.query(
@@ -701,16 +739,25 @@ export class InstallmentsService {
    * overdue plans. Returns the items + summary counts so the dashboard can show
    * «Рассрочка: N просрочено / сумма».
    */
-  async widget(tenantID: string, days = 3) {
+  async widget(tenantID: string, days = 3, actor?: JwtPayload) {
     const window = Number.isFinite(days) && days >= 0 ? Math.min(Math.trunc(days), 60) : 3;
+    // Виджет главной — экран ФИЛИАЛА, поэтому режется точкой чека, как список.
+    const widgetParams: unknown[] = [tenantID, window, await getTenantTimezone(this.pool, tenantID)];
+    const widgetPointId = actorPointId(actor);
+    let widgetPoint = '';
+    if (widgetPointId) {
+      widgetParams.push(widgetPointId);
+      widgetPoint = ` AND EXISTS (SELECT 1 FROM checks pc WHERE pc.id = p.check_id
+                      AND pc.tenant_id = p.tenant_id AND pc.point_id = $${widgetParams.length})`;
+    }
     const { rows } = await this.pool.query(
-      `${InstallmentsService.PLAN_SELECT}
+      `${InstallmentsService.planSelect('$3::text')}
         WHERE p.tenant_id = $1
           AND p.status = 'open'
           AND p.next_payment_date IS NOT NULL
-          AND p.next_payment_date <= (now() AT TIME ZONE 'Europe/Moscow')::date + $2::int
+          AND p.next_payment_date <= (now() AT TIME ZONE $3::text)::date + $2::int${widgetPoint}
         ORDER BY overdue DESC, p.next_payment_date ASC NULLS LAST`,
-      [tenantID, window],
+      widgetParams,
     );
     // Lean widget-item shape (planId, not the full plan) — matches the
     // InstallmentWidgetItem contract the dashboard card consumes.
@@ -813,11 +860,13 @@ export class InstallmentsService {
     // Only 'auto' (cron) and 'manual' (explicit trigger) actually send; 'off' is inert.
     if (settings.mode === 'off') return { sent: 0, failed: 0, total: 0 };
 
+    // «Сегодня» — календарный день ТЕНАНТА: напоминание «платёж завтра» обязано
+    // считаться по календарю его города, а не по московскому.
     const { rows } = await this.pool.query(
       `SELECT p.id, p.client_id, p.remaining, p.next_payment_date,
               CASE
-                WHEN p.next_payment_date > (now() AT TIME ZONE 'Europe/Moscow')::date THEN 'before'
-                WHEN p.next_payment_date = (now() AT TIME ZONE 'Europe/Moscow')::date THEN 'due'
+                WHEN p.next_payment_date > (now() AT TIME ZONE $5::text)::date THEN 'before'
+                WHEN p.next_payment_date = (now() AT TIME ZONE $5::text)::date THEN 'due'
                 ELSE 'overdue'
               END AS phase,
               cl.full_name AS client_name, cl.phone AS client_phone
@@ -828,12 +877,12 @@ export class InstallmentsService {
           AND p.next_payment_date IS NOT NULL
           AND cl.phone IS NOT NULL AND btrim(cl.phone) <> ''
           AND (
-            p.next_payment_date = (now() AT TIME ZONE 'Europe/Moscow')::date + $2::int
-            OR ($3 AND p.next_payment_date = (now() AT TIME ZONE 'Europe/Moscow')::date)
-            OR ($4 AND p.next_payment_date < (now() AT TIME ZONE 'Europe/Moscow')::date)
+            p.next_payment_date = (now() AT TIME ZONE $5::text)::date + $2::int
+            OR ($3 AND p.next_payment_date = (now() AT TIME ZONE $5::text)::date)
+            OR ($4 AND p.next_payment_date < (now() AT TIME ZONE $5::text)::date)
           )
         LIMIT 500`,
-      [tenantID, settings.daysBefore, settings.onDue, settings.onOverdue],
+      [tenantID, settings.daysBefore, settings.onDue, settings.onOverdue, await getTenantTimezone(this.pool, tenantID)],
     );
 
     let sent = 0;

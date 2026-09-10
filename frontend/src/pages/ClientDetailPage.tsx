@@ -48,6 +48,7 @@ import {
   WalletSettings,
 } from '../types';
 import { formatPhone } from '../../../shared/validation/phone';
+import { apiErrorMessage } from '../../../shared/utils/apiError';
 
 const formatMoney = (amount: number) => amount.toLocaleString('ru-RU') + ' ₽';
 
@@ -663,8 +664,12 @@ export default function ClientDetailPage() {
       toast.success('Клиент обновлён');
       setClientModalOpen(false);
     },
-    onError: () => {
-      toast.error('Ошибка при обновлении клиента');
+    // Глухой текст глотал реальную причину: 409 «этот номер уже занят» (в том
+    // числе 161 — карточкой ДРУГОГО ФИЛИАЛА, куда навигировать некуда: сервер
+    // намеренно не отдаёт ни имени, ни id) и 400 про пустое имя. Показываем
+    // сообщение сервера — оно объясняет, что делать.
+    onError: (err) => {
+      toast.error(apiErrorMessage(err) ?? 'Ошибка при обновлении клиента', { duration: 8000 });
     },
   });
 
