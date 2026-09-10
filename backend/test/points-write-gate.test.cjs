@@ -223,8 +223,8 @@ test('сброс в «Все точки» у сотрудника схлопыв
   assert.ok(/const fallback = await this\.defaultPointForMember\(user\);/.test(body));
   const helper = points.slice(points.indexOf('private async defaultPointForMember('));
   assert.ok(
-    /ORDER BY sort_order ASC, lower\(name\) ASC\s*\n\s*LIMIT 1/.test(helper),
-    '«первая» точка обязана выбираться детерминированно — иначе параллельные запросы дадут разные филиалы',
+    /ORDER BY is_main DESC, sort_order ASC, lower\(name\) ASC\s*\n\s*LIMIT 1/.test(helper),
+    '«первая» точка обязана выбираться детерминированно, и первой обязан идти ОСНОВНОЙ сервис — иначе сотрудник без назначений попадает в случайный филиал',
   );
 });
 

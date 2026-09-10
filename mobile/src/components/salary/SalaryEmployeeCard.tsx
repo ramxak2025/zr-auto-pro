@@ -813,10 +813,6 @@ export default function SalaryEmployeeCard({
         confirmText="Зафиксировать"
       />
 
-      {/* Невидимая шторка выбора филиала — её открывает кнопка в диалоге
-          отказа «Выберите филиал» (см. errorAlert). */}
-      {pointPrompt.element}
-
       {/* Round 15 (153) — отмена выплаты (зафиксированной / легаси-pending) */}
       <Modal visible={payoutToCancel !== null} onClose={() => setPayoutToCancel(null)} title="Отменить выплату?">
         {payoutToCancel ? (

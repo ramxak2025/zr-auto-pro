@@ -405,13 +405,27 @@ export function createTenantsApi(api: HttpClient) {
     unsuspend: (id: string) => api.post<Tenant>(`/tenants/${id}/unsuspend`),
     impersonate: (id: string) => api.post<ImpersonateResponse>(`/tenants/${id}/impersonate`),
     // ── Мульти-точки (156, tenant_points) — суперадмин-CRUD в карточке тенанта ──
+    // Список приходит отсортированным: живые раньше архивных, ОСНОВНОЙ сервис
+    // (isMain) — первой строкой (160).
     points: {
       list: (tenantId: string) => api.get<TenantPoint[]>(`/tenants/${tenantId}/points`),
+      /**
+       * Завести точку тенанту. Если у тенанта ещё нет основного сервиса,
+       * сервер сначала создаёт его из названия компании и отдаёт ЕМУ всю
+       * историю без филиала, а созданная здесь точка становится филиалом.
+       * Названа точка так же, как компания → она и есть основной сервис,
+       * дубль не создаётся.
+       */
       create: (tenantId: string, data: { name: string; address?: string }) =>
         api.post<TenantPoint>(`/tenants/${tenantId}/points`, data),
+      /** isMain менять нельзя: основной сервис можно только переименовать. */
       update: (tenantId: string, pointId: string, data: Partial<Pick<TenantPoint, 'name' | 'address' | 'isActive' | 'sortOrder'>>) =>
         api.patch<TenantPoint>(`/tenants/${tenantId}/points/${pointId}`, data),
-      /** «Удалить» = архив (isActive=false): старые чеки точку сохраняют. */
+      /**
+       * «Удалить» = архив (isActive=false): старые чеки точку сохраняют.
+       * Основной сервис архивировать нельзя — сервер ответит 400 (это сам
+       * автосервис, к нему привязана вся история компании).
+       */
       remove: (tenantId: string, pointId: string) => api.delete(`/tenants/${tenantId}/points/${pointId}`),
     },
   };
@@ -423,6 +437,11 @@ export function createTenantsApi(api: HttpClient) {
  */
 export function createPointsApi(api: HttpClient) {
   return {
+    /**
+     * Живые точки тенанта. Уже отсортированы сервером: ОСНОВНОЙ сервис
+     * (TenantPoint.isMain — сам автосервис владельца, ему принадлежит вся
+     * история до появления филиалов) первым, затем филиалы.
+     */
     list: () => api.get<PointsListResponse>('/points'),
     /**
      * Сводка для карточек раздела «Филиалы»: оборот дня/месяца, прибыль

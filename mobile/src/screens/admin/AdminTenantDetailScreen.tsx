@@ -151,6 +151,14 @@ interface PointDraft {
   name: string;
   address: string;
   isActive: boolean;
+  /**
+   * ОСНОВНОЙ сервис тенанта (160, tenant_points.is_main) — сам автосервис
+   * владельца, а не открытый позже филиал. Нужен форме, чтобы не предлагать
+   * «Архивировать» и «Удалить»: сервер их запрещает (400 «Основной сервис
+   * нельзя удалить или заархивировать…»), и кнопка вела бы в тупик. Новая
+   * точка основной не бывает — основной уже существует.
+   */
+  isMain: boolean;
 }
 
 function toPointDraft(p?: TenantPoint): PointDraft {
@@ -159,6 +167,7 @@ function toPointDraft(p?: TenantPoint): PointDraft {
     name: p?.name ?? '',
     address: p?.address ?? '',
     isActive: p ? p.isActive : true,
+    isMain: p?.isMain ?? false,
   };
 }
 
@@ -421,8 +430,8 @@ export default function AdminTenantDetailScreen() {
         typeof reason === 'string' && reason.trim()
           ? reason
           : editingPoint?.id
-            ? 'Не удалось сохранить точку'
-            : 'Не удалось создать точку',
+            ? 'Не удалось сохранить автосервис'
+            : 'Не удалось создать филиал',
       );
     },
     onSettled: () => setSavingPoint(false),
@@ -438,7 +447,7 @@ export default function AdminTenantDetailScreen() {
     },
     onError: () => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось изменить статус точки');
+      Alert.alert('Ошибка', 'Не удалось изменить статус филиала');
     },
   });
 
@@ -451,7 +460,7 @@ export default function AdminTenantDetailScreen() {
     },
     onError: () => {
       haptic('error');
-      Alert.alert('Ошибка', 'Не удалось удалить точку');
+      Alert.alert('Ошибка', 'Не удалось удалить филиал');
     },
   });
 
@@ -459,7 +468,7 @@ export default function AdminTenantDetailScreen() {
     if (!editingPoint) return;
     if (!editingPoint.name.trim()) {
       haptic('error');
-      Alert.alert('Укажите название', 'Название точки обязательно.');
+      Alert.alert('Укажите название', 'Название автосервиса обязательно.');
       return;
     }
     savePointMutation.mutate(editingPoint);
@@ -467,9 +476,9 @@ export default function AdminTenantDetailScreen() {
 
   const handleDeletePoint = React.useCallback(() => {
     if (!editingPoint?.id) return;
-    const name = editingPoint.name.trim() || 'Точка';
+    const name = editingPoint.name.trim() || 'Филиал';
     haptic('warning');
-    Alert.alert('Удалить точку?', `«${name}» станет архивной. Историю заказ-нарядов это не затронет.`, [
+    Alert.alert('Удалить филиал?', `«${name}» станет архивным. Историю заказ-нарядов это не затронет.`, [
       { text: 'Отмена', style: 'cancel' },
       {
         text: 'Удалить',
@@ -812,12 +821,14 @@ export default function AdminTenantDetailScreen() {
           </Pressable>
         </View>
 
-        {/* Points (156, tenant_points) — superadmin CRUD for tenant branches.
+        {/* Points (156/160, tenant_points) — superadmin CRUD автосервисов
+            тенанта. Первым идёт ОСНОВНОЙ сервис (сам автосервис владельца, с
+            его историей), дальше открытые позже филиалы; порядок задаёт сервер.
             «Удалить» здесь = архив (isActive=false); история заказ-нарядов
-            точку сохраняет. */}
+            автосервис сохраняет. */}
         <View style={styles.employeesHead}>
           <Text style={[styles.sectionLabel, { color: palette.text.tertiary, marginTop: 0 }]}>
-            Точки ({points.length})
+            Автосервисы ({points.length})
           </Text>
           <Pressable
             onPress={() => {
@@ -835,7 +846,7 @@ export default function AdminTenantDetailScreen() {
           <View style={[styles.card, surface.card, styles.emptyUsers]}>
             <Ionicons name="location-outline" size={28} color={palette.text.tertiary} />
             <Text style={[styles.emptyUsersText, { color: palette.text.secondary }]}>
-              У этого автосервиса пока нет точек
+              У этого тенанта один автосервис — филиалы не заведены
             </Text>
           </View>
         ) : (
@@ -860,6 +871,14 @@ export default function AdminTenantDetailScreen() {
                     </Text>
                   ) : null}
                 </View>
+                {/* Основной сервис подписан явно: его нельзя ни удалить, ни
+                    заархивировать, и суперадмин должен видеть это ДО того, как
+                    откроет карточку. */}
+                {p.isMain && (
+                  <View style={[styles.userBadge, { backgroundColor: palette.accent.primarySoft }]}>
+                    <Text style={[styles.userBadgeText, { color: palette.accent.primary }]}>Основной</Text>
+                  </View>
+                )}
                 {!p.isActive && (
                   <View style={[styles.userBadge, { backgroundColor: getBadgeColors(palette.mode).gray.bg }]}>
                     <Text style={[styles.userBadgeText, { color: getBadgeColors(palette.mode).gray.text }]}>Архив</Text>
@@ -1323,7 +1342,7 @@ export default function AdminTenantDetailScreen() {
                   <Text style={[styles.sheetCancel, { color: palette.text.secondary }]}>Отмена</Text>
                 </Pressable>
                 <Text style={[styles.sheetTitle, { color: palette.text.primary }]}>
-                  {editingPoint?.id ? 'Точка' : 'Новая точка'}
+                  {editingPoint?.isMain ? 'Основной сервис' : editingPoint?.id ? 'Филиал' : 'Новый филиал'}
                 </Text>
                 <Pressable onPress={handleSavePoint} disabled={savingPoint} hitSlop={8}>
                   {savingPoint ? (
@@ -1362,7 +1381,18 @@ export default function AdminTenantDetailScreen() {
                     />
                   </View>
 
-                  {editingPoint.id && (
+                  {/* Основной сервис = сам автосервис владельца: сервер
+                      отвечает 400 и на архив, и на удаление («Его можно
+                      переименовать»). Кнопок здесь нет вовсе — иначе
+                      суперадмин упирался бы в отказ вместо объяснения. */}
+                  {editingPoint.isMain ? (
+                    <Text style={[styles.mainPointNote, { color: palette.text.tertiary }]}>
+                      Это основной сервис — сам автосервис тенанта со всей его историей. Удалить или заархивировать его
+                      нельзя, можно только переименовать и поменять адрес.
+                    </Text>
+                  ) : null}
+
+                  {editingPoint.id && !editingPoint.isMain && (
                     <>
                       <Pressable
                         onPress={() =>
@@ -1398,7 +1428,7 @@ export default function AdminTenantDetailScreen() {
                         ) : (
                           <>
                             <Ionicons name="trash-outline" size={18} color={colors.red[600]} />
-                            <Text style={[styles.deleteUserText, { color: colors.red[600] }]}>Удалить точку</Text>
+                            <Text style={[styles.deleteUserText, { color: colors.red[600] }]}>Удалить филиал</Text>
                           </>
                         )}
                       </Pressable>
@@ -1725,6 +1755,8 @@ const styles = StyleSheet.create({
   },
   deleteUserText: { fontSize: 15, fontWeight: '700' },
   // Points sheet — neutral archive/unarchive toggle (delete reuses deleteUserBtn).
+  // Пояснение в карточке основного сервиса: почему нет кнопок архива/удаления.
+  mainPointNote: { fontSize: 12, lineHeight: 17, marginTop: spacing[4] },
   archivePointBtn: {
     flexDirection: 'row',
     alignItems: 'center',

@@ -29,7 +29,11 @@ import type { TenantPoint } from '../../../../shared/types';
  */
 
 const point = (id: string, memberIds: string[] = []): TenantPoint =>
-  ({ id, name: `Филиал ${id}`, memberIds }) as unknown as TenantPoint;
+  ({ id, name: `Филиал ${id}`, memberIds, isMain: false, sortOrder: 0 }) as unknown as TenantPoint;
+
+/** Основной сервис тенанта (160, is_main) — сам автосервис владельца. */
+const mainPoint = (id: string, memberIds: string[] = []): TenantPoint =>
+  ({ id, name: 'ZR AUTO', memberIds, isMain: true, sortOrder: 5 }) as unknown as TenantPoint;
 
 const access = (over: Partial<Parameters<typeof derivePointAccess>[0]>) =>
   derivePointAccess({
@@ -67,6 +71,27 @@ describe('derivePointAccess — что показывать', () => {
     const a = access({ points: [point('p1', ['u1']), point('p2', ['u1'])] });
     expect(a.multiPoint).toBe(true);
     expect(a.canSeeAllPoints).toBe(false);
+  });
+});
+
+/**
+ * Основной сервис (160) — САМ автосервис владельца, ему принадлежит вся
+ * история до появления филиалов. Он обязан идти первым и быть отделим от
+ * филиалов: иначе владелец увидит свою многолетнюю выручку строкой вровень с
+ * только что открытым «ТопГазом» и решит, что цифры перепутаны.
+ */
+describe('derivePointAccess — основной сервис и филиалы', () => {
+  it('основной идёт ПЕРВЫМ, даже если сервер прислал его в конце', () => {
+    const a = access({ points: [point('p2'), point('p1'), mainPoint('m1')], canManage: true });
+    expect(a.selectable.map((p) => p.id)).toEqual(['m1', 'p1', 'p2']);
+    expect(a.mainPoint?.id).toBe('m1');
+    expect(a.branches.map((p) => p.id)).toEqual(['p1', 'p2']);
+  });
+
+  it('сотруднику, назначенному только на филиал, основной не показывается', () => {
+    const a = access({ points: [mainPoint('m1'), point('p1', ['u1']), point('p2', ['u1'])] });
+    expect(a.mainPoint).toBeNull();
+    expect(a.branches.map((p) => p.id)).toEqual(['p1', 'p2']);
   });
 });
 

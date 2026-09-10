@@ -41,7 +41,7 @@ import LoadingSpinner from '../components/LoadingSpinner';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import IosScreenHeader from '../components/IosScreenHeader';
-import PointSwitcher from '../components/PointSwitcher';
+import PointIndicator from '../components/PointIndicator';
 import AnimatedCard from '../components/AnimatedCard';
 import QueryErrorState from '../components/QueryErrorState';
 import EmptyState from '../components/EmptyState';
@@ -3168,13 +3168,13 @@ export default function ScheduleScreen() {
         {/* Unified iOS header — same component used across screens. */}
         <IosScreenHeader title="Расписание" onBack={() => navigation.goBack()} trailing={trailingMonthStepper} />
 
-        {/* Филиал расписания (161): у смен появился филиал, и график/«Смены»
-            показывают ТЕКУЩИЙ филиал. Значит человек обязан видеть, чьи смены
-            он читает, — иначе решит, что мастер не вышел, хотя тот работает на
-            другой точке. Чип прячет себя сам при одном доступном филиале.
-            Отдельной строкой, а не в trailing: там уже стоит переключатель
-            месяца. */}
-        <PointSwitcher variant="chip" style={styles.pointChipRow} />
+        {/* Автосервис расписания (161): у смен появился филиал, и график/
+            «Смены» показывают ТЕКУЩИЙ автосервис. Значит человек обязан видеть,
+            чьи смены он читает, — иначе решит, что мастер не вышел, хотя тот
+            работает в другом автосервисе. Индикатор только показывает: тап
+            ведёт в раздел «Филиалы». Отдельной строкой, а не в trailing: там
+            уже стоит переключатель месяца. */}
+        <PointIndicator variant="chip" style={styles.pointChipRow} />
 
         {/* Tab bar */}
         <View

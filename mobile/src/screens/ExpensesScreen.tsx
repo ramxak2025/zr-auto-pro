@@ -1585,9 +1585,6 @@ export default function ExpensesScreen() {
   return (
     <View style={[styles.safe, { backgroundColor: palette.bg.canvas }]}>
       <IosScreenHeader title="Расходы" onBack={() => navigation.goBack()} trailing={trailing} />
-      {/* Невидимая шторка выбора филиала — её открывает кнопка в диалоге
-          отказа «Выберите филиал». Ничего не рисует, пока её не позвали. */}
-      {pointPrompt.element}
 
       {expensesQuery.isLoading && expenses.length === 0 ? (
         <View style={styles.loadingWrap}>

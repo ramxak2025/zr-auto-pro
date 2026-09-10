@@ -101,7 +101,7 @@ import { formatPhone, phoneSearchKey, phoneSearchVariants } from '../../../share
 import LastVisitBadge from '../components/LastVisitBadge';
 import ActiveWarrantiesSection from '../components/ActiveWarrantiesSection';
 import VoiceCommentSheet from '../components/VoiceCommentSheet';
-import PointSwitcher from '../components/PointSwitcher';
+import PointIndicator from '../components/PointIndicator';
 import { usePointRequiredPrompt } from '../components/PointRequiredPrompt';
 import { usePointAccess } from '../hooks/usePoints';
 import { isVoiceNativeReady } from '../utils/voiceRecorder';
@@ -2354,8 +2354,8 @@ export default function CheckCreateScreen() {
     // Правка существующего чека филиал не переставляет, поэтому только create.
     if (!editId && !opts?.preValidated && needsPointForWrite) {
       pointPrompt.show(
-        'Филиал не выбран — заказ-наряд не попадёт ни в один филиал: ни в его журнал, ни в выручку, ни в зарплату ' +
-          'мастера. Выберите филиал, чтобы пробить чек.',
+        'Автосервис не выбран — заказ-наряд не попадёт ни в основной сервис, ни в филиал: ни в журнал, ни в ' +
+          'выручку, ни в зарплату мастера. Откройте «Филиалы» и зайдите в тот автосервис, где пробиваете чек.',
       );
       return;
     }
@@ -2618,17 +2618,19 @@ export default function CheckCreateScreen() {
         ]}
         reserveTabBar={openedFromTab}
       >
-        {/* ═══ ФИЛИАЛ ЗАКАЗ-НАРЯДА (156/160) ═══
+        {/* ═══ АВТОСЕРВИС ЗАКАЗ-НАРЯДА (156/160) ═══
             Главный страх владельца: «чтобы чек не туда случайно не пробил».
-            Один и тот же мастер работает на нескольких точках, поэтому филиал
-            обязан быть виден ДО нажатия «Пробить», и сменить его можно прямо
-            отсюда. Скрыт, когда доступен ровно один филиал — там подставлять
-            нечего. В push-режиме (правка чека из Журнала) слева висит
-            плавающая стрелка «назад», поэтому сдвигаем строку правее, чтобы
-            она не уезжала под кнопку. */}
-        <PointSwitcher variant="banner" style={isStackScreen ? styles.pointBannerStacked : undefined} />
-        {/* Невидимая шторка выбора: её открывает кнопка в диалоге отказа. */}
-        {pointPrompt.element}
+            Один и тот же мастер работает в двух автосервисах, поэтому текущий
+            обязан быть виден ДО нажатия «Пробить». Сменить его отсюда НЕЛЬЗЯ —
+            тап ведёт в раздел «Филиалы»: выпадающий выбор прямо над кнопкой
+            «Пробить» и был тем самым способом промахнуться. «Филиалы»
+            открываются ПОВЕРХ Кассы (корневой стек, см. AppNavigator →
+            Stack.Screen "Points"), поэтому «назад» возвращает набранный
+            заказ-наряд нетронутым — экран не размонтируется. Скрыт, когда
+            автосервис ровно один — там подставлять нечего. В push-режиме
+            (правка чека из Журнала) слева висит плавающая стрелка «назад»,
+            поэтому сдвигаем строку правее, чтобы она не уезжала под кнопку. */}
+        <PointIndicator variant="banner" style={isStackScreen ? styles.pointBannerStacked : undefined} />
 
         {/* ═══ SECTION 1: CLIENT INFO — blue tint ═══ */}
         <View style={[styles.sectionClient, { backgroundColor: palette.bg.card, borderColor: palette.border.subtle }]}>

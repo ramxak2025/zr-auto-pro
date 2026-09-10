@@ -35,6 +35,7 @@ import { authApi, uploadsApi, subscriptionApi } from '../api/services';
 import type { UserPermissions, SubscriptionInfo } from '../types';
 import { roleLabels } from '../../../shared/utils/formatters';
 import DeleteAccountSection from '../components/DeleteAccountSection';
+import { usePointAccess } from '../hooks/usePoints';
 
 const PRIVACY_URL = 'https://autexa.pw/privacy';
 const TERMS_URL = 'https://autexa.pw/terms';
@@ -49,6 +50,12 @@ interface MenuItem {
   anyPermission?: (keyof UserPermissions)[];
   /** Только для зон БЕЗ ключа матрицы (напр. биллинг «Тариф и подписка»). */
   roles?: string[];
+  /**
+   * Пункт виден, только если у пользователя больше одного АВТОСЕРВИСА
+   * (156/160/161). Права здесь нет сознательно: переходить между автосервисами
+   * обязан и мастер, работающий в двух, иначе он пробьёт заказ-наряд не туда.
+   */
+  multiPointOnly?: boolean;
   featureKey?: string;
   color: string;
   iconColor: string;
@@ -232,6 +239,18 @@ const menuItems: MenuItem[] = [
     iconColor: 'text-amber-600',
   },
   {
+    // «Филиалы» (156/160/161) — ЕДИНСТВЕННЫЙ вход в переход между
+    // автосервисами: основной сервис владельца и открытые им филиалы, с
+    // оборотом каждого. В шапке остаётся только индикатор.
+    label: 'Филиалы',
+    description: 'Основной сервис и филиалы, переход между ними',
+    path: '/points',
+    icon: Building2,
+    multiPointOnly: true,
+    color: 'bg-orange-50',
+    iconColor: 'text-orange-600',
+  },
+  {
     label: 'Настройки компании',
     description: 'Реквизиты и данные для чеков',
     path: '/company-settings',
@@ -263,6 +282,8 @@ const menuItems: MenuItem[] = [
 
 export default function MorePage() {
   const { user, logout, hasPermission, refreshUser } = useAuth();
+  // Тот же ключ ['points'], что и у индикатора в шапке, — лишней сети нет.
+  const { multiPoint } = usePointAccess();
   const roleLabel = user?.role ? roleLabels[user.role] || user.role : '';
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -362,6 +383,11 @@ export default function MorePage() {
             return null;
           }
           if (item.roles && user?.role && !item.roles.includes(user.role)) {
+            return null;
+          }
+          // «Филиалы» скрыты, когда показывать нечего: у тенанта нет филиалов
+          // вовсе либо сотруднику доступен ровно один автосервис.
+          if (item.multiPointOnly && !multiPoint) {
             return null;
           }
 

@@ -2,7 +2,7 @@ import { memo, useEffect, useMemo } from 'react';
 import { NavLink, useLocation, Outlet } from 'react-router-dom';
 import { AnimatePresence } from 'framer-motion';
 import PageTransition from './PageTransition';
-import PointSwitcher from './PointSwitcher';
+import PointIndicator from './PointIndicator';
 import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
@@ -135,6 +135,8 @@ const mobileTabItems: (TabItem & { isCenter?: boolean })[] = [
       '/company-settings',
       '/integrations',
       '/notifications',
+      // «Филиалы» (156/160) — раздел живёт в «Ещё», как и в мобилке.
+      '/points',
     ],
   },
 ];
@@ -311,10 +313,11 @@ const MobileHeader = memo(function MobileHeader({ userAvatar, userInitial }: Mob
         <img src="/logo.png" alt="Logo" className="h-8 w-auto object-contain" />
       </div>
       <div className="flex min-w-0 items-center gap-2">
-        {/* Филиал (156/160): текущая точка хранится на сервере, поэтому веб и
-            так работает «внутри» филиала — человек обязан это видеть. Сам
-            компонент прячется, когда доступен один филиал. */}
-        <PointSwitcher />
+        {/* Автосервис (156/160): текущий хранится на сервере, поэтому веб и
+            так работает «внутри» одного из них — человек обязан это видеть.
+            Индикатор НЕ переключает, он ведёт на страницу «Филиалы»; сам
+            прячется, когда автосервис один. */}
+        <PointIndicator />
         {userAvatar ? (
           <img src={userAvatar} alt="" className="h-7 w-7 rounded-full object-cover" />
         ) : (
@@ -462,8 +465,8 @@ export default function Layout() {
             ))}
           </div>
           <div className="flex items-center gap-4">
-            {/* Филиал (156/160) — см. комментарий в MobileHeader. */}
-            <PointSwitcher />
+            {/* Автосервис (156/160) — см. комментарий в MobileHeader. */}
+            <PointIndicator />
             <div className="flex items-center gap-2.5">
               <span className="text-sm font-medium text-gray-700">{userName}</span>
               <span

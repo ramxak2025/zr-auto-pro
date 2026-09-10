@@ -55,7 +55,7 @@ import { ThemeToggle } from '../components/ThemeToggle';
 import AnimatedCard from '../components/AnimatedCard';
 import { Skeleton } from '../components/Skeleton';
 import FreshnessBadge from '../components/FreshnessBadge';
-import PointSwitcher from '../components/PointSwitcher';
+import PointIndicator from '../components/PointIndicator';
 import QueryErrorState from '../components/QueryErrorState';
 import type {
   SalarySummary,
@@ -3506,17 +3506,16 @@ function OwnerFreshnessBadge() {
 }
 
 /**
- * PointSwitcherChip — индикатор текущего филиала в шапке дашборда.
+ * PointIndicatorChip — индикатор текущего автосервиса в шапке главной.
  *
- * Вся логика (кто какие точки видит, что происходит при переключении, выбор
- * через BottomSheet вместо Alert) живёт в общем компоненте
- * `components/PointSwitcher` — тот же чип стоит в Журнале и на кассовой смене,
- * а на Кассе он же в широком варианте. Локальная копия здесь была источником
- * расхождения: она переключала точку, но инвалидировала лишь 8 ключей и
- * оставляла на экранах деньги прошлого филиала.
+ * Ничего не переключает: цифры главной принадлежат конкретному автосервису, и
+ * владелец обязан видеть, чьи они, — но менять автосервис можно только в
+ * разделе «Филиалы» (туда чип и ведёт). Вся логика живёт в общем компоненте
+ * `components/PointIndicator` — тот же чип стоит в Журнале, на кассовой смене
+ * и в расписании, а на Кассе он же в широком варианте.
  */
-function PointSwitcherChip({ style }: { style?: StyleProp<ViewStyle> }) {
-  return <PointSwitcher variant="chip" style={style} />;
+function PointIndicatorChip({ style }: { style?: StyleProp<ViewStyle> }) {
+  return <PointIndicator variant="chip" style={style} />;
 }
 
 // ── Configurable owner widgets ───────────────────────────────────────────────
@@ -3592,7 +3591,7 @@ function AdminDashboard({ name }: { name: string }) {
   return (
     <View style={{ gap: spacing[5] }}>
       <View style={styles.adminTopRow}>
-        <PointSwitcherChip />
+        <PointIndicatorChip />
         <View style={{ flex: 1 }}>
           <OwnerFreshnessBadge />
         </View>
@@ -4585,7 +4584,7 @@ export default function DashboardScreen() {
                 {greeting}, {displayName}!
               </Text>
               <Text style={[styles.headerSub, { color: palette.text.tertiary }]}>Обзор показателей автосервиса</Text>
-              <PointSwitcherChip style={styles.pointChipUnderGreeting} />
+              <PointIndicatorChip style={styles.pointChipUnderGreeting} />
             </View>
             {shiftsEnabled && <ShiftControl />}
             <MasterDashboard />
@@ -4648,8 +4647,8 @@ const styles = StyleSheet.create({
   headerSection: { marginBottom: spacing[1] },
   headerTitle: { fontSize: fontSize.xl, fontWeight: fontWeight.bold, color: colors.gray[900] },
   headerSub: { fontSize: fontSize.xs, color: colors.gray[400], marginTop: 2 },
-  // 156 — мульти-точки: отступ чипа филиала под приветствием мастера. Сам
-  // вид чипа живёт в components/PointSwitcher — один на все экраны.
+  // 156 — мульти-точки: отступ чипа автосервиса под приветствием мастера.
+  // Сам вид чипа живёт в components/PointIndicator — один на все экраны.
   pointChipUnderGreeting: { marginTop: spacing[1.5], alignSelf: 'flex-start' },
 
   // Legacy card (master path)

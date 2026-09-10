@@ -66,8 +66,9 @@ export function pointCacheSegment(pointId: string | null): string {
  *
  * СТРОГОЕ РАВЕНСТВО, а не `(point_id = $n OR point_id IS NULL)`: строка без
  * точки, показанная в КАЖДОМ филиале, задваивала бы деньги при сравнении
- * филиалов между собой. Историю без точки разово прибивает к первой живой
- * точке миграция 160, а новые «ничьи» чеки может родить только актор в режиме
+ * филиалов между собой. Историю без точки разово прибивает к ОСНОВНОМУ
+ * сервису тенанта (tenant_points.is_main) миграция 160 — филиал, открытый
+ * позже, чужую историю не забирает; новые «ничьи» чеки может родить только актор в режиме
  * «Все точки» — то есть владелец, у которого сетевой срез и так перед глазами.
  * Инвариант: деньги не исчезают (видны в сетевом срезе) и не двоятся.
  *
@@ -171,11 +172,12 @@ export async function resolvePointForWrite(
   }
 
   // LIMIT 2 — больше и не нужно: вопрос «одна или больше одной». Порядок
-  // (sort_order → created_at → id) совпадает с пикером точек и с миграциями
-  // 160/161, поэтому «единственная» точка резолвится детерминированно.
+  // (основная → sort_order → created_at → id) совпадает с пикером точек
+  // (PointsService.listForTenant), поэтому «единственная» точка резолвится
+  // детерминированно, а при равенстве прочего выигрывает ОСНОВНОЙ сервис.
   const { rows } = await db.query(
     `WITH live AS (
-       SELECT p.id, p.sort_order, p.created_at
+       SELECT p.id, p.sort_order, p.created_at, p.is_main
          FROM tenant_points p
         WHERE p.tenant_id = $1 AND p.is_active = true
      ),
@@ -189,7 +191,7 @@ export async function resolvePointForWrite(
        UNION ALL
        SELECT * FROM live WHERE NOT EXISTS (SELECT 1 FROM mine)
      ) available
-      ORDER BY sort_order ASC, created_at ASC, id ASC
+      ORDER BY is_main DESC, sort_order ASC, created_at ASC, id ASC
       LIMIT 2`,
     [actor.tenantID, actor.userID],
   );

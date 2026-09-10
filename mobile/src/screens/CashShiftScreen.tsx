@@ -24,7 +24,7 @@
  * Android-совместимо: ввод сумм идёт через собственную Modal + TextInput
  * (Alert.prompt — iOS-only), все API platform-agnostic.
  */
-import React, { useCallback, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
@@ -41,7 +41,8 @@ import { Ionicons } from '@expo/vector-icons';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import IosScreenHeader from '../components/IosScreenHeader';
-import PointSwitcher, { type PointSwitcherHandle } from '../components/PointSwitcher';
+import PointIndicator from '../components/PointIndicator';
+import { usePointRequiredPrompt } from '../components/PointRequiredPrompt';
 import Modal from '../components/Modal';
 import EmptyState from '../components/EmptyState';
 import { ListSkeleton } from '../components/Skeleton';
@@ -262,9 +263,11 @@ export default function CashShiftScreen() {
     setToSafeInput('');
   }, []);
 
-  // Ссылка на шторку выбора филиала: сервер отказывает открыть смену в режиме
-  // «Все точки», и правильный ответ на этот отказ — сразу предложить выбор.
-  const pointSwitcherRef = useRef<PointSwitcherHandle>(null);
+  // Сервер отказывает открыть смену в режиме «Все автосервисы»: деньги смены
+  // обязаны принадлежать конкретному автосервису. Правильный ответ на этот
+  // отказ — увести человека в раздел «Филиалы», единственное место, где
+  // автосервис выбирают (см. components/PointRequiredPrompt).
+  const pointPrompt = usePointRequiredPrompt();
 
   const openMutation = useMutation({
     // 155 — openingAmount опционален: без него сервер сам подставляет размен
@@ -298,17 +301,12 @@ export default function CashShiftScreen() {
       // ту проверку попал бы любой другой отказ, где это слово встретилось.
       const pointMessage = choosePointMessage(err);
       if (pointMessage) {
-        // Форма ввода размена — RN `<Modal>`, шторка выбора филиала тоже.
-        // Презентация одной в тот же кадр, когда другая ещё уходит, на iOS
-        // съедает верхнюю, поэтому сначала закрываем форму, потом (через
-        // анимацию) спрашиваем: смена всё равно не откроется без филиала.
+        // Форма ввода размена — RN `<Modal>`, диалог отказа тоже системный.
+        // Презентация одного в тот же кадр, когда другой ещё уходит, на iOS
+        // съедает верхний, поэтому сначала закрываем форму, потом (через
+        // анимацию) спрашиваем: смена всё равно не откроется без автосервиса.
         closeInputModal();
-        setTimeout(() => {
-          Alert.alert('Выберите филиал', pointMessage, [
-            { text: 'Отмена', style: 'cancel' },
-            { text: 'Выбрать филиал', onPress: () => pointSwitcherRef.current?.open() },
-          ]);
-        }, 250);
+        setTimeout(() => pointPrompt.show(pointMessage), 250);
         return;
       }
       Alert.alert('Ошибка', serverMessage(err) ?? 'Не удалось открыть смену. Возможно, смена уже открыта.');
@@ -604,12 +602,13 @@ export default function CashShiftScreen() {
         onBack={isTabRoot ? undefined : () => navigation.goBack()}
       />
 
-      {/* Филиал смены (156/161): GET /cash-shifts/current отдаёт смену ТЕКУЩЕГО
-          филиала, а открыть смену в режиме «Все точки» сервер не даёт вовсе —
-          деньги смены обязаны принадлежать конкретной точке. Отдельной строкой,
-          а не в trailing шапки: длинное название филиала обрезало бы заголовок.
-          Чип скрывает себя сам, когда доступен один филиал. */}
-      <PointSwitcher ref={pointSwitcherRef} variant="chip" style={styles.pointChipRow} />
+      {/* Автосервис смены (156/161): GET /cash-shifts/current отдаёт смену
+          ТЕКУЩЕГО автосервиса, а открыть смену в режиме «Все автосервисы»
+          сервер не даёт вовсе — деньги смены обязаны принадлежать конкретному.
+          Индикатор не переключает: тап ведёт в раздел «Филиалы». Отдельной
+          строкой, а не в trailing шапки: длинное название обрезало бы
+          заголовок. Скрывает себя сам, когда автосервис один. */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       {loadingFirst ? (
         <View style={styles.loadingWrap}>

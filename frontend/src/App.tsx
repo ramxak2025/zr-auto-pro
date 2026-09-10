@@ -91,6 +91,9 @@ const EmployeesPage = lazyWithRetry(() => import('./pages/EmployeesPage'));
 const EmployeeDetailPage = lazyWithRetry(() => import('./pages/EmployeeDetailPage'));
 const SchedulePage = lazyWithRetry(() => import('./pages/SchedulePage'));
 const MorePage = lazyWithRetry(() => import('./pages/MorePage'));
+// «Филиалы» (156/160) — основной автосервис владельца и открытые им филиалы.
+// ЕДИНСТВЕННОЕ место перехода между ними; в шапке остаётся только индикатор.
+const PointsPage = lazyWithRetry(() => import('./pages/PointsPage'));
 const TariffPage = lazyWithRetry(() => import('./pages/TariffPage'));
 const RetailChecksPage = lazyWithRetry(() => import('./pages/RetailChecksPage'));
 const ExpensesPage = lazyWithRetry(() => import('./pages/ExpensesPage'));
@@ -325,6 +328,7 @@ export default function App() {
                     <Route path="/employees/:id" element={<EmployeeDetailPage />} />
                     <Route path="/schedule" element={gated('schedule_view', <SchedulePage />)} />
                     <Route path="/more" element={<MorePage />} />
+                    <Route path="/points" element={<PointsPage />} />
                     <Route path="/notifications" element={<NotificationSettingsPage />} />
                     <Route path="/tariff" element={<TariffPage />} />
                     <Route path="/marketing" element={<MarketingPage />} />

@@ -34,7 +34,7 @@ import EmptyState from '../components/EmptyState';
 import Modal from '../components/Modal';
 import DateTimePickerModal from '../components/DateTimePickerModal';
 import FreshnessBadge from '../components/FreshnessBadge';
-import PointSwitcher from '../components/PointSwitcher';
+import PointIndicator from '../components/PointIndicator';
 import {
   colors,
   fontSize,
@@ -1342,10 +1342,11 @@ export default function ChecksScreen() {
           tab-bar label already, and the count duplicates info shown at
           the bottom of the list (pagination). Less chrome → more list. */}
 
-      {/* Филиал журнала (156/160) — Журнал показывает чеки ТЕКУЩЕГО филиала,
-          поэтому человек обязан видеть, чью выручку он сейчас читает, и уметь
-          переключиться отсюда же. Скрыт при одном доступном филиале. */}
-      <PointSwitcher variant="chip" style={styles.pointChipRow} />
+      {/* Автосервис журнала (156/160) — Журнал показывает чеки ТЕКУЩЕГО
+          автосервиса, поэтому человек обязан видеть, чью выручку он сейчас
+          читает. Индикатор НЕ переключает: тап ведёт в раздел «Филиалы», где
+          переключение и живёт. Скрыт, когда автосервис один. */}
+      <PointIndicator variant="chip" style={styles.pointChipRow} />
 
       {/* Freshness pill — HYBRID-perf plan. ChecksScreen renders from
           persistent cache instantly on cold start, so we expose the

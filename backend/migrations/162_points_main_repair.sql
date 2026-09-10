@@ -1,73 +1,77 @@
--- 161_points_scoping_modules.sql
+-- 162_points_main_repair.sql
 -- ============================================================================
--- Филиалы, волна 3: точка появляется у ОСТАЛЬНЫХ денежных модулей.
--- Продолжение 156 (tenant_points / user_points / checks.point_id /
--- clients.point_id) и 160 (основной сервис tenant_points.is_main + скоуп
--- журнала, дашбордов и отчётов).
+-- РЕМОНТ БАЗЫ, НА КОТОРОЙ 160/161 УСПЕЛИ ПРОГНАТЬСЯ В СТАРОЙ РЕДАКЦИИ.
 --
--- ЗАЧЕМ. 160 разрезала по филиалам чеки. Всё, что вокруг чеков — рабочие
--- смены, расходы, кассовая смена, зарплатные выплаты/премии/штрафы — осталось
--- общим на тенанта, и это НЕ косметика: филиал А видел расходы филиала Б в
--- своём «Движении денег», Z-отчёт филиала А сходился по чекам ВСЕЙ сети, а
--- вторая кассовая смена вообще не открывалась (см. блок 4 ниже).
+-- ЧТО БЫЛО СЛОМАНО. Первая редакция 160 и 161 привязывала всю историю тенанта
+-- (чеки, клиентов, смены, расходы, кассовые смены, зарплатные строки) к
+-- «ПЕРВОЙ ЖИВОЙ ТОЧКЕ» по порядку sort_order → created_at → id. Понятия
+-- основного сервиса в модели не было вовсе.
 --
--- РЕШЕНИЯ ВЛАДЕЛЬЦА, зашитые в эту миграцию:
---   • кассовая смена — СВОЯ у каждого филиала;
---   • расходы получают филиал: ручные — филиал автора, автоматические
---     (выплата ЗП, списание товара, покупка имущества) — филиал связанной
---     операции;
---   • зарплата считается по филиалам: начисления берутся через точку ЧЕКА
---     (колонка не нужна — она уже есть у checks), а выплаты / премии / штрафы
---     получают собственную точку;
---   • рабочая смена штампуется филиалом В МОМЕНТ ОТКРЫТИЯ (переключивший
---     филиал в середине смены остаётся в смене того филиала, где её открыл);
---   • график филиала скоупится по НАЗНАЧЕНИЯМ сотрудников (user_points) —
---     отдельной колонки у строки графика нет и не будет;
---   • склад (products / warehouse) остаётся ОБЩИМ на все филиалы.
+-- ПОЧЕМУ ЭТО КАТАСТРОФА. Владелец годами работал как ZR AUTO, потом открыл
+-- второй автосервис ТопГаз — и суперадмин завёл в системе ОДНУ точку,
+-- «ТопГаз». «Первая живая точка» в такой базе — ТопГаз, и вся многолетняя
+-- история ZR AUTO оказывается помечена филиалом, открытым в прошлом месяце.
+-- Обратно различить нечем: до миграции у всех строк точка пустая, признака
+-- «чьё это» не существует — деньги, клиенты и зарплата двух РАЗНЫХ
+-- автосервисов схлопываются в один необратимо.
 --
--- ЧЕГО ЗДЕСЬ СОЗНАТЕЛЬНО НЕТ:
---   • safe_transactions (сейф). Баланс сейфа — running total insert-only
---     ledger'а: Σ deposit + Σ adjustment − Σ collection. Депозит рождается при
---     закрытии смены (точка есть), а инкассация из сейфа делается владельцем и
---     точки может не иметь вовсе (режим «Все точки»). Точка у части строк =
---     подсумма по филиалу перестаёт сходиться с реальным остатком, и владелец
---     получает либо запрет законной инкассации, либо «лишние» деньги в
---     филиале. Сейф остаётся ОДИН на компанию — это и физически так (один
---     сейф в кабинете), и арифметически безопасно.
---   • cash_collections (инкассация из кассы). Своя точка не нужна: строка
---     жёстко привязана к shift_id, а у смены точка теперь есть.
---   • products / warehouse / stock_movements — склад общий (решение владельца).
+-- ПОЧЕМУ ОТДЕЛЬНЫМ ФАЙЛОМ. Сами 160 и 161 исправлены на месте (ветка не
+-- смержена и не запушена, деплоя не было), но MigrationRunner отмечает файл в
+-- `_migrations` по ИМЕНИ и повторно его не выполняет. На локальной или
+-- тестовой базе, где backend уже стартовал со старой редакцией, новая никогда
+-- не отработает — чинить приходится следующим номером.
 --
--- ИСТОРИЯ РАЗБИРАЕТСЯ ПО ДОКАЗАТЕЛЬСТВУ, А НЕ «ВСЯ ОСНОВНОМУ». Колонку
--- point_id этим семи таблицам заводит сама эта миграция, поэтому NULL в них НЕ
--- значит «строка старше филиалов» — он стоит у ВСЕХ строк, включая вчерашнюю
--- кассу филиала. Правило 160 («NULL → основной сервис») здесь дало бы
--- зеркальную катастрофу: августовская касса, расходы и зарплата ТопГаза уехали
--- бы на счёт ZR AUTO. Лестница доказательств и честный список того, что она
--- НЕ может определить, — в блоке 2 ниже.
+-- ПРИНЦИП РЕМОНТА — единственный надёжный: СТРОКА, СОЗДАННАЯ РАНЬШЕ, ЧЕМ
+-- ПОЯВИЛАСЬ САМА ТОЧКА, НЕ МОЖЕТ ЕЙ ПРИНАДЛЕЖАТЬ. Такие строки переносим на
+-- ОСНОВНОЙ сервис (tenant_points.is_main). Ничего другого доказать нельзя, и
+-- ничего другого мы не трогаем.
 --
--- ИДЕМПОТЕНТНОСТЬ. ADD COLUMN IF NOT EXISTS; CREATE OR REPLACE FUNCTION;
--- UPDATE'ы адресуют ТОЛЬКО строки с point_id IS NULL (повторный прогон не
--- может «перенести» уже привязанные деньги в другой филиал); CREATE INDEX
--- IF NOT EXISTS; DROP INDEX IF EXISTS.
+-- ВТОРАЯ ПОЛОВИНА ФАЙЛА — «ОСИРОТЕВШАЯ» ИСТОРИЯ (блок 3). Она разбирается ТОЙ
+-- ЖЕ лестницей доказательств, что и в 161 (блок ATTRIBUTION-BLOCK там —
+-- дословная копия этого). Обе миграции обязаны приводить базу к ОДНОМУ
+-- состоянию, в каком бы порядке они ни достались конкретной базе; расхождение
+-- означало бы, что распределение денег зависит от истории деплоя.
 --
--- РЕМОНТ УЖЕ ИСПОРЧЕННОЙ БАЗЫ — в 162_points_main_repair.sql: этот файл мог
--- быть применён в старой редакции (привязка к первой живой точке) на локальной
--- или тестовой базе, а повторно MigrationRunner его не выполнит.
+-- ЧЕГО РЕМОНТ СОЗНАТЕЛЬНО НЕ ДЕЛАЕТ (лучше не починить сомнительный случай,
+-- чем испортить хороший):
+--   • НЕ трогает строки, созданные ПОЗЖЕ своей точки. Между заведением точки
+--     и прогоном миграции у строк всё ещё был point_id IS NULL, поэтому среди
+--     них физически перемешаны работы обоих автосервисов — отличить их нечем,
+--     и любое автоматическое решение было бы выдуманным. Они остаются там,
+--     куда их привязала старая редакция.
+--   • НЕ трогает строки без даты создания (created_at IS NULL у части легаси-
+--     строк): доказательства «раньше точки» нет — значит, нет и переноса.
+--   • НЕ переносит строки МЕЖДУ филиалами и НЕ снимает строки с основной
+--     точки: единственное направление переноса — «филиал → основной сервис».
+--   • НЕ трогает тенантов без живых точек: у них скоуп филиала не включён и
+--     основного пункта списка быть не должно (иначе мульти-точечный режим
+--     включился бы сам собой, без просьбы владельца).
+--   • НЕ трогает safe_transactions и cash_collections — у них точки нет и по
+--     решению владельца не будет (обоснование в шапке 161).
+--   • НЕ трогает users.current_point_id: ремонт ни одной точки не удаляет и не
+--     архивирует, поэтому выбранная сотрудником точка остаётся живой строкой.
+--
+-- ИДЕМПОТЕНТНОСТЬ. Схема — ADD COLUMN / CREATE INDEX IF NOT EXISTS, функции —
+-- CREATE OR REPLACE. Основная точка помечается/создаётся только при её
+-- отсутствии (NOT EXISTS). Разбор «осиротевшей» истории адресует только
+-- point_id IS NULL. Ремонтные UPDATE'ы исключают саму основную точку
+-- (p.is_main = false), поэтому уже перенесённые строки во второй прогон не
+-- попадают ни при каких обстоятельствах.
 -- ============================================================================
 
--- ── 0. Основной сервис: повтор блока из 160 ─────────────────────────────────
--- ЗАЧЕМ ПОВТОР. MigrationRunner прерывает старт на первой упавшей миграции и
--- НЕ отмечает её применённой. База, где 160 успела примениться в старой
--- редакции (без is_main), а 161 упала на полпути, при следующем деплое
--- получает 160 пропущенной, а 161 — уже новой: без этого блока она сослалась
--- бы на несуществующую колонку tp.is_main, упала снова и увела бы backend в
--- вечный краш-луп. Всё ниже идемпотентно и на нормальной базе — no-op.
+-- ── 1. Схема основного сервиса (повтор 160 — на случай, если 160 применилась
+--       в старой редакции, где колонки и индекса ещё не было) ────────────────
 
 ALTER TABLE tenant_points ADD COLUMN IF NOT EXISTS is_main BOOLEAN NOT NULL DEFAULT false;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_tenant_points_one_main
     ON tenant_points (tenant_id) WHERE is_main;
+
+-- ── 2. Основной сервис обязан существовать у каждого тенанта с живыми точками
+-- Дословно те же два шага, что в 160: сначала пытаемся ПОМЕТИТЬ уже
+-- заведённую живую точку с именем компании (дубль «ZR AUTO» рядом с «ZR AUTO»
+-- владельцу не объяснить), и только если такой нет — заводим основную из
+-- tenants.name.
 
 UPDATE tenant_points tp
    SET is_main = true
@@ -93,29 +97,34 @@ SELECT t.id,
  WHERE EXISTS (SELECT 1 FROM tenant_points p WHERE p.tenant_id = t.id AND p.is_active)
    AND NOT EXISTS (SELECT 1 FROM tenant_points m WHERE m.tenant_id = t.id AND m.is_main);
 
--- ── 1. Колонки ──────────────────────────────────────────────────────────────
--- ON DELETE SET NULL — как у checks.point_id (156): физическое удаление точки
--- (архив им не является) не должно уносить деньги каскадом.
+-- ── 3. «Осиротевшая» история → её филиал ────────────────────────────────────
+-- Спасение для базы, где 160 применилась в старой редакции, а 161 упала на
+-- полпути (MigrationRunner в этом случае прерывает старт и НЕ отмечает файл):
+-- при следующем деплое 161 идёт уже в новой редакции, основной точки ещё нет,
+-- и семь таблиц остаются с point_id IS NULL — то есть невидимыми в любом
+-- филиальном срезе. Здесь основная точка уже гарантированно есть.
+-- Для нормально прошедшей базы блок — no-op.
+--
+-- ЧЕКИ И КЛИЕНТЫ — БЕЗ ЛЕСТНИЦЫ. Их point_id завела ещё 156, задолго до этой
+-- волны: филиальная строка там УЖЕ помечена филиалом, поэтому оставшийся NULL
+-- честно означает «строка старше филиалов» и принадлежит основному сервису.
+-- Это дословно правило 160.
 
-ALTER TABLE shifts            ADD COLUMN IF NOT EXISTS point_id UUID REFERENCES tenant_points(id) ON DELETE SET NULL;
-ALTER TABLE expenses          ADD COLUMN IF NOT EXISTS point_id UUID REFERENCES tenant_points(id) ON DELETE SET NULL;
-ALTER TABLE cash_shifts       ADD COLUMN IF NOT EXISTS point_id UUID REFERENCES tenant_points(id) ON DELETE SET NULL;
-ALTER TABLE salary_payouts    ADD COLUMN IF NOT EXISTS point_id UUID REFERENCES tenant_points(id) ON DELETE SET NULL;
-ALTER TABLE salary_premiums   ADD COLUMN IF NOT EXISTS point_id UUID REFERENCES tenant_points(id) ON DELETE SET NULL;
-ALTER TABLE salary_penalties  ADD COLUMN IF NOT EXISTS point_id UUID REFERENCES tenant_points(id) ON DELETE SET NULL;
--- salary_payments — ЛЕГАСИ-путь выплат (012). Новые выплаты идут через
--- salary_payouts, но старые строки живьём участвуют в «выплачено» и в сторно,
--- поэтому точка нужна и им: без неё филиал вычитал бы из своей доли начислений
--- выплаты ВСЕЙ сети.
-ALTER TABLE salary_payments   ADD COLUMN IF NOT EXISTS point_id UUID REFERENCES tenant_points(id) ON DELETE SET NULL;
+UPDATE checks ch
+   SET point_id = mp.point_id
+  FROM (SELECT tp.tenant_id, tp.id AS point_id FROM tenant_points tp WHERE tp.is_main AND tp.is_active) mp
+ WHERE ch.point_id IS NULL AND ch.tenant_id = mp.tenant_id;
 
--- ── 2. Разовая привязка истории — ПО ДОКАЗАТЕЛЬСТВУ ─────────────────────────
--- ВНИМАНИЕ. Здесь НЕ повторяется правило 160 «point_id IS NULL → основной
--- сервис». Для чеков и клиентов оно верно: их колонку завела ещё 156, и к
--- моменту 160 филиальные строки уже помечены филиалом. Для семи таблиц ЭТОЙ
--- волны колонка появляется строкой выше — NULL стоит у ВСЕХ строк, включая
--- вчерашнюю кассу филиала, и слепая привязка увела бы деньги ТопГаза на счёт
--- ZR AUTO. Полное обоснование и лестница доказательств — в блоке ниже.
+UPDATE clients cl
+   SET point_id = mp.point_id
+  FROM (SELECT tp.tenant_id, tp.id AS point_id FROM tenant_points tp WHERE tp.is_main AND tp.is_active) mp
+ WHERE cl.point_id IS NULL AND cl.tenant_id = mp.tenant_id;
+
+-- СЕМЬ ДЕНЕЖНЫХ ТАБЛИЦ — ТОЛЬКО ПО ДОКАЗАТЕЛЬСТВУ. У них колонку заводит 161,
+-- поэтому NULL там стоит и у филиальных строк тоже; правило «NULL → основной»
+-- увело бы августовскую кассу филиала на счёт основного сервиса. Блок ниже —
+-- ДОСЛОВНАЯ копия блока из 161: обе миграции обязаны приводить базу к ОДНОМУ
+-- состоянию, в каком бы порядке они ни достались конкретной базе.
 
 -- >>> ATTRIBUTION-BLOCK ─ ДОСЛОВНАЯ КОПИЯ В 161 И 162 ────────────────────────
 -- Этот блок ОБЯЗАН быть побайтово одинаковым в 161_points_scoping_modules.sql
@@ -489,67 +498,110 @@ UPDATE expenses e
    AND e.tenant_id = mp.tenant_id;
 -- <<< ATTRIBUTION-BLOCK ─ конец дословной копии ─────────────────────────────
 
--- ── 3. Индексы под новые фильтры ────────────────────────────────────────────
--- Везде point_id идёт СРАЗУ ПОСЛЕ tenant_id: все запросы начинаются с
--- tenant_id = $1 и добавляют point_id = $n, поэтому такой префикс покрывает и
--- филиальный, и сетевой («Все точки») режим.
-
--- Лента смен филиала (shifts.getAll: ORDER BY opened_at DESC LIMIT 100).
-CREATE INDEX IF NOT EXISTS idx_shifts_tenant_point_opened
-  ON shifts (tenant_id, point_id, opened_at DESC);
-
--- «Кто сейчас на работе» филиала (schedule.getToday и сводка «Филиалы»):
--- открытые смены сегодняшней бизнес-даты. Частичный по closed_at IS NULL —
--- открытых смен единицы, индекс остаётся крошечным и горячим.
-CREATE INDEX IF NOT EXISTS idx_shifts_tenant_point_open_date
-  ON shifts (tenant_id, point_id, date)
-  WHERE closed_at IS NULL;
-
--- Список расходов филиала за период (expenses.getAll: ORDER BY date DESC) и
--- наличный расход в окне кассовой смены (cash-shifts.computeFigures).
-CREATE INDEX IF NOT EXISTS idx_expenses_tenant_point_date
-  ON expenses (tenant_id, point_id, date DESC);
-
--- Открытая кассовая смена филиала + история смен филиала.
-CREATE INDEX IF NOT EXISTS idx_cash_shifts_tenant_point_opened
-  ON cash_shifts (tenant_id, point_id, opened_at DESC);
-
--- Зарплатные компоненты филиала: во всех трёх запросах фильтр — тенант +
--- точка + сотрудник.
-CREATE INDEX IF NOT EXISTS idx_salary_payouts_tenant_point_emp
-  ON salary_payouts (tenant_id, point_id, employee_id);
-CREATE INDEX IF NOT EXISTS idx_salary_premiums_tenant_point_user
-  ON salary_premiums (tenant_id, point_id, user_id);
-CREATE INDEX IF NOT EXISTS idx_salary_penalties_tenant_point_user
-  ON salary_penalties (tenant_id, point_id, user_id);
-CREATE INDEX IF NOT EXISTS idx_salary_payments_tenant_point_user
-  ON salary_payments (tenant_id, point_id, user_id);
-
--- ── 4. Кассовая смена: «одна открытая» — теперь НА ФИЛИАЛ ───────────────────
--- ПРОБЛЕМА. Миграция 080 завела частичный уникальный индекс
--- uq_cash_shifts_one_open_per_tenant по (tenant_id) WHERE status='open'. Он
--- ФИЗИЧЕСКИ запрещает вторую открытую смену у тенанта: филиал Б, открывая свою
--- кассу, получал 23505 → 409 «Смена уже открыта». Редактировать 080 нельзя
--- (уже применена), поэтому старый индекс снимаем здесь и ставим новый.
+-- ── 4. РЕМОНТ: строка старше своей точки → основной сервис ──────────────────
+-- Форма у всех девяти UPDATE'ов одна:
+--   p — филиал, к которому строка приписана сейчас (обязательно НЕ основной);
+--   m — основной сервис того же тенанта (уникальный индекс из шага 1
+--       гарантирует, что он ровно один, поэтому JOIN не размножает строки);
+--   условие «дата создания строки СТРОГО меньше даты создания точки» — то
+--   самое единственное доказательство, что строка филиалу принадлежать не
+--   может.
 --
--- ПОЧЕМУ COALESCE, А НЕ ПРОСТО (tenant_id, point_id). В Postgres NULL не
--- конфликтует сам с собой: у обычного индекса по (tenant_id, point_id)
--- одноточечный тенант (точек нет вовсе → point_id всегда NULL) мог бы открыть
--- СКОЛЬКО УГОДНО параллельных смен — защита, работавшая с 080, молча
--- исчезла бы, а вместе с ней и весь смысл Z-отчёта (два окна на один ящик =
--- касса пересчитывается дважды). Нулевой uuid как суррогат «филиала нет»
--- возвращает NULL'у способность конфликтовать с самим собой:
---   • тенант без точек   → все смены попадают в один слот → максимум одна
---     открытая, ровно как было до этой миграции;
---   • тенант с точками   → по одной открытой смене на филиал;
---   • «ничья» смена (актор в режиме «Все точки») — отдельный слот; открыть её
---     сервис не даёт (CashShiftsService.open требует выбранный филиал, когда у
---     тенанта есть точки), так что слот остаётся пустым, а индекс остаётся
---     последней линией обороны.
--- Нулевой uuid безопасен как суррогат: gen_random_uuid() его не порождает, и
--- FK на tenant_points сюда не смотрит (индекс — выражение, не колонка).
-DROP INDEX IF EXISTS uq_cash_shifts_one_open_per_tenant;
+-- m.is_active — страховка: переносить деньги в архивную точку нельзя, она не
+-- входит ни в один живой срез, и результат был бы неотличим от их пропажи.
+--
+-- Дата создания берётся из created_at везде, КРОМЕ cash_shifts: у кассовой
+-- смены роль «когда строка появилась» играет opened_at — он NOT NULL с самой
+-- 080, тогда как created_at у давно существовавшей таблицы мог не добраться
+-- (в 080 он есть только в CREATE TABLE, среди безопасных доборов колонок его
+-- нет). Брать заведомо существующую колонку надёжнее, чем уронить старт.
 
-CREATE UNIQUE INDEX IF NOT EXISTS uq_cash_shifts_one_open_per_point
-  ON cash_shifts (tenant_id, COALESCE(point_id, '00000000-0000-0000-0000-000000000000'::uuid))
-  WHERE status = 'open';
+UPDATE checks ch
+   SET point_id = m.id
+  FROM tenant_points p
+  JOIN tenant_points m ON m.tenant_id = p.tenant_id AND m.is_main AND m.is_active
+ WHERE ch.point_id = p.id
+   AND ch.tenant_id = p.tenant_id
+   AND p.is_main = false
+   AND ch.created_at IS NOT NULL
+   AND ch.created_at < p.created_at;
+
+UPDATE clients cl
+   SET point_id = m.id
+  FROM tenant_points p
+  JOIN tenant_points m ON m.tenant_id = p.tenant_id AND m.is_main AND m.is_active
+ WHERE cl.point_id = p.id
+   AND cl.tenant_id = p.tenant_id
+   AND p.is_main = false
+   AND cl.created_at IS NOT NULL
+   AND cl.created_at < p.created_at;
+
+UPDATE shifts s
+   SET point_id = m.id
+  FROM tenant_points p
+  JOIN tenant_points m ON m.tenant_id = p.tenant_id AND m.is_main AND m.is_active
+ WHERE s.point_id = p.id
+   AND s.tenant_id = p.tenant_id
+   AND p.is_main = false
+   AND s.created_at IS NOT NULL
+   AND s.created_at < p.created_at;
+
+UPDATE expenses e
+   SET point_id = m.id
+  FROM tenant_points p
+  JOIN tenant_points m ON m.tenant_id = p.tenant_id AND m.is_main AND m.is_active
+ WHERE e.point_id = p.id
+   AND e.tenant_id = p.tenant_id
+   AND p.is_main = false
+   AND e.created_at IS NOT NULL
+   AND e.created_at < p.created_at;
+
+UPDATE cash_shifts cs
+   SET point_id = m.id
+  FROM tenant_points p
+  JOIN tenant_points m ON m.tenant_id = p.tenant_id AND m.is_main AND m.is_active
+ WHERE cs.point_id = p.id
+   AND cs.tenant_id = p.tenant_id
+   AND p.is_main = false
+   AND cs.opened_at IS NOT NULL
+   AND cs.opened_at < p.created_at;
+
+UPDATE salary_payouts sp
+   SET point_id = m.id
+  FROM tenant_points p
+  JOIN tenant_points m ON m.tenant_id = p.tenant_id AND m.is_main AND m.is_active
+ WHERE sp.point_id = p.id
+   AND sp.tenant_id = p.tenant_id
+   AND p.is_main = false
+   AND sp.created_at IS NOT NULL
+   AND sp.created_at < p.created_at;
+
+UPDATE salary_premiums pr
+   SET point_id = m.id
+  FROM tenant_points p
+  JOIN tenant_points m ON m.tenant_id = p.tenant_id AND m.is_main AND m.is_active
+ WHERE pr.point_id = p.id
+   AND pr.tenant_id = p.tenant_id
+   AND p.is_main = false
+   AND pr.created_at IS NOT NULL
+   AND pr.created_at < p.created_at;
+
+UPDATE salary_penalties pe
+   SET point_id = m.id
+  FROM tenant_points p
+  JOIN tenant_points m ON m.tenant_id = p.tenant_id AND m.is_main AND m.is_active
+ WHERE pe.point_id = p.id
+   AND pe.tenant_id = p.tenant_id
+   AND p.is_main = false
+   AND pe.created_at IS NOT NULL
+   AND pe.created_at < p.created_at;
+
+UPDATE salary_payments spm
+   SET point_id = m.id
+  FROM tenant_points p
+  JOIN tenant_points m ON m.tenant_id = p.tenant_id AND m.is_main AND m.is_active
+ WHERE spm.point_id = p.id
+   AND spm.tenant_id = p.tenant_id
+   AND p.is_main = false
+   AND spm.created_at IS NOT NULL
+   AND spm.created_at < p.created_at;

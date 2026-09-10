@@ -65,22 +65,29 @@ test('161 заводит point_id у всех денежных модулей в
   }
 });
 
-test('161 привязывает историю только к живой первой точке и идемпотентна', () => {
+test('161 привязывает историю к ОСНОВНОЙ живой точке и идемпотентна', () => {
   const updates = migration.match(/^UPDATE \w+ \w+\n\s+SET point_id[\s\S]*?;/gm) ?? [];
   assert.equal(updates.length, 7, 'ожидалось ровно семь привязок — по одной на таблицу волны');
   for (const stmt of updates) {
     assert.ok(/point_id IS NULL/.test(stmt), 'привязка не ограничена строками без точки — неидемпотентно');
-    assert.ok(/DISTINCT ON \(tp\.tenant_id\)/.test(stmt), 'первая точка тенанта выбирается недетерминированно');
-    assert.ok(/tp\.is_active/.test(stmt), 'история может быть привязана к архивной точке');
     assert.ok(
-      /ORDER BY tp\.tenant_id, tp\.sort_order ASC, tp\.created_at ASC, tp\.id ASC/.test(stmt),
-      'порядок выбора «первой» точки должен быть полностью детерминированным',
+      /tp\.is_main AND tp\.is_active/.test(stmt),
+      'смены, расходы, касса и зарплата обязаны уходить ОСНОВНОМУ сервису, а не филиалу, открытому позже',
+    );
+    assert.ok(
+      !/DISTINCT ON/.test(stmt) && !/sort_order/.test(stmt),
+      '«первой точки» как понятия больше нет: основная ровно одна (uq_tenant_points_one_main)',
     );
   }
 });
 
 test('161: индексы идемпотентны, без CONCURRENTLY и с точкой сразу после тенанта', () => {
-  const indexes = migration.match(/^CREATE (UNIQUE )?INDEX[^;]*;/gm) ?? [];
+  // uq_tenant_points_one_main — не филиальный индекс, а гарантия «ровно одна
+  // основная точка на тенанта» (проверяется в points-main-service): у неё нет
+  // и не должно быть point_id.
+  const indexes = (migration.match(/^CREATE (UNIQUE )?INDEX[^;]*;/gm) ?? []).filter(
+    (idx) => !idx.includes('uq_tenant_points_one_main'),
+  );
   assert.ok(indexes.length >= 8, 'ожидались индексы под смены, расходы, кассу и зарплатные компоненты');
   for (const idx of indexes) {
     assert.ok(idx.includes('IF NOT EXISTS'), 'CREATE INDEX без IF NOT EXISTS — не идемпотентно');
@@ -254,8 +261,13 @@ test('«моя зарплата» филиалом НЕ режется — и э
 // ── 4. Кассовая смена ──────────────────────────────────────────────────────
 
 test('Z-отчёт считает по точке САМОЙ СМЕНЫ, а не по точке читающего', () => {
+  // Регулярка терпит перенос аргументов по строкам: prettier форматирует
+  // длинный вызов в столбик, и утверждение про ПОВЕДЕНИЕ не должно падать от
+  // расстановки переводов строки.
   assert.ok(
-    /computeFigures\(db, tenantID, shiftRow\.id, openedAt, windowEnd, shiftRow\.point_id \?\? null\)/.test(cashShifts),
+    /computeFigures\(\s*db,\s*tenantID,\s*shiftRow\.id,\s*openedAt,\s*windowEnd,\s*shiftRow\.point_id \?\? null,?\s*\)/.test(
+      cashShifts,
+    ),
     'assembleReport обязан передавать точку смены — иначе исторический Z-отчёт меняется от того, кто его открыл',
   );
   assert.ok(

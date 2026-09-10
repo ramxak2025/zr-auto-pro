@@ -1725,12 +1725,30 @@ export interface TenantPoint {
   address?: string | null;
   sortOrder: number;
   isActive: boolean;
+  /**
+   * ОСНОВНОЙ СЕРВИС тенанта (160, tenant_points.is_main) — сам автосервис
+   * владельца, а не открытый позже филиал. Его название берётся из названия
+   * компании (tenants.name), и ему принадлежит ВСЯ история, заведённая до
+   * появления филиалов.
+   *
+   * Ровно одна точка тенанта имеет isMain=true (гарантия уровня БД:
+   * частичный уникальный индекс uq_tenant_points_one_main), и сервер отдаёт
+   * её ПЕРВОЙ в любом списке. Клиенту это нужно, чтобы подписать её как
+   * основной сервис, а не как один из филиалов, и чтобы не предлагать
+   * действия «архивировать» / «удалить» — API их запрещает (400).
+   * Переименование разрешено.
+   */
+  isMain: boolean;
   createdAt?: string;
   /** Назначенные на точку сотрудники (GET /points). Пусто = явных назначений нет. */
   memberIds?: string[];
 }
 
-/** GET /points — живые точки своего тенанта + моя текущая точка. */
+/**
+ * GET /points — живые точки своего тенанта + моя текущая точка.
+ * Список УЖЕ отсортирован сервером: основной сервис (isMain) первым, дальше
+ * филиалы по sort_order и имени. Клиенту пересортировывать не нужно.
+ */
 export interface PointsListResponse {
   points: TenantPoint[];
   /**
@@ -1753,6 +1771,11 @@ export interface PointsListResponse {
 export interface PointSummary {
   pointId: string;
   name: string;
+  /**
+   * Это ОСНОВНОЙ сервис тенанта, а не филиал (см. TenantPoint.isMain).
+   * Сервер отдаёт его карточку первой в списке.
+   */
+  isMain: boolean;
   /** Оборот за сегодня (без гарантийных чеков). */
   revenueToday: number;
   /** Оборот с начала месяца (без гарантийных чеков). */
@@ -1786,7 +1809,10 @@ export interface PointSummary {
   mastersOnShift: number | null;
 }
 
-/** GET /points/summary — сводка по всем живым точкам тенанта. */
+/**
+ * GET /points/summary — сводка по всем живым точкам тенанта.
+ * Порядок тот же, что в GET /points: основной сервис первым.
+ */
 export interface PointsSummaryResponse {
   points: PointSummary[];
 }
