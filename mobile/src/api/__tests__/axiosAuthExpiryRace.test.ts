@@ -66,3 +66,80 @@ describe('axios auth-expiry epoch', () => {
     unsubscribe();
   });
 });
+
+// ── ОКНО ПЕРЕВЫПУСКА СЕССИИ (мгновенная смена филиала, 167) ────────────────
+// Перевыпуск гасит старый токен на сервере РАНЬШЕ, чем новый доедет до
+// телефона. Всё, что улетело с прежним bearer'ом, приходит в эту щель с 401
+// «Токен отозван». Если бы такой 401 гасил сессию, руководителя выкидывало бы
+// на экран входа ровно в тот момент, когда он просто переключал филиал.
+describe('axios — 401 в окне перевыпуска сессии', () => {
+  beforeEach(() => {
+    jest.resetModules();
+    mockStorageRemoveItem.mockClear();
+  });
+
+  it('чужой 401 внутри окна НЕ гасит сессию, но остаётся ошибкой запроса', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../axios') as typeof import('../axios');
+    mod.setAuthToken('token-A');
+    const expired = jest.fn();
+    const unsubscribe = mod.onAuthExpired(expired);
+    mod.default.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+      throw http401(config);
+    };
+
+    const close = mod.beginSessionReissueWindow();
+    await expect(mod.default.get('/points/summary')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(expired).not.toHaveBeenCalled();
+
+    // Окно закрыто — обычный разбор 401 вернулся, мёртвый токен снова заметен.
+    close();
+    await expect(mod.default.get('/points/summary')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(expired).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('401 самого перевыпуска гасит сессию даже внутри окна — это «войдите заново»', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../axios') as typeof import('../axios');
+    mod.setAuthToken('token-A');
+    const expired = jest.fn();
+    const unsubscribe = mod.onAuthExpired(expired);
+    mod.default.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+      throw http401(config);
+    };
+
+    const close = mod.beginSessionReissueWindow();
+    await expect(mod.default.post('/auth/switch-point', { pointId: 'p1' })).rejects.toMatchObject({
+      response: { status: 401 },
+    });
+    expect(expired).toHaveBeenCalledTimes(1);
+    close();
+    unsubscribe();
+  });
+
+  it('повторное закрытие окна идемпотентно — счётчик не уходит в минус', async () => {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mod = require('../axios') as typeof import('../axios');
+    mod.setAuthToken('token-A');
+    const expired = jest.fn();
+    const unsubscribe = mod.onAuthExpired(expired);
+    mod.default.defaults.adapter = async (config: InternalAxiosRequestConfig) => {
+      throw http401(config);
+    };
+
+    const closeOuter = mod.beginSessionReissueWindow();
+    const closeInner = mod.beginSessionReissueWindow();
+    closeInner();
+    closeInner();
+    // Внешнее окно ещё открыто: повторные закрытия внутреннего не должны были
+    // его «досрочно» снять.
+    await expect(mod.default.get('/auth/me')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(expired).not.toHaveBeenCalled();
+
+    closeOuter();
+    await expect(mod.default.get('/auth/me')).rejects.toMatchObject({ response: { status: 401 } });
+    expect(expired).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+});

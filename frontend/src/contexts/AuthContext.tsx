@@ -14,7 +14,9 @@ import {
 import { User, UserPermissions, UserRole } from '../types';
 import type { LoginPointOption } from '../../../shared/api/types';
 import { clearPersistentCache } from '../utils/persistentCache';
-import { purgeApiCache, purgeOfflineQueues } from '../utils/swCache';
+import { clearOwnSessionToken, readStoredToken, writeSessionToken } from '../utils/sessionToken';
+import { flushOfflineQueue, purgeApiCache, purgeOfflineQueues, readOfflineQueueState } from '../utils/swCache';
+import { judgeQueueFlush, OfflineQueueBlockedError } from '../utils/offlineQueueSwitch';
 import { forgetSessionEndedNotice, peekSessionEndedNotice } from '../utils/sessionNotice';
 
 /**
@@ -141,6 +143,26 @@ interface AuthContextType {
    * функция), потому что от него зависит, куда вести человека.
    */
   loginWithPoint: (selectToken: string, pointId: string) => Promise<void>;
+  /**
+   * МГНОВЕННАЯ СМЕНА ФИЛИАЛА РУКОВОДИТЕЛЕМ (167) — без повторного ввода пароля.
+   *
+   * Зовётся ТОЛЬКО из раздела «Филиалы» (требование владельца) и только у
+   * держателя права `user_management`; сотруднику филиал по-прежнему меняется
+   * выходом и входом заново — у него филиал определяет, куда уходят его деньги,
+   * и случайная смена дороже неудобства.
+   *
+   * Это не вход без пароля, а ПЕРЕВЫПУСК сессии: личность подтверждена живым
+   * токеном, сервер проверяет право и доступ к филиалу, выдаёт новый токен и
+   * немедленно гасит прежний. Ошибку axios бросает как есть — разбор кодов
+   * живёт в utils/switchPointFailure.ts, потому что от него зависит, оставлять
+   * человека в сессии или вести на вход.
+   *
+   * СНАЧАЛА ОЧЕРЕДЬ, ПОТОМ СЕССИЯ. Если в офлайн-очереди Service Worker лежат
+   * неотправленные мутации, они доигрываются ПОД СТАРЫМ ТОКЕНОМ, и филиал
+   * меняется только по нулевому остатку. Не доиграли — бросается
+   * {@link OfflineQueueBlockedError}, сессия не трогается (см. тело функции).
+   */
+  switchPoint: (pointId: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   hasPermission: (perm: keyof UserPermissions) => boolean;
@@ -163,7 +185,7 @@ const AuthContext = createContext<AuthContextType | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [token, setToken] = useState<string | null>(localStorage.getItem('token'));
+  const [token, setToken] = useState<string | null>(readStoredToken());
   const [loading, setLoading] = useState(true);
   const queryClient = useQueryClient();
   // Причина принудительного разлогина (163): «Филиал больше не доступен».
@@ -191,7 +213,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           // back to the login screen.
           const status = err?.response?.status;
           if (status === 401 || status === 403) {
-            localStorage.removeItem('token');
+            clearOwnSessionToken();
             setToken(null);
           } else {
             console.warn('Failed to fetch user (kept session):', status, err?.message);
@@ -211,7 +233,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
    * кадром мелькнут вчерашние цифры чужого филиала — и это прочитается как
    * «деньги пропали».
    */
-  const commitSession = async (t: string, u: User) => {
+  const commitSession = async (t: string, u: User, options?: { keepOfflineQueue?: boolean }) => {
     // Cross-tenant safety: `logout()` is the normal off-boarding path, but a
     // crash / kill / 401 hard-redirect can leave the previous user's data in
     // the in-memory cache, the persist IndexedDB store, or the SW API cache.
@@ -224,9 +246,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // Ту же логику — офлайн-очереди мутаций SW: недоигранные POST'ы прошлой
     // сессии (после краша/убитой вкладки) нельзя переиграть под токеном
     // нового пользователя — это запись в чужой тенант.
-    await purgeOfflineQueues();
+    //
+    // ИСКЛЮЧЕНИЕ — СМЕНА ФИЛИАЛА (`keepOfflineQueue`). Там ЧЕЛОВЕК И ТЕНАНТ ТЕ
+    // ЖЕ, чужого токена не появляется, а очередь уже доиграна до нуля в
+    // switchPoint (иначе переключения просто не было бы). Стереть её здесь
+    // значило бы уничтожить архив отклонённых записей того же владельца —
+    // единственный след пробитых без связи чеков. Вход и выход очередь
+    // по-прежнему стирают: за клавиатуру мог сесть другой человек.
+    if (!options?.keepOfflineQueue) {
+      await purgeOfflineQueues();
+    }
 
-    localStorage.setItem('token', t);
+    writeSessionToken(t);
     setToken(t);
     setUser(u);
     // Вход состоялся — прошлая причина разлогина больше не актуальна.
@@ -272,6 +303,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await commitSession(res.data.token, res.data.user);
   };
 
+  /**
+   * МГНОВЕННАЯ СМЕНА ФИЛИАЛА (167). Ровно то же тело, что у обоих шагов входа:
+   * сервер выдал токен — применяем его через commitSession.
+   *
+   * ПОЧЕМУ ИМЕННО commitSession, А НЕ «просто положить токен». Ответ сервера
+   * означает, что ПРЕЖНИЙ токен уже мёртв, а всё, что лежит в кешах, посчитано
+   * по прежнему филиалу. Любой следующий запрос обязан уйти с новым токеном, а
+   * ни одна старая цифра — не пережить переход: касса, журнал, склад и смены
+   * отфильтрованы по филиалу сессии, и кадр с чужими деньгами здесь читается
+   * как «деньги пропали». Профиль берём из ответа — отдельный /auth/me не нужен.
+   */
+  const switchPoint = async (pointId: string) => {
+    // ── ОФЛАЙН-ОЧЕРЕДЬ ИДЁТ ПЕРЕД СЕССИЕЙ ────────────────────────────────────
+    // Недоотправленные мутации лежат в Service Worker (IndexedDB autexa-sw) и
+    // не несут Authorization: SW спрашивает токен у живой вкладки в момент
+    // досылки. Значит всё, что переживёт переключение, уйдёт уже с токеном
+    // НОВОГО филиала — чек, пробитый в «ZR AUTO», запишется в «ТопГаз». А
+    // стереть очередь (как делает вход) — потерять эти деньги молча.
+    //
+    // Поэтому: пока жив токен ТЕКУЩЕГО филиала, дожимаем досылку, и филиал
+    // меняется ТОЛЬКО по нулевому остатку. Не доиграли — бросаем
+    // OfflineQueueBlockedError, сессия остаётся прежней, экран объясняет
+    // человеку, что произошло. Мобилка в той же точке штампует филиал в каждой
+    // записи (offlineCheckQueue.stampPendingPoint); в вебе запись — сырой HTTP,
+    // штамповать нечем, поэтому правило строже: доиграли или не переключаемся.
+    //
+    // Проверка стоит ЗДЕСЬ, а не на экране, чтобы её нельзя было обойти,
+    // добавив вторую кнопку перехода.
+    const queueBefore = await readOfflineQueueState();
+    if (queueBefore.pending > 0) {
+      const verdict = judgeQueueFlush(queueBefore, await flushOfflineQueue());
+      if (!verdict.ok) throw new OfflineQueueBlockedError(verdict);
+    }
+
+    const res = await authApi.switchSessionPoint(pointId);
+    // keepOfflineQueue: очередь только что доиграна до нуля, а архив отказов
+    // принадлежит тому же человеку в том же тенанте — стирать нечего и нельзя.
+    await commitSession(res.data.token, res.data.user, { keepOfflineQueue: true });
+  };
+
   const refreshUser = async () => {
     try {
       const res = await authApi.me();
@@ -313,7 +384,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void purgeApiCache();
     void purgeOfflineQueues();
 
-    localStorage.removeItem('token');
+    // Стираем ТОЛЬКО свой токен (167): если соседняя вкладка уже перевыпустила
+    // сессию (смена филиала), в хранилище лежит ЕЁ живой токен — удалить его
+    // значит обесточить человека посреди работы в той вкладке.
+    clearOwnSessionToken();
     localStorage.removeItem('user');
     // Обычный выход причины не имеет: если в хранилище осталась чужая (её
     // положил перехватчик, но экран входа так и не открылся), она всплыла бы
@@ -355,6 +429,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         loading,
         login,
         loginWithPoint,
+        switchPoint,
         logout,
         refreshUser,
         hasPermission,

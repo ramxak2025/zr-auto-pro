@@ -615,6 +615,49 @@ function isLoginRequest(cfg: InternalAxiosRequestConfig): boolean {
   return /(^|\/)auth\/login\/?$/.test(cfg.url || '');
 }
 
+/**
+ * Это POST /auth/switch-point — МГНОВЕННАЯ СМЕНА ФИЛИАЛА (167)? Матчим так же,
+ * как логин: по хвосту `config.url`, с якорем по концу строки.
+ */
+function isSessionReissueRequest(cfg: InternalAxiosRequestConfig): boolean {
+  if ((cfg.method || 'get').toLowerCase() !== 'post') return false;
+  return /(^|\/)auth\/switch-point\/?$/.test(cfg.url || '');
+}
+
+// ── ОКНО ПЕРЕВЫПУСКА СЕССИИ (мгновенная смена филиала, 167) ─────────────────
+// Перевыпуск гасит СТАРЫЙ токен на сервере РАНЬШЕ, чем ответ с новым доедет до
+// телефона. Всё, что улетело с прежним bearer'ом и приходит в эту щель (медленный
+// GET со сводкой, досылка чека), получит 401 «Токен отозван». Обычный разбор 401
+// увидел бы «текущий токен протух» — и выкинул бы руководителя из ЖИВОЙ сессии
+// на экран входа ровно в тот момент, когда он просто переключал филиал.
+//
+// Эпоха токена от этого не спасает: она защищает лишь ПОСЛЕ применения нового
+// bearer'а, а щель — ДО него. Поэтому AuthContext открывает окно на время
+// перевыпуска, и внутри него 401 гасит сессию ТОЛЬКО по самому перевыпуску
+// (для него 401 действительно означает «войдите заново»). Чужие 401 в эту
+// секунду просто отдаются вызывающему как ошибка запроса.
+let sessionReissueDepth = 0;
+/** Страховка от подвисшего окна: сессия не может «не замечать» 401 дольше этого. */
+const SESSION_REISSUE_WINDOW_MAX_MS = 30_000;
+
+/**
+ * Открыть окно перевыпуска. Возвращает идемпотентное закрытие — зовите его в
+ * finally. Окно закрывается и само по таймеру: утечка окна означала бы, что
+ * приложение перестало замечать мёртвый токен, и это хуже лишнего разлогина.
+ */
+export function beginSessionReissueWindow(): () => void {
+  sessionReissueDepth += 1;
+  let released = false;
+  const release = () => {
+    if (released) return;
+    released = true;
+    clearTimeout(timer);
+    sessionReissueDepth = Math.max(0, sessionReissueDepth - 1);
+  };
+  const timer = setTimeout(release, SESSION_REISSUE_WINDOW_MAX_MS);
+  return release;
+}
+
 /** UUID v4-ключ серверной идемпотентности (checks.client_request_id, мигр. 111). */
 const CLIENT_REQUEST_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SERIALIZED_CLIENT_REQUEST_ID_RE =
@@ -1314,6 +1357,13 @@ api.interceptors.response.use(
     const authSnapshotIsCurrent =
       !!cfg?._authToken && cfg._authEpoch === authTokenEpoch && cfg._authToken === cachedAuthToken;
     if (status === 401 && cfg && !isLoginRequest(cfg) && authSnapshotIsCurrent) {
+      // Идёт перевыпуск сессии (167): старый токен уже мёртв, новый ещё в пути.
+      // 401 чужого запроса в этой щели — ожидаемое следствие переключения, а не
+      // конец сессии. Гасим только по 401 самого перевыпуска: для него это
+      // действительно «войдите заново».
+      if (sessionReissueDepth > 0 && !isSessionReissueRequest(cfg)) {
+        return Promise.reject(error);
+      }
       // Persistence belongs to AuthContext's serialized session-transition
       // queue. Removing native-storage keys here can race a newer login and
       // delete token/user B after they were written. Clear the in-memory

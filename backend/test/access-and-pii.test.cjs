@@ -38,6 +38,10 @@ const usersController = read('src/users/users.controller.ts');
 const profileService = read('src/profile/profile.service.ts');
 const jwtStrategy = read('src/auth/jwt.strategy.ts');
 const authService = read('src/auth/auth.service.ts');
+// Граница «пароль изменён» переехала в общий файл (см. session-boundary.ts):
+// её сверяют ТРИ места — стратегия и обе ручки перевыпуска токена, — и
+// редакция правила обязана быть ровно одна.
+const sessionBoundary = read('src/auth/session-boundary.ts');
 const migration165 = read('migrations/165_access_hardening.sql');
 const migration163 = read('migrations/163_point_session_login.sql');
 
@@ -344,19 +348,29 @@ test('смена пароля пишет границу жизни сессий 
 });
 
 test('стратегия сверяет возраст токена с границей В БАЗЕ, а не в Node', () => {
-  assert.ok(/const tokenIat = typeof payload\.iat === 'number' \? payload\.iat : null;/.test(jwtStrategy));
+  assert.ok(/const tokenIat = tokenIatOf\(payload\);/.test(jwtStrategy));
+  // Само сравнение живёт в общем файле — стратегия подставляет его в свой
+  // запрос. Пробелы нечувствительны к переносам: prettier волен переносить.
   assert.ok(
-    /u\.sessions_valid_from IS NOT NULL[\s\S]{0,200}to_timestamp\(\$3::double precision\) < u\.sessions_valid_from/.test(
-      jwtStrategy,
+    /\$\{userAlias\}\.sessions_valid_from IS NOT NULL[\s\S]{0,200}to_timestamp\(\$\{iatParam\}::double precision\) < \$\{userAlias\}\.sessions_valid_from/.test(
+      sessionBoundary,
     ),
     'сравнение уехало в Node — расхождение часов Node и Postgres станет дырой или ложным разлогином',
   );
   assert.ok(
-    /if \(rows\[0\]\.session_stale === true\)/.test(jwtStrategy) && /Пароль изменён — войдите заново/.test(jwtStrategy),
+    /\$\{sessionStaleSql\('\$3'\)\}/.test(jwtStrategy),
+    'стратегия завела СВОЮ копию выражения границы — копии разъедутся, и одна из них станет дырой',
+  );
+  assert.ok(
+    /if \(rows\[0\]\.session_stale === true\)/.test(jwtStrategy) &&
+      /SESSION_STALE_MESSAGE = 'Пароль изменён — войдите заново'/.test(sessionBoundary),
     'токен старше границы снова проходит',
   );
   // Токен без iat при выставленной границе — стухший (fail-closed).
-  assert.ok(/\$3::double precision IS NULL\s+OR/.test(jwtStrategy), 'токен без iat обязан считаться старым');
+  assert.ok(
+    /\$\{iatParam\}::double precision IS NULL\s+OR/.test(sessionBoundary),
+    'токен без iat обязан считаться старым',
+  );
 });
 
 test('колонка границы сессий добавляется БЕЗ дефолта — иначе миграция разлогинит весь прод', () => {

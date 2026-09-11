@@ -7,6 +7,7 @@ import { ttlCache } from '../common/ttl-cache';
 import { authCacheKey, AUTH_CACHE_TTL_MS, NO_TENANT_ID, ValidatedUser } from '../common/auth-cache';
 import { mergeEffectivePermissions } from '../common/role-matrix';
 import { POINT_SELECT_PURPOSE } from './point-session';
+import { SESSION_STALE_MESSAGE, sessionStaleSql, tokenIatOf } from './session-boundary';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -53,7 +54,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // выданные сессии, а списка их jti нигде нет. Токена без `iat` не бывает
     // (jsonwebtoken проставляет его всегда), но если он пришёл — считаем
     // сессию неопределённо старой: fail-closed решает база ниже.
-    const tokenIat = typeof payload.iat === 'number' ? payload.iat : null;
+    const tokenIat = tokenIatOf(payload);
 
     // ── Auth-hop cache ───────────────────────────────────────────────────
     // validate() runs on EVERY authenticated request and otherwise pays 2 DB
@@ -131,7 +132,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // в базе: сравнивать claim `iat` с users.sessions_valid_from в Node значило
     // бы поставить безопасность в зависимость от расхождения часов Node и
     // Postgres. Токен без `iat` при выставленной границе — стухший
-    // (fail-closed): проверить его возраст нечем.
+    // (fail-closed): проверить его возраст нечем. Само выражение — ОДНО на весь
+    // backend (auth/session-boundary.ts): его же подставляют живые проверки
+    // /auth/refresh и /auth/switch-point, которые ходят в базу мимо этого кеша.
     //
     // 165 — «ЕСТЬ ЛИ У ТЕНАНТА ЖИВЫЕ ФИЛИАЛЫ» (`tenant_has_points`). Нужно,
     // чтобы отличить законную сессию без филиала (одноточечный автосервис) от
@@ -142,9 +145,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     const { rows } = await this.pool.query(
       `SELECT u.is_active, u.tenant_id::text as tenant_id, u.role, u.dismissed_at, u.purged_at,
               r.matrix as role_matrix,
-              (u.sessions_valid_from IS NOT NULL
-                 AND ($3::double precision IS NULL
-                      OR to_timestamp($3::double precision) < u.sessions_valid_from)) as session_stale,
+              ${sessionStaleSql('$3')},
               EXISTS (SELECT 1 FROM tenant_points p
                        WHERE p.tenant_id = u.tenant_id AND p.is_active) as tenant_has_points,
               CASE WHEN $2::uuid IS NULL THEN NULL
@@ -179,7 +180,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // может — списка живых jti пользователя не существует, поэтому граница
     // хранится в users.sessions_valid_from и проверяется здесь.
     if (rows[0].session_stale === true) {
-      throw new UnauthorizedException({ message: 'Пароль изменён — войдите заново' });
+      throw new UnauthorizedException({ message: SESSION_STALE_MESSAGE });
     }
 
     // ФИЛИАЛ БОЛЬШЕ НЕ ДОСТУПЕН — СЕССИЯ ОБЯЗАНА УМЕРЕТЬ (163). Именно этот

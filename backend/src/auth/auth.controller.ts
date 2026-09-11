@@ -4,6 +4,7 @@ import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { SelectPointDto } from './dto/select-point.dto';
+import { SwitchPointDto } from './dto/switch-point.dto';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { CurrentUser, JwtPayload } from '../common/decorators/current-user.decorator';
 
@@ -58,6 +59,39 @@ export class AuthController {
     const auth = (req.headers['authorization'] as string | undefined) || '';
     const rawToken = auth.startsWith('Bearer ') ? auth.slice(7) : '';
     return this.authService.refresh(user, rawToken);
+  }
+
+  /**
+   * МГНОВЕННАЯ СМЕНА ФИЛИАЛА (167) — ПЕРЕВЫПУСК СЕССИИ, а не «вход без пароля».
+   * Требует ЖИВОЙ обычной сессии (JwtAuthGuard) и права управления персоналом;
+   * сотруднику отвечает понятным отказом «выйдите и войдите заново» — прежний
+   * сценарий 163 для него сохраняется дословно. Клиент вызывает ручку ТОЛЬКО
+   * из раздела «Филиалы» (требование владельца) и обязан применить новый токен
+   * атомарно: старый гасится немедленно. Логика и обоснование — целиком в
+   * AuthService.switchPoint.
+   *
+   * ПОЧЕМУ ГЕЙТ ПРАВА НЕ PermissionsGuard, А ПРОВЕРКА ВНУТРИ СЕРВИСА. Во-первых,
+   * guard отвечает общим 403 — человек решил бы, что приложение сломалось, тогда
+   * как это осознанное правило, и текст обязан объяснить, что делать дальше.
+   * Во-вторых, @RequirePermission считает право по КАРТЕ АКТОРА в TypeScript, а
+   * «кто вправе управлять персоналом» уже живёт в SQL-функции миграции 166 — той
+   * же, что решает, какие филиалы кому доступны. Две копии одного правила рано
+   * или поздно разойдутся, а расхождение здесь — это либо запертый владелец,
+   * либо мастер, прыгающий по чужим кассам.
+   *
+   * Сырой bearer нужен сервису ради claims, которых нет в акторе
+   * (impersonatedBy, exp) — ровно как в /auth/refresh.
+   *
+   * RateLimitGuard тут НЕ переприменяется: он глобальный (main.ts), и второй
+   * экземпляр списывал бы те же бакеты дважды за один запрос. POST → write-бакет
+   * (150/мин на ip+токен), как у /auth/refresh и /auth/select-point.
+   */
+  @UseGuards(JwtAuthGuard)
+  @Post('switch-point')
+  switchPoint(@CurrentUser() user: JwtPayload, @Req() req: Request, @Body() dto: SwitchPointDto) {
+    const auth = (req.headers['authorization'] as string | undefined) || '';
+    const rawToken = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+    return this.authService.switchPoint(user, rawToken, dto);
   }
 
   @UseGuards(JwtAuthGuard)

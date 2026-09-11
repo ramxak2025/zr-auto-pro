@@ -16,13 +16,16 @@ import { PG_POOL } from '../database.module';
 import { normalizePhone } from '../common/normalize-phone';
 import { invalidateAuthToken, NO_TENANT_ID } from '../common/auth-cache';
 import { runWithTenant } from '../common/tenant-context';
+import { actorPointId } from '../common/point-scope';
 import { RUN_BACKGROUND_JOBS } from '../common/run-jobs';
 import { CANONICAL_PERMISSION_KEYS, mergeEffectivePermissions } from '../common/role-matrix';
 import { userHasPermission } from '../common/guards/permissions.guard';
 import { LoginDto } from './dto/login.dto';
 import { RegisterDto } from './dto/register.dto';
 import { SelectPointDto } from './dto/select-point.dto';
+import { SwitchPointDto } from './dto/switch-point.dto';
 import { POINT_SELECT_PURPOSE, POINT_SELECT_TTL_SECONDS } from './point-session';
+import { SESSION_STALE_MESSAGE, sessionStaleSql, tokenIatOf } from './session-boundary';
 
 // Shared SQL fragment for fetching user with tenant info.
 // ROLE-ONLY (волна «права как в Битрикс24», 2026-07): permissions клиенту
@@ -353,11 +356,29 @@ export class AuthService {
     // и видит собственную строку тенантного пользователя; аномальный
     // non-superadmin без тенанта не увидит ничего и получит 401 — fail-closed,
     // идентично его же /auth/me.
-    const { rows } = await this.pool.query(`SELECT is_active, dismissed_at, purged_at FROM users WHERE id=$1`, [
-      user.userID,
-    ]);
+    //
+    // ГРАНИЦА «ПАРОЛЬ ИЗМЕНЁН» (165) — ТЕМ ЖЕ ЗАПРОСОМ И ТОЖЕ МИМО КЭША. Без
+    // неё смена пароля переставала выгонять вора: проверка границы живёт в
+    // JwtStrategy, но её результат кешируется на 30 секунд, а кеш
+    // внутрипроцессный — в docker-compose реплик backend несколько, у каждой
+    // свой. В этом окне украденный токен продлевался, и вор получал СВЕЖИЙ
+    // токен, выписанный уже ПОСЛЕ смены пароля: дальше он проходит границу
+    // законно и живёт ещё 30 суток. Выражение — общее с JwtStrategy
+    // (auth/session-boundary.ts), чтобы две редакции правила не разъехались;
+    // сравнение считает база, а не часы Node.
+    const tokenIat = tokenIatOf(decoded);
+    const { rows } = await this.pool.query(
+      `SELECT u.is_active, u.dismissed_at, u.purged_at,
+              ${sessionStaleSql('$2')}
+         FROM users u
+        WHERE u.id=$1`,
+      [user.userID, tokenIat],
+    );
     if (rows.length === 0 || rows[0].dismissed_at || rows[0].purged_at || !rows[0].is_active) {
       throw new UnauthorizedException({ message: 'Аккаунт недоступен' });
+    }
+    if (rows[0].session_stale === true) {
+      throw new UnauthorizedException({ message: SESSION_STALE_MESSAGE });
     }
 
     // Атомарный claim обмена (подробности — doc-комментарий выше и
@@ -640,6 +661,187 @@ export class AuthService {
     this.logger.log(`Login OK (point): user=${userID} point=${chosen.id}`);
     const token = this.generateToken(userID, row.tenant_id, chosen.id);
     return { token, user: mapUserRow(row, chosen.id) };
+  }
+
+  /**
+   * МГНОВЕННАЯ СМЕНА ФИЛИАЛА ЖИВОЙ СЕССИЕЙ — ТОЛЬКО РУКОВОДИТЕЛЮ (167).
+   *
+   * ТРЕБОВАНИЕ ВЛАДЕЛЬЦА ДОСЛОВНО: «чтобы владелец автосервиса мог
+   * переключаться между филиалами без суеты с вводом заново паролей — просто
+   * нажал, переключился». Для СОТРУДНИКА прежний сценарий остаётся дословно:
+   * выйти и войти, выбрав филиал (163). У мастера филиал определяет, куда
+   * уходят его деньги, и случайное переключение дороже неудобства.
+   *
+   * ЭТО НЕ ВХОД БЕЗ ПАРОЛЯ И НЕ ПОВЫШЕНИЕ ПРАВ. Личность подтверждена ЖИВОЙ
+   * сессией (JwtAuthGuard пропустил запрос), а филиал меняется только на тот,
+   * к которому у актора УЖЕ есть доступ, — то есть ровно на тот, в который он
+   * и так вошёл бы, выйдя и войдя заново. Новых возможностей не появляется,
+   * исчезает только перезаход.
+   *
+   * ТЕХНИЧЕСКИ ЭТО ПЕРЕВЫПУСК СЕССИИ, А НЕ ПРАВКА ТОКЕНА. Филиал лежит в
+   * ПОДПИСАННОМ токене (163) — поменять его в выданном токене физически
+   * нельзя. Поэтому: чеканим новый токен с новым филиалом и ГАСИМ старый тем
+   * же claim-механизмом, что ротация /auth/refresh. Старый токен обязан
+   * умереть НЕМЕДЛЕННО (graceMs = 0, без grace-окна refresh'а) по двум
+   * причинам: (а) перехваченный прежний токен не должен остаться рабочим;
+   * (б) он привязан к ПРЕЖНЕМУ филиалу, и его доживание означало бы запросы в
+   * старый филиал из интерфейса, который уже показывает новый, — то есть
+   * деньги не в том автосервисе. Обрыв in-flight запросов при этом безопасен:
+   * оба клиента гасят сессию только на 401 со СВОИМ текущим bearer'ом
+   * (mobile — сверка epoch'а, web — только /auth/me и «филиал больше не
+   * доступен»), а здесь у них уже новый.
+   *
+   * ПРАВО РЕШАЕТ БАЗА, А НЕ TypeScript. «Кто вправе управлять персоналом» —
+   * autexa_can_manage_staff (миграция 166), та же функция, которой пользуется
+   * правило доступных филиалов. Второй копии правила в коде быть не должно:
+   * отставшая копия — это либо запертый владелец, либо мастер, мгновенно
+   * прыгающий по чужим кассам.
+   *
+   * ДОСТУП К ЦЕЛЕВОМУ ФИЛИАЛУ — тоже существующий предикат
+   * autexa_point_is_allowed (163/165/166). Одним вызовом закрыты все три
+   * вопроса: филиал жив, принадлежит тому же тенанту и разрешён этому актору.
+   * Поэтому архивный, чужой и несуществующий филиал получают ОДИН и тот же
+   * отказ — по ответу нельзя выяснить, существует ли филиал в чужой сети.
+   *
+   * RATE-LIMIT — глобальный write-бакет RateLimitGuard, как у /auth/refresh и
+   * /auth/select-point (см. комментарий у ручки в auth.controller.ts).
+   */
+  async switchPoint(
+    actor: { userID: string; tenantID: string; currentPointId?: string | null; jti?: string },
+    rawToken: string,
+    dto: SwitchPointDto,
+  ) {
+    const oldJti = actor.jti;
+    if (!oldJti) {
+      // Токен без jti нельзя ревокировать → старый филиал остался бы рабочим
+      // параллельно с новым. Такие токены не выпускаются с 021 — fail-closed.
+      throw new UnauthorizedException({ message: 'Сессия устарела — войдите заново' });
+    }
+
+    // rawToken — тот же bearer, что прошёл JwtAuthGuard (подпись проверена
+    // стратегией); decode без verify достаточен ради claims, которые guard не
+    // прокидывает в актор: impersonatedBy и exp.
+    const decoded = rawToken ? (this.jwtService.decode(rawToken) as Record<string, unknown> | null) : null;
+    if (!decoded || decoded.jti !== oldJti) {
+      throw new UnauthorizedException({ message: 'Неверный токен' });
+    }
+    // ВХОД ПОД ПОЛЬЗОВАТЕЛЕМ НЕ ПЕРЕКЛЮЧАЕТСЯ — серверный гейт, зеркало
+    // /auth/refresh. Иначе 30-минутный impersonation-токен обменивался бы на
+    // полноценный 30-дневный директорский БЕЗ следа impersonation: отмывание
+    // прав через кнопку смены филиала.
+    if (decoded.impersonatedBy) {
+      throw new ForbiddenException({ message: 'Сессия входа под пользователем не переключает филиал' });
+    }
+
+    // Живая проверка аккаунта МИМО 30с auth-кэша — тем же запросом, которым
+    // берётся профиль для ответа (клиенту не нужно отдельно звать /auth/me).
+    // Уволенный минуту назад руководитель не должен получить свежий
+    // 30-дневный токен внутри окна кэша.
+    //
+    // ГРАНИЦА «ПАРОЛЬ ИЗМЕНЁН» (165) — ТЕМ ЖЕ ЗАПРОСОМ. Ровно тот же пробел,
+    // что закрыт в /auth/refresh: JwtStrategy сверяет границу, но кеширует
+    // результат на 30 секунд, и кеш внутрипроцессный — реплик backend в
+    // docker-compose несколько. Владелец меняет пароль, чтобы выбить вора с
+    // угнанного телефона, а вор в этом окне жмёт «сменить филиал» и получает
+    // СВЕЖИЙ 30-дневный токен, выписанный уже ПОСЛЕ смены пароля, — такой токен
+    // границу проходит законно, и смена пароля не выгоняет никого. Выражение —
+    // общее с JwtStrategy (auth/session-boundary.ts): вторая редакция правила
+    // рано или поздно отстанет от первой, а отставание здесь и есть дыра.
+    const tokenIat = tokenIatOf(decoded);
+    const { rows } = await this.pool.query(
+      `SELECT ${USER_WITH_TENANT_COLUMNS},
+              ${sessionStaleSql('$2')}
+       FROM users u
+       LEFT JOIN tenants t ON t.id = u.tenant_id
+       ${ROLE_JOIN}
+       WHERE u.id = $1`,
+      [actor.userID, tokenIat],
+    );
+    if (rows.length === 0) {
+      throw new UnauthorizedException({ message: 'Пользователь не найден' });
+    }
+    const row = rows[0];
+    if (row.dismissed_at || row.purged_at) {
+      throw new UnauthorizedException({ message: 'Аккаунт уволен' });
+    }
+    if (!row.is_active) {
+      throw new UnauthorizedException({ message: 'Аккаунт деактивирован' });
+    }
+    // ДО ветки «уже в этом филиале»: стухшая сессия не имеет права получить ни
+    // токен, ни профиль в ответе — ни в одной ветке ручки.
+    if (row.session_stale === true) {
+      throw new UnauthorizedException({ message: SESSION_STALE_MESSAGE });
+    }
+
+    // УЖЕ В ЭТОМ ФИЛИАЛЕ — НЕ ОШИБКА. Повторный тап по текущему филиалу и
+    // ретрай после обрыва сети обязаны быть безобидными: ничего не выпускаем,
+    // ничего не гасим, отдаём состояние как есть. Токен в ответе — ТОТ ЖЕ, что
+    // прислал клиент: так commit на клиенте безопасен в обеих ветках, а
+    // `token: null` в этой ветке обнулял бы живую сессию у клиента, который
+    // сохраняет ответ не глядя.
+    const current = actorPointId(actor);
+    if (current && current === dto.pointId) {
+      return { token: rawToken, user: mapUserRow(row, current), currentPointId: current, switched: false as const };
+    }
+
+    // ОДИН ЗАПРОС НА ОБА ПРЕДИКАТА: право управления персоналом (166) и доступ
+    // к целевому филиалу (163/165/166). Оба ответа считает база — правило
+    // доступа в монорепо ровно одно.
+    const { rows: gate } = await this.pool.query(
+      `SELECT autexa_can_manage_staff($2::uuid) as can_manage,
+              autexa_point_is_allowed($1::uuid, $2::uuid, $3::uuid) as point_allowed`,
+      [row.tenant_id ?? null, actor.userID, dto.pointId],
+    );
+
+    // ОТКАЗ СОТРУДНИКУ — ЭТО ПРАВИЛО, А НЕ ПОЛОМКА, и текст обязан это
+    // объяснять: человек должен понять, что делать дальше, а не решить, что
+    // приложение сломалось. Проверяем ДО доступа к филиалу — мастер не должен
+    // по ответу выяснять, какие филиалы ему разрешены.
+    if (gate[0]?.can_manage !== true) {
+      throw new ForbiddenException({
+        message:
+          'Мгновенное переключение филиала доступно только руководителю. ' +
+          'Чтобы работать в другом филиале, выйдите из приложения и войдите заново, выбрав нужный филиал.',
+      });
+    }
+    if (gate[0]?.point_allowed !== true) {
+      throw new ForbiddenException({ message: 'Филиал недоступен' });
+    }
+
+    // Атомарный claim: старый токен становится недействительным ДО чеканки
+    // нового. Строка уже есть (logout, ротация refresh'а или ПАРАЛЛЕЛЬНОЕ
+    // переключение тем же токеном) → 401 и никакого второго токена: у сессии
+    // всегда ровно одна живая линия. expires_at = настоящий exp старого
+    // токена, чтобы строка blacklist пережила токен, который она гасит.
+    const exp = typeof decoded.exp === 'number' ? new Date(decoded.exp * 1000) : new Date(Date.now() + 30 * 86400000);
+    const tenantForRow = row.tenant_id && row.tenant_id !== NO_TENANT_ID ? row.tenant_id : null;
+    const claimed = await this.blacklistToken({
+      jti: oldJti,
+      userId: actor.userID,
+      tenantId: tenantForRow,
+      graceMs: 0,
+      expiresAt: exp,
+      mode: 'claim',
+    });
+    if (!claimed) {
+      throw new UnauthorizedException({ message: 'Токен отозван' });
+    }
+    // Без сброса позитивного auth-кэша старый токен прожил бы ещё до 30
+    // секунд — ровно то окно, в котором перехваченный токен работает.
+    invalidateAuthToken(actor.userID, oldJti);
+
+    await this.rememberPoint(actor.userID, dto.pointId);
+    this.logger.log(`Point switch: user=${actor.userID} ${current ?? 'none'} -> ${dto.pointId}`);
+    // Sentinel-тенант (tenant-less суперадмин) в токен не зашивается — ровно
+    // как при login: стратегия подставит его снова при валидации.
+    const tenantID = row.tenant_id && row.tenant_id !== NO_TENANT_ID ? row.tenant_id : undefined;
+    const token = this.generateToken(actor.userID, tenantID, dto.pointId);
+    return {
+      token,
+      user: mapUserRow(row, dto.pointId),
+      currentPointId: dto.pointId,
+      switched: true as const,
+    };
   }
 
   async register(dto: RegisterDto) {

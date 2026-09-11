@@ -6,14 +6,25 @@
  * точки, то в Ещё добавляется раздел Филиалы, там список филиалов… где виден
  * оборот за день, оборот за месяц, прибыль и сколько мастеров на работе».
  *
- * ФИЛИАЛ ЗДЕСЬ НЕ ПЕРЕКЛЮЧАЕТСЯ (163). Дословно: «чтобы выйти и войти в другой
- * им надо опять выйти и войти в другой филиал». Филиал — свойство СЕССИИ: он
- * выбирается при входе и живёт ровно столько, сколько живёт токен. Поэтому в
- * карточке чужого филиала стоит действие «Войти в этот филиал», которое честно
- * предупреждает, что текущая сессия завершится, и по подтверждению делает
- * ВЫХОД — дальше человек входит заново и выбирает филиал на экране входа.
- * Никакого тихого перехода: тихий переход и был тем, из-за чего веб молча
- * уезжал в филиал, выбранный на телефоне.
+ * ЗДЕСЬ И ТОЛЬКО ЗДЕСЬ МЕНЯЕТСЯ ФИЛИАЛ (163/167). Требование владельца: «чтобы
+ * переключаться только там». Филиал — свойство СЕССИИ: он лежит в подписанном
+ * токене, и отобрать его у выданной сессии нельзя — можно только выдать новую.
+ * Отсюда ДВА РАЗНЫХ сценария в карточке чужого филиала:
+ *
+ *   • РУКОВОДИТЕЛЬ (право user_management — владелец, директор, админ сети) —
+ *     «Перейти в этот филиал»: МГНОВЕННО, без выхода и без пароля. Сервер
+ *     проверяет живую сессию и доступ к филиалу, перевыпускает токен и гасит
+ *     старый (POST /auth/switch-point, 167). Это не вход без пароля и не
+ *     повышение прав: личность уже подтверждена живой сессией, а филиал
+ *     меняется только на тот, к которому доступ уже есть.
+ *   • ОСТАЛЬНЫЕ СОТРУДНИКИ — прежний сценарий 163 дословно: «Войти в этот
+ *     филиал» честно предупреждает, что сессия завершится, и по подтверждению
+ *     делает ВЫХОД; дальше человек входит заново и выбирает филиал на экране
+ *     входа. Это прямое требование владельца: у мастера филиал определяет,
+ *     куда уходят ЕГО деньги, и случайное переключение дороже неудобства.
+ *
+ * Никакого тихого перехода ни в одном из сценариев: тихий переход и был тем,
+ * из-за чего веб молча уезжал в филиал, выбранный на телефоне.
  *
  * ЧЕМ ОСНОВНОЙ СЕРВИС ОТЛИЧАЕТСЯ ОТ ФИЛИАЛА (160, tenant_points.is_main):
  * основной — это САМ автосервис владельца, ему принадлежит вся история,
@@ -24,8 +35,11 @@
  *
  * КТО ВИДИТ ЧТО:
  *   • список — любой сотрудник тенанта с более чем одним автосервисом;
- *   • «Войти в этот филиал» — только для филиалов, куда человека пускает
- *     сервер (usePointAccess.selectable — зеркало autexa_available_points);
+ *   • переход в филиал — только туда, куда человека пускает сервер
+ *     (usePointAccess.selectable — зеркало autexa_available_points), а
+ *     МГНОВЕННЫЙ переход вдобавок только держателю user_management (сервер
+ *     перепроверяет право сам, гейт здесь лишь прячет кнопку, которая
+ *     ответила бы сотруднику отказом);
  *   • деньги (оборот, прибыль, мастера на смене) — GET /points/summary под
  *     ключом `financial_reports`; прибыль внутри дополнительно закрыта
  *     `profit_view` (без права сервер отдаёт 0, поэтому строку не рисуем
@@ -49,10 +63,10 @@
 import React from 'react';
 import { View, StyleSheet, ScrollView, Pressable, ActivityIndicator, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigation } from '@react-navigation/native';
 import { pointsApi } from '../api/services';
-import { usePointAccess, pointKindLabel } from '../hooks/usePoints';
+import { usePointAccess, pointKindLabel, POINTS_QUERY_KEY } from '../hooks/usePoints';
 import IosScreenHeader from '../components/IosScreenHeader';
 import EmptyState from '../components/EmptyState';
 import { Text } from '../platform/Typography';
@@ -62,22 +76,50 @@ import { useColors } from '../contexts/ThemeContext';
 import { useIosSurface, useShadow } from '../platform/iosSurface';
 import { colors, spacing, borderRadius } from '../theme';
 import { useTabBarHeight } from '../hooks/useTabBarHeight';
-import { pendingChecksLogoutNotice, pendingOfflineCheckCount } from '../utils/offlineCheckQueue';
+import {
+  flushOfflineCheckQueue,
+  pendingChecksLogoutNotice,
+  pendingOfflineCheckCount,
+} from '../utils/offlineCheckQueue';
+import { pendingChecksSwitchNotice, resolvePointSwitchFailure } from './pointSwitch';
 import { formatMoney } from '../../../shared/utils/formatters';
 import { buildPointCardRows, type PointCardRow } from '../../../shared/utils/pointCards';
-import type { TenantPoint, PointsSummaryResponse } from '../../../shared/types';
+import type { TenantPoint, PointsListResponse, PointsSummaryResponse } from '../../../shared/types';
 
 export default function PointsScreen() {
   const navigation = useNavigation<any>();
   const palette = useColors();
   const tabBarHeight = useTabBarHeight();
-  const { hasPermission, logout } = useAuth();
+  const queryClient = useQueryClient();
+  const { hasPermission, logout, switchSessionPoint } = useAuth();
   // Деньги автосервисов — тот же ключ, что гейтит эндпоинт на сервере. Без
   // права запрос даже не отправляем: 403 в консоли ничего не лечит.
   const canSeeMoney = hasPermission('financial_reports');
   const canSeeProfit = hasPermission('profit_view');
+  /**
+   * МГНОВЕННЫЙ ПЕРЕХОД (167) — только держателю права управления персоналом.
+   * Тот же ключ, по которому решает сервер (autexa_can_manage_staff): клиентский
+   * гейт нужен ровно затем, чтобы не показывать сотруднику кнопку, которая
+   * ответит ему отказом. Право сервер всё равно перепроверяет сам.
+   */
+  const canSwitchInstantly = hasPermission('user_management');
 
-  const { points, selectable, currentPointId, isLoading } = usePointAccess();
+  const { points, selectable, currentPointId, currentPoint, isLoading } = usePointAccess();
+  /**
+   * Филиал, в который прямо сейчас идёт перевыпуск сессии. Он же — признак
+   * «занято»: пока он не null, повторный тап игнорируется и остальные кнопки
+   * заблокированы. Перевыпуск гасит старый токен, и второй запрос тем же
+   * bearer'ом получил бы 401 «Токен отозван» — то есть выкинул бы человека из
+   * живой сессии на ровном месте.
+   */
+  const [switchingPointId, setSwitchingPointId] = React.useState<string | null>(null);
+  /**
+   * Тот же признак «занято», но СИНХРОННЫЙ. Состояние React обновляется через
+   * такт, а между тапом и стартом перевыпуска есть await (чтение офлайн-очереди
+   * с диска) — двух быстрых тапов хватило бы, чтобы проскочить проверку по
+   * состоянию дважды и отправить второй запрос уже погашенным токеном.
+   */
+  const switchBusyRef = React.useRef(false);
 
   const { data: summaryData, isLoading: summaryLoading } = useQuery<PointsSummaryResponse>({
     queryKey: ['points-summary'],
@@ -162,6 +204,126 @@ export default function PointsScreen() {
     [logout],
   );
 
+  /**
+   * Вернуть человека на ГЛАВНУЮ после успешного перехода. Смысл не в навигации,
+   * а в честности: экран филиалов после переключения показывал бы «Вы здесь» на
+   * другой карточке и всё — а деньги, ради которых переходили, живут на главной.
+   *
+   * Ищем таб-навигатор вверх по дереву (экран открывается из «Ещё», но может
+   * быть смонтирован и без вкладок). Не нашли — остаёмся на месте: карточки уже
+   * перерисовались под новую сессию.
+   */
+  const goToDashboard = React.useCallback(() => {
+    for (let nav: any = navigation; nav; nav = nav.getParent?.()) {
+      if (nav.getState?.()?.type === 'tab') {
+        nav.navigate('Dashboard');
+        return;
+      }
+    }
+  }, [navigation]);
+
+  /**
+   * МГНОВЕННЫЙ ПЕРЕХОД РУКОВОДИТЕЛЯ (167): перевыпуск сессии без выхода.
+   *
+   * ОФЛАЙН-ОЧЕРЕДЬ — ГЛАВНАЯ ОПАСНОСТЬ ЭТОЙ КНОПКИ. На телефоне могут лежать
+   * пробитые без связи заказ-наряды; это ДЕНЬГИ, и переключение не имеет права
+   * ни отправить их в другой автосервис, ни потерять. Делаем оба безопасных
+   * действия сразу:
+   *   1. предупреждаем и спрашиваем — молча увозить чужую выручку нельзя;
+   *   2. по подтверждению СНАЧАЛА дожимаем досылку текущей сессией (пока жив
+   *      токен старого филиала), и только потом переключаемся;
+   *   3. что не ушло — остаётся на телефоне со ВШИТЫМ филиалом: перед сменой
+   *      сессии AuthContext прибивает филиал уходящей сессии к каждой записи
+   *      без штампа (offlineCheckQueue.stampPendingPoint). Поэтому обещание из
+   *      диалога «всё равно уйдут в тот филиал» — факт, а не утешение.
+   *
+   * Очередь при переходе НЕ стирается: её владелец (человек + тенант) не
+   * меняется, и adoptOfflineCheckQueue её усыновляет.
+   */
+  const instantSwitch = React.useCallback(
+    async (point: TenantPoint) => {
+      // Повторный тап во время перевыпуска игнорируется: второй запрос ушёл бы
+      // уже погашенным токеном и выкинул бы человека на экран входа.
+      if (switchBusyRef.current) return;
+      haptic('tap');
+
+      // Чтение очереди best-effort: сбой диска не должен запрещать переход.
+      let pending = 0;
+      try {
+        pending = await pendingOfflineCheckCount();
+      } catch {
+        pending = 0;
+      }
+      // Пока читали диск, перевыпуск мог уже начаться со второго тапа.
+      if (switchBusyRef.current) return;
+
+      const run = async () => {
+        // Взводим флаг СИНХРОННО, до первого await: два подтверждения подряд
+        // (диалог + тап по другой карточке) не должны дать двух запросов.
+        if (switchBusyRef.current) return;
+        switchBusyRef.current = true;
+        setSwitchingPointId(point.id);
+        try {
+          // Досылка ДО переключения идёт под токеном текущего филиала — то есть
+          // деньги попадают ровно туда, где их пробили. Ошибку глотаем: нет
+          // связи — записи останутся на телефоне, и это уже описано в диалоге.
+          if (pending > 0) {
+            try {
+              await flushOfflineCheckQueue();
+            } catch {
+              // См. выше: остаток уедет в свой филиал по вшитому штампу.
+            }
+          }
+          await switchSessionPoint(point.id);
+          // Коммит сессии стирает ВЕСЬ кеш экранов (иначе первым кадром
+          // мелькнут деньги прошлого филиала). Список автосервисов при этом от
+          // филиала не зависит — это справочник тенанта, одинаковый в обоих, —
+          // поэтому кладём его обратно сразу с НОВЫМ филиалом сессии. Без этого
+          // индикатор автосервиса на денежных экранах на такт сети пропадал бы
+          // (имя рисовать нечем), а пропавшая подпись читается как «филиал не
+          // важен». Свежий ответ GET /points всё равно придёт следом —
+          // prefetchAfterLogin греет этот же ключ.
+          // Список пуст только если сюда пришли без загруженных точек — тогда
+          // подсовывать пустоту нельзя: экран показал бы «Пока нет филиалов».
+          if (points.length > 0) {
+            queryClient.setQueryData<PointsListResponse>(POINTS_QUERY_KEY, { points, currentPointId: point.id });
+          }
+          haptic('success');
+          goToDashboard();
+        } catch (err) {
+          const failure = resolvePointSwitchFailure(err);
+          // 401: перехватчик axios уже погасил сессию и увёл на экран входа —
+          // второе окно поверх него только напугало бы.
+          if (failure.action === 'relogin') return;
+          if (failure.action === 'refresh') {
+            // Отказ по правилу означает, что показанный список мог устареть
+            // (филиал закрыли, доступ сняли). Перезапрашиваем, чтобы человек не
+            // бился в кнопку, которой больше не место на экране.
+            void queryClient.invalidateQueries({ queryKey: POINTS_QUERY_KEY });
+            void queryClient.invalidateQueries({ queryKey: ['points-summary'] });
+          }
+          haptic('error');
+          // Сессию НЕ гасим: человек остаётся в своём филиале, как и был.
+          Alert.alert(failure.title, failure.message);
+        } finally {
+          switchBusyRef.current = false;
+          setSwitchingPointId(null);
+        }
+      };
+
+      if (pending === 0) {
+        // Ничего не ждёт отправки — «просто нажал, переключился», без диалогов.
+        void run();
+        return;
+      }
+      Alert.alert(`Перейти в «${point.name}»?`, pendingChecksSwitchNotice(pending, currentPoint?.name ?? null), [
+        { text: 'Отмена', style: 'cancel' },
+        { text: 'Отправить и перейти', onPress: () => void run() },
+      ]);
+    },
+    [currentPoint, goToDashboard, points, queryClient, switchSessionPoint],
+  );
+
   const renderCard = (row: PointCardRow) => (
     <PointCard
       key={row.pointId}
@@ -170,11 +332,18 @@ export default function PointsScreen() {
       canSeeMoney={canSeeMoney}
       canSeeProfit={canSeeProfit}
       isCurrent={row.pointId === currentPointId}
-      // Войти можно только в ЖИВОЙ филиал, куда пускает сервер. У закрытого
-      // живой записи нет вовсе — и входить в него некуда.
+      // Перейти можно только в ЖИВОЙ филиал, куда пускает сервер. У закрытого
+      // живой записи нет вовсе — и переходить в него некуда.
       canEnter={!row.isArchived && row.point !== null && canEnter(row.pointId)}
+      instant={canSwitchInstantly}
+      switching={switchingPointId === row.pointId}
+      // Пока идёт перевыпуск, кнопки остальных карточек заблокированы: два
+      // перевыпуска подряд одним токеном — это 401 и выход на экран входа.
+      disabled={switchingPointId !== null && switchingPointId !== row.pointId}
       onEnter={() => {
-        if (row.point) void enterPoint(row.point);
+        if (!row.point) return;
+        if (canSwitchInstantly) void instantSwitch(row.point);
+        else void enterPoint(row.point);
       }}
     />
   );
@@ -204,8 +373,9 @@ export default function PointsScreen() {
                 Без этой строки владелец не понимает, почему выручка не
                 суммируется, и где он вообще сейчас работает. */}
             <Text style={[styles.intro, { color: palette.text.secondary }]}>
-              Основной сервис и филиалы — разные автосервисы одного владельца: у каждого своя касса, свой склад и своя
-              зарплата. Вы работаете в том филиале, в который вошли; чтобы перейти в другой, нужно выйти и войти заново.
+              {canSwitchInstantly
+                ? 'Основной сервис и филиалы — разные автосервисы одного владельца: у каждого своя касса, свой склад и своя зарплата. Вы работаете в том филиале, который отмечен «Вы здесь»; чтобы перейти в другой, нажмите «Перейти» в его карточке — выходить и вводить пароль не нужно.'
+                : 'Основной сервис и филиалы — разные автосервисы одного владельца: у каждого своя касса, свой склад и своя зарплата. Вы работаете в том филиале, в который вошли; чтобы перейти в другой, нужно выйти и войти заново.'}
             </Text>
 
             {mainRow ? (
@@ -241,6 +411,9 @@ function PointCard({
   canSeeProfit,
   isCurrent,
   canEnter,
+  instant,
+  switching,
+  disabled,
   onEnter,
 }: {
   row: PointCardRow;
@@ -250,6 +423,16 @@ function PointCard({
   isCurrent: boolean;
   /** Пустит ли сервер этого человека в этот филиал (user_points, 163). */
   canEnter: boolean;
+  /**
+   * Переход МГНОВЕННЫЙ (право user_management, 167) — тогда кнопка обещает
+   * переход, а не выход. Иначе она обязана честно называться «Войти»: сотрудник
+   * действительно выйдет из аккаунта и будет вводить пароль.
+   */
+  instant: boolean;
+  /** Перевыпуск сессии ИМЕННО В ЭТОТ филиал прямо сейчас. */
+  switching: boolean;
+  /** Занято другим переходом — кнопка недоступна, чтобы не было второго запроса. */
+  disabled: boolean;
   onEnter: () => void;
 }) {
   const palette = useColors();
@@ -390,15 +573,37 @@ function PointCard({
       ) : canEnter ? (
         <Pressable
           onPress={onEnter}
+          disabled={switching || disabled}
           style={({ pressed }) => [
             styles.enterBtn,
-            { backgroundColor: palette.accent.primary, opacity: pressed ? 0.85 : 1 },
+            {
+              backgroundColor: palette.accent.primary,
+              // Занятая кнопка гасится заметно, а не «чуть-чуть»: человек должен
+              // видеть, что приложение занято, а не жать ещё раз.
+              opacity: switching ? 0.9 : disabled ? 0.45 : pressed ? 0.85 : 1,
+            },
           ]}
           accessibilityRole="button"
-          accessibilityLabel={`Войти в автосервис ${row.name}. Потребуется выйти и войти заново`}
+          accessibilityState={{ disabled: switching || disabled, busy: switching }}
+          accessibilityLabel={
+            instant
+              ? `Перейти в автосервис ${row.name} без повторного входа`
+              : `Войти в автосервис ${row.name}. Потребуется выйти и войти заново`
+          }
         >
-          <Ionicons name="log-in-outline" size={16} color={colors.white} />
-          <Text style={[styles.enterBtnText, { color: colors.white }]}>Войти в этот филиал</Text>
+          {switching ? (
+            <>
+              <ActivityIndicator size="small" color={colors.white} />
+              <Text style={[styles.enterBtnText, { color: colors.white }]}>Переходим…</Text>
+            </>
+          ) : (
+            <>
+              <Ionicons name={instant ? 'swap-horizontal' : 'log-in-outline'} size={16} color={colors.white} />
+              <Text style={[styles.enterBtnText, { color: colors.white }]}>
+                {instant ? 'Перейти в этот филиал' : 'Войти в этот филиал'}
+              </Text>
+            </>
+          )}
         </Pressable>
       ) : (
         // Сотрудник сюда не назначен — сервер его не пустит. Показываем причину,

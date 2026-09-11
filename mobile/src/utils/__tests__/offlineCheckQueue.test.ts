@@ -649,6 +649,96 @@ describe('offlineCheckQueue — филиал (pointId) фиксируется н
   });
 });
 
+// ── МГНОВЕННАЯ СМЕНА ФИЛИАЛА (167) ─────────────────────────────────────────
+// Переключение руководителя происходит БЕЗ выхода, то есть без того момента,
+// когда очередь гарантированно пуста или дослана. Значит непробитые чеки могут
+// пережить смену филиала внутри одной установки приложения — и обязаны уйти
+// туда, где их набрали, а не туда, куда человек только что перешёл.
+describe('offlineCheckQueue — филиал примораживается перед мгновенной сменой (167)', () => {
+  const POINT_A = '11111111-1111-4111-8111-111111111111';
+  const POINT_B = '22222222-2222-4222-8222-222222222222';
+
+  it('чеку без штампа дописывается филиал уходящей сессии', async () => {
+    const { storage } = createMemoryStorage();
+    // Резолвер точки упал на «Пробить» — чек лёг в очередь БЕЗ филиала. Это
+    // штатное поведение: чек важнее штампа.
+    const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => null });
+    await core.enqueue(payloadOf(ID_A));
+    expect('pointId' in core.getSnapshot()[0].payload).toBe(false);
+
+    expect(await core.stampPendingPoint(POINT_A)).toBe(1);
+    expect(core.getSnapshot()[0].payload.pointId).toBe(POINT_A);
+
+    // И после смены филиала досылка уходит В СТАРЫЙ филиал, а не в новый.
+    const sent: QueuedCheckPayload[] = [];
+    core.setSender(async (payload) => {
+      sent.push(payload);
+      return {};
+    });
+    await core.flush();
+    expect(sent[0].pointId).toBe(POINT_A);
+  });
+
+  it('чужой штамп НЕ перетирается — чек филиала А остаётся филиала А', async () => {
+    const { storage } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => POINT_A });
+    await core.enqueue(payloadOf(ID_A));
+    // Человек уже в филиале B и уходит дальше: штамповать A-шный чек филиалом B
+    // означало бы увезти чужую выручку.
+    expect(await core.stampPendingPoint(POINT_B)).toBe(0);
+    expect(core.getSnapshot()[0].payload.pointId).toBe(POINT_A);
+  });
+
+  it('штамп переживает перезапуск — он записан на диск, а не только в память', async () => {
+    const { storage, map } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => null });
+    await core.enqueue(payloadOf(ID_A));
+    await core.stampPendingPoint(POINT_A);
+
+    const restored = parseStoredQueue(map.get(OFFLINE_CHECK_QUEUE_STORAGE_KEY) ?? null);
+    expect(restored).toHaveLength(1);
+    expect(restored[0].payload.pointId).toBe(POINT_A);
+  });
+
+  it('пустая очередь и пустой филиал — no-op без записи на диск', async () => {
+    const { storage, map } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage });
+    expect(await core.stampPendingPoint(POINT_A)).toBe(0);
+    expect(await core.stampPendingPoint('')).toBe(0);
+    expect(map.has(OFFLINE_CHECK_QUEUE_STORAGE_KEY)).toBe(false);
+  });
+
+  it('отклонённые сервером (bucket failed) тоже примораживаются — их ещё отправят руками', async () => {
+    const { storage } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => null });
+    await core.enqueue(payloadOf(ID_A));
+    core.setSender(async () => {
+      throw axiosError(409, { message: 'Смена закрыта' });
+    });
+    await core.flush();
+    expect(core.getSnapshot()[0].status).toBe('failed');
+
+    expect(await core.stampPendingPoint(POINT_A)).toBe(1);
+    expect(core.getSnapshot()[0].payload.pointId).toBe(POINT_A);
+  });
+
+  it('переключение НЕ стирает очередь: владелец тот же, вход её усыновляет', async () => {
+    const { storage } = createMemoryStorage();
+    const core = createOfflineCheckQueueCore({ storage, resolvePointId: async () => null });
+    const owner = { userId: 'u-owner', tenantId: 't-1' };
+    await core.adoptSession(owner);
+    await core.enqueue(payloadOf(ID_A));
+    await core.stampPendingPoint(POINT_A);
+
+    // Мгновенная смена филиала = тот же коммит сессии, что и вход: владелец
+    // (человек + тенант) не изменился, значит чеки остаются на месте.
+    await core.adoptSession(owner);
+    await core.ensureLoaded();
+    expect(core.getSnapshot()).toHaveLength(1);
+    expect(core.getSnapshot()[0].payload.pointId).toBe(POINT_A);
+  });
+});
+
 // ── ЖИВУЧЕСТЬ ОЧЕРЕДИ ПРИ РАЗЛОГИНЕ (пакет «потеря данных», 2026-09) ────────
 // Очередь принадлежит ЧЕЛОВЕКУ, а не сессии. Истёкший токен, снятый доступ к
 // филиалу, архивация филиала и обычный «Выйти» её НЕ стирают — иначе мастер,

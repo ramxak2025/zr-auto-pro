@@ -195,6 +195,8 @@ import type {
   PointSelectLoginRequest,
   PointSelectLoginResponse,
   SelectPointRequest,
+  SwitchSessionPointRequest,
+  SwitchSessionPointResponse,
   RegisterRequest,
   DeleteAccountRequest,
   DeleteAccountResponse,
@@ -301,11 +303,32 @@ export function createAuthApi(api: HttpClient) {
      * («Выбор филиала уже использован — войдите заново»), истёкший — 401
      * («Время выбора филиала истекло»), филиал недоступен — 403.
      *
-     * СМЕНА ФИЛИАЛА = ВЫХОД И ВХОД ЗАНОВО. Переключения внутри приложения нет:
+     * СМЕНА ФИЛИАЛА ДЛЯ СОТРУДНИКА = ВЫХОД И ВХОД ЗАНОВО. Мгновенно
+     * переключиться может только руководитель — switchSessionPoint ниже (167);
      * POST /points/switch лишь запоминает филиал для СЛЕДУЮЩЕГО входа (ручка
      * оставлена ради сборок 3.5/3.6, см. pointsApi.switch).
      */
     selectPoint: (data: SelectPointRequest) => api.post<LoginResponse>('/auth/select-point', data),
+    /**
+     * МГНОВЕННАЯ СМЕНА ФИЛИАЛА РУКОВОДИТЕЛЕМ (167) — без повторного ввода
+     * пароля. Зовётся ТОЛЬКО из раздела «Филиалы» (требование владельца).
+     *
+     * Это ПЕРЕВЫПУСК сессии: сервер проверяет живую сессию, право управления
+     * персоналом и доступ к целевому филиалу, выдаёт новый токен и НЕМЕДЛЕННО
+     * гасит старый. Поэтому клиент обязан применить `token` из ответа атомарно
+     * (как после входа) ДО любого следующего запроса — прежний bearer мёртв.
+     *
+     * Коды: 403 с объяснением «выйдите и войдите заново» — у актора нет права
+     * управления персоналом (обычный сотрудник, прежний сценарий 163 для него
+     * не меняется); 403 «Филиал недоступен» — филиал чужой, архивный или не
+     * назначен актору; 401 — сессия уже недействительна (токен отозван,
+     * аккаунт уволен/деактивирован), нужен полноценный вход.
+     *
+     * `switched: false` — актор уже работал в этом филиале: ничего не
+     * перевыпускалось, в `token` лежит прежний токен.
+     */
+    switchSessionPoint: (pointId: string) =>
+      api.post<SwitchSessionPointResponse>('/auth/switch-point', { pointId } satisfies SwitchSessionPointRequest),
     register: (data: RegisterRequest) => api.post<LoginResponse>('/auth/register', data),
     me: () => api.get<User>('/auth/me'),
     // Тихое продление сессии: свежий токен (полный TTL) по ещё валидному
@@ -513,9 +536,9 @@ export function createPointsApi(api: HttpClient) {
      * ЭТОЙ сессии, а не запрошенный. `pointId: null` («Все автосервисы») —
      * 409: такого режима больше нет.
      *
-     * Новый клиент вместо переключения делает выход и вход в нужный филиал
-     * (authApi.loginWithPointSelect → authApi.selectPoint) и этот метод НЕ
-     * зовёт.
+     * Новый клиент этот метод НЕ зовёт: руководитель переключается мгновенно
+     * (authApi.switchSessionPoint, 167), сотрудник — выходом и входом в нужный
+     * филиал (authApi.loginWithPointSelect → authApi.selectPoint).
      */
     switch: (pointId: string | null) =>
       api.post<{ currentPointId: string | null }>('/points/switch', { pointId }),

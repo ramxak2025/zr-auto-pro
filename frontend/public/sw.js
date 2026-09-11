@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════════════════
-//  Autexa PWA Service Worker v15
+//  Autexa PWA Service Worker v16
 //
 //  SPEED STRATEGY:
 //  - GET /api/auth/* → bypass SW, always network (auth must be fresh)
@@ -9,6 +9,19 @@
 //  - POST/PATCH/DELETE /api/* → network, offline queue fallback
 //  - Static assets   → cache-first (immutable hashed filenames)
 //  - Navigation HTML  → network-first, offline fallback to cached shell
+//
+//  v16 — СМЕНА ФИЛИАЛА НЕ ТЕРЯЕТ И НЕ УВОЗИТ ОЧЕРЕДЬ (мульти-точки 167-web):
+//  - FLUSH_OFFLINE_QUEUE: вкладка может ПОПРОСИТЬ доиграть очередь прямо сейчас
+//    и ДОЖДАТЬСЯ ответа с остатком ({pending, failed}). Нужно ровно перед
+//    перевыпуском сессии: записи очереди не несут Authorization, replay берёт
+//    токен у живой вкладки, поэтому всё, что останется в очереди после смены
+//    филиала, уйдёт уже в НОВЫЙ автосервис — то есть чужая выручка попадёт не
+//    туда. Вкладка переключается только по нулевому остатку.
+//  - replayMutations() теперь возвращает ПРОМИС идущего раунда (был флаг
+//    «занято» + мгновенный return): пришедший вторым обязан дождаться конца,
+//    иначе ответ «сейчас и так играется» прочитался бы как «очередь пуста».
+//  - CLEAR_OFFLINE_QUEUE остался ровно для входа/выхода: там очередь стирается
+//    осознанно, потому что за клавиатуру мог сесть другой человек.
 //
 //  v15 — API-GET: network-first вместо stale-while-revalidate. SWR отдавал
 //  закэшированный ответ ЛЮБОГО возраста, свежий доезжал только до Cache
@@ -35,8 +48,8 @@
 //    Ничего не дропается.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const STATIC_CACHE = 'autexa-static-v15';
-const API_CACHE = 'autexa-api-v15';
+const STATIC_CACHE = 'autexa-static-v16';
+const API_CACHE = 'autexa-api-v16';
 const OFFLINE_QUEUE = 'autexa-offline-queue';
 const FAILED_STORE = 'autexa-offline-failed';
 const IDB_VERSION = 2; // v2: + FAILED_STORE
@@ -225,18 +238,58 @@ async function queueMutation(request) {
   }
 }
 
-// ONLINE-message и Background Sync могут выстрелить одновременно — без guard'а
-// очередь проигрывалась бы дважды параллельно (двойные POST'ы).
-let replayInFlight = false;
+// ONLINE-message, Background Sync и принудительная досылка перед сменой филиала
+// могут выстрелить одновременно — без guard'а очередь проигрывалась бы дважды
+// параллельно (двойные POST'ы).
+//
+// ХРАНИМ ПРОМИС, А НЕ ФЛАГ «занято». Раньше пришедший вторым получал мгновенный
+// return: для фонового ONLINE это нормально (раунд и так идёт), но смена филиала
+// решает по ОСТАТКУ очереди, переключаться ей или нет. Ответ «сейчас и так
+// играется», отданный сразу, прочитался бы как «очередь пуста», и недоигранные
+// чеки уехали бы в другой автосервис. Теперь второй ждёт конца первого.
+let replayInFlight = null;
 
-async function replayMutations() {
-  if (replayInFlight) return;
-  replayInFlight = true;
-  try {
-    await doReplayMutations();
-  } finally {
-    replayInFlight = false;
+function replayMutations() {
+  if (replayInFlight) return replayInFlight;
+  const run = doReplayMutations().finally(() => {
+    replayInFlight = null;
+  });
+  replayInFlight = run;
+  // Отдельная «проглатывающая» ветка для фоновых вызовов (sync/ONLINE): без неё
+  // отказ раунда стал бы unhandledrejection. Наружу отдаём ИСХОДНЫЙ промис —
+  // его ждёт принудительная досылка, и ей отказ знать обязательно.
+  run.catch(() => {});
+  return run;
+}
+
+/** Сколько записей лежит в сторе. Отсутствие стора = 0, а не ошибка. */
+async function countRecords(storeName) {
+  const db = await openDB();
+  const count = await idbRead(db, storeName, (store) => store.count());
+  return typeof count === 'number' ? count : 0;
+}
+
+/**
+ * ПРИНУДИТЕЛЬНАЯ ДОСЫЛКА ПЕРЕД СМЕНОЙ ФИЛИАЛА (167-web).
+ *
+ * Зачем отдельный вход, если есть ONLINE: тому ответ не нужен, а здесь решение
+ * «переключать сессию или нет» принимается ПО ОСТАТКУ. Поэтому возвращаем
+ * фактические остатки обоих сторов после попытки.
+ *
+ * Два прохода, а не один: список ключей раунд снимает ОДИН раз в начале, и
+ * записи, добавленные уже во время раунда (или во время чужого раунда, конца
+ * которого мы дождались), первый проход не увидел бы. Больше двух не нужно —
+ * дальше это был бы бесконечный догоняющий цикл при активной работе вкладки.
+ */
+async function flushOfflineQueueNow() {
+  await replayMutations();
+  if ((await countRecords(OFFLINE_QUEUE)) > 0) {
+    await replayMutations();
   }
+  return {
+    pending: await countRecords(OFFLINE_QUEUE),
+    failed: await countRecords(FAILED_STORE),
+  };
 }
 
 async function doReplayMutations() {
@@ -357,11 +410,11 @@ async function getFreshAuthToken() {
 // ─── Events ──────────────────────────────────────────────────────────────────
 
 self.addEventListener('sync', (event) => {
-  if (event.tag === 'replay-mutations') event.waitUntil(replayMutations());
+  if (event.tag === 'replay-mutations') event.waitUntil(replayMutations().catch(() => {}));
 });
 
 self.addEventListener('message', (event) => {
-  if (event.data?.type === 'ONLINE') replayMutations();
+  if (event.data?.type === 'ONLINE') replayMutations().catch(() => {});
 
   // Cross-tenant isolation: on logout / session change the client asks the SW
   // to drop every cached /api response. The API cache is keyed by URL only
@@ -379,9 +432,31 @@ self.addEventListener('message', (event) => {
     );
   }
 
-  // Logout / смена сессии: невыполненные мутации предыдущего пользователя
-  // нельзя ни хранить, ни (тем более) переигрывать под токеном следующего —
-  // это запись в чужой тенант. Чистим и очередь, и failed-store.
+  // СМЕНА ФИЛИАЛА (167-web): «доиграй очередь ПРЯМО СЕЙЧАС и скажи, что
+  // осталось». Вкладка зовёт это ДО POST /auth/switch-point, пока жив токен
+  // ТЕКУЩЕГО филиала, — значит недоотправленные чеки уходят ровно в тот
+  // автосервис, где их пробили. Ответ обязателен: по нулевому остатку вкладка
+  // переключается, по ненулевому — остаётся на месте и объясняет человеку,
+  // почему. Молчание (нет SW, таймаут) вкладка тоже трактует как «не
+  // переключаемся»: потерять деньги дороже, чем не перейти с первого раза.
+  if (event.data?.type === 'FLUSH_OFFLINE_QUEUE') {
+    event.waitUntil(
+      flushOfflineQueueNow()
+        .then((state) => ({ type: 'OFFLINE_QUEUE_FLUSHED', ok: true, ...state }))
+        // Отказ самого механизма (IndexedDB недоступна) — честный «не знаю
+        // остаток». Числа не выдумываем: null читается вкладкой как «блокируем».
+        .catch(() => ({ type: 'OFFLINE_QUEUE_FLUSHED', ok: false, pending: null, failed: null }))
+        .then((message) => {
+          if (event.ports && event.ports[0]) event.ports[0].postMessage(message);
+        })
+    );
+  }
+
+  // Logout / вход другого пользователя: невыполненные мутации предыдущей
+  // сессии нельзя ни хранить, ни (тем более) переигрывать под токеном
+  // следующего — это запись в чужой тенант. Чистим и очередь, и failed-store.
+  // СМЕНА ФИЛИАЛА сюда НЕ ходит: там человек и тенант те же, а очередь сначала
+  // доигрывается (FLUSH_OFFLINE_QUEUE выше) — стирать её было бы потерей денег.
   if (event.data?.type === 'CLEAR_OFFLINE_QUEUE') {
     event.waitUntil(
       clearOfflineStores()

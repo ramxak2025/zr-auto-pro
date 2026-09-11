@@ -356,6 +356,21 @@ export interface OfflineCheckQueueCore {
    * вызывающий экран обязан показать честную ошибку (чек в очередь НЕ попал).
    */
   enqueue(payload: QueuedCheckPayload, meta?: QueuedCheckMeta): Promise<QueuedCheck>;
+  /**
+   * ЗАМОРОЗИТЬ ФИЛИАЛ У УЖЕ ЛЕЖАЩИХ ЧЕКОВ перед мгновенной сменой филиала
+   * (167). Дописывает `pointId` ТОЛЬКО тем записям, у которых штампа нет
+   * вовсе; чужой штамп не трогает никогда. Возвращает, скольким дописали.
+   *
+   * ЗАЧЕМ. Штамп на `enqueue` — best-effort: резолвер точки лезет в
+   * AsyncStorage, и его сбой оставляет чек БЕЗ поля (чек важнее штампа). Такой
+   * чек сервер при досылке припишет филиалу ТЕКУЩЕЙ сессии — до 167 это было
+   * безопасно (филиал менялся только выходом и новым входом, то есть всегда
+   * ПОСЛЕ досылки хвоста), а мгновенное переключение молча увело бы выручку в
+   * соседний автосервис. Здесь мы подставляем филиал сессии, которая ещё не
+   * сменилась, — то есть ровно тот, который сервер подставил бы сам секундой
+   * раньше. Хуже не становится ни в одном случае, а типичный становится точным.
+   */
+  stampPendingPoint(pointId: string): Promise<number>;
   /** Полная очистка диска и памяти (смена владельца). */
   clearAll(): Promise<void>;
   /**
@@ -565,6 +580,30 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
     }
     if (ownerGeneration !== sessionGeneration) throw new Error('Сессия сменилась до сохранения чека');
     return entry;
+  }
+
+  /** См. OfflineCheckQueueCore.stampPendingPoint. */
+  async function stampPendingPoint(pointId: string): Promise<number> {
+    if (!pointId) return 0;
+    const ownerGeneration = sessionGeneration;
+    await ensureLoaded();
+    // Смена владельца/сессии в процессе чтения — штамповать нечего: это уже
+    // другая очередь. Не готовая граница диска (см. storageBoundaryReady) —
+    // писать нельзя по той же причине, что и в enqueue.
+    if (ownerGeneration !== sessionGeneration || !storageBoundaryReady) return 0;
+    let stamped = 0;
+    const next = entries.map((entry) => {
+      if (entry.payload.pointId !== undefined) return entry;
+      stamped += 1;
+      return { ...entry, payload: { ...entry.payload, pointId } };
+    });
+    if (stamped === 0) return 0;
+    // Отказ диска здесь НЕ бросаем: память уже проштампована, а именно из
+    // памяти читает flush. Пережить перезапуск без штампа такой чек может лишь
+    // при одновременном отказе AsyncStorage и убийстве процесса — и даже тогда
+    // он ведёт себя как до 167, а человека уже предупредили в диалоге.
+    await commit(next, ownerGeneration);
+    return stamped;
   }
 
   async function remove(clientRequestId: string): Promise<void> {
@@ -786,6 +825,7 @@ export function createOfflineCheckQueueCore(deps: OfflineCheckQueueCoreDeps): Of
       await storageWriteTail.catch(() => {});
     },
     enqueue,
+    stampPendingPoint,
     remove,
     retry,
     flush,
@@ -839,8 +879,9 @@ function getQueue(): OfflineCheckQueueCore {
       // фонового flush-триггера) обязан работать без смонтированного дерева.
       // Это тот же конверт, который читает холодный старт axios, поэтому
       // значение всегда согласовано с текущим пользователем — включая
-      // переключение филиала (AuthContext перезаписывает user после
-      // POST /points/switch → GET /auth/me).
+      // мгновенную смену филиала (167): AuthContext перезаписывает конверт
+      // новым профилем в том же коммите сессии и тут же сообщает очереди новый
+      // филиал явно (setOfflineCheckQueuePointId), не дожидаясь GET /points.
       // Любая ошибка чтения/разбора = null: чек важнее штампа точки, сервер
       // тогда просто возьмёт текущую точку автора, как делал раньше.
       resolvePointId: async () => {
@@ -877,6 +918,19 @@ function getQueue(): OfflineCheckQueueCore {
 /** См. OfflineCheckQueueCore.enqueue. Вызывается из CheckCreateScreen. */
 export function enqueueOfflineCheck(payload: QueuedCheckPayload, meta?: QueuedCheckMeta): Promise<QueuedCheck> {
   return getQueue().enqueue(payload, meta);
+}
+
+/**
+ * МГНОВЕННАЯ СМЕНА ФИЛИАЛА (167): приколотить филиал уходящей сессии ко всем
+ * отложенным чекам, у которых его ещё нет. Зовётся из AuthContext ДО запроса
+ * перевыпуска — раньше, чем старый токен может умереть, — поэтому потерянный
+ * ответ сервера («переключение состоялось, а клиент об этом не узнал») тоже
+ * не может увести чужую выручку в соседний автосервис.
+ *
+ * Возвращает число проштампованных записей (для текста предупреждения).
+ */
+export function stampOfflineCheckQueuePoint(pointId: string): Promise<number> {
+  return getQueue().stampPendingPoint(pointId);
 }
 
 /** Ручная досылка («Отправить сейчас» в Журнале). */

@@ -26,6 +26,7 @@ import {
   pointsApi,
 } from '../api/services';
 import api, {
+  beginSessionReissueWindow,
   createCapturedAuthRequester,
   onApiRouteReady,
   onAuthExpired,
@@ -36,7 +37,13 @@ import api, {
 import { addSentryBreadcrumb, captureException, isTransientPushError } from '../sentry';
 import { clearWidgetData } from '../utils/widgetBridge';
 import { clearPersistentCache } from '../utils/persistentCache';
-import { adoptOfflineCheckQueue, endOfflineCheckQueueSession, type QueueOwner } from '../utils/offlineCheckQueue';
+import {
+  adoptOfflineCheckQueue,
+  endOfflineCheckQueueSession,
+  setOfflineCheckQueuePointId,
+  stampOfflineCheckQueuePoint,
+  type QueueOwner,
+} from '../utils/offlineCheckQueue';
 import { toLocalISODate } from '../utils/dates';
 import { PRODUCT_LIST_FIELDS } from '../constants/productFields';
 import {
@@ -94,6 +101,25 @@ interface AuthContextType {
    * функция с тестами), потому что от него зависит, куда вести человека.
    */
   loginWithPoint: (selectToken: string, pointId: string) => Promise<void>;
+  /**
+   * МГНОВЕННАЯ СМЕНА ФИЛИАЛА РУКОВОДИТЕЛЕМ (167) — без выхода и без пароля.
+   *
+   * Это НЕ вход и НЕ повышение прав: личность подтверждена живой сессией,
+   * сервер лишь перевыпускает токен на другой филиал, к которому у человека
+   * уже есть доступ, и НЕМЕДЛЕННО гасит прежний. Поэтому новый токен
+   * применяется ровно тем же атомарным путём, что и после входа: кеш прошлого
+   * филиала (память + диск) стирается ДО того, как новый токен попадёт на
+   * диск, иначе на главной первым кадром мелькнут чужие деньги.
+   *
+   * Зовётся ТОЛЬКО из раздела «Филиалы» (требование владельца). Право
+   * `user_management` перепроверяет сервер — клиентский гейт лишь прячет
+   * кнопку от сотрудника, которому она ответит отказом.
+   *
+   * Бросает ошибку axios как есть: разбор кодов живёт в screens/pointSwitch.ts
+   * (чистая функция с тестами), потому что от него зависит, куда вести
+   * человека — остаться, обновить список или идти на вход.
+   */
+  switchSessionPoint: (pointId: string) => Promise<void>;
   logout: () => void;
   refreshUser: () => Promise<void>;
   hasPermission: (perm: keyof UserPermissions) => boolean;
@@ -1106,6 +1132,59 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
     [commitSession],
   );
 
+  /**
+   * МГНОВЕННАЯ СМЕНА ФИЛИАЛА (167). Порядок шагов здесь — не стиль, а защита
+   * денег; каждый шаг закрывает конкретный способ их потерять.
+   *
+   * 1. ФИЛИАЛ ОТЛОЖЕННЫХ ЧЕКОВ ПРИБИВАЕМ ПЕРВЫМ, ещё ДО запроса. Чек, набитый
+   *    без связи, штампуется филиалом на «Пробить», но штамп best-effort:
+   *    сбой чтения сессии оставляет запись без него, и тогда филиал
+   *    подставляет сервер в момент ДОСЫЛКИ. До 167 это было безопасно (филиал
+   *    менялся только выходом и новым входом), а теперь молча увело бы выручку
+   *    филиала А в филиал Б. Штампуем ДО запроса, а не после ответа, потому что
+   *    сервер гасит старый токен раньше, чем ответ доедет до телефона:
+   *    потерянный ответ не должен оставить чеки без филиала.
+   * 2. СЕТЬ — ВНЕ очереди переходов сессии (как в login): медленный ответ не
+   *    имеет права держать выход или более новый переход.
+   * 3. КОММИТ — тот же самый, что после входа (commitSession): кеш прошлого
+   *    филиала стирается в памяти и на диске ДО того, как новый токен попадёт
+   *    на диск. Ветку «switched: false» отдельно не обрабатываем: сервер в ней
+   *    возвращает ТОТ ЖЕ токен, и коммит безопасен без условий.
+   * 4. ФИЛИАЛ ОЧЕРЕДИ сообщаем явно — иначе до первого ответа GET /points она
+   *    читала бы филиал из конверта сессии, а его переписывает шаг 3.
+   *
+   * Офлайн-очередь при этом НЕ стирается: владелец (человек + тенант) не
+   * изменился, adoptOfflineCheckQueue её усыновляет. Чеки прошлого филиала
+   * остаются на телефоне и уходят туда, где их набрали.
+   */
+  const switchSessionPoint = useCallback(
+    async (pointId: string) => {
+      const previousPointId = user?.currentPointId ?? null;
+      if (previousPointId) {
+        try {
+          await stampOfflineCheckQueuePoint(previousPointId);
+        } catch {
+          // Диск отказал — переключение важнее штампа: человек уже прочитал в
+          // диалоге, что лежит на телефоне, а сервер при досылке подставит
+          // филиал сам, ровно как до 167.
+        }
+      }
+      // Окно перевыпуска держим ОТ запроса ДО применения нового токена: в этой
+      // щели старый bearer уже мёртв на сервере, и чужие запросы, улетевшие с
+      // ним, вернут 401 «Токен отозван». Гасить из-за них живую сессию нельзя —
+      // см. beginSessionReissueWindow в api/axios.ts.
+      const closeReissueWindow = beginSessionReissueWindow();
+      try {
+        const res = await authApi.switchSessionPoint(pointId);
+        await commitSession(res.data.token, res.data.user);
+        setOfflineCheckQueuePointId(res.data.currentPointId);
+      } finally {
+        closeReissueWindow();
+      }
+    },
+    [commitSession, user],
+  );
+
   const refreshUser = useCallback(async () => {
     const refreshEpoch = sessionRuntime.capture();
     try {
@@ -1259,6 +1338,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       retrySessionRecovery,
       login,
       loginWithPoint,
+      switchSessionPoint,
       logout,
       refreshUser,
       hasPermission,
@@ -1278,6 +1358,7 @@ export function AuthProvider({ children, queryClient, onAuthResolve }: AuthProvi
       retrySessionRecovery,
       login,
       loginWithPoint,
+      switchSessionPoint,
       logout,
       refreshUser,
       hasPermission,

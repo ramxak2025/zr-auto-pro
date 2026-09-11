@@ -2,6 +2,13 @@ import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { clearPersistentCache } from '../utils/persistentCache';
 import { purgeApiCache, purgeOfflineQueues } from '../utils/swCache';
 import { rememberSessionEndedNotice } from '../utils/sessionNotice';
+import {
+  clearOwnSessionToken,
+  inspectStoredSession,
+  isSessionTakeoverError,
+  readStoredToken,
+  sessionTakeoverError,
+} from '../utils/sessionToken';
 import { sessionPointLostMessage } from '../../../shared/utils/apiError';
 
 const api = axios.create({
@@ -30,7 +37,17 @@ const IDEMPOTENT_METHODS = new Set(['get', 'head', 'options']);
 type ReserveRetryConfig = InternalAxiosRequestConfig & { _reserveRetried?: boolean };
 
 api.interceptors.request.use((config) => {
-  const token = localStorage.getItem('token');
+  // ── Сессию перевыпустили в ДРУГОЙ вкладке (167) ───────────────────────────
+  // localStorage общий на все вкладки, поэтому после мгновенной смены филиала
+  // соседняя вкладка отправила бы запрос уже НОВЫМ токеном — и получила бы
+  // ответ про новый филиал на экран, подписанный прежним. Человек прочитал бы
+  // чужие деньги как свои, а чек ушёл бы не в тот автосервис. Пока вкладка не
+  // обновится, её запросы не уходят вовсе; поверх экрана стоит объяснение
+  // (components/SessionTakeoverGuard.tsx) с единственным действием «обновить».
+  if (inspectStoredSession() === 'foreign') {
+    throw sessionTakeoverError();
+  }
+  const token = readStoredToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -50,7 +67,10 @@ let lastRedirectTime = 0;
  * browser). Debounced so a wave of failures fires this once.
  */
 function hardLogoutRedirect(): void {
-  localStorage.removeItem('token');
+  // Стираем ТОЛЬКО свой токен (167): если в хранилище уже лежит токен соседней
+  // вкладки, которая только что перевыпустила сессию, удалить его — значит
+  // обесточить человека посреди работы там. См. utils/sessionToken.ts.
+  clearOwnSessionToken();
   localStorage.removeItem('user');
 
   const now = Date.now();
@@ -71,9 +91,46 @@ function hardLogoutRedirect(): void {
   }
 }
 
+/**
+ * Каким токеном УШЁЛ запрос. Заголовки axios приходят объектом AxiosHeaders
+ * (есть .get) или простым объектом — читаем оба способа, чужие реализации не
+ * предполагаем. null = прочитать не удалось.
+ */
+function sentAuthorization(config: InternalAxiosRequestConfig | undefined): string | null {
+  const headers = config?.headers as
+    | { get?: (name: string) => unknown; Authorization?: unknown; authorization?: unknown }
+    | undefined;
+  if (!headers) return null;
+  const value =
+    (typeof headers.get === 'function' ? headers.get('Authorization') : undefined) ??
+    headers.Authorization ??
+    headers.authorization;
+  return typeof value === 'string' && value ? value : null;
+}
+
+/**
+ * Ушёл ли запрос с токеном ПРОШЛОЙ сессии — то есть токен успели сменить, пока
+ * запрос был в пути (мгновенная смена филиала 167, вход, вход под владельцем).
+ * Ответ на такой запрос относится к сессии, которой уже нет, и не может служить
+ * приговором текущей.
+ */
+function isPreviousSessionRequest(config: InternalAxiosRequestConfig | undefined): boolean {
+  const sent = sentAuthorization(config);
+  if (!sent) return false;
+  const current = readStoredToken();
+  return !!current && sent !== `Bearer ${current}`;
+}
+
 api.interceptors.response.use(
   (res) => res,
   async (error: AxiosError<{ message?: string }>) => {
+    // Запрос погашен нами же: сессию перевыпустили в другой вкладке (167).
+    // Ответа нет и не будет, но это НЕ сетевой сбой — переигрывать такой
+    // запрос через резервный шлюз нельзя, он ушёл бы с чужим токеном.
+    if (isSessionTakeoverError(error)) {
+      return Promise.reject(error);
+    }
+
     // Network error or server unreachable
     if (!error.response) {
       // ── Best-effort reserve failover ──────────────────────────────────────
@@ -116,6 +173,20 @@ api.interceptors.response.use(
     const status = error.response.status;
     const url = error.config?.url || '';
 
+    // ── Ответ ПРОШЛОГО поколения сессии (167) ─────────────────────────────
+    // Мгновенная смена филиала перевыпускает сессию: сервер выдаёт новый токен
+    // и гасит прежний МГНОВЕННО, без грейс-окна. Запросы, улетевшие за секунду
+    // до перехода, возвращаются уже с 401 «Токен отозван» — по СТАРОМУ токену,
+    // который мы сами и заменили. Гасить из-за них новую сессию нельзя: человек
+    // успешно перешёл в другой филиал и был бы выброшен на экран входа за
+    // собственное удачное действие.
+    //
+    // Отличаем по заголовку самого запроса: он ушёл не с тем токеном, который
+    // сейчас у сессии. Прочитать заголовок не удалось — считаем отказ обычным
+    // (поведение как до правки): молчаливо проигнорированный 401 опаснее лишней
+    // перезагрузки на вход.
+    const staleSessionResponse = status === 401 && isPreviousSessionRequest(error.config);
+
     // ── Session validity: /auth/me is the SOLE authority ───────────────────
     // A 401 means "this request was not authorized" — it does NOT mean the
     // session token is dead. The ONLY endpoint that proves the token itself is
@@ -150,10 +221,10 @@ api.interceptors.response.use(
     // (тот же отказ мог прилететь и с /auth/me, и тогда сессию гасит ветка
     // ниже). Экран входа обязан объяснить, ПОЧЕМУ человека выкинуло, а после
     // перезагрузки на /login объяснять будет уже нечем.
-    const pointLost = sessionPointLostMessage(error);
+    const pointLost = staleSessionResponse ? null : sessionPointLostMessage(error);
     if (pointLost) rememberSessionEndedNotice(pointLost);
 
-    if (status === 401 && url.includes('/auth/me')) {
+    if (status === 401 && url.includes('/auth/me') && !staleSessionResponse) {
       hardLogoutRedirect();
     }
 
@@ -174,5 +245,21 @@ api.interceptors.response.use(
     return Promise.reject(error);
   },
 );
+
+/**
+ * ЗАВЕРШИТЬ СЕССИЮ, ОБЪЯСНИВ ПРИЧИНУ. Нужна там, где недействительность токена
+ * выясняется не из /auth/me, а из ответа конкретной ручки: например, смена
+ * филиала (167) отвечает 401 «Токен отозван» / «Аккаунт уволен», и второй
+ * попытки у этой сессии нет.
+ *
+ * Почему через жёсткую перезагрузку, а не через AuthContext.logout(): на экране
+ * уже отрисованы цифры мёртвой сессии, и только полная перезагрузка гарантирует,
+ * что ни один компонент их не переживёт. Причину кладём в sessionStorage — иначе
+ * после перезагрузки объяснять человеку, почему его выкинуло, будет уже нечем.
+ */
+export function endSessionWithNotice(message: string): void {
+  rememberSessionEndedNotice(message);
+  hardLogoutRedirect();
+}
 
 export default api;

@@ -390,8 +390,11 @@ export class PointsService {
    * Сводка по сети осталась карточками GET /points/summary.
    *
    * НОВЫЙ КЛИЕНТ СЮДА НЕ ХОДИТ: в shared/api/createServices.ts метод помечен
-   * @deprecated, ни один экран web/mobile его не зовёт — смена филиала в новом
-   * UI это выход и вход (authApi.loginWithPointSelect → selectPoint).
+   * @deprecated. В новом UI филиал меняет руководитель — мгновенно, перевыпуском
+   * сессии (POST /auth/switch-point, 167), а сотрудник — выходом и входом
+   * (authApi.loginWithPointSelect → selectPoint). Эта ручка остаётся дословно
+   * такой, какая есть: на руках сборки 3.5/3.6, и сломать им подсказку
+   * следующего входа значит запереть человека не в том филиале.
    */
   async switchPoint(user: JwtPayload, pointId: string | null): Promise<{ currentPointId: string | null }> {
     if (!pointId) {

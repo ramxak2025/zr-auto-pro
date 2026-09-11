@@ -6,6 +6,7 @@ import toast, { Toaster } from 'react-hot-toast';
 import { AuthProvider } from './contexts/AuthContext';
 import App from './App';
 import ErrorBoundary from './components/ErrorBoundary';
+import SessionTakeoverGuard from './components/SessionTakeoverGuard';
 import { setupPersistence } from './utils/persistentCache';
 import './index.css';
 
@@ -123,6 +124,10 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
         <QueryClientProvider client={queryClient}>
           <AuthProvider>
             <App />
+            {/* Сессию перевыпустили в СОСЕДНЕЙ вкладке (167) — эта показывает
+                прежний филиал и работать в ней нельзя. Заслон стоит над всем
+                приложением: подмена филиала одинаково опасна на любом экране. */}
+            <SessionTakeoverGuard />
             <Toaster position="top-right" toastOptions={{ duration: 3000 }} />
           </AuthProvider>
         </QueryClientProvider>

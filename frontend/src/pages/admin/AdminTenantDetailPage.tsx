@@ -41,6 +41,7 @@ import QueryState from '../../components/QueryState';
 import Switch from '../../components/Switch';
 import EmptyState from '../../components/EmptyState';
 import SubscriptionPeriodBadge from '../../components/SubscriptionPeriodBadge';
+import { writeSessionToken } from '../../utils/sessionToken';
 import { roleLabels } from '../../../../shared/utils/formatters';
 
 // Quick-fill presets — each computes the new "until" date from the anchor
@@ -238,7 +239,11 @@ export default function AdminTenantDetailPage() {
       // the short-lived director token and reload into the tenant's app.
       await queryClient.cancelQueries().catch(() => {});
       queryClient.clear();
-      localStorage.setItem('token', token);
+      // Через writeSessionToken, а не напрямую в localStorage: вкладка обязана
+      // запомнить, каким токеном она теперь живёт (167). Иначе собственный
+      // заслон «сессия обновлена в другой вкладке» принял бы этот вход за
+      // чужой и заблокировал бы запросы ровно той вкладке, которая его сделала.
+      writeSessionToken(token);
       await refreshUser();
       toast.success('Вход выполнен от имени владельца');
       window.location.href = '/dashboard';
